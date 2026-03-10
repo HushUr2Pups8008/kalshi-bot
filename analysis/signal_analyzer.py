@@ -1,0 +1,216 @@
+"""
+Signal analyzer: estimates the probability shift implied by a news headline.
+
+Two modes:
+  1. Keyword scoring (always available) — fast, deterministic, no API calls.
+  2. LLM estimation via Claude API (optional) — higher quality, requires
+     ANTHROPIC_API_KEY in environment.
+
+The analyzer returns a probability ADJUSTMENT relative to the current market
+price.  E.g. if the market is at 0.30 and the news suggests a +0.15 upward
+shift, our estimated probability is 0.45.
+"""
+
+import re
+from typing import Optional
+
+from config import cfg, GEOPOLITICAL_SIGNALS
+from feeds import NewsItem
+from kalshi import KalshiMarket
+from utils.logger import get_logger
+
+log = get_logger("signal_analyzer")
+
+
+# ── Keyword scoring ───────────────────────────────────────────────────────────
+
+def _keyword_score(text: str) -> tuple[float, str, list[str]]:
+    """
+    Scan text against GEOPOLITICAL_SIGNALS keyword lists.
+
+    Returns:
+        (raw_shift, dominant_direction, matched_keywords)
+        raw_shift is a signed float: positive = push toward YES, negative = push toward NO.
+    """
+    text_lower = text.lower()
+    total_shift = 0.0
+    matched: list[str] = []
+    direction_weights: dict[str, float] = {"yes": 0.0, "no": 0.0}
+
+    for sig_def in GEOPOLITICAL_SIGNALS:
+        keywords  = sig_def["keywords"]
+        direction = sig_def["direction"]
+        strength  = sig_def["strength"]
+
+        hits = [kw for kw in keywords if kw.lower() in text_lower]
+        if hits:
+            matched.extend(hits)
+            weight = strength * (1 + 0.1 * (len(hits) - 1))   # bonus for multiple hits
+            direction_weights[direction] += weight
+
+    net_shift = direction_weights["yes"] - direction_weights["no"]
+    dominant  = "yes" if net_shift >= 0 else "no"
+    return net_shift, dominant, matched
+
+
+def keyword_estimate(
+    news: NewsItem,
+    market: KalshiMarket,
+    base_probability: Optional[float] = None,
+) -> tuple[float, str, list[str], str]:
+    """
+    Estimate the probability of YES resolution for the given market,
+    given the news item, using keyword scoring.
+
+    Returns:
+        (estimated_probability, side, keywords_matched, reasoning)
+    """
+    combined_text = f"{news.headline} {news.body}"
+    shift, direction, keywords = _keyword_score(combined_text)
+
+    if base_probability is None:
+        base_probability = market.yes_prob  # use current market price
+
+    # Dampen shift by current market price: shifts near extremes are smaller
+    # because the market is already "priced in" somewhat
+    dampen_factor = 1.0
+    if base_probability > 0.8 and direction == "yes":
+        dampen_factor = 0.4
+    elif base_probability < 0.2 and direction == "no":
+        dampen_factor = 0.4
+
+    adjusted_shift = shift * dampen_factor
+    estimated_prob = max(0.02, min(0.98, base_probability + adjusted_shift))
+
+    edge = estimated_prob - market.yes_prob
+    side = "yes" if edge > 0 else "no"
+
+    reasoning = (
+        f"Keyword analysis found {len(keywords)} signal(s): [{', '.join(keywords[:5])}]. "
+        f"Net shift: {shift:+.3f} (dampened: {adjusted_shift:+.3f}). "
+        f"Base prob: {base_probability:.3f} → estimated: {estimated_prob:.3f}. "
+        f"Edge vs market ({market.yes_price:.1f}¢): {edge:+.3f}. "
+        f"Betting {side.upper()}."
+    )
+
+    return estimated_prob, side, keywords, reasoning
+
+
+# ── Optional LLM estimation ───────────────────────────────────────────────────
+
+_LLM_SYSTEM_PROMPT = """You are a prediction market analyst specializing in geopolitical events.
+Your job is to estimate the probability that a Kalshi binary market resolves YES,
+given recent breaking news.
+
+You will be given:
+1. A news headline and summary
+2. The Kalshi market title and current YES price
+3. The market close date
+
+Respond with ONLY a JSON object:
+{
+  "estimated_probability": <float 0.0-1.0>,
+  "confidence": <float 0.0-1.0>,
+  "reasoning": "<1-2 sentence explanation>"
+}
+
+Be calibrated and conservative. Do not overreact to a single headline.
+The current market price already reflects the consensus — only deviate significantly
+if the news is truly market-moving."""
+
+
+async def llm_estimate(
+    news: NewsItem,
+    market: KalshiMarket,
+) -> tuple[float, float, str] | None:
+    """
+    Use Claude API to estimate probability.
+
+    Returns (estimated_probability, confidence, reasoning) or None on failure.
+    Requires ANTHROPIC_API_KEY to be set.
+    """
+    if not cfg.anthropic_api_key:
+        return None
+
+    try:
+        import anthropic
+        import json as _json
+
+        client = anthropic.AsyncAnthropic(api_key=cfg.anthropic_api_key)
+
+        user_msg = (
+            f"NEWS HEADLINE: {news.headline}\n"
+            f"SOURCE: {news.source}\n"
+            f"SUMMARY: {news.body[:400] if news.body else '(none)'}\n\n"
+            f"MARKET TITLE: {market.title}\n"
+            f"CURRENT YES PRICE: {market.yes_price:.1f} cents ({market.yes_prob:.1%})\n"
+            f"MARKET CLOSES: {market.close_time}\n\n"
+            f"What is the probability this market resolves YES?"
+        )
+
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",   # fast + cheap for this use case
+            max_tokens=256,
+            system=_LLM_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+
+        text = response.content[0].text.strip()
+        # Extract JSON
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise ValueError(f"No JSON in LLM response: {text[:100]}")
+
+        parsed = _json.loads(match.group())
+        prob       = float(parsed["estimated_probability"])
+        confidence = float(parsed.get("confidence", 0.6))
+        reasoning  = parsed.get("reasoning", "")
+
+        prob = max(0.02, min(0.98, prob))
+        log.debug("LLM estimate: %.3f (confidence %.2f) for %s", prob, confidence, market.ticker)
+        return prob, confidence, reasoning
+
+    except ImportError:
+        log.warning("anthropic package not installed — LLM estimation disabled")
+        return None
+    except Exception as exc:
+        log.warning("LLM estimation failed: %s", exc)
+        return None
+
+
+# ── Combined estimator ────────────────────────────────────────────────────────
+
+async def estimate_probability(
+    news: NewsItem,
+    market: KalshiMarket,
+) -> tuple[float, float, list[str], str]:
+    """
+    Best-available probability estimate for this (news, market) pair.
+
+    Tries LLM first; falls back to keyword scoring.
+
+    Returns:
+        (estimated_probability, confidence, keywords_matched, reasoning)
+    """
+    # Always run keyword scoring for the keyword list
+    kw_prob, kw_side, keywords, kw_reasoning = keyword_estimate(news, market)
+
+    if not keywords:
+        # News doesn't seem related to this market
+        return market.yes_prob, 0.1, [], "No relevant keywords found — no signal."
+
+    # Try LLM if available
+    llm_result = await llm_estimate(news, market)
+    if llm_result:
+        llm_prob, llm_confidence, llm_reasoning = llm_result
+        # Blend: 70% LLM, 30% keyword when LLM is available
+        blended_prob = 0.7 * llm_prob + 0.3 * kw_prob
+        reasoning = (
+            f"[LLM] {llm_reasoning} "
+            f"(LLM: {llm_prob:.3f}, Keywords: {kw_prob:.3f}, Blended: {blended_prob:.3f})"
+        )
+        return blended_prob, llm_confidence, keywords, reasoning
+
+    # Keyword only
+    confidence = min(0.7, 0.3 + 0.05 * len(keywords))   # more keywords → more confident
+    return kw_prob, confidence, keywords, kw_reasoning

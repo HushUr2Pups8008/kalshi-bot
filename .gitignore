@@ -1,0 +1,30 @@
+# Environment / secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Bot data (paper trades DB, logs — too large/personal for version control)
+data/*.db
+logs/*.log
+logs/*.log.*
+logs/report_*.txt
+
+# Keep the placeholder files
+!data/.gitkeep
+!logs/.gitkeep
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
