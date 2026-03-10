@@ -1,21 +1,22 @@
 """
 Kalshi Geopolitical Trading Bot — entry point.
 
-Runs these async tasks concurrently:
-  1. RSS monitor       — polls Reuters/AP/BBC/Al Jazeera every 60s
-  2. Reddit monitor    — streams r/worldnews, r/geopolitics, r/news
-  3. WebSocket client  — real-time Kalshi price feed
-  4. Market cache refresh — keeps the market list fresh (every 5 min)
-  5. Daily reporter    — logs a summary + full report each morning
-  6. Go-live watchdog  — announces when paper trading phase ends
+Concurrent tasks:
+  1. RSS monitor        — polls Reuters/AP/BBC/Al Jazeera every 60s
+  2. Reddit monitor     — polls r/worldnews, r/geopolitics, r/news (public JSON)
+  3. WebSocket client   — real-time Kalshi price feed
+  4. Market cache refresh
+  5. Daily reporter     — logs summary every 24h, writes report file
 
-Each news item flows through:
-  news item → market matcher → signal analyzer → kelly sizer → executor
+Paper trading runs INDEFINITELY until you explicitly confirm go-live.
+No automatic switchover.
 
-Usage:
-    python main.py                  # normal run
-    python main.py --report         # print paper trading report and exit
+Commands:
+    python main.py                          # run (paper mode until --go-live used)
+    python main.py --report                 # print full paper trading report and exit
     python main.py --resolve TICKER YES|NO  # manually resolve a paper trade
+    python main.py --go-live                # review report, then confirm live trading
+    python main.py --credibility            # print source credibility table and exit
 """
 
 import argparse
@@ -28,7 +29,7 @@ from analysis import SignalAnalysis
 from analysis.kelly import kelly_bet
 from analysis.market_matcher import MarketMatcher
 from analysis.signal_analyzer import estimate_probability
-from config import cfg
+from config import cfg, PAPER_MIN_EDGE
 from feeds import NewsItem
 from feeds.reddit_monitor import run_reddit_monitor
 from feeds.rss_monitor import run_rss_monitor
@@ -40,41 +41,34 @@ from utils.logger import get_logger
 
 log = get_logger("main")
 
-# ── CLI args ──────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Kalshi Geopolitical Trading Bot")
-    p.add_argument("--report", action="store_true",
-                   help="Print the paper trading performance report and exit")
-    p.add_argument("--resolve", nargs=2, metavar=("TICKER", "RESULT"),
+    p.add_argument("--report",      action="store_true",
+                   help="Print paper trading report and exit")
+    p.add_argument("--resolve",     nargs=2, metavar=("TICKER", "RESULT"),
                    help="Resolve a paper trade: --resolve TICKER YES|NO")
-    p.add_argument("--paper-days", type=int, default=None,
-                   help="Override paper trading duration (days)")
+    p.add_argument("--go-live",     action="store_true",
+                   help="Review report then confirm switching to live trading")
+    p.add_argument("--credibility", action="store_true",
+                   help="Print source credibility table and exit")
     return p.parse_args()
 
 
-# ── Core pipeline ─────────────────────────────────────────────────────────────
-
 class TradingBot:
-    """Wires all components together and manages the async task graph."""
-
     def __init__(self):
-        self.rest    = KalshiRestClient()
-        self.ws      = KalshiWebSocketClient()
-        self.matcher = MarketMatcher(self.rest)
-        self.paper   = PaperTrader()
+        self.rest     = KalshiRestClient()
+        self.ws       = KalshiWebSocketClient()
+        self.matcher  = MarketMatcher(self.rest)
+        self.paper    = PaperTrader()
         self.executor = TradeExecutor(self.rest, self.paper)
-
-        # Register WS price callback for live price updates
         self.ws.on_price_update(self._on_price_update)
 
-    # ── News processing ───────────────────────────────────────────────────────
+    # ── News pipeline ─────────────────────────────────────────────────────────
 
     async def on_news_item(self, news: NewsItem) -> None:
-        """Called for every new news item from any feed."""
         log.info("[NEWS] [%s] %s", news.source, news.headline[:100])
 
-        # Find relevant markets
         candidates = await self.matcher.find_candidates(news)
         if not candidates:
             log.debug("No matching markets for: %s", news.headline[:60])
@@ -84,37 +78,42 @@ class TradingBot:
             await self._process_candidate(news, market, match_score)
 
     async def _process_candidate(self, news: NewsItem, market, match_score: float) -> None:
-        """Analyze a single (news, market) pair and potentially trade."""
-        # Fetch latest price from WS if available, otherwise use REST
+        # Use WS price if available
         ws_price = self.ws.get_yes_price(market.ticker)
         if ws_price is not None:
             market.yes_price = ws_price
             market.yes_bid   = max(1, ws_price - 1)
             market.yes_ask   = min(99, ws_price + 1)
 
-        # Estimate probability
         estimated_prob, confidence, keywords, reasoning = await estimate_probability(
             news, market
         )
-
         if not keywords:
-            return  # no signal found
+            return
 
-        # Log the opportunity
-        from utils.logger import trade_log
         edge = estimated_prob - market.yes_prob
         side = "yes" if edge > 0 else "no"
 
-        # Kelly sizing
+        # Get source credibility multiplier
+        source_mult = self.paper.credibility.get_multiplier(news.source)
+
+        # Dynamic max bet based on current notional bankroll
+        notional   = self.paper.get_notional_bankroll()
+        max_bet    = cfg.dynamic_max_bet(notional)
+        min_edge   = PAPER_MIN_EDGE if cfg.is_paper_trading else cfg.min_edge
+
         kelly_frac, kelly_dollars, capped_dollars = kelly_bet(
             estimated_probability=estimated_prob,
             market_price_cents=market.yes_price,
-            bankroll=cfg.bankroll,
+            bankroll=notional,
             kelly_fraction=cfg.kelly_fraction,
-            max_bet_dollars=cfg.max_bet_dollars,
-            min_edge=cfg.min_edge,
+            max_bet_dollars=max_bet,
+            min_bet_dollars=cfg.min_bet_dollars,
+            min_edge=min_edge,
+            source_multiplier=source_mult,
         )
 
+        from utils.logger import trade_log
         trade_log.log_signal(
             source=news.source,
             headline=news.headline,
@@ -136,10 +135,7 @@ class TradingBot:
         )
 
         if capped_dollars <= 0:
-            log.debug(
-                "No bet for %s: edge=%+.4f kelly=$%.2f",
-                market.ticker, edge, kelly_dollars,
-            )
+            log.debug("No bet for %s: edge=%+.4f below threshold", market.ticker, edge)
             return
 
         analysis = SignalAnalysis(
@@ -158,58 +154,24 @@ class TradingBot:
         )
 
         await self.executor.execute(analysis)
-
-        # Subscribe to WS price updates for this market now that we care about it
         self.ws.watch([market.ticker])
 
-    # ── WebSocket callback ────────────────────────────────────────────────────
-
-    async def _on_price_update(
-        self, ticker: str, yes_bid: float, yes_ask: float
-    ) -> None:
-        """Called by the WS client when a market's prices change."""
-        yes_price = (yes_bid + yes_ask) / 2.0
-        log.debug("[WS] %s yes_bid=%.1f¢ yes_ask=%.1f¢ mid=%.1f¢",
-                  ticker, yes_bid, yes_ask, yes_price)
+    async def _on_price_update(self, ticker: str, yes_bid: float, yes_ask: float) -> None:
+        log.debug("[WS] %s bid=%.1f¢ ask=%.1f¢", ticker, yes_bid, yes_ask)
 
     # ── Scheduled tasks ───────────────────────────────────────────────────────
 
     async def _daily_report_task(self) -> None:
-        """Emit a summary log every 24 hours and write the full report to file."""
-        import asyncio
         from config import LOGS_DIR
-
         while True:
-            await asyncio.sleep(86_400)  # 24 hours
+            await asyncio.sleep(86_400)
             self.paper.daily_summary()
-            report = self.paper.generate_report()
+            report      = self.paper.generate_report()
             report_path = LOGS_DIR / f"report_{datetime.now(timezone.utc).strftime('%Y%m%d')}.txt"
             report_path.write_text(report, encoding="utf-8")
             log.info("Daily report written to %s", report_path)
 
-    async def _golive_watchdog_task(self) -> None:
-        """Poll every minute and announce when paper trading ends."""
-        import asyncio
-        was_paper = cfg.is_paper_trading
-        while True:
-            await asyncio.sleep(60)
-            is_paper = cfg.is_paper_trading
-            if was_paper and not is_paper:
-                log.warning(
-                    "=" * 60 + "\n"
-                    "PAPER TRADING PHASE COMPLETE — SWITCHING TO LIVE TRADING\n"
-                    "Bankroll: $%.2f | Max bet: $%.2f | Kelly: %.0f%%\n"
-                    + "=" * 60,
-                    cfg.bankroll, cfg.max_bet_dollars, cfg.kelly_fraction * 100,
-                )
-                # Print the final paper trading report
-                report = self.paper.generate_report()
-                log.info("\n%s", report)
-            was_paper = is_paper
-
     async def _market_refresh_task(self) -> None:
-        """Periodically force-refresh the market cache."""
-        import asyncio
         from config import MARKET_CACHE_TTL_SECONDS
         while True:
             await asyncio.sleep(MARKET_CACHE_TTL_SECONDS)
@@ -218,29 +180,32 @@ class TradingBot:
     # ── Run ───────────────────────────────────────────────────────────────────
 
     async def run(self) -> None:
+        notional = self.paper.get_notional_bankroll()
+        max_bet  = cfg.dynamic_max_bet(notional)
+
         log.info("=" * 60)
         log.info("Kalshi Trading Bot starting")
-        log.info("Mode: %s", "PAPER TRADING" if cfg.is_paper_trading else "LIVE TRADING")
+        log.info("Mode:             %s", "PAPER TRADING" if cfg.is_paper_trading else "LIVE TRADING")
+        log.info("Notional bankroll: $%.2f", notional)
+        log.info("Max bet (dynamic): $%.2f  (%.0f%% of bankroll, hard cap $%.2f)",
+                 max_bet, cfg.bet_pct_bankroll * 100, cfg.max_bet_hard_cap)
+        log.info("Kelly fraction:   %.0f%%", cfg.kelly_fraction * 100)
         if cfg.is_paper_trading:
-            log.info("Paper trading for %.1f more days", cfg.days_remaining_paper)
-        log.info("Bankroll: $%.2f | Max bet: $%.2f | Kelly: %.0f%%",
-                 cfg.bankroll, cfg.max_bet_dollars, cfg.kelly_fraction * 100)
+            log.info("Paper trading — run `python main.py --go-live` when ready to switch.")
         log.info("=" * 60)
 
-        # Verify Kalshi connectivity
         try:
             balance = self.rest.get_balance()
             log.info("Kalshi account balance: $%.2f", balance)
         except Exception as exc:
-            log.warning("Could not fetch Kalshi balance (API keys not set?): %s", exc)
+            log.warning("Could not fetch Kalshi balance: %s", exc)
 
         tasks = [
-            asyncio.create_task(run_rss_monitor(self.on_news_item),          name="rss"),
-            asyncio.create_task(run_reddit_monitor(self.on_news_item),        name="reddit"),
-            asyncio.create_task(self.ws.run(),                                name="websocket"),
-            asyncio.create_task(self._daily_report_task(),                    name="daily_report"),
-            asyncio.create_task(self._golive_watchdog_task(),                 name="golive_watchdog"),
-            asyncio.create_task(self._market_refresh_task(),                  name="market_refresh"),
+            asyncio.create_task(run_rss_monitor(self.on_news_item),    name="rss"),
+            asyncio.create_task(run_reddit_monitor(self.on_news_item), name="reddit"),
+            asyncio.create_task(self.ws.run(),                         name="websocket"),
+            asyncio.create_task(self._daily_report_task(),             name="daily_report"),
+            asyncio.create_task(self._market_refresh_task(),           name="market_refresh"),
         ]
 
         try:
@@ -256,19 +221,19 @@ class TradingBot:
         self.ws.stop()
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── CLI handlers ──────────────────────────────────────────────────────────────
 
 async def async_main() -> None:
     args = parse_args()
-
-    if args.paper_days is not None:
-        cfg.paper_trading_days = args.paper_days
-        log.info("Paper trading days overridden to %d", args.paper_days)
-
     paper = PaperTrader()
 
     if args.report:
         print(paper.generate_report())
+        return
+
+    if args.credibility:
+        print("\nSOURCE CREDIBILITY TABLE")
+        print(paper.credibility.format_table())
         return
 
     if args.resolve:
@@ -278,23 +243,50 @@ async def async_main() -> None:
         log.info("Resolved %s as %s", ticker, "YES" if resolved_yes else "NO")
         return
 
+    if args.go_live:
+        _handle_go_live(paper)
+        return
+
     bot = TradingBot()
 
-    # Graceful shutdown on SIGINT / SIGTERM
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, lambda: asyncio.create_task(_shutdown(bot)))
         except (NotImplementedError, RuntimeError):
-            pass  # Windows doesn't support add_signal_handler
+            pass
 
     await bot.run()
+
+
+def _handle_go_live(paper: PaperTrader) -> None:
+    """
+    Interactive go-live confirmation gate.
+
+    Prints the full report, then requires the user to type CONFIRM to proceed.
+    This is the ONLY way to switch the bot to live trading.
+    """
+    print(paper.generate_report())
+    print()
+    print("=" * 60)
+    print("  WARNING: You are about to switch to LIVE TRADING.")
+    print("  Real money will be at risk. Review the report above.")
+    print("=" * 60)
+    notional = paper.get_notional_bankroll()
+    print(f"  Notional bankroll at switch: ${notional:.2f}")
+    print(f"  Live max bet: ${cfg.dynamic_max_bet(notional):.2f}")
+    print()
+    answer = input("  Type CONFIRM to go live, or anything else to cancel: ").strip()
+    if answer == "CONFIRM":
+        paper.confirm_go_live()
+        print("Live trading confirmed. Restart the bot with `python main.py` to begin.")
+    else:
+        print("Cancelled — still in paper trading mode.")
 
 
 async def _shutdown(bot: TradingBot) -> None:
     log.info("Shutdown signal received")
     bot.stop()
-    # Print a final paper report on exit
     try:
         report = bot.paper.generate_report()
         log.info("\n%s", report)
