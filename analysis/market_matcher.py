@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from config import cfg, MARKET_CACHE_TTL_SECONDS, MAX_MARKET_DAYS_TO_EXPIRY
-from config import PAPER_MIN_MATCH_SCORE, PAPER_MAX_CANDIDATES
+from config import PAPER_MIN_MATCH_SCORE, PAPER_MAX_CANDIDATES, KALSHI_GEOPOLITICAL_SERIES
 from feeds import NewsItem
 from kalshi import KalshiMarket
 from kalshi.rest_client import KalshiRestClient
@@ -104,12 +104,15 @@ class MarketCache:
             markets = await loop.run_in_executor(None, self._client.get_all_open_markets)
             filtered = []
             for m in markets:
+                if m.series_ticker not in KALSHI_GEOPOLITICAL_SERIES:
+                    continue
                 days = _days_to_close(m.close_time)
                 if days is None or 0 < days <= MAX_MARKET_DAYS_TO_EXPIRY:
                     filtered.append(m)
             self._markets    = filtered
             self._last_fetch = time.monotonic()
-            log.info("Market cache refreshed: %d markets", len(filtered))
+            log.info("Market cache refreshed: %d geopolitical markets (filtered from %d total)",
+                     len(filtered), len(markets))
         except Exception as exc:
             log.error("Market cache refresh failed: %s", exc)
 
