@@ -22,8 +22,15 @@ logs/report_*.txt
 !data/.gitkeep
 !logs/.gitkeep
 
+# PAT / credential files
+*_pat.txt
+JRP_GamingDesktop_pat.txt
+
 # macOS
 .DS_Store
+
+# Windows
+Thumbs.db
 
 # IDE
 .vscode/

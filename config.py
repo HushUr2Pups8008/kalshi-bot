@@ -22,9 +22,9 @@ LOGS_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 # ── Kalshi REST base URLs ─────────────────────────────────────────────────────
-KALSHI_PROD_REST = "https://trading-api.kalshi.com/trade-api/v2"
+KALSHI_PROD_REST = "https://api.elections.kalshi.com/trade-api/v2"
 KALSHI_DEMO_REST = "https://demo-api.kalshi.co/trade-api/v2"
-KALSHI_PROD_WS   = "wss://trading-api.kalshi.com/trade-api/ws/v2"
+KALSHI_PROD_WS   = "wss://api.elections.kalshi.com/trade-api/ws/v2"
 KALSHI_DEMO_WS   = "wss://demo-api.kalshi.co/trade-api/ws/v2"
 
 # ── RSS feeds to monitor ──────────────────────────────────────────────────────
