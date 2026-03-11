@@ -85,6 +85,46 @@ def _days_to_close(close_time_str: str) -> Optional[float]:
         return None
 
 
+# ── Series discovery ──────────────────────────────────────────────────────────
+#
+# Kalshi's market catalogue has shifted away from organised geo series
+# (e.g. KXUKR, KXINTL) toward thousands of one-off series per topic.
+# We discover political/geo series by keyword-matching their titles, then
+# fetch markets only for matched series — avoiding 10k+ sports parlays.
+#
+# The keywords here cast a wide net; the _GEOPOLITICAL_BOOST check inside
+# find_candidates() acts as the final precision gate at match time.
+
+_GEO_SERIES_KEYWORDS = frozenset({
+    # Countries / regions
+    "russia", "ukraine", "china", "taiwan", "iran", "israel", "gaza",
+    "korea", "nato", "pakistan", "india", "japan", "turkey", "saudi",
+    "europe", "european", "syria", "iraq", "afghanistan", "venezuela",
+    "cuba", "mexico", "canada", "france", "germany", "britain",
+    # Political leaders
+    "zelensky", "putin", "trump",
+    # Political roles / institutions
+    "president", "senator", "congress", "senate", "parliament",
+    "governor", "chancellor", "minister", "supreme court",
+    # US politics
+    "republican", "democrat", "cabinet", "impeach",
+    "tariff", "executive order", "legislation",
+    # Events / actions
+    "election", "ceasefire", "invasion", "military",
+    "nuclear", "sanctions", "summit", "treaty", "coup",
+    # International topics
+    "diplomatic", "foreign policy", "united nations",
+    # Policy
+    "healthcare", "immigration", "climate",
+})
+
+
+def _is_geo_series(series: dict) -> bool:
+    """Return True if the series title contains a geo/political keyword."""
+    title = (series.get("title") or series.get("ticker") or "").lower()
+    return any(kw in title for kw in _GEO_SERIES_KEYWORDS)
+
+
 # ── Market cache ──────────────────────────────────────────────────────────────
 
 class MarketCache:
@@ -104,24 +144,63 @@ class MarketCache:
     async def _refresh(self) -> None:
         loop = asyncio.get_event_loop()
         try:
-            markets = await loop.run_in_executor(None, self._client.get_all_open_markets)
-            filtered = []
-            for m in markets:
-                # Drop sports / non-geopolitical series — check both series_ticker
-                # and the market ticker itself (series_ticker may be empty from API)
-                series = (m.series_ticker or "").upper()
-                ticker = m.ticker.upper()
-                if any(series.startswith(p) or ticker.startswith(p)
-                       for p in MARKET_SERIES_BLOCKLIST_PREFIXES):
-                    continue
-                days = _days_to_close(m.close_time)
-                if days is None or 0 < days <= MAX_MARKET_DAYS_TO_EXPIRY:
-                    filtered.append(m)
-            self._markets    = filtered
+            markets, n_series = await loop.run_in_executor(
+                None, self._fetch_geo_markets
+            )
+            self._markets    = markets
             self._last_fetch = time.monotonic()
-            log.info("Market cache refreshed: %d markets (sports/non-geo filtered)", len(filtered))
+            log.info(
+                "Market cache refreshed: %d geo markets from %d series",
+                len(markets), n_series,
+            )
         except Exception as exc:
             log.error("Market cache refresh failed: %s", exc)
+
+    def _fetch_geo_markets(self) -> tuple[list, int]:
+        """
+        Synchronous: discover geo/political series then fetch their open markets.
+
+        Strategy:
+          1. Fetch all Kalshi series (~8k+) from /series endpoint.
+          2. Keyword-match series titles to identify geo/political ones.
+          3. For each matched series, fetch open markets.
+          4. Apply the days-to-expiry filter.
+
+        Runs in a thread pool executor so it doesn't block the event loop.
+        """
+        all_series = self._client.get_all_series()
+
+        # Pass 1: keyword-match series titles to find geo/political candidates
+        keyword_matched = [s for s in all_series if _is_geo_series(s)]
+
+        # Pass 2: drop sports leagues from geo-relevant countries (e.g. Saudi
+        # Pro League matches "saudi", J-League matches "japan").
+        geo_tickers = [
+            s["ticker"] for s in keyword_matched
+            if not any(
+                s["ticker"].upper().startswith(p)
+                for p in MARKET_SERIES_BLOCKLIST_PREFIXES
+            )
+        ]
+        log.info(
+            "Series discovery: %d geo/political of %d total (%d dropped by sports blocklist)",
+            len(geo_tickers), len(all_series), len(keyword_matched) - len(geo_tickers),
+        )
+
+        filtered = []
+        for series_ticker in geo_tickers:
+            try:
+                page, _ = self._client.get_markets(
+                    series_ticker=series_ticker, limit=200
+                )
+                for m in page:
+                    days = _days_to_close(m.close_time)
+                    if days is None or 0 < days <= MAX_MARKET_DAYS_TO_EXPIRY:
+                        filtered.append(m)
+            except Exception as exc:
+                log.debug("Skipping series %s: %s", series_ticker, exc)
+
+        return filtered, len(geo_tickers)
 
 
 # ── Matcher ───────────────────────────────────────────────────────────────────

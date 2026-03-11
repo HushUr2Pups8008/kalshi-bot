@@ -105,36 +105,57 @@ REDDIT_SUBREDDITS = [
 REDDIT_MIN_SCORE  = 50
 
 # ── Kalshi market filters ─────────────────────────────────────────────────────
+# NOTE: KALSHI_GEOPOLITICAL_SERIES is no longer used by the market cache.
+# Kalshi retired these organised geo series (KXUKR, KXINTL, etc.) — there are
+# no open markets under them. The market cache now uses series-title keyword
+# discovery via _GEO_SERIES_KEYWORDS in analysis/market_matcher.py.
 KALSHI_GEOPOLITICAL_SERIES = [
     "KXPRESGELECT", "KXINTL", "KXUKR", "KXMIDEAST",
     "KXCHINA", "KXNATO", "KXRUSSIA", "KXIRAN", "KXNK",
 ]
 
-# Series ticker PREFIXES to block — sports, entertainment, and other
-# non-geopolitical categories that will produce false matches.
+# Series ticker PREFIXES to reject — used as a second filter after keyword
+# discovery to drop sports leagues from geo-relevant countries (e.g. Saudi Pro
+# League matches "saudi", J-League matches "japan").
 MARKET_SERIES_BLOCKLIST_PREFIXES = [
-    "KXNCAA",    # NCAA sports (basketball, football, etc.)
-    "KXNFL",     # NFL football
-    "KXNBA",     # NBA basketball
-    "KXMLB",     # MLB baseball
-    "KXNHL",     # NHL hockey
-    "KXMLS",     # MLS soccer
-    "KXSOCCER",  # International soccer
-    "KXTENNIS",  # Tennis
-    "KXGOLF",    # Golf
-    "KXBOXING",  # Boxing
-    "KXMMA",     # MMA / UFC
-    "KXNASCAR",  # NASCAR
-    "KXFORMULA", # Formula 1
-    "KXOLYMPIC", # Olympics
+    # US major sports
+    "KXNCAA",      # NCAA sports
+    "KXNFL",       # NFL football
+    "KXNBA",       # NBA basketball
+    "KXMLB",       # MLB baseball
+    "KXNHL",       # NHL hockey
+    "KXMLS",       # MLS soccer
+    # International soccer leagues / cups
+    "KXSOCCER",    # Generic international soccer
+    "KXUCL",       # UEFA Champions League
+    "KXUEL",       # UEFA Europa League
+    "KXSAUDIPL",   # Saudi Pro League
+    "KXJLEAGUE",   # Japan J-League
+    "KXJBLEAGUE",  # Japan B-League (basketball)
+    "KXKLEAGUE",   # Korea K-League
+    "KXLIGUE1",    # French Ligue 1
+    "KXBUNDESLIGA",# German Bundesliga
+    "KXVENFUTVE",  # Venezuela soccer
+    # Other international sports
+    "KXTENNIS",    # Tennis
+    "KXGOLF",      # Golf
+    "KXBOXING",    # Boxing
+    "KXMMA",       # MMA / UFC
+    "KXNASCAR",    # NASCAR
+    "KXFORMULA",   # Formula 1
+    "KXOLYMPIC",   # Olympics
+    "KXBSL",       # Basketball Super Lig (Turkey)
+    "KXFIBAECUP",  # FIBA Europe Cup
+    # Entertainment / crypto / weather
     "KXENTERTAIN", # Entertainment / pop culture
-    "KXCRYPTO",  # Crypto price markets (not geopolitical)
-    "KXWEATHER", # Weather markets
-    "KXMVESPORTS", # Multi-event sports packages
-    "KXMVECROSS",  # Cross-category multi-event (non-geo)
+    "KXCRYPTO",    # Crypto price markets
+    "KXWEATHER",   # Weather markets
+    # Multi-event parlay packages
+    "KXMVESPORT",  # Multi-event sports
+    "KXMVECROSS",  # Cross-category multi-event
 ]
 
-MARKET_CACHE_TTL_SECONDS  = 300
+MARKET_CACHE_TTL_SECONDS  = 1800  # 30 min — geo market refresh takes ~3 min; no need to refresh every 5
 MAX_MARKET_DAYS_TO_EXPIRY = 30
 
 # ── Paper trading thresholds (cast a wide net for data collection) ────────────

@@ -250,6 +250,33 @@ class KalshiRestClient:
         log.info("Fetched %d open markets from Kalshi", len(all_markets))
         return all_markets
 
+    def get_all_series(self, max_pages: int = 100) -> list[dict]:
+        """
+        Paginate through the /series endpoint.
+
+        Returns a list of raw series dicts, each containing at minimum
+        'ticker' and 'title' keys. Used by the market cache to discover
+        geo/political series before fetching their open markets.
+        """
+        all_series: list[dict] = []
+        cursor = None
+        for _ in range(max_pages):
+            params: dict[str, Any] = {"limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                data = self._request("GET", "/series", params=params)
+            except Exception as exc:
+                log.warning("get_all_series page fetch failed: %s", exc)
+                break
+            batch = data.get("series", [])
+            all_series.extend(batch)
+            cursor = data.get("cursor") or None
+            if not cursor or not batch:
+                break
+        log.info("Fetched %d series from Kalshi", len(all_series))
+        return all_series
+
     # ── Account data ──────────────────────────────────────────────────────────
 
     def get_balance(self) -> float:
