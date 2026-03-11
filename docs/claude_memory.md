@@ -41,7 +41,8 @@ These are known issues to fix in a future session:
 - Kalshi REST base URL: `https://api.elections.kalshi.com/trade-api/v2` (migrated from `trading-api.kalshi.com`)
 - Kalshi WS URL: `wss://api.elections.kalshi.com/trade-api/ws/v2`
 - Market status: Kalshi now returns `"active"` (not `"open"`) — executor checks for both
-- `KALSHI_GEOPOLITICAL_SERIES` allowlist in `config.py` filters ~2000 total markets down to geopolitical only; applied in `analysis/market_matcher.py:_refresh()` — without this, sports/entertainment markets flood the pipeline
+- **Market discovery (2026-03):** Kalshi retired organised geo series (KXUKR, KXINTL, etc.) — all 0 open markets. New approach: fetch all ~9k series from `/series`, keyword-match titles to identify geo/political ones (~1,400), apply sports prefix blocklist (pass 2), fetch open markets per matched series (~443 geo markets). `KALSHI_GEOPOLITICAL_SERIES` in config.py is now historical/unused.
+- `MARKET_CACHE_TTL_SECONDS = 1800` (30 min) — refresh takes ~3 min in thread pool; political markets don't need 5-min refresh
 - `data/paper_trades.db` is local to each machine — DBs are NOT synced between Mac and Windows
 - Reddit monitor uses public JSON endpoints (no API credentials); 29 subreddits, 10s stagger, 300s cycle
 - 5 async tasks: RSS monitor, Reddit monitor, WebSocket client, daily reporter, market cache refresh
