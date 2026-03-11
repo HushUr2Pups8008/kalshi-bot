@@ -19,32 +19,26 @@ custom headers during the HTTP upgrade handshake.
 | 10.x – 11.x        | `additional_headers` |
 | 12.0+              | `extra_headers` (renamed back) |
 
-The bot **requires `websockets==12.0`** (pinned in `requirements.txt`).
-On that version the correct call is:
+The bot uses `websockets>=13.0` (see `requirements.txt`). On 12.0+ the correct
+kwarg is `extra_headers`. The correct call is:
 
 ```python
 async with websockets.connect(
     url,
-    extra_headers=auth_headers,   # ← correct for websockets 12.0
+    extra_headers=auth_headers,   # ← correct for websockets 12.0+
     ping_interval=30,
     ping_timeout=10,
 ) as ws:
 ```
 
-If you accidentally install a different version (e.g. the latest 13.x or an older
-11.x), the kwarg name may not match and the auth headers will be silently dropped,
-causing a 401 or connection reset.
+If an older version (10.x–11.x) is somehow installed (e.g. from a stale cached
+environment), the kwarg was named `additional_headers` and headers will be silently
+ignored, causing a 401 or immediate connection reset.
 
-**Always install the pinned version:**
+**Always install from the requirements file to get the right version:**
 
 ```bash
 pip install -r requirements.txt
-```
-
-or explicitly:
-
-```bash
-pip install "websockets==12.0"
 ```
 
 ---
@@ -97,7 +91,7 @@ characters: backslash + n), **not** actual newlines or Windows line endings (CRL
    ```
    pip install -r requirements.txt
    ```
-4. Verify `websockets` is exactly 12.0:
+4. Verify `websockets` is 12.0 or newer:
    ```
    pip show websockets
    ```
@@ -109,5 +103,5 @@ characters: backslash + n), **not** actual newlines or Windows line endings (CRL
 
 If the WebSocket still fails, check the logs for:
 - `"Could not sign WS handshake"` → PEM key parse error, check `.env` formatting.
-- `"401"` or `"403"` in the connection error → auth headers not sent; verify `websockets==12.0`.
+- `"401"` or `"403"` in the connection error → auth headers not sent; verify `websockets>=12.0`.
 - `"ConnectionClosed"` immediately after connect → usually a key or header issue.
