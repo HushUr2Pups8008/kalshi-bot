@@ -72,7 +72,7 @@ class TradeExecutor:
         if abs(analysis.edge) < effective_min_edge:
             return f"edge {analysis.edge:+.4f} below min_edge {effective_min_edge}"
 
-        if analysis.market.status != "open":
+        if analysis.market.status not in ("open", "active"):
             return f"market status={analysis.market.status}"
 
         # Price sanity: during paper trading allow slightly wider range
