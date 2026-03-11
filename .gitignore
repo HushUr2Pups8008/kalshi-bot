@@ -16,6 +16,7 @@ build/
 data/*.db
 logs/*.log
 logs/*.log.*
+logs/*.jsonl
 logs/report_*.txt
 
 # Keep the placeholder files
