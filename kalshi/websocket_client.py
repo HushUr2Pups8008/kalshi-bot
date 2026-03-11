@@ -23,8 +23,12 @@ try:
     import websockets
     from websockets.exceptions import ConnectionClosed
     _WS_AVAILABLE = True
+    # extra_headers was renamed to additional_headers in websockets 14.0
+    _ws_ver = tuple(int(x) for x in websockets.__version__.split(".")[:2])
+    _WS_HEADER_KWARG = "additional_headers" if _ws_ver >= (14, 0) else "extra_headers"
 except ImportError:
     _WS_AVAILABLE = False
+    _WS_HEADER_KWARG = "extra_headers"
 
 try:
     from cryptography.hazmat.primitives import hashes, serialization
@@ -222,7 +226,7 @@ class KalshiWebSocketClient:
 
                 async with websockets.connect(
                     url,
-                    extra_headers=auth_headers,
+                    **{_WS_HEADER_KWARG: auth_headers},
                     ping_interval=_PING_INTERVAL,
                     ping_timeout=10,
                 ) as ws:

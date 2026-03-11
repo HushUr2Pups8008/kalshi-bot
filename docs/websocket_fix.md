@@ -17,25 +17,26 @@ custom headers during the HTTP upgrade handshake.
 |--------------------|---------------|
 | < 10.0             | `extra_headers` |
 | 10.x – 11.x        | `additional_headers` |
-| 12.0+              | `extra_headers` (renamed back) |
+| 12.0 – 13.x        | `extra_headers` (renamed back) |
+| 14.0+              | `additional_headers` (renamed again) |
 
-The bot uses `websockets>=13.0` (see `requirements.txt`). On 12.0+ the correct
-kwarg is `extra_headers`. The correct call is:
+The bot requires `websockets>=13.0`. Since either 13.x (`extra_headers`) or 14.0+
+(`additional_headers`) may be installed, the code detects the version at import time
+and uses the correct kwarg automatically:
 
 ```python
+_ws_ver = tuple(int(x) for x in websockets.__version__.split(".")[:2])
+_WS_HEADER_KWARG = "additional_headers" if _ws_ver >= (14, 0) else "extra_headers"
+
 async with websockets.connect(
     url,
-    extra_headers=auth_headers,   # ← correct for websockets 12.0+
+    **{_WS_HEADER_KWARG: auth_headers},
     ping_interval=30,
     ping_timeout=10,
 ) as ws:
 ```
 
-If an older version (10.x–11.x) is somehow installed (e.g. from a stale cached
-environment), the kwarg was named `additional_headers` and headers will be silently
-ignored, causing a 401 or immediate connection reset.
-
-**Always install from the requirements file to get the right version:**
+**Always install from the requirements file:**
 
 ```bash
 pip install -r requirements.txt
