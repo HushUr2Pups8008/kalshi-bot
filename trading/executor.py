@@ -125,7 +125,7 @@ class TradeExecutor:
 
         cost_dollars = contracts * price_cents / 100.0
         log.info(
-            "[LIVE] Placing order: %s %s %d @ %d¢ | cost=$%.2f | edge=%+.3f | src_mult=%.2fx",
+            "[LIVE] Placing order: %s %s %d @ %d¢ | cost=$%.2f | edge=%+.3f | confidence=%.2f",
             analysis.market.ticker, analysis.side.upper(), contracts,
             price_cents, cost_dollars, analysis.edge, analysis.confidence,
         )

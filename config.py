@@ -22,24 +22,86 @@ LOGS_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 # ── Kalshi REST base URLs ─────────────────────────────────────────────────────
+# Production URL per official OpenAPI spec (api.elections.kalshi.com)
 KALSHI_PROD_REST = "https://api.elections.kalshi.com/trade-api/v2"
 KALSHI_DEMO_REST = "https://demo-api.kalshi.co/trade-api/v2"
-KALSHI_PROD_WS   = "wss://trading-api.kalshi.com/trade-api/ws/v2"
+KALSHI_PROD_WS   = "wss://api.elections.kalshi.com/trade-api/ws/v2"
 KALSHI_DEMO_WS   = "wss://demo-api.kalshi.co/trade-api/ws/v2"
 
 # ── RSS feeds to monitor ──────────────────────────────────────────────────────
 RSS_FEEDS = [
+    # Reuters
     "https://feeds.reuters.com/reuters/worldNews",
-    "https://feeds.reuters.com/Reuters/worldNews",
+    "https://feeds.reuters.com/reuters/topNews",
+    # AP News
     "https://feeds.apnews.com/rss/apf-topnews",
-    "https://apnews.com/apf-topnews.rss",
+    "https://feeds.apnews.com/rss/apf-intlnews",
+    # BBC
     "https://feeds.bbci.co.uk/news/world/rss.xml",
+    "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml",
+    "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
+    "https://feeds.bbci.co.uk/news/world/asia/rss.xml",
+    # Al Jazeera
     "https://www.aljazeera.com/xml/rss/all.xml",
+    # The Guardian
+    "https://www.theguardian.com/world/rss",
+    "https://www.theguardian.com/world/ukraine/rss",
+    "https://www.theguardian.com/world/middleeast/rss",
+    # NPR
+    "https://feeds.npr.org/1004/rss.xml",  # World
+    # Foreign Policy
+    "https://foreignpolicy.com/feed/",
+    # Defense One
+    "https://www.defenseone.com/rss/all/",
+    # The Hill (politics/geopolitics)
+    "https://thehill.com/news/feed/",
+    # Politico
+    "https://rss.politico.com/politics-news.xml",
+    # NY Times World
+    "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
+    # France 24
+    "https://www.france24.com/en/rss",
+    # Deutsche Welle
+    "https://rss.dw.com/xml/rss-en-world",
+    # Radio Free Europe
+    "https://www.rferl.org/api/zyqopjmxel",
 ]
 RSS_POLL_INTERVAL_SECONDS = 60
 
 # ── Reddit subreddits to monitor ──────────────────────────────────────────────
-REDDIT_SUBREDDITS = ["worldnews", "geopolitics", "news"]
+REDDIT_SUBREDDITS = [
+    # Core geopolitical / world news
+    "worldnews",
+    "geopolitics",
+    "InternationalNews",
+    "GlobalTalk",
+    "worldpolitics",
+    # Regional / conflict-specific
+    "ukraine",
+    "MiddleEast",
+    "China",
+    "iran",
+    "europe",
+    "NATO",
+    "NorthKorea",
+    "Israel",
+    "pakistan",
+    "southasia",
+    "EasternEurope",
+    "taiwan",
+    "Turkey",
+    "Syria",
+    "Africa",
+    "LatinAmerica",
+    "Eurasia",
+    # Analysis & defense
+    "CredibleDefense",
+    "ArmedConflicts",
+    "WarCollege",
+    "geopoliticsdiscussion",
+    "foreignpolicy",
+    "military",
+]
 REDDIT_MIN_SCORE  = 50
 
 # ── Kalshi market filters ─────────────────────────────────────────────────────
@@ -47,6 +109,31 @@ KALSHI_GEOPOLITICAL_SERIES = [
     "KXPRESGELECT", "KXINTL", "KXUKR", "KXMIDEAST",
     "KXCHINA", "KXNATO", "KXRUSSIA", "KXIRAN", "KXNK",
 ]
+
+# Series ticker PREFIXES to block — sports, entertainment, and other
+# non-geopolitical categories that will produce false matches.
+MARKET_SERIES_BLOCKLIST_PREFIXES = [
+    "KXNCAA",    # NCAA sports (basketball, football, etc.)
+    "KXNFL",     # NFL football
+    "KXNBA",     # NBA basketball
+    "KXMLB",     # MLB baseball
+    "KXNHL",     # NHL hockey
+    "KXMLS",     # MLS soccer
+    "KXSOCCER",  # International soccer
+    "KXTENNIS",  # Tennis
+    "KXGOLF",    # Golf
+    "KXBOXING",  # Boxing
+    "KXMMA",     # MMA / UFC
+    "KXNASCAR",  # NASCAR
+    "KXFORMULA", # Formula 1
+    "KXOLYMPIC", # Olympics
+    "KXENTERTAIN", # Entertainment / pop culture
+    "KXCRYPTO",  # Crypto price markets (not geopolitical)
+    "KXWEATHER", # Weather markets
+    "KXMVESPORTS", # Multi-event sports packages
+    "KXMVECROSS",  # Cross-category multi-event (non-geo)
+]
+
 MARKET_CACHE_TTL_SECONDS  = 300
 MAX_MARKET_DAYS_TO_EXPIRY = 30
 

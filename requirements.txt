@@ -6,6 +6,9 @@ aiohttp>=3.10.0
 websockets>=13.0
 requests==2.32.3
 
+# Cryptography (RSA signing for Kalshi API auth)
+cryptography>=41.0
+
 # Data / storage
 python-dotenv==1.0.1
 

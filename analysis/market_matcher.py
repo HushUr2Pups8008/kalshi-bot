@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from config import cfg, MARKET_CACHE_TTL_SECONDS, MAX_MARKET_DAYS_TO_EXPIRY
-from config import PAPER_MIN_MATCH_SCORE, PAPER_MAX_CANDIDATES, KALSHI_GEOPOLITICAL_SERIES
+from config import PAPER_MIN_MATCH_SCORE, PAPER_MAX_CANDIDATES, MARKET_SERIES_BLOCKLIST_PREFIXES
 from feeds import NewsItem
 from kalshi import KalshiMarket
 from kalshi.rest_client import KalshiRestClient
@@ -39,6 +39,9 @@ _STOP_WORDS = {
     "at", "by", "for", "with", "from", "and", "or", "but", "not", "no",
     "this", "that", "it", "its", "their", "there", "if", "as", "about",
     "after", "before", "than", "when", "who", "which", "what", "how",
+    # Sports betting noise words — prevent "Over 224.5" matching "war is over"
+    "over", "under", "yes", "no", "scored", "points", "goals", "rebounds",
+    "assists", "win", "wins", "loss", "losses", "vs", "per", "total",
 }
 
 _GEOPOLITICAL_BOOST = {
@@ -46,7 +49,7 @@ _GEOPOLITICAL_BOOST = {
     "korea", "north korea", "nato", "europe", "usa", "united states",
     "pakistan", "india", "afghanistan", "syria", "iraq", "saudi",
     "president", "prime minister", "election", "military", "war", "ceasefire",
-    "nuclear", "sanctions", "coup", "treaty", "summit", "un",
+    "nuclear", "sanctions", "coup", "treaty", "summit", "un", "troops",
     "attack", "invasion", "strike", "withdraw", "deploy", "negotiate",
 }
 
@@ -104,15 +107,19 @@ class MarketCache:
             markets = await loop.run_in_executor(None, self._client.get_all_open_markets)
             filtered = []
             for m in markets:
-                if m.series_ticker not in KALSHI_GEOPOLITICAL_SERIES:
+                # Drop sports / non-geopolitical series — check both series_ticker
+                # and the market ticker itself (series_ticker may be empty from API)
+                series = (m.series_ticker or "").upper()
+                ticker = m.ticker.upper()
+                if any(series.startswith(p) or ticker.startswith(p)
+                       for p in MARKET_SERIES_BLOCKLIST_PREFIXES):
                     continue
                 days = _days_to_close(m.close_time)
                 if days is None or 0 < days <= MAX_MARKET_DAYS_TO_EXPIRY:
                     filtered.append(m)
             self._markets    = filtered
             self._last_fetch = time.monotonic()
-            log.info("Market cache refreshed: %d geopolitical markets (filtered from %d total)",
-                     len(filtered), len(markets))
+            log.info("Market cache refreshed: %d markets (sports/non-geo filtered)", len(filtered))
         except Exception as exc:
             log.error("Market cache refresh failed: %s", exc)
 
@@ -149,6 +156,10 @@ class MarketMatcher:
         scored: list[tuple[KalshiMarket, float]] = []
         for market in markets:
             market_tokens = _tokenize(f"{market.title} {market.subtitle}")
+            # Require the market itself to contain at least one geopolitical token.
+            # This prevents sports/financial markets from ever matching geo news.
+            if not (market_tokens & _GEOPOLITICAL_BOOST):
+                continue
             score = _similarity(news_tokens, market_tokens)
             if score < min_score:
                 continue

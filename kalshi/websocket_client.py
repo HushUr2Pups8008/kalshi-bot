@@ -13,6 +13,7 @@ Usage:
 """
 
 import asyncio
+import base64
 import json
 import logging
 import time
@@ -25,6 +26,13 @@ try:
 except ImportError:
     _WS_AVAILABLE = False
 
+try:
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+    _CRYPTO_AVAILABLE = True
+except ImportError:
+    _CRYPTO_AVAILABLE = False
+
 from config import cfg
 from utils.logger import get_logger
 
@@ -36,6 +44,60 @@ PriceCallback = Callable[[str, float, float], Awaitable[None]]
 _INITIAL_RECONNECT_DELAY = 2
 _MAX_RECONNECT_DELAY     = 60
 _PING_INTERVAL           = 30
+
+def _normalize_pem(raw: str | bytes) -> bytes:
+    """
+    Normalize a private key to a valid PEM byte string.
+
+    Handles:
+      - Literal \\n escape sequences (common in .env files)
+      - Missing -----BEGIN/END RSA PRIVATE KEY----- headers
+    """
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    raw = raw.replace("\\n", "\n").strip()
+    if "BEGIN" not in raw:
+        raw = f"-----BEGIN RSA PRIVATE KEY-----\n{raw}\n-----END RSA PRIVATE KEY-----"
+    return raw.encode()
+
+
+def _build_ws_auth_headers() -> dict:
+    """
+    Build RSA-PSS auth headers for the WebSocket HTTP upgrade.
+
+    Per the Kalshi docs, auth uses three headers passed during the WS handshake:
+      KALSHI-ACCESS-KEY, KALSHI-ACCESS-TIMESTAMP, KALSHI-ACCESS-SIGNATURE
+
+    Message to sign: timestamp + "GET" + "/trade-api/ws/v2"
+    Signing algorithm: RSA-PSS, SHA-256, salt_length=DIGEST_LENGTH
+    """
+    if not cfg.api_key_id or not cfg.api_key_secret or not _CRYPTO_AVAILABLE:
+        return {}
+    from urllib.parse import urlparse
+    ws_path = cfg.ws_url.replace("wss://", "https://").replace("ws://", "http://")
+    path = urlparse(ws_path).path  # e.g. /trade-api/ws/v2
+    ts = str(int(time.time() * 1000))
+    message = (ts + "GET" + path).encode()
+    try:
+        pem = _normalize_pem(cfg.api_key_secret)
+        private_key = serialization.load_pem_private_key(pem, password=None)
+        sig = private_key.sign(
+            message,
+            asym_padding.PSS(
+                mgf=asym_padding.MGF1(hashes.SHA256()),
+                salt_length=asym_padding.PSS.DIGEST_LENGTH,
+            ),
+            hashes.SHA256(),
+        )
+        sig_b64 = base64.b64encode(sig).decode()
+    except Exception as exc:
+        log.warning("Could not sign WS handshake: %s — connecting unsigned", exc)
+        return {}
+    return {
+        "KALSHI-ACCESS-KEY":       cfg.api_key_id,
+        "KALSHI-ACCESS-TIMESTAMP": ts,
+        "KALSHI-ACCESS-SIGNATURE": sig_b64,
+    }
 
 
 class KalshiWebSocketClient:
@@ -113,6 +175,8 @@ class KalshiWebSocketClient:
             await self._handle_orderbook(msg)
         elif msg_type == "subscribed":
             log.debug("WS subscription confirmed: %s", msg.get("msg", {}).get("market_ticker"))
+        elif msg_type == "error":
+            log.warning("WS error message: %s", msg)
 
     async def _handle_orderbook(self, msg: dict) -> None:
         """Extract best yes bid/ask from an orderbook update."""
@@ -154,14 +218,11 @@ class KalshiWebSocketClient:
                 url = cfg.ws_url
                 log.info("Connecting to Kalshi WS: %s", url)
 
-                auth_headers = {}
-                if cfg.api_key_id:
-                    # Simple token header for WS auth
-                    auth_headers["Authorization"] = f"Bearer {cfg.api_key_id}"
+                auth_headers = _build_ws_auth_headers()
 
                 async with websockets.connect(
                     url,
-                    additional_headers=auth_headers,
+                    extra_headers=auth_headers,
                     ping_interval=_PING_INTERVAL,
                     ping_timeout=10,
                 ) as ws:

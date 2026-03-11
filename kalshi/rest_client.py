@@ -8,8 +8,6 @@ Kalshi API docs: https://trading-api.kalshi.com/trade-api/v2/openapi.json
 """
 
 import base64
-import hashlib
-import hmac
 import json
 import logging
 import time
@@ -18,6 +16,8 @@ from typing import Any, Optional
 from urllib.parse import urljoin
 
 import requests
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -26,6 +26,23 @@ from kalshi import KalshiMarket, OrderResult
 from utils.logger import get_logger
 
 log = get_logger("kalshi_rest")
+
+
+def _normalize_pem(raw: str | bytes) -> bytes:
+    """
+    Normalize a private key to a valid PEM byte string.
+
+    Handles:
+      - Literal \\n escape sequences (common in .env files)
+      - Missing -----BEGIN/END RSA PRIVATE KEY----- headers
+    """
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    raw = raw.replace("\\n", "\n").strip()
+    if "BEGIN" not in raw:
+        raw = f"-----BEGIN RSA PRIVATE KEY-----\n{raw}\n-----END RSA PRIVATE KEY-----"
+    return raw.encode()
+
 
 # Rate-limit guard: max 10 requests/second
 _MIN_REQUEST_INTERVAL = 0.12   # seconds
@@ -60,19 +77,26 @@ class KalshiRestClient:
 
     def _sign(self, method: str, path: str, body: str = "") -> dict[str, str]:
         """
-        Build the HMAC-SHA256 Authorization header required by Kalshi.
+        Build the RSA-PSS signature headers required by Kalshi v2.
 
         Kalshi uses:
           timestamp  = milliseconds since epoch (string)
           message    = timestamp + method.upper() + path + body
-          signature  = HMAC-SHA256(secret, message), base64-encoded
-          header     = "Kalshi <key_id>:<signature>"
+          signature  = RSA-PSS/SHA-256 (DIGEST_LENGTH salt), base64-encoded
         """
         ts = str(int(time.time() * 1000))
-        message = ts + method.upper() + path + body
+        message = (ts + method.upper() + path + body).encode()
         try:
-            secret_bytes = self._secret.encode() if isinstance(self._secret, str) else self._secret
-            sig = hmac.new(secret_bytes, message.encode(), hashlib.sha256).digest()
+            pem = _normalize_pem(self._secret)
+            private_key = serialization.load_pem_private_key(pem, password=None)
+            sig = private_key.sign(
+                message,
+                asym_padding.PSS(
+                    mgf=asym_padding.MGF1(hashes.SHA256()),
+                    salt_length=asym_padding.PSS.DIGEST_LENGTH,
+                ),
+                hashes.SHA256(),
+            )
             sig_b64 = base64.b64encode(sig).decode()
         except Exception as exc:
             log.warning("Could not sign request: %s — proceeding unsigned", exc)

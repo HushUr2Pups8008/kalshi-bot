@@ -20,10 +20,12 @@ from utils.logger import get_logger
 
 log = get_logger("reddit_monitor")
 
-REDDIT_POLL_INTERVAL = 120   # seconds between polls
-FETCH_LIMIT          = 25    # posts per request
-SCORE_RECHECK_DELAY  = 90    # seconds before rechecking score
-MAX_SEEN             = 2_000
+REDDIT_POLL_INTERVAL  = 300   # seconds between full poll cycles
+FETCH_LIMIT           = 25    # posts per request
+SCORE_RECHECK_DELAY   = 90    # seconds before rechecking score
+MAX_SEEN              = 2_000
+_STAGGER_DELAY        = 10    # seconds between each subreddit request (avoids burst)
+_MAX_BACKOFF          = 300   # max 429 backoff in seconds
 
 # Reddit requires a descriptive User-Agent to avoid rate limiting
 _USER_AGENT = "KalshiBot/1.0 (geopolitical news monitor; no login required)"
@@ -34,14 +36,25 @@ def _make_id(post_id: str) -> str:
     return hashlib.sha256(post_id.encode()).hexdigest()
 
 
+_backoff: dict[str, float] = {}   # per-subreddit 429 backoff tracker
+
 async def _fetch_subreddit(session: aiohttp.ClientSession, subreddit: str) -> list[dict]:
+    # Honour any active backoff for this subreddit
+    backoff = _backoff.get(subreddit, 0.0)
+    if backoff > 0:
+        log.debug("r/%s in backoff — skipping this cycle", subreddit)
+        _backoff[subreddit] = max(0.0, backoff - REDDIT_POLL_INTERVAL)
+        return []
+
     url = _BASE_URL.format(subreddit=subreddit, limit=FETCH_LIMIT)
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             if resp.status == 429:
-                log.warning("Reddit rate limit hit for r/%s — backing off 30s", subreddit)
-                await asyncio.sleep(30)
+                new_backoff = min(_backoff.get(subreddit, 60) * 2, _MAX_BACKOFF)
+                _backoff[subreddit] = new_backoff
+                log.warning("Reddit rate limit hit for r/%s — backing off %.0fs", subreddit, new_backoff)
                 return []
+            _backoff[subreddit] = 0.0   # reset on success
             if resp.status != 200:
                 log.warning("r/%s returned HTTP %d", subreddit, resp.status)
                 return []
@@ -148,10 +161,13 @@ async def run_reddit_monitor(
     headers = {"User-Agent": _USER_AGENT}
     async with aiohttp.ClientSession(headers=headers) as session:
         while True:
-            tasks = [
-                _poll_subreddit(session, sub, callback, seen)
-                for sub in subreddits
-            ]
-            await asyncio.gather(*tasks, return_exceptions=True)
-            log.debug("Reddit poll cycle complete, sleeping %ds", poll_interval)
+            # Poll each subreddit sequentially with a stagger delay to avoid
+            # bursting Reddit's rate limiter with simultaneous requests.
+            for sub in subreddits:
+                try:
+                    await _poll_subreddit(session, sub, callback, seen)
+                except Exception as exc:
+                    log.warning("Unhandled error polling r/%s: %s", sub, exc)
+                await asyncio.sleep(_STAGGER_DELAY)
+            log.debug("Reddit poll cycle complete (%d subs), sleeping %ds", len(subreddits), poll_interval)
             await asyncio.sleep(poll_interval)
