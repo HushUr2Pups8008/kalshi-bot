@@ -191,7 +191,7 @@ async def _ollama_estimate(news, market):
                 data = await resp.json()
 
         text  = data["choices"][0]["message"]["content"].strip()
-        match = _re.search(r"\{.*\}", text, _re.DOTALL)
+        match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
             raise ValueError(f"No JSON in Ollama response: {text[:100]}")
 
@@ -232,7 +232,7 @@ async def _anthropic_estimate(news, market):
         )
 
         text  = response.content[0].text.strip()
-        match = _re.search(r"\{.*\}", text, _re.DOTALL)
+        match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
             raise ValueError(f"No JSON in Anthropic response: {text[:100]}")
 
