@@ -149,6 +149,11 @@ MARKET_SERIES_BLOCKLIST_PREFIXES = [
     # Polling / approval rating markets (not geopolitical events)
     "KXAPRPOTUS",  # Presidential approval rating polls
     "KXPOLLPOTUS", # Presidential polls
+    # Central bank decision markets (monetary policy, not geopolitical events)
+    "KXCBDECISION", # Central bank rate decisions (Russia, China, etc.)
+    # Trump quote-prediction markets (not event markets; match any Trump headline)
+    "KXTRUMPSAY",  # Will Trump say [word] this week?
+    "KXTRUMPSAYMONTH",  # Will Trump say [word] this month?
     # Entertainment / crypto / weather
     "KXENTERTAIN", # Entertainment / pop culture
     "KXCRYPTO",    # Crypto price markets
@@ -166,7 +171,7 @@ MAX_MARKET_DAYS_TO_EXPIRY = 30
 # and build source credibility data during the paper phase.
 PAPER_MIN_EDGE         = 0.02   # vs live 0.04
 PAPER_MIN_MATCH_SCORE  = 0.03   # vs live 0.06
-PAPER_MAX_CANDIDATES   = 10     # vs live 5
+PAPER_MAX_CANDIDATES   = 1      # top match only — one trade per article, clean signal
 PAPER_FLAT_CONTRACTS   = 5      # flat contract count during paper training (no bankroll gating)
 
 # ── Source credibility settings ───────────────────────────────────────────────

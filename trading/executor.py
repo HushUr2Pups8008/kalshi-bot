@@ -3,7 +3,7 @@ Trade executor — the decision gate between analysis and action.
 
 Paper mode: determined by cfg.is_paper_trading (set by PaperTrader reading DB).
   - Relaxed edge and price checks — cast wide net for credibility data.
-  - No ticker cooldown — we want as many resolved trades as possible.
+  - Per-ticker cooldown 4h — prevents same ticker spammed by article bursts.
   - Dynamic max bet based on notional bankroll.
 
 Live mode: requires explicit --go-live confirmation. Tighter checks.
@@ -83,7 +83,18 @@ class TradeExecutor:
         if yes_price < price_floor or yes_price > price_ceil:
             return f"price {yes_price:.1f}¢ is near limit (too illiquid)"
 
-        # Ticker cooldown — live only (paper wants max data)
+        # Paper ticker cooldown (4h): prevents same ticker being spammed by a burst
+        # of headlines on the same topic (e.g. 30 Iran-war articles in one poll cycle).
+        if cfg.is_paper_trading:
+            last    = self._last_traded.get(analysis.market.ticker, 0.0)
+            elapsed = time.monotonic() - last
+            if elapsed < _PAPER_TICKER_COOLDOWN:
+                return (
+                    f"paper cooldown: last trade {elapsed/3600:.1f}h ago "
+                    f"(cooldown={_PAPER_TICKER_COOLDOWN//3600}h)"
+                )
+
+        # Live ticker cooldown + balance check
         if not cfg.is_paper_trading:
             last    = self._last_traded.get(analysis.market.ticker, 0.0)
             elapsed = time.monotonic() - last
