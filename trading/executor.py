@@ -26,7 +26,8 @@ from utils.logger import get_logger, trade_log
 
 log = get_logger("executor")
 
-_LIVE_TICKER_COOLDOWN = 600   # seconds between trades on same ticker (live only)
+_LIVE_TICKER_COOLDOWN  = 600        # seconds between trades on same ticker (live only)
+_PAPER_TICKER_COOLDOWN = 4 * 3600  # 4h cooldown per ticker during paper trading
 
 
 class TradeExecutor:
