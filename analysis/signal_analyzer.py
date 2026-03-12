@@ -193,7 +193,7 @@ async def _ollama_estimate(news, market):
             async with session.post(
                 f"{cfg.ollama_base_url}/chat/completions",
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=30),
+                timeout=aiohttp.ClientTimeout(total=60),
             ) as resp:
                 if resp.status != 200:
                     log.debug("Ollama returned HTTP %d", resp.status)
