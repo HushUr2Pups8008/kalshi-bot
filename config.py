@@ -146,6 +146,9 @@ MARKET_SERIES_BLOCKLIST_PREFIXES = [
     "KXOLYMPIC",   # Olympics
     "KXBSL",       # Basketball Super Lig (Turkey)
     "KXFIBAECUP",  # FIBA Europe Cup
+    # Polling / approval rating markets (not geopolitical events)
+    "KXAPRPOTUS",  # Presidential approval rating polls
+    "KXPOLLPOTUS", # Presidential polls
     # Entertainment / crypto / weather
     "KXENTERTAIN", # Entertainment / pop culture
     "KXCRYPTO",    # Crypto price markets

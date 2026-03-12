@@ -242,10 +242,13 @@ class MarketMatcher:
             # This prevents sports/financial markets from ever matching geo news.
             if not (market_tokens & _GEOPOLITICAL_BOOST):
                 continue
-            # Require at least one token from the news HEADLINE to appear in
-            # the market title -- prevents body-only spurious matches like
-            # "Georgia runoff" matching "Bank of Korea rate decisions".
-            if not (headline_tokens & market_title_tokens):
+            # Require at least one MEANINGFUL token from the news HEADLINE to
+            # appear in the market title. Filter out short/numeric tokens first
+            # to prevent date fragments like '1' (from 'Apr 1') or 's' (from
+            # 'U.S.') from creating false positives.
+            meaningful_hl = {t for t in headline_tokens if len(t) >= 3 and not t.isdigit()}
+            meaningful_mt = {t for t in market_title_tokens if len(t) >= 3 and not t.isdigit()}
+            if not (meaningful_hl & meaningful_mt):
                 continue
             score = _similarity(news_tokens, market_tokens)
             if score < min_score:
