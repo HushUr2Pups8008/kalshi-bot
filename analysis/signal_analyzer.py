@@ -127,35 +127,38 @@ def keyword_estimate(
 
 # ── Optional LLM estimation ───────────────────────────────────────────────────
 
-_LLM_SYSTEM_PROMPT = """You are a prediction market analyst specializing in geopolitical events.
-Your job is to estimate the probability that a Kalshi binary market resolves YES,
-given recent breaking news.
+# Magnitude -> probability shift mapping (applied in code, not by the LLM)
+_MAGNITUDE_SHIFT = {"none": 0.0, "small": 0.08, "moderate": 0.15, "large": 0.25}
+
+_LLM_SYSTEM_PROMPT = """You are a geopolitical prediction market analyst.
+Assess whether a news headline materially shifts the probability of a Kalshi binary market.
 
 You will be given:
 1. A news headline and summary
 2. The Kalshi market title and current YES price
-3. The market close date
 
-Think step by step before giving your final estimate:
-Step 1 - What is the market already pricing in? Describe the consensus view reflected by the current YES price.
-Step 2 - What specific new information does this headline add, if any? Is this genuinely new, or already known/expected?
-Step 3 - Given steps 1 and 2, does this news materially change the probability? By how much and in which direction?
+Answer these questions in order:
+Q1 - Is this headline directly relevant to the specific market question? (true/false)
+Q2 - Does this headline add genuinely NEW information not already priced in? (true/false)
+Q3 - If new and relevant: which direction does it push the YES probability? (yes/no/neutral)
+Q4 - How strongly does it push? (none/small/moderate/large)
+     none:     no meaningful shift
+     small:    5-8 cent move (e.g. minor new development)
+     moderate: 10-20 cent move (e.g. significant escalation or de-escalation)
+     large:    20+ cent move (e.g. major unexpected event directly resolving the question)
 
-Then respond with ONLY a JSON object:
+Respond with ONLY a JSON object:
 {
-  "estimated_probability": <float 0.0-1.0>,
+  "relevant": <true|false>,
+  "new_information": <true|false>,
+  "direction": "yes" | "no" | "neutral",
+  "magnitude": "none" | "small" | "moderate" | "large",
   "confidence": <float 0.0-1.0>,
-  "reasoning": "<2-3 sentences summarising your step-by-step conclusion>"
+  "reasoning": "<2-3 sentences>"
 }
 
-Be calibrated and conservative. Most headlines are already priced in.
-Only deviate significantly from the current market price if the news is
-genuinely new information that the market has not yet had a chance to react to.
-
-CRITICAL CONSISTENCY RULE: Your estimated_probability MUST be consistent with your reasoning.
-- If Step 2 concludes the news adds NO new information, estimated_probability must be within 0.05 of the current YES price.
-- If Step 3 concludes the news causes only a SLIGHT shift, estimated_probability must be within 0.10 of the current YES price.
-- Only set estimated_probability far from the current price if Steps 2 and 3 identify clear, specific, material new information."""
+Be conservative. Most headlines are already priced in. Only use moderate/large
+when the news is a clear, specific, direct development on the exact market question."""
 
 
 def _build_user_msg(news, market) -> str:
@@ -166,7 +169,7 @@ def _build_user_msg(news, market) -> str:
         f"MARKET TITLE: {market.title}\n"
         f"CURRENT YES PRICE: {market.yes_price:.1f} cents ({market.yes_prob:.1%})\n"
         f"MARKET CLOSES: {market.close_time}\n\n"
-        f"What is the probability this market resolves YES?"
+        f"Is this news relevant to this market, and if so, which direction and how strongly does it shift the probability?"
     )
 
 
@@ -206,11 +209,25 @@ async def _ollama_estimate(news, market):
             raise ValueError(f"No JSON in Ollama response: {text[:100]}")
 
         parsed     = _json.loads(match.group())
-        prob       = float(parsed["estimated_probability"])
-        confidence = float(parsed.get("confidence", 0.6))
+        confidence = float(parsed.get("confidence", 0.5))
         reasoning  = parsed.get("reasoning", "")
-        prob       = max(0.02, min(0.98, prob))
-        log.debug("Ollama estimate: %.3f (conf=%.2f) for %s", prob, confidence, market.ticker)
+        relevant   = parsed.get("relevant", True)
+        new_info   = parsed.get("new_information", True)
+        direction  = parsed.get("direction", "neutral")
+        magnitude  = parsed.get("magnitude", "none")
+
+        if not relevant or not new_info or direction == "neutral" or magnitude == "none":
+            prob = market.yes_prob
+        else:
+            base_shift = _MAGNITUDE_SHIFT.get(magnitude, 0.0)
+            shift = base_shift * confidence
+            if direction == "yes":
+                prob = min(0.95, market.yes_prob + shift)
+            else:
+                prob = max(0.05, market.yes_prob - shift)
+
+        log.debug("Ollama: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
+                  direction, magnitude, confidence, prob, market.ticker)
         return prob, confidence, reasoning
 
     except aiohttp.ClientConnectorError:
@@ -247,11 +264,25 @@ async def _anthropic_estimate(news, market):
             raise ValueError(f"No JSON in Anthropic response: {text[:100]}")
 
         parsed     = _json.loads(match.group())
-        prob       = float(parsed["estimated_probability"])
-        confidence = float(parsed.get("confidence", 0.6))
+        confidence = float(parsed.get("confidence", 0.5))
         reasoning  = parsed.get("reasoning", "")
-        prob       = max(0.02, min(0.98, prob))
-        log.debug("Anthropic estimate: %.3f (conf=%.2f) for %s", prob, confidence, market.ticker)
+        relevant   = parsed.get("relevant", True)
+        new_info   = parsed.get("new_information", True)
+        direction  = parsed.get("direction", "neutral")
+        magnitude  = parsed.get("magnitude", "none")
+
+        if not relevant or not new_info or direction == "neutral" or magnitude == "none":
+            prob = market.yes_prob
+        else:
+            base_shift = _MAGNITUDE_SHIFT.get(magnitude, 0.0)
+            shift = base_shift * confidence
+            if direction == "yes":
+                prob = min(0.95, market.yes_prob + shift)
+            else:
+                prob = max(0.05, market.yes_prob - shift)
+
+        log.debug("Anthropic: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
+                  direction, magnitude, confidence, prob, market.ticker)
         return prob, confidence, reasoning
 
     except ImportError:
