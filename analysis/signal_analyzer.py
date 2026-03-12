@@ -136,16 +136,21 @@ You will be given:
 2. The Kalshi market title and current YES price
 3. The market close date
 
-Respond with ONLY a JSON object:
+Think step by step before giving your final estimate:
+Step 1 - What is the market already pricing in? Describe the consensus view reflected by the current YES price.
+Step 2 - What specific new information does this headline add, if any? Is this genuinely new, or already known/expected?
+Step 3 - Given steps 1 and 2, does this news materially change the probability? By how much and in which direction?
+
+Then respond with ONLY a JSON object:
 {
   "estimated_probability": <float 0.0-1.0>,
   "confidence": <float 0.0-1.0>,
-  "reasoning": "<1-2 sentence explanation>"
+  "reasoning": "<2-3 sentences summarising your step-by-step conclusion>"
 }
 
-Be calibrated and conservative. Do not overreact to a single headline.
-The current market price already reflects the consensus — only deviate significantly
-if the news is truly market-moving."""
+Be calibrated and conservative. Most headlines are already priced in.
+Only deviate significantly from the current market price if the news is
+genuinely new information that the market has not yet had a chance to react to."""
 
 
 def _build_user_msg(news, market) -> str:
