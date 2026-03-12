@@ -53,6 +53,25 @@ _GEOPOLITICAL_BOOST = {
     "attack", "invasion", "strike", "withdraw", "deploy", "negotiate",
 }
 
+# Named geo entities specific enough that a single token overlap is meaningful.
+# Used in the tiered headline gate and geo-coherence edge checks.
+# Generic conflict words (war, attack, bank, people) are NOT included here --
+# those require 2+ overlaps to pass the gate.
+_GEO_NAMED_ENTITIES = frozenset({
+    # Country names
+    "ukraine", "russia", "china", "taiwan", "iran", "israel", "gaza",
+    "korea", "pakistan", "india", "japan", "turkey", "saudi", "syria",
+    "iraq", "afghanistan", "venezuela", "cuba", "mexico", "canada",
+    "france", "germany", "britain", "lebanon", "hamas", "hezbollah",
+    # Adjective / demonym forms
+    "russian", "chinese", "iranian", "ukrainian", "korean", "israeli",
+    "european", "american", "british", "french", "german", "turkish",
+    "japanese", "lebanese", "iraqi", "syrian", "saudi",
+    # Key individuals
+    "zelensky", "zelenskyy", "putin", "trump", "biden", "netanyahu",
+    "khamenei", "hegseth", "modi",
+})
+
 
 def _tokenize(text: str) -> set[str]:
     text = text.lower()
@@ -248,7 +267,13 @@ class MarketMatcher:
             # 'U.S.') from creating false positives.
             meaningful_hl = {t for t in headline_tokens if len(t) >= 3 and not t.isdigit()}
             meaningful_mt = {t for t in market_title_tokens if len(t) >= 3 and not t.isdigit()}
-            if not (meaningful_hl & meaningful_mt):
+            overlap = meaningful_hl & meaningful_mt
+            # Tiered gate: a specific named geo-entity (country, person) is
+            # distinctive enough to pass alone. Generic words like "bank",
+            # "people", "war", "attack" are too common -- require 2+ of them.
+            geo_overlap     = overlap & _GEO_NAMED_ENTITIES
+            generic_overlap = overlap - _GEO_NAMED_ENTITIES
+            if not geo_overlap and len(generic_overlap) < 2:
                 continue
             score = _similarity(news_tokens, market_tokens)
             if score < min_score:

@@ -71,6 +71,35 @@ def keyword_estimate(
     if base_probability is None:
         base_probability = market.yes_prob  # use current market price
 
+    # Geo-entity coherence check: if the article and market both reference
+    # specific countries/regions, they must share at least one. This prevents
+    # signals from Iran news bleeding into Bank of Russia / PBOC markets.
+    # Countries + their adjective forms; deliberately excludes generic words
+    # like "war", "attack", "bank" that appear in many unrelated contexts.
+    _GEO_COUNTRIES = frozenset({
+        "ukraine", "russia", "china", "taiwan", "iran", "israel", "gaza",
+        "korea", "pakistan", "india", "japan", "turkey", "saudi", "syria",
+        "iraq", "afghanistan", "venezuela", "cuba", "mexico", "canada",
+        "france", "germany", "britain", "lebanon",
+        "russian", "chinese", "iranian", "ukrainian", "korean", "israeli",
+        "european", "american", "british", "french", "german", "turkish",
+        "japanese", "lebanese", "iraqi", "syrian",
+    })
+    article_text_lower = f"{news.headline} {news.body[:300] if news.body else ''}".lower()
+    market_text_lower  = f"{market.title} {market.subtitle}".lower()
+    article_countries  = {e for e in _GEO_COUNTRIES if e in article_text_lower}
+    market_countries   = {e for e in _GEO_COUNTRIES if e in market_text_lower}
+    if article_countries and market_countries and not (article_countries & market_countries):
+        log.debug(
+            "Geo-coherence suppressed: article=%s market=%s ticker=%s",
+            article_countries, market_countries, market.ticker,
+        )
+        return (
+            market.yes_prob, 0.05, keywords,
+            f"Geo-entity mismatch: article mentions {article_countries} "
+            f"but market concerns {market_countries} — signal suppressed.",
+        )
+
     # Dampen shift by current market price: shifts near extremes are smaller
     # because the market is already "priced in" somewhat
     dampen_factor = 1.0
