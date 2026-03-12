@@ -148,15 +148,73 @@ The current market price already reflects the consensus — only deviate signifi
 if the news is truly market-moving."""
 
 
-async def llm_estimate(
-    news: NewsItem,
-    market: KalshiMarket,
-) -> tuple[float, float, str] | None:
-    """
-    Use Claude API to estimate probability.
+def _build_user_msg(news, market) -> str:
+    return (
+        f"NEWS HEADLINE: {news.headline}\n"
+        f"SOURCE: {news.source}\n"
+        f"SUMMARY: {news.body[:400] if news.body else '(none)'}\n\n"
+        f"MARKET TITLE: {market.title}\n"
+        f"CURRENT YES PRICE: {market.yes_price:.1f} cents ({market.yes_prob:.1%})\n"
+        f"MARKET CLOSES: {market.close_time}\n\n"
+        f"What is the probability this market resolves YES?"
+    )
 
-    Returns (estimated_probability, confidence, reasoning) or None on failure.
-    Requires ANTHROPIC_API_KEY to be set.
+
+async def _ollama_estimate(news, market):
+    """
+    Call local Ollama server (OpenAI-compatible endpoint).
+    Returns (prob, confidence, reasoning) or None if Ollama is not running.
+    """
+    import aiohttp
+    import json as _json
+
+    payload = {
+        "model": cfg.ollama_model,
+        "messages": [
+            {"role": "system", "content": _LLM_SYSTEM_PROMPT},
+            {"role": "user",   "content": _build_user_msg(news, market)},
+        ],
+        "max_tokens": 256,
+        "temperature": 0.1,
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{cfg.ollama_base_url}/chat/completions",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                if resp.status != 200:
+                    log.debug("Ollama returned HTTP %d", resp.status)
+                    return None
+                data = await resp.json()
+
+        text  = data["choices"][0]["message"]["content"].strip()
+        match = _re.search(r"\{.*\}", text, _re.DOTALL)
+        if not match:
+            raise ValueError(f"No JSON in Ollama response: {text[:100]}")
+
+        parsed     = _json.loads(match.group())
+        prob       = float(parsed["estimated_probability"])
+        confidence = float(parsed.get("confidence", 0.6))
+        reasoning  = parsed.get("reasoning", "")
+        prob       = max(0.02, min(0.98, prob))
+        log.debug("Ollama estimate: %.3f (conf=%.2f) for %s", prob, confidence, market.ticker)
+        return prob, confidence, reasoning
+
+    except aiohttp.ClientConnectorError:
+        log.debug("Ollama not running -- falling back to keyword scoring")
+        return None
+    except Exception as exc:
+        log.warning("Ollama estimation failed: %s", exc)
+        return None
+
+
+async def _anthropic_estimate(news, market):
+    """
+    Call Anthropic Claude API (fallback if Ollama unavailable).
+    Returns None if ANTHROPIC_API_KEY is not set or the call fails.
     """
     if not cfg.anthropic_api_key:
         return None
@@ -165,46 +223,45 @@ async def llm_estimate(
         import anthropic
         import json as _json
 
-        client = anthropic.AsyncAnthropic(api_key=cfg.anthropic_api_key)
-
-        user_msg = (
-            f"NEWS HEADLINE: {news.headline}\n"
-            f"SOURCE: {news.source}\n"
-            f"SUMMARY: {news.body[:400] if news.body else '(none)'}\n\n"
-            f"MARKET TITLE: {market.title}\n"
-            f"CURRENT YES PRICE: {market.yes_price:.1f} cents ({market.yes_prob:.1%})\n"
-            f"MARKET CLOSES: {market.close_time}\n\n"
-            f"What is the probability this market resolves YES?"
-        )
-
+        client   = anthropic.AsyncAnthropic(api_key=cfg.anthropic_api_key)
         response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",   # fast + cheap for this use case
+            model="claude-haiku-4-5-20251001",
             max_tokens=256,
             system=_LLM_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_msg}],
+            messages=[{"role": "user", "content": _build_user_msg(news, market)}],
         )
 
-        text = response.content[0].text.strip()
-        # Extract JSON
-        match = re.search(r"\{.*\}", text, re.DOTALL)
+        text  = response.content[0].text.strip()
+        match = _re.search(r"\{.*\}", text, _re.DOTALL)
         if not match:
-            raise ValueError(f"No JSON in LLM response: {text[:100]}")
+            raise ValueError(f"No JSON in Anthropic response: {text[:100]}")
 
-        parsed = _json.loads(match.group())
+        parsed     = _json.loads(match.group())
         prob       = float(parsed["estimated_probability"])
         confidence = float(parsed.get("confidence", 0.6))
         reasoning  = parsed.get("reasoning", "")
-
-        prob = max(0.02, min(0.98, prob))
-        log.debug("LLM estimate: %.3f (confidence %.2f) for %s", prob, confidence, market.ticker)
+        prob       = max(0.02, min(0.98, prob))
+        log.debug("Anthropic estimate: %.3f (conf=%.2f) for %s", prob, confidence, market.ticker)
         return prob, confidence, reasoning
 
     except ImportError:
-        log.warning("anthropic package not installed — LLM estimation disabled")
+        log.warning("anthropic package not installed -- Anthropic estimation disabled")
         return None
     except Exception as exc:
-        log.warning("LLM estimation failed: %s", exc)
+        log.warning("Anthropic estimation failed: %s", exc)
         return None
+
+
+async def llm_estimate(news, market):
+    """
+    Best-available LLM estimate. Tries Ollama first (free, local, no rate
+    limits), then Anthropic (requires ANTHROPIC_API_KEY). Returns None if
+    both are unavailable, triggering keyword-only fallback in the caller.
+    """
+    result = await _ollama_estimate(news, market)
+    if result:
+        return result
+    return await _anthropic_estimate(news, market)
 
 
 # ── Combined estimator ────────────────────────────────────────────────────────

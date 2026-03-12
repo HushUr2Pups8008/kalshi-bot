@@ -227,10 +227,14 @@ class BotConfig:
     max_bet_hard_cap:  float = field(default_factory=lambda: float(os.getenv("MAX_BET_HARD_CAP", "25.0")))
     min_bet_dollars:   float = field(default_factory=lambda: float(os.getenv("MIN_BET_DOLLARS", "2.0")))
 
-    # Optional LLM key
+    # Optional Anthropic API key (fallback LLM if Ollama unavailable)
     anthropic_api_key: Optional[str] = field(
         default_factory=lambda: os.getenv("ANTHROPIC_API_KEY")
     )
+
+    # Local Ollama settings (primary LLM backend)
+    ollama_base_url: str = field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"))
+    ollama_model:    str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen2.5:3b"))
 
     # Paper trading mode — True until explicitly confirmed via --go-live
     # Set at runtime by PaperTrader reading the DB flag.
