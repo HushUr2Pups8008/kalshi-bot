@@ -97,7 +97,7 @@ def keyword_estimate(
         return (
             market.yes_prob, 0.05, keywords,
             f"Geo-entity mismatch: article mentions {article_countries} "
-            f"but market concerns {market_countries} — signal suppressed.",
+            f"but market concerns {market_countries} â€” signal suppressed.",
         )
 
     # Dampen shift by current market price: shifts near extremes are smaller
