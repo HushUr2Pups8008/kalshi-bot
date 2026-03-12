@@ -150,7 +150,12 @@ Then respond with ONLY a JSON object:
 
 Be calibrated and conservative. Most headlines are already priced in.
 Only deviate significantly from the current market price if the news is
-genuinely new information that the market has not yet had a chance to react to."""
+genuinely new information that the market has not yet had a chance to react to.
+
+CRITICAL CONSISTENCY RULE: Your estimated_probability MUST be consistent with your reasoning.
+- If Step 2 concludes the news adds NO new information, estimated_probability must be within 0.05 of the current YES price.
+- If Step 3 concludes the news causes only a SLIGHT shift, estimated_probability must be within 0.10 of the current YES price.
+- Only set estimated_probability far from the current price if Steps 2 and 3 identify clear, specific, material new information."""
 
 
 def _build_user_msg(news, market) -> str:
