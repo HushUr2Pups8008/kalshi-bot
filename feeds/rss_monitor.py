@@ -9,6 +9,7 @@ NewsItem objects onto an asyncio.Queue for downstream processing.
 import asyncio
 import hashlib
 import logging
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Callable, Awaitable
 
@@ -54,7 +55,7 @@ def _source_name(feed_url: str, feed_title: str) -> str:
 async def poll_feed(
     url: str,
     callback: Callable[[NewsItem], Awaitable[None]],
-    seen: set[str],
+    seen: OrderedDict,
 ) -> None:
     """Fetch one RSS feed URL and invoke callback for each unseen entry."""
     loop = asyncio.get_event_loop()
@@ -73,11 +74,11 @@ async def poll_feed(
         if item_id in seen:
             continue
 
-        # Manage memory: evict oldest entry (approximation — set is unordered)
+        # Manage memory: evict oldest entry (FIFO — OrderedDict maintains insertion order)
         if len(seen) >= MAX_SEEN:
-            seen.pop()
+            seen.popitem(last=False)
 
-        seen.add(item_id)
+        seen[item_id] = None
         new_count += 1
 
         item = NewsItem(
@@ -110,7 +111,7 @@ async def run_rss_monitor(
     if feeds is None:
         feeds = RSS_FEEDS
 
-    seen: set[str] = set()
+    seen: OrderedDict = OrderedDict()
     log.info("RSS monitor started — watching %d feeds", len(feeds))
 
     while True:

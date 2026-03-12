@@ -289,13 +289,15 @@ async def estimate_probability(
     llm_result = await llm_estimate(news, market)
     if llm_result:
         llm_prob, llm_confidence, llm_reasoning = llm_result
-        # Blend: 70% LLM, 30% keyword when LLM is available
-        blended_prob = 0.7 * llm_prob + 0.3 * kw_prob
+        # Use LLM probability directly — keywords only gate the match, not the estimate.
+        # Blending was removed because it allowed keyword scores to manufacture bets
+        # that the LLM explicitly said were not market-moving (e.g. LLM: 0.50 + keywords
+        # push kw_prob to 0.65 -> blended 0.545 -> bet placed against LLM advice).
         reasoning = (
             f"[LLM] {llm_reasoning} "
-            f"(LLM: {llm_prob:.3f}, Keywords: {kw_prob:.3f}, Blended: {blended_prob:.3f})"
+            f"(LLM: {llm_prob:.3f}, Keywords(ref): {kw_prob:.3f})"
         )
-        return blended_prob, llm_confidence, keywords, reasoning
+        return llm_prob, llm_confidence, keywords, reasoning
 
     # Keyword only
     confidence = min(0.7, 0.3 + 0.05 * len(keywords))   # more keywords → more confident

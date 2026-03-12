@@ -9,6 +9,7 @@ objects for new posts above the minimum score threshold.
 
 import asyncio
 import hashlib
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Callable, Awaitable
 
@@ -83,7 +84,8 @@ async def _score_recheck_and_emit(
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                score = data[0]["data"]["children"][0]["data"].get("score", 0)
+                children = data[0]["data"]["children"] if data else []
+                score = children[0]["data"].get("score", 0) if children else post.get("score", 0)
             else:
                 score = post.get("score", 0)
     except Exception:
@@ -119,7 +121,7 @@ async def _poll_subreddit(
     session: aiohttp.ClientSession,
     subreddit: str,
     callback: Callable[[NewsItem], Awaitable[None]],
-    seen: set[str],
+    seen: OrderedDict,
 ) -> None:
     children = await _fetch_subreddit(session, subreddit)
     new_count = 0
@@ -132,8 +134,8 @@ async def _poll_subreddit(
         if pid in seen:
             continue
         if len(seen) >= MAX_SEEN:
-            seen.pop()
-        seen.add(pid)
+            seen.popitem(last=False)
+        seen[pid] = None
         new_count += 1
         asyncio.create_task(_score_recheck_and_emit(session, post, subreddit, callback))
     if new_count:
@@ -152,7 +154,7 @@ async def run_reddit_monitor(
     if subreddits is None:
         subreddits = REDDIT_SUBREDDITS
 
-    seen: set[str] = set()
+    seen: OrderedDict = OrderedDict()
     log.info(
         "Reddit monitor started (public JSON API) — watching: %s",
         ", ".join(f"r/{s}" for s in subreddits),
