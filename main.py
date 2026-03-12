@@ -179,6 +179,32 @@ class TradingBot:
 
     # ── Run ───────────────────────────────────────────────────────────────────
 
+    async def _check_llm_health(self) -> None:
+        """Log LLM availability at startup so the operator knows what's active."""
+        import aiohttp
+        base = cfg.ollama_base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3]
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(
+                    f"{base}/api/tags",
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as r:
+                    if r.status == 200:
+                        data   = await r.json()
+                        models = [m["name"] for m in data.get("models", [])]
+                        log.info("LLM: Ollama running | model=%s | available=%s",
+                                 cfg.ollama_model, models)
+                        return
+        except Exception:
+            pass
+        if cfg.anthropic_api_key:
+            log.info("LLM: Ollama not reachable -- Anthropic fallback active")
+        else:
+            log.warning("LLM: Ollama not reachable and no ANTHROPIC_API_KEY "
+                        "-- keyword scoring only (reduced signal accuracy)")
+
     async def run(self) -> None:
         notional = self.paper.get_notional_bankroll()
         max_bet  = cfg.dynamic_max_bet(notional)
@@ -199,6 +225,8 @@ class TradingBot:
             log.info("Kalshi account balance: $%.2f", balance)
         except Exception as exc:
             log.warning("Could not fetch Kalshi balance: %s", exc)
+
+        await self._check_llm_health()
 
         tasks = [
             asyncio.create_task(run_rss_monitor(self.on_news_item),    name="rss"),
