@@ -66,7 +66,8 @@ class TradeExecutor:
         # Use relaxed edge threshold during paper trading
         effective_min_edge = PAPER_MIN_EDGE if cfg.is_paper_trading else cfg.min_edge
 
-        if analysis.capped_dollars <= 0:
+        # Paper mode uses flat contracts -- skip the dollars gate entirely
+        if not cfg.is_paper_trading and analysis.capped_dollars <= 0:
             return "capped_dollars=0 (below minimum bet size)"
 
         if abs(analysis.edge) < effective_min_edge:

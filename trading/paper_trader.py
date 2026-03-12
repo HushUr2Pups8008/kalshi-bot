@@ -21,7 +21,7 @@ from tabulate import tabulate
 
 from analysis import SignalAnalysis
 from analysis.source_credibility import SourceCredibility
-from config import cfg, DATA_DIR
+from config import cfg, DATA_DIR, PAPER_FLAT_CONTRACTS
 from utils.logger import get_logger, trade_log
 
 log = get_logger("paper_trader")
@@ -171,7 +171,12 @@ class PaperTrader:
         price_cents = int(analysis.market.yes_price) if analysis.side == "yes" \
                       else int(100 - analysis.market.yes_price)
         price_cents  = max(1, min(99, price_cents))
-        contracts    = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
+        # Paper training mode: flat contracts -- no bankroll gating so we
+        # maximise trade volume and accumulate signal-quality data.
+        if cfg.is_paper_trading:
+            contracts    = PAPER_FLAT_CONTRACTS
+        else:
+            contracts    = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
         cost_dollars = contracts * price_cents / 100.0
 
         bankroll_before = self.get_notional_bankroll()

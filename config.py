@@ -164,6 +164,7 @@ MAX_MARKET_DAYS_TO_EXPIRY = 30
 PAPER_MIN_EDGE         = 0.02   # vs live 0.04
 PAPER_MIN_MATCH_SCORE  = 0.03   # vs live 0.06
 PAPER_MAX_CANDIDATES   = 10     # vs live 5
+PAPER_FLAT_CONTRACTS   = 5      # flat contract count during paper training (no bankroll gating)
 
 # ── Source credibility settings ───────────────────────────────────────────────
 CREDIBILITY_MIN_SAMPLE = 10     # trades needed before multiplier takes effect

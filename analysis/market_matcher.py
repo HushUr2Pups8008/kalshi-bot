@@ -232,12 +232,20 @@ class MarketMatcher:
         news_tokens = _tokenize(f"{news.headline} {news.body}")
         markets     = await self._cache.get_markets()
 
+        headline_tokens = _tokenize(news.headline)
+
         scored: list[tuple[KalshiMarket, float]] = []
         for market in markets:
-            market_tokens = _tokenize(f"{market.title} {market.subtitle}")
+            market_title_tokens = _tokenize(market.title)
+            market_tokens = market_title_tokens | _tokenize(market.subtitle)
             # Require the market itself to contain at least one geopolitical token.
             # This prevents sports/financial markets from ever matching geo news.
             if not (market_tokens & _GEOPOLITICAL_BOOST):
+                continue
+            # Require at least one token from the news HEADLINE to appear in
+            # the market title -- prevents body-only spurious matches like
+            # "Georgia runoff" matching "Bank of Korea rate decisions".
+            if not (headline_tokens & market_title_tokens):
                 continue
             score = _similarity(news_tokens, market_tokens)
             if score < min_score:
