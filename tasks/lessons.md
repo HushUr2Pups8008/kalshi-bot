@@ -3,6 +3,100 @@
 
 ---
 
+## Project Context
+
+**What it is:** News-driven prediction market bot. Monitors RSS/Reddit for geopolitical
+events, matches them to open Kalshi markets, estimates probability shifts via LLM, and
+places Kelly-sized bets.
+
+**Machines:**
+| Machine | Path | How it runs |
+|---------|------|-------------|
+| MacBook (primary dev) | `/Users/Jake/vscode/kalshi_bot` | `python main.py` |
+| Windows Gaming Desktop | `e:/VS_Code/kalshi-bot/` | NSSM service (`kalshi-bot`) |
+| Mac Studio (incoming) | `/Users/Jake/vscode/kalshi_bot` | `python main.py` (planned) |
+
+**Rule:** Always `git pull` before starting a session on any machine.
+
+**Bot is currently in paper trading mode.** Do not go live without Jake's explicit
+instruction and the `--go-live` confirmation gate. Mac and Windows share the same Kalshi
+API key — only ONE instance in live mode at a time.
+
+---
+
+## Architecture
+
+### 5 Concurrent Async Tasks
+1. RSS monitor — polls 19 feeds every 60s
+2. Reddit monitor — polls 29 subreddits, 10s stagger, 300s cycle
+3. WebSocket client — real-time Kalshi price feed
+4. Market cache refresh — every 30 min (refresh takes ~3 min in thread pool)
+5. Daily reporter — writes report file every 24h
+
+### LLM Stack
+`Ollama qwen2.5:7b` (primary, local) → `Claude Haiku` (fallback, `ANTHROPIC_API_KEY`)
+→ keyword scoring (final fallback, always available)
+
+### Market Discovery Flow
+1. Fetch all ~9k series from `/series` endpoint
+2. Keyword-match titles via `_GEO_SERIES_KEYWORDS` → ~1,400 geo candidates
+3. Apply sports prefix blocklist (`MARKET_SERIES_BLOCKLIST_PREFIXES`) → ~443 markets
+4. Cache for 30 min (`MARKET_CACHE_TTL_SECONDS = 1800`)
+
+### Match Gate in `find_candidates()`
+Tiered gate — not just similarity score:
+- A single **named geo entity** (country, person in `_GEO_NAMED_ENTITIES`) passes alone
+- **Generic words** ("bank", "attack", "war") require 2+ overlaps
+- Market must contain at least one token from `_GEOPOLITICAL_BOOST`
+
+---
+
+## Key Files
+| File | Purpose |
+|------|---------|
+| `config.py` | All tuneable params and env var bindings — import `cfg` everywhere |
+| `analysis/market_matcher.py` | Market discovery, series keyword matching, tiered headline gate |
+| `analysis/signal_analyzer.py` | LLM + keyword probability estimation |
+| `kalshi/websocket_client.py` | WS connection, auth headers, version-safe kwarg detection |
+| `kalshi/rest_client.py` | RSA-PSS signed REST calls |
+| `trading/executor.py` | Live/paper trade execution |
+| `trading/paper_trader.py` | Paper trade tracking, source credibility, bankroll |
+| `data/paper_trades.db` | SQLite — paper trades + bot state (gitignored, not synced) |
+| `docs/future_plans.md` | Roadmap: Mac Studio, equity bot, OpenClaw |
+| `docs/websocket_fix.md` | Detailed websocket version history and fix |
+
+---
+
+## Config / Env Vars
+| Var | Notes |
+|-----|-------|
+| `BANKROLL` | Starting notional bankroll |
+| `MAX_BET_HARD_CAP` | Hard ceiling per bet (NOT `MAX_BET_DOLLARS` — that name is gone) |
+| `BET_PCT_BANKROLL` | % of bankroll per bet (default 5%) |
+| `MIN_BET_DOLLARS` | Floor per bet |
+| `KELLY_FRACTION` | Half-Kelly = 0.5 |
+| `MIN_EDGE` | Min edge before live bet (default 0.04) |
+| `OLLAMA_MODEL` | Model name (default `qwen2.5:3b`) |
+| `OLLAMA_BASE_URL` | Default `http://localhost:11434/v1` |
+
+### Paper Trading Constants
+- `PAPER_MAX_CANDIDATES = 1` — top match only, one trade per article (clean signal data)
+- `PAPER_MIN_EDGE = 0.02` (vs live `0.04`) — wider net for data collection
+- `PAPER_FLAT_CONTRACTS = 5` — flat contract count during paper phase (no bankroll gating)
+
+---
+
+## What NOT To Do
+- Do not blend LLM probability with keyword scores — removed intentionally (see Signal Analysis below)
+- Do not use `KALSHI_GEOPOLITICAL_SERIES` allowlist — obsolete, zero open markets under it
+- Do not use PKCS1v15 or HMAC for signing — Kalshi requires RSA-PSS
+- Do not hardcode `extra_headers` or `additional_headers` — use `_WS_HEADER_KWARG`
+- Do not commit `.env`, `data/`, or `logs/` — gitignored
+- Do not run bot on Mac and Windows simultaneously in live mode — same API key
+- Do not pin `aiohttp` to 3.9.x — no cp314 wheel, Windows machine runs Python 3.14
+
+---
+
 ## Authentication
 
 ### RSA-PSS, not PKCS1v15 or HMAC
@@ -11,6 +105,15 @@ ALL signing — both REST headers and the WebSocket HTTP upgrade handshake. Earl
 HMAC-SHA256 (wrong) and then PKCS1v15 (also wrong). Both return 401 silently or with a
 generic auth error that doesn't name the signing algorithm as the cause.
 **Rule:** Never change the signing algorithm. Never use `hmac`, never use PKCS1v15 padding.
+
+**API URLs:**
+- REST: `https://api.elections.kalshi.com/trade-api/v2`
+- WebSocket: `wss://api.elections.kalshi.com/trade-api/ws/v2`
+
+### Market Status Field is `"active"` not `"open"`
+**Lesson:** The Kalshi API returns market status as `"active"` for tradeable markets, not
+`"open"`. The executor checks for both strings. Do not filter on `"open"` alone or active
+markets will be silently skipped.
 
 ### PEM Key in .env — Single Line with Literal `\n`
 **Lesson:** Windows `.env` files can't store multi-line values reliably. The key must be
