@@ -148,6 +148,6 @@ Live mode adds tighter edge thresholds, a live balance check before each order, 
 | `MAX_BET_HARD_CAP` | `50.00` | Maximum single bet in dollars |
 | `KELLY_FRACTION` | `0.5` | Kelly fraction (0.5 = half-Kelly) |
 | `MIN_EDGE` | `0.04` | Minimum edge to place a live trade |
-| `OLLAMA_MODEL` | `qwen2.5:3b` | Ollama model name |
+| `OLLAMA_MODEL` | `qwen2.5:7b` | Ollama model name |
 | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Ollama API base URL |
 | `ANTHROPIC_API_KEY` | _(unset)_ | Enables Claude Haiku fallback |
