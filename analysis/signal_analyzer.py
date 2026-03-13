@@ -131,21 +131,42 @@ def keyword_estimate(
 _MAGNITUDE_SHIFT = {"none": 0.0, "small": 0.08, "moderate": 0.15, "large": 0.25}
 
 _LLM_SYSTEM_PROMPT = """You are a geopolitical prediction market analyst.
-Assess whether a news headline materially shifts the probability of a Kalshi binary market.
+
+Your task is to determine whether a news headline would cause traders to update
+the probability of a specific Kalshi binary market.
 
 You will be given:
-1. A news headline and summary
-2. The Kalshi market title and current YES price
+MARKET: title, resolution criteria, current YES price
+NEWS: headline and summary
 
-Answer these questions in order:
-Q1 - Is this headline directly relevant to the specific market question? (true/false)
-Q2 - Does this headline add genuinely NEW information not already priced in? (true/false)
-Q3 - If new and relevant: which direction does it push the YES probability? (yes/no/neutral)
-Q4 - How strongly does it push? (none/small/moderate/large)
-     none:     no meaningful shift
-     small:    5-8 cent move (e.g. minor new development)
-     moderate: 10-20 cent move (e.g. significant escalation or de-escalation)
-     large:    20+ cent move (e.g. major unexpected event directly resolving the question)
+Decision process:
+
+Step 1 - Relevance
+Is the headline directly related to the exact event described in the market?
+If not, magnitude must be "none".
+
+Step 2 - New Information
+Does the headline contain concrete NEW information that traders likely did not
+already price in?
+Routine updates, speculation, rhetoric, and commentary are usually already priced in.
+
+Step 3 - Direction
+If the information is new and relevant, does it increase or decrease the
+probability of the event resolving YES?
+
+Step 4 - Magnitude
+Estimate how much traders would likely move the price.
+
+Magnitude definitions (probability change):
+  none:     0 percentage points
+  small:    3-8 percentage points
+  moderate: 8-20 percentage points
+  large:    >20 percentage points
+
+Important rules:
+- Most headlines should result in magnitude="none".
+- If new_information=false, then direction="neutral" and magnitude="none".
+- Only major unexpected developments justify "moderate" or "large".
 
 Respond with ONLY a JSON object:
 {
@@ -154,22 +175,20 @@ Respond with ONLY a JSON object:
   "direction": "yes" | "no" | "neutral",
   "magnitude": "none" | "small" | "moderate" | "large",
   "confidence": <float 0.0-1.0>,
-  "reasoning": "<2-3 sentences>"
-}
-
-Be conservative. Most headlines are already priced in. Only use moderate/large
-when the news is a clear, specific, direct development on the exact market question."""
+  "reasoning": "<one concise sentence>"
+}"""
 
 
 def _build_user_msg(news, market) -> str:
+    resolution = market.subtitle if market.subtitle else market.title
     return (
-        f"NEWS HEADLINE: {news.headline}\n"
-        f"SOURCE: {news.source}\n"
-        f"SUMMARY: {news.body[:400] if news.body else '(none)'}\n\n"
         f"MARKET TITLE: {market.title}\n"
+        f"RESOLUTION CRITERIA: {resolution}\n"
         f"CURRENT YES PRICE: {market.yes_price:.1f} cents ({market.yes_prob:.1%})\n"
         f"MARKET CLOSES: {market.close_time}\n\n"
-        f"Is this news relevant to this market, and if so, which direction and how strongly does it shift the probability?"
+        f"NEWS HEADLINE: {news.headline}\n"
+        f"SOURCE: {news.source}\n"
+        f"SUMMARY: {news.body[:400] if news.body else '(none)'}"
     )
 
 
@@ -233,8 +252,17 @@ async def _ollama_estimate(news, market):
     except aiohttp.ClientConnectorError:
         log.debug("Ollama not running -- falling back to keyword scoring")
         return None
-    except Exception as exc:
+    except asyncio.TimeoutError:
+        log.warning("Ollama estimation failed: timed out after 60s (model loading or CPU overloaded)")
+        return None
+    except _json.JSONDecodeError as exc:
+        log.warning("Ollama estimation failed: invalid JSON in response -- %s", exc)
+        return None
+    except ValueError as exc:
         log.warning("Ollama estimation failed: %s", exc)
+        return None
+    except Exception as exc:
+        log.warning("Ollama estimation failed: %s (%s)", exc, type(exc).__name__)
         return None
 
 
