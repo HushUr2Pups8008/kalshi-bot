@@ -76,7 +76,7 @@ Tiered gate — not just similarity score:
 | `MIN_BET_DOLLARS` | Floor per bet |
 | `KELLY_FRACTION` | Half-Kelly = 0.5 |
 | `MIN_EDGE` | Min edge before live bet (default 0.04) |
-| `OLLAMA_MODEL` | Model name (default `qwen2.5:3b`) |
+| `OLLAMA_MODEL` | Model name (default `qwen2.5:7b`) |
 | `OLLAMA_BASE_URL` | Default `http://localhost:11434/v1` |
 
 ### Paper Trading Constants
