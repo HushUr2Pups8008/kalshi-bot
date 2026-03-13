@@ -208,6 +208,7 @@ async def _ollama_estimate(news, market):
         ],
         "max_tokens": 256,
         "temperature": 0.1,
+        "repetition_penalty": 1.05,
     }
 
     try:
