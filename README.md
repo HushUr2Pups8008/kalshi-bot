@@ -10,7 +10,7 @@ Monitors RSS news feeds and Reddit for breaking geopolitical events, matches the
 
 1. **News ingestion** — RSS (Reuters, AP, BBC, Al Jazeera) and Reddit (r/worldnews, r/geopolitics, r/news) are polled continuously for new headlines.
 2. **Market matching** — Each headline is matched against cached open Kalshi markets using Jaccard token similarity with a geopolitical keyword boost.
-3. **Probability estimation** — A local LLM (Ollama `qwen2.5:7b`) uses 3-step chain-of-thought reasoning to estimate whether the news shifts the market probability. Falls back to keyword scoring if Ollama is unavailable.
+3. **Probability estimation** — A local LLM (Ollama `qwen2.5:7b`) classifies each signal with categorical output: relevance, novelty, direction (yes/no/neutral), and magnitude (none/small/moderate/large). Code applies deterministic probability shifts from these categories. Falls back to keyword scoring if Ollama is unavailable.
 4. **Bet sizing** — Half-Kelly criterion, capped at 5% of notional bankroll and a hard dollar cap.
 5. **Execution** — Paper mode records trades to SQLite. Live mode requires `--go-live` + typing `CONFIRM`.
 
@@ -111,7 +111,7 @@ Signal quality priority:
 2. **Anthropic Claude Haiku** (paid fallback) — set `ANTHROPIC_API_KEY` in `.env`
 3. **Keyword scoring** (always available) — deterministic fallback, no external calls
 
-The LLM uses structured chain-of-thought: it explicitly reasons about what the market already prices in before estimating any probability shift. Keywords serve as an initial match gate but do not influence the final probability when the LLM is available.
+The LLM answers categorical questions (relevant? new information? direction? magnitude?) rather than outputting a raw probability. Code maps magnitude to deterministic shifts (small=8pp, moderate=15pp, large=25pp), scaled by confidence. Keywords serve as an initial match gate but do not influence the final probability when the LLM is available.
 
 ---
 
