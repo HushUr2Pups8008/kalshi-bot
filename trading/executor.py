@@ -14,6 +14,7 @@ Live mode: requires explicit --go-live confirmation. Tighter checks.
 
 import asyncio
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 from analysis import SignalAnalysis
@@ -37,6 +38,27 @@ class TradeExecutor:
         self._rest         = rest_client
         self._paper        = paper_trader
         self._last_traded: dict[str, float] = {}
+        self._seed_cooldowns_from_db()
+
+    def _seed_cooldowns_from_db(self) -> None:
+        """Seed per-ticker cooldowns from DB so restarts don't reset the gate."""
+        now_wall = datetime.now(timezone.utc)
+        now_mono = time.monotonic()
+        rows = self._paper._conn.execute(
+            "SELECT ticker, MAX(ts) as last_ts FROM paper_trades "
+            "WHERE resolved = 0 GROUP BY ticker"
+        ).fetchall()
+        for row in rows:
+            trade_ts = datetime.fromisoformat(row["last_ts"])
+            if trade_ts.tzinfo is None:
+                trade_ts = trade_ts.replace(tzinfo=timezone.utc)
+            age_secs = (now_wall - trade_ts).total_seconds()
+            if age_secs < _PAPER_TICKER_COOLDOWN:
+                self._last_traded[row["ticker"]] = now_mono - age_secs
+                log.debug(
+                    "Cooldown seeded for %s from DB (%.1fh ago)",
+                    row["ticker"], age_secs / 3600,
+                )
 
     async def execute(self, analysis: SignalAnalysis) -> Optional[str]:
         """
@@ -94,6 +116,20 @@ class TradeExecutor:
                     f"paper cooldown: last trade {elapsed/3600:.1f}h ago "
                     f"(cooldown={_PAPER_TICKER_COOLDOWN//3600}h)"
                 )
+
+        # Same-signal guard: skip if an open trade already exists at the same
+        # probability estimate and market price — no new information has arrived.
+        if cfg.is_paper_trading:
+            last = self._paper.get_last_open_trade(analysis.market.ticker)
+            if last is not None:
+                prob_delta  = abs(last["estimated_prob"] - analysis.estimated_probability)
+                price_delta = abs(last["market_yes_price"] - analysis.market_yes_price)
+                if prob_delta < 0.02 and price_delta < 2.0:
+                    return (
+                        f"same-signal skip: open trade at "
+                        f"est={last['estimated_prob']:.3f} "
+                        f"mkt={last['market_yes_price']:.1f}¢ — no new information"
+                    )
 
         # Live ticker cooldown + balance check
         if not cfg.is_paper_trading:
