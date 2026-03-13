@@ -127,7 +127,11 @@ _GEO_SERIES_KEYWORDS = frozenset({
     "governor", "chancellor", "minister", "supreme court",
     # US politics
     "republican", "democrat", "cabinet", "impeach",
-    "tariff", "executive order", "legislation",
+    "tariff", "executive", "legislation",
+    # US domestic policy (expanded)
+    "budget", "regulation", "nomination", "confirmation",
+    "department of",           # cabinet dept titles
+    "doge",                    # Dept of Government Efficiency
     # Events / actions
     "election", "ceasefire", "invasion", "military",
     "nuclear", "sanctions", "summit", "treaty", "coup",
@@ -135,6 +139,10 @@ _GEO_SERIES_KEYWORDS = frozenset({
     "diplomatic", "foreign policy", "united nations",
     # Policy
     "healthcare", "immigration", "climate",
+    # Economic / financial
+    "inflation", "gdp", "federal reserve",
+    # AI / tech policy
+    "ai safety", "ai regulation", "artificial intelligence",
 })
 
 
