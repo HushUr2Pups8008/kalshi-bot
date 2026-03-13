@@ -207,7 +207,7 @@ async def _ollama_estimate(news, market):
             {"role": "user",   "content": _build_user_msg(news, market)},
         ],
         "max_tokens": 256,
-        "temperature": 0.1,
+        "temperature": 0,
         "repetition_penalty": 1.05,
     }
 
