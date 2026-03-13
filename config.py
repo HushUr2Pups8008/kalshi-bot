@@ -98,7 +98,9 @@ REDDIT_SUBREDDITS = [
     "CredibleDefense",
     "ArmedConflicts",
     "WarCollege",
-    "geopoliticsdiscussion",
+    "IRstudies",
+    "GlobalAffairs",
+    "sanctions",
     "foreignpolicy",
     "military",
 ]
