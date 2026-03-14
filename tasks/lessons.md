@@ -249,5 +249,11 @@ X's free API tier has no search and ~1 req/15min — useless for this. Options:
 - Position size: treat as low-confidence signal, use minimum bet size initially
 - Paper trade this signal separately to measure its actual edge before going live with it
 
+**Critical validation question:** The fade signal is documented primarily on sports and
+entertainment markets (Super Bowl, alien odds, etc.) where retail attention is highest.
+Geopolitical markets have different liquidity profiles and different trader behavior.
+Before building signal logic, validate empirically: does the pattern actually hold on
+geo/political markets specifically, or is it a sports phenomenon that doesn't transfer?
+
 **Status:** Not yet implemented. Investigate before going live — could be meaningful edge
 with zero marginal infrastructure cost if RSSHub approach works.
