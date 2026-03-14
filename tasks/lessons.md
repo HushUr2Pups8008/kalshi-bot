@@ -218,3 +218,36 @@ Call this with the current notional bankroll — do not use a hardcoded dollar a
 ### Paper Trades DB is Local — Not Synced
 **Lesson:** `data/paper_trades.db` is gitignored and local to each machine. Mac and Windows
 have separate paper trade histories. The bankroll state does not sync between machines.
+
+---
+
+## Future Signal: "Fade the Kalshi Tweet"
+
+**The signal:** When @Kalshi tweets "BREAKING" or "[market] odds at ATH/all-time high,"
+sharp money has historically faded it — the market is already overpriced from retail
+attention and the edge is on the underpriced side. This is a sentiment/contrarian signal,
+not a news signal.
+
+**Why it's different from the existing pipeline:** The current pipeline is:
+`news → find matching market → estimate probability shift → bet`
+The fade signal is inverted: the tweet *is* the market identifier, and the action is always
+to fade (no directional estimation needed). Requires a separate code path.
+
+**How to get the feed without paying for X API:**
+X's free API tier has no search and ~1 req/15min — useless for this. Options:
+- **RSSHub** (recommended): open source, generates RSS from public X accounts.
+  Add `https://rsshub.app/twitter/user/Kalshi` to `RSS_FEEDS` — zero new code needed.
+  Self-hosting RSSHub is more reliable than public instances (public instances get blocked by X).
+- X official API: Basic = $200/mo, Pro = $5,000/mo — not worth it for one account.
+- Third-party scrapers (e.g. Xpoz): ~$20/mo for 1M results — overkill for one account.
+
+**Implementation notes for when this gets built:**
+- Detect tweet patterns: "BREAKING", "all-time high", "ATH", "surging" in @Kalshi tweets
+- Parse the market ticker or title from the tweet text
+- Look up current YES price via REST API
+- Fade: if tweet is bullish on YES → buy NO (and vice versa)
+- Position size: treat as low-confidence signal, use minimum bet size initially
+- Paper trade this signal separately to measure its actual edge before going live with it
+
+**Status:** Not yet implemented. Investigate before going live — could be meaningful edge
+with zero marginal infrastructure cost if RSSHub approach works.

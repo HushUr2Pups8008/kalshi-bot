@@ -6,6 +6,7 @@
 ## Go-Live Prerequisites
 - [ ] Accumulate valid paper trades on geopolitical markets (not sports)
 - [ ] Review paper trade performance — confirm positive edge
+- [ ] Investigate "fade the Kalshi tweet" signal (see lessons.md) — assess before going live
 - [ ] Run `python main.py --go-live` and type `CONFIRM` at prompt
 - [ ] Verify Kalshi API key is current and account is funded
 
