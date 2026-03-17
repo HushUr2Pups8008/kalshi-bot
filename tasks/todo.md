@@ -17,7 +17,7 @@ at a time. Confirm Windows service is stopped before going live on Mac (or vice 
 
 ## Signal Quality Bugs (from 2026-03-14 analysis)
 
-- [ ] **Multi-position guard** — `trading/executor.py`  ← CONFIRMED BUG (2026-03-16)
+- [x] **Multi-position guard** — `trading/executor.py`  ✓ FIXED (commit 9f1d783, 2026-03-16)
   Two failures observed:
   1. Bot took YES and NO on `KXTRUMPIRAN` (opposing signals 24h apart) → costless hedge.
   2. Bot added a THIRD position (2nd NO) on `KXTRUMPIRAN` on Mar 16 — same-signal guard only
@@ -30,20 +30,18 @@ at a time. Confirm Windows service is stopped before going live on Mac (or vice 
     (b) prob_delta < 0.02 AND price_delta < 2.0 → skip ("same-signal, existing position")
   This replaces the current single-row check entirely.
 
-- [ ] **LLM actor disambiguation** — `analysis/signal_analyzer.py` prompt
+- [x] **LLM actor disambiguation** — `analysis/signal_analyzer.py` prompt  ✓ FIXED (commit 89e4dc2, 2026-03-16)
   Crown prince trade (2026-03-14): model saw "Iran's exiled crown prince + Trump contact"
   and called `dir=yes` without recognizing the actor has no official standing.
   Fix (low-effort): add to LLM prompt — "Consider whether the named actors have actual
   decision-making power over the market event. Opposition figures, exiles, and unofficial
   contacts should not move the probability."
 
-- [ ] **`asyncio not defined` error in RSS callbacks** — `feeds/rss_monitor.py`
-  23 occurrences confirmed. Pattern: always at service restarts (4–8 errors/restart for same
-  item hashes — these are headlines in-flight at shutdown that can't complete their callback).
-  Likely a callback closure that references `asyncio` from an outer scope that's torn down
-  during NSSM service restart before the callback fires.
-  Fix: grep for bare `asyncio.` calls in rss_monitor.py, confirm import is at module level
-  AND that callbacks don't close over the event loop reference.
+- [x] **`asyncio not defined` error in RSS callbacks** — `analysis/signal_analyzer.py`  ✓ FIXED (commit 0473154, 2026-03-16)
+  Root cause: `asyncio` was not imported in signal_analyzer.py, but `_ollama_estimate()`
+  catches `asyncio.TimeoutError`. On restart, Ollama cold-starts (model loads in 10-30s),
+  the 60s timeout fires, and the NameError propagated up to poll_feed's catch block.
+  Fix: added `import asyncio` to signal_analyzer.py.
 
 ---
 
