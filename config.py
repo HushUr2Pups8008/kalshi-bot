@@ -71,6 +71,11 @@ RSS_FEEDS = [
 ]
 RSS_POLL_INTERVAL_SECONDS = 60
 
+# Maximum age of a news item when the consumer processes it. Items older than
+# this were either slow through the queue or stale when they arrived — skip
+# them to avoid trading on already-priced-in information.
+MAX_NEWS_AGE_SECONDS: int = int(os.getenv("MAX_NEWS_AGE_SECONDS", "300"))  # 5 min
+
 # Optional RSSHub feed for @Kalshi tweets — enables "fade the Kalshi tweet" signal.
 # Leave empty (default) to disable. Set to https://rsshub.app/twitter/user/Kalshi
 # or a self-hosted RSSHub instance URL before going live with this signal.

@@ -26,6 +26,7 @@ at a time. Confirm Windows service is stopped before going live on Mac (or vice 
 
 ### Signal Quality
 - [ ] **Priority queue** — swap `asyncio.Queue` for `asyncio.PriorityQueue` in `main.py`
+      *(LLM semaphore, staleness check, and queue observability done — v0.5.1)*
       RSS/breaking news = priority 1, Reddit = priority 2.
       Prevents a burst of low-signal Reddit posts from delaying a high-impact RSS headline
       by up to 600s (10 posts × 60s Ollama = 10 min stall on the single consumer).

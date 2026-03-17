@@ -22,6 +22,12 @@ from utils.logger import get_logger
 
 log = get_logger("signal_analyzer")
 
+# Limit concurrent LLM calls to 1. With a single Ollama process on CPU,
+# parallel calls don't improve throughput — they just spike latency.
+# Using a semaphore here (not at the worker level) means this cap holds
+# even if we add more consumer workers in the future.
+_LLM_SEMAPHORE = asyncio.Semaphore(1)
+
 
 def _extract_json(text: str) -> dict:
     """
@@ -353,11 +359,15 @@ async def llm_estimate(news, market):
     Best-available LLM estimate. Tries Ollama first (free, local, no rate
     limits), then Anthropic (requires ANTHROPIC_API_KEY). Returns None if
     both are unavailable, triggering keyword-only fallback in the caller.
+
+    Serialized via _LLM_SEMAPHORE — only one call runs at a time regardless
+    of how many consumer workers are active.
     """
-    result = await _ollama_estimate(news, market)
-    if result:
-        return result
-    return await _anthropic_estimate(news, market)
+    async with _LLM_SEMAPHORE:
+        result = await _ollama_estimate(news, market)
+        if result:
+            return result
+        return await _anthropic_estimate(news, market)
 
 
 # ── Combined estimator ────────────────────────────────────────────────────────

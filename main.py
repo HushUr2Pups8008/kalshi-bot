@@ -29,7 +29,7 @@ from analysis import SignalAnalysis
 from analysis.kelly import kelly_bet
 from analysis.market_matcher import MarketMatcher
 from analysis.signal_analyzer import estimate_probability
-from config import cfg, PAPER_MIN_EDGE, VERSION, FADE_TWEET_FEED_URLS, MARKET_SERIES_BLOCKLIST_PREFIXES
+from config import cfg, PAPER_MIN_EDGE, VERSION, FADE_TWEET_FEED_URLS, MARKET_SERIES_BLOCKLIST_PREFIXES, MAX_NEWS_AGE_SECONDS
 from feeds import NewsItem
 from feeds.dedup import HeadlineDedup
 from feeds.reddit_monitor import run_reddit_monitor
@@ -93,6 +93,7 @@ class TradingBot:
 
     async def _news_consumer_task(self) -> None:
         """Drain the news queue, processing one item at a time."""
+        processed = 0
         while True:
             news = await self._news_queue.get()
             try:
@@ -101,6 +102,12 @@ class TradingBot:
                 log.error("Unhandled error processing news item: %s", exc)
             finally:
                 self._news_queue.task_done()
+                processed += 1
+                if processed % 10 == 0:
+                    log.debug(
+                        "News consumer: %d processed, queue depth=%d",
+                        processed, self._news_queue.qsize(),
+                    )
 
     async def on_news_item(self, news: NewsItem) -> None:
         log.info("[NEWS] [%s] %s", news.source, news.headline[:100])
@@ -114,6 +121,16 @@ class TradingBot:
             await self._process_candidate(news, market, match_score)
 
     async def _process_candidate(self, news: NewsItem, market, match_score: float) -> None:
+        # Staleness check: skip if the article is too old when we process it.
+        # With a queue, items can sit for several minutes; old news is already priced in.
+        age_secs = (datetime.now(timezone.utc) - news.published).total_seconds()
+        if age_secs > MAX_NEWS_AGE_SECONDS:
+            log.debug(
+                "Stale news skipped (%.0fs > %ds): %s",
+                age_secs, MAX_NEWS_AGE_SECONDS, news.headline[:60],
+            )
+            return
+
         # Use WS price if available
         ws_price = self.ws.get_yes_price(market.ticker)
         if ws_price is not None:
