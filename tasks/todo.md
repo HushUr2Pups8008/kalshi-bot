@@ -8,9 +8,12 @@
 - [ ] Review paper trade performance — confirm positive edge
 - [ ] Validate fade signal paper trades — query DB after 2-4 weeks:
       `SELECT substr(reasoning,1,30) tag, count(*) trades, sum(case when pnl>0 then 1 else 0 end) wins FROM paper_trades WHERE reasoning LIKE '[FADE%' GROUP BY tag ORDER BY trades DESC;`
-      Compare win rate: [FADE/GEO] vs [FADE/SPORTS], and per-account (@Kalshi vs @Polymarket).
+      Compare win rate: [FADE/GEO] vs [FADE/SPORTS], and per-account (@Kalshi vs @Polymarket vs @PolymarketMoney).
       All categories positive → go live. If sports wins < 50% → disable sports from fade pipeline.
       Self-host RSSHub before going live (public instance may be blocked by X).
+- [ ] Portfolio state object — single source of truth for open positions/exposure before go-live
+      Currently spread across SQLite DB, WebSocket cache, and in-memory cooldown dicts.
+      Needed for: risk checks, position sizing against real exposure, pre-go-live audit.
 - [ ] Run `python main.py --go-live` and type `CONFIRM` at prompt
 - [ ] Verify Kalshi API key is current and account is funded
 
@@ -19,48 +22,30 @@ at a time. Confirm Windows service is stopped before going live on Mac (or vice 
 
 ---
 
-## Signal Quality Bugs (from 2026-03-14 analysis)
+## Near-Term Backlog
 
-- [x] **Multi-position guard** — `trading/executor.py`  ✓ FIXED (commit 9f1d783, 2026-03-16)
-  Two failures observed:
-  1. Bot took YES and NO on `KXTRUMPIRAN` (opposing signals 24h apart) → costless hedge.
-  2. Bot added a THIRD position (2nd NO) on `KXTRUMPIRAN` on Mar 16 — same-signal guard only
-     checked the MOST RECENT open trade (the YES), saw delta > 2%, and passed it. The
-     existing NO at est=0.444 was ignored. Now holding 3 positions on one ticker.
-  Root cause: `get_last_open_trade()` returns only 1 row. Guard needs to check ALL open trades.
-  Fix: add `get_all_open_trades(ticker)` to `paper_trader.py`, returning all rows where
-  `resolved=0`. In `_validate()`, loop all open trades — if ANY has:
-    (a) opposite side → skip ("opposing position exists")
-    (b) prob_delta < 0.02 AND price_delta < 2.0 → skip ("same-signal, existing position")
-  This replaces the current single-row check entirely.
+### Signal Quality
+- [ ] **Priority queue** — swap `asyncio.Queue` for `asyncio.PriorityQueue` in `main.py`
+      RSS/breaking news = priority 1, Reddit = priority 2.
+      Prevents a burst of low-signal Reddit posts from delaying a high-impact RSS headline
+      by up to 600s (10 posts × 60s Ollama = 10 min stall on the single consumer).
+      Implementation: `(priority, timestamp, news_item)` tuples; `source_priority()` helper.
 
-- [x] **LLM actor disambiguation** — `analysis/signal_analyzer.py` prompt  ✓ FIXED (commit 89e4dc2, 2026-03-16)
-  Crown prince trade (2026-03-14): model saw "Iran's exiled crown prince + Trump contact"
-  and called `dir=yes` without recognizing the actor has no official standing.
-  Fix (low-effort): add to LLM prompt — "Consider whether the named actors have actual
-  decision-making power over the market event. Opposition figures, exiles, and unofficial
-  contacts should not move the probability."
+- [ ] **Market snapshot at decision time** — add `market_snapshot` JSON column to `paper_trades`
+      Currently store `market_yes_price` but not `yes_bid`/`yes_ask`, `close_time`, or `status`.
+      True replay requires decision-time prices, not today's prices.
+      Minimal fix: serialize `KalshiMarket` fields to JSON at `record_trade()` time.
 
-- [x] **`asyncio not defined` error in RSS callbacks** — `analysis/signal_analyzer.py`  ✓ FIXED (commit 0473154, 2026-03-16)
-  Root cause: `asyncio` was not imported in signal_analyzer.py, but `_ollama_estimate()`
-  catches `asyncio.TimeoutError`. On restart, Ollama cold-starts (model loads in 10-30s),
-  the 60s timeout fires, and the NameError propagated up to poll_feed's catch block.
-  Fix: added `import asyncio` to signal_analyzer.py.
+### LLM / Mac Studio (post-GPU)
+- [ ] **3-stage LLM pipeline** — replace single combined prompt with:
+      1. Relevance filter (binary, early exit)
+      2. Novelty detector (binary, early exit)
+      3. Impact estimator (direction + magnitude only)
+      Only practical when inference < 5s (GPU or cloud). Defer to Mac Studio / Qwen3.
 
----
-
-## Known Bugs (Low Priority)
-
-- [x] **Silent exception swallow on shutdown** — `main.py:322`  ✓ FIXED
-  `except Exception: pass` → `except Exception as exc: log.warning("Report generation failed: %s", exc)`
-
-- [x] **`cfg.is_paper_trading` mutability** — `config.py`, `trading/paper_trader.py`  ✓ FIXED
-  Added `BotConfig.set_paper_mode(paper: bool)` as the single mutation point.
-  `paper_trader.py` now calls `cfg.set_paper_mode()` instead of `cfg.is_paper_trading = ...`.
-
-- [x] **Duplicate LLM parse logic** — `analysis/signal_analyzer.py`  ✓ FIXED
-  Extracted `_parse_llm_response(parsed, market)` shared helper.
-  Both `_ollama_estimate()` and `_anthropic_estimate()` now call it.
+- [ ] **Consensus voting** — run 3 evaluations per signal, take majority vote on direction,
+      median magnitude, mean confidence. Stabilizes borderline outputs.
+      Same constraint as 3-stage: 3× inference time, needs sub-5s per call.
 
 ---
 

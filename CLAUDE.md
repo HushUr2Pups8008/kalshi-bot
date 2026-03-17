@@ -52,7 +52,7 @@
 - Document Results
   - Add a short review section to `tasks/todo.md` summarizing outcomes, issues, and decisions
 - Maintain the Todo File (Critical)
-  - Remove or archive completed sections after they are fully done
+  - Move completed sections to `tasks/completed.md` (never delete — archive with date heading)
   - Move valuable insights to `tasks/lessons.md`
   - Keep `tasks/todo.md` focused on active and near-term work only
 - Capture Lessons

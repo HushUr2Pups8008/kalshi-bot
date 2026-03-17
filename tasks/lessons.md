@@ -26,12 +26,24 @@ API key — only ONE instance in live mode at a time.
 
 ## Architecture
 
-### 5 Concurrent Async Tasks
-1. RSS monitor — polls 19 feeds every 60s
-2. Reddit monitor — polls 29 subreddits, 10s stagger, 300s cycle
-3. WebSocket client — real-time Kalshi price feed
-4. Market cache refresh — every 30 min (refresh takes ~3 min in thread pool)
-5. Daily reporter — writes report file every 24h
+### 6 Concurrent Async Tasks
+1. RSS monitor — polls 19 feeds every 60s; calls `_enqueue_news()` (non-blocking)
+2. Reddit monitor — polls 29 subreddits, 10s stagger, 300s cycle; calls `_enqueue_news()`
+3. News consumer — single worker draining `asyncio.PriorityQueue`; serializes LLM calls
+4. WebSocket client — real-time Kalshi price feed
+5. Market cache refresh — every 30 min (refresh takes ~3 min in thread pool)
+6. Daily reporter — writes report file every 24h
+
+**+ conditional:** `fade_tweets` task — polls FADE_TWEET_FEED_URLS (RSSHub RSS) for @Kalshi,
+@Polymarket, @PolymarketMoney tweets. Routes directly to `_on_fade_tweet()` (not the queue —
+pattern matching is fast, no LLM needed).
+
+### asyncio.Queue Decoupling
+Feed pollers call `_enqueue_news()` which does `queue.put_nowait()` — returns immediately.
+The single `_news_consumer_task` drains the queue and calls `on_news_item()` including the
+60s Ollama call. This prevents feed pollers from blocking on LLM latency.
+Queue is bounded at 500 items; overflow logs a warning and drops. `HeadlineDedup` runs
+inside `_enqueue_news()` before the item enters the queue — duplicates never reach Ollama.
 
 ### LLM Stack
 `Ollama qwen2.5:7b` (primary, local) → `Claude Haiku` (fallback, `ANTHROPIC_API_KEY`)
@@ -240,6 +252,36 @@ Observed patterns from 72-hour production run (5 trades, 116 LLM evaluations, 51
 - Watch for: if new high-impact events hit non-KXTRUMPIRAN markets (e.g. Zelenskyy removal,
   Venezuela election), the funnel should open up and generate new trades.
 
+### LLM JSON Extraction — Use JSONDecoder.raw_decode(), Not Greedy Regex
+**Lesson:** `re.search(r"\{.*\}", text, re.DOTALL)` grabs from the first `{` to the last `}`.
+If the LLM outputs preamble with braces — e.g. `"Consider {Russia}: {"relevant": true...}"` —
+the regex captures from the opening `{Russia}` brace through the end, producing invalid JSON.
+**Fix:** `_extract_json()` in `signal_analyzer.py` uses `json.JSONDecoder.raw_decode(text, pos)`
+at each `{` position, keeping the **last** successfully parsed dict. This correctly handles
+all preamble cases and raises `ValueError` (caught by the existing except chain) if no valid
+JSON is found. Never use a greedy `{.*}` regex on LLM output.
+
+### Cross-Source Headline Dedup — Conservative Threshold
+**Lesson:** Reuters, AP, and BBC publish near-identical stories within minutes. Each copy
+triggered a separate 60s Ollama call and could generate a duplicate trade.
+**Fix:** `feeds/dedup.py` — `HeadlineDedup` normalizes headlines (lowercase, sorted tokens),
+compares with `rapidfuzz.fuzz.token_sort_ratio`, threshold 85/100, TTL 15 min, max 500 entries.
+Runs in `_enqueue_news()` before items enter the queue.
+**Threshold note:** 85 is intentionally conservative — only catches near-verbatim wire copies,
+not paraphrases. Tested: genuinely-same stories from different outlets score ~70-79; exact
+copies score 95+. False-positive suppression (blocking a real new story) is worse than a
+duplicate LLM call, so the threshold stays high.
+
+### DB Transaction Atomicity in resolve_market()
+**Lesson:** The original `resolve_market()` updated each trade in a separate `execute()` call.
+A crash mid-loop (power outage, SIGKILL) would leave some trades resolved and others not —
+permanently corrupting the bankroll figure, which affects every subsequent Kelly calculation.
+**Fix:** Pre-calculate all outcomes (no DB writes), then wrap all UPDATEs in `with self._conn:`
+(SQLite context manager = automatic SAVEPOINT/ROLLBACK). Credit bankroll once for the total
+payout after the atomic block completes.
+**Rule:** Any operation that reads-then-writes multiple rows touching the bankroll must be
+wrapped in a DB transaction. Money math must be atomic.
+
 ### Do Not Blend LLM and Keyword Probabilities
 **Lesson:** An earlier version blended LLM probability with keyword-derived probability.
 This caused bets to be placed when the LLM explicitly returned "magnitude: none" — the
@@ -278,6 +320,14 @@ paper trades exist only in `logs/trades.jsonl` — not in the DB. The current DB
 starts 2026-03-13T08:07. If analyzing historical signal quality, read trades.jsonl, not just
 the DB.
 
+### Reddit Backoff Must Use Absolute Monotonic Timestamp
+**Lesson:** The original backoff used a countdown (`backoff -= poll_interval`). After a 429
+set backoff to 120s, the next poll cycle subtracted 300s (the poll interval) → went negative
+→ clamped to 0 → subreddit immediately retried. Exponential backoff provided zero protection.
+**Fix:** Store `_backoff[subreddit] = time.monotonic() + delay` and check
+`if time.monotonic() < _backoff.get(subreddit, 0.0): skip`. Never use a countdown for
+time-based gating — always store the absolute resume timestamp.
+
 ### Reddit Rate Limits Mass-Trigger on Startup
 **Lesson:** Every bot restart polls all ~29 subreddits in a short burst, triggering simultaneous
 429s across all of them. Reddit data is unavailable for ~2-5 minutes post-startup. This is
@@ -286,39 +336,27 @@ delay per subreddit would help.
 
 ---
 
-## Future Signal: "Fade the Kalshi Tweet"
+## Fade Signal (Implemented — v0.4.0+)
 
-**The signal:** When @Kalshi tweets "BREAKING" or "[market] odds at ATH/all-time high,"
-sharp money has historically faded it — the market is already overpriced from retail
-attention and the edge is on the underpriced side. This is a sentiment/contrarian signal,
-not a news signal.
+**The signal:** When @Kalshi or @Polymarket tweet "BREAKING", "ATH", or "all-time high",
+the market is likely overpriced from retail attention. Fade it: bullish tweet → buy NO.
+This is a sentiment/contrarian signal, not a news signal — no LLM needed, pattern matching only.
 
-**Why it's different from the existing pipeline:** The current pipeline is:
-`news → find matching market → estimate probability shift → bet`
-The fade signal is inverted: the tweet *is* the market identifier, and the action is always
-to fade (no directional estimation needed). Requires a separate code path.
+**Architecture:** Separate code path from the main news pipeline.
+- `FADE_TWEET_FEED_URLS` (config.py) — list of RSSHub RSS URLs, one per monitored account
+- `_on_fade_tweet()` (main.py) — dedicated callback, bypasses the news queue
+- `_process_fade_tweet(tweet, account)` — pattern matching, market lookup, executor
+- Trade tags: `[FADE/GEO/@Kalshi]`, `[FADE/SPORTS/@Polymarket]` — enables per-account SQL win-rate queries
+- RSSHub is used to get X/Twitter feeds without paying for the X API ($200-5000/mo)
 
-**How to get the feed without paying for X API:**
-X's free API tier has no search and ~1 req/15min — useless for this. Options:
-- **RSSHub** (recommended): open source, generates RSS from public X accounts.
-  Add `https://rsshub.app/twitter/user/Kalshi` to `RSS_FEEDS` — zero new code needed.
-  Self-hosting RSSHub is more reliable than public instances (public instances get blocked by X).
-- X official API: Basic = $200/mo, Pro = $5,000/mo — not worth it for one account.
-- Third-party scrapers (e.g. Xpoz): ~$20/mo for 1M results — overkill for one account.
+**Accounts monitored:** @Kalshi (geo+sports), @Polymarket (geo+sports), @PolymarketMoney (geo+sports)
+Configure via `.env`: `FADE_TWEET_FEED_URLS=https://rsshub.app/twitter/user/Kalshi,...`
+Backward-compatible: old `KALSHI_TWEET_FEED_URL` env var still works as a single-URL fallback.
 
-**Implementation notes for when this gets built:**
-- Detect tweet patterns: "BREAKING", "all-time high", "ATH", "surging" in @Kalshi tweets
-- Parse the market ticker or title from the tweet text
-- Look up current YES price via REST API
-- Fade: if tweet is bullish on YES → buy NO (and vice versa)
-- Position size: treat as low-confidence signal, use minimum bet size initially
-- Paper trade this signal separately to measure its actual edge before going live with it
+**Critical validation question (open):** The fade pattern is documented on sports/entertainment
+markets where retail attention is highest. Geopolitical markets have different liquidity profiles.
+Validate empirically after 2-4 weeks of paper trades — see Go-Live Prerequisites in todo.md.
+If sports win rate < 50%, disable sports category from the fade pipeline.
 
-**Critical validation question:** The fade signal is documented primarily on sports and
-entertainment markets (Super Bowl, alien odds, etc.) where retail attention is highest.
-Geopolitical markets have different liquidity profiles and different trader behavior.
-Before building signal logic, validate empirically: does the pattern actually hold on
-geo/political markets specifically, or is it a sports phenomenon that doesn't transfer?
-
-**Status:** Not yet implemented. Investigate before going live — could be meaningful edge
-with zero marginal infrastructure cost if RSSHub approach works.
+**Self-host RSSHub before go-live.** Public rsshub.app instances get blocked by X periodically.
+A self-hosted instance on Mac Studio is more reliable for production use.
