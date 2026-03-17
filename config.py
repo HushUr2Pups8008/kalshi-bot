@@ -245,6 +245,13 @@ class BotConfig:
     max_bet_hard_cap:  float = field(default_factory=lambda: float(os.getenv("MAX_BET_HARD_CAP", "25.0")))
     min_bet_dollars:   float = field(default_factory=lambda: float(os.getenv("MIN_BET_DOLLARS", "2.0")))
 
+    # Portfolio risk: max fraction of notional bankroll deployed in a single ticker.
+    # Prevents runaway concentration on one market (e.g. Iran war dominates the book).
+    # Default 25% — raise in .env if needed. Set to 1.0 to disable.
+    max_ticker_exposure_pct: float = field(
+        default_factory=lambda: float(os.getenv("MAX_TICKER_EXPOSURE_PCT", "0.25"))
+    )
+
     # Optional Anthropic API key (fallback LLM if Ollama unavailable)
     anthropic_api_key: Optional[str] = field(
         default_factory=lambda: os.getenv("ANTHROPIC_API_KEY")

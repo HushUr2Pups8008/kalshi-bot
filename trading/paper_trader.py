@@ -23,6 +23,7 @@ from tabulate import tabulate
 from analysis import SignalAnalysis
 from analysis.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR, PAPER_FLAT_CONTRACTS
+from trading.portfolio import Portfolio, Position
 from utils.logger import get_logger, trade_log
 
 log = get_logger("paper_trader")
@@ -85,6 +86,8 @@ class PaperTrader:
         self._conn.commit()
         self._migrate_db()
         self.credibility = SourceCredibility(db_path)
+        self.portfolio   = Portfolio()
+        self.portfolio.load_from_db(self._conn)
         self._load_state()
 
     # ── Schema migrations ─────────────────────────────────────────────────────
@@ -232,6 +235,19 @@ class PaperTrader:
         )
         self._conn.commit()
 
+        # Keep portfolio in sync with DB
+        self.portfolio.add(Position(
+            trade_id=trade_id,
+            ticker=analysis.market.ticker,
+            side=analysis.side,
+            contracts=contracts,
+            cost_dollars=cost_dollars,
+            price_cents=price_cents,
+            estimated_prob=analysis.estimated_probability,
+            market_yes_price=analysis.market_yes_price,
+            ts=datetime.now(timezone.utc).isoformat(),
+        ))
+
         trade_log.log_paper_trade(
             trade_id=trade_id,
             ticker=analysis.market.ticker,
@@ -300,6 +316,9 @@ class PaperTrader:
 
         # Credit bankroll once for total payout (cost was debited on entry per-trade)
         self._credit_bankroll(total_payout)
+
+        # Keep portfolio in sync — all positions for this ticker are now closed
+        self.portfolio.resolve(ticker)
 
         # Non-critical side effects: credibility + audit log (DB already committed above)
         for t, won, payout, pnl in outcomes:

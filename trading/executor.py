@@ -19,7 +19,7 @@ from typing import Optional
 
 from analysis import SignalAnalysis
 from analysis.kelly import contracts_from_dollars
-from config import cfg, PAPER_MIN_EDGE
+from config import cfg, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS
 from kalshi import OrderResult
 from kalshi.rest_client import KalshiRestClient
 from trading.paper_trader import PaperTrader
@@ -41,23 +41,25 @@ class TradeExecutor:
         self._seed_cooldowns_from_db()
 
     def _seed_cooldowns_from_db(self) -> None:
-        """Seed per-ticker cooldowns from DB so restarts don't reset the gate."""
+        """
+        Seed per-ticker cooldowns from portfolio so restarts don't reset the gate.
+        Reads from the already-loaded Portfolio instead of re-querying the DB.
+        """
         now_wall = datetime.now(timezone.utc)
         now_mono = time.monotonic()
-        rows = self._paper._conn.execute(
-            "SELECT ticker, MAX(ts) as last_ts FROM paper_trades "
-            "WHERE resolved = 0 GROUP BY ticker"
-        ).fetchall()
-        for row in rows:
-            trade_ts = datetime.fromisoformat(row["last_ts"])
+        for ticker in self._paper.portfolio.tickers():
+            latest = self._paper.portfolio.latest_ts(ticker)
+            if latest is None:
+                continue
+            trade_ts = datetime.fromisoformat(latest)
             if trade_ts.tzinfo is None:
                 trade_ts = trade_ts.replace(tzinfo=timezone.utc)
             age_secs = (now_wall - trade_ts).total_seconds()
             if age_secs < _PAPER_TICKER_COOLDOWN:
-                self._last_traded[row["ticker"]] = now_mono - age_secs
+                self._last_traded[ticker] = now_mono - age_secs
                 log.debug(
-                    "Cooldown seeded for %s from DB (%.1fh ago)",
-                    row["ticker"], age_secs / 3600,
+                    "Cooldown seeded for %s from portfolio (%.1fh ago)",
+                    ticker, age_secs / 3600,
                 )
 
     async def execute(self, analysis: SignalAnalysis) -> Optional[str]:
@@ -119,21 +121,44 @@ class TradeExecutor:
 
         # Multi-position guard: block opposing trades (no hedges) and duplicate
         # signals (same side, same probability estimate, same market price).
-        if cfg.is_paper_trading:
-            for open_trade in self._paper.get_all_open_trades(analysis.market.ticker):
-                if open_trade["side"] != analysis.side:
-                    return (
-                        f"opposing position exists: open {open_trade['side'].upper()} "
-                        f"at est={open_trade['estimated_prob']:.3f} — no hedging"
-                    )
-                prob_delta  = abs(open_trade["estimated_prob"] - analysis.estimated_probability)
-                price_delta = abs(open_trade["market_yes_price"] - analysis.market_yes_price)
-                if prob_delta < 0.02 and price_delta < 2.0:
-                    return (
-                        f"same-signal skip: open {open_trade['side'].upper()} at "
-                        f"est={open_trade['estimated_prob']:.3f} "
-                        f"mkt={open_trade['market_yes_price']:.1f}¢ — no new information"
-                    )
+        # Reads from the in-memory Portfolio — no DB query at decision time.
+        for pos in self._paper.portfolio.open_positions(analysis.market.ticker):
+            if pos.side != analysis.side:
+                return (
+                    f"opposing position exists: open {pos.side.upper()} "
+                    f"at est={pos.estimated_prob:.3f} — no hedging"
+                )
+            prob_delta  = abs(pos.estimated_prob - analysis.estimated_probability)
+            price_delta = abs(pos.market_yes_price - analysis.market_yes_price)
+            if prob_delta < 0.02 and price_delta < 2.0:
+                return (
+                    f"same-signal skip: open {pos.side.upper()} at "
+                    f"est={pos.estimated_prob:.3f} "
+                    f"mkt={pos.market_yes_price:.1f}¢ — no new information"
+                )
+
+        # Concentration risk: cap exposure per ticker at max_ticker_exposure_pct
+        # of the notional bankroll. Prevents a flood of signals on one ticker
+        # from deploying an outsized fraction of capital on a single outcome.
+        notional = self._paper.get_notional_bankroll()
+        trade_cost = (
+            PAPER_FLAT_CONTRACTS * max(1, min(99, int(analysis.market.yes_price))) / 100.0
+            if cfg.is_paper_trading
+            else analysis.capped_dollars
+        )
+        if not self._paper.portfolio.is_concentration_ok(
+            ticker=analysis.market.ticker,
+            additional_dollars=trade_cost,
+            max_ticker_pct=cfg.max_ticker_exposure_pct,
+            bankroll=notional,
+        ):
+            current_exposure = self._paper.portfolio.exposure(analysis.market.ticker)
+            cap = cfg.max_ticker_exposure_pct * notional
+            return (
+                f"concentration limit: {analysis.market.ticker} exposure "
+                f"${current_exposure:.2f} + ${trade_cost:.2f} would exceed "
+                f"{cfg.max_ticker_exposure_pct:.0%} cap (${cap:.2f})"
+            )
 
         # Live ticker cooldown + balance check
         if not cfg.is_paper_trading:
@@ -214,7 +239,8 @@ class TradeExecutor:
 
     def status(self) -> dict:
         return {
-            "mode":             "paper" if cfg.is_paper_trading else "live",
+            "mode":              "paper" if cfg.is_paper_trading else "live",
             "notional_bankroll": self._paper.get_notional_bankroll(),
-            "ticker_cooldowns": len(self._last_traded),
+            "ticker_cooldowns":  len(self._last_traded),
+            "portfolio":         self._paper.portfolio.summary(),
         }
