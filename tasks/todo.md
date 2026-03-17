@@ -6,7 +6,11 @@
 ## Go-Live Prerequisites
 - [ ] Accumulate valid paper trades on geopolitical markets (not sports)
 - [ ] Review paper trade performance — confirm positive edge
-- [ ] Investigate "fade the Kalshi tweet" signal (see lessons.md) — assess before going live
+- [ ] Validate "fade the Kalshi tweet" paper trades — query DB after 2-4 weeks:
+      `SELECT reasoning, resolved FROM paper_trades WHERE reasoning LIKE '[FADE]%'`
+      Compare win rate: [FADE/GEO] vs [FADE/SPORTS]. Both positive → go live.
+      Enable signal: set `KALSHI_TWEET_FEED_URL=https://rsshub.app/twitter/user/Kalshi` in `.env`
+      Self-host RSSHub before going live (public instance may be blocked by X).
 - [ ] Run `python main.py --go-live` and type `CONFIRM` at prompt
 - [ ] Verify Kalshi API key is current and account is funded
 

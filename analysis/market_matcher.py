@@ -156,10 +156,13 @@ def _is_geo_series(series: dict) -> bool:
 
 class MarketCache:
     def __init__(self, rest_client: KalshiRestClient):
-        self._client      = rest_client
-        self._markets:    list[KalshiMarket] = []
-        self._last_fetch: float = 0.0
-        self._lock        = asyncio.Lock()
+        self._client          = rest_client
+        self._markets:        list[KalshiMarket] = []
+        self._last_fetch:     float = 0.0
+        self._all_markets:    list[KalshiMarket] = []
+        self._all_last_fetch: float = 0.0
+        self._lock            = asyncio.Lock()
+        self._all_lock        = asyncio.Lock()
 
     async def get_markets(self) -> list[KalshiMarket]:
         async with self._lock:
@@ -228,6 +231,48 @@ class MarketCache:
                 log.debug("Skipping series %s: %s", series_ticker, exc)
 
         return filtered, len(geo_tickers)
+
+    async def get_all_markets(self) -> list[KalshiMarket]:
+        """
+        Return all active Kalshi markets (up to 2000), regardless of category.
+        Used exclusively by the fade signal to search sports + geo markets.
+        Cached for MARKET_CACHE_TTL_SECONDS (same as geo cache).
+        """
+        async with self._all_lock:
+            age = time.monotonic() - self._all_last_fetch
+            if age > MARKET_CACHE_TTL_SECONDS or not self._all_markets:
+                await self._refresh_all()
+        return list(self._all_markets)
+
+    async def _refresh_all(self) -> None:
+        loop = asyncio.get_event_loop()
+        try:
+            markets = await loop.run_in_executor(None, self._fetch_all_markets)
+            self._all_markets    = markets
+            self._all_last_fetch = time.monotonic()
+            log.info("All-markets cache refreshed: %d active markets", len(markets))
+        except Exception as exc:
+            log.error("All-markets cache refresh failed: %s", exc)
+
+    def _fetch_all_markets(self) -> list[KalshiMarket]:
+        """
+        Synchronous: page through all active markets (up to 10 pages × 200 = 2000).
+        Applies the same days-to-expiry filter as the geo cache.
+        Runs in a thread pool executor.
+        """
+        markets = []
+        cursor  = None
+        for _ in range(10):
+            page, cursor = self._client.get_markets(
+                status="open", cursor=cursor, limit=200
+            )
+            for m in page:
+                days = _days_to_close(m.close_time)
+                if days is None or 0 < days <= MAX_MARKET_DAYS_TO_EXPIRY:
+                    markets.append(m)
+            if not cursor:
+                break
+        return markets
 
 
 # ── Matcher ───────────────────────────────────────────────────────────────────
@@ -311,6 +356,53 @@ class MarketMatcher:
                 results[0][1],
             )
 
+        return results
+
+    async def find_all_candidates(
+        self, news: NewsItem, max_results: int = 1
+    ) -> list[tuple[KalshiMarket, float]]:
+        """
+        Like find_candidates() but searches ALL active markets (geo + sports + entertainment).
+        Used exclusively by the fade signal pipeline.
+
+        Applies a relaxed gate: Jaccard similarity only, no geopolitical boost requirement,
+        no named-entity gate. This allows sports/entertainment markets to match.
+        """
+        _FADE_MIN_SCORE = 0.02
+
+        news_tokens = _tokenize(f"{news.headline} {news.body}")
+        markets     = await self._cache.get_all_markets()
+
+        scored: list[tuple[KalshiMarket, float]] = []
+        for market in markets:
+            if market.status not in ("open", "active"):
+                continue
+            market_tokens = _tokenize(market.title) | _tokenize(market.subtitle)
+            if not market_tokens:
+                continue
+            score = _similarity(news_tokens, market_tokens)
+            if score < _FADE_MIN_SCORE:
+                continue
+            days = _days_to_close(market.close_time)
+            if days is not None:
+                if days <= 0:
+                    continue
+                if days <= 1:
+                    score *= 1.5
+                elif days <= 7:
+                    score *= 1.2
+                elif days <= 14:
+                    score *= 1.1
+            scored.append((market, round(score, 4)))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        results = scored[:max_results]
+        if results:
+            log.debug(
+                "[FADE] Matched %d market(s) for '%s...' — top: %s (%.3f)",
+                len(results), news.headline[:50],
+                results[0][0].ticker, results[0][1],
+            )
         return results
 
     async def refresh_cache(self) -> None:

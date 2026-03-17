@@ -71,6 +71,11 @@ RSS_FEEDS = [
 ]
 RSS_POLL_INTERVAL_SECONDS = 60
 
+# Optional RSSHub feed for @Kalshi tweets — enables "fade the Kalshi tweet" signal.
+# Leave empty (default) to disable. Set to https://rsshub.app/twitter/user/Kalshi
+# or a self-hosted RSSHub instance URL before going live with this signal.
+KALSHI_TWEET_FEED_URL: str = os.getenv("KALSHI_TWEET_FEED_URL", "")
+
 # ── Reddit subreddits to monitor ──────────────────────────────────────────────
 REDDIT_SUBREDDITS = [
     # Core geopolitical / world news
