@@ -29,7 +29,7 @@ from analysis import SignalAnalysis
 from analysis.kelly import kelly_bet
 from analysis.market_matcher import MarketMatcher
 from analysis.signal_analyzer import estimate_probability
-from config import cfg, PAPER_MIN_EDGE
+from config import cfg, PAPER_MIN_EDGE, VERSION
 from feeds import NewsItem
 from feeds.reddit_monitor import run_reddit_monitor
 from feeds.rss_monitor import run_rss_monitor
@@ -210,7 +210,7 @@ class TradingBot:
         max_bet  = cfg.dynamic_max_bet(notional)
 
         log.info("=" * 60)
-        log.info("Kalshi Trading Bot starting")
+        log.info("Kalshi Trading Bot v%s starting", VERSION)
         log.info("Mode:             %s", "PAPER TRADING" if cfg.is_paper_trading else "LIVE TRADING")
         log.info("Notional bankroll: $%.2f", notional)
         log.info("Max bet (dynamic): $%.2f  (%.0f%% of bankroll, hard cap $%.2f)",

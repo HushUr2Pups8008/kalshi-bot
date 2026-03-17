@@ -21,6 +21,9 @@ DATA_DIR = BASE_DIR / "data"
 LOGS_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
+# ── Version ───────────────────────────────────────────────────────────────────
+VERSION = (BASE_DIR / "VERSION").read_text(encoding="utf-8").strip()
+
 # ── Kalshi REST base URLs ─────────────────────────────────────────────────────
 # Production URL per official OpenAPI spec (api.elections.kalshi.com)
 KALSHI_PROD_REST = "https://api.elections.kalshi.com/trade-api/v2"
