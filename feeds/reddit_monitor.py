@@ -9,6 +9,7 @@ objects for new posts above the minimum score threshold.
 
 import asyncio
 import hashlib
+import time
 from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Callable, Awaitable
@@ -37,25 +38,26 @@ def _make_id(post_id: str) -> str:
     return hashlib.sha256(post_id.encode()).hexdigest()
 
 
-_backoff: dict[str, float] = {}   # per-subreddit 429 backoff tracker
+_backoff:       dict[str, float] = {}  # per-subreddit resume-time (monotonic clock)
+_backoff_delay: dict[str, float] = {}  # per-subreddit current delay for exponential growth
 
 async def _fetch_subreddit(session: aiohttp.ClientSession, subreddit: str) -> list[dict]:
     # Honour any active backoff for this subreddit
-    backoff = _backoff.get(subreddit, 0.0)
-    if backoff > 0:
+    if time.monotonic() < _backoff.get(subreddit, 0.0):
         log.debug("r/%s in backoff — skipping this cycle", subreddit)
-        _backoff[subreddit] = max(0.0, backoff - REDDIT_POLL_INTERVAL)
         return []
 
     url = _BASE_URL.format(subreddit=subreddit, limit=FETCH_LIMIT)
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             if resp.status == 429:
-                new_backoff = min(_backoff.get(subreddit, 60) * 2, _MAX_BACKOFF)
-                _backoff[subreddit] = new_backoff
-                log.warning("Reddit rate limit hit for r/%s — backing off %.0fs", subreddit, new_backoff)
+                delay = min(_backoff_delay.get(subreddit, 30.0) * 2, _MAX_BACKOFF)
+                _backoff_delay[subreddit] = delay
+                _backoff[subreddit] = time.monotonic() + delay
+                log.warning("Reddit rate limit hit for r/%s — backing off %.0fs", subreddit, delay)
                 return []
-            _backoff[subreddit] = 0.0   # reset on success
+            _backoff[subreddit] = 0.0          # 0.0 < monotonic() always → not in backoff
+            _backoff_delay.pop(subreddit, None) # reset exponential delay on success
             if resp.status != 200:
                 log.warning("r/%s returned HTTP %d", subreddit, resp.status)
                 return []

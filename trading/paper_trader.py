@@ -260,27 +260,34 @@ class PaperTrader:
             log.debug("No open paper trades for %s", ticker)
             return
 
-        total_pnl = 0.0
+        # Pre-calculate all outcomes before any DB writes
+        outcomes: list[tuple] = []
+        total_pnl    = 0.0
+        total_payout = 0.0
         for t in trades:
-            won   = (t["side"] == "yes" and resolved_yes) or \
-                    (t["side"] == "no"  and not resolved_yes)
-            payout    = t["contracts"] * 1.0 if won else 0.0
-            pnl       = payout - t["cost_dollars"]
-            total_pnl += pnl
+            won    = (t["side"] == "yes" and resolved_yes) or \
+                     (t["side"] == "no"  and not resolved_yes)
+            payout = float(t["contracts"]) if won else 0.0
+            pnl    = payout - t["cost_dollars"]
+            outcomes.append((t, won, payout, pnl))
+            total_pnl    += pnl
+            total_payout += payout
 
-            # Credit bankroll with payout (cost was already debited on entry)
-            self._credit_bankroll(payout)
+        # Atomically mark all trades resolved — rolls back everything if interrupted
+        with self._conn:
+            for t, won, payout, pnl in outcomes:
+                self._conn.execute(
+                    "UPDATE paper_trades SET resolved=1, resolved_yes=?, pnl_dollars=? "
+                    "WHERE trade_id=?",
+                    (int(resolved_yes), pnl, t["trade_id"]),
+                )
 
-            self._conn.execute(
-                "UPDATE paper_trades SET resolved=1, resolved_yes=?, pnl_dollars=? "
-                "WHERE trade_id=?",
-                (int(resolved_yes), pnl, t["trade_id"]),
-            )
+        # Credit bankroll once for total payout (cost was debited on entry per-trade)
+        self._credit_bankroll(total_payout)
 
-            # Update source credibility
-            # Signal was "correct" if we won the trade
+        # Non-critical side effects: credibility + audit log (DB already committed above)
+        for t, won, payout, pnl in outcomes:
             self.credibility.record_outcome(t["signal_source"], was_correct=won)
-
             trade_log.log_paper_resolution(
                 trade_id=t["trade_id"],
                 ticker=ticker,
@@ -292,8 +299,6 @@ class PaperTrader:
                 t["trade_id"], ticker, resolved_yes, pnl,
                 self.get_notional_bankroll(),
             )
-
-        self._conn.commit()
         log.info(
             "[RESOLVED] %s: %d trades | net P&L $%+.2f | notional bankroll $%.2f",
             ticker, len(trades), total_pnl, self.get_notional_bankroll(),

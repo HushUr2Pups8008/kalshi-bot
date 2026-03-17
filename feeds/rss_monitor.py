@@ -58,7 +58,7 @@ async def poll_feed(
     seen: OrderedDict,
 ) -> None:
     """Fetch one RSS feed URL and invoke callback for each unseen entry."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         # feedparser is synchronous — run in executor to avoid blocking
         parsed = await loop.run_in_executor(None, feedparser.parse, url)

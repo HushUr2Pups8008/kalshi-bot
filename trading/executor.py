@@ -183,7 +183,7 @@ class TradeExecutor:
             price_cents, cost_dollars, analysis.edge, analysis.confidence,
         )
 
-        loop   = asyncio.get_event_loop()
+        loop   = asyncio.get_running_loop()
         result: OrderResult = await loop.run_in_executor(
             None,
             lambda: self._rest.place_limit_order(
