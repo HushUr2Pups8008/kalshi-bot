@@ -12,7 +12,7 @@ shift, our estimated probability is 0.45.
 """
 
 import asyncio
-import re
+import json as _json
 from typing import Optional
 
 from config import cfg, GEOPOLITICAL_SIGNALS
@@ -21,6 +21,37 @@ from kalshi import KalshiMarket
 from utils.logger import get_logger
 
 log = get_logger("signal_analyzer")
+
+
+def _extract_json(text: str) -> dict:
+    """
+    Extract the last valid JSON object from an LLM response string.
+
+    Uses raw_decode() to scan forward from each '{', keeping the last
+    successfully parsed result.  This handles LLM preamble like:
+        'Consider {Russia}: {"relevant": true, ...}'
+    where a greedy regex would capture from the first '{' to the last '}'
+    and produce invalid JSON.
+
+    Raises ValueError if no valid JSON object is found.
+    """
+    decoder = _json.JSONDecoder()
+    last: dict | None = None
+    i = 0
+    while i < len(text):
+        pos = text.find("{", i)
+        if pos == -1:
+            break
+        try:
+            obj, _ = decoder.raw_decode(text, pos)
+            if isinstance(obj, dict):
+                last = obj
+        except _json.JSONDecodeError:
+            pass
+        i = pos + 1
+    if last is None:
+        raise ValueError(f"No valid JSON object found in LLM response: {text[:120]!r}")
+    return last
 
 
 # ── Keyword scoring ───────────────────────────────────────────────────────────
@@ -233,7 +264,6 @@ async def _ollama_estimate(news, market):
     Returns (prob, confidence, reasoning) or None if Ollama is not running.
     """
     import aiohttp
-    import json as _json
 
     payload = {
         "model": cfg.ollama_model,
@@ -258,12 +288,8 @@ async def _ollama_estimate(news, market):
                     return None
                 data = await resp.json()
 
-        text  = data["choices"][0]["message"]["content"].strip()
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            raise ValueError(f"No JSON in Ollama response: {text[:100]}")
-
-        parsed = _json.loads(match.group())
+        text   = data["choices"][0]["message"]["content"].strip()
+        parsed = _extract_json(text)
         prob, confidence, reasoning = _parse_llm_response(parsed, market)
         log.debug("Ollama: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
                   parsed.get("direction"), parsed.get("magnitude"),
@@ -297,7 +323,6 @@ async def _anthropic_estimate(news, market):
 
     try:
         import anthropic
-        import json as _json
 
         client   = anthropic.AsyncAnthropic(api_key=cfg.anthropic_api_key)
         response = await client.messages.create(
@@ -307,12 +332,8 @@ async def _anthropic_estimate(news, market):
             messages=[{"role": "user", "content": _build_user_msg(news, market)}],
         )
 
-        text  = response.content[0].text.strip()
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            raise ValueError(f"No JSON in Anthropic response: {text[:100]}")
-
-        parsed = _json.loads(match.group())
+        text   = response.content[0].text.strip()
+        parsed = _extract_json(text)
         prob, confidence, reasoning = _parse_llm_response(parsed, market)
         log.debug("Anthropic: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
                   parsed.get("direction"), parsed.get("magnitude"),

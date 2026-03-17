@@ -31,6 +31,7 @@ from analysis.market_matcher import MarketMatcher
 from analysis.signal_analyzer import estimate_probability
 from config import cfg, PAPER_MIN_EDGE, VERSION, FADE_TWEET_FEED_URLS, MARKET_SERIES_BLOCKLIST_PREFIXES
 from feeds import NewsItem
+from feeds.dedup import HeadlineDedup
 from feeds.reddit_monitor import run_reddit_monitor
 from feeds.rss_monitor import run_rss_monitor
 from kalshi.rest_client import KalshiRestClient
@@ -71,8 +72,35 @@ class TradingBot:
         self.paper    = PaperTrader()
         self.executor = TradeExecutor(self.rest, self.paper)
         self.ws.on_price_update(self._on_price_update)
+        # Bounded queue decouples feed pollers from slow LLM inference.
+        # Feed pollers enqueue instantly; a single consumer drains sequentially.
+        self._news_queue: asyncio.Queue[NewsItem] = asyncio.Queue(maxsize=500)
+        # Cross-source dedup: Reuters/AP/BBC often publish the same story within
+        # minutes. Skip near-identical headlines seen in the last 15 minutes.
+        self._dedup = HeadlineDedup()
 
     # ── News pipeline ─────────────────────────────────────────────────────────
+
+    async def _enqueue_news(self, news: NewsItem) -> None:
+        """Non-blocking enqueue from feed pollers. Drops items if queue is full."""
+        if self._dedup.is_duplicate(news.headline, source=news.source):
+            return
+        try:
+            self._news_queue.put_nowait(news)
+        except asyncio.QueueFull:
+            log.warning("News queue full (%d items) — dropping: %s",
+                        self._news_queue.maxsize, news.headline[:60])
+
+    async def _news_consumer_task(self) -> None:
+        """Drain the news queue, processing one item at a time."""
+        while True:
+            news = await self._news_queue.get()
+            try:
+                await self.on_news_item(news)
+            except Exception as exc:
+                log.error("Unhandled error processing news item: %s", exc)
+            finally:
+                self._news_queue.task_done()
 
     async def on_news_item(self, news: NewsItem) -> None:
         log.info("[NEWS] [%s] %s", news.source, news.headline[:100])
@@ -306,11 +334,12 @@ class TradingBot:
         await self._check_llm_health()
 
         tasks = [
-            asyncio.create_task(run_rss_monitor(self.on_news_item),    name="rss"),
-            asyncio.create_task(run_reddit_monitor(self.on_news_item), name="reddit"),
-            asyncio.create_task(self.ws.run(),                         name="websocket"),
-            asyncio.create_task(self._daily_report_task(),             name="daily_report"),
-            asyncio.create_task(self._market_refresh_task(),           name="market_refresh"),
+            asyncio.create_task(run_rss_monitor(self._enqueue_news),    name="rss"),
+            asyncio.create_task(run_reddit_monitor(self._enqueue_news), name="reddit"),
+            asyncio.create_task(self._news_consumer_task(),             name="news_consumer"),
+            asyncio.create_task(self.ws.run(),                          name="websocket"),
+            asyncio.create_task(self._daily_report_task(),              name="daily_report"),
+            asyncio.create_task(self._market_refresh_task(),            name="market_refresh"),
             *([asyncio.create_task(
                 run_rss_monitor(self._on_fade_tweet, feeds=FADE_TWEET_FEED_URLS),
                 name="fade_tweets",
