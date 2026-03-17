@@ -322,7 +322,7 @@ async def _ollama_estimate(news, market):
         if _ollama_consecutive_failures >= _OLLAMA_FAILURE_THRESHOLD:
             _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
             log.warning(
-                "Ollama circuit open — %d consecutive failures, skipping for %.0fm",
+                "Ollama circuit open -- %d consecutive failures, skipping for %.0fm",
                 _ollama_consecutive_failures, _OLLAMA_PROBE_INTERVAL / 60,
             )
         else:
@@ -333,7 +333,7 @@ async def _ollama_estimate(news, market):
         if _ollama_consecutive_failures >= _OLLAMA_FAILURE_THRESHOLD:
             _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
             log.warning(
-                "Ollama circuit open — %d consecutive failures (timeout), skipping for %.0fm",
+                "Ollama circuit open -- %d consecutive failures (timeout), skipping for %.0fm",
                 _ollama_consecutive_failures, _OLLAMA_PROBE_INTERVAL / 60,
             )
         else:

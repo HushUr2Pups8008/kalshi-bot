@@ -59,14 +59,14 @@ async def _fetch_subreddit(session: aiohttp.ClientSession, subreddit: str) -> li
                 _backoff_delay[subreddit] = delay
                 _backoff[subreddit] = time.monotonic() + delay
                 _cycle_errors.append(429)
-                log.warning("Reddit rate limit hit for r/%s — backing off %.0fs", subreddit, delay)
+                log.warning("Reddit rate limit hit for r/%s -- backing off %.0fs", subreddit, delay)
                 return []
             if resp.status == 403:
                 delay = min(_backoff_delay.get(subreddit, 60.0) * 2, _MAX_BACKOFF)
                 _backoff_delay[subreddit] = delay
                 _backoff[subreddit] = time.monotonic() + delay
                 _cycle_errors.append(403)
-                log.warning("Reddit access denied for r/%s (403) — backing off %.0fs", subreddit, delay)
+                log.warning("Reddit access denied for r/%s (403) -- backing off %.0fs", subreddit, delay)
                 return []
             _backoff[subreddit] = 0.0          # 0.0 < monotonic() always → not in backoff
             _backoff_delay.pop(subreddit, None) # reset exponential delay on success
