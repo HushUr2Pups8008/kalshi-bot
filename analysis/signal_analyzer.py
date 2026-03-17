@@ -13,6 +13,7 @@ shift, our estimated probability is 0.45.
 
 import asyncio
 import json as _json
+import time
 from typing import Optional
 
 from config import cfg, GEOPOLITICAL_SIGNALS
@@ -27,6 +28,12 @@ log = get_logger("signal_analyzer")
 # Using a semaphore here (not at the worker level) means this cap holds
 # even if we add more consumer workers in the future.
 _LLM_SEMAPHORE = asyncio.Semaphore(1)
+
+# ── Ollama circuit breaker ─────────────────────────────────────────────────────
+_OLLAMA_FAILURE_THRESHOLD = 3     # consecutive failures before circuit opens
+_OLLAMA_PROBE_INTERVAL    = 300   # seconds between recovery probes (5 min)
+_ollama_consecutive_failures: int = 0
+_ollama_down_until: float = 0.0   # monotonic — skip Ollama until this time
 
 
 def _extract_json(text: str) -> dict:
@@ -269,6 +276,10 @@ async def _ollama_estimate(news, market):
     Call local Ollama server (OpenAI-compatible endpoint).
     Returns (prob, confidence, reasoning) or None if Ollama is not running.
     """
+    global _ollama_consecutive_failures, _ollama_down_until
+    if time.monotonic() < _ollama_down_until:
+        return None  # circuit open — skip without burning 60s timeout
+
     import aiohttp
 
     payload = {
@@ -297,16 +308,36 @@ async def _ollama_estimate(news, market):
         text   = data["choices"][0]["message"]["content"].strip()
         parsed = _extract_json(text)
         prob, confidence, reasoning = _parse_llm_response(parsed, market)
+        if _ollama_consecutive_failures > 0:
+            log.info("Ollama recovered after %d consecutive failures", _ollama_consecutive_failures)
+            _ollama_consecutive_failures = 0
+            _ollama_down_until = 0.0
         log.debug("Ollama: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
                   parsed.get("direction"), parsed.get("magnitude"),
                   confidence, prob, market.ticker)
         return prob, confidence, reasoning
 
     except aiohttp.ClientConnectorError:
-        log.debug("Ollama not running -- falling back to keyword scoring")
+        _ollama_consecutive_failures += 1
+        if _ollama_consecutive_failures >= _OLLAMA_FAILURE_THRESHOLD:
+            _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
+            log.warning(
+                "Ollama circuit open — %d consecutive failures, skipping for %.0fm",
+                _ollama_consecutive_failures, _OLLAMA_PROBE_INTERVAL / 60,
+            )
+        else:
+            log.debug("Ollama not running -- falling back to keyword scoring")
         return None
     except asyncio.TimeoutError:
-        log.warning("Ollama estimation failed: timed out after 60s (model loading or CPU overloaded)")
+        _ollama_consecutive_failures += 1
+        if _ollama_consecutive_failures >= _OLLAMA_FAILURE_THRESHOLD:
+            _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
+            log.warning(
+                "Ollama circuit open — %d consecutive failures (timeout), skipping for %.0fm",
+                _ollama_consecutive_failures, _OLLAMA_PROBE_INTERVAL / 60,
+            )
+        else:
+            log.warning("Ollama estimation failed: timed out after 60s (model loading or CPU overloaded)")
         return None
     except _json.JSONDecodeError as exc:
         log.warning("Ollama estimation failed: invalid JSON in response -- %s", exc)

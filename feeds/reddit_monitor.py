@@ -28,6 +28,10 @@ SCORE_RECHECK_DELAY   = 90    # seconds before rechecking score
 MAX_SEEN              = 2_000
 _STAGGER_DELAY        = 10    # seconds between each subreddit request (avoids burst)
 _MAX_BACKOFF          = 300   # max 429 backoff in seconds
+_REDDIT_GLOBAL_BACKOFF   = 1800   # 30-min global suspension when IP-blocked
+_REDDIT_OUTAGE_THRESHOLD = 0.5    # fraction of subreddits failing triggers global backoff
+_reddit_down_until: float = 0.0   # monotonic — skip all Reddit until this time
+_cycle_errors: list[int] = []     # 403/429 status codes collected during current poll cycle
 
 # Reddit requires a descriptive User-Agent to avoid rate limiting
 _USER_AGENT = "KalshiBot/1.0 (geopolitical news monitor; no login required)"
@@ -54,7 +58,15 @@ async def _fetch_subreddit(session: aiohttp.ClientSession, subreddit: str) -> li
                 delay = min(_backoff_delay.get(subreddit, 30.0) * 2, _MAX_BACKOFF)
                 _backoff_delay[subreddit] = delay
                 _backoff[subreddit] = time.monotonic() + delay
+                _cycle_errors.append(429)
                 log.warning("Reddit rate limit hit for r/%s — backing off %.0fs", subreddit, delay)
+                return []
+            if resp.status == 403:
+                delay = min(_backoff_delay.get(subreddit, 60.0) * 2, _MAX_BACKOFF)
+                _backoff_delay[subreddit] = delay
+                _backoff[subreddit] = time.monotonic() + delay
+                _cycle_errors.append(403)
+                log.warning("Reddit access denied for r/%s (403) — backing off %.0fs", subreddit, delay)
                 return []
             _backoff[subreddit] = 0.0          # 0.0 < monotonic() always → not in backoff
             _backoff_delay.pop(subreddit, None) # reset exponential delay on success
@@ -165,6 +177,18 @@ async def run_reddit_monitor(
     headers = {"User-Agent": _USER_AGENT}
     async with aiohttp.ClientSession(headers=headers) as session:
         while True:
+            global _reddit_down_until
+            # Recovery detection — log once when circuit expires
+            if _reddit_down_until > 0.0 and time.monotonic() >= _reddit_down_until:
+                log.info("Reddit global circuit recovered — resuming normal polling")
+                _reddit_down_until = 0.0
+            # Global circuit breaker: skip entire cycle when IP-blocked
+            if time.monotonic() < _reddit_down_until:
+                remaining = (_reddit_down_until - time.monotonic()) / 60
+                log.warning("Reddit global circuit open — skipping poll cycle (%.0fm remaining)", remaining)
+                await asyncio.sleep(poll_interval)
+                continue
+
             # Poll each subreddit sequentially with a stagger delay to avoid
             # bursting Reddit's rate limiter with simultaneous requests.
             for sub in subreddits:
@@ -173,5 +197,19 @@ async def run_reddit_monitor(
                 except Exception as exc:
                     log.warning("Unhandled error polling r/%s: %s", sub, exc)
                 await asyncio.sleep(_STAGGER_DELAY)
+
+            # Evaluate global circuit after each cycle
+            if _cycle_errors:
+                fail_rate = len(_cycle_errors) / len(subreddits)
+                if fail_rate >= _REDDIT_OUTAGE_THRESHOLD:
+                    _reddit_down_until = time.monotonic() + _REDDIT_GLOBAL_BACKOFF
+                    log.warning(
+                        "Reddit global circuit open — %.0f%% of subreddits failed (%d/%d), "
+                        "likely IP block. Suspending all Reddit polling for %.0fm.",
+                        fail_rate * 100, len(_cycle_errors), len(subreddits),
+                        _REDDIT_GLOBAL_BACKOFF / 60,
+                    )
+            _cycle_errors.clear()
+
             log.debug("Reddit poll cycle complete (%d subs), sleeping %ds", len(subreddits), poll_interval)
             await asyncio.sleep(poll_interval)
