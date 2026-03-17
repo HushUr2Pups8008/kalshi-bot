@@ -86,3 +86,42 @@
   Backward-compatible via env var fallback. Added @Polymarket and @PolymarketMoney.
   Dedicated `_on_fade_tweet()` callback with `_account_from_rsshub_url()` helper.
   Trade tags: `[FADE/GEO/@Kalshi]`, `[FADE/SPORTS/@Polymarket]` for per-account SQL queries.
+
+---
+
+## 2026-03-17 (Mac Onboarding Session — v0.5.2 → v0.5.6)
+
+### Python 3.14 / Mac Compatibility Fixes
+
+- **`asyncio.get_event_loop()` in `market_matcher.py`** — `analysis/market_matcher.py`  ✓ FIXED (v0.5.2)
+  Both `_refresh()` and `_refresh_all()` used deprecated `get_event_loop()` inside async functions.
+  Fix: replaced with `get_running_loop()` (consistent with prior fixes in rss_monitor + executor).
+
+- **Duplicate `PaperTrader` init on startup** — `main.py`  ✓ FIXED (v0.5.3)
+  `async_main()` created a standalone `PaperTrader()` unconditionally, then `TradingBot.__init__()`
+  created a second one. Both logged "Paper trading resumed" on every normal startup.
+  Fix: defer standalone `PaperTrader()` to only when a CLI flag (`--report`, `--go-live`, etc.) needs it.
+  Also replaced `asyncio.get_event_loop()` → `get_running_loop()` in the same function.
+
+- **`CancelledError` on shutdown (Python 3.14)** — `main.py`  ✓ FIXED (v0.5.4)
+  Python 3.14 changed `asyncio.run()` to propagate `CancelledError` from `shutdown_default_executor()`
+  when thread pool threads (the 1585-series market fetch) are still running at cleanup time.
+  Fix: added `asyncio.CancelledError` to the `except` at the `asyncio.run()` entry point.
+
+- **`UnknownTimezoneWarning` for EST/PST in `market_matcher.py`** — `analysis/market_matcher.py`  ✓ FIXED (v0.5.5)
+  Kalshi `close_time` strings use abbreviated US timezone names that dateutil doesn't recognise
+  without explicit `tzinfos`. Would become a hard exception in a future dateutil version.
+  Fix: added `_TZ` dict mapping EST/EDT/CST/CDT/MST/MDT/PST/PDT to UTC offsets; passed to `dp.parse()`.
+
+- **`UnknownTimezoneWarning` for EST/PST in `rss_monitor.py`** — `feeds/rss_monitor.py`  ✓ FIXED (v0.5.6)
+  Same issue as above but in `_parse_date()` — the actual source of the startup warning (fires on
+  first RSS item before market cache is built). Fix: `_RSS_TZINFOS` dict, passed to `dateutil_parser.parse()`.
+
+### Diagnosed (Not Bugs)
+
+- **Market cache lower than Windows** — 79–208 markets vs ~443 on Windows.
+  Cause: short-term geo markets expired overnight; remaining markets are longer-dated.
+  Count recovers as Kalshi opens new markets for upcoming events. Not a code issue.
+
+- **`qwen2.5:3b` running instead of `qwen2.5:7b`** — config.py default is `3b`; user set
+  `OLLAMA_MODEL=qwen2.5:7b` in `.env` after downloading the 7b model.
