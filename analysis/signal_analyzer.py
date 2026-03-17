@@ -167,6 +167,13 @@ Important rules:
 - Most headlines should result in magnitude="none".
 - If new_information=false, then direction="neutral" and magnitude="none".
 - Only major unexpected developments justify "moderate" or "large".
+- Actors must have official decision-making power over the market event. Statements
+  by opposition figures, exiles, diaspora groups, foreign critics, or unofficial
+  intermediaries do NOT move the probability. Ask yourself: "Does this person or
+  group have actual authority to cause the market event to resolve?"
+- Your JSON output must be internally consistent with your reasoning field. If your
+  reasoning says the headline "does not directly impact" or is "not directly related
+  to" the market event, then direction MUST be "neutral" and magnitude MUST be "none".
 
 Respond with ONLY a JSON object:
 {
