@@ -44,6 +44,15 @@
 5. Document Results – Add a review section to `tasks/todo.md`
 6. Capture Lessons – Update `tasks/lessons.md` after corrections
 
+## Version Control
+- Bump `VERSION` file on every commit that adds features, fixes bugs, or refactors
+- Versioning scheme: `MAJOR.MINOR.PATCH`
+  - PATCH: bug fixes, single-file tweaks (e.g. 0.4.0 → 0.4.1)
+  - MINOR: new features, multi-file improvements, new modules (e.g. 0.4.0 → 0.5.0)
+  - MAJOR: breaking architecture changes or go-live milestone (e.g. 0.x → 1.0.0)
+- Include the VERSION bump in the same commit as the code change — never a follow-up commit
+- If you forgot to bump VERSION, catch it before `git push` and amend the commit
+
 ## Core Principles
 
 **Simplicity First**
