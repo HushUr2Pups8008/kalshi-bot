@@ -21,6 +21,7 @@ Commands:
 
 import argparse
 import asyncio
+import itertools
 import signal
 import sys
 from datetime import datetime, timezone
@@ -41,6 +42,15 @@ from trading.paper_trader import PaperTrader
 from utils.logger import get_logger
 
 log = get_logger("main")
+
+# Monotonic counter used as PriorityQueue tiebreaker so NewsItem objects
+# are never compared against each other (dataclasses without __lt__ would raise).
+_news_counter = itertools.count()
+
+
+def _source_priority(source: str) -> int:
+    """Lower number = higher priority. Wire services (RSS) = 1, Reddit = 2."""
+    return 2 if source.startswith("r/") else 1
 
 
 def _account_from_rsshub_url(url: str) -> str:
@@ -72,9 +82,10 @@ class TradingBot:
         self.paper    = PaperTrader()
         self.executor = TradeExecutor(self.rest, self.paper)
         self.ws.on_price_update(self._on_price_update)
-        # Bounded queue decouples feed pollers from slow LLM inference.
-        # Feed pollers enqueue instantly; a single consumer drains sequentially.
-        self._news_queue: asyncio.Queue[NewsItem] = asyncio.Queue(maxsize=500)
+        # Priority queue decouples feed pollers from slow LLM inference.
+        # RSS/wire services (priority 1) are processed before Reddit (priority 2).
+        # Tuple layout: (priority, seq, news) — seq prevents NewsItem comparison.
+        self._news_queue: asyncio.PriorityQueue[tuple[int, int, NewsItem]] = asyncio.PriorityQueue(maxsize=500)
         # Cross-source dedup: Reuters/AP/BBC often publish the same story within
         # minutes. Skip near-identical headlines seen in the last 15 minutes.
         self._dedup = HeadlineDedup()
@@ -85,17 +96,18 @@ class TradingBot:
         """Non-blocking enqueue from feed pollers. Drops items if queue is full."""
         if self._dedup.is_duplicate(news.headline, source=news.source):
             return
+        priority = _source_priority(news.source)
         try:
-            self._news_queue.put_nowait(news)
+            self._news_queue.put_nowait((priority, next(_news_counter), news))
         except asyncio.QueueFull:
             log.warning("News queue full (%d items) — dropping: %s",
                         self._news_queue.maxsize, news.headline[:60])
 
     async def _news_consumer_task(self) -> None:
-        """Drain the news queue, processing one item at a time."""
+        """Drain the priority news queue, processing one item at a time."""
         processed = 0
         while True:
-            news = await self._news_queue.get()
+            _priority, _seq, news = await self._news_queue.get()
             try:
                 await self.on_news_item(news)
             except Exception as exc:
