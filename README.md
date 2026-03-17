@@ -8,26 +8,29 @@ Monitors RSS news feeds and Reddit for breaking geopolitical events, matches the
 
 ## How It Works
 
-1. **News ingestion** — RSS (Reuters, AP, BBC, Al Jazeera) and Reddit (r/worldnews, r/geopolitics, r/news) are polled continuously for new headlines.
-2. **Market matching** — Each headline is matched against cached open Kalshi markets using Jaccard token similarity with a geopolitical keyword boost.
-3. **Probability estimation** — A local LLM (Ollama `qwen2.5:7b`) classifies each signal with categorical output: relevance, novelty, direction (yes/no/neutral), and magnitude (none/small/moderate/large). Code applies deterministic probability shifts from these categories. Falls back to keyword scoring if Ollama is unavailable.
-4. **Bet sizing** — Half-Kelly criterion, capped at 5% of notional bankroll and a hard dollar cap.
-5. **Execution** — Paper mode records trades to SQLite. Live mode requires `--go-live` + typing `CONFIRM`.
+1. **News ingestion** — RSS (Reuters, AP, BBC, Al Jazeera, and others) and Reddit (r/worldnews, r/geopolitics, r/news, and others) are polled continuously for new headlines. Cross-source dedup suppresses near-identical stories published by multiple outlets within 15 minutes.
+2. **Queue + consumer** — New items are placed on a bounded async queue (non-blocking). A single consumer drains the queue, preventing feed pollers from stalling during LLM inference.
+3. **Market matching** — Each headline is matched against cached open Kalshi markets using Jaccard token similarity with a geopolitical keyword boost.
+4. **Probability estimation** — A local LLM (Ollama `qwen2.5:7b`) classifies each signal with categorical output: relevance, novelty, direction (yes/no/neutral), and magnitude (none/small/moderate/large). Code applies deterministic probability shifts from these categories. Falls back to keyword scoring if Ollama is unavailable.
+5. **Fade signal** — Separately monitors @Kalshi, @Polymarket, and @PolymarketMoney tweets via RSSHub. Detects hype/ATH language and fades it: bullish tweet → buy NO. No LLM needed — pattern matching only.
+6. **Bet sizing** — Half-Kelly criterion, capped at a configurable % of notional bankroll and a hard dollar cap.
+7. **Execution** — Paper mode records trades to SQLite. Live mode requires `--go-live` + typing `CONFIRM`.
 
 ---
 
 ## Architecture
 
 ```
-main.py                   — Async entry point; 5 concurrent tasks
+main.py                   — Async entry point; 6 concurrent tasks + optional fade_tweets
   feeds/
     rss_monitor.py        — Polls RSS feeds every 60s
     reddit_monitor.py     — Polls Reddit public JSON API every 300s
+    dedup.py              — Cross-source headline dedup (rapidfuzz, 15-min TTL)
   analysis/
     signal_analyzer.py    — LLM + keyword probability estimation
     market_matcher.py     — Jaccard similarity market matching
     kelly.py              — Half-Kelly bet sizing
-    source_credibility.py — Per-source win/loss multiplier (0.5-1.5x)
+    source_credibility.py — Per-source win/loss multiplier (0.5–1.5x)
   trading/
     executor.py           — Validation gate, routes to paper or live
     paper_trader.py       — SQLite paper trading engine
@@ -36,6 +39,17 @@ main.py                   — Async entry point; 5 concurrent tasks
     websocket_client.py   — Real-time price feed
   config.py               — All configuration, env var bindings, keyword lists
 ```
+
+**Concurrent tasks:**
+| Task | Role |
+|------|------|
+| `rss` | Polls RSS feeds, enqueues new items |
+| `reddit` | Polls Reddit, enqueues new items |
+| `news_consumer` | Drains queue, runs LLM pipeline |
+| `websocket` | Real-time Kalshi price feed |
+| `market_refresh` | Refreshes geo market cache every 30 min |
+| `daily_report` | Writes performance report every 24h |
+| `fade_tweets` | *(conditional)* Polls @Kalshi/@Polymarket RSSHub feeds |
 
 **State:** `data/paper_trades.db` — SQLite with paper trades, bot state, and source credibility scores.
 
@@ -101,6 +115,11 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 
 > Ollama must be running before starting the service. On a fresh boot it starts automatically via the Ollama tray app (Windows startup).
 
+**Note:** After installing new dependencies, always install them into the service venv explicitly:
+```powershell
+E:\VS_Code\kalshi-bot\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
 ---
 
 ## LLM Probability Estimation
@@ -112,6 +131,21 @@ Signal quality priority:
 3. **Keyword scoring** (always available) — deterministic fallback, no external calls
 
 The LLM answers categorical questions (relevant? new information? direction? magnitude?) rather than outputting a raw probability. Code maps magnitude to deterministic shifts (small=8pp, moderate=15pp, large=25pp), scaled by confidence. Keywords serve as an initial match gate but do not influence the final probability when the LLM is available.
+
+LLM calls are serialized via an `asyncio.Semaphore(1)` — only one Ollama call runs at a time to avoid latency spikes from concurrent inference on CPU.
+
+---
+
+## Fade Signal
+
+When @Kalshi or @Polymarket tweet "BREAKING", "all-time high", or similar hype language, the market is often overpriced from retail attention. The bot fades these signals: bullish tweet → buy NO.
+
+Configure via `.env`:
+```
+FADE_TWEET_FEED_URLS=https://rsshub.app/twitter/user/Kalshi,https://rsshub.app/twitter/user/Polymarket
+```
+
+Requires a running [RSSHub](https://rsshub.app) instance (self-hosted recommended for production — public instances can be rate-limited by X).
 
 ---
 
@@ -145,9 +179,12 @@ Live mode adds tighter edge thresholds, a live balance check before each order, 
 |---|---|---|
 | `KALSHI_ENV` | `demo` | `demo` or `prod` |
 | `BANKROLL` | `500.00` | Notional bankroll for Kelly sizing |
-| `MAX_BET_HARD_CAP` | `50.00` | Maximum single bet in dollars |
+| `MAX_BET_HARD_CAP` | `25.00` | Hard ceiling per bet in dollars |
+| `BET_PCT_BANKROLL` | `0.05` | Max bet as % of bankroll (5%) |
 | `KELLY_FRACTION` | `0.5` | Kelly fraction (0.5 = half-Kelly) |
 | `MIN_EDGE` | `0.04` | Minimum edge to place a live trade |
 | `OLLAMA_MODEL` | `qwen2.5:7b` | Ollama model name |
 | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Ollama API base URL |
+| `MAX_NEWS_AGE_SECONDS` | `300` | Max age of a queued news item before skipping |
 | `ANTHROPIC_API_KEY` | _(unset)_ | Enables Claude Haiku fallback |
+| `FADE_TWEET_FEED_URLS` | _(unset)_ | Comma-separated RSSHub URLs for fade signal |
