@@ -380,31 +380,29 @@ class TradingBot:
 
 async def async_main() -> None:
     args = parse_args()
-    paper = PaperTrader()
 
-    if args.report:
-        print(paper.generate_report())
-        return
-
-    if args.credibility:
-        print("\nSOURCE CREDIBILITY TABLE")
-        print(paper.credibility.format_table())
-        return
-
-    if args.resolve:
-        ticker, result_str = args.resolve
-        resolved_yes = result_str.upper() == "YES"
-        paper.resolve_market(ticker, resolved_yes)
-        log.info("Resolved %s as %s", ticker, "YES" if resolved_yes else "NO")
-        return
-
-    if args.go_live:
-        _handle_go_live(paper)
-        return
+    if args.report or args.credibility or args.resolve or args.go_live:
+        paper = PaperTrader()
+        if args.report:
+            print(paper.generate_report())
+            return
+        if args.credibility:
+            print("\nSOURCE CREDIBILITY TABLE")
+            print(paper.credibility.format_table())
+            return
+        if args.resolve:
+            ticker, result_str = args.resolve
+            resolved_yes = result_str.upper() == "YES"
+            paper.resolve_market(ticker, resolved_yes)
+            log.info("Resolved %s as %s", ticker, "YES" if resolved_yes else "NO")
+            return
+        if args.go_live:
+            _handle_go_live(paper)
+            return
 
     bot = TradingBot()
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, lambda: asyncio.create_task(_shutdown(bot)))
