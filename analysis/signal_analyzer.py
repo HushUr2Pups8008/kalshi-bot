@@ -11,6 +11,7 @@ price.  E.g. if the market is at 0.30 and the news suggests a +0.15 upward
 shift, our estimated probability is 0.45.
 """
 
+import asyncio
 import re
 from typing import Optional
 
