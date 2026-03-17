@@ -10,6 +10,7 @@ Key additions vs. original:
   - Weekly review reminder emitted in daily_summary()
 """
 
+import dataclasses
 import json
 import sqlite3
 import uuid
@@ -52,7 +53,8 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     notional_bankroll_after  REAL,
     resolved                INTEGER DEFAULT 0,
     resolved_yes            INTEGER,
-    pnl_dollars             REAL
+    pnl_dollars             REAL,
+    market_snapshot         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS bot_state (
@@ -81,8 +83,19 @@ class PaperTrader:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_DDL)
         self._conn.commit()
+        self._migrate_db()
         self.credibility = SourceCredibility(db_path)
         self._load_state()
+
+    # ── Schema migrations ─────────────────────────────────────────────────────
+
+    def _migrate_db(self) -> None:
+        """Add columns introduced after initial schema without dropping existing data."""
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(paper_trades)")}
+        if "market_snapshot" not in cols:
+            self._conn.execute("ALTER TABLE paper_trades ADD COLUMN market_snapshot TEXT")
+            self._conn.commit()
+            log.info("DB migrated: added market_snapshot column to paper_trades")
 
     # ── State management ──────────────────────────────────────────────────────
 
@@ -183,14 +196,16 @@ class PaperTrader:
         bankroll_after  = self._debit_bankroll(cost_dollars)
 
         source_mult = self.credibility.get_multiplier(analysis.news_item.source)
+        market_snapshot = json.dumps(dataclasses.asdict(analysis.market))
 
         self._conn.execute(
             """INSERT INTO paper_trades
                (trade_id, ts, ticker, market_title, side, contracts, price_cents,
                 cost_dollars, estimated_prob, market_yes_price, edge, kelly_dollars,
                 capped_dollars, signal_headline, signal_source, keywords_matched,
-                reasoning, source_multiplier, notional_bankroll_before, notional_bankroll_after)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                reasoning, source_multiplier, notional_bankroll_before, notional_bankroll_after,
+                market_snapshot)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 trade_id,
                 datetime.now(timezone.utc).isoformat(),
@@ -212,6 +227,7 @@ class PaperTrader:
                 source_mult,
                 bankroll_before,
                 bankroll_after,
+                market_snapshot,
             ),
         )
         self._conn.commit()
