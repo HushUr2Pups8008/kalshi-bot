@@ -14,7 +14,20 @@ from datetime import datetime, timezone
 from typing import Callable, Awaitable
 
 import feedparser
-from dateutil import parser as dateutil_parser
+from dateutil import parser as dateutil_parser, tz as dateutil_tz
+
+# Abbreviated US timezone names that dateutil doesn't recognise by default.
+# Passing this to parse() avoids UnknownTimezoneWarning (and future exceptions).
+_RSS_TZINFOS = {
+    "EST": dateutil_tz.tzoffset("EST", -5 * 3600),
+    "EDT": dateutil_tz.tzoffset("EDT", -4 * 3600),
+    "CST": dateutil_tz.tzoffset("CST", -6 * 3600),
+    "CDT": dateutil_tz.tzoffset("CDT", -5 * 3600),
+    "MST": dateutil_tz.tzoffset("MST", -7 * 3600),
+    "MDT": dateutil_tz.tzoffset("MDT", -6 * 3600),
+    "PST": dateutil_tz.tzoffset("PST", -8 * 3600),
+    "PDT": dateutil_tz.tzoffset("PDT", -7 * 3600),
+}
 
 from config import RSS_FEEDS, RSS_POLL_INTERVAL_SECONDS
 from feeds import NewsItem
@@ -36,7 +49,7 @@ def _parse_date(entry) -> datetime:
         raw = getattr(entry, attr, None)
         if raw:
             try:
-                return dateutil_parser.parse(raw).astimezone(timezone.utc)
+                return dateutil_parser.parse(raw, tzinfos=_RSS_TZINFOS).astimezone(timezone.utc)
             except Exception:
                 pass
     return datetime.now(timezone.utc)
