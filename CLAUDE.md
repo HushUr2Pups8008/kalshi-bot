@@ -37,12 +37,27 @@
 - Fix failing CI tests automatically
 
 ## Task Management
-1. Plan First – Write the plan in `tasks/todo.md` with checkable items
-2. Verify Plan – Confirm the plan before implementation
-3. Track Progress – Mark items complete as you go
-4. Explain Changes – Provide a high-level summary at each step
-5. Document Results – Add a review section to `tasks/todo.md`
-6. Capture Lessons – Update `tasks/lessons.md` after corrections
+- Plan First
+  - Write a clear, scoped plan in `tasks/todo.md` using checkable items
+  - Group related tasks under a dated or named section
+- Verify Plan
+  - Re-read the plan in `tasks/todo.md` before implementation begins
+  - Present a brief summary to the user and wait for explicit go-ahead
+  - If the task was shelved and resumed later, always re-read the plan first — context may have drifted for both of us
+- Track Progress
+  - Mark items complete as you go
+  - Add brief notes inline if needed for context
+- Explain Changes
+  - Provide a high-level summary of what was done and why
+- Document Results
+  - Add a short review section to `tasks/todo.md` summarizing outcomes, issues, and decisions
+- Maintain the Todo File (Critical)
+  - Remove or archive completed sections after they are fully done
+  - Move valuable insights to `tasks/lessons.md`
+  - Keep `tasks/todo.md` focused on active and near-term work only
+- Capture Lessons
+  - Record reusable insights, fixes, or patterns in `tasks/lessons.md`
+
 
 ## Version Control
 - Bump `VERSION` file on every commit that adds features, fixes bugs, or refactors
