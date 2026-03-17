@@ -112,10 +112,10 @@ class PaperTrader:
             "SELECT value FROM bot_state WHERE key = 'go_live_confirmed'"
         ).fetchone()
         if row and row["value"] == "true":
-            cfg.is_paper_trading = False
+            cfg.set_paper_mode(False)
             log.warning("GO-LIVE confirmed — bot is in LIVE TRADING mode.")
         else:
-            cfg.is_paper_trading = True
+            cfg.set_paper_mode(True)
 
     def _set_state(self, key: str, value: str) -> None:
         self._conn.execute(
@@ -155,7 +155,7 @@ class PaperTrader:
         Called only from main.py --go-live after human confirmation.
         """
         self._set_state("go_live_confirmed", "true")
-        cfg.is_paper_trading = False
+        cfg.set_paper_mode(False)
         log.warning(
             "GO-LIVE CONFIRMED. Bot will now place real orders. "
             "Notional bankroll at time of switch: $%.2f",

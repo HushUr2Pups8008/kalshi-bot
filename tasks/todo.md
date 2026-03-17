@@ -47,18 +47,16 @@ at a time. Confirm Windows service is stopped before going live on Mac (or vice 
 
 ## Known Bugs (Low Priority)
 
-- [ ] **Silent exception swallow on shutdown** — `main.py:322`
-  `except Exception: pass` silently drops report generation errors at shutdown.
-  Fix: `log.warning("Report generation failed: %s", exc)`
+- [x] **Silent exception swallow on shutdown** — `main.py:322`  ✓ FIXED
+  `except Exception: pass` → `except Exception as exc: log.warning("Report generation failed: %s", exc)`
 
-- [ ] **`cfg.is_paper_trading` mutability** — `config.py`, `trading/paper_trader.py`
-  Global singleton mutated directly during runtime; no async locking.
-  Low risk (only set at startup) but architecturally unsound.
+- [x] **`cfg.is_paper_trading` mutability** — `config.py`, `trading/paper_trader.py`  ✓ FIXED
+  Added `BotConfig.set_paper_mode(paper: bool)` as the single mutation point.
+  `paper_trader.py` now calls `cfg.set_paper_mode()` instead of `cfg.is_paper_trading = ...`.
 
-- [ ] **Duplicate LLM parse logic** — `analysis/signal_analyzer.py`
-  `_ollama_estimate()` and `_anthropic_estimate()` have identical direction/magnitude →
-  probability math written twice.
-  Fix: extract into shared `_parse_llm_response(parsed, market)` helper.
+- [x] **Duplicate LLM parse logic** — `analysis/signal_analyzer.py`  ✓ FIXED
+  Extracted `_parse_llm_response(parsed, market)` shared helper.
+  Both `_ollama_estimate()` and `_anthropic_estimate()` now call it.
 
 ---
 

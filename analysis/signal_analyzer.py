@@ -200,6 +200,33 @@ def _build_user_msg(news, market) -> str:
     )
 
 
+def _parse_llm_response(parsed: dict, market) -> tuple[float, float, str]:
+    """
+    Shared helper: extract (prob, confidence, reasoning) from a parsed LLM JSON dict.
+
+    Applies the magnitude -> probability shift mapping and returns market.yes_prob
+    unchanged when the model signals no new information.
+    """
+    confidence = float(parsed.get("confidence", 0.5))
+    reasoning  = parsed.get("reasoning", "")
+    relevant   = parsed.get("relevant", True)
+    new_info   = parsed.get("new_information", True)
+    direction  = parsed.get("direction", "neutral")
+    magnitude  = parsed.get("magnitude", "none")
+
+    if not relevant or not new_info or direction == "neutral" or magnitude == "none":
+        prob = market.yes_prob
+    else:
+        base_shift = _MAGNITUDE_SHIFT.get(magnitude, 0.0)
+        shift = base_shift * confidence
+        if direction == "yes":
+            prob = min(0.95, market.yes_prob + shift)
+        else:
+            prob = max(0.05, market.yes_prob - shift)
+
+    return prob, confidence, reasoning
+
+
 async def _ollama_estimate(news, market):
     """
     Call local Ollama server (OpenAI-compatible endpoint).
@@ -236,26 +263,11 @@ async def _ollama_estimate(news, market):
         if not match:
             raise ValueError(f"No JSON in Ollama response: {text[:100]}")
 
-        parsed     = _json.loads(match.group())
-        confidence = float(parsed.get("confidence", 0.5))
-        reasoning  = parsed.get("reasoning", "")
-        relevant   = parsed.get("relevant", True)
-        new_info   = parsed.get("new_information", True)
-        direction  = parsed.get("direction", "neutral")
-        magnitude  = parsed.get("magnitude", "none")
-
-        if not relevant or not new_info or direction == "neutral" or magnitude == "none":
-            prob = market.yes_prob
-        else:
-            base_shift = _MAGNITUDE_SHIFT.get(magnitude, 0.0)
-            shift = base_shift * confidence
-            if direction == "yes":
-                prob = min(0.95, market.yes_prob + shift)
-            else:
-                prob = max(0.05, market.yes_prob - shift)
-
+        parsed = _json.loads(match.group())
+        prob, confidence, reasoning = _parse_llm_response(parsed, market)
         log.debug("Ollama: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
-                  direction, magnitude, confidence, prob, market.ticker)
+                  parsed.get("direction"), parsed.get("magnitude"),
+                  confidence, prob, market.ticker)
         return prob, confidence, reasoning
 
     except aiohttp.ClientConnectorError:
@@ -300,26 +312,11 @@ async def _anthropic_estimate(news, market):
         if not match:
             raise ValueError(f"No JSON in Anthropic response: {text[:100]}")
 
-        parsed     = _json.loads(match.group())
-        confidence = float(parsed.get("confidence", 0.5))
-        reasoning  = parsed.get("reasoning", "")
-        relevant   = parsed.get("relevant", True)
-        new_info   = parsed.get("new_information", True)
-        direction  = parsed.get("direction", "neutral")
-        magnitude  = parsed.get("magnitude", "none")
-
-        if not relevant or not new_info or direction == "neutral" or magnitude == "none":
-            prob = market.yes_prob
-        else:
-            base_shift = _MAGNITUDE_SHIFT.get(magnitude, 0.0)
-            shift = base_shift * confidence
-            if direction == "yes":
-                prob = min(0.95, market.yes_prob + shift)
-            else:
-                prob = max(0.05, market.yes_prob - shift)
-
+        parsed = _json.loads(match.group())
+        prob, confidence, reasoning = _parse_llm_response(parsed, market)
         log.debug("Anthropic: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
-                  direction, magnitude, confidence, prob, market.ticker)
+                  parsed.get("direction"), parsed.get("magnitude"),
+                  confidence, prob, market.ticker)
         return prob, confidence, reasoning
 
     except ImportError:

@@ -239,8 +239,12 @@ class BotConfig:
     ollama_model:    str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen2.5:3b"))
 
     # Paper trading mode — True until explicitly confirmed via --go-live
-    # Set at runtime by PaperTrader reading the DB flag.
+    # Set at runtime via set_paper_mode() — do not mutate directly.
     is_paper_trading: bool = True
+
+    def set_paper_mode(self, paper: bool) -> None:
+        """Single controlled mutation point for the paper/live flag."""
+        self.is_paper_trading = paper
 
     @property
     def rest_base_url(self) -> str:

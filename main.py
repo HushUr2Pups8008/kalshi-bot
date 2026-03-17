@@ -318,8 +318,8 @@ async def _shutdown(bot: TradingBot) -> None:
     try:
         report = bot.paper.generate_report()
         log.info("\n%s", report)
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("Report generation failed: %s", exc)
     for task in asyncio.all_tasks():
         if task is not asyncio.current_task():
             task.cancel()
