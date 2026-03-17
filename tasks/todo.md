@@ -37,6 +37,15 @@ at a time. Confirm Windows service is stopped before going live on Mac (or vice 
       True replay requires decision-time prices, not today's prices.
       Minimal fix: serialize `KalshiMarket` fields to JSON at `record_trade()` time.
 
+### Data Sources
+- [ ] **Reddit OAuth** — switch `feeds/reddit_monitor.py` from public JSON API to authenticated OAuth
+      Reddit 403ing unauthenticated requests on ~16 subreddits: r/europe, r/NorthKorea, r/Israel,
+      r/pakistan, r/southasia, r/EasternEurope, r/IRstudies, r/GlobalAffairs, r/Syria, r/Africa,
+      r/LatinAmerica, r/Eurasia, r/CredibleDefense, r/ArmedConflicts, r/WarCollege, r/geopoliticsdiscussion.
+      Fix: create a Reddit "script" app at reddit.com/prefs/apps, use PRAW or direct OAuth2 client_credentials
+      flow. Add `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` env vars. Not a blocker — RSS feeds and
+      unblocked subreddits (r/worldnews, r/ukraine, r/geopolitics) still provide signal.
+
 ### LLM / Mac Studio (post-GPU)
 - [ ] **3-stage LLM pipeline** — replace single combined prompt with:
       1. Relevance filter (binary, early exit)
