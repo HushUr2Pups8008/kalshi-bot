@@ -306,6 +306,21 @@ Call this with the current notional bankroll — do not use a hardcoded dollar a
 
 ## Infrastructure
 
+### New Dependencies Must Be Installed in the Service venv
+**Lesson:** The NSSM service runs `E:\VS_Code\kalshi-bot\.venv\Scripts\python.exe`, not the
+system Python. Installing a package with bare `pip install` goes into the system Python and
+is invisible to the service — bot crashes at import with `ModuleNotFoundError` on next start.
+**Rule:** After adding any new package to `requirements.txt`, always install it explicitly
+into the service venv:
+```
+E:\VS_Code\kalshi-bot\.venv\Scripts\python.exe -m pip install <package>
+```
+Or install all requirements at once:
+```
+E:\VS_Code\kalshi-bot\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+Verify the import works from the venv before restarting the service.
+
 ### Python 3.14 on Windows Requires aiohttp>=3.10.0
 **Lesson:** `aiohttp==3.9.5` has no cp314 wheel. Windows machine runs Python 3.14.
 `requirements.txt` uses `aiohttp>=3.10.0` to handle this. Do not pin aiohttp to 3.9.x.
