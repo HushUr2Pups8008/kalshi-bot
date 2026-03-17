@@ -453,5 +453,5 @@ async def _shutdown(bot: TradingBot) -> None:
 if __name__ == "__main__":
     try:
         asyncio.run(async_main())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         pass
