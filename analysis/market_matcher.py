@@ -172,7 +172,7 @@ class MarketCache:
         return list(self._markets)
 
     async def _refresh(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             markets, n_series = await loop.run_in_executor(
                 None, self._fetch_geo_markets
@@ -245,7 +245,7 @@ class MarketCache:
         return list(self._all_markets)
 
     async def _refresh_all(self) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             markets = await loop.run_in_executor(None, self._fetch_all_markets)
             self._all_markets    = markets
