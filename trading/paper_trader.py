@@ -301,13 +301,13 @@ class PaperTrader:
 
     # ── Report ────────────────────────────────────────────────────────────────
 
-    def get_last_open_trade(self, ticker: str) -> Optional[sqlite3.Row]:
-        """Return the most recent unresolved trade for ticker, or None."""
+    def get_all_open_trades(self, ticker: str) -> list[sqlite3.Row]:
+        """Return all unresolved trades for ticker (oldest first)."""
         return self._conn.execute(
             "SELECT * FROM paper_trades WHERE ticker = ? AND resolved = 0 "
-            "ORDER BY ts DESC LIMIT 1",
+            "ORDER BY ts ASC",
             (ticker,),
-        ).fetchone()
+        ).fetchall()
 
     def get_all_trades(self) -> list[sqlite3.Row]:
         return self._conn.execute(

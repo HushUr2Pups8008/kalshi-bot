@@ -187,6 +187,59 @@ event markets. They are in the blocklist.
 
 ## Signal Analysis
 
+### Same-Signal Guard Checks Only Most-Recent Trade — NOT All Open Trades
+**Lesson (confirmed 2026-03-16):** `get_last_open_trade()` returns 1 row (most recent).
+If trades alternate YES/NO, the "most recent" is the opposite side. A new signal with
+est=0.440 will have large delta vs the YES at 0.556, pass the guard, and place a redundant
+NO — even though an identical NO at 0.444 already exists.
+**Rule:** The multi-position guard must query ALL open trades for the ticker and check:
+- Any opposite side → block (no hedges)
+- Any same-side within ±2% prob / ±2¢ price → block (no duplicates)
+Using only the most recent trade is always wrong when both YES and NO positions exist.
+
+### LLM Behavioral Observations (updated 2026-03-16 after 72h run)
+Observed patterns from 72-hour production run (5 trades, 116 LLM evaluations, 5136 market matches):
+
+**LLM direction distribution (101 calls):**
+- `neutral` — 76 (75%) — no change from market price
+- `no` — 24 (24%) — probability should decrease
+- `yes` — 1 (1%) — probability should increase
+
+**What the model gets right:**
+- High neutral rate (75%) — correctly identifies most news as non-moving. Prediction markets
+  are already priced; incremental war coverage doesn't move "Trump visits Iran" probability.
+- Conservative magnitude — defaults to `small` or `none`, rarely `moderate`. Prevents
+  over-betting on weak signals.
+- Hostile rhetoric correctly read as bearish: "Trump calls Iran leaders deranged scumbags"
+  → correctly predicted as negative for US-Iran visit probability.
+- Active military escalation → correctly bearish on nuclear deal probability.
+
+**Known failure mode — actor disambiguation:**
+- "Iran's exiled crown prince says he's been in contact with Trump administration" → LLM
+  called `dir=yes` on the Trump-visits-Iran market. The exiled crown prince (Reza Pahlavi)
+  has had zero official standing in the Iranian government since 1979. Contact between
+  opposition-in-exile and the Trump admin does not indicate a diplomatic visit.
+- This trade directly contradicts the earlier NO trade on the same ticker — creating a
+  $5/$5 costless hedge that locks capital with zero expected P&L.
+- **Rule:** When the LLM calls `dir=yes/no`, the actor must have actual decision-making
+  power over the market event. Opposition figures, exiles, and unofficial contacts are noise.
+  TODO: add actor-standing guidance to the LLM prompt.
+
+**Known failure mode — direction/reasoning inconsistency:**
+- Zelenskyy trade: LLM reasoning said "does not directly impact Zelenskyy leaving office"
+  but output `dir=no, mag=small` anyway. The headline was about Zelenskyy cooperating with
+  Saudi Arabia on drones — completely unrelated to his tenure.
+- **Rule:** If the LLM reasoning text contains "does not directly impact" or "not directly
+  related", the magnitude MUST be `none`. A mismatch is a model output error, not a signal.
+  The bet placed here was based on faulty output logic.
+
+**The 99% funnel:**
+- 4,909 market matches → 101 LLM evaluations (~2% pass rate through cooldown + same-signal guard)
+- This is correct behavior — most matches are repetitive Iran war stories routing to the
+  same ticker where a position already exists.
+- Watch for: if new high-impact events hit non-KXTRUMPIRAN markets (e.g. Zelenskyy removal,
+  Venezuela election), the funnel should open up and generate new trades.
+
 ### Do Not Blend LLM and Keyword Probabilities
 **Lesson:** An earlier version blended LLM probability with keyword-derived probability.
 This caused bets to be placed when the LLM explicitly returned "magnitude: none" — the
@@ -218,6 +271,18 @@ Call this with the current notional bankroll — do not use a hardcoded dollar a
 ### Paper Trades DB is Local — Not Synced
 **Lesson:** `data/paper_trades.db` is gitignored and local to each machine. Mac and Windows
 have separate paper trade histories. The bankroll state does not sync between machines.
+
+### trades.jsonl is the Only Pre-Wipe Record
+**Lesson:** DB was wiped multiple times during 2026-03-11/12 test cycles. The 343 pre-production
+paper trades exist only in `logs/trades.jsonl` — not in the DB. The current DB production run
+starts 2026-03-13T08:07. If analyzing historical signal quality, read trades.jsonl, not just
+the DB.
+
+### Reddit Rate Limits Mass-Trigger on Startup
+**Lesson:** Every bot restart polls all ~29 subreddits in a short burst, triggering simultaneous
+429s across all of them. Reddit data is unavailable for ~2-5 minutes post-startup. This is
+handled by backoff logic but means early-startup signals are RSS-only. A staggered startup
+delay per subreddit would help.
 
 ---
 

@@ -117,18 +117,22 @@ class TradeExecutor:
                     f"(cooldown={_PAPER_TICKER_COOLDOWN//3600}h)"
                 )
 
-        # Same-signal guard: skip if an open trade already exists at the same
-        # probability estimate and market price — no new information has arrived.
+        # Multi-position guard: block opposing trades (no hedges) and duplicate
+        # signals (same side, same probability estimate, same market price).
         if cfg.is_paper_trading:
-            last = self._paper.get_last_open_trade(analysis.market.ticker)
-            if last is not None:
-                prob_delta  = abs(last["estimated_prob"] - analysis.estimated_probability)
-                price_delta = abs(last["market_yes_price"] - analysis.market_yes_price)
+            for open_trade in self._paper.get_all_open_trades(analysis.market.ticker):
+                if open_trade["side"] != analysis.side:
+                    return (
+                        f"opposing position exists: open {open_trade['side'].upper()} "
+                        f"at est={open_trade['estimated_prob']:.3f} — no hedging"
+                    )
+                prob_delta  = abs(open_trade["estimated_prob"] - analysis.estimated_probability)
+                price_delta = abs(open_trade["market_yes_price"] - analysis.market_yes_price)
                 if prob_delta < 0.02 and price_delta < 2.0:
                     return (
-                        f"same-signal skip: open trade at "
-                        f"est={last['estimated_prob']:.3f} "
-                        f"mkt={last['market_yes_price']:.1f}¢ — no new information"
+                        f"same-signal skip: open {open_trade['side'].upper()} at "
+                        f"est={open_trade['estimated_prob']:.3f} "
+                        f"mkt={open_trade['market_yes_price']:.1f}¢ — no new information"
                     )
 
         # Live ticker cooldown + balance check
