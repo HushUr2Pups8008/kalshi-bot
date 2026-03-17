@@ -9,6 +9,8 @@ Provides:
 import json
 import logging
 import logging.handlers
+import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,6 +39,51 @@ _COLOR_MAP = {
 }
 
 
+class _WindowsSafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """RotatingFileHandler using copy+truncate instead of rename for rotation.
+
+    On Windows, os.rename() raises WinError 32 when any other process (VS Code,
+    tail -f, etc.) holds the log file open. Rename failure leaves self.stream=None,
+    causing every subsequent emit() to silently drop the record. Copy+truncate
+    keeps the same path so open handles in other processes continue working.
+    """
+
+    def doRollover(self):
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+
+        # Backup files are not held open -- rename is safe for those
+        if self.backupCount > 0:
+            for i in range(self.backupCount - 1, 0, -1):
+                sfn = self.rotation_filename("%s.%d" % (self.baseFilename, i))
+                dfn = self.rotation_filename("%s.%d" % (self.baseFilename, i + 1))
+                if os.path.exists(sfn):
+                    if os.path.exists(dfn):
+                        os.remove(dfn)
+                    os.rename(sfn, dfn)
+
+            # Copy base log to .1, then truncate in place
+            dfn = self.rotation_filename(self.baseFilename + ".1")
+            if os.path.exists(dfn):
+                os.remove(dfn)
+            try:
+                shutil.copy2(self.baseFilename, dfn)
+            except Exception:
+                pass
+
+        # Truncate base file in place -- path and inode unchanged, so any
+        # process holding it open continues writing to the same (now empty) file
+        try:
+            with open(self.baseFilename, "w", encoding=self.encoding or "utf-8"):
+                pass
+        except Exception:
+            pass
+
+        if not self.delay:
+            self.stream = self._open()
+
+
 def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:
     """Return a logger with colored console output and rotating file output."""
     logger = logging.getLogger(name)
@@ -50,7 +97,7 @@ def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:
     ch.setFormatter(colorlog.ColoredFormatter(_COLOR_FORMAT, log_colors=_COLOR_MAP))
 
     # File handler (10 MB × 5 backups)
-    fh = logging.handlers.RotatingFileHandler(
+    fh = _WindowsSafeRotatingFileHandler(
         APP_LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
     )
     fh.setLevel(logging.DEBUG)
