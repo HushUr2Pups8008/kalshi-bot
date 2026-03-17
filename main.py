@@ -29,7 +29,7 @@ from analysis import SignalAnalysis
 from analysis.kelly import kelly_bet
 from analysis.market_matcher import MarketMatcher
 from analysis.signal_analyzer import estimate_probability
-from config import cfg, PAPER_MIN_EDGE, VERSION, KALSHI_TWEET_FEED_URL, MARKET_SERIES_BLOCKLIST_PREFIXES
+from config import cfg, PAPER_MIN_EDGE, VERSION, FADE_TWEET_FEED_URLS, MARKET_SERIES_BLOCKLIST_PREFIXES
 from feeds import NewsItem
 from feeds.reddit_monitor import run_reddit_monitor
 from feeds.rss_monitor import run_rss_monitor
@@ -40,6 +40,14 @@ from trading.paper_trader import PaperTrader
 from utils.logger import get_logger
 
 log = get_logger("main")
+
+
+def _account_from_rsshub_url(url: str) -> str:
+    """Extract account name from RSSHub URL. e.g. .../user/Kalshi → 'Kalshi'"""
+    parts = url.rstrip("/").split("/")
+    if len(parts) >= 1:
+        return parts[-1]
+    return url.split("/")[2]  # fallback: domain
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,11 +76,6 @@ class TradingBot:
 
     async def on_news_item(self, news: NewsItem) -> None:
         log.info("[NEWS] [%s] %s", news.source, news.headline[:100])
-
-        # Kalshi tweet feed items go to the fade pipeline, not the normal pipeline
-        if KALSHI_TWEET_FEED_URL and news.url and "kalshi" in news.url.lower():
-            await self._process_kalshi_tweet(news)
-            return
 
         candidates = await self.matcher.find_candidates(news)
         if not candidates:
@@ -161,27 +164,33 @@ class TradingBot:
         await self.executor.execute(analysis)
         self.ws.watch([market.ticker])
 
-    # ── Fade the Kalshi Tweet pipeline ────────────────────────────────────────
+    # ── Fade tweet pipeline ────────────────────────────────────────────────────
 
-    async def _process_kalshi_tweet(self, tweet: NewsItem) -> None:
+    async def _on_fade_tweet(self, tweet: NewsItem) -> None:
+        """Callback for the fade-tweet RSS monitor. Extracts source account and routes."""
+        account = _account_from_rsshub_url(tweet.url or "")
+        log.info("[FADE] [%s] %s", account, tweet.headline[:100])
+        await self._process_fade_tweet(tweet, account)
+
+    async def _process_fade_tweet(self, tweet: NewsItem, account: str) -> None:
         """
-        Separate code path for @Kalshi tweet items.
+        Separate code path for prediction-market hype tweets.
 
         Detects hype/ATH patterns and fades them: bullish tweet → buy NO.
         Searches ALL active markets (geo + sports) so we can compare efficacy
         across both categories during the paper trading validation phase.
-        All trades are tagged [FADE/GEO] or [FADE/SPORTS] in reasoning for DB analysis.
+        All trades are tagged [FADE/GEO/@account] or [FADE/SPORTS/@account] for DB analysis.
         """
         from analysis.fade_signal import detect_fade_pattern
 
         pattern = detect_fade_pattern(tweet)
         if not pattern:
-            log.debug("[FADE] No fade pattern in tweet: %s", tweet.headline[:80])
+            log.debug("[FADE] [%s] No fade pattern: %s", account, tweet.headline[:80])
             return
 
         candidates = await self.matcher.find_all_candidates(tweet)
         if not candidates:
-            log.debug("[FADE] No matching market for tweet: %s", tweet.headline[:80])
+            log.debug("[FADE] [%s] No matching market: %s", account, tweet.headline[:80])
             return
 
         market, score = candidates[0]
@@ -214,13 +223,13 @@ class TradingBot:
             capped_dollars=0.0,
             keywords_matched=[],
             reasoning=(
-                f"[FADE/{category}] Kalshi tweet hype detected ({pattern}): "
+                f"[FADE/{category}/@{account}] {pattern}: "
                 f"{tweet.headline[:80]}"
             ),
             confidence=0.3,
         )
-        log.info("[FADE/%s] %s | %s | pattern=%s | match_score=%.3f",
-                 category, market.ticker, fade_side.upper(), pattern, score)
+        log.info("[FADE/%s/@%s] %s | %s | pattern=%s | match_score=%.3f",
+                 category, account, market.ticker, fade_side.upper(), pattern, score)
         await self.executor.execute(analysis)
         self.ws.watch([market.ticker])
 
@@ -303,9 +312,9 @@ class TradingBot:
             asyncio.create_task(self._daily_report_task(),             name="daily_report"),
             asyncio.create_task(self._market_refresh_task(),           name="market_refresh"),
             *([asyncio.create_task(
-                run_rss_monitor(self.on_news_item, feeds=[KALSHI_TWEET_FEED_URL]),
-                name="kalshi_tweet",
-            )] if KALSHI_TWEET_FEED_URL else []),
+                run_rss_monitor(self._on_fade_tweet, feeds=FADE_TWEET_FEED_URLS),
+                name="fade_tweets",
+            )] if FADE_TWEET_FEED_URLS else []),
         ]
 
         try:
