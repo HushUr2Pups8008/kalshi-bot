@@ -68,6 +68,26 @@
 - Include the VERSION bump in the same commit as the code change — never a follow-up commit
 - If you forgot to bump VERSION, catch it before `git push` and amend the commit
 
+## Windows Encoding Rule — NEVER use non-ASCII characters in log/print strings
+
+**Rule:** All `log.*()`, `print()`, and exception message strings must use plain ASCII only.
+No em dashes (`—`), curly quotes (`""`), ellipses (`…`), or any other non-ASCII character.
+Use `--` instead of `—`, `"` instead of curly quotes, `...` instead of `…`.
+
+**Why:** Windows log handlers (NSSM-captured stderr, file handlers opened without explicit
+encoding) default to cp1252. When the logging system tries to emit a non-ASCII character,
+it calls `handleError()` and dumps a fake crash traceback to `service_stderr.log`. The log
+message is silently dropped. This burned us twice: once as a SyntaxError (commit 1479504),
+once as a silent logging failure with a misleading traceback (commit c2c7f4b / v0.6.1).
+
+**How to apply:** Before every commit, grep new log strings for non-ASCII:
+```bash
+grep -Pn '[^\x00-\x7F]' feeds/*.py analysis/*.py trading/*.py main.py
+```
+If any hits are in log/print strings, replace with ASCII equivalents before committing.
+
+Comments and docstrings are fine — only runtime-emitted strings matter.
+
 ## Core Principles
 
 **Simplicity First**
