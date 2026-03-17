@@ -95,8 +95,18 @@ def _days_to_close(close_time_str: str) -> Optional[float]:
     if not close_time_str:
         return None
     try:
-        from dateutil import parser as dp
-        dt = dp.parse(close_time_str)
+        from dateutil import parser as dp, tz as dtz
+        _TZ = {
+            "EST": dtz.tzoffset("EST", -5 * 3600),
+            "EDT": dtz.tzoffset("EDT", -4 * 3600),
+            "CST": dtz.tzoffset("CST", -6 * 3600),
+            "CDT": dtz.tzoffset("CDT", -5 * 3600),
+            "MST": dtz.tzoffset("MST", -7 * 3600),
+            "MDT": dtz.tzoffset("MDT", -6 * 3600),
+            "PST": dtz.tzoffset("PST", -8 * 3600),
+            "PDT": dtz.tzoffset("PDT", -7 * 3600),
+        }
+        dt = dp.parse(close_time_str, tzinfos=_TZ)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return (dt - datetime.now(timezone.utc)).total_seconds() / 86_400
