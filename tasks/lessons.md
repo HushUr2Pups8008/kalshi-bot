@@ -343,6 +343,16 @@ set backoff to 120s, the next poll cycle subtracted 300s (the poll interval) →
 `if time.monotonic() < _backoff.get(subreddit, 0.0): skip`. Never use a countdown for
 time-based gating — always store the absolute resume timestamp.
 
+### Concurrent Instances on Same Network Cause Reddit 403s
+**Lesson (2026-03-17):** Running Mac and Windows instances simultaneously from the same home
+network means both share the same external IP. Reddit sees double the polling rate from one
+address and begins rejecting the second connection with 403s — not because those subreddits
+require auth, but because the combined request rate from the IP trips Reddit's rate limiter.
+The instance that started first keeps its session clean; the one added later gets the 403s.
+**Rule:** Do not run Mac and Windows bot instances concurrently on the same network, even in
+paper trading mode. One instance per external IP. When switching machines, stop the old
+instance before starting the new one.
+
 ### Reddit Rate Limits Mass-Trigger on Startup
 **Lesson:** Every bot restart polls all ~29 subreddits in a short burst, triggering simultaneous
 429s across all of them. Reddit data is unavailable for ~2-5 minutes post-startup. This is

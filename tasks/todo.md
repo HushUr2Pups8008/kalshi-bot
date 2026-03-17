@@ -11,9 +11,7 @@
       Compare win rate: [FADE/GEO] vs [FADE/SPORTS], and per-account (@Kalshi vs @Polymarket vs @PolymarketMoney).
       All categories positive → go live. If sports wins < 50% → disable sports from fade pipeline.
       Self-host RSSHub before going live (public instance may be blocked by X).
-- [ ] Portfolio state object — single source of truth for open positions/exposure before go-live
-      Currently spread across SQLite DB, WebSocket cache, and in-memory cooldown dicts.
-      Needed for: risk checks, position sizing against real exposure, pre-go-live audit.
+- [x] Portfolio state object — `trading/portfolio.py` ✓ v0.6.0
 - [ ] Run `python main.py --go-live` and type `CONFIRM` at prompt
 - [ ] Verify Kalshi API key is current and account is funded
 
@@ -25,26 +23,12 @@ at a time. Confirm Windows service is stopped before going live on Mac (or vice 
 ## Near-Term Backlog
 
 ### Signal Quality
-- [ ] **Priority queue** — swap `asyncio.Queue` for `asyncio.PriorityQueue` in `main.py`
-      *(LLM semaphore, staleness check, and queue observability done — v0.5.1)*
-      RSS/breaking news = priority 1, Reddit = priority 2.
-      Prevents a burst of low-signal Reddit posts from delaying a high-impact RSS headline
-      by up to 600s (10 posts × 60s Ollama = 10 min stall on the single consumer).
-      Implementation: `(priority, timestamp, news_item)` tuples; `source_priority()` helper.
+- [x] **Priority queue** — swap `asyncio.Queue` for `asyncio.PriorityQueue` in `main.py` ✓ v0.5.7
 
-- [ ] **Market snapshot at decision time** — add `market_snapshot` JSON column to `paper_trades`
-      Currently store `market_yes_price` but not `yes_bid`/`yes_ask`, `close_time`, or `status`.
-      True replay requires decision-time prices, not today's prices.
-      Minimal fix: serialize `KalshiMarket` fields to JSON at `record_trade()` time.
+- [x] **Market snapshot at decision time** — `market_snapshot` JSON column added to `paper_trades` ✓ v0.5.8
 
 ### Data Sources
-- [ ] **Reddit OAuth** — switch `feeds/reddit_monitor.py` from public JSON API to authenticated OAuth
-      Reddit 403ing unauthenticated requests on ~16 subreddits: r/europe, r/NorthKorea, r/Israel,
-      r/pakistan, r/southasia, r/EasternEurope, r/IRstudies, r/GlobalAffairs, r/Syria, r/Africa,
-      r/LatinAmerica, r/Eurasia, r/CredibleDefense, r/ArmedConflicts, r/WarCollege, r/geopoliticsdiscussion.
-      Fix: create a Reddit "script" app at reddit.com/prefs/apps, use PRAW or direct OAuth2 client_credentials
-      flow. Add `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` env vars. Not a blocker — RSS feeds and
-      unblocked subreddits (r/worldnews, r/ukraine, r/geopolitics) still provide signal.
+- ~~**Reddit OAuth**~~ — **DROPPED**: Reddit's 2023 API policy requires apps to benefit the Reddit community; a trading bot does not qualify. The 16 blocked subreddits stay 403'd. r/worldnews, r/ukraine, r/geopolitics (public JSON) remain active and provide adequate signal.
 
 ### LLM / Mac Studio (post-GPU)
 - [ ] **3-stage LLM pipeline** — replace single combined prompt with:

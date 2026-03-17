@@ -3,6 +3,28 @@
 
 ---
 
+## 2026-03-17 (Windows session — v0.5.7)
+
+### Signal Quality
+
+- **Portfolio state object** — `trading/portfolio.py` (new)  ✓ DONE (commit c2e28db)
+  `Position` dataclass + `Portfolio` class. Loaded from DB on startup, updated in-memory
+  on every trade/resolution. Eliminates all DB queries from executor._validate().
+  Added concentration risk check: blocks trades pushing a ticker above 25% of bankroll.
+  `executor.status()` now exposes full portfolio snapshot.
+
+- **Market snapshot at decision time** — `trading/paper_trader.py`  ✓ DONE (commit 84e8ee1)
+  Added `market_snapshot TEXT` column to `paper_trades`. Serializes full `KalshiMarket`
+  (yes_bid, yes_ask, yes_price, volume, open_interest, close_time, status) via `dataclasses.asdict()`.
+  `_migrate_db()` runs on startup — existing DBs get the column on next launch, no data loss.
+
+- **Priority queue** — `main.py`  ✓ DONE (commit f45d723)
+  Swapped `asyncio.Queue` → `asyncio.PriorityQueue`. RSS/wire services priority 1, Reddit priority 2.
+  Tuple layout `(priority, seq, news)` — monotonic `seq` counter prevents `NewsItem` comparison.
+  Prevents a 10-post Reddit burst from blocking a Reuters headline by up to 10 min.
+
+---
+
 ## 2026-03-16
 
 ### Signal Quality Bugs
