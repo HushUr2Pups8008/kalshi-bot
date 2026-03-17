@@ -33,6 +33,10 @@ JRP_GamingDesktop_pat.txt
 # Windows
 Thumbs.db
 
+# Machine-specific Windows setup files (paths, service config, credentials)
+WINDOWS_COMMANDS.md
+setup_service.ps1
+
 # IDE
 .vscode/
 .idea/
