@@ -30,6 +30,21 @@ at a time. Confirm Windows service is stopped before going live on Mac (or vice 
 ### Data Sources
 - ~~**Reddit OAuth**~~ — **DROPPED**: Reddit's 2023 API policy requires apps to benefit the Reddit community; a trading bot does not qualify. The 16 blocked subreddits stay 403'd. r/worldnews, r/ukraine, r/geopolitics (public JSON) remain active and provide adequate signal.
 
+### Logging System (deferred -- not blocking go-live)
+- [ ] **Date-stamped daily log rotation** -- replace size-based `bot.log.1/.2` with
+      time-based `bot-YYYY-MM-DD.log` (one file per day). Instant grep for "what happened
+      yesterday"; no guessing which .N backup covers which time window.
+      - Use `TimedRotatingFileHandler` with `when='midnight'`, override `doRollover()` with
+        the same copy+truncate strategy from `_WindowsSafeRotatingFileHandler` (WinError 32
+        still applies on time-based rotate).
+      - Retention: keep 90 days, auto-delete older files on rotate.
+      - Separate `errors-YYYY-MM-DD.log` at WARNING+ only -- quick triage without grepping
+        through full DEBUG output.
+      - Emit a startup banner into each new file: VERSION, Ollama model, KALSHI_ENV,
+        Python version. Makes post-mortem analysis self-contained per file.
+      - `service_stderr.log` (NSSM artifact) stays as-is; no changes needed there.
+
+
 ### LLM / Mac Studio (post-GPU)
 - [ ] **3-stage LLM pipeline** — replace single combined prompt with:
       1. Relevance filter (binary, early exit)
