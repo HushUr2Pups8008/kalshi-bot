@@ -1,5 +1,7 @@
 # kalshi-bot
 
+[![Version](https://img.shields.io/badge/version-0.6.2-blue)](CHANGELOG.md) 
+
 A 24/7 automated paper/live trading bot for [Kalshi](https://kalshi.com) geopolitical prediction markets.
 
 Monitors RSS news feeds and Reddit for breaking geopolitical events, matches them against open Kalshi markets, estimates probability shifts using a local LLM (Ollama) or keyword scoring, sizes bets with half-Kelly, and executes paper trades automatically. Live trading requires explicit opt-in.
