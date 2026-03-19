@@ -20,6 +20,61 @@ at a time. Confirm Windows service is stopped before going live on Mac (or vice 
 
 ---
 
+
+---
+
+## Bugs & Issues — Logged 2026-03-19 (48h Review)
+
+### CRITICAL — Ollama Permanently in Circuit-Open State
+- [ ] **Ollama never recovering from circuit-open** -- After 7 consecutive 60s timeouts spread
+      across 48h, the circuit breaker is permanently open and the bot has been running
+      keyword-only for the entire period. The probe fires every 5 min but also times out.
+      - Root cause unknown: qwen3.5:4b may be slower than qwen2.5:7b, or Ollama is
+        genuinely overloaded/unresponsive on this machine
+      - Investigate: check Ollama server.log, verify qwen3.5:4b is actually loaded,
+        compare inference speed between models
+      - Possible fixes: reduce timeout from 60s to 30s (force faster failure + more frequent
+        probes), swap back to qwen2.5:7b, or reduce probe interval from 5m to 2m
+      - Impact: ALL 6 paper trades placed since Mar 13 used keyword-only or LLM was down;
+        only 1 trade (2026-03-19 KXZELENSKYYOUT NO) used keyword-only explicitly
+
+### BUG — Same-Side Duplicate Position Allowed
+- [ ] **Duplicate NO on KXZELENSKYYOUT-26APR01** -- Two open NO positions on the same market:
+      - 2026-03-13: NO at est=0.440
+      - 2026-03-19: NO at est=0.380 (keyword-only: "de-escalation")
+      - The same-side guard uses +-2% probability threshold. These are 6% apart so it passed.
+      - Decision needed: during paper phase, should we block ANY same-side same-ticker
+        regardless of probability delta? Goal is clean signal data, not hedging gains.
+      - Recommended fix: add `PAPER_BLOCK_SAME_SIDE_ANY_TICKER = True` flag that blocks
+        any duplicate same-side position during paper phase, regardless of prob delta.
+
+### BUG — "Just In News" Feed Serving Stale Content
+- [ ] **Stale news waste from "Just In News" source** -- 301 of 740 stale-skipped items were
+      6+ hours old; max staleness was 3,923,743s (~45 days). Median staleness 3.4h.
+      This feed appears to aggregate old articles and re-serve them as new.
+      - Impact: wastes queue processing time; no trades placed but LLM/keyword cycles wasted
+      - Recommended fix: add per-feed max-age config; flag feeds that consistently deliver
+        stale content; consider removing "Just In News" from the feed list entirely
+      - Check: grep `signal_source` in paper_trades.db -- if zero good trades came from
+        "Just In News", remove it
+
+### MINOR — Double Market Cache Refresh
+- [ ] **Market cache refreshing twice within ~60s** -- 8 occurrences in 48h. Two tasks
+      appear to trigger a cache refresh in quick succession (7-54s apart). Each refresh
+      fetches all ~9k series from the Kalshi API (~3 min, expensive).
+      - Likely cause: scheduled refresh task + a signal-triggered refresh happening
+        simultaneously; no mutex on the refresh operation
+      - Fix: add a refresh lock/debounce -- if a refresh completed within the last 60s,
+        skip the next trigger
+
+### MINOR — service_stderr.log Growing Unbounded
+- [ ] **service_stderr.log has no rotation** -- Currently 10MB, contains ~2,511
+      pre-fix PermissionError tracebacks (all from before v0.6.2 on Mar 17) plus
+      mirrored INFO lines from bot.log. Will grow indefinitely.
+      - Fix: configure NSSM AppStdoutRotateBytes / AppStderrRotateBytes, OR pipe stderr
+        to a logger with rotation in main.py to avoid the separate file entirely
+      - Note: zero PermissionErrors after v0.6.2 fix -- log rotation is working correctly
+
 ## Near-Term Backlog
 
 ### Signal Quality

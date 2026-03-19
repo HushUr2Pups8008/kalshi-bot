@@ -109,6 +109,18 @@ Tiered gate — not just similarity score:
 
 ---
 
+
+### Smaller Model != Faster CPU Inference
+**Lesson (2026-03-19):** Switched from `qwen2.5:7b` to `qwen3.5:4b` expecting faster CPU
+inference due to lower parameter count. Every inference call returned HTTP 500 after
+exactly 60s. The model loaded fine (runner started in ~2s) but crashed during inference.
+`qwen2.5:7b` was stable; `qwen3.5:4b` on the same hardware was completely broken.
+**Root cause:** `qwen3.5` uses a different architecture internally (`qwen35` vs `qwen25`
+in llama.cpp). On CPU, architecture, quantization format, and kernel optimizations matter
+as much as parameter count. Fewer parameters does not guarantee faster or more stable inference.
+**Rule:** When changing Ollama models, verify with a manual `ollama run <model> "test"` before
+pointing the bot at it. Check Ollama server.log for HTTP 500s on first inference after restart.
+
 ## Authentication
 
 ### RSA-PSS, not PKCS1v15 or HMAC
