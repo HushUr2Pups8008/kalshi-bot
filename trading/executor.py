@@ -19,7 +19,7 @@ from typing import Optional
 
 from analysis import SignalAnalysis
 from analysis.kelly import contracts_from_dollars
-from config import cfg, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS
+from config import cfg, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, PAPER_BLOCK_SAME_SIDE_DUPLICATE
 from kalshi import OrderResult
 from kalshi.rest_client import KalshiRestClient
 from trading.paper_trader import PaperTrader
@@ -126,7 +126,15 @@ class TradeExecutor:
             if pos.side != analysis.side:
                 return (
                     f"opposing position exists: open {pos.side.upper()} "
-                    f"at est={pos.estimated_prob:.3f} — no hedging"
+                    f"at est={pos.estimated_prob:.3f} -- no hedging"
+                )
+            # Paper phase: block ANY same-side duplicate regardless of prob delta.
+            # Goal is clean, non-redundant signal data. Live mode keeps the narrow
+            # delta guard (only skip informationally identical signals).
+            if cfg.is_paper_trading and PAPER_BLOCK_SAME_SIDE_DUPLICATE:
+                return (
+                    f"paper duplicate skip: open {pos.side.upper()} at "
+                    f"est={pos.estimated_prob:.3f} already exists -- no stacking"
                 )
             prob_delta  = abs(pos.estimated_prob - analysis.estimated_probability)
             price_delta = abs(pos.market_yes_price - analysis.market_yes_price)
@@ -134,7 +142,7 @@ class TradeExecutor:
                 return (
                     f"same-signal skip: open {pos.side.upper()} at "
                     f"est={pos.estimated_prob:.3f} "
-                    f"mkt={pos.market_yes_price:.1f}¢ — no new information"
+                    f"mkt={pos.market_yes_price:.1f}c -- no new information"
                 )
 
         # Concentration risk: cap exposure per ticker at max_ticker_exposure_pct

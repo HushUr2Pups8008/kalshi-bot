@@ -56,8 +56,6 @@ RSS_FEEDS = [
     "https://foreignpolicy.com/feed/",
     # Defense One
     "https://www.defenseone.com/rss/all/",
-    # The Hill (politics/geopolitics)
-    "https://thehill.com/news/feed/",
     # Politico
     "https://rss.politico.com/politics-news.xml",
     # NY Times World
@@ -187,10 +185,11 @@ MAX_MARKET_DAYS_TO_EXPIRY = 30
 # ── Paper trading thresholds (cast a wide net for data collection) ────────────
 # These are more permissive than live thresholds to maximise resolved trades
 # and build source credibility data during the paper phase.
-PAPER_MIN_EDGE         = 0.02   # vs live 0.04
-PAPER_MIN_MATCH_SCORE  = 0.03   # vs live 0.06
-PAPER_MAX_CANDIDATES   = 1      # top match only — one trade per article, clean signal
-PAPER_FLAT_CONTRACTS   = 5      # flat contract count during paper training (no bankroll gating)
+PAPER_MIN_EDGE                  = 0.02   # vs live 0.04
+PAPER_MIN_MATCH_SCORE           = 0.03   # vs live 0.06
+PAPER_MAX_CANDIDATES            = 1      # top match only -- one trade per article, clean signal
+PAPER_FLAT_CONTRACTS            = 5      # flat contract count during paper training (no bankroll gating)
+PAPER_BLOCK_SAME_SIDE_DUPLICATE = True   # block any same-ticker same-side position during paper phase
 
 # ── Source credibility settings ───────────────────────────────────────────────
 CREDIBILITY_MIN_SAMPLE = 10     # trades needed before multiplier takes effect

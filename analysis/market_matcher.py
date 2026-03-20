@@ -164,6 +164,9 @@ def _is_geo_series(series: dict) -> bool:
 
 # ── Market cache ──────────────────────────────────────────────────────────────
 
+_REFRESH_DEBOUNCE_SECONDS = 60  # min seconds between back-to-back refreshes
+
+
 class MarketCache:
     def __init__(self, rest_client: KalshiRestClient):
         self._client          = rest_client
@@ -182,6 +185,9 @@ class MarketCache:
         return list(self._markets)
 
     async def _refresh(self) -> None:
+        if time.monotonic() - self._last_fetch < _REFRESH_DEBOUNCE_SECONDS:
+            log.debug("Market cache refresh debounced (last refresh %.0fs ago)", time.monotonic() - self._last_fetch)
+            return
         loop = asyncio.get_running_loop()
         try:
             markets, n_series = await loop.run_in_executor(
@@ -255,6 +261,9 @@ class MarketCache:
         return list(self._all_markets)
 
     async def _refresh_all(self) -> None:
+        if time.monotonic() - self._all_last_fetch < _REFRESH_DEBOUNCE_SECONDS:
+            log.debug("All-markets cache refresh debounced (last refresh %.0fs ago)", time.monotonic() - self._all_last_fetch)
+            return
         loop = asyncio.get_running_loop()
         try:
             markets = await loop.run_in_executor(None, self._fetch_all_markets)

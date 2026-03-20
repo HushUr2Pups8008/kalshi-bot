@@ -6,6 +6,31 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.3] - 2026-03-19
+
+### Fixed
+- **Same-side duplicate positions blocked** (`trading/executor.py`, `config.py`) — the
+  multi-position guard only blocked same-side trades within a +-2% probability delta,
+  allowing duplicate NO positions on the same ticker when estimates differed by >2%.
+  Added `PAPER_BLOCK_SAME_SIDE_DUPLICATE = True` in paper mode: any existing same-side
+  open position on a ticker now unconditionally blocks a new one. Live mode retains the
+  narrow delta guard. Fixes 2 open NO positions on `KXZELENSKYYOUT-26APR01`.
+- **NSSM log rotation now active while running** (`setup_service.ps1`) — `AppRotateOnline`
+  was 0, so NSSM only rotated logs at service restart. With 48h uptime, `service_stderr.log`
+  grew to 10MB unchecked. Set `AppRotateOnline 1` so rotation fires at 10MB regardless
+  of uptime.
+- **Double market cache refresh debounced** (`analysis/market_matcher.py`) — two code paths
+  could trigger `_refresh()` within seconds of each other (scheduled task + TTL expiry on
+  an incoming signal). Added a 60-second debounce inside `_refresh()` and `_refresh_all()`:
+  if a refresh completed within the last 60s, the second call returns immediately.
+
+### Removed
+- **"Just In News" (The Hill) RSS feed** (`config.py`) — feed re-served articles up to
+  45 days old as new items, contributing 301 of 740 stale-skipped queue entries over 48h.
+  Zero tradeable signals produced. Removed from `RSS_FEEDS`.
+
+---
+
 ## [0.6.2] - 2026-03-17
 
 ### Fixed

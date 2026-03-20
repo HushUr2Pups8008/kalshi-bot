@@ -1,6 +1,6 @@
 # kalshi-bot
 
-[![Version](https://img.shields.io/badge/version-0.6.2-blue)](CHANGELOG.md) 
+[![Version](https://img.shields.io/badge/version-0.6.3-blue)](CHANGELOG.md) 
 
 A 24/7 automated paper/live trading bot for [Kalshi](https://kalshi.com) geopolitical prediction markets.
 
