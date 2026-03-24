@@ -54,6 +54,19 @@ Never revert to a hardcoded name.
 
 ---
 
+## Changelog
+
+Every version bump requires a `CHANGELOG.md` entry in the same commit. No exceptions.
+
+- Add the new version block at the top, above all prior entries.
+- Use the existing format: `## [X.Y.Z] - YYYY-MM-DD` with `### Added / Changed / Fixed / Removed` subsections.
+- Write one bullet per logical change: what changed, which file(s), and why (the reasoning that
+  drove the version bump). A reader should be able to understand what happened and why without
+  reading the diff.
+- Never batch multiple version bumps into one entry -- each version gets its own block.
+
+---
+
 ## Go-Live Safety
 
 - Paper trading mode is the default. Live requires `python main.py --go-live` + `CONFIRM`.

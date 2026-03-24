@@ -6,6 +6,73 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.7] - 2026-03-23
+
+### Added
+- **Startup banner** (`utils/logger.py`) — `emit_startup_banner(version, model, env)` writes
+  a one-line context header (`# ===== v0.6.7 | env=demo | model=qwen2.5:7b | py=3.14.x =====`)
+  to both `bot.log` and `errors.log` on startup. The banner is stored in each handler and
+  re-emitted automatically after every midnight rotation, so every archived log file is
+  self-describing without needing to search back to the beginning of the run.
+
+### Fixed
+- **Multiple file handlers per log file** (`utils/logger.py`) — each `get_logger()` call
+  previously created new `_DailyRotatingFileHandler` instances. With ~10 named loggers,
+  ~10 separate handlers were all writing to and trying to rotate `bot.log` simultaneously
+  at midnight. Fixed by promoting `_app_fh` and `_err_fh` to module-level singletons shared
+  across every logger — exactly one write and one rotation attempt per record.
+- **Em dash encoding** (`main.py`) — three pre-existing `--` (em dash U+2014) characters in
+  `log.warning()`, `log.info()`, and `print()` calls. Windows cp1252 log handlers silently
+  drop messages containing non-ASCII and dump a fake crash traceback. Replaced with `--`.
+
+---
+
+## [0.6.6] - 2026-03-23
+
+### Added
+- **Daily log rotation** (`utils/logger.py`) — replaced the size-based
+  `_WindowsSafeRotatingFileHandler` with `_DailyRotatingFileHandler` (midnight rotation,
+  90-day retention, named `bot.log.YYYY-MM-DD`). Uses copy+truncate strategy so the base
+  log path never moves — open file handles (VS Code, tail) continue uninterrupted. Works
+  identically on Mac and Windows.
+- **`errors.log`** (`utils/logger.py`) — WARNING+ only log file written alongside `bot.log`.
+  Enables fast triage without grepping the full DEBUG output.
+- **NSSM `service_stderr.log` rotation** — configured `AppRotateFiles=1`,
+  `AppRotateOnline=1`, `AppRotateBytes=5242880` via registry. Rotation now fires at 5MB
+  while the service is running, not just on restart.
+
+---
+
+## [0.6.5] - 2026-03-23
+
+### Fixed
+- **Ollama circuit breaker permanently open** (`analysis/signal_analyzer.py`) — circuit
+  probes were full 60s inference calls. When Ollama was slow, each probe timed out,
+  incremented the failure counter, and reset the 5-minute lockout window — the circuit
+  could never close. Added `_ollama_ping()`: a cheap `GET /api/version` call with a 5s
+  timeout. At probe time, ping first. A failed ping extends the lockout timer without
+  touching the failure counter. A successful ping resets the counter and unlocks inference.
+
+---
+
+## [0.6.4] - 2026-03-23
+
+### Changed
+- **Fade signal source: tweet feed replaced with WebSocket price detector**
+  (`analysis/fade_signal.py`, `main.py`, `config.py`) — rsshub.app Twitter routes all
+  returned 404 after X blocked public RSSHub instances. Replaced with a price-crossing
+  detector on the existing authenticated Kalshi WebSocket connection (no new dependency).
+  `detect_price_fade()` fires when a geo market crosses above 85c or below 15c, with a
+  1c hysteresis buffer to suppress boundary noise. `_warm_ws_subscriptions()` subscribes
+  to all geo market tickers at startup. Trade reasoning is prefixed `[PRICE_FADE...]`
+  for SQL win-rate queries.
+
+### Removed
+- `FADE_TWEET_FEED_URLS`, `_on_fade_tweet()`, `_process_fade_tweet()`,
+  `_account_from_rsshub_url()` — tweet feed infrastructure no longer needed.
+
+---
+
 ## [0.6.3] - 2026-03-19
 
 ### Fixed

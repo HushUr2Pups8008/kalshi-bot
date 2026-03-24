@@ -6,11 +6,9 @@
 ## Go-Live Prerequisites
 - [ ] Accumulate valid paper trades on geopolitical markets (not sports)
 - [ ] Review paper trade performance — confirm positive edge
-- [ ] Validate fade signal paper trades — query DB after 2-4 weeks:
-      `SELECT substr(reasoning,1,30) tag, count(*) trades, sum(case when pnl>0 then 1 else 0 end) wins FROM paper_trades WHERE reasoning LIKE '[FADE%' GROUP BY tag ORDER BY trades DESC;`
-      Compare win rate: [FADE/GEO] vs [FADE/SPORTS], and per-account (@Kalshi vs @Polymarket vs @PolymarketMoney).
-      All categories positive → go live. If sports wins < 50% → disable sports from fade pipeline.
-      Self-host RSSHub before going live (public instance may be blocked by X).
+- [ ] Validate price-fade paper trades — query DB after 2-4 weeks:
+      `SELECT substr(reasoning,1,30) tag, count(*) trades, sum(case when pnl>0 then 1 else 0 end) wins FROM paper_trades WHERE reasoning LIKE '[PRICE_FADE%' GROUP BY tag;`
+      Positive win rate → go live.
 - [x] Portfolio state object — `trading/portfolio.py` ✓ v0.6.0
 - [ ] Run `python main.py --go-live` and type `CONFIRM` at prompt
 - [ ] Verify Kalshi API key is current and account is funded
@@ -20,52 +18,16 @@ at a time. Confirm Windows service is stopped before going live on Mac (or vice 
 
 ---
 
-
----
-
-## Bugs & Issues — Logged 2026-03-19 (48h Review)
-
-### ~~CRITICAL — Ollama Permanently in Circuit-Open State~~ FIXED v0.6.5
-
-### ~~BUG — Same-Side Duplicate Position Allowed~~ ALREADY FIXED
-- `PAPER_BLOCK_SAME_SIDE_DUPLICATE = True` in config.py; executor enforces at line 134.
-
-### ~~BUG — "Just In News" Feed Serving Stale Content~~ ALREADY FIXED
-- Feed no longer in `RSS_FEEDS` in config.py; only 1 historical trade from that source.
-
-### ~~MINOR — Double Market Cache Refresh~~ ALREADY FIXED
-- `_REFRESH_DEBOUNCE_SECONDS = 60` in `market_matcher.py` lines 188/264.
-
-### ~~MINOR — service_stderr.log Growing Unbounded~~ FIXED 2026-03-23
-- NSSM: AppRotateFiles=1, AppRotateOnline=1, AppRotateBytes=5242880 (5MB cap, rotates to .old)
-
-## Near-Term Backlog
-
-### Signal Quality
-- [x] **Priority queue** — swap `asyncio.Queue` for `asyncio.PriorityQueue` in `main.py` ✓ v0.5.7
-
-- [x] **Market snapshot at decision time** — `market_snapshot` JSON column added to `paper_trades` ✓ v0.5.8
-
-### Data Sources
-- ~~**Reddit OAuth**~~ — **DROPPED**: Reddit's 2023 API policy requires apps to benefit the Reddit community; a trading bot does not qualify. The 16 blocked subreddits stay 403'd. r/worldnews, r/ukraine, r/geopolitics (public JSON) remain active and provide adequate signal.
-
-### ~~Logging System~~ DONE v0.6.6-v0.6.7
-- Daily midnight rotation (bot.log.YYYY-MM-DD, 90-day retention) ✓
-- errors.log at WARNING+ ✓
-- Shared singleton file handlers (no duplicate writes/rotations) ✓
-- Startup banner (version/env/model/python) at top of every log file ✓
-
-
-### LLM / Mac Studio (post-GPU)
+## LLM Improvements (post-GPU — Mac Studio)
 - [ ] **3-stage LLM pipeline** — replace single combined prompt with:
       1. Relevance filter (binary, early exit)
       2. Novelty detector (binary, early exit)
       3. Impact estimator (direction + magnitude only)
-      Only practical when inference < 5s (GPU or cloud). Defer to Mac Studio / Qwen3.
+      Only practical when inference < 5s. Defer to Mac Studio / Qwen3.
 
 - [ ] **Consensus voting** — run 3 evaluations per signal, take majority vote on direction,
       median magnitude, mean confidence. Stabilizes borderline outputs.
-      Same constraint as 3-stage: 3× inference time, needs sub-5s per call.
+      Same constraint: 3× inference time, needs sub-5s per call.
 
 ---
 
@@ -88,23 +50,18 @@ at a time. Confirm Windows service is stopped before going live on Mac (or vice 
 - [ ] Node 24 confirmed on Mac Studio
 - [ ] Decide on model: Anthropic API or local Qwen3-Coder:32B via LM Studio
 
-### Profit → Bitcoin Strategy (future — after Kalshi is live and generating consistent profit)
+### Profit → Bitcoin Strategy (after Kalshi is live and profitable)
 - [x] Decide on custody model: self-custody via Coinbase ✓
-  - Transfer Robinhood BTC → Coinbase is NOT a taxable event (custody transfer, no sale)
-  - Selling BTC back to USD IS taxable (capital gains; short-term <1yr, long-term >1yr)
-  - Simply holding in Coinbase: no tax until sold
+  - Transfer Robinhood BTC → Coinbase is NOT a taxable event
+  - Selling BTC back to USD IS taxable (capital gains)
 - [ ] Define trading float minimum (e.g. $500 bankroll + $200 buffer = $700 floor)
-- [ ] Define sweep rule: e.g. "monthly, sweep 50% of balance above floor into BTC"
-- [ ] Decide on entry strategy: pure DCA (fixed schedule, ignore price) vs. price-conditional (only buy below 200-day MA)
-  - DCA is simpler and proven; timing is hard even for professionals
-- [ ] Evaluate automation: script that checks Kalshi balance, calculates excess, triggers Robinhood buy
-  - Robinhood has an unofficial API (robin_stocks library) — not officially supported, use with caution
-  - Alternative: manual monthly review until amounts justify automation
-- [ ] Tax planning: crypto buys/sells are taxable events — track cost basis from day one
+- [ ] Define sweep rule (e.g. monthly, sweep 50% of balance above floor into BTC)
+- [ ] Decide on entry strategy: pure DCA vs. price-conditional (below 200-day MA)
+- [ ] Tax planning: track cost basis from day one
 
 ### Polymarket Direct Trading (future — after Kalshi is live and stable)
-- [ ] Research Polymarket API / SDK (blockchain-based: Polygon/USDC wallet, not API key)
+- [ ] Research Polymarket API / SDK (blockchain-based: Polygon/USDC wallet)
 - [ ] Set up Polygon wallet, fund with USDC
 - [ ] Build Polymarket execution layer (separate from Kalshi executor)
-- [ ] Validate fade signal win rate on Polymarket-matched markets before going live there
+- [ ] Validate fade signal win rate on Polymarket-matched markets before going live
 - [ ] Decide: unified bot or separate process per exchange

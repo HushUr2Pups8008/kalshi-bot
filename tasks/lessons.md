@@ -34,10 +34,6 @@ API key — only ONE instance in live mode at a time.
 5. Market cache refresh — every 30 min (refresh takes ~3 min in thread pool)
 6. Daily reporter — writes report file every 24h
 
-**+ conditional:** `fade_tweets` task — polls FADE_TWEET_FEED_URLS (RSSHub RSS) for @Kalshi,
-@Polymarket, @PolymarketMoney tweets. Routes directly to `_on_fade_tweet()` (not the queue —
-pattern matching is fast, no LLM needed).
-
 ### asyncio.Queue Decoupling
 Feed pollers call `_enqueue_news()` which does `queue.put_nowait()` — returns immediately.
 The single `_news_consumer_task` drains the queue and calls `on_news_item()` including the
@@ -373,27 +369,32 @@ delay per subreddit would help.
 
 ---
 
-## Fade Signal (Implemented — v0.4.0+)
+## Fade Signal (Current — v0.6.4+)
 
-**The signal:** When @Kalshi or @Polymarket tweet "BREAKING", "ATH", or "all-time high",
-the market is likely overpriced from retail attention. Fade it: bullish tweet → buy NO.
-This is a sentiment/contrarian signal, not a news signal — no LLM needed, pattern matching only.
+**The signal:** When a geo market price crosses above 85c or below 15c, the market may be
+overpriced from retail attention or panic. Fade it: extreme-high crossing → buy NO, extreme-low
+crossing → buy YES. Contrarian signal — no LLM needed.
 
-**Architecture:** Separate code path from the main news pipeline.
-- `FADE_TWEET_FEED_URLS` (config.py) — list of RSSHub RSS URLs, one per monitored account
-- `_on_fade_tweet()` (main.py) — dedicated callback, bypasses the news queue
-- `_process_fade_tweet(tweet, account)` — pattern matching, market lookup, executor
-- Trade tags: `[FADE/GEO/@Kalshi]`, `[FADE/SPORTS/@Polymarket]` — enables per-account SQL win-rate queries
-- RSSHub is used to get X/Twitter feeds without paying for the X API ($200-5000/mo)
+**Why the tweet approach was abandoned:** rsshub.app Twitter routes all returned 404 in
+March 2026 — X blocked public RSSHub instances. Replaced with a WebSocket price detector
+that uses the existing authenticated Kalshi connection with no external dependency.
 
-**Accounts monitored:** @Kalshi (geo+sports), @Polymarket (geo+sports), @PolymarketMoney (geo+sports)
-Configure via `.env`: `FADE_TWEET_FEED_URLS=https://rsshub.app/twitter/user/Kalshi,...`
-Backward-compatible: old `KALSHI_TWEET_FEED_URL` env var still works as a single-URL fallback.
+**Architecture:** Runs inside the existing WebSocket task — not a separate task.
+- `analysis/fade_signal.py` — `detect_price_fade(ticker, price, prev_prices)` detects
+  crossings above `FADE_PRICE_HIGH_THRESHOLD` (85c) or below `FADE_PRICE_LOW_THRESHOLD` (15c),
+  with 1c hysteresis buffer to suppress boundary noise
+- `main.py:_on_price_update()` — receives WS price updates; calls `detect_price_fade()`
+- `main.py:_process_price_fade()` — builds synthetic `NewsItem` and routes to executor
+- `main.py:_warm_ws_subscriptions()` — subscribes WS to all geo market tickers at startup
+- `main.py:_ws_prev_prices` — dict tracking previous price per ticker for crossing detection
+- Config: `FADE_PRICE_HIGH_THRESHOLD=85`, `FADE_PRICE_LOW_THRESHOLD=15` (env-configurable)
 
-**Critical validation question (open):** The fade pattern is documented on sports/entertainment
-markets where retail attention is highest. Geopolitical markets have different liquidity profiles.
-Validate empirically after 2-4 weeks of paper trades — see Go-Live Prerequisites in todo.md.
-If sports win rate < 50%, disable sports category from the fade pipeline.
+**Trade tag:** Reasoning prefixed with `[PRICE_FADE...]` — enables per-crossing SQL win-rate queries:
+```sql
+SELECT substr(reasoning,1,30) tag, count(*) trades,
+       sum(case when pnl>0 then 1 else 0 end) wins
+FROM paper_trades WHERE reasoning LIKE '[PRICE_FADE%' GROUP BY tag;
+```
 
-**Self-host RSSHub before go-live.** Public rsshub.app instances get blocked by X periodically.
-A self-hosted instance on Mac Studio is more reliable for production use.
+**Critical validation question (open):** Validate empirically after 2-4 weeks of paper trades.
+Positive win rate → go live. See Go-Live Prerequisites in todo.md.
