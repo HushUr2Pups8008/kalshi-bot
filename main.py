@@ -41,7 +41,7 @@ from kalshi.rest_client import KalshiRestClient
 from kalshi.websocket_client import KalshiWebSocketClient
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
-from utils.logger import get_logger
+from utils.logger import get_logger, emit_startup_banner
 
 log = get_logger("main")
 
@@ -105,7 +105,7 @@ class TradingBot:
         try:
             self._news_queue.put_nowait((priority, next(_news_counter), news))
         except asyncio.QueueFull:
-            log.warning("News queue full (%d items) — dropping: %s",
+            log.warning("News queue full (%d items) -- dropping: %s",
                         self._news_queue.maxsize, news.headline[:60])
 
     async def _news_consumer_task(self) -> None:
@@ -453,6 +453,7 @@ class TradingBot:
         notional = self.paper.get_notional_bankroll()
         max_bet  = cfg.dynamic_max_bet(notional)
 
+        emit_startup_banner(VERSION, cfg.ollama_model, cfg.kalshi_env)
         log.info("=" * 60)
         log.info("Kalshi Trading Bot v%s starting", VERSION)
         log.info("Mode:             %s", "PAPER TRADING" if cfg.is_paper_trading else "LIVE TRADING")
@@ -461,7 +462,7 @@ class TradingBot:
                  max_bet, cfg.bet_pct_bankroll * 100, cfg.max_bet_hard_cap)
         log.info("Kelly fraction:   %.0f%%", cfg.kelly_fraction * 100)
         if cfg.is_paper_trading:
-            log.info("Paper trading — run `python main.py --go-live` when ready to switch.")
+            log.info("Paper trading -- run `python main.py --go-live` when ready to switch.")
         log.info("=" * 60)
 
         try:
@@ -557,7 +558,7 @@ def _handle_go_live(paper: PaperTrader) -> None:
         paper.confirm_go_live()
         print("Live trading confirmed. Restart the bot with `python main.py` to begin.")
     else:
-        print("Cancelled — still in paper trading mode.")
+        print("Cancelled -- still in paper trading mode.")
 
 
 async def _shutdown(bot: TradingBot) -> None:

@@ -2,8 +2,24 @@
 Logging setup for the Kalshi bot.
 
 Provides:
-  - get_logger(name)  – colored console + rotating file logger
-  - trade_log         – structured JSON logger for paper/live trade records
+  - get_logger(name)          -- colored console + rotating file logger
+  - emit_startup_banner(...)  -- write context line at startup and after each
+                                 midnight rotation so every archived file is
+                                 self-describing
+  - trade_log                 -- structured JSON logger for paper/live records
+
+File layout (logs/):
+  bot.log              -- active DEBUG+ log; rotated to bot.log.YYYY-MM-DD
+  errors.log           -- active WARNING+ log; same rotation scheme
+  bot.log.YYYY-MM-DD   -- 90-day archive
+  errors.log.YYYY-MM-DD
+  trades.jsonl         -- structured trade records (append-only, never rotated)
+
+Architecture:
+  _app_fh and _err_fh are module-level singletons.  get_logger() creates one
+  console handler per named logger and attaches the shared file handlers --
+  this ensures exactly one write per record regardless of how many loggers are
+  active, and exactly one rotation attempt at midnight.
 """
 
 import json
@@ -12,7 +28,7 @@ import logging.handlers
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import colorlog
 
@@ -23,7 +39,7 @@ APP_LOG_FILE   = LOGS_DIR / "bot.log"
 ERROR_LOG_FILE = LOGS_DIR / "errors.log"     # WARNING+ only -- quick triage
 TRADE_LOG_FILE = LOGS_DIR / "trades.jsonl"   # newline-delimited JSON
 
-# ── Formatter ─────────────────────────────────────────────────────────────────
+# ── Formatters ────────────────────────────────────────────────────────────────
 _COLOR_FORMAT = (
     "%(log_color)s%(asctime)s %(levelname)-8s%(reset)s "
     "%(cyan)s%(name)-20s%(reset)s %(message)s"
@@ -51,7 +67,15 @@ class _DailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
     less efficient than an atomic rename but functionally identical.
 
     Rotated backups: bot.log.YYYY-MM-DD, 90-day retention.
+
+    Banner: a one-line context string (version/env/model) written at the top
+    of every new file so any rotated archive is self-describing without
+    needing to search back to the beginning of the bot run.
     """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._banner: str = ""
 
     def rotate(self, source: str, dest: str) -> None:
         try:
@@ -64,33 +88,82 @@ class _DailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
         except Exception:
             pass
 
+    def doRollover(self) -> None:
+        super().doRollover()
+        # Re-emit the banner at the top of the freshly-rotated (empty) file
+        if self._banner and self.stream:
+            try:
+                self.stream.write(self._banner + "\n")
+                self.stream.flush()
+            except Exception:
+                pass
+
+
+# ── Shared file handler singletons ────────────────────────────────────────────
+# Created once on first get_logger() call; reused by every subsequent logger.
+# This ensures exactly one rotation attempt at midnight and one write per record.
+_app_fh: Optional[_DailyRotatingFileHandler] = None
+_err_fh: Optional[_DailyRotatingFileHandler] = None
+
+
+def _ensure_file_handlers() -> tuple[_DailyRotatingFileHandler, _DailyRotatingFileHandler]:
+    global _app_fh, _err_fh
+    if _app_fh is None:
+        _app_fh = _DailyRotatingFileHandler(
+            APP_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8"
+        )
+        _app_fh.setLevel(logging.DEBUG)
+        _app_fh.setFormatter(logging.Formatter(_FILE_FORMAT))
+    if _err_fh is None:
+        _err_fh = _DailyRotatingFileHandler(
+            ERROR_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8"
+        )
+        _err_fh.setLevel(logging.WARNING)
+        _err_fh.setFormatter(logging.Formatter(_FILE_FORMAT))
+    return _app_fh, _err_fh
+
+
+def emit_startup_banner(version: str, model: str, env: str) -> None:
+    """Write a one-line context banner to the active log files.
+
+    Call once near the top of main.py run() after logging is set up.
+    The banner is stored in each handler and re-emitted automatically
+    after every midnight rotation, so every archived log file begins
+    with a self-describing header line.
+
+    Example output at top of bot.log (and errors.log):
+        # ===== v0.6.7 | env=demo | model=qwen2.5:7b | py=3.14.0 =====
+    """
+    import sys
+    banner = (
+        f"# ===== v{version} | env={env} | model={model}"
+        f" | py={sys.version.split()[0]} ====="
+    )
+    fh, eh = _ensure_file_handlers()
+    for handler in (fh, eh):
+        handler._banner = banner
+        if handler.stream:
+            try:
+                handler.stream.write(banner + "\n")
+                handler.stream.flush()
+            except Exception:
+                pass
+
 
 def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:
-    """Return a logger with colored console output and rotating file output."""
+    """Return a named logger with console output and shared file output."""
+    fh, eh = _ensure_file_handlers()
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger  # already configured
     logger.setLevel(level)
 
-    # Console handler
+    # Console handler -- one per named logger (colored, INFO+)
     ch = colorlog.StreamHandler()
     ch.setLevel(logging.INFO)
     ch.setFormatter(colorlog.ColoredFormatter(_COLOR_FORMAT, log_colors=_COLOR_MAP))
 
-    # Main log: DEBUG+, daily rotation, 90-day retention
-    fh = _DailyRotatingFileHandler(
-        APP_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8"
-    )
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(logging.Formatter(_FILE_FORMAT))
-
-    # Error log: WARNING+ only -- fast triage without grepping full DEBUG output
-    eh = _DailyRotatingFileHandler(
-        ERROR_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8"
-    )
-    eh.setLevel(logging.WARNING)
-    eh.setFormatter(logging.Formatter(_FILE_FORMAT))
-
+    # Shared file handlers -- same objects attached to every logger
     logger.addHandler(ch)
     logger.addHandler(fh)
     logger.addHandler(eh)
