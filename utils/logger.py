@@ -39,13 +39,18 @@ _COLOR_MAP = {
 }
 
 
-class _WindowsSafeDailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
+class _DailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
     """TimedRotatingFileHandler using copy+truncate instead of rename.
 
-    On Windows, os.rename() raises WinError 32 when any other process (VS Code,
-    tail -f, etc.) holds the log file open. Overriding rotate() with copy+truncate
-    keeps the base path unchanged so open handles continue working across midnight
-    rotation. Rotated backups are named bot.log.YYYY-MM-DD (90-day retention).
+    Overrides rotate() so the base log path never moves. This lets any process
+    (VS Code, tail -f) that has the file open continue writing without
+    interruption across midnight rotation.
+
+    On Windows this is required -- os.rename() raises WinError 32 when
+    another process holds the file open. On Mac/Linux it is harmless: slightly
+    less efficient than an atomic rename but functionally identical.
+
+    Rotated backups: bot.log.YYYY-MM-DD, 90-day retention.
     """
 
     def rotate(self, source: str, dest: str) -> None:
@@ -73,14 +78,14 @@ def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:
     ch.setFormatter(colorlog.ColoredFormatter(_COLOR_FORMAT, log_colors=_COLOR_MAP))
 
     # Main log: DEBUG+, daily rotation, 90-day retention
-    fh = _WindowsSafeDailyRotatingFileHandler(
+    fh = _DailyRotatingFileHandler(
         APP_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8"
     )
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(logging.Formatter(_FILE_FORMAT))
 
     # Error log: WARNING+ only -- fast triage without grepping full DEBUG output
-    eh = _WindowsSafeDailyRotatingFileHandler(
+    eh = _DailyRotatingFileHandler(
         ERROR_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8"
     )
     eh.setLevel(logging.WARNING)
