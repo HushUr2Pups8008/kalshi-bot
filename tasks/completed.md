@@ -3,6 +3,23 @@
 
 ---
 
+## 2026-03-23 (Windows session -- v0.6.4, v0.6.5)
+
+### Fade Signal -- Replaced Dead Tweet Feed with WebSocket Price Detector (v0.6.4)
+- **rsshub.app all 404 for Twitter routes** -- X blocked public RSSHub instances.
+- **Fix:** replaced tweet-based fade with WebSocket price-crossing detector.
+  - `analysis/fade_signal.py`: added `detect_price_fade()` -- detects crossings above 85c or below 15c with 1c buffer to suppress boundary noise.
+  - `config.py`: added `FADE_PRICE_HIGH_THRESHOLD` (85) and `FADE_PRICE_LOW_THRESHOLD` (15) env-configurable constants.
+  - `main.py`: added `_ws_prev_prices` tracker, `_on_price_update()` now calls `detect_price_fade()`, `_process_price_fade()` builds synthetic NewsItem + routes through executor, `_warm_ws_subscriptions` subscribes WS to all geo market tickers at startup.
+- No external dependency -- uses existing authenticated Kalshi WS connection.
+
+### CRITICAL -- Ollama Circuit Breaker Permanently Open (v0.6.5)
+- **Root cause:** circuit probes were full 60s inference calls. When Ollama was slow, probes timed out, incremented the failure counter, and reset the 5-min lockout -- circuit never closed.
+- **Fix:** `analysis/signal_analyzer.py` -- added `_ollama_ping()` (GET /api/version, 5s timeout). When probe time arrives, ping first. Failed ping extends timer without touching failure count. Successful ping resets counter and unlocks inference.
+- Commit: 282d22b
+
+---
+
 ## 2026-03-17 (Windows session — v0.5.7)
 
 ### Signal Quality

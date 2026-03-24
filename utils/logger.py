@@ -9,7 +9,6 @@ Provides:
 import json
 import logging
 import logging.handlers
-import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +20,7 @@ from config import LOGS_DIR
 
 # ── Log file paths ────────────────────────────────────────────────────────────
 APP_LOG_FILE   = LOGS_DIR / "bot.log"
+ERROR_LOG_FILE = LOGS_DIR / "errors.log"     # WARNING+ only -- quick triage
 TRADE_LOG_FILE = LOGS_DIR / "trades.jsonl"   # newline-delimited JSON
 
 # ── Formatter ─────────────────────────────────────────────────────────────────
@@ -39,49 +39,25 @@ _COLOR_MAP = {
 }
 
 
-class _WindowsSafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
-    """RotatingFileHandler using copy+truncate instead of rename for rotation.
+class _WindowsSafeDailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
+    """TimedRotatingFileHandler using copy+truncate instead of rename.
 
     On Windows, os.rename() raises WinError 32 when any other process (VS Code,
-    tail -f, etc.) holds the log file open. Rename failure leaves self.stream=None,
-    causing every subsequent emit() to silently drop the record. Copy+truncate
-    keeps the same path so open handles in other processes continue working.
+    tail -f, etc.) holds the log file open. Overriding rotate() with copy+truncate
+    keeps the base path unchanged so open handles continue working across midnight
+    rotation. Rotated backups are named bot.log.YYYY-MM-DD (90-day retention).
     """
 
-    def doRollover(self):
-        if self.stream:
-            self.stream.close()
-            self.stream = None
-
-        # Backup files are not held open -- rename is safe for those
-        if self.backupCount > 0:
-            for i in range(self.backupCount - 1, 0, -1):
-                sfn = self.rotation_filename("%s.%d" % (self.baseFilename, i))
-                dfn = self.rotation_filename("%s.%d" % (self.baseFilename, i + 1))
-                if os.path.exists(sfn):
-                    if os.path.exists(dfn):
-                        os.remove(dfn)
-                    os.rename(sfn, dfn)
-
-            # Copy base log to .1, then truncate in place
-            dfn = self.rotation_filename(self.baseFilename + ".1")
-            if os.path.exists(dfn):
-                os.remove(dfn)
-            try:
-                shutil.copy2(self.baseFilename, dfn)
-            except Exception:
-                pass
-
-        # Truncate base file in place -- path and inode unchanged, so any
-        # process holding it open continues writing to the same (now empty) file
+    def rotate(self, source: str, dest: str) -> None:
         try:
-            with open(self.baseFilename, "w", encoding=self.encoding or "utf-8"):
-                pass
+            shutil.copy2(source, dest)
         except Exception:
             pass
-
-        if not self.delay:
-            self.stream = self._open()
+        try:
+            with open(source, "w", encoding="utf-8"):
+                pass  # truncate in place -- path and inode unchanged
+        except Exception:
+            pass
 
 
 def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:
@@ -96,15 +72,23 @@ def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:
     ch.setLevel(logging.INFO)
     ch.setFormatter(colorlog.ColoredFormatter(_COLOR_FORMAT, log_colors=_COLOR_MAP))
 
-    # File handler (10 MB × 5 backups)
-    fh = _WindowsSafeRotatingFileHandler(
-        APP_LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    # Main log: DEBUG+, daily rotation, 90-day retention
+    fh = _WindowsSafeDailyRotatingFileHandler(
+        APP_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8"
     )
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(logging.Formatter(_FILE_FORMAT))
 
+    # Error log: WARNING+ only -- fast triage without grepping full DEBUG output
+    eh = _WindowsSafeDailyRotatingFileHandler(
+        ERROR_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8"
+    )
+    eh.setLevel(logging.WARNING)
+    eh.setFormatter(logging.Formatter(_FILE_FORMAT))
+
     logger.addHandler(ch)
     logger.addHandler(fh)
+    logger.addHandler(eh)
     return logger
 
 
