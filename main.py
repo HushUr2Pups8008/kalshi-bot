@@ -30,7 +30,9 @@ from analysis import SignalAnalysis
 from analysis.kelly import kelly_bet
 from analysis.market_matcher import MarketMatcher
 from analysis.signal_analyzer import estimate_probability
-from config import cfg, PAPER_MIN_EDGE, VERSION, FADE_TWEET_FEED_URLS, MARKET_SERIES_BLOCKLIST_PREFIXES, MAX_NEWS_AGE_SECONDS
+from config import (cfg, PAPER_MIN_EDGE, VERSION, FADE_TWEET_FEED_URLS,
+                    MARKET_SERIES_BLOCKLIST_PREFIXES, MAX_NEWS_AGE_SECONDS,
+                    FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD)
 from feeds import NewsItem
 from feeds.dedup import HeadlineDedup
 from feeds.reddit_monitor import run_reddit_monitor
@@ -89,6 +91,9 @@ class TradingBot:
         # Cross-source dedup: Reuters/AP/BBC often publish the same story within
         # minutes. Skip near-identical headlines seen in the last 15 minutes.
         self._dedup = HeadlineDedup()
+        # Previous WS mid-price per ticker -- used to detect threshold crossings
+        # for the price-based fade signal.
+        self._ws_prev_prices: dict[str, float] = {}
 
     # ── News pipeline ─────────────────────────────────────────────────────────
 
@@ -291,7 +296,90 @@ class TradingBot:
         self.ws.watch([market.ticker])
 
     async def _on_price_update(self, ticker: str, yes_bid: float, yes_ask: float) -> None:
-        log.debug("[WS] %s bid=%.1f¢ ask=%.1f¢", ticker, yes_bid, yes_ask)
+        now_mid = (yes_bid + yes_ask) / 2.0
+        log.debug("[WS] %s bid=%.1fc ask=%.1fc mid=%.1fc", ticker, yes_bid, yes_ask, now_mid)
+
+        prev_mid = self._ws_prev_prices.get(ticker)
+        self._ws_prev_prices[ticker] = now_mid
+
+        if prev_mid is None:
+            return  # first tick for this ticker -- no crossing possible yet
+
+        from analysis.fade_signal import detect_price_fade
+        crossing = detect_price_fade(
+            ticker, prev_mid, now_mid,
+            FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD,
+        )
+        if crossing is not None:
+            await self._process_price_fade(ticker, crossing, now_mid, yes_bid, yes_ask)
+
+    async def _process_price_fade(
+        self,
+        ticker: str,
+        crossing: str,
+        now_mid: float,
+        yes_bid: float,
+        yes_ask: float,
+    ) -> None:
+        """
+        Execute a price-based fade when a geo market crosses the high/low threshold.
+
+        high_cross (>=85c) -> buy NO  (fade the spike)
+        low_cross  (<=15c) -> buy YES (fade the collapse)
+        """
+        # Only fade geo/political markets
+        _t = ticker.upper()
+        if any(_t.startswith(p) for p in MARKET_SERIES_BLOCKLIST_PREFIXES):
+            log.debug("[PRICE_FADE] Skipping sports ticker %s", ticker)
+            return
+
+        markets = await self.matcher._cache.get_markets()
+        market = next((m for m in markets if m.ticker == ticker), None)
+        if market is None:
+            log.debug("[PRICE_FADE] %s not in geo cache, skipping", ticker)
+            return
+
+        # Update market price to reflect live WS data
+        market.yes_price = now_mid
+        market.yes_bid   = max(1, yes_bid)
+        market.yes_ask   = min(99, yes_ask)
+
+        fade_side = "no" if crossing == "high_cross" else "yes"
+        edge_sign = -1.0 if fade_side == "no" else 1.0
+        fake_edge = edge_sign * (PAPER_MIN_EDGE + 0.01)
+
+        threshold_val = (FADE_PRICE_HIGH_THRESHOLD if crossing == "high_cross"
+                         else FADE_PRICE_LOW_THRESHOLD)
+        direction = "above" if crossing == "high_cross" else "below"
+
+        synthetic_news = NewsItem(
+            headline=(f"[PRICE_FADE] {ticker} crossed {direction} {threshold_val}c"
+                      f" (mid={now_mid:.1f}c)"),
+            url=f"kalshi://price_fade/{ticker}",
+            source="price_fade",
+        )
+
+        analysis = SignalAnalysis(
+            news_item=synthetic_news,
+            market=market,
+            estimated_probability=market.yes_prob + fake_edge,
+            market_yes_price=market.yes_price,
+            edge=fake_edge,
+            side=fade_side,
+            kelly_fraction=cfg.kelly_fraction,
+            kelly_dollars=0.0,
+            capped_dollars=0.0,
+            keywords_matched=[],
+            reasoning=(
+                f"[PRICE_FADE] {ticker} {crossing}: mid={now_mid:.1f}c "
+                f"threshold={threshold_val}c -> {fade_side.upper()}"
+            ),
+            confidence=0.4,
+        )
+
+        log.info("[PRICE_FADE] %s | %s | mid=%.1fc | threshold=%dc | side=%s",
+                 ticker, crossing, now_mid, threshold_val, fade_side.upper())
+        await self.executor.execute(analysis)
 
     # ── Scheduled tasks ───────────────────────────────────────────────────────
 
@@ -305,11 +393,33 @@ class TradingBot:
             report_path.write_text(report, encoding="utf-8")
             log.info("Daily report written to %s", report_path)
 
+    async def _warm_ws_subscriptions(self) -> None:
+        """
+        Background task: wait for the market cache to populate on first run,
+        then subscribe the WS to every geo market ticker so the price-fade
+        detector has live prices from the start.
+        """
+        try:
+            markets = await self.matcher._cache.get_markets()
+            tickers = [m.ticker for m in markets]
+            if tickers:
+                self.ws.watch(tickers)
+                log.info("WS: subscribed to %d geo market tickers for price fade",
+                         len(tickers))
+        except Exception as exc:
+            log.warning("WS price-fade warm-up failed: %s", exc)
+
     async def _market_refresh_task(self) -> None:
         from config import MARKET_CACHE_TTL_SECONDS
         while True:
             await asyncio.sleep(MARKET_CACHE_TTL_SECONDS)
             await self.matcher.refresh_cache()
+            # Re-subscribe WS to catch any newly listed geo markets
+            try:
+                markets = await self.matcher._cache.get_markets()
+                self.ws.watch([m.ticker for m in markets])
+            except Exception as exc:
+                log.warning("WS re-subscription after market refresh failed: %s", exc)
 
     # ── Run ───────────────────────────────────────────────────────────────────
 
@@ -367,6 +477,7 @@ class TradingBot:
             asyncio.create_task(run_reddit_monitor(self._enqueue_news), name="reddit"),
             asyncio.create_task(self._news_consumer_task(),             name="news_consumer"),
             asyncio.create_task(self.ws.run(),                          name="websocket"),
+            asyncio.create_task(self._warm_ws_subscriptions(),          name="ws_warm"),
             asyncio.create_task(self._daily_report_task(),              name="daily_report"),
             asyncio.create_task(self._market_refresh_task(),            name="market_refresh"),
             *([asyncio.create_task(

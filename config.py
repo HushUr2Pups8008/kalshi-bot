@@ -82,6 +82,12 @@ MAX_NEWS_AGE_SECONDS: int = int(os.getenv("MAX_NEWS_AGE_SECONDS", "300"))  # 5 m
 _fade_raw = os.getenv("FADE_TWEET_FEED_URLS", os.getenv("KALSHI_TWEET_FEED_URL", ""))
 FADE_TWEET_FEED_URLS: list[str] = [u.strip() for u in _fade_raw.split(",") if u.strip()]
 
+# Price-based fade thresholds (cents, 0-100).
+# A market crossing above HIGH → buy NO (fade the spike).
+# A market crossing below LOW  → buy YES (fade the collapse).
+FADE_PRICE_HIGH_THRESHOLD: int = int(os.getenv("FADE_PRICE_HIGH_THRESHOLD", "85"))
+FADE_PRICE_LOW_THRESHOLD:  int = int(os.getenv("FADE_PRICE_LOW_THRESHOLD",  "15"))
+
 # ── Reddit subreddits to monitor ──────────────────────────────────────────────
 REDDIT_SUBREDDITS = [
     # Core geopolitical / world news

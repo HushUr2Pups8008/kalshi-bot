@@ -271,14 +271,54 @@ def _parse_llm_response(parsed: dict, market) -> tuple[float, float, str]:
     return prob, confidence, reasoning
 
 
+async def _ollama_ping() -> bool:
+    """
+    Lightweight Ollama health check (5s timeout).
+    Calls GET /api/version on the native Ollama port.
+    Does NOT count against the failure threshold -- used as a cheap
+    connectivity probe before committing to a full 60s inference call.
+    """
+    import aiohttp
+    base = cfg.ollama_base_url.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{base}/api/version",
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                return resp.status == 200
+    except Exception:
+        return False
+
+
 async def _ollama_estimate(news, market):
     """
     Call local Ollama server (OpenAI-compatible endpoint).
     Returns (prob, confidence, reasoning) or None if Ollama is not running.
     """
     global _ollama_consecutive_failures, _ollama_down_until
-    if time.monotonic() < _ollama_down_until:
-        return None  # circuit open — skip without burning 60s timeout
+
+    if _ollama_down_until > 0.0:
+        if time.monotonic() < _ollama_down_until:
+            return None  # circuit open -- not probe time yet
+        # Probe window: run a cheap ping before committing to 60s inference.
+        # A failed ping just extends the timer without incrementing the failure
+        # counter -- prevents probes from keeping the circuit permanently open.
+        if not await _ollama_ping():
+            _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
+            log.debug(
+                "Ollama probe (ping) failed -- circuit stays open for %.0fm",
+                _OLLAMA_PROBE_INTERVAL / 60,
+            )
+            return None
+        log.info(
+            "Ollama ping succeeded after %d failures -- attempting inference",
+            _ollama_consecutive_failures,
+        )
+        _ollama_consecutive_failures = 0
+        _ollama_down_until = 0.0
 
     import aiohttp
 

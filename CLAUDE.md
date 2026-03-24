@@ -1,38 +1,3 @@
-# CLAUDE.md — kalshi-bot
-
-Global rules (engineering philosophy, Windows platform, versioning, task management,
-collaboration style) live in `~/.claude/CLAUDE.md` and apply here automatically.
-This file contains only kalshi-bot-specific rules.
-
----
-
-## Plan Mode Default
-- Enter plan mode for any non-trivial task (3+ steps or architectural decisions)
-- If something goes wrong, STOP and re-plan immediately -- don't keep pushing
-- Use plan mode for verification steps, not just building
-
-## Subagent Strategy
-- Use subagents frequently to keep the main context window clean
-- Offload research, exploration, and parallel analysis to subagents
-- Assign one task per subagent for focused execution
-
-## Self-Improvement Loop
-- After any correction, update `tasks/lessons.md` with the pattern
-- Review `tasks/lessons.md` at the start of each session
-
-## Verification Before Done
-- Never mark a task complete without proving it works
-- Ask yourself: "Would a staff engineer approve this?"
-- Run tests, check logs, and demonstrate correctness
-
-## Task Management
-- Plan First: write a scoped plan in `tasks/todo.md`
-- Verify Plan: re-read before starting; get explicit user go-ahead
-- Track Progress: mark items complete as you go
-- Maintain the Todo File: move completed work to `tasks/completed.md`; keep todo.md lean
-
----
-
 ## Windows Encoding — Project Reminder
 
 Non-ASCII in log/print strings silently kills Windows logging (see global CLAUDE.md).
