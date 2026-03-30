@@ -71,11 +71,17 @@ class _DailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
     Banner: a one-line context string (version/env/model) written at the top
     of every new file so any rotated archive is self-describing without
     needing to search back to the beginning of the bot run.
+
+    Peer handlers: other _DailyRotatingFileHandler instances that should be
+    rotated whenever this handler rotates. This ensures handlers with high
+    log-level filters (e.g. WARNING-only) still rotate at midnight even if
+    no qualifying messages arrive around that time.
     """
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._banner: str = ""
+        self._peers: list["_DailyRotatingFileHandler"] = []
 
     def rotate(self, source: str, dest: str) -> None:
         try:
@@ -97,6 +103,13 @@ class _DailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
                 self.stream.flush()
             except Exception:
                 pass
+        # Nudge peer handlers that may not have received any messages since
+        # midnight (e.g. errors.log during a quiet period).
+        for peer in self._peers:
+            if peer.shouldRollover(logging.LogRecord(
+                "", 0, "", 0, None, None, None
+            )):
+                peer.doRollover()
 
 
 # ── Shared file handler singletons ────────────────────────────────────────────
@@ -120,6 +133,9 @@ def _ensure_file_handlers() -> tuple[_DailyRotatingFileHandler, _DailyRotatingFi
         )
         _err_fh.setLevel(logging.WARNING)
         _err_fh.setFormatter(logging.Formatter(_FILE_FORMAT))
+        # bot.log rotates on every DEBUG+ message at midnight; nudge errors.log
+        # along with it so it rotates even during quiet (no-WARNING) periods.
+        _app_fh._peers.append(_err_fh)
     return _app_fh, _err_fh
 
 

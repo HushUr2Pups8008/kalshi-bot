@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.1] - 2026-03-30
+
+### Fixed
+- **errors.log rotation stall** (`utils/logger.py`) -- `errors.log` (WARNING+ only) failed to
+  rotate at midnight when no warnings were emitted around that time. `TimedRotatingFileHandler`
+  only checks `shouldRollover()` on `emit()`, so the errors handler was never triggered during
+  quiet periods. Fixed by adding a peer-nudge mechanism: when `bot.log` (DEBUG+, always active)
+  rotates at midnight, it now also triggers `shouldRollover()` on the errors handler, ensuring
+  both files rotate in lockstep regardless of message volume.
+
+---
+
 ## [0.7.0] - 2026-03-29
 
 ### Added
