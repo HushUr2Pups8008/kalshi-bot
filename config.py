@@ -262,6 +262,15 @@ class BotConfig:
         default_factory=lambda: os.getenv("ANTHROPIC_API_KEY")
     )
 
+    # Reddit OAuth2 (optional — public JSON fallback if missing)
+    reddit_client_id:     Optional[str] = field(default_factory=lambda: os.getenv("REDDIT_CLIENT_ID"))
+    reddit_client_secret: Optional[str] = field(default_factory=lambda: os.getenv("REDDIT_CLIENT_SECRET"))
+    reddit_user_agent:    Optional[str] = field(default_factory=lambda: os.getenv("REDDIT_USER_AGENT"))
+
+    @property
+    def reddit_oauth_available(self) -> bool:
+        return bool(self.reddit_client_id and self.reddit_client_secret)
+
     # Local Ollama settings (primary LLM backend)
     ollama_base_url: str = field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"))
     ollama_model:    str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen2.5:3b"))

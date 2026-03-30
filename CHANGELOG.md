@@ -6,6 +6,31 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.0] - 2026-03-29
+
+### Added
+- **Reddit OAuth2 support** (`feeds/reddit_monitor.py`, `config.py`) -- when `REDDIT_CLIENT_ID`
+  and `REDDIT_CLIENT_SECRET` are set in `.env`, the Reddit monitor authenticates via OAuth2
+  `client_credentials` grant and uses `oauth.reddit.com` (600 req/10 min). Without credentials,
+  falls back to the public JSON API (current behavior, aggressively rate-limited).
+- **`_RedditAuth` token manager** (`feeds/reddit_monitor.py`) -- handles token acquisition,
+  caching, auto-refresh (60s before expiry), HTTP 401 retry, and permanent credential failure
+  detection. Zero new dependencies (uses existing `aiohttp`).
+- **OAuth-aware circuit breaker** (`feeds/reddit_monitor.py`) -- under OAuth, HTTP 403 means
+  private/quarantined subreddit (not IP block) and does not count toward the global circuit
+  breaker. Only 429s trigger the global pause. OAuth mode uses a shorter 10-min global backoff
+  (vs 30-min for public mode) and 3s stagger between subreddits (vs 10s).
+- **Reddit OAuth env vars** (`.env.example`) -- documented `REDDIT_CLIENT_ID`,
+  `REDDIT_CLIENT_SECRET`, and `REDDIT_USER_AGENT` with setup instructions.
+- **`reddit_oauth_available` property** (`config.py`) -- convenience check for whether Reddit
+  OAuth credentials are configured.
+
+### Fixed
+- **Reddit 403 storm** -- the public JSON API was producing ~2,600 HTTP 403s/week with
+  escalating IP blocks lasting 6-14+ hours. OAuth2 eliminates this entirely.
+
+---
+
 ## [0.6.7] - 2026-03-23
 
 ### Added
