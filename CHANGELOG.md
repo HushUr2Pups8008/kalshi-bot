@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.8.2] - 2026-04-02
+
+### Fixed
+- **Startup crash after v0.8.1** (`main.py:532`) -- startup log referenced
+  `cfg.bet_pct_bankroll` which was renamed to `cfg.max_bet_pct_bankroll` in v0.8.1.
+  Caused `AttributeError` on every startup, putting the NSSM service into a crash loop.
+  Fixed by updating the one reference in the startup log message.
+
+---
+
 ## [0.8.1] - 2026-04-02
 
 ### Changed
