@@ -126,6 +126,88 @@ REDDIT_SUBREDDITS = [
 ]
 REDDIT_MIN_SCORE  = 50
 
+# ── Adaptive subreddit selection ──────────────────────────────────────────────
+# Tier-1: always polled every cycle regardless of active markets
+REDDIT_CORE_SUBREDDITS: list[str] = [
+    "worldnews",
+    "geopolitics",
+    "InternationalNews",
+    "CredibleDefense",
+    "ArmedConflicts",
+]
+
+# Tier-2: topic -> subreddits (ordered by signal quality within each topic)
+REDDIT_SUBREDDIT_TOPIC_MAP: dict[str, list[str]] = {
+    "military_conflict": ["WarCollege", "GlobalAffairs", "ukraine", "NATO"],
+    "elections":         ["worldpolitics", "GlobalTalk", "IRstudies"],
+    "trade_economic":    ["economics", "worldpolitics", "GlobalAffairs"],
+    "nuclear":           ["NorthKorea", "iran", "WarCollege"],
+    "sanctions":         ["sanctions", "foreignpolicy", "IRstudies"],
+    "us_domestic":       ["politics", "PoliticalDiscussion"],
+    "regional_europe":   ["europe", "EasternEurope", "ukraine"],
+    "regional_mideast":  ["MiddleEast", "Israel", "iran", "Syria"],
+    "regional_asia":     ["China", "taiwan", "NorthKorea", "southasia", "pakistan"],
+    "regional_latam":    ["LatinAmerica"],
+    "regional_africa":   ["Africa"],
+    "regional_eurasia":  ["Eurasia", "Turkey"],
+}
+
+# Per-topic keyword sets used to match active Kalshi market titles
+REDDIT_TOPIC_KEYWORDS: dict[str, frozenset] = {
+    "military_conflict": frozenset({
+        "war", "invasion", "military", "ceasefire", "troops", "attack",
+        "strike", "offensive", "conflict", "soldiers", "weapons",
+    }),
+    "elections": frozenset({
+        "election", "vote", "president", "prime", "minister", "senator",
+        "governor", "ballot", "polling", "runoff", "candidate",
+    }),
+    "trade_economic": frozenset({
+        "tariff", "tariffs", "trade", "import", "export", "embargo",
+        "customs", "commerce", "duty", "duties", "reciprocal", "liberation",
+    }),
+    "nuclear": frozenset({
+        "nuclear", "icbm", "ballistic", "missile", "warhead",
+        "enrichment", "uranium", "plutonium",
+    }),
+    "sanctions": frozenset({
+        "sanctions", "sanction", "embargo", "expelled", "diplomatic",
+        "ambassador", "alliance", "bilateral",
+    }),
+    "us_domestic": frozenset({
+        "executive", "shutdown", "impeach", "congress", "senate", "cabinet",
+        "supreme", "legislation", "regulation", "pardon", "indictment",
+        "confirmation", "doge", "budget", "debt",
+    }),
+    "regional_europe": frozenset({
+        "europe", "european", "ukraine", "russia", "nato", "germany",
+        "france", "britain", "poland", "czech", "hungary", "moldova",
+    }),
+    "regional_mideast": frozenset({
+        "israel", "gaza", "iran", "lebanon", "syria", "hamas", "hezbollah",
+        "saudi", "iraq", "yemen", "qatar", "jordan",
+    }),
+    "regional_asia": frozenset({
+        "china", "taiwan", "korea", "japan", "pakistan", "india", "vietnam",
+        "philippines", "myanmar", "bangladesh", "tibet",
+    }),
+    "regional_latam": frozenset({
+        "venezuela", "cuba", "mexico", "colombia", "brazil", "argentina",
+        "nicaragua", "ecuador", "peru", "chile",
+    }),
+    "regional_africa": frozenset({
+        "africa", "ethiopia", "sudan", "somalia", "nigeria", "kenya",
+        "congo", "libya", "egypt", "sahel", "mali", "niger",
+    }),
+    "regional_eurasia": frozenset({
+        "turkey", "georgia", "armenia", "azerbaijan", "kazakhstan",
+        "belarus", "erdogan", "caucasus", "eurasia",
+    }),
+}
+
+# Max subreddits per poll cycle (core always included; topic subs fill remaining slots)
+REDDIT_MAX_SUBREDDITS: int = 20
+
 # ── Kalshi market filters ─────────────────────────────────────────────────────
 # NOTE: KALSHI_GEOPOLITICAL_SERIES is no longer used by the market cache.
 # Kalshi retired these organised geo series (KXUKR, KXINTL, etc.) — there are

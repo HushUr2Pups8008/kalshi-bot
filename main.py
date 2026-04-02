@@ -493,6 +493,32 @@ class TradingBot:
 
     # ── Run ───────────────────────────────────────────────────────────────────
 
+    def _make_subreddit_getter(self) -> "Callable[[], Awaitable[list[str]]]":
+        """
+        Return an async callable that computes the subreddit list from the live
+        market cache. Called once per Reddit poll cycle (~300s) to enable
+        adaptive selection: topic subreddits are added only when matching markets
+        are open. Falls back to REDDIT_CORE_SUBREDDITS if the cache is cold or
+        the selector raises.
+        """
+        from feeds.subreddit_selector import select_subreddits
+
+        async def _get() -> list[str]:
+            try:
+                markets = self.matcher._cache._markets
+                result = select_subreddits(markets)
+                log.debug(
+                    "Subreddit selector: %d subs for this cycle (%d active markets)",
+                    len(result), len(markets),
+                )
+                return result
+            except Exception as exc:
+                log.warning("Subreddit selector error, using core list: %s", exc)
+                from config import REDDIT_CORE_SUBREDDITS
+                return list(REDDIT_CORE_SUBREDDITS)
+
+        return _get
+
     async def _check_llm_health(self) -> None:
         """Log LLM availability at startup so the operator knows what's active."""
         import aiohttp
@@ -545,7 +571,10 @@ class TradingBot:
 
         tasks = [
             asyncio.create_task(run_rss_monitor(self._enqueue_news),    name="rss"),
-            asyncio.create_task(run_reddit_monitor(self._enqueue_news), name="reddit"),
+            asyncio.create_task(
+                run_reddit_monitor(self._enqueue_news, subreddits=self._make_subreddit_getter()),
+                name="reddit",
+            ),
             asyncio.create_task(self._news_consumer_task(),             name="news_consumer"),
             asyncio.create_task(self.ws.run(),                          name="websocket"),
             asyncio.create_task(self._warm_ws_subscriptions(),          name="ws_warm"),

@@ -6,6 +6,32 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.9.0] - 2026-04-02
+
+### Added
+- **Adaptive subreddit selection** (`feeds/subreddit_selector.py`, `config.py`) -- Reddit
+  polling is now vocabulary-driven instead of always querying all 35 hardcoded subreddits.
+  Each poll cycle selects up to 20 subreddits: 5 core (worldnews, geopolitics,
+  InternationalNews, CredibleDefense, ArmedConflicts) are always included; topic-specific
+  subreddits (12 topics: military, elections, trade, nuclear, sanctions, US domestic,
+  and 6 regional buckets) are added only when open Kalshi market titles match their
+  keyword sets. This reduces steady-state request volume and targets subreddits to the
+  markets actually being traded.
+- **`REDDIT_CORE_SUBREDDITS`**, **`REDDIT_SUBREDDIT_TOPIC_MAP`**,
+  **`REDDIT_TOPIC_KEYWORDS`**, **`REDDIT_MAX_SUBREDDITS`** constants in `config.py` --
+  fully configurable; topic map and keyword sets can be expanded without touching logic.
+
+### Changed
+- **`run_reddit_monitor()`** (`feeds/reddit_monitor.py`) -- `subreddits` parameter now
+  accepts a static `list[str]`, an async callable, or `None` (falls back to full
+  `REDDIT_SUBREDDITS` list). The subreddit list is re-evaluated at the top of each
+  poll cycle when an async callable is passed.
+- **`TradingBot.run()`** (`main.py`) -- wires the Reddit monitor with
+  `_make_subreddit_getter()`, an async callable that reads the live market cache
+  (`self.matcher._cache._markets`) and calls `select_subreddits()` each cycle.
+
+---
+
 ## [0.8.2] - 2026-04-02
 
 ### Fixed

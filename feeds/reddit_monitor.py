@@ -300,16 +300,28 @@ async def _poll_subreddit(
 
 async def run_reddit_monitor(
     callback: Callable[[NewsItem], Awaitable[None]],
-    subreddits: list[str] | None = None,
+    subreddits: "list[str] | Callable[[], Awaitable[list[str]]] | None" = None,
     poll_interval: int = REDDIT_POLL_INTERVAL,
 ) -> None:
     """
     Poll Reddit subreddits for geopolitical news.
     Uses OAuth2 when credentials are available, otherwise public JSON.
     Runs indefinitely; cancel the task to stop.
+
+    subreddits may be:
+      - None              -> use the full REDDIT_SUBREDDITS fallback list
+      - list[str]         -> use that static list every cycle
+      - async callable    -> call each cycle to get the current list (adaptive mode)
     """
+    # Normalize subreddits to a uniform async callable
     if subreddits is None:
-        subreddits = REDDIT_SUBREDDITS
+        _static = REDDIT_SUBREDDITS
+        async def _get_subs() -> list[str]: return _static
+    elif isinstance(subreddits, list):
+        _static = subreddits
+        async def _get_subs() -> list[str]: return _static
+    else:
+        _get_subs = subreddits
 
     seen: OrderedDict = OrderedDict()
 
@@ -318,16 +330,11 @@ async def run_reddit_monitor(
     if cfg.reddit_oauth_available:
         user_agent = cfg.reddit_user_agent or _USER_AGENT
         auth = _RedditAuth(cfg.reddit_client_id, cfg.reddit_client_secret, user_agent)
-        log.info(
-            "Reddit monitor started (OAuth2) -- watching %d subreddits",
-            len(subreddits),
-        )
+        log.info("Reddit monitor started (OAuth2) -- adaptive subreddit selection active")
     else:
         log.info(
-            "Reddit monitor started (public JSON -- degraded, expect rate limits) "
-            "-- watching %d subreddits. Set REDDIT_CLIENT_ID and "
-            "REDDIT_CLIENT_SECRET in .env for OAuth2.",
-            len(subreddits),
+            "Reddit monitor started (public JSON -- degraded, expect rate limits). "
+            "Set REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET in .env for OAuth2."
         )
 
     stagger = _STAGGER_DELAY_OAUTH if auth else _STAGGER_DELAY
@@ -348,8 +355,12 @@ async def run_reddit_monitor(
                 await asyncio.sleep(poll_interval)
                 continue
 
+            # Resolve subreddit list for this cycle (adaptive or static)
+            current_subs = await _get_subs()
+            log.debug("Reddit cycle: polling %d subreddits", len(current_subs))
+
             # Poll each subreddit sequentially with a stagger delay
-            for sub in subreddits:
+            for sub in current_subs:
                 try:
                     await _poll_subreddit(session, sub, callback, seen, auth)
                 except Exception as exc:
@@ -360,7 +371,7 @@ async def run_reddit_monitor(
             # Under OAuth, only 429s count (403 = private sub, not IP block).
             # Under public mode, both 403 and 429 count.
             if _cycle_errors:
-                fail_rate = len(_cycle_errors) / len(subreddits)
+                fail_rate = len(_cycle_errors) / max(len(current_subs), 1)
                 if fail_rate >= _REDDIT_OUTAGE_THRESHOLD:
                     backoff_duration = (
                         _REDDIT_GLOBAL_BACKOFF_OAUTH if auth and auth.available
@@ -370,10 +381,10 @@ async def run_reddit_monitor(
                     log.warning(
                         "Reddit global circuit open -- %.0f%% of subreddits failed (%d/%d), "
                         "suspending all Reddit polling for %.0fm.",
-                        fail_rate * 100, len(_cycle_errors), len(subreddits),
+                        fail_rate * 100, len(_cycle_errors), len(current_subs),
                         backoff_duration / 60,
                     )
             _cycle_errors.clear()
 
-            log.debug("Reddit poll cycle complete (%d subs), sleeping %ds", len(subreddits), poll_interval)
+            log.debug("Reddit poll cycle complete (%d subs), sleeping %ds", len(current_subs), poll_interval)
             await asyncio.sleep(poll_interval)
