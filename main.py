@@ -173,6 +173,10 @@ class TradingBot:
         max_bet    = cfg.dynamic_max_bet(notional)
         min_edge   = PAPER_MIN_EDGE if cfg.is_paper_trading else cfg.min_edge
 
+        # Days to close -- used by kelly_bet() for time discount
+        from analysis.market_matcher import _days_to_close
+        days_to_close = _days_to_close(market.close_time) or 14.0
+
         kelly_frac, kelly_dollars, capped_dollars = kelly_bet(
             estimated_probability=estimated_prob,
             market_price_cents=market.yes_price,
@@ -182,6 +186,10 @@ class TradingBot:
             min_bet_dollars=cfg.min_bet_dollars,
             min_edge=min_edge,
             source_multiplier=source_mult,
+            confidence=confidence,
+            days_to_close=days_to_close,
+            time_discount_half_life=cfg.time_discount_half_life,
+            time_discount_floor=cfg.time_discount_floor,
         )
 
         from utils.logger import trade_log

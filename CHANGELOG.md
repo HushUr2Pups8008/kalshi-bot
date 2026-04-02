@@ -6,6 +6,30 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.8.1] - 2026-04-02
+
+### Changed
+- **Confidence-scaled bet sizing** (`analysis/kelly.py`) -- LLM confidence is now a
+  first-class multiplier on the Kelly fraction. Previously confidence only affected the
+  probability estimate (via magnitude scaling); now it directly scales the bet:
+  `f_adjusted = f_full * kelly_fraction * confidence * source_multiplier * time_discount`.
+  A 0.95-confidence signal bets 95% of what Kelly says; a 0.50-confidence signal bets 50%.
+  Keyword-only fallback confidence is already capped at 0.70, so fallback trades are
+  automatically reduced relative to LLM-backed trades.
+- **Time discount for long-duration bets** (`analysis/kelly.py`) -- new `_time_discount()`
+  function applies exponential decay to bets that lock up capital far into the future.
+  Markets closing within 3 days get full sizing (1.0x). Beyond that, discount decays with
+  a 14-day half-life toward a 0.20 floor (60+ day markets get at most 20% of base sizing).
+  Half-life and floor are configurable via `TIME_DISCOUNT_HALF_LIFE` and `TIME_DISCOUNT_FLOOR`
+  env vars.
+- **Bankroll-proportional bet ceiling** (`config.py`) -- replaced the fixed `$25` hard cap
+  with `MAX_BET_PCT_BANKROLL * bankroll` (default 15% = $75 on $500, grows with bankroll).
+  The old hard cap is retained as a safety backstop raised to $200 (`MAX_BET_HARD_CAP`).
+  `dynamic_max_bet()` now uses `max_bet_pct_bankroll` as the operating ceiling.
+- **`kelly_bet()` call site updated** (`main.py`) -- now passes `confidence` and
+  `days_to_close` (extracted from `market.close_time` via `_days_to_close()`) into
+  `kelly_bet()`. Defaults to 14 days when close time is unavailable.
+
 ## [0.8.0] - 2026-04-02
 
 ### Added

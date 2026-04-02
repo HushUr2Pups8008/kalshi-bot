@@ -268,10 +268,17 @@ class BotConfig:
     kelly_fraction:  float = field(default_factory=lambda: float(os.getenv("KELLY_FRACTION", "0.5")))
     min_edge:        float = field(default_factory=lambda: float(os.getenv("MIN_EDGE", "0.04")))
 
-    # Dynamic bet sizing: max_bet = min(max_bet_hard_cap, bet_pct_bankroll * notional_bankroll)
-    bet_pct_bankroll:  float = field(default_factory=lambda: float(os.getenv("BET_PCT_BANKROLL", "0.05")))
-    max_bet_hard_cap:  float = field(default_factory=lambda: float(os.getenv("MAX_BET_HARD_CAP", "25.0")))
-    min_bet_dollars:   float = field(default_factory=lambda: float(os.getenv("MIN_BET_DOLLARS", "2.0")))
+    # Dynamic bet sizing: max_bet = min(hard_cap, max_bet_pct_bankroll * notional_bankroll)
+    # max_bet_pct_bankroll is the operating ceiling (scales with bankroll).
+    # max_bet_hard_cap is a safety backstop (rarely the binding constraint).
+    max_bet_pct_bankroll: float = field(default_factory=lambda: float(os.getenv("MAX_BET_PCT_BANKROLL", "0.15")))
+    max_bet_hard_cap:     float = field(default_factory=lambda: float(os.getenv("MAX_BET_HARD_CAP", "200.0")))
+    min_bet_dollars:      float = field(default_factory=lambda: float(os.getenv("MIN_BET_DOLLARS", "2.0")))
+
+    # Time discount parameters -- passed through to kelly_bet() to penalise bets
+    # that lock up capital for months. Exponential decay with a configurable floor.
+    time_discount_half_life: float = field(default_factory=lambda: float(os.getenv("TIME_DISCOUNT_HALF_LIFE", "14.0")))
+    time_discount_floor:     float = field(default_factory=lambda: float(os.getenv("TIME_DISCOUNT_FLOOR", "0.20")))
 
     # Portfolio risk: max fraction of notional bankroll deployed in a single ticker.
     # Prevents runaway concentration on one market (e.g. Iran war dominates the book).
@@ -318,16 +325,17 @@ class BotConfig:
         """
         Calculate the current max bet allowed.
 
-        = min(max_bet_hard_cap, bet_pct_bankroll * notional_bankroll)
-        Always at least min_bet_dollars.
+        Primary ceiling: max_bet_pct_bankroll * notional_bankroll (scales with bankroll).
+        Safety backstop: max_bet_hard_cap (rarely binding at default $200).
+        Floor: min_bet_dollars.
         """
-        pct_based = self.bet_pct_bankroll * notional_bankroll
+        pct_based = self.max_bet_pct_bankroll * notional_bankroll
         return max(self.min_bet_dollars, min(self.max_bet_hard_cap, pct_based))
 
-    # Convenience aliases used in existing call sites
+    # Convenience alias used in existing call sites
     @property
     def max_bet_dollars(self) -> float:
-        """Static alias — use dynamic_max_bet() for live sizing."""
+        """Static alias -- use dynamic_max_bet() for live sizing."""
         return self.max_bet_hard_cap
 
 
