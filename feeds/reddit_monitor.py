@@ -359,8 +359,14 @@ async def run_reddit_monitor(
             current_subs = await _get_subs()
             log.debug("Reddit cycle: polling %d subreddits", len(current_subs))
 
-            # Poll each subreddit sequentially with a stagger delay
+            # Poll each subreddit sequentially with a stagger delay.
+            # Skip subreddits that are still in backoff -- no stagger sleep wasted.
             for sub in current_subs:
+                resume = _backoff.get(sub, 0.0)
+                if time.monotonic() < resume:
+                    log.debug("r/%s in backoff (%.0fs remaining) -- skipping",
+                              sub, resume - time.monotonic())
+                    continue
                 try:
                     await _poll_subreddit(session, sub, callback, seen, auth)
                 except Exception as exc:

@@ -6,6 +6,38 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.10.0] - 2026-04-02
+
+### Added
+- **Google News RSS monitor** (`feeds/google_news_monitor.py`) -- new async task that
+  generates targeted Google News RSS queries from active Kalshi market titles and fetches
+  them in parallel every 300s. No API key required. Indexes within minutes of publication.
+  Markets are sorted by open_interest so the most-traded topics get query priority. Up to
+  25 distinct queries per cycle (cap configurable via `GNEWS_MAX_QUERIES`). Reuses
+  `poll_feed()` from `rss_monitor.py` for feedparser, dedup, and NewsItem creation.
+  Feeds the same news consumer callback as RSS and Reddit -- all three sources run
+  concurrently as independent async tasks.
+- **`_make_gnews_getter()`** method on `TradingBot` (`main.py`) -- sync callable that
+  reads `self.matcher._cache._markets` and passes it to the Google News monitor each cycle.
+
+### Changed
+- **`TradingBot.run()`** (`main.py`) -- added `gnews` as a 9th concurrent async task
+  alongside rss, reddit, news_consumer, websocket, ws_warm, daily_report, market_refresh,
+  and auto_resolve.
+
+---
+
+## [0.9.1] - 2026-04-02
+
+### Fixed
+- **Reddit stagger sleep wasted on backed-off subreddits** (`feeds/reddit_monitor.py`) --
+  the poll loop now checks `_backoff` before calling `_poll_subreddit` and skips the
+  entire subreddit (including the `asyncio.sleep(stagger)`) when the sub is in backoff.
+  Previously the 10s stagger ran even for subs that `_fetch_subreddit()` immediately
+  short-circuited. Saves 10s per backed-off subreddit per cycle in public mode.
+
+---
+
 ## [0.9.0] - 2026-04-02
 
 ### Added
