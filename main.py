@@ -36,6 +36,7 @@ from config import (cfg, PAPER_MIN_EDGE, VERSION, FADE_TWEET_FEED_URLS,
                     FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD)
 from feeds import NewsItem
 from feeds.dedup import HeadlineDedup
+from feeds.google_news_monitor import run_google_news_monitor
 from feeds.reddit_monitor import run_reddit_monitor
 from feeds.rss_monitor import run_rss_monitor
 from kalshi.rest_client import KalshiRestClient
@@ -519,6 +520,12 @@ class TradingBot:
 
         return _get
 
+    def _make_gnews_getter(self) -> "Callable[[], list]":
+        """Sync callable that returns the live market cache for Google News query generation."""
+        def _get() -> list:
+            return self.matcher._cache._markets
+        return _get
+
     async def _check_llm_health(self) -> None:
         """Log LLM availability at startup so the operator knows what's active."""
         import aiohttp
@@ -574,6 +581,10 @@ class TradingBot:
             asyncio.create_task(
                 run_reddit_monitor(self._enqueue_news, subreddits=self._make_subreddit_getter()),
                 name="reddit",
+            ),
+            asyncio.create_task(
+                run_google_news_monitor(self._enqueue_news, self._make_gnews_getter()),
+                name="gnews",
             ),
             asyncio.create_task(self._news_consumer_task(),             name="news_consumer"),
             asyncio.create_task(self.ws.run(),                          name="websocket"),
