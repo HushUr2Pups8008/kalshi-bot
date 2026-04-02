@@ -230,6 +230,29 @@ GEOPOLITICAL_SIGNALS = [
     {"keywords": ["terror attack", "bombing", "assassination", "mass shooting",
                   "hostage"],
      "direction": "yes", "strength": 0.10},
+    # Trade & economic policy
+    {"keywords": ["tariff imposed", "new tariff", "tariff hike", "trade war",
+                  "import ban", "export ban", "trade embargo", "reciprocal tariff"],
+     "direction": "yes", "strength": 0.10},
+    {"keywords": ["tariff removed", "tariff reduced", "trade deal signed",
+                  "trade agreement", "free trade", "tariff exemption"],
+     "direction": "no", "strength": 0.08},
+    # Foreign policy
+    {"keywords": ["diplomatic expulsion", "ambassador recalled", "embassy closed",
+                  "foreign aid suspended", "alliance withdrawal", "nato invoked",
+                  "security pact", "defense agreement"],
+     "direction": "yes", "strength": 0.10},
+    {"keywords": ["diplomatic talks", "foreign aid restored", "embassy reopened",
+                  "alliance renewed", "security guarantee"],
+     "direction": "no", "strength": 0.07},
+    # Domestic policy (US-focused -- Kalshi heavy on US markets)
+    {"keywords": ["executive order signed", "government shutdown", "debt ceiling",
+                  "impeachment vote", "cabinet fired", "attorney general fired",
+                  "special counsel appointed", "national emergency declared"],
+     "direction": "yes", "strength": 0.12},
+    {"keywords": ["government reopened", "debt ceiling raised", "budget passed",
+                  "bipartisan deal", "confirmation vote passed"],
+     "direction": "no", "strength": 0.08},
 ]
 
 

@@ -206,6 +206,7 @@ class KalshiRestClient:
                     status=m.get("status", "open"),
                     series_ticker=m.get("series_ticker", ""),
                     subtitle=m.get("subtitle", ""),
+                    result=m.get("result", ""),
                 ))
             except (KeyError, TypeError, ValueError) as exc:
                 log.debug("Skipping malformed market entry: %s", exc)
@@ -233,6 +234,7 @@ class KalshiRestClient:
                 status=m.get("status", "open"),
                 series_ticker=m.get("series_ticker", ""),
                 subtitle=m.get("subtitle", ""),
+                result=m.get("result", ""),
             )
         except Exception as exc:
             log.warning("get_market(%s) failed: %s", ticker, exc)

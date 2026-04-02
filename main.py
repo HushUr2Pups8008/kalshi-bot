@@ -2,11 +2,12 @@
 Kalshi Geopolitical Trading Bot — entry point.
 
 Concurrent tasks:
-  1. RSS monitor        — polls Reuters/AP/BBC/Al Jazeera every 60s
-  2. Reddit monitor     — polls r/worldnews, r/geopolitics, r/news (public JSON)
-  3. WebSocket client   — real-time Kalshi price feed
+  1. RSS monitor        -- polls Reuters/AP/BBC/Al Jazeera every 60s
+  2. Reddit monitor     -- polls r/worldnews, r/geopolitics, r/news (public JSON)
+  3. WebSocket client   -- real-time Kalshi price feed
   4. Market cache refresh
-  5. Daily reporter     — logs summary every 24h, writes report file
+  5. Daily reporter     -- logs summary every 24h, writes report file
+  6. Auto-resolver      -- polls Kalshi every 30 min for settled markets
 
 Paper trading runs INDEFINITELY until you explicitly confirm go-live.
 No automatic switchover.
@@ -409,6 +410,67 @@ class TradingBot:
         except Exception as exc:
             log.warning("WS price-fade warm-up failed: %s", exc)
 
+    async def _auto_resolve_task(self) -> None:
+        """Poll Kalshi API for settled markets and auto-resolve open paper trades.
+
+        Runs every 30 minutes. For each unique ticker with open paper trades,
+        fetches the market from Kalshi. If status is 'finalized' or 'settled'
+        and a result is present, resolves all open trades for that ticker.
+        """
+        _RESOLVE_INTERVAL = 1800  # 30 minutes
+        while True:
+            await asyncio.sleep(_RESOLVE_INTERVAL)
+            try:
+                await self._check_and_resolve()
+            except Exception as exc:
+                log.error("Auto-resolve cycle failed: %s", exc)
+
+    async def _check_and_resolve(self) -> None:
+        """Single pass: check all open paper trade tickers for settlement."""
+        open_trades = self.paper._conn.execute(
+            "SELECT DISTINCT ticker FROM paper_trades WHERE resolved = 0"
+        ).fetchall()
+        if not open_trades:
+            return
+
+        tickers = [row[0] for row in open_trades]
+        log.debug("Auto-resolve: checking %d open tickers", len(tickers))
+
+        loop = asyncio.get_running_loop()
+        resolved_count = 0
+        for ticker in tickers:
+            try:
+                market = await loop.run_in_executor(
+                    None, self.rest.get_market, ticker
+                )
+                if market is None:
+                    continue
+                if market.status not in ("finalized", "settled"):
+                    continue
+                result_str = (market.result or "").lower().strip()
+                if result_str not in ("yes", "no"):
+                    log.warning(
+                        "Auto-resolve: %s is %s but result=%r -- skipping",
+                        ticker, market.status, market.result,
+                    )
+                    continue
+                resolved_yes = result_str == "yes"
+                self.paper.resolve_market(ticker, resolved_yes)
+                resolved_count += 1
+                log.info(
+                    "Auto-resolve: %s -> %s",
+                    ticker, "YES" if resolved_yes else "NO",
+                )
+            except Exception as exc:
+                log.warning("Auto-resolve: failed to check %s: %s", ticker, exc)
+
+        if resolved_count:
+            log.info(
+                "Auto-resolve: resolved %d/%d tickers | bankroll=$%.2f",
+                resolved_count, len(tickers),
+                self.paper.get_notional_bankroll(),
+            )
+
     async def _market_refresh_task(self) -> None:
         from config import MARKET_CACHE_TTL_SECONDS
         while True:
@@ -481,6 +543,7 @@ class TradingBot:
             asyncio.create_task(self._warm_ws_subscriptions(),          name="ws_warm"),
             asyncio.create_task(self._daily_report_task(),              name="daily_report"),
             asyncio.create_task(self._market_refresh_task(),            name="market_refresh"),
+            asyncio.create_task(self._auto_resolve_task(),              name="auto_resolve"),
             *([asyncio.create_task(
                 run_rss_monitor(self._on_fade_tweet, feeds=FADE_TWEET_FEED_URLS),
                 name="fade_tweets",

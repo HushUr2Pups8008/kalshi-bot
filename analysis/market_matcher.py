@@ -45,12 +45,24 @@ _STOP_WORDS = {
 }
 
 _GEOPOLITICAL_BOOST = {
+    # Countries / regions
     "ukraine", "russia", "china", "taiwan", "iran", "israel", "gaza",
     "korea", "north korea", "nato", "europe", "usa", "united states",
     "pakistan", "india", "afghanistan", "syria", "iraq", "saudi",
+    # Political roles / actions
     "president", "prime minister", "election", "military", "war", "ceasefire",
     "nuclear", "sanctions", "coup", "treaty", "summit", "un", "troops",
     "attack", "invasion", "strike", "withdraw", "deploy", "negotiate",
+    # Trade & economic policy
+    "tariff", "tariffs", "trade", "import", "export", "embargo", "customs",
+    "commerce", "reciprocal", "duty", "duties", "liberation",
+    # Foreign policy
+    "diplomatic", "ambassador", "embassy", "alliance", "pact", "foreign",
+    "bilateral", "multilateral", "sovereignty", "extradition",
+    # Domestic policy (US-focused)
+    "executive order", "shutdown", "impeach", "impeachment", "cabinet",
+    "congress", "senate", "legislation", "regulation", "nomination",
+    "confirmation", "indictment", "pardon", "veto",
 }
 
 # Named geo entities specific enough that a single token overlap is meaningful.
@@ -63,13 +75,19 @@ _GEO_NAMED_ENTITIES = frozenset({
     "korea", "pakistan", "india", "japan", "turkey", "saudi", "syria",
     "iraq", "afghanistan", "venezuela", "cuba", "mexico", "canada",
     "france", "germany", "britain", "lebanon", "hamas", "hezbollah",
+    "brazil", "colombia", "philippines", "vietnam", "thailand",
+    "egypt", "libya", "yemen", "somalia", "sudan", "ethiopia",
     # Adjective / demonym forms
     "russian", "chinese", "iranian", "ukrainian", "korean", "israeli",
     "european", "american", "british", "french", "german", "turkish",
-    "japanese", "lebanese", "iraqi", "syrian", "saudi",
+    "japanese", "lebanese", "iraqi", "syrian", "saudi", "canadian",
+    "mexican", "brazilian", "colombian", "egyptian",
     # Key individuals
     "zelensky", "zelenskyy", "putin", "trump", "biden", "netanyahu",
-    "khamenei", "hegseth", "modi",
+    "khamenei", "hegseth", "modi", "macron", "scholz", "starmer",
+    "vance", "rubio", "waltz",
+    # Institutions / orgs (distinctive enough for single-token match)
+    "nato", "pentagon", "kremlin", "congress", "senate",
 })
 
 
@@ -130,27 +148,39 @@ _GEO_SERIES_KEYWORDS = frozenset({
     "korea", "nato", "pakistan", "india", "japan", "turkey", "saudi",
     "europe", "european", "syria", "iraq", "afghanistan", "venezuela",
     "cuba", "mexico", "canada", "france", "germany", "britain",
+    "brazil", "colombia", "philippines", "egypt", "libya", "yemen",
+    "somalia", "sudan", "ethiopia",
     # Political leaders
-    "zelensky", "putin", "trump",
+    "zelensky", "putin", "trump", "vance", "rubio",
     # Political roles / institutions
     "president", "senator", "congress", "senate", "parliament",
     "governor", "chancellor", "minister", "supreme court",
     # US politics
     "republican", "democrat", "cabinet", "impeach",
-    "tariff", "executive", "legislation",
-    # US domestic policy (expanded)
+    "executive", "legislation",
+    # US domestic policy
     "budget", "regulation", "nomination", "confirmation",
     "department of",           # cabinet dept titles
     "doge",                    # Dept of Government Efficiency
+    "shutdown", "debt ceiling", "indictment", "pardon",
+    "executive order", "national emergency",
+    # Trade & economic policy
+    "tariff", "tariffs", "trade", "import", "export",
+    "embargo", "customs", "commerce", "duty", "reciprocal",
+    "liberation day",          # Trump tariff branding
+    "trade war", "trade deal", "trade agreement",
+    # Foreign policy
+    "diplomatic", "foreign policy", "united nations",
+    "ambassador", "embassy", "alliance", "bilateral",
+    "sovereignty", "extradition", "deportation",
     # Events / actions
     "election", "ceasefire", "invasion", "military",
     "nuclear", "sanctions", "summit", "treaty", "coup",
-    # International topics
-    "diplomatic", "foreign policy", "united nations",
     # Policy
-    "healthcare", "immigration", "climate",
+    "healthcare", "immigration", "climate", "border",
     # Economic / financial
-    "inflation", "gdp", "federal reserve",
+    "inflation", "gdp", "federal reserve", "recession",
+    "interest rate", "treasury", "deficit",
     # AI / tech policy
     "ai safety", "ai regulation", "artificial intelligence",
 })

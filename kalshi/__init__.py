@@ -15,6 +15,7 @@ class KalshiMarket:
     status:           str     # "open", "closed", etc.
     series_ticker:    str = ""
     subtitle:         str = ""
+    result:           str = ""    # "yes", "no", or "" if not yet settled
 
     @property
     def yes_prob(self) -> float:

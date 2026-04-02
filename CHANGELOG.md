@@ -6,6 +6,37 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.8.0] - 2026-04-02
+
+### Added
+- **Auto-resolution task** (`main.py`) -- new 6th concurrent async task
+  `_auto_resolve_task()` polls Kalshi every 30 minutes for settled markets.
+  `_check_and_resolve()` queries all open paper trade tickers, calls
+  `rest_client.get_market()` for each, and auto-calls `paper_trader.resolve_market()`
+  when status is `finalized`/`settled` with a `yes`/`no` result. Eliminates the need
+  for manual `--resolve` commands and unblocks the daily performance report.
+- **`result` field on `KalshiMarket`** (`kalshi/__init__.py`, `kalshi/rest_client.py`) --
+  both `get_market()` and `get_markets()` now parse the `result` field from the API
+  response (`"yes"`, `"no"`, or `""` if not yet settled). Required by the auto-resolver.
+
+### Changed
+- **Expanded signal vocabulary** (`config.py`, `analysis/market_matcher.py`) -- added
+  trade/economic policy, foreign policy, and domestic policy terms across all four
+  vocabulary layers:
+  - `GEOPOLITICAL_SIGNALS` (+6 new keyword categories for tariffs, trade deals, diplomatic
+    events, and domestic US policy triggers)
+  - `_GEOPOLITICAL_BOOST` (+30 terms: tariff, trade, import, export, embargo, diplomatic,
+    executive order, shutdown, impeachment, cabinet, confirmation, etc.)
+  - `_GEO_NAMED_ENTITIES` (+20 terms: additional country demonyms, current officials
+    Vance/Rubio/Waltz/Macron/Scholz/Starmer, institutions NATO/Pentagon/Kremlin/Congress/Senate)
+  - `_GEO_SERIES_KEYWORDS` (+35 terms for series discovery: tariffs, trade war, trade deal,
+    liberation day, embargo, customs, debt ceiling, executive order, recession, treasury,
+    deportation, border, and more country names)
+  Goal: capture Trump tariff/trade policy markets and broader domestic/foreign policy
+  markets that were previously invisible to the signal pipeline.
+
+---
+
 ## [0.7.1] - 2026-03-30
 
 ### Fixed
