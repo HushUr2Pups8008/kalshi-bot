@@ -584,7 +584,13 @@ class TradingBot:
                 name="reddit",
             ),
             asyncio.create_task(
-                run_search_news_monitor(self._enqueue_news, self._make_market_getter()),
+                run_search_news_monitor(
+                    self._enqueue_news,
+                    self._make_market_getter(),
+                    queue_depth_fn=lambda: (
+                        self._news_queue.qsize() / self._news_queue.maxsize
+                    ),
+                ),
                 name="search",
             ),
             asyncio.create_task(

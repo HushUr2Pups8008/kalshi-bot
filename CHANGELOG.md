@@ -6,6 +6,34 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.13.0] - 2026-04-03
+
+### Changed
+- **AIMD query-limit controller for GDELT** (`feeds/gdelt_monitor.py`) -- replaced the
+  static `GDELT_MAX_QUERIES=15` constant with an adaptive `_gdelt_query_limit` variable
+  (starts at 5, range 1-25). Signal: HTTP response codes from GDELT itself. On any 429
+  in a cycle: halve the limit (multiplicative decrease). On a clean cycle with at least
+  one successful response: increment by 1 (additive increase). The limit self-calibrates
+  to GDELT's actual tolerance ceiling without guessing. Timeouts are treated as network
+  noise and do not adjust the limit. Removed the now-redundant `GDELT_MAX_QUERIES`
+  constant.
+- **AIMD articles-per-query controller for search** (`feeds/search_news_monitor.py`) --
+  replaced the static `SEARCH_MAX_ARTICLES_PER_QUERY=5` constant with an adaptive
+  `_search_articles_cap` variable (starts at 3, range 1-15). Signal: news queue fill
+  ratio passed in via a new `queue_depth_fn` parameter. Queue >60% full: decrement cap
+  (back off ingestion -- consumer is falling behind). Queue <20% full: increment cap
+  (consumer has headroom -- feed it more). Renamed `SEARCH_MAX_ARTICLES_PER_QUERY` to
+  `_search_articles_cap`; the old constant is gone. Cap snapshot is taken per-query to
+  avoid mid-gather inconsistency.
+- **`run_search_news_monitor` signature** (`feeds/search_news_monitor.py`) -- added
+  optional `queue_depth_fn: Callable[[], float] | None = None` parameter. When None
+  (default), the cap holds steady at its current AIMD value. Main wires it as
+  `lambda: queue.qsize() / queue.maxsize`.
+- **`main.py` task wiring** -- passes `queue_depth_fn` lambda to `run_search_news_monitor`
+  so the search AIMD controller receives live queue fill ratio each cycle.
+
+---
+
 ## [0.12.0] - 2026-04-03
 
 ### Fixed

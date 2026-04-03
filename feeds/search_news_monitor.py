@@ -31,10 +31,20 @@ from utils.logger import get_logger
 
 log = get_logger("search_monitor")
 
-SEARCH_POLL_INTERVAL          = 300   # seconds between full fetch cycles
-SEARCH_MAX_QUERIES            = 25    # max distinct queries per cycle (prioritized by open_interest)
-SEARCH_MAX_SEEN               = 2000  # dedup cache entry limit
-SEARCH_MAX_ARTICLES_PER_QUERY = 5     # max new articles forwarded per query per cycle (both engines combined)
+SEARCH_POLL_INTERVAL = 300   # seconds between full fetch cycles
+SEARCH_MAX_QUERIES   = 25    # max distinct queries per cycle (prioritized by open_interest)
+SEARCH_MAX_SEEN      = 2000  # dedup cache entry limit
+
+# Hard bounds for the AIMD articles-per-query controller
+_SEARCH_ARTICLES_MIN =  1
+_SEARCH_ARTICLES_MAX = 15
+
+# ── AIMD rate state ───────────────────────────────────────────────────────────
+# articles_cap starts conservative and self-calibrates each cycle based on
+# news queue fill ratio: queue shallow (<20%) → +1, queue deep (>60%) → -1.
+# The queue depth is the consumer's throughput signal -- if the LLM can't keep
+# up, the queue fills and we back off ingestion; if it's idle, we feed it more.
+_search_articles_cap: int = 3  # current per-query article cap; AIMD-adjusted each cycle
 
 _GNEWS_BASE = "https://news.google.com/rss/search"
 _BING_BASE  = "https://www.bing.com/news/search"
@@ -159,23 +169,30 @@ async def run_search_news_monitor(
     callback: Callable[[NewsItem], Awaitable[None]],
     get_markets: Callable[[], Sequence[KalshiMarket]],
     poll_interval: int = SEARCH_POLL_INTERVAL,
+    queue_depth_fn: "Callable[[], float] | None" = None,
 ) -> None:
     """
     Poll Google News RSS and Bing News RSS for queries derived from active
     Kalshi market titles. Runs indefinitely; cancel the task to stop.
 
-    Each query is fetched from both engines in a single asyncio.gather call,
-    giving 2x article coverage with a shared dedup cache to suppress overlaps.
+    Each query is fetched from both engines in parallel with a per-query
+    article cap that self-adjusts via AIMD based on queue fill ratio.
 
     Args:
-        callback:     Called for each new NewsItem.
-        get_markets:  Sync callable returning the current market cache list.
-        poll_interval: Seconds between fetch cycles (default 300).
+        callback:       Called for each new NewsItem.
+        get_markets:    Sync callable returning the current market cache list.
+        poll_interval:  Seconds between fetch cycles (default 300).
+        queue_depth_fn: Optional sync callable returning queue fill ratio (0.0-1.0).
+                        When provided, the articles-per-query cap rises when the
+                        queue is shallow and falls when it is deep. Pass None to
+                        keep the cap static at its current AIMD value.
     """
+    global _search_articles_cap
     seen: OrderedDict = OrderedDict()
     log.info(
-        "Search news monitor started (poll interval %ds, max %d queries/cycle, 2 engines)",
-        poll_interval, SEARCH_MAX_QUERIES,
+        "Search news monitor started (poll interval %ds, max %d queries/cycle,"
+        " 2 engines, AIMD articles/query start=%d max=%d)",
+        poll_interval, SEARCH_MAX_QUERIES, _search_articles_cap, _SEARCH_ARTICLES_MAX,
     )
 
     while True:
@@ -188,22 +205,37 @@ async def run_search_news_monitor(
                 await asyncio.sleep(poll_interval)
                 continue
 
-            # Fetch both engines per query with a per-query article cap.
-            # Capping at SEARCH_MAX_ARTICLES_PER_QUERY across both engines prevents
-            # a single hot query (e.g. "donald trump executive") from dumping 20+
-            # articles into the queue at once.
+            # ── AIMD adjustment (queue depth signal) ──────────────────────────
+            # Adjust articles-per-query cap before this cycle based on how full
+            # the consumer queue is. Queue depth is the LLM throughput signal:
+            # shallow = consumer keeping up, we can feed more;
+            # deep    = consumer falling behind, back off ingestion.
+            if queue_depth_fn is not None:
+                depth = queue_depth_fn()   # 0.0 (empty) .. 1.0 (full)
+                old_cap = _search_articles_cap
+                if depth > 0.6:
+                    _search_articles_cap = max(_search_articles_cap - 1, _SEARCH_ARTICLES_MIN)
+                elif depth < 0.2:
+                    _search_articles_cap = min(_search_articles_cap + 1, _SEARCH_ARTICLES_MAX)
+                if _search_articles_cap != old_cap:
+                    log.info(
+                        "Search AIMD: queue %.0f%% full -- articles/query %d -> %d",
+                        depth * 100, old_cap, _search_articles_cap,
+                    )
+
             log.debug(
                 "Search news: fetching %d queries x 2 engines for %d active markets"
                 " (cap %d articles/query)",
-                len(queries), len(markets), SEARCH_MAX_ARTICLES_PER_QUERY,
+                len(queries), len(markets), _search_articles_cap,
             )
 
             for q in queries:
                 _q_count = 0
+                _cap = _search_articles_cap  # snapshot cap for this query
 
-                async def _capped(item: NewsItem, _cb=callback) -> None:
+                async def _capped(item: NewsItem, _cb=callback, _c=_cap) -> None:
                     nonlocal _q_count
-                    if _q_count >= SEARCH_MAX_ARTICLES_PER_QUERY:
+                    if _q_count >= _c:
                         return
                     _q_count += 1
                     await _cb(item)

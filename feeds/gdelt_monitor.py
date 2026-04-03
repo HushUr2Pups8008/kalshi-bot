@@ -35,18 +35,25 @@ from utils.logger import get_logger
 log = get_logger("gdelt_monitor")
 
 GDELT_POLL_INTERVAL = 900    # seconds -- matches GDELT's 15-minute update cadence
-GDELT_MAX_QUERIES   = 15     # fewer than search engines; sequential fetch, not parallel
 GDELT_MAX_RECORDS   = 25     # articles per query
 GDELT_MAX_SEEN      = 2000   # dedup cache entry limit
 GDELT_TIMEOUT       = 15     # seconds per request
 GDELT_STAGGER       = 2      # seconds between queries within a cycle
 
+# Hard bounds for the AIMD query-limit controller
+_GDELT_QUERY_MIN =  1
+_GDELT_QUERY_MAX = 25
+
 _GDELT_BASE = "https://api.gdeltproject.org/api/v2/doc/doc"
 
-# Module-level backoff state -- shared across all calls in the process.
-# Mirrors the per-subreddit backoff pattern in reddit_monitor.
+# ── AIMD rate state ───────────────────────────────────────────────────────────
+# query_limit starts conservative and self-calibrates: +1 per clean cycle,
+# halved on any 429. This finds GDELT's tolerance ceiling without guessing.
+# backoff_until / backoff_secs: pause-and-retry after a 429, separate from the
+# limit controller (the limit shrinks the next cycle; the backoff skips this one).
 _gdelt_backoff_until: float = 0.0   # monotonic clock; 0.0 = not in backoff
-_gdelt_backoff_secs:  float = 60.0  # current delay; doubles on each 429, resets on success
+_gdelt_backoff_secs:  float = 60.0  # current pause; doubles on each 429, resets on success
+_gdelt_query_limit:   int   = 5     # current query cap; AIMD-adjusted each cycle
 
 
 def _gdelt_url(query: str) -> str:
@@ -122,18 +129,19 @@ async def run_gdelt_monitor(
         get_markets:   Sync callable returning the current market cache list.
         poll_interval: Seconds between fetch cycles (default 900).
     """
+    global _gdelt_query_limit
     seen: OrderedDict = OrderedDict()
     log.info(
-        "GDELT monitor started (poll interval %ds, max %d queries/cycle)",
-        poll_interval, GDELT_MAX_QUERIES,
+        "GDELT monitor started (poll interval %ds, AIMD query limit start=%d max=%d)",
+        poll_interval, _gdelt_query_limit, _GDELT_QUERY_MAX,
     )
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
                 markets = get_markets()
-                # Reuse query generation; cap at GDELT_MAX_QUERIES (fewer than search engines)
-                queries = _markets_to_queries(markets)[:GDELT_MAX_QUERIES]
+                # Use the AIMD-controlled limit rather than a static cap
+                queries = _markets_to_queries(markets)[:_gdelt_query_limit]
 
                 if not queries:
                     log.debug("GDELT: no active markets, skipping cycle")
@@ -141,17 +149,27 @@ async def run_gdelt_monitor(
                     continue
 
                 log.debug(
-                    "GDELT: fetching %d queries for %d active markets",
-                    len(queries), len(markets),
+                    "GDELT: fetching %d queries (limit=%d) for %d active markets",
+                    len(queries), _gdelt_query_limit, len(markets),
                 )
 
+                _cycle_hit_429  = False
+                _cycle_successes = 0
+
                 for query in queries:
-                    # Skip queries while in backoff -- entire GDELT endpoint is rate-limited
+                    # Skip remaining queries while in backoff
                     if time.monotonic() < _gdelt_backoff_until:
                         remaining = _gdelt_backoff_until - time.monotonic()
                         log.debug("GDELT in backoff (%.0fs remaining) -- skipping cycle", remaining)
+                        _cycle_hit_429 = True
                         break
                     articles = await _fetch_gdelt_query(session, query)
+                    # Detect whether _fetch_gdelt_query just triggered a backoff
+                    if _gdelt_backoff_until > time.monotonic():
+                        _cycle_hit_429 = True
+                        break
+                    if articles:
+                        _cycle_successes += 1
                     new_count = 0
 
                     for article in articles:
@@ -187,6 +205,27 @@ async def run_gdelt_monitor(
 
                     # Short stagger between queries -- conservative against GDELT rate limits
                     await asyncio.sleep(GDELT_STAGGER)
+
+                # ── AIMD adjustment ───────────────────────────────────────────
+                # 429 hit → multiplicative decrease (halve); clean cycle with
+                # at least one success → additive increase (+1). Timeouts and
+                # empty results don't adjust the limit -- they're network noise,
+                # not a signal from the partner about our request rate.
+                old_limit = _gdelt_query_limit
+                if _cycle_hit_429:
+                    _gdelt_query_limit = max(_gdelt_query_limit // 2, _GDELT_QUERY_MIN)
+                    if _gdelt_query_limit != old_limit:
+                        log.info(
+                            "GDELT AIMD: 429 -- query limit %d -> %d",
+                            old_limit, _gdelt_query_limit,
+                        )
+                elif _cycle_successes > 0:
+                    _gdelt_query_limit = min(_gdelt_query_limit + 1, _GDELT_QUERY_MAX)
+                    if _gdelt_query_limit != old_limit:
+                        log.debug(
+                            "GDELT AIMD: clean cycle (%d success) -- query limit %d -> %d",
+                            _cycle_successes, old_limit, _gdelt_query_limit,
+                        )
 
                 # Trim dedup cache to bound memory
                 while len(seen) > GDELT_MAX_SEEN:
