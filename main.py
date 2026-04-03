@@ -36,7 +36,8 @@ from config import (cfg, PAPER_MIN_EDGE, VERSION, FADE_TWEET_FEED_URLS,
                     FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD)
 from feeds import NewsItem
 from feeds.dedup import HeadlineDedup
-from feeds.google_news_monitor import run_google_news_monitor
+from feeds.gdelt_monitor import run_gdelt_monitor
+from feeds.search_news_monitor import run_search_news_monitor
 from feeds.reddit_monitor import run_reddit_monitor
 from feeds.rss_monitor import run_rss_monitor
 from kalshi.rest_client import KalshiRestClient
@@ -89,7 +90,7 @@ class TradingBot:
         # Priority queue decouples feed pollers from slow LLM inference.
         # RSS/wire services (priority 1) are processed before Reddit (priority 2).
         # Tuple layout: (priority, seq, news) — seq prevents NewsItem comparison.
-        self._news_queue: asyncio.PriorityQueue[tuple[int, int, NewsItem]] = asyncio.PriorityQueue(maxsize=500)
+        self._news_queue: asyncio.PriorityQueue[tuple[int, int, NewsItem]] = asyncio.PriorityQueue(maxsize=2000)
         # Cross-source dedup: Reuters/AP/BBC often publish the same story within
         # minutes. Skip near-identical headlines seen in the last 15 minutes.
         self._dedup = HeadlineDedup()
@@ -520,8 +521,8 @@ class TradingBot:
 
         return _get
 
-    def _make_gnews_getter(self) -> "Callable[[], list]":
-        """Sync callable that returns the live market cache for Google News query generation."""
+    def _make_market_getter(self) -> "Callable[[], list]":
+        """Sync callable returning the live market cache for search/GDELT query generation."""
         def _get() -> list:
             return self.matcher._cache._markets
         return _get
@@ -583,8 +584,12 @@ class TradingBot:
                 name="reddit",
             ),
             asyncio.create_task(
-                run_google_news_monitor(self._enqueue_news, self._make_gnews_getter()),
-                name="gnews",
+                run_search_news_monitor(self._enqueue_news, self._make_market_getter()),
+                name="search",
+            ),
+            asyncio.create_task(
+                run_gdelt_monitor(self._enqueue_news, self._make_market_getter()),
+                name="gdelt",
             ),
             asyncio.create_task(self._news_consumer_task(),             name="news_consumer"),
             asyncio.create_task(self.ws.run(),                          name="websocket"),

@@ -6,6 +6,65 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.12.0] - 2026-04-03
+
+### Fixed
+- **Sports/blocklisted market filter in query generator** (`feeds/search_news_monitor.py`) --
+  `_markets_to_queries()` now skips any market whose series_ticker or ticker prefix matches
+  `MARKET_SERIES_BLOCKLIST_PREFIXES`. Previously, sports and crypto markets that slipped through
+  the geo cache would generate irrelevant queries like "tiger woods dui" or "royal challengers
+  bengaluru", flooding the queue with celebrity golf and IPL cricket articles.
+- **Per-query article cap** (`feeds/search_news_monitor.py`) -- added `SEARCH_MAX_ARTICLES_PER_QUERY = 5`
+  constant and switched the gather pattern from all-at-once to per-query with a capped callback.
+  A single hot query can no longer dump 20+ articles in one burst; max is now 5 new articles
+  across both engines per query per cycle (25 queries x 5 = 125 max/cycle, down from ~500).
+  This is the primary fix for the 8,700+ queue overflow drops observed overnight.
+- **News queue maxsize** (`main.py`) -- increased from 500 to 2000 to absorb legitimate
+  high-volume news events (e.g. breaking geopolitical stories across many sources) without dropping.
+- **GDELT 429 rate-limit backoff** (`feeds/gdelt_monitor.py`) -- added module-level
+  `_gdelt_backoff_until` / `_gdelt_backoff_secs` state mirroring the Reddit backoff pattern.
+  On HTTP 429: enters backoff, skips the remainder of the current cycle, doubles the delay
+  (60s initial, max 900s). On next successful response: resets to 60s. Previously GDELT
+  returned 429 with no recovery, retrying immediately on the next cycle.
+
+---
+
+## [0.11.1] - 2026-04-02
+
+### Changed
+- **Search/GDELT query prioritization** (`feeds/search_news_monitor.py`) -- `_markets_to_queries()`
+  now ranks markets by `open_interest * (1 - |price - 50| / 50)` instead of open_interest alone.
+  This weights query slots toward contested markets (price near 50c) with meaningful volume,
+  where fresh news is most likely to create exploitable edge. Fully-decided markets (price
+  near 0 or 100) score near zero regardless of volume. Applies to both the search monitor
+  (Google + Bing) and GDELT, which both import `_markets_to_queries` from this module.
+
+---
+
+## [0.11.0] - 2026-04-02
+
+### Added
+- **Multi-engine search monitor** (`feeds/search_news_monitor.py`) -- replaces
+  `google_news_monitor.py`. Now fetches each query from both Google News RSS and Bing
+  News RSS in a single `asyncio.gather` call (50 fetches/cycle at 25 queries x 2 engines).
+  Shared dedup cache suppresses cross-engine duplicates. No new dependencies.
+- **GDELT monitor** (`feeds/gdelt_monitor.py`) -- new async task querying the GDELT
+  Document 2.0 geopolitical event database. Free, no API key, updates every 15 minutes.
+  Generates up to 15 queries/cycle from active market titles (reusing `_markets_to_queries`
+  from search_news_monitor), fetches sequentially with a 2s stagger, emits NewsItem
+  via the same callback chain. Poll interval 900s to match GDELT's indexing cadence.
+- **`_make_market_getter()`** on `TradingBot` (`main.py`) -- replaces `_make_gnews_getter()`;
+  shared by both search and GDELT monitors.
+
+### Changed
+- **`TradingBot.run()`** (`main.py`) -- replaced `gnews` task with two concurrent tasks:
+  `search` (Google + Bing RSS, 300s) and `gdelt` (GDELT JSON API, 900s). Total async
+  tasks now 10 (11 when fade_tweets is configured).
+- `feeds/google_news_monitor.py` superseded by `feeds/search_news_monitor.py` (file kept
+  for git history; no longer imported).
+
+---
+
 ## [0.10.0] - 2026-04-02
 
 ### Added
