@@ -99,7 +99,7 @@ class KalshiRestClient:
             )
             sig_b64 = base64.b64encode(sig).decode()
         except Exception as exc:
-            log.warning("Could not sign request: %s — proceeding unsigned", exc)
+            log.warning("Could not sign request: %s -- proceeding unsigned", exc)
             return {"KALSHI-ACCESS-TIMESTAMP": ts}
 
         return {
@@ -149,8 +149,15 @@ class KalshiRestClient:
             resp.raise_for_status()
             return resp.json() if resp.text else {}
         except requests.HTTPError as exc:
-            log.error("HTTP %s %s → %s: %s", method, endpoint, exc.response.status_code,
-                      exc.response.text[:300])
+            # Log status + sanitized body: strip any echoed auth/signature fields.
+            status = exc.response.status_code
+            body = exc.response.text[:300] if exc.response.text else ""
+            for sensitive in ("KALSHI-ACCESS-KEY", "KALSHI-ACCESS-SIGNATURE",
+                              "Authorization", "signature", "api_key"):
+                if sensitive.lower() in body.lower():
+                    body = "(response body redacted -- may contain credentials)"
+                    break
+            log.error("HTTP %s %s -> %s: %s", method, endpoint, status, body)
             raise
         except requests.RequestException as exc:
             log.error("Request error %s %s: %s", method, endpoint, exc)

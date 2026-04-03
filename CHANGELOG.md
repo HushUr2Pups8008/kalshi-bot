@@ -6,6 +6,54 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.16.0] - 2026-04-03
+
+### Added
+- **Source credibility time decay** (`analysis/source_credibility.py`) -- added
+  `_time_decayed_accuracy()` method. Rather than computing accuracy as a flat win/loss
+  ratio, accuracy is now a time-weighted average: each resolved outcome is weighted by
+  `exp(-ln2 / half_life * age_days)` where half_life defaults to 30 days. An outcome
+  from 60 days ago counts 25% as much as one from today. Prevents stale performance
+  data from permanently locking a source into a high or low multiplier. The half-life
+  is configurable via `CREDIBILITY_HALF_LIFE_DAYS` in `config.py`.
+- **Config-driven go-live gates** (`config.py`, `main.py`) -- added three new `BotConfig`
+  fields controlling readiness checks before live trading confirmation:
+  `go_live_min_resolved` (default 20), `go_live_min_win_rate` (default 0.52),
+  `go_live_max_drawdown_pct` (default 0.20). All three are overridable via env vars.
+  `_check_go_live_gates()` in `main.py` evaluates them before the CONFIRM prompt and
+  prints each gate's FAIL/pass status. Gate values are logged at startup.
+- **Config-driven ticker cooldowns** (`config.py`, `trading/executor.py`) -- moved
+  `_LIVE_TICKER_COOLDOWN = 600` and `_PAPER_TICKER_COOLDOWN = 14400` from hardcoded
+  module constants in `executor.py` to `BotConfig` fields (`live_ticker_cooldown`,
+  `paper_ticker_cooldown`) overridable via `LIVE_TICKER_COOLDOWN` and
+  `PAPER_TICKER_COOLDOWN` env vars. Operator can tune cooldowns without code changes.
+
+---
+
+## [0.14.0] - 2026-04-03
+
+### Added
+- **Startup validation gate** (`config.py`) -- `BotConfig.__post_init__()` validates all
+  critical env vars at import time. Checks: `KALSHI_API_KEY_ID` non-empty,
+  `KALSHI_API_KEY_SECRET` is a loadable RSA PEM key, `KALSHI_ENV` is 'demo' or 'prod',
+  `BANKROLL` is positive, `KELLY_FRACTION` is in (0, 1]. On failure, prints clear error
+  messages to stderr and exits immediately -- no more silent failures hours later on first
+  trade attempt.
+- **Feedparser timeout guard** (`feeds/rss_monitor.py`) -- wrapped `feedparser.parse()` in
+  `asyncio.wait_for()` with a 30-second timeout. A hanging feed server can no longer stall
+  the entire RSS poll cycle indefinitely; the feed is skipped with a warning and the cycle
+  continues.
+
+### Fixed
+- **REST client error log sanitization** (`kalshi/rest_client.py`) -- HTTP error response
+  bodies are now checked for sensitive patterns (auth keys, signatures) before logging.
+  If detected, the body is redacted. Defense in depth for live trading mode.
+- **Non-ASCII in log strings** -- replaced em dash in `rss_monitor.py` log message and
+  right arrow in `rest_client.py` log message with ASCII equivalents. Prevents Windows
+  cp1252 logging failures under NSSM.
+
+---
+
 ## [0.13.0] - 2026-04-03
 
 ### Changed

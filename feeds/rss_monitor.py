@@ -38,6 +38,10 @@ log = get_logger("rss_monitor")
 # Maximum number of dedup IDs to keep in memory (oldest dropped first)
 MAX_SEEN = 5_000
 
+# Timeout for a single feedparser.parse() call (seconds).
+# Prevents a hanging feed server from stalling the entire RSS poll cycle.
+_FEED_PARSE_TIMEOUT = 30
+
 
 def _make_id(entry) -> str:
     key = (getattr(entry, "link", "") + getattr(entry, "title", "")).encode()
@@ -73,8 +77,15 @@ async def poll_feed(
     """Fetch one RSS feed URL and invoke callback for each unseen entry."""
     loop = asyncio.get_running_loop()
     try:
-        # feedparser is synchronous — run in executor to avoid blocking
-        parsed = await loop.run_in_executor(None, feedparser.parse, url)
+        # feedparser is synchronous -- run in executor to avoid blocking.
+        # Wrap with wait_for() so a hanging feed server cannot stall the cycle.
+        parsed = await asyncio.wait_for(
+            loop.run_in_executor(None, feedparser.parse, url),
+            timeout=_FEED_PARSE_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        log.warning("Feed timed out after %ds: %s", _FEED_PARSE_TIMEOUT, url)
+        return
     except Exception as exc:
         log.warning("Failed to fetch %s: %s", url, exc)
         return
@@ -125,7 +136,7 @@ async def run_rss_monitor(
         feeds = RSS_FEEDS
 
     seen: OrderedDict = OrderedDict()
-    log.info("RSS monitor started — watching %d feeds", len(feeds))
+    log.info("RSS monitor started -- watching %d feeds", len(feeds))
 
     while True:
         tasks = [poll_feed(url, callback, seen) for url in feeds]

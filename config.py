@@ -283,6 +283,9 @@ PAPER_BLOCK_SAME_SIDE_DUPLICATE = True   # block any same-ticker same-side posit
 CREDIBILITY_MIN_SAMPLE = 10     # trades needed before multiplier takes effect
 CREDIBILITY_MIN_MULT   = 0.5    # floor multiplier (unreliable source)
 CREDIBILITY_MAX_MULT   = 1.5    # ceiling multiplier (very reliable source)
+# Half-life (days) for exponential time decay on credibility outcomes.
+# A win/loss CREDIBILITY_HALF_LIFE_DAYS days ago counts 50% as much as today's.
+CREDIBILITY_HALF_LIFE_DAYS: float = 30.0
 
 # ── Signal keyword categories ─────────────────────────────────────────────────
 GEOPOLITICAL_SIGNALS = [
@@ -362,6 +365,16 @@ class BotConfig:
     time_discount_half_life: float = field(default_factory=lambda: float(os.getenv("TIME_DISCOUNT_HALF_LIFE", "14.0")))
     time_discount_floor:     float = field(default_factory=lambda: float(os.getenv("TIME_DISCOUNT_FLOOR", "0.20")))
 
+    # Ticker cooldowns (configurable to tune via .env without code changes)
+    live_ticker_cooldown:  int = field(default_factory=lambda: int(os.getenv("LIVE_TICKER_COOLDOWN", "600")))    # 10 min
+    paper_ticker_cooldown: int = field(default_factory=lambda: int(os.getenv("PAPER_TICKER_COOLDOWN", "14400")))  # 4h
+
+    # Go-live gate thresholds -- evaluated by --go-live before allowing confirmation.
+    # Set these to 0/1.0 to disable any individual gate.
+    go_live_min_resolved:    int   = field(default_factory=lambda: int(os.getenv("GO_LIVE_MIN_RESOLVED", "20")))
+    go_live_min_win_rate:    float = field(default_factory=lambda: float(os.getenv("GO_LIVE_MIN_WIN_RATE", "0.52")))
+    go_live_max_drawdown_pct: float = field(default_factory=lambda: float(os.getenv("GO_LIVE_MAX_DRAWDOWN_PCT", "0.20")))
+
     # Portfolio risk: max fraction of notional bankroll deployed in a single ticker.
     # Prevents runaway concentration on one market (e.g. Iran war dominates the book).
     # Default 25% — raise in .env if needed. Set to 1.0 to disable.
@@ -390,6 +403,52 @@ class BotConfig:
     # Paper trading mode — True until explicitly confirmed via --go-live
     # Set at runtime via set_paper_mode() — do not mutate directly.
     is_paper_trading: bool = True
+
+    def __post_init__(self) -> None:
+        """Validate critical config at startup -- fail fast, not hours later."""
+        errors: list[str] = []
+        if not self.api_key_id:
+            errors.append("KALSHI_API_KEY_ID is missing or empty")
+        if not self.api_key_secret:
+            errors.append("KALSHI_API_KEY_SECRET is missing or empty")
+        if self.kalshi_env not in ("demo", "prod"):
+            errors.append(
+                "KALSHI_ENV must be 'demo' or 'prod', got '%s'" % self.kalshi_env
+            )
+        if self.bankroll <= 0:
+            errors.append("BANKROLL must be positive, got %.2f" % self.bankroll)
+        if not (0 < self.kelly_fraction <= 1.0):
+            errors.append(
+                "KELLY_FRACTION must be in (0, 1], got %.2f" % self.kelly_fraction
+            )
+        # Validate RSA key can be loaded (catches bad PEM before first trade)
+        if self.api_key_secret:
+            try:
+                from cryptography.hazmat.primitives import serialization
+                pem = self.api_key_secret
+                if isinstance(pem, str):
+                    pem = pem.replace("\\n", "\n").strip()
+                    if "BEGIN" not in pem:
+                        pem = (
+                            "-----BEGIN RSA PRIVATE KEY-----\n"
+                            + pem
+                            + "\n-----END RSA PRIVATE KEY-----"
+                        )
+                    pem = pem.encode()
+                serialization.load_pem_private_key(pem, password=None)
+            except Exception as exc:
+                errors.append(
+                    "KALSHI_API_KEY_SECRET is not a valid RSA PEM key: %s" % exc
+                )
+        if errors:
+            import sys
+            for e in errors:
+                print("[CONFIG ERROR] %s" % e, file=sys.stderr)
+            print(
+                "\nFix the above in your .env file and restart.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     def set_paper_mode(self, paper: bool) -> None:
         """Single controlled mutation point for the paper/live flag."""

@@ -14,6 +14,7 @@ The tracker is backed by the same SQLite database as the paper trader.
 It is updated on every market resolution and queried on every trade entry.
 """
 
+import math
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,7 @@ from config import (
     CREDIBILITY_MIN_SAMPLE,
     CREDIBILITY_MIN_MULT,
     CREDIBILITY_MAX_MULT,
+    CREDIBILITY_HALF_LIFE_DAYS,
 )
 from utils.logger import get_logger
 
@@ -92,20 +94,72 @@ class SourceCredibility:
 
     # ── Write ─────────────────────────────────────────────────────────────────
 
+    def _time_decayed_accuracy(self, source: str) -> tuple[float, int]:
+        """
+        Compute exponentially time-decayed accuracy for a source.
+
+        Queries resolved paper_trades for this source and weights each
+        outcome by exp(-ln2 / half_life * age_days). Recent wins/losses
+        count more than old ones, preventing stale data from permanently
+        fixing the multiplier.
+
+        Returns (decayed_accuracy, n_resolved).
+        """
+        rows = self._conn.execute(
+            """
+            SELECT ts,
+                   CASE WHEN (side='yes' AND resolved_yes=1)
+                             OR (side='no' AND resolved_yes=0)
+                        THEN 1 ELSE 0 END AS was_correct
+            FROM paper_trades
+            WHERE signal_source = ? AND resolved = 1
+            ORDER BY ts ASC
+            """,
+            (source,),
+        ).fetchall()
+
+        n = len(rows)
+        if n == 0:
+            return 0.5, 0
+
+        now = datetime.now(timezone.utc)
+        half_life = CREDIBILITY_HALF_LIFE_DAYS
+        w_sum   = 0.0
+        w_total = 0.0
+        for r in rows:
+            try:
+                ts = datetime.fromisoformat(r["ts"])
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                dt_days = max(0.0, (now - ts).total_seconds() / 86400)
+            except (ValueError, TypeError):
+                dt_days = 0.0
+            weight   = math.exp(-math.log(2) / half_life * dt_days)
+            w_sum   += weight * r["was_correct"]
+            w_total += weight
+
+        accuracy = w_sum / w_total if w_total > 0 else 0.5
+        return accuracy, n
+
     def record_outcome(self, source: str, was_correct: bool) -> None:
         """
         Record the outcome of a resolved trade signal for a given source.
 
-        was_correct=True  → our signal direction matched the market resolution
-        was_correct=False → our signal was wrong
+        was_correct=True  -- our signal direction matched the market resolution
+        was_correct=False -- our signal was wrong
+
+        Accuracy is computed as a time-decayed weighted average over all
+        resolved outcomes (CREDIBILITY_HALF_LIFE_DAYS=30 by default), so
+        stale data from months ago decays naturally and does not permanently
+        fix the multiplier.
         """
         now = datetime.now(timezone.utc).isoformat()
 
-        # Upsert the source record
+        # Upsert raw win/loss counts (kept for display in the credibility table)
         self._conn.execute(
             """
             INSERT INTO source_credibility (source, wins, losses, total, accuracy, multiplier, last_updated)
-            VALUES (?, ?, ?, 1, ?, ?, ?)
+            VALUES (?, ?, ?, 1, ?, 1.0, ?)
             ON CONFLICT(source) DO UPDATE SET
                 wins         = wins + excluded.wins,
                 losses       = losses + excluded.losses,
@@ -117,36 +171,36 @@ class SourceCredibility:
                 1 if was_correct else 0,
                 0 if was_correct else 1,
                 1.0 if was_correct else 0.0,
-                1.0,   # placeholder; recalculated below
                 now,
             ),
         )
         self._conn.commit()
 
-        # Recalculate accuracy and multiplier from fresh totals
+        # Recompute time-decayed accuracy from paper_trades (committed by caller)
+        accuracy, n_resolved = self._time_decayed_accuracy(source)
+        multiplier = CREDIBILITY_MIN_MULT + accuracy * (CREDIBILITY_MAX_MULT - CREDIBILITY_MIN_MULT)
+        self._conn.execute(
+            "UPDATE source_credibility SET accuracy = ?, multiplier = ? WHERE source = ?",
+            (round(accuracy, 4), round(multiplier, 4), source),
+        )
+        self._conn.commit()
+
         row = self._conn.execute(
             "SELECT wins, total FROM source_credibility WHERE source = ?", (source,)
         ).fetchone()
+        wins_raw = row["wins"] if row else 0
+        total    = row["total"] if row else n_resolved
 
-        if row and row["total"] > 0:
-            accuracy   = row["wins"] / row["total"]
-            multiplier = CREDIBILITY_MIN_MULT + accuracy * (CREDIBILITY_MAX_MULT - CREDIBILITY_MIN_MULT)
-            self._conn.execute(
-                "UPDATE source_credibility SET accuracy = ?, multiplier = ? WHERE source = ?",
-                (round(accuracy, 4), round(multiplier, 4), source),
-            )
-            self._conn.commit()
-
-            log.info(
-                "Source credibility updated — %s: %d/%d (%.1f%%) → multiplier=%.2fx%s",
-                source,
-                row["wins"],
-                row["total"],
-                accuracy * 100,
-                multiplier,
-                "" if row["total"] >= CREDIBILITY_MIN_SAMPLE
-                else f" (inactive — need {CREDIBILITY_MIN_SAMPLE - row['total']} more samples)",
-            )
+        log.info(
+            "Source credibility updated -- %s: %d/%d raw (%.1f%% time-decayed) -> multiplier=%.2fx%s",
+            source,
+            wins_raw,
+            total,
+            accuracy * 100,
+            multiplier,
+            "" if total >= CREDIBILITY_MIN_SAMPLE
+            else " (inactive -- need %d more samples)" % (CREDIBILITY_MIN_SAMPLE - total),
+        )
 
     # ── Report helper ─────────────────────────────────────────────────────────
 

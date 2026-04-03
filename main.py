@@ -567,6 +567,12 @@ class TradingBot:
         log.info("Kelly fraction:   %.0f%%", cfg.kelly_fraction * 100)
         if cfg.is_paper_trading:
             log.info("Paper trading -- run `python main.py --go-live` when ready to switch.")
+            log.info(
+                "Go-live gates: min_resolved=%d, min_win_rate=%.0f%%, max_drawdown=%.0f%%",
+                cfg.go_live_min_resolved,
+                cfg.go_live_min_win_rate * 100,
+                cfg.go_live_max_drawdown_pct * 100,
+            )
         log.info("=" * 60)
 
         try:
@@ -658,14 +664,68 @@ async def async_main() -> None:
     await bot.run()
 
 
+def _check_go_live_gates(paper: PaperTrader) -> list[str]:
+    """
+    Evaluate config-driven go-live readiness gates.
+
+    Returns a list of failure reasons (empty = all gates passed).
+    Gates are set in .env and logged at startup:
+      GO_LIVE_MIN_RESOLVED    -- minimum resolved trades (default 20)
+      GO_LIVE_MIN_WIN_RATE    -- minimum win rate (default 0.52)
+      GO_LIVE_MAX_DRAWDOWN_PCT -- max drawdown as fraction of starting bankroll (default 0.20)
+    """
+    trades   = paper.get_all_trades()
+    resolved = [t for t in trades if t["resolved"]]
+    notional = paper.get_notional_bankroll()
+    failures = []
+
+    n_resolved = len(resolved)
+    if n_resolved < cfg.go_live_min_resolved:
+        failures.append(
+            f"Resolved trades: {n_resolved} < minimum {cfg.go_live_min_resolved}"
+        )
+
+    if resolved:
+        wins     = sum(1 for t in resolved if (t["pnl_dollars"] or 0) > 0)
+        win_rate = wins / n_resolved
+        if win_rate < cfg.go_live_min_win_rate:
+            failures.append(
+                f"Win rate: {win_rate:.1%} < minimum {cfg.go_live_min_win_rate:.1%}"
+            )
+
+    drawdown_pct = (cfg.bankroll - notional) / cfg.bankroll if cfg.bankroll > 0 else 0.0
+    if drawdown_pct > cfg.go_live_max_drawdown_pct:
+        failures.append(
+            f"Drawdown: {drawdown_pct:.1%} > maximum {cfg.go_live_max_drawdown_pct:.1%}"
+        )
+
+    return failures
+
+
 def _handle_go_live(paper: PaperTrader) -> None:
     """
     Interactive go-live confirmation gate.
 
-    Prints the full report, then requires the user to type CONFIRM to proceed.
+    Checks config-driven readiness gates first, then prints the full report
+    and requires the user to type CONFIRM to proceed.
     This is the ONLY way to switch the bot to live trading.
     """
     print(paper.generate_report())
+    print()
+    print("=" * 60)
+    print("  GO-LIVE READINESS GATES")
+    print("=" * 60)
+    gate_failures = _check_go_live_gates(paper)
+    if gate_failures:
+        print("  GATES FAILED -- resolve these before going live:")
+        for f in gate_failures:
+            print(f"    [FAIL] {f}")
+        print()
+        print("  Override gates with GO_LIVE_MIN_RESOLVED=0 etc. in .env if intentional.")
+        print("=" * 60)
+    else:
+        print("  All readiness gates passed.")
+        print("=" * 60)
     print()
     print("=" * 60)
     print("  WARNING: You are about to switch to LIVE TRADING.")
@@ -674,6 +734,9 @@ def _handle_go_live(paper: PaperTrader) -> None:
     notional = paper.get_notional_bankroll()
     print(f"  Notional bankroll at switch: ${notional:.2f}")
     print(f"  Live max bet: ${cfg.dynamic_max_bet(notional):.2f}")
+    if gate_failures:
+        print()
+        print("  NOTE: Readiness gates have FAILED. Proceeding anyway is your choice.")
     print()
     answer = input("  Type CONFIRM to go live, or anything else to cancel: ").strip()
     if answer == "CONFIRM":

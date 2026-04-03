@@ -27,8 +27,8 @@ from utils.logger import get_logger, trade_log
 
 log = get_logger("executor")
 
-_LIVE_TICKER_COOLDOWN  = 600        # seconds between trades on same ticker (live only)
-_PAPER_TICKER_COOLDOWN = 4 * 3600  # 4h cooldown per ticker during paper trading
+# Cooldowns moved to BotConfig (cfg.live_ticker_cooldown / cfg.paper_ticker_cooldown).
+# Read from cfg at call time so .env changes take effect without code edits.
 
 
 class TradeExecutor:
@@ -55,7 +55,7 @@ class TradeExecutor:
             if trade_ts.tzinfo is None:
                 trade_ts = trade_ts.replace(tzinfo=timezone.utc)
             age_secs = (now_wall - trade_ts).total_seconds()
-            if age_secs < _PAPER_TICKER_COOLDOWN:
+            if age_secs < cfg.paper_ticker_cooldown:
                 self._last_traded[ticker] = now_mono - age_secs
                 log.debug(
                     "Cooldown seeded for %s from portfolio (%.1fh ago)",
@@ -113,10 +113,10 @@ class TradeExecutor:
         if cfg.is_paper_trading:
             last    = self._last_traded.get(analysis.market.ticker, 0.0)
             elapsed = time.monotonic() - last
-            if elapsed < _PAPER_TICKER_COOLDOWN:
+            if elapsed < cfg.paper_ticker_cooldown:
                 return (
                     f"paper cooldown: last trade {elapsed/3600:.1f}h ago "
-                    f"(cooldown={_PAPER_TICKER_COOLDOWN//3600}h)"
+                    f"(cooldown={cfg.paper_ticker_cooldown//3600}h)"
                 )
 
         # Multi-position guard: block opposing trades (no hedges) and duplicate
@@ -172,10 +172,10 @@ class TradeExecutor:
         if not cfg.is_paper_trading:
             last    = self._last_traded.get(analysis.market.ticker, 0.0)
             elapsed = time.monotonic() - last
-            if elapsed < _LIVE_TICKER_COOLDOWN:
+            if elapsed < cfg.live_ticker_cooldown:
                 return (
                     f"cooldown: last trade {elapsed:.0f}s ago "
-                    f"(cooldown={_LIVE_TICKER_COOLDOWN}s)"
+                    f"(cooldown={cfg.live_ticker_cooldown}s)"
                 )
             # Live balance check
             balance = self._rest.get_balance()
