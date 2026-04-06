@@ -33,7 +33,8 @@ from analysis import SignalAnalysis
 from analysis.kelly import kelly_bet
 from analysis.market_matcher import MarketMatcher
 from analysis.signal_analyzer import estimate_probability
-from config import (cfg, PAPER_MIN_EDGE, VERSION, FADE_TWEET_FEED_URLS,
+from analysis.source_stats import SourceStats
+from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, VERSION, FADE_TWEET_FEED_URLS,
                     MARKET_SERIES_BLOCKLIST_PREFIXES, MAX_NEWS_AGE_SECONDS,
                     FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD,
                     DRIFT_ALERT_CENTS, DRIFT_LOG_COOLDOWN_SECS,
@@ -86,11 +87,12 @@ def parse_args() -> argparse.Namespace:
 
 class TradingBot:
     def __init__(self):
-        self.rest     = KalshiRestClient()
-        self.ws       = KalshiWebSocketClient()
-        self.matcher  = MarketMatcher(self.rest)
-        self.paper    = PaperTrader()
-        self.executor = TradeExecutor(self.rest, self.paper)
+        self.rest         = KalshiRestClient()
+        self.ws           = KalshiWebSocketClient()
+        self.matcher      = MarketMatcher(self.rest)
+        self.paper        = PaperTrader()
+        self.executor     = TradeExecutor(self.rest, self.paper)
+        self.source_stats = SourceStats(db_path=DATA_DIR / "paper_trades.db")
         self.ws.on_price_update(self._on_price_update)
         # Priority queue decouples feed pollers from slow LLM inference.
         # RSS/wire services (priority 1) are processed before Reddit (priority 2).
@@ -144,6 +146,7 @@ class TradingBot:
 
     async def on_news_item(self, news: NewsItem) -> None:
         log.info("[NEWS] [%s] %s", news.source, news.headline[:100])
+        self.source_stats.increment_posts(news.source)
 
         candidates = await self.matcher.find_candidates(news)
         if not candidates:
@@ -177,6 +180,7 @@ class TradingBot:
         if not keywords:
             return
 
+        self.source_stats.increment_signals(news.source)
         edge = estimated_prob - market.yes_prob
         side = "yes" if edge > 0 else "no"
 
@@ -227,6 +231,7 @@ class TradingBot:
             side=side,
             reasoning=reasoning,
         )
+        self.source_stats.increment_opportunities(news.source)
 
         if capped_dollars <= 0:
             log.debug("No bet for %s: edge=%+.4f below threshold", market.ticker, edge)
@@ -247,7 +252,9 @@ class TradingBot:
             confidence=confidence,
         )
 
-        await self.executor.execute(analysis)
+        trade_id = await self.executor.execute(analysis)
+        if trade_id:
+            self.source_stats.increment_trades(news.source)
         self.ws.watch([market.ticker])
 
     # ── Fade tweet pipeline ────────────────────────────────────────────────────
@@ -540,6 +547,7 @@ class TradingBot:
 
     async def _check_and_resolve(self) -> None:
         """Single pass: check all open paper trade tickers for settlement."""
+        self.source_stats.flush()
         open_trades = self.paper._conn.execute(
             "SELECT DISTINCT ticker FROM paper_trades WHERE resolved = 0"
         ).fetchall()
@@ -631,7 +639,7 @@ class TradingBot:
         async def _get() -> list[str]:
             try:
                 markets = self.matcher._cache._markets
-                result = select_subreddits(markets)
+                result = select_subreddits(markets, source_stats=self.source_stats)
                 log.debug(
                     "Subreddit selector: %d subs for this cycle (%d active markets)",
                     len(result), len(markets),

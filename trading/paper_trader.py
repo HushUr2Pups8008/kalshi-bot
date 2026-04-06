@@ -85,6 +85,16 @@ CREATE TABLE IF NOT EXISTS source_credibility (
     multiplier    REAL    DEFAULT 1.0,
     last_updated  TEXT
 );
+
+CREATE TABLE IF NOT EXISTS source_stats (
+    source        TEXT PRIMARY KEY,
+    posts_seen    INTEGER DEFAULT 0,
+    signals       INTEGER DEFAULT 0,
+    opportunities INTEGER DEFAULT 0,
+    trades        INTEGER DEFAULT 0,
+    last_signal   TEXT,
+    last_updated  TEXT
+);
 """
 
 

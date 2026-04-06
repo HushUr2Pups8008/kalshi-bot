@@ -6,6 +6,46 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.20.0] - 2026-04-06
+
+### Added
+- **Source quality feedback loop** (`analysis/source_stats.py` NEW, `main.py`,
+  `feeds/subreddit_selector.py`, `config.py`, `trading/paper_trader.py`,
+  `scripts/performance_analysis.py`) -- closes the "garbage subreddit" problem.
+  The pipeline previously had no visibility into what happened before a SIGNAL event,
+  so zero-signal subreddits consumed poll slots indefinitely. Now every post,
+  signal, opportunity, and trade is counted per source.
+
+- **New module `analysis/source_stats.py`** -- SourceStats class tracking the full
+  quality funnel (posts_seen -> signals -> opportunities -> trades) per source.
+  Uses signal_rate (signals / posts_seen) as the primary quality metric, available
+  within 24-48 hours vs the existing win_rate credibility system which needs 10+
+  resolved trades (weeks). Writes are batched in-memory and flushed every 30 minutes
+  (piggybacked on the auto-resolve task) to avoid SQLite write contention.
+
+- **Subreddit suppression** (`feeds/subreddit_selector.py`) -- zero-signal subreddits
+  (>= SOURCE_STATS_ZERO_SIGNAL_POSTS posts, 0 signals) are skipped from topic-driven
+  selection. Topic subreddits are sorted by signal rate so high-quality sources fill
+  the REDDIT_MAX_SUBREDDITS cap first. Core subreddits (worldnews, geopolitics, etc.)
+  are always exempt from suppression and are never quality-gated.
+
+- **New DB table `source_stats`** in `data/paper_trades.db` -- schema added via
+  `CREATE TABLE IF NOT EXISTS` in `trading/paper_trader.py` DDL (safe migration on
+  existing DB). Columns: source, posts_seen, signals, opportunities, trades,
+  last_signal, last_updated.
+
+- **Source quality funnel section** in `scripts/performance_analysis.py` -- new
+  section 6 ("SOURCE QUALITY FUNNEL") shows per-source signal rate, opportunity rate,
+  and quality label (Good / Low / SUPPRESSED / ?) using the source_stats table.
+
+- **3 new env-configurable constants** (`config.py`):
+  SOURCE_STATS_MIN_POSTS (default 100), SOURCE_STATS_LOW_SIGNAL_RATE (default 0.005),
+  SOURCE_STATS_ZERO_SIGNAL_POSTS (default 200).
+
+### Changed
+- `_process_candidate()` in `main.py` now captures the return value of
+  `executor.execute()` so trade placements can be counted per source.
+
 ## [0.19.0] - 2026-04-06
 
 ### Added

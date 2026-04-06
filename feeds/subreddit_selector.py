@@ -55,18 +55,22 @@ def _active_topics(markets: Sequence[KalshiMarket]) -> frozenset:
     return frozenset(active)
 
 
-def select_subreddits(markets: Sequence[KalshiMarket]) -> list[str]:
+def select_subreddits(
+    markets: Sequence[KalshiMarket],
+    source_stats=None,  # SourceStats instance or None
+) -> list[str]:
     """
     Return the subreddit list for the current poll cycle.
 
     Algorithm:
-      1. Start with REDDIT_CORE_SUBREDDITS (always included, order preserved).
+      1. Start with REDDIT_CORE_SUBREDDITS (always included, never suppressed).
       2. Determine which topics are active via keyword match on market titles.
-      3. For each active topic (in REDDIT_SUBREDDIT_TOPIC_MAP insertion order),
-         append its subreddits, skipping duplicates already in the list.
-      4. Stop when REDDIT_MAX_SUBREDDITS is reached.
+      3. For each active topic, sort its subreddits by signal rate (best first).
+      4. Skip subreddits suppressed by source_stats (>=200 posts, 0 signals).
+      5. Stop when REDDIT_MAX_SUBREDDITS is reached.
 
     Falls back to REDDIT_CORE_SUBREDDITS only when markets is empty.
+    source_stats: optional SourceStats instance for quality-aware filtering.
     """
     selected: list[str] = list(REDDIT_CORE_SUBREDDITS)
     seen: set[str] = set(selected)
@@ -76,12 +80,35 @@ def select_subreddits(markets: Sequence[KalshiMarket]) -> list[str]:
 
     active = _active_topics(markets)
 
+    suppressed_log = []
     for topic, subs in REDDIT_SUBREDDIT_TOPIC_MAP.items():
         if topic not in active:
             continue
-        for sub in subs:
+
+        # Sort topic subs by signal rate: best quality first.
+        # Subreddits with insufficient data (< MIN_POSTS) get ranking_score=1.0
+        # and sort above known-bad ones (ranking_score < 0.5%).
+        if source_stats is not None:
+            ordered = sorted(
+                subs,
+                key=lambda s: source_stats.ranking_score("r/" + s),
+                reverse=True,
+            )
+        else:
+            ordered = subs
+
+        for sub in ordered:
+            if source_stats is not None and source_stats.is_suppressed("r/" + sub):
+                suppressed_log.append(sub)
+                continue
             if sub not in seen and len(selected) < REDDIT_MAX_SUBREDDITS:
                 selected.append(sub)
                 seen.add(sub)
+
+    if suppressed_log:
+        import logging
+        logging.getLogger("subreddit_selector").debug(
+            "[SUBREDDIT] Suppressed (zero-signal): %s", ", ".join(suppressed_log)
+        )
 
     return selected

@@ -308,6 +308,14 @@ CREDIBILITY_MAX_MULT   = 1.5    # ceiling multiplier (very reliable source)
 # A win/loss CREDIBILITY_HALF_LIFE_DAYS days ago counts 50% as much as today's.
 CREDIBILITY_HALF_LIFE_DAYS: float = 30.0
 
+# ── Source stats / quality gate settings ─────────────────────────────────────
+# Signal rate (signals / posts_seen) is available in 24-48h vs win_rate which
+# needs 10+ resolved trades per source (weeks to months).  Quality gates fire
+# only after MIN_POSTS posts so brand-new sources get a fair trial first.
+SOURCE_STATS_MIN_POSTS: int         = int(os.getenv("SOURCE_STATS_MIN_POSTS",         "100"))
+SOURCE_STATS_LOW_SIGNAL_RATE: float = float(os.getenv("SOURCE_STATS_LOW_SIGNAL_RATE", "0.005"))
+SOURCE_STATS_ZERO_SIGNAL_POSTS: int = int(os.getenv("SOURCE_STATS_ZERO_SIGNAL_POSTS", "200"))
+
 # ── Signal keyword categories ─────────────────────────────────────────────────
 GEOPOLITICAL_SIGNALS = [
     {"keywords": ["missile strike", "bombs", "shelling", "invasion", "military attack",

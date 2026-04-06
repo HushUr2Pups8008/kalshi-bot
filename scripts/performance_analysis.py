@@ -573,6 +573,93 @@ def section_source_performance(entries, db_trades):
     return "\n".join(lines)
 
 
+def section_source_quality():
+    """
+    Source quality funnel from source_stats table.
+
+    Shows posts_seen -> signals -> opportunities -> trades per source,
+    with signal_rate and quality label.  Useful for identifying subreddits
+    that consume poll slots without contributing actionable signals.
+    """
+    if not DB_PATH.exists():
+        return "No database found."
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT * FROM source_stats ORDER BY posts_seen DESC"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return "source_stats table not found -- bot has not run with v0.20.0+ yet."
+    finally:
+        conn.close()
+
+    if not rows:
+        return "No source stats recorded yet (table exists but is empty)."
+
+    # Read thresholds from env (same defaults as SourceStats class)
+    min_posts        = int(os.getenv("SOURCE_STATS_MIN_POSTS",         "100"))
+    low_signal_rate  = float(os.getenv("SOURCE_STATS_LOW_SIGNAL_RATE", "0.005"))
+    zero_signal_posts = int(os.getenv("SOURCE_STATS_ZERO_SIGNAL_POSTS", "200"))
+
+    table_rows = []
+    for r in rows:
+        posts   = r["posts_seen"]
+        sigs    = r["signals"]
+        opps    = r["opportunities"]
+        trades  = r["trades"]
+
+        sig_rate = sigs / posts if posts > 0 else 0.0
+        opp_rate = opps / sigs  if sigs  > 0 else None
+
+        suppressed   = posts >= zero_signal_posts and sigs == 0
+        low_quality  = posts >= min_posts and sig_rate < low_signal_rate and not suppressed
+        insufficient = posts < min_posts
+
+        if suppressed:
+            quality = "SUPPRESSED"
+        elif low_quality:
+            quality = "Low"
+        elif insufficient:
+            quality = "?"
+        else:
+            quality = "Good"
+
+        table_rows.append([
+            (r["source"] or "")[:30],
+            "{:,}".format(posts),
+            "{:,}".format(sigs),
+            "%.1f%%" % (sig_rate * 100) if posts > 0 else "N/A",
+            "{:,}".format(opps),
+            "%.0f%%" % (opp_rate * 100) if opp_rate is not None else "--",
+            "{:,}".format(trades),
+            quality,
+        ])
+
+    # Sort by posts_seen desc (already sorted by query, but re-sort for stability)
+    table_rows.sort(key=lambda r: -int(r[1].replace(",", "")))
+
+    lines = ["Source quality funnel (from source_stats table):", ""]
+    lines.append(tabulate(
+        table_rows,
+        headers=["Source", "Posts", "Signals", "Sig%", "Opps", "Opp%", "Trades", "Quality"],
+        tablefmt="simple",
+    ))
+
+    # Quick summary
+    suppressed_count = sum(1 for r in table_rows if r[7] == "SUPPRESSED")
+    low_count        = sum(1 for r in table_rows if r[7] == "Low")
+    if suppressed_count or low_count:
+        lines.append("")
+        lines.append(
+            "  %d suppressed (>=%d posts, 0 signals), %d low-quality (<%.1f%% signal rate)"
+            % (suppressed_count, zero_signal_posts, low_count, low_signal_rate * 100)
+        )
+
+    return "\n".join(lines)
+
+
 def section_edge_calibration(db_trades):
     resolved = [t for t in db_trades if t.get("resolved") and t.get("resolved_yes") is not None]
     if not resolved:
@@ -734,10 +821,13 @@ def main():
     report_lines.append(section_header("5. PER-SOURCE PERFORMANCE"))
     report_lines.append(section_source_performance(entries, db_trades))
 
-    report_lines.append(section_header("6. EDGE CALIBRATION"))
+    report_lines.append(section_header("6. SOURCE QUALITY FUNNEL"))
+    report_lines.append(section_source_quality())
+
+    report_lines.append(section_header("7. EDGE CALIBRATION"))
     report_lines.append(section_edge_calibration(db_trades))
 
-    report_lines.append(section_header("7. GO-LIVE READINESS"))
+    report_lines.append(section_header("8. GO-LIVE READINESS"))
     report_lines.append(section_golive_readiness(db_trades, state))
 
     report_lines.append("")
