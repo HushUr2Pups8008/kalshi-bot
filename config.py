@@ -274,8 +274,15 @@ MAX_MARKET_DAYS_TO_EXPIRY = 30
 # These are more permissive than live thresholds to maximise resolved trades
 # and build source credibility data during the paper phase.
 PAPER_MIN_EDGE                  = 0.02   # vs live 0.04
-PAPER_MIN_MATCH_SCORE           = 0.03   # vs live 0.06
-PAPER_MAX_CANDIDATES            = 1      # top match only -- one trade per article, clean signal
+PAPER_MIN_MATCH_SCORE           = 0.06   # raised from 0.03 -- scores <0.06 are almost always wrong-market
+                                         # noise (e.g. "Trump fires Bondi" -> China visit at 0.033).
+                                         # Real relevance starts at ~0.06 based on match score distribution.
+PAPER_MAX_CANDIDATES            = 3      # raised from 1 -- evaluate top 3 market matches per article.
+                                         # With max_candidates=1 the LLM was forced to evaluate wrong
+                                         # markets (top Jaccard match != best conceptual match) and
+                                         # correctly returned neutral, suppressing real signals.
+                                         # CPU CONSTRAINT: at 20-40s/call this means up to ~120s inference
+                                         # per article. On Mac Studio M4 Max (<5s/call) raise to 8-10.
 PAPER_FLAT_CONTRACTS            = 5      # flat contract count during paper training (no bankroll gating)
 PAPER_BLOCK_SAME_SIDE_DUPLICATE = True   # block any same-ticker same-side position during paper phase
 

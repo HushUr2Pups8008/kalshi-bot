@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.17.1] - 2026-04-06
+
+### Changed
+- **`PAPER_MAX_CANDIDATES` 1 -> 3** (`config.py`) -- the bot was evaluating only the
+  single top Jaccard match per article. With 822+ cached markets, the top match is
+  frequently the wrong market (e.g. "Trump fires Bondi" -> China visit at score 0.033).
+  The LLM correctly returned neutral on these mismatches, suppressing real signals.
+  Raising to 3 lets the LLM evaluate the top 3 conceptual candidates and find genuine
+  relevance. CPU constraint: at 20-40s/call this is ~120s max per article. On Mac Studio
+  M4 Max (<5s inference) raise to 8-10.
+- **`PAPER_MIN_MATCH_SCORE` 0.03 -> 0.06** (`config.py`) -- empirical analysis of match
+  score distribution showed scores below 0.06 are almost always wrong-market noise.
+  Real relevance starts at ~0.06. The old floor of 0.03 was passing garbage matches
+  to the LLM unnecessarily. This pairs with the candidates increase: fewer but better
+  candidates per article.
+
+---
+
 ## [0.17.0] - 2026-04-06
 
 ### Added
