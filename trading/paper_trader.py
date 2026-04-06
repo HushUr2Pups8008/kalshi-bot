@@ -31,6 +31,19 @@ log = get_logger("paper_trader")
 DB_PATH = DATA_DIR / "paper_trades.db"
 
 _DDL = """
+CREATE TABLE IF NOT EXISTS keyword_outcomes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id      TEXT    NOT NULL,
+    ticker        TEXT    NOT NULL,
+    series_ticker TEXT    NOT NULL,
+    keyword       TEXT    NOT NULL,
+    direction     TEXT    NOT NULL,
+    market_side   TEXT    NOT NULL,
+    resolved_yes  INTEGER NOT NULL,
+    correct       INTEGER NOT NULL,
+    ts            TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS paper_trades (
     trade_id                TEXT PRIMARY KEY,
     ts                      TEXT NOT NULL,
@@ -320,7 +333,16 @@ class PaperTrader:
         # Keep portfolio in sync — all positions for this ticker are now closed
         self.portfolio.resolve(ticker)
 
-        # Non-critical side effects: credibility + audit log (DB already committed above)
+        # Non-critical side effects: credibility + audit log + keyword outcomes
+        # (DB already committed above)
+        series_ticker = ticker.split("-")[0]  # e.g. "KXTRUMPIRAN-26APR01" -> "KXTRUMPIRAN"
+        now_ts = datetime.now(timezone.utc).isoformat()
+        from config import GEOPOLITICAL_SIGNALS
+        _kw_direction: dict[str, str] = {}
+        for sig in GEOPOLITICAL_SIGNALS:
+            for kw in sig["keywords"]:
+                _kw_direction[kw] = sig["direction"]
+
         for t, won, payout, pnl in outcomes:
             self.credibility.record_outcome(t["signal_source"], was_correct=won)
             trade_log.log_paper_resolution(
@@ -330,10 +352,39 @@ class PaperTrader:
                 pnl_dollars=pnl,
             )
             log.info(
-                "[RESOLVED] %s %s → YES=%s | pnl=$%+.2f | bankroll=$%.2f",
+                "[RESOLVED] %s %s YES=%s | pnl=$%+.2f | bankroll=$%.2f",
                 t["trade_id"], ticker, resolved_yes, pnl,
                 self.get_notional_bankroll(),
             )
+            # Record per-keyword outcomes for feedback loop learning.
+            # Each resolved trade writes one row per keyword that fired on it.
+            # Accumulated over time this teaches us which keywords are predictive
+            # on which series -- the foundation for Phase 3 dynamic weighting.
+            try:
+                keywords = json.loads(t["keywords_matched"] or "[]")
+                for kw in keywords:
+                    direction = _kw_direction.get(kw, t["side"])
+                    correct = int(
+                        (direction == "yes" and resolved_yes) or
+                        (direction == "no"  and not resolved_yes)
+                    )
+                    self._conn.execute(
+                        "INSERT INTO keyword_outcomes "
+                        "(trade_id, ticker, series_ticker, keyword, direction, "
+                        " market_side, resolved_yes, correct, ts) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)",
+                        (t["trade_id"], ticker, series_ticker, kw, direction,
+                         t["side"], int(resolved_yes), correct, now_ts),
+                    )
+                if keywords:
+                    self._conn.commit()
+                    log.debug(
+                        "[RESOLVED] %s: recorded %d keyword outcome(s)",
+                        t["trade_id"], len(keywords),
+                    )
+            except Exception as exc:
+                log.warning("Failed to record keyword outcomes for %s: %s", t["trade_id"], exc)
+
         log.info(
             "[RESOLVED] %s: %d trades | net P&L $%+.2f | notional bankroll $%.2f",
             ticker, len(trades), total_pnl, self.get_notional_bankroll(),

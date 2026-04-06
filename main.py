@@ -25,6 +25,8 @@ import asyncio
 import itertools
 import signal
 import sys
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 
 from analysis import SignalAnalysis
@@ -33,7 +35,10 @@ from analysis.market_matcher import MarketMatcher
 from analysis.signal_analyzer import estimate_probability
 from config import (cfg, PAPER_MIN_EDGE, VERSION, FADE_TWEET_FEED_URLS,
                     MARKET_SERIES_BLOCKLIST_PREFIXES, MAX_NEWS_AGE_SECONDS,
-                    FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD)
+                    FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD,
+                    DRIFT_ALERT_CENTS, DRIFT_LOG_COOLDOWN_SECS,
+                    PRICE_MOVE_THRESHOLD_CENTS, PRICE_SEARCH_COOLDOWN_SECS,
+                    PRICE_VELOCITY_WINDOW_SECS)
 from feeds import NewsItem
 from feeds.dedup import HeadlineDedup
 from feeds.gdelt_monitor import run_gdelt_monitor
@@ -97,6 +102,14 @@ class TradingBot:
         # Previous WS mid-price per ticker -- used to detect threshold crossings
         # for the price-based fade signal.
         self._ws_prev_prices: dict[str, float] = {}
+        # Loop A: price velocity tracker (ticker -> deque of (monotonic_ts, mid_price))
+        # Used to detect >10c moves in the last 5 minutes and trigger targeted search.
+        self._ws_velocity: dict[str, deque] = defaultdict(lambda: deque(maxlen=60))
+        self._last_search_triggered: dict[str, float] = {}  # ticker -> monotonic
+        # Loop C: drift log cooldown (ticker -> last log monotonic time)
+        self._last_drift_logged: dict[str, float] = {}
+        # Loop D: previous market ticker set for new-market detection
+        self._known_market_tickers: set[str] = set()
 
     # ── News pipeline ─────────────────────────────────────────────────────────
 
@@ -307,15 +320,67 @@ class TradingBot:
         self.ws.watch([market.ticker])
 
     async def _on_price_update(self, ticker: str, yes_bid: float, yes_ask: float) -> None:
-        now_mid = (yes_bid + yes_ask) / 2.0
+        now_mid  = (yes_bid + yes_ask) / 2.0
+        now_mono = time.monotonic()
         log.debug("[WS] %s bid=%.1fc ask=%.1fc mid=%.1fc", ticker, yes_bid, yes_ask, now_mid)
 
         prev_mid = self._ws_prev_prices.get(ticker)
         self._ws_prev_prices[ticker] = now_mid
 
         if prev_mid is None:
-            return  # first tick for this ticker -- no crossing possible yet
+            # First tick: seed the velocity deque and return (no crossing yet)
+            self._ws_velocity[ticker].append((now_mono, now_mid))
+            return
 
+        # ── Loop A: price velocity -> targeted search ─────────────────────────
+        # Track rolling price history; trigger a targeted news search if price
+        # has moved >= PRICE_MOVE_THRESHOLD_CENTS within the velocity window.
+        vq = self._ws_velocity[ticker]
+        vq.append((now_mono, now_mid))
+        # Purge ticks older than PRICE_VELOCITY_WINDOW_SECS
+        cutoff = now_mono - PRICE_VELOCITY_WINDOW_SECS
+        while vq and vq[0][0] < cutoff:
+            vq.popleft()
+        if vq:
+            oldest_price = vq[0][1]
+            price_move   = abs(now_mid - oldest_price)
+            last_search  = self._last_search_triggered.get(ticker, 0.0)
+            if (price_move >= PRICE_MOVE_THRESHOLD_CENTS
+                    and now_mono - last_search >= PRICE_SEARCH_COOLDOWN_SECS):
+                self._last_search_triggered[ticker] = now_mono
+                log.info(
+                    "[PRICE_MOVE] %s moved %.1fc in %.0fs -- triggering targeted search",
+                    ticker, price_move, PRICE_VELOCITY_WINDOW_SECS,
+                )
+                asyncio.ensure_future(self._trigger_targeted_search(ticker))
+
+        # ── Loop C: open position drift logging ───────────────────────────────
+        # If we have an open paper position on this ticker and the price has
+        # drifted >= DRIFT_ALERT_CENTS from entry, log a POSITION_DRIFT event.
+        open_positions = self.paper.portfolio.open_positions(ticker)
+        if open_positions:
+            last_drift = self._last_drift_logged.get(ticker, 0.0)
+            if now_mono - last_drift >= DRIFT_LOG_COOLDOWN_SECS:
+                for pos in open_positions:
+                    drift = now_mid - pos.market_yes_price
+                    if abs(drift) >= DRIFT_ALERT_CENTS:
+                        self._last_drift_logged[ticker] = now_mono
+                        from utils.logger import trade_log as _tl
+                        _tl.log_position_drift(
+                            ticker=ticker,
+                            entry_price=pos.market_yes_price,
+                            current_price=now_mid,
+                            drift_cents=drift,
+                            side=pos.side,
+                            open_since=pos.ts,
+                        )
+                        log.info(
+                            "[DRIFT] %s: entry=%.1fc now=%.1fc drift=%+.1fc (%s)",
+                            ticker, pos.market_yes_price, now_mid, drift, pos.side.upper(),
+                        )
+                        break  # one log event per ticker per cooldown period
+
+        # ── Fade signal (existing) ────────────────────────────────────────────
         from analysis.fade_signal import detect_price_fade
         crossing = detect_price_fade(
             ticker, prev_mid, now_mid,
@@ -323,6 +388,44 @@ class TradingBot:
         )
         if crossing is not None:
             await self._process_price_fade(ticker, crossing, now_mid, yes_bid, yes_ask)
+
+    async def _trigger_targeted_search(self, ticker: str) -> None:
+        """
+        Loop A: fetch targeted Google News + GDELT results for a single market
+        that just had a significant price move. Emits articles through the normal
+        news queue so they go through the full signal pipeline.
+
+        Rate-limiting is handled by the caller (_on_price_update checks
+        _last_search_triggered before calling this).
+        """
+        try:
+            markets = await self.matcher._cache.get_markets()
+            market  = next((m for m in markets if m.ticker == ticker), None)
+            if market is None:
+                log.debug("[PRICE_MOVE] %s not in geo cache, skipping targeted search", ticker)
+                return
+
+            from feeds.search_news_monitor import _markets_to_queries, _gnews_url, _bing_url
+            from feeds.rss_monitor import poll_feed
+            from collections import OrderedDict
+            import aiohttp
+
+            queries = _markets_to_queries([market])
+            if not queries:
+                log.debug("[PRICE_MOVE] %s: no query tokens, skipping", ticker)
+                return
+
+            seen: OrderedDict = OrderedDict()
+            log.debug("[PRICE_MOVE] %s: targeted search query='%s'", ticker, queries[0])
+            async with aiohttp.ClientSession() as session:
+                for q in queries[:1]:  # single query per triggered search
+                    await asyncio.gather(
+                        poll_feed(_gnews_url(q), self._enqueue_news, seen),
+                        poll_feed(_bing_url(q),  self._enqueue_news, seen),
+                        return_exceptions=True,
+                    )
+        except Exception as exc:
+            log.warning("[PRICE_MOVE] Targeted search failed for %s: %s", ticker, exc)
 
     async def _process_price_fade(
         self,
@@ -488,10 +591,30 @@ class TradingBot:
             await self.matcher.refresh_cache()
             # Re-subscribe WS to catch any newly listed geo markets
             try:
-                markets = await self.matcher._cache.get_markets()
-                self.ws.watch([m.ticker for m in markets])
+                markets    = await self.matcher._cache.get_markets()
+                new_tickers = {m.ticker for m in markets}
+                self.ws.watch(list(new_tickers))
+
+                # Loop D: detect newly listed markets and proactively search for news
+                if self._known_market_tickers:
+                    added = new_tickers - self._known_market_tickers
+                    for m in markets:
+                        if m.ticker not in added:
+                            continue
+                        from utils.logger import trade_log as _tl
+                        _tl.log_new_market(
+                            ticker=m.ticker,
+                            title=m.title,
+                            series_ticker=m.series_ticker,
+                        )
+                        log.info(
+                            "[NEW_MARKET] %s listed: '%s' -- triggering targeted search",
+                            m.ticker, m.title[:60],
+                        )
+                        asyncio.ensure_future(self._trigger_targeted_search(m.ticker))
+                self._known_market_tickers = new_tickers
             except Exception as exc:
-                log.warning("WS re-subscription after market refresh failed: %s", exc)
+                log.warning("Market refresh task error: %s", exc)
 
     # ── Run ───────────────────────────────────────────────────────────────────
 

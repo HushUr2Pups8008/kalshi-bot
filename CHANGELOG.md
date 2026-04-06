@@ -6,6 +6,52 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.19.0] - 2026-04-06
+
+### Added
+- **Market feedback loop — Phase 1 and 2** (`main.py`, `trading/paper_trader.py`,
+  `utils/logger.py`, `config.py`, `docs/market_feedback_loop_roadmap.md`) --
+  closes the one-way news->trade pipeline into four feedback loops. See
+  `docs/market_feedback_loop_roadmap.md` for architecture and Mac Studio upgrade path.
+
+- **Loop A: Price-velocity-driven targeted news search** (`main.py`) -- when a geo
+  market price moves >= PRICE_MOVE_THRESHOLD_CENTS (10c, env-configurable) within a
+  5-minute rolling window, immediately fetch Google News RSS + GDELT for that
+  specific market's tokens. Inverts discovery: volatile markets proactively hunt for
+  news rather than waiting for RSS. Rate-limited to PRICE_SEARCH_COOLDOWN_SECS (30min)
+  per ticker. Uses existing `_markets_to_queries()` and `poll_feed()` -- no new deps.
+
+- **Loop B: Keyword outcome tracking** (`trading/paper_trader.py`) -- new
+  `keyword_outcomes` table in `paper_trades.db`. On every trade resolution, one row
+  per keyword that fired on that trade is written with: keyword, its declared direction,
+  the side we bet, resolved_yes, and a `correct` flag (1 if keyword pointed the right
+  way). Enables per-series keyword accuracy queries: e.g. "invasion" on KXTRUMP* series
+  has 10% correct rate -- the foundation for Phase 3 dynamic signal weighting.
+  Schema added via `CREATE TABLE IF NOT EXISTS` (safe migration on existing DB).
+
+- **Loop C: Open position price drift logging** (`main.py`, `utils/logger.py`) --
+  when a WS price update arrives for a ticker with an open paper position, emit a
+  `POSITION_DRIFT` event to `trades.jsonl` if price has moved >= DRIFT_ALERT_CENTS
+  (15c, env-configurable) from entry. Rate-limited to DRIFT_LOG_COOLDOWN_SECS (1h)
+  per ticker. On Mac Studio this will trigger LLM re-analysis; now it builds the
+  data trail for position health monitoring.
+
+- **Loop D: New market detection** (`main.py`, `utils/logger.py`) -- at each 30-min
+  market cache refresh, compare the new ticker set against the previous. Any ticker
+  not seen before emits a `NEW_MARKET` event to `trades.jsonl` and immediately
+  triggers a Loop A targeted news search. New Kalshi listings are discovered within
+  30 minutes of appearing rather than waiting for RSS to bring a matching story.
+
+- **5 new env-configurable constants** (`config.py`): `DRIFT_ALERT_CENTS`,
+  `DRIFT_LOG_COOLDOWN_SECS`, `PRICE_MOVE_THRESHOLD_CENTS`, `PRICE_SEARCH_COOLDOWN_SECS`,
+  `PRICE_VELOCITY_WINDOW_SECS`.
+
+- **Architecture roadmap** (`docs/market_feedback_loop_roadmap.md`) -- committed to
+  repo so it travels to Mac Studio on `git pull`. Documents all four loops,
+  Phase 3 dynamic weighting implementation sketch, and multi-agent vision.
+
+---
+
 ## [0.18.0] - 2026-04-06
 
 ### Changed

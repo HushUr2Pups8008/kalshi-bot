@@ -328,6 +328,42 @@ class TradeLogger:
             "headline": headline,
         })
 
+    def log_position_drift(
+        self,
+        *,
+        ticker: str,
+        entry_price: float,
+        current_price: float,
+        drift_cents: float,
+        side: str,
+        open_since: str,
+    ) -> None:
+        """Loop C: open position price has drifted significantly from entry."""
+        self._write({
+            "type": "POSITION_DRIFT",
+            "ticker": ticker,
+            "entry_price": round(entry_price, 2),
+            "current_price": round(current_price, 2),
+            "drift_cents": round(drift_cents, 2),
+            "side": side,
+            "open_since": open_since,
+        })
+
+    def log_new_market(
+        self,
+        *,
+        ticker: str,
+        title: str,
+        series_ticker: str,
+    ) -> None:
+        """Loop D: a market not seen in the previous cache refresh has appeared."""
+        self._write({
+            "type": "NEW_MARKET",
+            "ticker": ticker,
+            "title": title,
+            "series_ticker": series_ticker,
+        })
+
 
 # Module-level singletons
 trade_log = TradeLogger()

@@ -270,6 +270,20 @@ MARKET_SERIES_BLOCKLIST_PREFIXES = [
 MARKET_CACHE_TTL_SECONDS  = 1800  # 30 min — geo market refresh takes ~3 min; no need to refresh every 5
 MAX_MARKET_DAYS_TO_EXPIRY = 30
 
+# ── Market feedback loop thresholds ──────────────────────────────────────────
+# Loop C: open position drift alert
+# Log a POSITION_DRIFT event to trades.jsonl when an open position's market
+# price moves this many cents from the entry price. Rate-limited per ticker.
+DRIFT_ALERT_CENTS: int       = int(os.getenv("DRIFT_ALERT_CENTS",       "15"))
+DRIFT_LOG_COOLDOWN_SECS: int = int(os.getenv("DRIFT_LOG_COOLDOWN_SECS", "3600"))
+
+# Loop A: price-velocity-driven targeted news search
+# Trigger a targeted Google News + GDELT search for a geo market when its price
+# moves this many cents within the last 5 minutes (PRICE_VELOCITY_WINDOW_SECS).
+PRICE_MOVE_THRESHOLD_CENTS: int  = int(os.getenv("PRICE_MOVE_THRESHOLD_CENTS",  "10"))
+PRICE_SEARCH_COOLDOWN_SECS: int  = int(os.getenv("PRICE_SEARCH_COOLDOWN_SECS",  "1800"))
+PRICE_VELOCITY_WINDOW_SECS: int  = int(os.getenv("PRICE_VELOCITY_WINDOW_SECS",  "300"))
+
 # ── Paper trading thresholds (cast a wide net for data collection) ────────────
 # These are more permissive than live thresholds to maximise resolved trades
 # and build source credibility data during the paper phase.
