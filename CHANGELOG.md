@@ -6,6 +6,36 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.18.0] - 2026-04-06
+
+### Changed
+- **Paper ticker cooldown 4h -> 2h** (`.env` `PAPER_TICKER_COOLDOWN=7200`) -- historical
+  analysis showed 34 of 178 skips were cooldown blocks. The 4h window was blocking
+  legitimate follow-on signals (ceasefire news after airstrike news, ~2-6h later).
+  2h still prevents intra-burst spam (bot polls every 60s, so 2h = 120 suppression cycles)
+  but allows real signal diversity. No code change; `cfg.paper_ticker_cooldown` reads from env.
+- **Staleness guard 5min -> 10min** (`.env` `MAX_NEWS_AGE_SECONDS=600`) -- with
+  max_candidates=3 and 20-40s/inference, articles can be 3-5 min in queue before LLM
+  evaluation. The old 300s window was discarding valid articles during busy inference periods.
+  10 min is still within alpha window for 24h Kalshi markets.
+- **Same-side duplicate guard: flat block -> prob+price delta** (`trading/executor.py:134-138`) --
+  the paper phase was blocking ALL same-side re-entry on a ticker regardless of how much
+  the probability estimate shifted. 11 historical skips used this path. Now allows
+  re-entry when estimated_prob has shifted >=0.07 OR market price has moved >=5c since
+  the open position. This lets the LLM accumulate on genuinely updated signals while
+  still blocking informationally-identical ones.
+
+### Added
+- **Senate confirmation + Trump action keyword groups** (`config.py` `GEOPOLITICAL_SIGNALS`) --
+  active Kalshi markets include KXSENATECONFIRM (Bondi, Gabbard, Hegseth), KXBONDITESTIFY,
+  and various Trump executive action markets. The keyword gate had no terms for confirmation
+  hearings ("confirmation hearing", "senate confirms", "nominee confirmed", "testifies before")
+  or Trump-specific actions ("trump fires", "trump pardons", "fired by trump"). These markets
+  were generating zero SIGNAL events despite active news flow. Two new keyword groups
+  cover these categories at strength 0.12 and 0.10 respectively.
+
+---
+
 ## [0.17.1] - 2026-04-06
 
 ### Changed

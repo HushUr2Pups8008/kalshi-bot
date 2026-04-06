@@ -345,6 +345,21 @@ GEOPOLITICAL_SIGNALS = [
     {"keywords": ["government reopened", "debt ceiling raised", "budget passed",
                   "bipartisan deal", "confirmation vote passed"],
      "direction": "no", "strength": 0.08},
+    # Senate confirmations / testimony (KXSENATECONFIRM, KXBONDITESTIFY, etc.)
+    # These markets are active on Kalshi but the keyword gate was previously silent
+    # on confirmation-specific language.
+    {"keywords": ["confirmation hearing", "senate confirms", "senate vote",
+                  "confirmation vote", "cabinet confirmed", "filibuster",
+                  "cloture vote", "nominee confirmed", "nominee rejected",
+                  "testimony begins", "testifies before", "senate judiciary",
+                  "senate armed services", "advise and consent"],
+     "direction": "yes", "strength": 0.12},
+    # Trump executive actions -- high-volume Kalshi market category covering
+    # firings, pardons, and executive orders where the headline IS the market event.
+    {"keywords": ["trump fires", "trump pardons", "executive order signed",
+                  "fired by trump", "dismissed by trump", "removed from office",
+                  "trump dismisses", "white house fires", "trump terminates"],
+     "direction": "yes", "strength": 0.10},
 ]
 
 

@@ -128,14 +128,19 @@ class TradeExecutor:
                     f"opposing position exists: open {pos.side.upper()} "
                     f"at est={pos.estimated_prob:.3f} -- no hedging"
                 )
-            # Paper phase: block ANY same-side duplicate regardless of prob delta.
-            # Goal is clean, non-redundant signal data. Live mode keeps the narrow
-            # delta guard (only skip informationally identical signals).
+            # Paper phase: allow same-side re-entry only if the estimated probability
+            # has shifted significantly (>=0.07) OR market price has moved (>=5c).
+            # This replaces the former flat block (PAPER_BLOCK_SAME_SIDE_DUPLICATE)
+            # which suppressed 11 valid follow-on signals over the first 30 days.
             if cfg.is_paper_trading and PAPER_BLOCK_SAME_SIDE_DUPLICATE:
-                return (
-                    f"paper duplicate skip: open {pos.side.upper()} at "
-                    f"est={pos.estimated_prob:.3f} already exists -- no stacking"
-                )
+                prob_delta_paper  = abs(pos.estimated_prob - analysis.estimated_probability)
+                price_delta_paper = abs(pos.market_yes_price - analysis.market_yes_price)
+                if prob_delta_paper < 0.07 and price_delta_paper < 5.0:
+                    return (
+                        f"paper duplicate skip: open {pos.side.upper()} at "
+                        f"est={pos.estimated_prob:.3f} (delta={prob_delta_paper:.3f}) "
+                        f"-- prob shift too small to add position"
+                    )
             prob_delta  = abs(pos.estimated_prob - analysis.estimated_probability)
             price_delta = abs(pos.market_yes_price - analysis.market_yes_price)
             if prob_delta < 0.02 and price_delta < 2.0:
