@@ -6,6 +6,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.17.0] - 2026-04-06
+
+### Added
+- **Performance analysis script** (`scripts/performance_analysis.py`) -- repeatable
+  end-to-end analysis covering the full signal pipeline. Reads `logs/trades.jsonl`
+  and `data/paper_trades.db` to produce a dated report in `logs/analysis_YYYYMMDD_HHmm.txt`.
+  Sections: signal pipeline funnel (signal->opportunity->trade conversion rates), placed
+  trades performance (win rate, P&L, ROI, edge calibration), skip reason breakdown,
+  missed opportunities with counterfactual P&L for those with known resolutions,
+  per-source performance, edge calibration vs actual outcomes, go-live readiness.
+  Optional `--enrich` flag fetches Kalshi API resolutions for skipped tickers and caches
+  them to `logs/market_resolution_cache.json`. Date window via `--since`/`--until`
+  (default: last 30 days). Designed for daily/weekly/monthly cadence.
+
+---
+
 ## [0.16.0] - 2026-04-03
 
 ### Added
