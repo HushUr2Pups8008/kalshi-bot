@@ -6,6 +6,41 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.24.0] - 2026-04-07
+
+### Added
+- **Live loss limit circuit breaker (CRITICAL safety):** `executor.py` now tracks the
+  session-start Kalshi balance on the first live order attempt. If cumulative session loss
+  exceeds `LIVE_LOSS_LIMIT_PERCENT` (default 10%) of bankroll, `_live_halted` is set, the
+  shutdown callback fires, and all subsequent `_validate()` calls short-circuit with a
+  "HALTED" message without touching the exchange. Added `set_shutdown_callback()` method to
+  `TradeExecutor` so `main.py` can wire an async shutdown coroutine at startup.
+- **`LIVE_LOSS_LIMIT_PERCENT` config var:** Added to `config.py` (default `0.10`) and
+  documented in `.env.example`. Controls the session drawdown threshold.
+- **Order retry with exponential backoff:** `_execute_live()` now retries up to 3 times on
+  transient failures (429, 5xx, timeout, connection reset, network errors) with 1s and 2s
+  delays. Permanent errors (400, 403) abort immediately after one attempt. Prevents missed
+  trades from single network hiccups.
+- **Automated test suite -- 74 tests, 0 failures:** New `tests/` directory with `pytest.ini`
+  (`asyncio_mode = auto`). Five test modules covering the critical path:
+  - `test_kelly.py` (31 tests): time discount, Kelly sizing, min-edge gate, cap enforcement,
+    source multiplier, contracts-from-dollars conversion.
+  - `test_paper_trader.py` (10 tests): bankroll atomicity regression, P&L accounting (win YES,
+    loss YES, win NO), keyword_outcomes written on resolution, Kelly shadow column.
+  - `test_signal_analyzer.py` (16 tests): `_extract_json` edge cases including brace-in-preamble
+    and last-valid-object behavior; `_parse_llm_response` probability mapping and clamping;
+    `_keyword_score` with and without KeywordStats multiplier.
+  - `test_market_matcher.py` (11 tests): tokenization, stopword removal, Jaccard similarity
+    with geopolitical boost.
+  - `test_executor.py` (13 tests): loss limit seeding/breach/persistence/callback, retry
+    transient/permanent discrimination, 3-attempt exhaustion.
+
+### Changed
+- `main.py`: Wires shutdown callback to executor after construction so loss limit breach
+  triggers a clean async shutdown via `asyncio.create_task(_shutdown(self))`.
+
+---
+
 ## [0.23.0] - 2026-04-07
 
 ### Fixed

@@ -15,7 +15,7 @@ Live mode: requires explicit --go-live confirmation. Tighter checks.
 import asyncio
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from analysis import SignalAnalysis
 from analysis.kelly import contracts_from_dollars
@@ -38,7 +38,34 @@ class TradeExecutor:
         self._rest         = rest_client
         self._paper        = paper_trader
         self._last_traded: dict[str, float] = {}
+        # Live session loss limit state
+        self._session_start_balance: Optional[float] = None
+        self._live_halted:           bool             = False
+        self._shutdown_callback:     Optional[Callable] = None
         self._seed_cooldowns_from_db()
+
+    def set_shutdown_callback(self, cb: Callable) -> None:
+        """Register a callback that is invoked when the live loss limit is breached."""
+        self._shutdown_callback = cb
+
+    def _check_live_loss_limit(self, balance: float) -> bool:
+        """
+        Track session-start Kalshi balance and return True if the loss limit is breached.
+        First call seeds the baseline; subsequent calls compare against it.
+        """
+        if self._session_start_balance is None:
+            self._session_start_balance = balance
+            log.info(
+                "[LOSS_LIMIT] Session start balance recorded: $%.2f "
+                "(halt at $%.2f loss, limit=%.0f%%)",
+                balance,
+                cfg.bankroll * cfg.live_loss_limit_pct,
+                cfg.live_loss_limit_pct * 100,
+            )
+            return False
+        loss = self._session_start_balance - balance
+        limit = cfg.bankroll * cfg.live_loss_limit_pct
+        return loss >= limit
 
     def _seed_cooldowns_from_db(self) -> None:
         """
@@ -106,7 +133,7 @@ class TradeExecutor:
         price_floor = 2 if cfg.is_paper_trading else 3
         price_ceil  = 98 if cfg.is_paper_trading else 97
         if yes_price < price_floor or yes_price > price_ceil:
-            return f"price {yes_price:.1f}¢ is near limit (too illiquid)"
+            return f"price {yes_price:.1f}c is near limit (too illiquid)"
 
         # Paper ticker cooldown (4h): prevents same ticker being spammed by a burst
         # of headlines on the same topic (e.g. 30 Iran-war articles in one poll cycle).
@@ -173,8 +200,12 @@ class TradeExecutor:
                 f"{cfg.max_ticker_exposure_pct:.0%} cap (${cap:.2f})"
             )
 
-        # Live ticker cooldown + balance check
+        # Live ticker cooldown + balance check + session loss limit
         if not cfg.is_paper_trading:
+            # Halt check: if a previous call already triggered the limit, reject all trades
+            if self._live_halted:
+                return "LIVE HALTED: session loss limit reached -- all trading suspended"
+
             last    = self._last_traded.get(analysis.market.ticker, 0.0)
             elapsed = time.monotonic() - last
             if elapsed < cfg.live_ticker_cooldown:
@@ -182,8 +213,23 @@ class TradeExecutor:
                     f"cooldown: last trade {elapsed:.0f}s ago "
                     f"(cooldown={cfg.live_ticker_cooldown}s)"
                 )
-            # Live balance check
+            # Live balance check + session loss limit (single API call covers both)
             balance = self._rest.get_balance()
+            if self._check_live_loss_limit(balance):
+                self._live_halted = True
+                loss = self._session_start_balance - balance
+                log.critical(
+                    "LIVE LOSS LIMIT BREACHED -- halting all trading. "
+                    "Session loss $%.2f >= limit $%.2f (%.0f%% of $%.2f bankroll). "
+                    "Restart bot to reset.",
+                    loss,
+                    cfg.bankroll * cfg.live_loss_limit_pct,
+                    cfg.live_loss_limit_pct * 100,
+                    cfg.bankroll,
+                )
+                if self._shutdown_callback:
+                    self._shutdown_callback()
+                return "LIVE HALTED: session loss limit reached -- all trading suspended"
             if analysis.capped_dollars > balance * 0.9:
                 return f"insufficient live balance (${balance:.2f})"
 
@@ -202,53 +248,99 @@ class TradeExecutor:
         )
         return trade_id
 
+    @staticmethod
+    def _is_retryable_error(error: Optional[str]) -> bool:
+        """Return True for transient errors worth retrying (network, 5xx, rate-limit)."""
+        if not error:
+            return False
+        transient_markers = ("timeout", "429", "500", "502", "503", "504",
+                             "connection", "network", "reset")
+        err_lower = error.lower()
+        return any(m in err_lower for m in transient_markers)
+
     async def _execute_live(self, analysis: SignalAnalysis) -> Optional[str]:
-        """Place a real limit order on Kalshi."""
+        """Place a real limit order on Kalshi with exponential backoff on transient errors."""
         price_cents = int(analysis.market.yes_ask) if analysis.side == "yes" \
                       else int(100 - analysis.market.yes_bid)
         price_cents  = max(1, min(99, price_cents))
         contracts    = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
 
         if contracts <= 0:
-            log.warning("Live order aborted: contracts=0 for $%.2f @ %d¢",
+            log.warning("Live order aborted: contracts=0 for $%.2f @ %dc",
                         analysis.capped_dollars, price_cents)
             return None
 
         cost_dollars = contracts * price_cents / 100.0
         log.info(
-            "[LIVE] Placing order: %s %s %d @ %d¢ | cost=$%.2f | edge=%+.3f | confidence=%.2f",
+            "[LIVE] Placing order: %s %s %d @ %dc | cost=$%.2f | edge=%+.3f | confidence=%.2f",
             analysis.market.ticker, analysis.side.upper(), contracts,
             price_cents, cost_dollars, analysis.edge, analysis.confidence,
         )
 
-        loop   = asyncio.get_running_loop()
-        result: OrderResult = await loop.run_in_executor(
-            None,
-            lambda: self._rest.place_limit_order(
+        loop = asyncio.get_running_loop()
+        last_error: Optional[str] = None
+
+        for attempt in range(3):
+            if attempt > 0:
+                delay = 2 ** (attempt - 1)   # 1s, 2s
+                log.warning(
+                    "[LIVE] Retrying order for %s (attempt %d/3, backoff=%ds): %s",
+                    analysis.market.ticker, attempt + 1, delay, last_error,
+                )
+                await asyncio.sleep(delay)
+
+            try:
+                result: OrderResult = await loop.run_in_executor(
+                    None,
+                    lambda: self._rest.place_limit_order(
+                        ticker=analysis.market.ticker,
+                        side=analysis.side,
+                        count=contracts,
+                        limit_price=price_cents,
+                    ),
+                )
+            except Exception as exc:
+                last_error = str(exc)
+                if attempt < 2:
+                    continue
+                log.error("[LIVE] Order failed after 3 attempts (exception): %s", last_error)
+                return None
+
+            if result.error:
+                last_error = result.error
+                if self._is_retryable_error(result.error) and attempt < 2:
+                    continue
+                # Non-retryable or final attempt
+                log.error(
+                    "[LIVE] Order failed%s: %s",
+                    " after 3 attempts" if attempt == 2 else "",
+                    result.error,
+                )
+                return None
+
+            # Success
+            trade_log.log_live_order(
+                order_id=result.order_id,
                 ticker=analysis.market.ticker,
                 side=analysis.side,
-                count=contracts,
-                limit_price=price_cents,
-            ),
-        )
+                contracts=contracts,
+                price_cents=price_cents,
+                cost_dollars=cost_dollars,
+                status=result.status,
+            )
+            if attempt > 0:
+                log.info(
+                    "[LIVE] Order placed on attempt %d: %s | status=%s | filled=%d",
+                    attempt + 1, result.order_id, result.status, result.filled,
+                )
+            else:
+                log.info(
+                    "[LIVE] Order placed: %s | status=%s | filled=%d",
+                    result.order_id, result.status, result.filled,
+                )
+            return result.order_id
 
-        trade_log.log_live_order(
-            order_id=result.order_id,
-            ticker=analysis.market.ticker,
-            side=analysis.side,
-            contracts=contracts,
-            price_cents=price_cents,
-            cost_dollars=cost_dollars,
-            status=result.status,
-        )
-
-        if result.error:
-            log.error("[LIVE] Order failed: %s", result.error)
-            return None
-
-        log.info("[LIVE] Order placed: %s | status=%s | filled=%d",
-                 result.order_id, result.status, result.filled)
-        return result.order_id
+        return None
 
     def status(self) -> dict:
         return {

@@ -94,6 +94,11 @@ class TradingBot:
         self.matcher       = MarketMatcher(self.rest)
         self.paper         = PaperTrader()
         self.executor      = TradeExecutor(self.rest, self.paper)
+        # Wire live loss limit shutdown: executor calls this when the session loss
+        # threshold is breached. Uses asyncio.create_task so it's safe from any context.
+        self.executor.set_shutdown_callback(
+            lambda: asyncio.create_task(_shutdown(self))
+        )
         self.source_stats  = SourceStats(db_path=DATA_DIR / "paper_trades.db")
         self.keyword_stats = KeywordStats(DATA_DIR / "paper_trades.db")
         self.ws.on_price_update(self._on_price_update)

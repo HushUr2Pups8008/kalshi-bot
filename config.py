@@ -426,6 +426,13 @@ class BotConfig:
     go_live_min_win_rate:    float = field(default_factory=lambda: float(os.getenv("GO_LIVE_MIN_WIN_RATE", "0.52")))
     go_live_max_drawdown_pct: float = field(default_factory=lambda: float(os.getenv("GO_LIVE_MAX_DRAWDOWN_PCT", "0.20")))
 
+    # Live session loss limit: halt all trading if live Kalshi balance drops more than
+    # this fraction of BANKROLL below the session-start balance. Default 10% ($50 on $500).
+    # Set to 1.0 to disable. Checked on every live trade attempt via get_balance().
+    live_loss_limit_pct: float = field(
+        default_factory=lambda: float(os.getenv("LIVE_LOSS_LIMIT_PERCENT", "0.10"))
+    )
+
     # Portfolio risk: max fraction of notional bankroll deployed in a single ticker.
     # Prevents runaway concentration on one market (e.g. Iran war dominates the book).
     # Default 25% — raise in .env if needed. Set to 1.0 to disable.
