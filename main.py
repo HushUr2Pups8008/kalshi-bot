@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 
 from analysis import SignalAnalysis
 from analysis.kelly import kelly_bet
+from analysis.keyword_stats import KeywordStats
 from analysis.market_matcher import MarketMatcher
 from analysis.signal_analyzer import estimate_probability
 from analysis.source_stats import SourceStats
@@ -87,12 +88,13 @@ def parse_args() -> argparse.Namespace:
 
 class TradingBot:
     def __init__(self):
-        self.rest         = KalshiRestClient()
-        self.ws           = KalshiWebSocketClient()
-        self.matcher      = MarketMatcher(self.rest)
-        self.paper        = PaperTrader()
-        self.executor     = TradeExecutor(self.rest, self.paper)
-        self.source_stats = SourceStats(db_path=DATA_DIR / "paper_trades.db")
+        self.rest          = KalshiRestClient()
+        self.ws            = KalshiWebSocketClient()
+        self.matcher       = MarketMatcher(self.rest)
+        self.paper         = PaperTrader()
+        self.executor      = TradeExecutor(self.rest, self.paper)
+        self.source_stats  = SourceStats(db_path=DATA_DIR / "paper_trades.db")
+        self.keyword_stats = KeywordStats(DATA_DIR / "paper_trades.db")
         self.ws.on_price_update(self._on_price_update)
         # Priority queue decouples feed pollers from slow LLM inference.
         # RSS/wire services (priority 1) are processed before Reddit (priority 2).
@@ -174,9 +176,8 @@ class TradingBot:
             market.yes_bid   = max(1, ws_price - 1)
             market.yes_ask   = min(99, ws_price + 1)
 
-        estimated_prob, confidence, keywords, reasoning = await estimate_probability(
-            news, market
-        )
+        estimated_prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
+            await estimate_probability(news, market, keyword_stats=self.keyword_stats)
         if not keywords:
             return
 
@@ -250,6 +251,11 @@ class TradingBot:
             keywords_matched=keywords,
             reasoning=reasoning,
             confidence=confidence,
+            match_score=match_score,
+            signal_type="news",
+            llm_direction=llm_dir,
+            llm_magnitude=llm_mag,
+            llm_confidence=llm_conf,
         )
 
         trade_id = await self.executor.execute(analysis)
@@ -320,6 +326,8 @@ class TradingBot:
                 f"{tweet.headline[:80]}"
             ),
             confidence=0.3,
+            match_score=score,
+            signal_type="fade_tweet",
         )
         log.info("[FADE/%s/@%s] %s | %s | pattern=%s | match_score=%.3f",
                  category, account, market.ticker, fade_side.upper(), pattern, score)
@@ -496,6 +504,7 @@ class TradingBot:
                 f"threshold={threshold_val}c -> {fade_side.upper()}"
             ),
             confidence=0.4,
+            signal_type="price_fade",
         )
 
         log.info("[PRICE_FADE] %s | %s | mid=%.1fc | threshold=%dc | side=%s",

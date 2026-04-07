@@ -6,6 +6,44 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.22.0] - 2026-04-07
+
+### Added
+- `analysis/keyword_stats.py`: new `KeywordStats` class reads per-(keyword, series_ticker)
+  accuracy from the `keyword_outcomes` table (written since v0.19.0 but never consumed).
+  Returns a multiplier in [0.5, 1.5] applied to each keyword's base strength in
+  `_keyword_score()`. Loaded at startup, refreshed every 6h, thread-safe. Closes the
+  keyword feedback loop that was the largest "Phase 3" gap found in the v0.22.0 audit.
+- Seven new columns in `paper_trades` schema (added via ALTER TABLE migration, zero data
+  loss): `series_ticker`, `resolved_ts`, `signal_type`, `match_score`, `llm_direction`,
+  `llm_magnitude`, `llm_confidence`. Historical `series_ticker` backfilled from
+  `json_extract(market_snapshot, '$.series_ticker')`.
+- `SignalAnalysis` dataclass extended with `match_score`, `signal_type`, `llm_direction`,
+  `llm_magnitude`, `llm_confidence` fields (`analysis/__init__.py`).
+- `signal_type` tagging: news pipeline signals tagged `"news"`, price-fade signals tagged
+  `"price_fade"`, fade-tweet signals tagged `"fade_tweet"` (`main.py`).
+- `match_score` now flows from `find_candidates()` through `_process_candidate()` into
+  `SignalAnalysis` and is persisted to `paper_trades` (`main.py`, `paper_trader.py`).
+- Raw LLM fields (`direction`, `magnitude`, `confidence`) now returned from
+  `_parse_llm_response()` / `estimate_probability()` and stored in each trade record,
+  enabling future LLM calibration analysis (`signal_analyzer.py`, `paper_trader.py`).
+- Three new sections in `scripts/performance_analysis.py`:
+  - **7b. Per-series win rate**: win rate and P&L grouped by `series_ticker`.
+  - **7c. Keyword accuracy**: per-(keyword, series_ticker) accuracy table with applied
+    multiplier; aggregate per-keyword table for overview.
+  - **7d. Match score calibration**: win rate by match_score band with advisory if
+    empirical data suggests a better `PAPER_MIN_MATCH_SCORE` threshold.
+
+### Changed
+- `_keyword_score()` now accepts optional `keyword_stats` and `series_ticker` args;
+  applies per-(keyword, series_ticker) accuracy multiplier when sufficient data exists
+  (>= 10 samples). Falls back to 1.0 (neutral) below threshold (`signal_analyzer.py`).
+- `estimate_probability()` signature extended to accept `keyword_stats` and returns a
+  7-tuple including raw LLM fields. All callers updated (`main.py`).
+- `resolve_market()` now populates `resolved_ts` on every resolution (`paper_trader.py`).
+- Two pre-existing em dashes in `paper_trader.py` log strings replaced with `--` to
+  comply with Windows cp1252 logging safety rules.
+
 ## [0.21.0] - 2026-04-07
 
 ### Added

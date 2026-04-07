@@ -69,16 +69,22 @@ def _extract_json(text: str) -> dict:
 
 # ── Keyword scoring ───────────────────────────────────────────────────────────
 
-def _keyword_score(text: str) -> tuple[float, str, list[str]]:
+def _keyword_score(
+    text: str,
+    keyword_stats=None,   # KeywordStats instance or None
+    series_ticker: str = "",
+) -> tuple[float, str, list[str]]:
     """
     Scan text against GEOPOLITICAL_SIGNALS keyword lists.
+
+    If keyword_stats is provided, each keyword's base strength is multiplied by
+    its per-(keyword, series_ticker) accuracy multiplier from KeywordStats.
 
     Returns:
         (raw_shift, dominant_direction, matched_keywords)
         raw_shift is a signed float: positive = push toward YES, negative = push toward NO.
     """
     text_lower = text.lower()
-    total_shift = 0.0
     matched: list[str] = []
     direction_weights: dict[str, float] = {"yes": 0.0, "no": 0.0}
 
@@ -91,6 +97,12 @@ def _keyword_score(text: str) -> tuple[float, str, list[str]]:
         if hits:
             matched.extend(hits)
             weight = strength * (1 + 0.1 * (len(hits) - 1))   # bonus for multiple hits
+            if keyword_stats is not None and series_ticker:
+                # Apply per-(keyword, series_ticker) accuracy multiplier.
+                # Use the first hit in this signal group as the representative keyword;
+                # all hits share the same direction and strength definition.
+                mult = keyword_stats.get_multiplier(hits[0], series_ticker)
+                weight *= mult
             direction_weights[direction] += weight
 
     net_shift = direction_weights["yes"] - direction_weights["no"]
@@ -102,6 +114,7 @@ def keyword_estimate(
     news: NewsItem,
     market: KalshiMarket,
     base_probability: Optional[float] = None,
+    keyword_stats=None,   # KeywordStats instance or None
 ) -> tuple[float, str, list[str], str]:
     """
     Estimate the probability of YES resolution for the given market,
@@ -111,7 +124,10 @@ def keyword_estimate(
         (estimated_probability, side, keywords_matched, reasoning)
     """
     combined_text = f"{news.headline} {news.body}"
-    shift, direction, keywords = _keyword_score(combined_text)
+    series_ticker = getattr(market, "series_ticker", "") or ""
+    shift, direction, keywords = _keyword_score(
+        combined_text, keyword_stats=keyword_stats, series_ticker=series_ticker
+    )
 
     if base_probability is None:
         base_probability = market.yes_prob  # use current market price
@@ -244,12 +260,14 @@ def _build_user_msg(news, market) -> str:
     )
 
 
-def _parse_llm_response(parsed: dict, market) -> tuple[float, float, str]:
+def _parse_llm_response(parsed: dict, market) -> tuple[float, float, str, str, str]:
     """
-    Shared helper: extract (prob, confidence, reasoning) from a parsed LLM JSON dict.
+    Shared helper: extract (prob, confidence, reasoning, direction, magnitude)
+    from a parsed LLM JSON dict.
 
     Applies the magnitude -> probability shift mapping and returns market.yes_prob
     unchanged when the model signals no new information.
+    Returns raw direction and magnitude for storage in paper_trades.
     """
     confidence = float(parsed.get("confidence", 0.5))
     reasoning  = parsed.get("reasoning", "")
@@ -268,7 +286,7 @@ def _parse_llm_response(parsed: dict, market) -> tuple[float, float, str]:
         else:
             prob = max(0.05, market.yes_prob - shift)
 
-    return prob, confidence, reasoning
+    return prob, confidence, reasoning, direction, magnitude
 
 
 async def _ollama_ping() -> bool:
@@ -347,15 +365,14 @@ async def _ollama_estimate(news, market):
 
         text   = data["choices"][0]["message"]["content"].strip()
         parsed = _extract_json(text)
-        prob, confidence, reasoning = _parse_llm_response(parsed, market)
+        prob, confidence, reasoning, direction, magnitude = _parse_llm_response(parsed, market)
         if _ollama_consecutive_failures > 0:
             log.info("Ollama recovered after %d consecutive failures", _ollama_consecutive_failures)
             _ollama_consecutive_failures = 0
             _ollama_down_until = 0.0
         log.debug("Ollama: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
-                  parsed.get("direction"), parsed.get("magnitude"),
-                  confidence, prob, market.ticker)
-        return prob, confidence, reasoning
+                  direction, magnitude, confidence, prob, market.ticker)
+        return prob, confidence, reasoning, direction, magnitude
 
     except aiohttp.ClientConnectorError:
         _ollama_consecutive_failures += 1
@@ -411,11 +428,10 @@ async def _anthropic_estimate(news, market):
 
         text   = response.content[0].text.strip()
         parsed = _extract_json(text)
-        prob, confidence, reasoning = _parse_llm_response(parsed, market)
+        prob, confidence, reasoning, direction, magnitude = _parse_llm_response(parsed, market)
         log.debug("Anthropic: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
-                  parsed.get("direction"), parsed.get("magnitude"),
-                  confidence, prob, market.ticker)
-        return prob, confidence, reasoning
+                  direction, magnitude, confidence, prob, market.ticker)
+        return prob, confidence, reasoning, direction, magnitude
 
     except ImportError:
         log.warning("anthropic package not installed -- Anthropic estimation disabled")
@@ -446,27 +462,36 @@ async def llm_estimate(news, market):
 async def estimate_probability(
     news: NewsItem,
     market: KalshiMarket,
-) -> tuple[float, float, list[str], str]:
+    keyword_stats=None,   # KeywordStats instance or None
+) -> tuple[float, float, list[str], str, Optional[str], Optional[str], Optional[float]]:
     """
     Best-available probability estimate for this (news, market) pair.
 
     Tries LLM first; falls back to keyword scoring.
 
+    Args:
+        keyword_stats: optional KeywordStats instance for per-(keyword, series_ticker)
+                       accuracy multipliers. Pass None to skip multipliers.
+
     Returns:
-        (estimated_probability, confidence, keywords_matched, reasoning)
+        (estimated_probability, confidence, keywords_matched, reasoning,
+         llm_direction, llm_magnitude, llm_confidence)
+        llm_* fields are None when keyword-only path is used.
     """
     # Always run keyword scoring for the keyword list
-    kw_prob, kw_side, keywords, kw_reasoning = keyword_estimate(news, market)
+    kw_prob, kw_side, keywords, kw_reasoning = keyword_estimate(
+        news, market, keyword_stats=keyword_stats
+    )
 
     if not keywords:
         # News doesn't seem related to this market
-        return market.yes_prob, 0.1, [], "No relevant keywords found — no signal."
+        return market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", None, None, None
 
     # Try LLM if available
     llm_result = await llm_estimate(news, market)
     if llm_result:
-        llm_prob, llm_confidence, llm_reasoning = llm_result
-        # Use LLM probability directly — keywords only gate the match, not the estimate.
+        llm_prob, llm_confidence, llm_reasoning, llm_direction, llm_magnitude = llm_result
+        # Use LLM probability directly -- keywords only gate the match, not the estimate.
         # Blending was removed because it allowed keyword scores to manufacture bets
         # that the LLM explicitly said were not market-moving (e.g. LLM: 0.50 + keywords
         # push kw_prob to 0.65 -> blended 0.545 -> bet placed against LLM advice).
@@ -474,8 +499,8 @@ async def estimate_probability(
             f"[LLM] {llm_reasoning} "
             f"(LLM: {llm_prob:.3f}, Keywords(ref): {kw_prob:.3f})"
         )
-        return llm_prob, llm_confidence, keywords, reasoning
+        return llm_prob, llm_confidence, keywords, reasoning, llm_direction, llm_magnitude, llm_confidence
 
     # Keyword only
-    confidence = min(0.7, 0.3 + 0.05 * len(keywords))   # more keywords → more confident
-    return kw_prob, confidence, keywords, kw_reasoning
+    confidence = min(0.7, 0.3 + 0.05 * len(keywords))   # more keywords -> more confident
+    return kw_prob, confidence, keywords, kw_reasoning, None, None, None

@@ -718,6 +718,233 @@ def section_candidate_subreddits():
     return "\n".join(lines)
 
 
+def section_per_series_win_rate():
+    """
+    7b. Per-series win rate (resolved trades grouped by series_ticker).
+    Requires series_ticker column added in v0.22.0.
+    """
+    if not DB_PATH.exists():
+        return "No database found."
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                COALESCE(series_ticker, '(unknown)') AS series,
+                count(*) AS total,
+                sum(CASE WHEN pnl_dollars > 0 THEN 1 ELSE 0 END) AS wins,
+                sum(pnl_dollars) AS net_pnl
+            FROM paper_trades
+            WHERE resolved = 1 AND pnl_dollars IS NOT NULL
+            GROUP BY series
+            HAVING count(*) >= 2
+            ORDER BY total DESC
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return "series_ticker column not found -- run bot once with v0.22.0+ to migrate schema."
+    finally:
+        conn.close()
+
+    if not rows:
+        return "No resolved trades with series_ticker yet."
+
+    table_rows = []
+    for r in rows:
+        n    = r["total"]
+        wins = r["wins"]
+        wr   = wins / n if n else 0.0
+        table_rows.append([r["series"], n, wins, "%.1f%%" % (wr * 100), "$%+.2f" % (r["net_pnl"] or 0)])
+
+    lines = ["Win rate by series (resolved, >= 2 trades):", ""]
+    lines.append(tabulate(
+        table_rows,
+        headers=["Series", "Trades", "Wins", "Win Rate", "Net P&L"],
+        tablefmt="simple",
+    ))
+    return "\n".join(lines)
+
+
+def section_keyword_accuracy():
+    """
+    7c. Keyword accuracy table -- top keywords by sample count with accuracy and multiplier.
+    Uses keyword_outcomes table. Requires >= 10 resolved trades per (keyword, series_ticker).
+    """
+    if not DB_PATH.exists():
+        return "No database found."
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT keyword, series_ticker, count(*) AS n,
+                   sum(correct) AS wins,
+                   round(1.0 * sum(correct) / count(*), 3) AS accuracy
+            FROM keyword_outcomes
+            GROUP BY keyword, series_ticker
+            HAVING count(*) >= 10
+            ORDER BY count(*) DESC
+            LIMIT 30
+            """
+        ).fetchall()
+        # Also pull aggregate per keyword (all series) for context
+        agg_rows = conn.execute(
+            """
+            SELECT keyword, count(*) AS n, sum(correct) AS wins,
+                   round(1.0 * sum(correct) / count(*), 3) AS accuracy
+            FROM keyword_outcomes
+            GROUP BY keyword
+            ORDER BY count(*) DESC
+            LIMIT 30
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return "keyword_outcomes table not found -- bot has not run with v0.19.0+ yet."
+    finally:
+        conn.close()
+
+    lines = []
+
+    if not rows and not agg_rows:
+        return "No keyword outcome data yet (need >= 10 resolved trades with keyword matches)."
+
+    # Per-(keyword, series) with >= 10 samples
+    if rows:
+        table_rows = []
+        for r in rows:
+            acc  = r["accuracy"] or 0.0
+            mult = max(0.5, min(1.5, 0.5 + acc))
+            table_rows.append([
+                r["keyword"],
+                r["series_ticker"] or "(all)",
+                r["n"],
+                r["wins"],
+                "%.1f%%" % (acc * 100),
+                "%.2fx" % mult,
+            ])
+        lines.append("Per-(keyword, series_ticker) accuracy (>= 10 samples, top 30 by count):")
+        lines.append("")
+        lines.append(tabulate(
+            table_rows,
+            headers=["Keyword", "Series", "n", "Wins", "Accuracy", "Multiplier"],
+            tablefmt="simple",
+        ))
+        lines.append("")
+
+    # Aggregate per keyword (all series combined) for overview
+    if agg_rows:
+        agg_table = []
+        for r in agg_rows:
+            acc  = r["accuracy"] or 0.0
+            mult = max(0.5, min(1.5, 0.5 + acc))
+            agg_table.append([
+                r["keyword"],
+                r["n"],
+                r["wins"],
+                "%.1f%%" % (acc * 100),
+                "%.2fx" % mult,
+            ])
+        lines.append("Aggregate per keyword (all series, top 30 by count):")
+        lines.append("")
+        lines.append(tabulate(
+            agg_table,
+            headers=["Keyword", "n", "Wins", "Accuracy", "Multiplier"],
+            tablefmt="simple",
+        ))
+
+    return "\n".join(lines) if lines else "No keyword outcome data yet."
+
+
+def section_match_score_calibration():
+    """
+    7d. Match score calibration -- win rate by match_score band.
+    Uses match_score column added in v0.22.0.
+    Advisory: suggests whether PAPER_MIN_MATCH_SCORE threshold should be adjusted.
+    """
+    if not DB_PATH.exists():
+        return "No database found."
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT match_score, pnl_dollars
+            FROM paper_trades
+            WHERE resolved = 1
+              AND pnl_dollars IS NOT NULL
+              AND match_score IS NOT NULL
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return "match_score column not found -- run bot once with v0.22.0+ to migrate schema."
+    finally:
+        conn.close()
+
+    if not rows:
+        return "No resolved trades with match_score yet (column added in v0.22.0)."
+
+    # Bin into bands
+    bands = [0.0, 0.10, 0.20, 0.30, 0.50, 1.01]
+    band_labels = ["0.00-0.10", "0.10-0.20", "0.20-0.30", "0.30-0.50", "0.50+"]
+    band_data: dict[str, list[float]] = {l: [] for l in band_labels}
+
+    for r in rows:
+        score = r["match_score"] or 0.0
+        pnl   = r["pnl_dollars"]
+        for i in range(len(bands) - 1):
+            if bands[i] <= score < bands[i + 1]:
+                band_data[band_labels[i]].append(pnl)
+                break
+
+    table_rows = []
+    best_band  = None
+    best_wr    = 0.0
+    for label in band_labels:
+        pnls = band_data[label]
+        if not pnls:
+            continue
+        wins = sum(1 for p in pnls if p > 0)
+        wr   = wins / len(pnls)
+        net  = sum(pnls)
+        table_rows.append([label, len(pnls), wins, "%.1f%%" % (wr * 100), "$%+.2f" % net])
+        if wr > best_wr:
+            best_wr   = wr
+            best_band = label
+
+    if not table_rows:
+        return "No resolved trades with match_score in range."
+
+    lines = ["Win rate by match_score band:", ""]
+    lines.append(tabulate(
+        table_rows,
+        headers=["Score Band", "Trades", "Wins", "Win Rate", "Net P&L"],
+        tablefmt="simple",
+    ))
+    lines.append("")
+
+    # Advisory
+    current_threshold = float(os.environ.get("PAPER_MIN_MATCH_SCORE", "0.06"))
+    if best_band and table_rows:
+        low_bound = float(best_band.split("-")[0])
+        lines.append(
+            "  Advisory: highest win rate band is %s (%.1f%%). "
+            "Current threshold: %.2f." % (best_band, best_wr * 100, current_threshold)
+        )
+        if low_bound > current_threshold + 0.01:
+            lines.append(
+                "  Raising PAPER_MIN_MATCH_SCORE to %.2f may improve signal quality "
+                "-- verify with >= 30 samples before changing." % low_bound
+            )
+        else:
+            lines.append("  Current threshold appears reasonable given available data.")
+
+    return "\n".join(lines)
+
+
 def section_edge_calibration(db_trades):
     resolved = [t for t in db_trades if t.get("resolved") and t.get("resolved_yes") is not None]
     if not resolved:
@@ -887,6 +1114,15 @@ def main():
 
     report_lines.append(section_header("7. EDGE CALIBRATION"))
     report_lines.append(section_edge_calibration(db_trades))
+
+    report_lines.append(section_header("7b. PER-SERIES WIN RATE"))
+    report_lines.append(section_per_series_win_rate())
+
+    report_lines.append(section_header("7c. KEYWORD ACCURACY"))
+    report_lines.append(section_keyword_accuracy())
+
+    report_lines.append(section_header("7d. MATCH SCORE CALIBRATION"))
+    report_lines.append(section_match_score_calibration())
 
     report_lines.append(section_header("8. GO-LIVE READINESS"))
     report_lines.append(section_golive_readiness(db_trades, state))

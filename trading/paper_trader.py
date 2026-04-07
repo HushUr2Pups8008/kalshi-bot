@@ -132,6 +132,43 @@ class PaperTrader:
             self._conn.commit()
             log.info("DB migrated: added market_snapshot column to paper_trades")
 
+        # v0.22.0: feedback-loop columns
+        new_cols = [
+            ("series_ticker",  "TEXT"),
+            ("resolved_ts",    "TEXT"),
+            ("signal_type",    "TEXT DEFAULT 'news'"),
+            ("match_score",    "REAL"),
+            ("llm_direction",  "TEXT"),
+            ("llm_magnitude",  "TEXT"),
+            ("llm_confidence", "REAL"),
+        ]
+        for col, col_type in new_cols:
+            if col not in cols:
+                try:
+                    self._conn.execute(
+                        f"ALTER TABLE paper_trades ADD COLUMN {col} {col_type}"
+                    )
+                    self._conn.commit()
+                    log.info("DB migrated: added %s column to paper_trades", col)
+                except Exception as exc:
+                    log.warning("DB migration failed for column %s: %s", col, exc)
+
+        # Backfill series_ticker from market_snapshot JSON for historical rows
+        if "series_ticker" not in cols:
+            try:
+                cur = self._conn.execute(
+                    """UPDATE paper_trades
+                       SET series_ticker = json_extract(market_snapshot, '$.series_ticker')
+                       WHERE series_ticker IS NULL AND market_snapshot IS NOT NULL"""
+                )
+                self._conn.commit()
+                if cur.rowcount:
+                    log.info(
+                        "DB backfilled series_ticker for %d historical trades", cur.rowcount
+                    )
+            except Exception as exc:
+                log.warning("DB backfill of series_ticker failed: %s", exc)
+
     # ── State management ──────────────────────────────────────────────────────
 
     def _load_state(self) -> None:
@@ -143,7 +180,7 @@ class PaperTrader:
         if not row:
             now = datetime.now(timezone.utc).isoformat()
             self._set_state("paper_start_time", now)
-            log.info("Paper trading phase started — runs until you confirm --go-live.")
+            log.info("Paper trading phase started -- runs until you confirm --go-live.")
         else:
             log.info("Paper trading resumed (started %s).", row["value"])
 
@@ -161,7 +198,7 @@ class PaperTrader:
         ).fetchone()
         if row and row["value"] == "true":
             cfg.set_paper_mode(False)
-            log.warning("GO-LIVE confirmed — bot is in LIVE TRADING mode.")
+            log.warning("GO-LIVE confirmed -- bot is in LIVE TRADING mode.")
         else:
             cfg.set_paper_mode(True)
 
@@ -239,8 +276,9 @@ class PaperTrader:
                 cost_dollars, estimated_prob, market_yes_price, edge, kelly_dollars,
                 capped_dollars, signal_headline, signal_source, keywords_matched,
                 reasoning, source_multiplier, notional_bankroll_before, notional_bankroll_after,
-                market_snapshot)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                market_snapshot, series_ticker, signal_type, match_score,
+                llm_direction, llm_magnitude, llm_confidence)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 trade_id,
                 datetime.now(timezone.utc).isoformat(),
@@ -263,6 +301,12 @@ class PaperTrader:
                 bankroll_before,
                 bankroll_after,
                 market_snapshot,
+                analysis.market.series_ticker,
+                getattr(analysis, "signal_type", "news"),
+                getattr(analysis, "match_score", None),
+                getattr(analysis, "llm_direction", None),
+                getattr(analysis, "llm_magnitude", None),
+                getattr(analysis, "llm_confidence", None),
             ),
         )
         self._conn.commit()
@@ -337,13 +381,16 @@ class PaperTrader:
             total_pnl    += pnl
             total_payout += payout
 
+        now_ts = datetime.now(timezone.utc).isoformat()
+        series_ticker = ticker.split("-")[0]  # e.g. "KXTRUMPIRAN-26APR01" -> "KXTRUMPIRAN"
+
         # Atomically mark all trades resolved — rolls back everything if interrupted
         with self._conn:
             for t, won, payout, pnl in outcomes:
                 self._conn.execute(
-                    "UPDATE paper_trades SET resolved=1, resolved_yes=?, pnl_dollars=? "
-                    "WHERE trade_id=?",
-                    (int(resolved_yes), pnl, t["trade_id"]),
+                    "UPDATE paper_trades SET resolved=1, resolved_yes=?, pnl_dollars=?, "
+                    "resolved_ts=? WHERE trade_id=?",
+                    (int(resolved_yes), pnl, now_ts, t["trade_id"]),
                 )
 
         # Credit bankroll once for total payout (cost was debited on entry per-trade)
@@ -354,8 +401,6 @@ class PaperTrader:
 
         # Non-critical side effects: credibility + audit log + keyword outcomes
         # (DB already committed above)
-        series_ticker = ticker.split("-")[0]  # e.g. "KXTRUMPIRAN-26APR01" -> "KXTRUMPIRAN"
-        now_ts = datetime.now(timezone.utc).isoformat()
         from config import GEOPOLITICAL_SIGNALS
         _kw_direction: dict[str, str] = {}
         for sig in GEOPOLITICAL_SIGNALS:
