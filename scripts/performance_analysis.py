@@ -660,6 +660,64 @@ def section_source_quality():
     return "\n".join(lines)
 
 
+def section_candidate_subreddits():
+    """
+    Show subreddits discovered via Reddit post search (v0.21.0 discovery loop).
+    Displays discovered_ts, query that found it, probe_count, last_probed, status.
+    """
+    if not DB_PATH.exists():
+        return "No database found."
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT sub, discovered_ts, discovered_via, probe_count, last_probed, status
+            FROM subreddit_candidates
+            ORDER BY status ASC, probe_count DESC, discovered_ts DESC
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return "subreddit_candidates table not found -- bot has not run with v0.21.0+ yet."
+    finally:
+        conn.close()
+
+    if not rows:
+        return "No candidate subreddits discovered yet."
+
+    table_rows = []
+    for r in rows:
+        discovered = (r["discovered_ts"] or "")[:10]
+        via = (r["discovered_via"] or "")[:25]
+        last = (r["last_probed"] or "never")[:16]
+        table_rows.append([
+            "r/" + r["sub"],
+            discovered,
+            via,
+            r["probe_count"],
+            last,
+            r["status"],
+        ])
+
+    lines = ["Candidate subreddits (discovered via Reddit post search):", ""]
+    lines.append(tabulate(
+        table_rows,
+        headers=["Sub", "Discovered", "Via Query", "Probes", "Last Probed", "Status"],
+        tablefmt="simple",
+    ))
+
+    candidate_count  = sum(1 for r in rows if r["status"] == "candidate")
+    suppressed_count = sum(1 for r in rows if r["status"] == "suppressed")
+    lines.append("")
+    lines.append(
+        "  %d active candidates, %d suppressed (zero-signal after probing)"
+        % (candidate_count, suppressed_count)
+    )
+
+    return "\n".join(lines)
+
+
 def section_edge_calibration(db_trades):
     resolved = [t for t in db_trades if t.get("resolved") and t.get("resolved_yes") is not None]
     if not resolved:
@@ -823,6 +881,9 @@ def main():
 
     report_lines.append(section_header("6. SOURCE QUALITY FUNNEL"))
     report_lines.append(section_source_quality())
+
+    report_lines.append(section_header("6b. CANDIDATE SUBREDDITS"))
+    report_lines.append(section_candidate_subreddits())
 
     report_lines.append(section_header("7. EDGE CALIBRATION"))
     report_lines.append(section_edge_calibration(db_trades))

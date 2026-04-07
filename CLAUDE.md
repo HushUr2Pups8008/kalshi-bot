@@ -67,6 +67,16 @@ Every version bump requires a `CHANGELOG.md` entry in the same commit. No except
 
 ---
 
+## Plan Archiving
+After every non-trivial implementation (new feature, architectural change, version bump):
+- Archive the plan to docs/plans/vX.Y.Z_short_description.md in the repo
+- Include the full plan: Context, Non-Obvious Design Decisions, Verification sections
+- Commit the archive in the same commit as the implementation
+- These are Architectural Decision Records -- they prevent re-litigating design choices
+- Naming convention: docs/plans/vX.Y.Z_short_description_with_underscores.md
+
+---
+
 ## Go-Live Safety
 
 - Paper trading mode is the default. Live requires `python main.py --go-live` + `CONFIRM`.

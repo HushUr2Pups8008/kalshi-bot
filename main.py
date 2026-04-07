@@ -624,6 +624,27 @@ class TradingBot:
             except Exception as exc:
                 log.warning("Market refresh task error: %s", exc)
 
+    async def _subreddit_discovery_task(self) -> None:
+        """
+        Periodically discover new candidate subreddits via Reddit post search.
+        Waits 5 minutes on startup so the market cache is warm before the first pass.
+        """
+        from feeds.subreddit_discovery import run_discovery_pass
+        await asyncio.sleep(300)  # Let market cache warm up
+        while True:
+            try:
+                markets = self.matcher._cache._markets
+                if markets:
+                    count = await run_discovery_pass(markets, DATA_DIR / "paper_trades.db")
+                    if count:
+                        log.info("[DISCOVERY] Found %d new candidate subreddits", count)
+                else:
+                    log.debug("[DISCOVERY] Market cache empty, skipping discovery pass")
+            except Exception as exc:
+                log.warning("[DISCOVERY] Discovery pass failed: %s", exc)
+            from config import SUBREDDIT_DISCOVERY_INTERVAL_SECS
+            await asyncio.sleep(SUBREDDIT_DISCOVERY_INTERVAL_SECS)
+
     # ── Run ───────────────────────────────────────────────────────────────────
 
     def _make_subreddit_getter(self) -> "Callable[[], Awaitable[list[str]]]":
@@ -639,7 +660,11 @@ class TradingBot:
         async def _get() -> list[str]:
             try:
                 markets = self.matcher._cache._markets
-                result = select_subreddits(markets, source_stats=self.source_stats)
+                result = select_subreddits(
+                    markets,
+                    source_stats=self.source_stats,
+                    db_path=DATA_DIR / "paper_trades.db",
+                )
                 log.debug(
                     "Subreddit selector: %d subs for this cycle (%d active markets)",
                     len(result), len(markets),
@@ -740,6 +765,7 @@ class TradingBot:
             asyncio.create_task(self._daily_report_task(),              name="daily_report"),
             asyncio.create_task(self._market_refresh_task(),            name="market_refresh"),
             asyncio.create_task(self._auto_resolve_task(),              name="auto_resolve"),
+            asyncio.create_task(self._subreddit_discovery_task(),       name="sub_discovery"),
             *([asyncio.create_task(
                 run_rss_monitor(self._on_fade_tweet, feeds=FADE_TWEET_FEED_URLS),
                 name="fade_tweets",

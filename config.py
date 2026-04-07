@@ -316,6 +316,13 @@ SOURCE_STATS_MIN_POSTS: int         = int(os.getenv("SOURCE_STATS_MIN_POSTS",   
 SOURCE_STATS_LOW_SIGNAL_RATE: float = float(os.getenv("SOURCE_STATS_LOW_SIGNAL_RATE", "0.005"))
 SOURCE_STATS_ZERO_SIGNAL_POSTS: int = int(os.getenv("SOURCE_STATS_ZERO_SIGNAL_POSTS", "200"))
 
+# Subreddit discovery (v0.21.0) -- Reddit post search finds candidate subreddits
+# organically active on our market topics; source_stats then evaluates quality.
+SUBREDDIT_DISCOVERY_INTERVAL_SECS: int = int(os.getenv("SUBREDDIT_DISCOVERY_INTERVAL_SECS", "21600"))   # 6h between passes
+SUBREDDIT_PROBE_COOLDOWN_SECS: int     = int(os.getenv("SUBREDDIT_PROBE_COOLDOWN_SECS",     "10800"))   # 3h cooldown per candidate
+SUBREDDIT_PROBE_SLOTS: int             = int(os.getenv("SUBREDDIT_PROBE_SLOTS",             "3"))       # candidates per poll cycle
+SUBREDDIT_DISCOVERY_MAX_QUERIES: int   = int(os.getenv("SUBREDDIT_DISCOVERY_MAX_QUERIES",   "10"))      # queries per pass
+
 # ── Signal keyword categories ─────────────────────────────────────────────────
 GEOPOLITICAL_SIGNALS = [
     {"keywords": ["missile strike", "bombs", "shelling", "invasion", "military attack",

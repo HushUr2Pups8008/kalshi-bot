@@ -6,6 +6,55 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.21.0] - 2026-04-07
+
+### Added
+- **Subreddit discovery loop** (`feeds/subreddit_discovery.py` NEW,
+  `feeds/subreddit_selector.py`, `main.py`, `config.py`,
+  `trading/paper_trader.py`, `scripts/performance_analysis.py`) -- closes the
+  second half of the source quality feedback loop. v0.20.0 pruned zero-signal
+  subreddits; v0.21.0 finds new ones. Reddit's public post search API is queried
+  every 6h for active market topics; subreddits generating that discussion are
+  inserted as candidates and probed automatically. source_stats evaluates quality
+  the same way as any other source -- good ones stay, bad ones are suppressed.
+
+- **New module `feeds/subreddit_discovery.py`** -- `run_discovery_pass()` queries
+  Reddit post search for up to SUBREDDIT_DISCOVERY_MAX_QUERIES active market topic
+  queries, extracts subreddit names, filters against known subs and a generic
+  content blocklist, and inserts new candidates into `subreddit_candidates` DB table.
+  Rate-limited to 1 request per 2 seconds (well within Reddit's public API limits).
+
+- **New table `subreddit_candidates`** in `paper_trades.db` (`trading/paper_trader.py`)
+  -- tracks discovered subreddits with probe_count, last_probed, discovered_via, and
+  status (candidate/suppressed). Added via `CREATE TABLE IF NOT EXISTS` -- safe on
+  existing DBs.
+
+- **Tier 3 subreddit selection** (`feeds/subreddit_selector.py`) -- `select_subreddits()`
+  now accepts `db_path` and fills remaining capacity slots with candidate probes.
+  Candidates are selected by probe_count ASC (never-probed first), then oldest.
+  Per-candidate 3h cooldown prevents re-probing already-evaluated subs. Suppressed
+  candidates are marked in DB and permanently excluded.
+
+- **Discovery scheduled task** (`main.py` `_subreddit_discovery_task()`) -- runs
+  every SUBREDDIT_DISCOVERY_INTERVAL_SECS (default 6h) with a 5-minute startup
+  delay to let the market cache warm. Candidate count logged at INFO level.
+
+- **4 new env-configurable constants** (`config.py`):
+  SUBREDDIT_DISCOVERY_INTERVAL_SECS (default 21600),
+  SUBREDDIT_PROBE_COOLDOWN_SECS (default 10800),
+  SUBREDDIT_PROBE_SLOTS (default 3),
+  SUBREDDIT_DISCOVERY_MAX_QUERIES (default 10).
+
+- **Candidate subreddits section** (`scripts/performance_analysis.py` section 6b)
+  -- shows discovered subs with probe count, last probed timestamp, and
+  status (candidate/suppressed).
+
+- **Plan archiving convention** (`docs/plans/` NEW) -- non-trivial implementation
+  plans archived as Architectural Decision Records. Added rule to both project
+  `CLAUDE.md` and global `~/.claude/CLAUDE.md`. First two ADRs archived:
+  `docs/plans/v0.20.0_source_quality_feedback_loop.md` and
+  `docs/plans/v0.21.0_subreddit_discovery_loop.md`.
+
 ## [0.20.0] - 2026-04-06
 
 ### Added

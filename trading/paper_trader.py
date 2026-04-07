@@ -95,6 +95,15 @@ CREATE TABLE IF NOT EXISTS source_stats (
     last_signal   TEXT,
     last_updated  TEXT
 );
+
+CREATE TABLE IF NOT EXISTS subreddit_candidates (
+    sub            TEXT PRIMARY KEY,
+    discovered_ts  TEXT NOT NULL,
+    discovered_via TEXT NOT NULL,
+    probe_count    INTEGER DEFAULT 0,
+    last_probed    TEXT,
+    status         TEXT DEFAULT 'candidate'
+);
 """
 
 
