@@ -21,6 +21,10 @@ Usage:
 Output: logs/analysis_YYYYMMDD_HHmm.txt  (also printed to stdout)
 
 Run from the repo root (same directory as config.py).
+
+From bash:
+  cd /e/VS_Code/kalshi-bot
+  .venv/Scripts/python.exe scripts/performance_analysis.py
 """
 
 import argparse
@@ -39,22 +43,30 @@ from tabulate import tabulate
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).parent.parent
 JSONL_PATH = REPO_ROOT / "logs" / "trades.jsonl"
-DB_PATH    = REPO_ROOT / "data" / "paper_trades.db"
+DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
 CACHE_PATH = REPO_ROOT / "logs" / "market_resolution_cache.json"
-LOGS_DIR   = REPO_ROOT / "logs"
+LOGS_DIR = REPO_ROOT / "logs"
 
-PAPER_MIN_EDGE      = 0.02
+PAPER_MIN_EDGE = 0.02
 PAPER_FLAT_CONTRACTS = 5
 CREDIBILITY_MIN_SAMPLE = 10
 
 # Skip categories
-_CONTROLLABLE_KEYWORDS = ("cooldown", "opposing position", "duplicate", "same-signal", "concentration", "status=active")
-_BUG_SKIP_REASONS      = ("market status=active",)
+_CONTROLLABLE_KEYWORDS = (
+    "cooldown",
+    "opposing position",
+    "duplicate",
+    "same-signal",
+    "concentration",
+    "status=active",
+)
+_BUG_SKIP_REASONS = ("market status=active",)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _parse_ts(ts_str):
     """Parse ISO timestamp to UTC datetime."""
@@ -101,7 +113,12 @@ def _skip_category(reason):
 
 def _is_controllable(reason):
     cat = _skip_category(reason)
-    return cat not in ("edge below threshold", "price illiquid", "insufficient balance", "unknown")
+    return cat not in (
+        "edge below threshold",
+        "price illiquid",
+        "insufficient balance",
+        "unknown",
+    )
 
 
 def _counterfactual_pnl(side, price_cents, resolved_yes):
@@ -114,15 +131,15 @@ def _counterfactual_pnl(side, price_cents, resolved_yes):
     p = price_cents / 100.0
     if side == "yes":
         if resolved_yes:
-            return contracts * (1.0 - p)   # win: collect (1 - cost_per_contract)
+            return contracts * (1.0 - p)  # win: collect (1 - cost_per_contract)
         else:
-            return -contracts * p           # loss: lose cost
+            return -contracts * p  # loss: lose cost
     else:
         no_price = 1.0 - p
         if not resolved_yes:
-            return contracts * no_price     # win
+            return contracts * no_price  # win
         else:
-            return -contracts * no_price    # loss
+            return -contracts * no_price  # loss
 
 
 def _pct(num, denom):
@@ -141,6 +158,7 @@ def _fmt_pnl(v):
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
+
 
 def load_jsonl(since_dt, until_dt):
     """Load and filter trades.jsonl entries within the date window."""
@@ -202,6 +220,7 @@ def save_resolution_cache(cache):
 # Resolution lookup
 # ---------------------------------------------------------------------------
 
+
 def build_resolution_map(db_trades, jsonl_entries, enrich):
     """
     Build ticker -> {"resolved_yes": bool, "result": "yes"/"no"/""}
@@ -243,10 +262,14 @@ def build_resolution_map(db_trades, jsonl_entries, enrich):
                     tickers_to_check.add(t)
 
         if tickers_to_check:
-            print("\nFetching %d ticker resolutions from Kalshi API..." % len(tickers_to_check))
+            print(
+                "\nFetching %d ticker resolutions from Kalshi API..."
+                % len(tickers_to_check)
+            )
             sys.path.insert(0, str(REPO_ROOT))
             try:
                 from kalshi.rest_client import KalshiRestClient
+
                 client = KalshiRestClient()
                 for ticker in sorted(tickers_to_check):
                     market = client.get_market(ticker)
@@ -278,34 +301,44 @@ def build_resolution_map(db_trades, jsonl_entries, enrich):
 # Analysis sections
 # ---------------------------------------------------------------------------
 
+
 def section_header(title):
     line = "=" * 70
     return "\n%s\n  %s\n%s\n" % (line, title, line)
 
 
 def section_pipeline_funnel(entries, db_trades):
-    signals      = [e for e in entries if e.get("type") == "SIGNAL"]
+    signals = [e for e in entries if e.get("type") == "SIGNAL"]
     opportunities = [e for e in entries if e.get("type") == "OPPORTUNITY"]
-    paper_trades  = [e for e in entries if e.get("type") == "PAPER_TRADE"]
-    skipped       = [e for e in entries if e.get("type") == "SKIPPED"]
-    resolutions   = [e for e in entries if e.get("type") == "PAPER_RESOLUTION"]
+    paper_trades = [e for e in entries if e.get("type") == "PAPER_TRADE"]
+    skipped = [e for e in entries if e.get("type") == "SKIPPED"]
+    resolutions = [e for e in entries if e.get("type") == "PAPER_RESOLUTION"]
 
     # Resolved from DB trades (joined by trade_id would be ideal, use count)
     db_resolved = sum(1 for t in db_trades if t.get("resolved"))
-    db_open     = sum(1 for t in db_trades if not t.get("resolved"))
+    db_open = sum(1 for t in db_trades if not t.get("resolved"))
 
-    n_sig  = len(signals)
-    n_opp  = len(opportunities)
-    n_trd  = len(paper_trades)
+    n_sig = len(signals)
+    n_opp = len(opportunities)
+    n_trd = len(paper_trades)
     n_skip = len(skipped)
 
     lines = []
     lines.append("Signal pipeline (events in window):")
     lines.append("")
     lines.append("  Signals detected           : %4d" % n_sig)
-    lines.append("  Opportunities identified    : %4d  (%s of signals)" % (n_opp, _pct(n_opp, n_sig)))
-    lines.append("  Trades placed (PAPER_TRADE) : %4d  (%s of opportunities)" % (n_trd, _pct(n_trd, n_opp + n_skip)))
-    lines.append("  Skipped by executor        : %4d  (%s of opportunities)" % (n_skip, _pct(n_skip, n_opp + n_skip)))
+    lines.append(
+        "  Opportunities identified    : %4d  (%s of signals)"
+        % (n_opp, _pct(n_opp, n_sig))
+    )
+    lines.append(
+        "  Trades placed (PAPER_TRADE) : %4d  (%s of opportunities)"
+        % (n_trd, _pct(n_trd, n_opp + n_skip))
+    )
+    lines.append(
+        "  Skipped by executor        : %4d  (%s of opportunities)"
+        % (n_skip, _pct(n_skip, n_opp + n_skip))
+    )
     lines.append("")
     lines.append("  DB resolved trades         : %4d" % db_resolved)
     lines.append("  DB open trades             : %4d" % db_open)
@@ -324,12 +357,14 @@ def section_placed_performance(entries, db_trades, resolution_map):
     if not db_trades:
         return "No trades in database."
 
-    wins   = [t for t in resolved if (t.get("pnl_dollars") or 0) > 0]
+    wins = [t for t in resolved if (t.get("pnl_dollars") or 0) > 0]
     losses = [t for t in resolved if (t.get("pnl_dollars") or 0) <= 0]
     net_pnl = sum(t.get("pnl_dollars") or 0 for t in resolved)
     total_cost = sum(t.get("cost_dollars") or 0 for t in db_trades)
     roi = (net_pnl / total_cost * 100) if total_cost > 0 else 0.0
-    avg_edge = sum(t.get("edge") or 0 for t in db_trades) / len(db_trades) if db_trades else 0
+    avg_edge = (
+        sum(t.get("edge") or 0 for t in db_trades) / len(db_trades) if db_trades else 0
+    )
 
     lines = []
     lines.append("Placed trades (from paper_trades.db):")
@@ -337,22 +372,39 @@ def section_placed_performance(entries, db_trades, resolution_map):
     lines.append("  Total trades  : %d" % len(db_trades))
     lines.append("  Resolved      : %d" % len(resolved))
     lines.append("  Open          : %d" % len(unresolved))
-    lines.append("  Win rate      : %s  (%d W / %d L)" % (_pct(len(wins), len(resolved)), len(wins), len(losses)))
+    lines.append(
+        "  Win rate      : %s  (%d W / %d L)"
+        % (_pct(len(wins), len(resolved)), len(wins), len(losses))
+    )
     lines.append("  Net P&L       : %s" % _fmt_pnl(net_pnl))
     lines.append("  Total cost    : $%.2f" % total_cost)
     lines.append("  ROI on cost   : %.1f%%" % roi)
     lines.append("  Avg edge      : %+.4f" % avg_edge)
 
     if resolved:
-        best  = max(resolved, key=lambda t: t.get("pnl_dollars") or -999)
+        best = max(resolved, key=lambda t: t.get("pnl_dollars") or -999)
         worst = min(resolved, key=lambda t: t.get("pnl_dollars") or 999)
         lines.append("")
-        lines.append("  Best  trade: %s | %s %s | edge=%+.3f | P&L=%s" % (
-            best["ticker"][:35], best["side"].upper(), best["ts"][:10],
-            best.get("edge") or 0, _fmt_pnl(best.get("pnl_dollars"))))
-        lines.append("  Worst trade: %s | %s %s | edge=%+.3f | P&L=%s" % (
-            worst["ticker"][:35], worst["side"].upper(), worst["ts"][:10],
-            worst.get("edge") or 0, _fmt_pnl(worst.get("pnl_dollars"))))
+        lines.append(
+            "  Best  trade: %s | %s %s | edge=%+.3f | P&L=%s"
+            % (
+                best["ticker"][:35],
+                best["side"].upper(),
+                best["ts"][:10],
+                best.get("edge") or 0,
+                _fmt_pnl(best.get("pnl_dollars")),
+            )
+        )
+        lines.append(
+            "  Worst trade: %s | %s %s | edge=%+.3f | P&L=%s"
+            % (
+                worst["ticker"][:35],
+                worst["side"].upper(),
+                worst["ts"][:10],
+                worst.get("edge") or 0,
+                _fmt_pnl(worst.get("pnl_dollars")),
+            )
+        )
 
     # Resolved trades table
     if resolved:
@@ -361,21 +413,38 @@ def section_placed_performance(entries, db_trades, resolution_map):
         rows = []
         for t in sorted(resolved, key=lambda x: x["ts"]):
             result = "YES" if t.get("resolved_yes") else "NO"
-            rows.append([
-                t["ts"][:10],
-                t["ticker"][:28],
-                t["side"].upper(),
-                "%+.3f" % (t.get("edge") or 0),
-                "%.2f" % (t.get("estimated_prob") or 0),
-                "%.0fc" % (t.get("market_yes_price") or 0),
-                "$%.2f" % (t.get("cost_dollars") or 0),
-                result,
-                _fmt_pnl(t.get("pnl_dollars")),
-                (t.get("signal_source") or "")[:22],
-            ])
-        lines.append(tabulate(rows,
-            headers=["Date", "Ticker", "Side", "Edge", "Est.P", "Mkt.P", "Cost", "Result", "P&L", "Source"],
-            tablefmt="simple"))
+            rows.append(
+                [
+                    t["ts"][:10],
+                    t["ticker"][:28],
+                    t["side"].upper(),
+                    "%+.3f" % (t.get("edge") or 0),
+                    "%.2f" % (t.get("estimated_prob") or 0),
+                    "%.0fc" % (t.get("market_yes_price") or 0),
+                    "$%.2f" % (t.get("cost_dollars") or 0),
+                    result,
+                    _fmt_pnl(t.get("pnl_dollars")),
+                    (t.get("signal_source") or "")[:22],
+                ]
+            )
+        lines.append(
+            tabulate(
+                rows,
+                headers=[
+                    "Date",
+                    "Ticker",
+                    "Side",
+                    "Edge",
+                    "Est.P",
+                    "Mkt.P",
+                    "Cost",
+                    "Result",
+                    "P&L",
+                    "Source",
+                ],
+                tablefmt="simple",
+            )
+        )
 
     return "\n".join(lines)
 
@@ -395,9 +464,15 @@ def section_skip_breakdown(entries):
     lines.append("")
     rows = []
     for cat, items in sorted(by_cat.items(), key=lambda x: -len(x[1])):
-        controllable = "yes" if _is_controllable(items[0].get("reason","")) else "no (correct)"
+        controllable = (
+            "yes" if _is_controllable(items[0].get("reason", "")) else "no (correct)"
+        )
         rows.append([len(items), cat, controllable])
-    lines.append(tabulate(rows, headers=["Count", "Category", "Controllable?"], tablefmt="simple"))
+    lines.append(
+        tabulate(
+            rows, headers=["Count", "Category", "Controllable?"], tablefmt="simple"
+        )
+    )
 
     # Top tickers per controllable category
     lines.append("")
@@ -419,7 +494,7 @@ def section_missed_opportunities(entries, resolution_map):
     for those where resolution is known and skip was controllable.
     """
     opportunities = [e for e in entries if e.get("type") == "OPPORTUNITY"]
-    skipped       = [e for e in entries if e.get("type") == "SKIPPED"]
+    skipped = [e for e in entries if e.get("type") == "SKIPPED"]
 
     if not skipped:
         return "No skipped entries in window."
@@ -439,7 +514,7 @@ def section_missed_opportunities(entries, resolution_map):
     for s in skipped:
         if not _is_controllable(s.get("reason", "")):
             continue
-        ts     = s.get("ts", "")
+        ts = s.get("ts", "")
         ticker = s.get("ticker", "")
         # Try exact minute, then +-1 minute
         opp = None
@@ -448,7 +523,9 @@ def section_missed_opportunities(entries, resolution_map):
                 dt = _parse_ts(ts)
                 if dt is None:
                     break
-                candidate_ts = (dt + timedelta(minutes=offset)).strftime("%Y-%m-%dT%H:%M")
+                candidate_ts = (dt + timedelta(minutes=offset)).strftime(
+                    "%Y-%m-%dT%H:%M"
+                )
                 opp = opp_index.get((ticker, candidate_ts))
                 if opp:
                     break
@@ -462,7 +539,10 @@ def section_missed_opportunities(entries, resolution_map):
     lines = []
     lines.append("Missed opportunities (controllable skips with resolution known):")
     lines.append("")
-    lines.append("  Controllable skips in window : %d" % len([s for s in skipped if _is_controllable(s.get("reason",""))]))
+    lines.append(
+        "  Controllable skips in window : %d"
+        % len([s for s in skipped if _is_controllable(s.get("reason", ""))])
+    )
     lines.append("  Paired to an opportunity     : %d" % len(paired))
     if unmatched:
         lines.append("  Unmatched (no opportunity)   : %d" % unmatched)
@@ -474,22 +554,24 @@ def section_missed_opportunities(entries, resolution_map):
         res = resolution_map.get(ticker)
         if res:
             price_cents = int(opp.get("market_yes_price", 50))
-            side  = opp.get("side", "yes")
-            edge  = opp.get("edge", 0)
+            side = opp.get("side", "yes")
+            edge = opp.get("edge", 0)
             est_p = opp.get("estimated_probability", 0)
             resolved_yes = res["resolved_yes"]
             cf_pnl = _counterfactual_pnl(side, price_cents, resolved_yes)
-            resolvable.append({
-                "ts":     skip.get("ts", "")[:10],
-                "ticker": ticker,
-                "reason": skip.get("reason", ""),
-                "edge":   edge,
-                "side":   side,
-                "est_p":  est_p,
-                "mkt_p":  price_cents,
-                "result": res["result"].upper(),
-                "cf_pnl": cf_pnl,
-            })
+            resolvable.append(
+                {
+                    "ts": skip.get("ts", "")[:10],
+                    "ticker": ticker,
+                    "reason": skip.get("reason", ""),
+                    "edge": edge,
+                    "side": side,
+                    "est_p": est_p,
+                    "mkt_p": price_cents,
+                    "result": res["result"].upper(),
+                    "cf_pnl": cf_pnl,
+                }
+            )
 
     lines.append("  With known resolution        : %d" % len(resolvable))
 
@@ -501,9 +583,11 @@ def section_missed_opportunities(entries, resolution_map):
 
     # Summary
     profitable = [r for r in resolvable if r["cf_pnl"] > 0]
-    total_cf   = sum(r["cf_pnl"] for r in resolvable)
+    total_cf = sum(r["cf_pnl"] for r in resolvable)
     lines.append("")
-    lines.append("  Would have been profitable   : %d of %d" % (len(profitable), len(resolvable)))
+    lines.append(
+        "  Would have been profitable   : %d of %d" % (len(profitable), len(resolvable))
+    )
     lines.append("  Total counterfactual P&L     : %s" % _fmt_pnl(total_cf))
 
     # Table
@@ -511,27 +595,50 @@ def section_missed_opportunities(entries, resolution_map):
     rows = []
     for r in sorted(resolvable, key=lambda x: x["ts"]):
         cat = _skip_category(r["reason"])
-        rows.append([
-            r["ts"],
-            r["ticker"][:28],
-            cat[:22],
-            "%+.3f" % r["edge"],
-            r["side"].upper(),
-            "%.2f" % r["est_p"],
-            "%dc" % r["mkt_p"],
-            r["result"],
-            _fmt_pnl(r["cf_pnl"]),
-        ])
-    lines.append(tabulate(rows,
-        headers=["Date", "Ticker", "Skip Category", "Edge", "Side", "Est.P", "Mkt.P", "Resolution", "CF P&L"],
-        tablefmt="simple"))
+        rows.append(
+            [
+                r["ts"],
+                r["ticker"][:28],
+                cat[:22],
+                "%+.3f" % r["edge"],
+                r["side"].upper(),
+                "%.2f" % r["est_p"],
+                "%dc" % r["mkt_p"],
+                r["result"],
+                _fmt_pnl(r["cf_pnl"]),
+            ]
+        )
+    lines.append(
+        tabulate(
+            rows,
+            headers=[
+                "Date",
+                "Ticker",
+                "Skip Category",
+                "Edge",
+                "Side",
+                "Est.P",
+                "Mkt.P",
+                "Resolution",
+                "CF P&L",
+            ],
+            tablefmt="simple",
+        )
+    )
 
     # Key insight note
-    bug_skips_wrong = [r for r in resolvable if "status=active" in r["reason"] and r["cf_pnl"] < 0]
+    bug_skips_wrong = [
+        r for r in resolvable if "status=active" in r["reason"] and r["cf_pnl"] < 0
+    ]
     if bug_skips_wrong:
         lines.append("")
-        lines.append("  NOTE: %d of the status=active bug skips would have LOST -- the bug" % len(bug_skips_wrong))
-        lines.append("  accidentally prevented bad trades. Signal quality issue, not just a bug.")
+        lines.append(
+            "  NOTE: %d of the status=active bug skips would have LOST -- the bug"
+            % len(bug_skips_wrong)
+        )
+        lines.append(
+            "  accidentally prevented bad trades. Signal quality issue, not just a bug."
+        )
 
     return "\n".join(lines)
 
@@ -541,11 +648,13 @@ def section_source_performance(entries, db_trades):
     if not db_trades:
         return "No placed trades in database."
 
-    by_source = defaultdict(lambda: {"trades": 0, "resolved": 0, "wins": 0, "pnl": 0.0, "cost": 0.0})
+    by_source = defaultdict(
+        lambda: {"trades": 0, "resolved": 0, "wins": 0, "pnl": 0.0, "cost": 0.0}
+    )
     for t in db_trades:
         src = t.get("signal_source") or "unknown"
-        by_source[src]["trades"]  += 1
-        by_source[src]["cost"]    += t.get("cost_dollars") or 0
+        by_source[src]["trades"] += 1
+        by_source[src]["cost"] += t.get("cost_dollars") or 0
         if t.get("resolved"):
             by_source[src]["resolved"] += 1
             pnl = t.get("pnl_dollars") or 0
@@ -554,22 +663,30 @@ def section_source_performance(entries, db_trades):
                 by_source[src]["wins"] += 1
 
     rows = []
-    for src, d in sorted(by_source.items(), key=lambda x: -(x[1]["wins"] / max(x[1]["resolved"], 1))):
+    for src, d in sorted(
+        by_source.items(), key=lambda x: -(x[1]["wins"] / max(x[1]["resolved"], 1))
+    ):
         n_res = d["resolved"]
         win_rate = ("%.0f%%" % (100.0 * d["wins"] / n_res)) if n_res else "N/A"
         note = " (low data)" if n_res < 3 else ""
-        rows.append([
-            src[:35],
-            d["trades"],
-            d["resolved"],
-            win_rate + note,
-            _fmt_pnl(d["pnl"]) if n_res else "--",
-        ])
+        rows.append(
+            [
+                src[:35],
+                d["trades"],
+                d["resolved"],
+                win_rate + note,
+                _fmt_pnl(d["pnl"]) if n_res else "--",
+            ]
+        )
 
     lines = ["Per-source performance (from DB trades):", ""]
-    lines.append(tabulate(rows,
-        headers=["Source", "Trades", "Resolved", "Win Rate", "Net P&L"],
-        tablefmt="simple"))
+    lines.append(
+        tabulate(
+            rows,
+            headers=["Source", "Trades", "Resolved", "Win Rate", "Net P&L"],
+            tablefmt="simple",
+        )
+    )
     return "\n".join(lines)
 
 
@@ -599,22 +716,24 @@ def section_source_quality():
         return "No source stats recorded yet (table exists but is empty)."
 
     # Read thresholds from env (same defaults as SourceStats class)
-    min_posts        = int(os.getenv("SOURCE_STATS_MIN_POSTS",         "100"))
-    low_signal_rate  = float(os.getenv("SOURCE_STATS_LOW_SIGNAL_RATE", "0.005"))
+    min_posts = int(os.getenv("SOURCE_STATS_MIN_POSTS", "100"))
+    low_signal_rate = float(os.getenv("SOURCE_STATS_LOW_SIGNAL_RATE", "0.005"))
     zero_signal_posts = int(os.getenv("SOURCE_STATS_ZERO_SIGNAL_POSTS", "200"))
 
     table_rows = []
     for r in rows:
-        posts   = r["posts_seen"]
-        sigs    = r["signals"]
-        opps    = r["opportunities"]
-        trades  = r["trades"]
+        posts = r["posts_seen"]
+        sigs = r["signals"]
+        opps = r["opportunities"]
+        trades = r["trades"]
 
         sig_rate = sigs / posts if posts > 0 else 0.0
-        opp_rate = opps / sigs  if sigs  > 0 else None
+        opp_rate = opps / sigs if sigs > 0 else None
 
-        suppressed   = posts >= zero_signal_posts and sigs == 0
-        low_quality  = posts >= min_posts and sig_rate < low_signal_rate and not suppressed
+        suppressed = posts >= zero_signal_posts and sigs == 0
+        low_quality = (
+            posts >= min_posts and sig_rate < low_signal_rate and not suppressed
+        )
         insufficient = posts < min_posts
 
         if suppressed:
@@ -626,30 +745,43 @@ def section_source_quality():
         else:
             quality = "Good"
 
-        table_rows.append([
-            (r["source"] or "")[:30],
-            "{:,}".format(posts),
-            "{:,}".format(sigs),
-            "%.1f%%" % (sig_rate * 100) if posts > 0 else "N/A",
-            "{:,}".format(opps),
-            "%.0f%%" % (opp_rate * 100) if opp_rate is not None else "--",
-            "{:,}".format(trades),
-            quality,
-        ])
+        table_rows.append(
+            [
+                (r["source"] or "")[:30],
+                "{:,}".format(posts),
+                "{:,}".format(sigs),
+                "%.1f%%" % (sig_rate * 100) if posts > 0 else "N/A",
+                "{:,}".format(opps),
+                "%.0f%%" % (opp_rate * 100) if opp_rate is not None else "--",
+                "{:,}".format(trades),
+                quality,
+            ]
+        )
 
     # Sort by posts_seen desc (already sorted by query, but re-sort for stability)
     table_rows.sort(key=lambda r: -int(r[1].replace(",", "")))
 
     lines = ["Source quality funnel (from source_stats table):", ""]
-    lines.append(tabulate(
-        table_rows,
-        headers=["Source", "Posts", "Signals", "Sig%", "Opps", "Opp%", "Trades", "Quality"],
-        tablefmt="simple",
-    ))
+    lines.append(
+        tabulate(
+            table_rows,
+            headers=[
+                "Source",
+                "Posts",
+                "Signals",
+                "Sig%",
+                "Opps",
+                "Opp%",
+                "Trades",
+                "Quality",
+            ],
+            tablefmt="simple",
+        )
+    )
 
     # Quick summary
     suppressed_count = sum(1 for r in table_rows if r[7] == "SUPPRESSED")
-    low_count        = sum(1 for r in table_rows if r[7] == "Low")
+    low_count = sum(1 for r in table_rows if r[7] == "Low")
     if suppressed_count or low_count:
         lines.append("")
         lines.append(
@@ -679,7 +811,9 @@ def section_candidate_subreddits():
             """
         ).fetchall()
     except sqlite3.OperationalError:
-        return "subreddit_candidates table not found -- bot has not run with v0.21.0+ yet."
+        return (
+            "subreddit_candidates table not found -- bot has not run with v0.21.0+ yet."
+        )
     finally:
         conn.close()
 
@@ -691,23 +825,34 @@ def section_candidate_subreddits():
         discovered = (r["discovered_ts"] or "")[:10]
         via = (r["discovered_via"] or "")[:25]
         last = (r["last_probed"] or "never")[:16]
-        table_rows.append([
-            "r/" + r["sub"],
-            discovered,
-            via,
-            r["probe_count"],
-            last,
-            r["status"],
-        ])
+        table_rows.append(
+            [
+                "r/" + r["sub"],
+                discovered,
+                via,
+                r["probe_count"],
+                last,
+                r["status"],
+            ]
+        )
 
     lines = ["Candidate subreddits (discovered via Reddit post search):", ""]
-    lines.append(tabulate(
-        table_rows,
-        headers=["Sub", "Discovered", "Via Query", "Probes", "Last Probed", "Status"],
-        tablefmt="simple",
-    ))
+    lines.append(
+        tabulate(
+            table_rows,
+            headers=[
+                "Sub",
+                "Discovered",
+                "Via Query",
+                "Probes",
+                "Last Probed",
+                "Status",
+            ],
+            tablefmt="simple",
+        )
+    )
 
-    candidate_count  = sum(1 for r in rows if r["status"] == "candidate")
+    candidate_count = sum(1 for r in rows if r["status"] == "candidate")
     suppressed_count = sum(1 for r in rows if r["status"] == "suppressed")
     lines.append("")
     lines.append(
@@ -753,17 +898,27 @@ def section_per_series_win_rate():
 
     table_rows = []
     for r in rows:
-        n    = r["total"]
+        n = r["total"]
         wins = r["wins"]
-        wr   = wins / n if n else 0.0
-        table_rows.append([r["series"], n, wins, "%.1f%%" % (wr * 100), "$%+.2f" % (r["net_pnl"] or 0)])
+        wr = wins / n if n else 0.0
+        table_rows.append(
+            [
+                r["series"],
+                n,
+                wins,
+                "%.1f%%" % (wr * 100),
+                "$%+.2f" % (r["net_pnl"] or 0),
+            ]
+        )
 
     lines = ["Win rate by series (resolved, >= 2 trades):", ""]
-    lines.append(tabulate(
-        table_rows,
-        headers=["Series", "Trades", "Wins", "Win Rate", "Net P&L"],
-        tablefmt="simple",
-    ))
+    lines.append(
+        tabulate(
+            table_rows,
+            headers=["Series", "Trades", "Wins", "Win Rate", "Net P&L"],
+            tablefmt="simple",
+        )
+    )
     return "\n".join(lines)
 
 
@@ -815,45 +970,55 @@ def section_keyword_accuracy():
     if rows:
         table_rows = []
         for r in rows:
-            acc  = r["accuracy"] or 0.0
+            acc = r["accuracy"] or 0.0
             mult = max(0.5, min(1.5, 0.5 + acc))
-            table_rows.append([
-                r["keyword"],
-                r["series_ticker"] or "(all)",
-                r["n"],
-                r["wins"],
-                "%.1f%%" % (acc * 100),
-                "%.2fx" % mult,
-            ])
-        lines.append("Per-(keyword, series_ticker) accuracy (>= 10 samples, top 30 by count):")
+            table_rows.append(
+                [
+                    r["keyword"],
+                    r["series_ticker"] or "(all)",
+                    r["n"],
+                    r["wins"],
+                    "%.1f%%" % (acc * 100),
+                    "%.2fx" % mult,
+                ]
+            )
+        lines.append(
+            "Per-(keyword, series_ticker) accuracy (>= 10 samples, top 30 by count):"
+        )
         lines.append("")
-        lines.append(tabulate(
-            table_rows,
-            headers=["Keyword", "Series", "n", "Wins", "Accuracy", "Multiplier"],
-            tablefmt="simple",
-        ))
+        lines.append(
+            tabulate(
+                table_rows,
+                headers=["Keyword", "Series", "n", "Wins", "Accuracy", "Multiplier"],
+                tablefmt="simple",
+            )
+        )
         lines.append("")
 
     # Aggregate per keyword (all series combined) for overview
     if agg_rows:
         agg_table = []
         for r in agg_rows:
-            acc  = r["accuracy"] or 0.0
+            acc = r["accuracy"] or 0.0
             mult = max(0.5, min(1.5, 0.5 + acc))
-            agg_table.append([
-                r["keyword"],
-                r["n"],
-                r["wins"],
-                "%.1f%%" % (acc * 100),
-                "%.2fx" % mult,
-            ])
+            agg_table.append(
+                [
+                    r["keyword"],
+                    r["n"],
+                    r["wins"],
+                    "%.1f%%" % (acc * 100),
+                    "%.2fx" % mult,
+                ]
+            )
         lines.append("Aggregate per keyword (all series, top 30 by count):")
         lines.append("")
-        lines.append(tabulate(
-            agg_table,
-            headers=["Keyword", "n", "Wins", "Accuracy", "Multiplier"],
-            tablefmt="simple",
-        ))
+        lines.append(
+            tabulate(
+                agg_table,
+                headers=["Keyword", "n", "Wins", "Accuracy", "Multiplier"],
+                tablefmt="simple",
+            )
+        )
 
     return "\n".join(lines) if lines else "No keyword outcome data yet."
 
@@ -894,36 +1059,40 @@ def section_match_score_calibration():
 
     for r in rows:
         score = r["match_score"] or 0.0
-        pnl   = r["pnl_dollars"]
+        pnl = r["pnl_dollars"]
         for i in range(len(bands) - 1):
             if bands[i] <= score < bands[i + 1]:
                 band_data[band_labels[i]].append(pnl)
                 break
 
     table_rows = []
-    best_band  = None
-    best_wr    = 0.0
+    best_band = None
+    best_wr = 0.0
     for label in band_labels:
         pnls = band_data[label]
         if not pnls:
             continue
         wins = sum(1 for p in pnls if p > 0)
-        wr   = wins / len(pnls)
-        net  = sum(pnls)
-        table_rows.append([label, len(pnls), wins, "%.1f%%" % (wr * 100), "$%+.2f" % net])
+        wr = wins / len(pnls)
+        net = sum(pnls)
+        table_rows.append(
+            [label, len(pnls), wins, "%.1f%%" % (wr * 100), "$%+.2f" % net]
+        )
         if wr > best_wr:
-            best_wr   = wr
+            best_wr = wr
             best_band = label
 
     if not table_rows:
         return "No resolved trades with match_score in range."
 
     lines = ["Win rate by match_score band:", ""]
-    lines.append(tabulate(
-        table_rows,
-        headers=["Score Band", "Trades", "Wins", "Win Rate", "Net P&L"],
-        tablefmt="simple",
-    ))
+    lines.append(
+        tabulate(
+            table_rows,
+            headers=["Score Band", "Trades", "Wins", "Win Rate", "Net P&L"],
+            tablefmt="simple",
+        )
+    )
     lines.append("")
 
     # Advisory
@@ -945,8 +1114,66 @@ def section_match_score_calibration():
     return "\n".join(lines)
 
 
+def section_kelly_shadow():
+    """Compare flat-5 actual P&L vs what Kelly shadow sizing would have returned."""
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """SELECT contracts, kelly_contracts, price_cents, pnl_dollars,
+                  cost_dollars, resolved_yes, side
+           FROM paper_trades
+           WHERE resolved = 1
+             AND kelly_contracts IS NOT NULL
+             AND pnl_dollars IS NOT NULL"""
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        return "No resolved trades with kelly_contracts yet (column added in v0.23.0)."
+
+    flat_pnl   = 0.0
+    kelly_pnl  = 0.0
+    flat_cost  = 0.0
+    kelly_cost = 0.0
+
+    for r in rows:
+        k_contracts = r["kelly_contracts"] or 0
+        k_cost      = k_contracts * r["price_cents"] / 100.0
+        k_payout    = float(k_contracts) if r["resolved_yes"] else 0.0
+        k_pnl       = k_payout - k_cost
+
+        flat_pnl  += r["pnl_dollars"]
+        kelly_pnl += k_pnl
+        flat_cost += r["cost_dollars"]
+        kelly_cost += k_cost
+
+    n = len(rows)
+    flat_roi  = (flat_pnl  / flat_cost  * 100) if flat_cost  > 0 else 0.0
+    kelly_roi = (kelly_pnl / kelly_cost * 100) if kelly_cost > 0 else 0.0
+
+    lines = [
+        "Flat-5 (actual) vs Kelly shadow sizing (%d resolved trades):" % n,
+        "",
+        "  %-22s  %8s  %8s  %6s" % ("Metric", "Flat-5", "Kelly", "Delta"),
+        "  %-22s  %8s  %8s  %6s" % ("-" * 22, "-" * 8, "-" * 8, "-" * 6),
+        "  %-22s  %+8.2f  %+8.2f  %+6.2f" % (
+            "Net P&L ($)", flat_pnl, kelly_pnl, kelly_pnl - flat_pnl),
+        "  %-22s  %8.2f  %8.2f  %+6.2f" % (
+            "Capital deployed ($)", flat_cost, kelly_cost, kelly_cost - flat_cost),
+        "  %-22s  %7.1f%%  %7.1f%%  %+5.1f%%" % (
+            "ROI on deployed (%)", flat_roi, kelly_roi, kelly_roi - flat_roi),
+        "",
+        "  NOTE: Kelly shadow is retrospective -- it uses the same capped_dollars",
+        "  that the bot computed at trade time, converted to contracts at that price.",
+        "  A positive Delta means Kelly would have outperformed flat-5 on these trades.",
+    ]
+    return "\n".join(lines)
+
+
 def section_edge_calibration(db_trades):
-    resolved = [t for t in db_trades if t.get("resolved") and t.get("resolved_yes") is not None]
+    resolved = [
+        t for t in db_trades if t.get("resolved") and t.get("resolved_yes") is not None
+    ]
     if not resolved:
         return "No resolved trades for calibration."
 
@@ -954,28 +1181,53 @@ def section_edge_calibration(db_trades):
         ("0.50-0.60", 0.50, 0.60),
         ("0.60-0.70", 0.60, 0.70),
         ("0.70-0.80", 0.70, 0.80),
-        ("0.80+",     0.80, 1.01),
+        ("0.80+", 0.80, 1.01),
     ]
 
     lines = ["Edge calibration (estimated_prob vs actual outcome):", ""]
-    lines.append("  NOTE: Only %d resolved trades -- results are directional, not statistically robust." % len(resolved))
+    lines.append(
+        "  NOTE: Only %d resolved trades -- results are directional, not statistically robust."
+        % len(resolved)
+    )
     lines.append("")
 
     rows = []
     for label, lo, hi in buckets:
-        bucket_trades = [t for t in resolved if lo <= (t.get("estimated_prob") or 0) < hi]
+        bucket_trades = [
+            t for t in resolved if lo <= (t.get("estimated_prob") or 0) < hi
+        ]
         if not bucket_trades:
             continue
         wins = sum(1 for t in bucket_trades if t.get("resolved_yes"))
-        avg_est = sum(t.get("estimated_prob") or 0 for t in bucket_trades) / len(bucket_trades)
-        actual  = wins / len(bucket_trades)
+        avg_est = sum(t.get("estimated_prob") or 0 for t in bucket_trades) / len(
+            bucket_trades
+        )
+        actual = wins / len(bucket_trades)
         calib_err = avg_est - actual
-        rows.append([label, len(bucket_trades), "%.2f" % avg_est, "%.2f" % actual, "%+.2f" % calib_err])
+        rows.append(
+            [
+                label,
+                len(bucket_trades),
+                "%.2f" % avg_est,
+                "%.2f" % actual,
+                "%+.2f" % calib_err,
+            ]
+        )
 
     if rows:
-        lines.append(tabulate(rows,
-            headers=["Est.P Bucket", "N", "Avg Est.P", "Actual Win Rate", "Calib Error"],
-            tablefmt="simple"))
+        lines.append(
+            tabulate(
+                rows,
+                headers=[
+                    "Est.P Bucket",
+                    "N",
+                    "Avg Est.P",
+                    "Actual Win Rate",
+                    "Calib Error",
+                ],
+                tablefmt="simple",
+            )
+        )
     else:
         lines.append("  No resolved trades match the buckets in this window.")
 
@@ -984,7 +1236,7 @@ def section_edge_calibration(db_trades):
 
 def section_golive_readiness(db_trades, state):
     resolved = [t for t in db_trades if t.get("resolved")]
-    wins     = [t for t in resolved if (t.get("pnl_dollars") or 0) > 0]
+    wins = [t for t in resolved if (t.get("pnl_dollars") or 0) > 0]
     win_rate = (len(wins) / len(resolved)) if resolved else 0.0
 
     try:
@@ -993,12 +1245,14 @@ def section_golive_readiness(db_trades, state):
         bankroll_now = 0.0
 
     # Read config thresholds from env / defaults
-    min_resolved    = int(os.getenv("GO_LIVE_MIN_RESOLVED", "20"))
-    min_win_rate    = float(os.getenv("GO_LIVE_MIN_WIN_RATE", "0.52"))
-    max_drawdown    = float(os.getenv("GO_LIVE_MAX_DRAWDOWN_PCT", "0.20"))
+    min_resolved = int(os.getenv("GO_LIVE_MIN_RESOLVED", "20"))
+    min_win_rate = float(os.getenv("GO_LIVE_MIN_WIN_RATE", "0.52"))
+    max_drawdown = float(os.getenv("GO_LIVE_MAX_DRAWDOWN_PCT", "0.20"))
 
     bankroll_start = 500.0  # can't easily read from .env here; use known default
-    drawdown = (bankroll_start - bankroll_now) / bankroll_start if bankroll_start > 0 else 0.0
+    drawdown = (
+        (bankroll_start - bankroll_now) / bankroll_start if bankroll_start > 0 else 0.0
+    )
 
     def gate(val, threshold, mode):
         if mode == "min":
@@ -1008,28 +1262,46 @@ def section_golive_readiness(db_trades, state):
         return "PASS" if ok else "FAIL"
 
     lines = ["Go-live readiness:", ""]
-    lines.append("  Resolved trades : %d / %d required  [%s]" % (
-        len(resolved), min_resolved, gate(len(resolved), min_resolved, "min")))
-    lines.append("  Win rate        : %.0f%% / %.0f%% required  [%s]" % (
-        win_rate * 100, min_win_rate * 100, gate(win_rate, min_win_rate, "min")))
-    lines.append("  Drawdown        : %.1f%% / %.0f%% max  [%s]" % (
-        drawdown * 100, max_drawdown * 100, gate(drawdown, max_drawdown, "max")))
-    lines.append("  Notional bankroll : $%.2f (started $%.2f)" % (bankroll_now, bankroll_start))
+    lines.append(
+        "  Resolved trades : %d / %d required  [%s]"
+        % (len(resolved), min_resolved, gate(len(resolved), min_resolved, "min"))
+    )
+    lines.append(
+        "  Win rate        : %.0f%% / %.0f%% required  [%s]"
+        % (win_rate * 100, min_win_rate * 100, gate(win_rate, min_win_rate, "min"))
+    )
+    lines.append(
+        "  Drawdown        : %.1f%% / %.0f%% max  [%s]"
+        % (drawdown * 100, max_drawdown * 100, gate(drawdown, max_drawdown, "max"))
+    )
+    lines.append(
+        "  Notional bankroll : $%.2f (started $%.2f)" % (bankroll_now, bankroll_start)
+    )
     lines.append("")
 
-    all_pass = (len(resolved) >= min_resolved
-                and win_rate >= min_win_rate
-                and drawdown <= max_drawdown)
+    all_pass = (
+        len(resolved) >= min_resolved
+        and win_rate >= min_win_rate
+        and drawdown <= max_drawdown
+    )
     if all_pass:
         lines.append("  OVERALL: READY FOR LIVE TRADING")
     else:
         missing = []
         if len(resolved) < min_resolved:
-            missing.append("%d more resolved trades needed" % (min_resolved - len(resolved)))
+            missing.append(
+                "%d more resolved trades needed" % (min_resolved - len(resolved))
+            )
         if win_rate < min_win_rate:
-            missing.append("win rate needs %.0f%% (currently %.0f%%)" % (min_win_rate * 100, win_rate * 100))
+            missing.append(
+                "win rate needs %.0f%% (currently %.0f%%)"
+                % (min_win_rate * 100, win_rate * 100)
+            )
         if drawdown > max_drawdown:
-            missing.append("drawdown %.1f%% exceeds %.0f%% cap" % (drawdown * 100, max_drawdown * 100))
+            missing.append(
+                "drawdown %.1f%% exceeds %.0f%% cap"
+                % (drawdown * 100, max_drawdown * 100)
+            )
         lines.append("  OVERALL: NOT READY -- " + "; ".join(missing))
 
     return "\n".join(lines)
@@ -1039,14 +1311,22 @@ def section_golive_readiness(db_trades, state):
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(description="kalshi-bot performance analysis")
-    parser.add_argument("--since", default=None,
-                        help="Start of window (YYYY-MM-DD). Default: 30 days ago.")
-    parser.add_argument("--until", default=None,
-                        help="End of window (YYYY-MM-DD). Default: today.")
-    parser.add_argument("--enrich", action="store_true",
-                        help="Fetch market resolutions from Kalshi API for unresolved tickers.")
+    parser.add_argument(
+        "--since",
+        default=None,
+        help="Start of window (YYYY-MM-DD). Default: 30 days ago.",
+    )
+    parser.add_argument(
+        "--until", default=None, help="End of window (YYYY-MM-DD). Default: today."
+    )
+    parser.add_argument(
+        "--enrich",
+        action="store_true",
+        help="Fetch market resolutions from Kalshi API for unresolved tickers.",
+    )
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
@@ -1058,14 +1338,15 @@ def main():
 
     if args.until:
         until_dt = datetime.fromisoformat(args.until).replace(
-            hour=23, minute=59, second=59, tzinfo=timezone.utc)
+            hour=23, minute=59, second=59, tzinfo=timezone.utc
+        )
     else:
         until_dt = now
 
     # Load data
-    entries   = load_jsonl(since_dt, until_dt)
+    entries = load_jsonl(since_dt, until_dt)
     db_trades = load_db_trades()
-    state     = load_db_state()
+    state = load_db_state()
     resolution_map = build_resolution_map(db_trades, entries, args.enrich)
 
     # Build report
@@ -1075,8 +1356,10 @@ def main():
     report_lines.append("=" * 70)
     report_lines.append("  KALSHI-BOT PERFORMANCE ANALYSIS")
     report_lines.append("  Generated : %s" % now.strftime("%Y-%m-%d %H:%M UTC"))
-    report_lines.append("  Window    : %s -> %s" % (
-        since_dt.strftime("%Y-%m-%d"), until_dt.strftime("%Y-%m-%d")))
+    report_lines.append(
+        "  Window    : %s -> %s"
+        % (since_dt.strftime("%Y-%m-%d"), until_dt.strftime("%Y-%m-%d"))
+    )
     report_lines.append("  JSONL     : %d entries in window" % len(entries))
     report_lines.append("  DB trades : %d total" % len(db_trades))
     report_lines.append("=" * 70)
@@ -1084,7 +1367,9 @@ def main():
     # Caveats
     caveats = []
     if since_dt < datetime(2026, 3, 15, tzinfo=timezone.utc):
-        caveats.append("Window includes pre-DB-wipe data (before 2026-03-15). DB has 7 trades only.")
+        caveats.append(
+            "Window includes pre-DB-wipe data (before 2026-03-15). DB has 7 trades only."
+        )
     if caveats:
         report_lines.append("")
         report_lines.append("CAVEATS:")
@@ -1123,6 +1408,9 @@ def main():
 
     report_lines.append(section_header("7d. MATCH SCORE CALIBRATION"))
     report_lines.append(section_match_score_calibration())
+
+    report_lines.append(section_header("7e. KELLY SHADOW SIZING"))
+    report_lines.append(section_kelly_shadow())
 
     report_lines.append(section_header("8. GO-LIVE READINESS"))
     report_lines.append(section_golive_readiness(db_trades, state))

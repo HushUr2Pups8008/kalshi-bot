@@ -141,6 +141,9 @@ class PaperTrader:
             ("llm_direction",  "TEXT"),
             ("llm_magnitude",  "TEXT"),
             ("llm_confidence", "REAL"),
+            # v0.23.0: Kelly shadow sizing -- what Kelly would have done in paper mode
+            # Lets analytics compare flat-5 vs Kelly trajectory before going live
+            ("kelly_contracts", "INTEGER"),
         ]
         for col, col_type in new_cols:
             if col not in cols:
@@ -256,12 +259,15 @@ class PaperTrader:
         price_cents = int(analysis.market.yes_price) if analysis.side == "yes" \
                       else int(100 - analysis.market.yes_price)
         price_cents  = max(1, min(99, price_cents))
+        # Kelly shadow: always compute what Kelly would size, even in flat paper mode.
+        # Stored as kelly_contracts for post-hoc analytics comparing flat-5 vs Kelly P&L.
+        kelly_contracts = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
         # Paper training mode: flat contracts -- no bankroll gating so we
         # maximise trade volume and accumulate signal-quality data.
         if cfg.is_paper_trading:
             contracts    = PAPER_FLAT_CONTRACTS
         else:
-            contracts    = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
+            contracts    = kelly_contracts
         cost_dollars = contracts * price_cents / 100.0
 
         bankroll_before = self.get_notional_bankroll()
@@ -277,8 +283,8 @@ class PaperTrader:
                 capped_dollars, signal_headline, signal_source, keywords_matched,
                 reasoning, source_multiplier, notional_bankroll_before, notional_bankroll_after,
                 market_snapshot, series_ticker, signal_type, match_score,
-                llm_direction, llm_magnitude, llm_confidence)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                llm_direction, llm_magnitude, llm_confidence, kelly_contracts)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 trade_id,
                 datetime.now(timezone.utc).isoformat(),
@@ -307,6 +313,7 @@ class PaperTrader:
                 getattr(analysis, "llm_direction", None),
                 getattr(analysis, "llm_magnitude", None),
                 getattr(analysis, "llm_confidence", None),
+                kelly_contracts,
             ),
         )
         self._conn.commit()
@@ -341,10 +348,11 @@ class PaperTrader:
             signal_source=analysis.news_item.source,
         )
 
+        kelly_note = f" (kelly_shadow={kelly_contracts})" if cfg.is_paper_trading else ""
         log.info(
-            "[PAPER] %s: BUY %d %s @ %d¢ | cost=$%.2f | edge=%+.3f | "
-            "bankroll=$%.2f→$%.2f | src_mult=%.2fx | %s",
-            trade_id, contracts, analysis.side.upper(), price_cents,
+            "[PAPER] %s: BUY %d%s %s @ %d¢ | cost=$%.2f | edge=%+.3f | "
+            "bankroll=$%.2f->$%.2f | src_mult=%.2fx | %s",
+            trade_id, contracts, kelly_note, analysis.side.upper(), price_cents,
             cost_dollars, analysis.edge,
             bankroll_before, bankroll_after,
             source_mult, analysis.market.ticker,
@@ -384,7 +392,9 @@ class PaperTrader:
         now_ts = datetime.now(timezone.utc).isoformat()
         series_ticker = ticker.split("-")[0]  # e.g. "KXTRUMPIRAN-26APR01" -> "KXTRUMPIRAN"
 
-        # Atomically mark all trades resolved — rolls back everything if interrupted
+        # Atomically mark all trades resolved and credit bankroll in one transaction.
+        # _credit_bankroll calls _set_state which commits -- both the UPDATE rows and
+        # the bankroll write land in the same commit so a crash between them is impossible.
         with self._conn:
             for t, won, payout, pnl in outcomes:
                 self._conn.execute(
@@ -392,9 +402,8 @@ class PaperTrader:
                     "resolved_ts=? WHERE trade_id=?",
                     (int(resolved_yes), pnl, now_ts, t["trade_id"]),
                 )
-
-        # Credit bankroll once for total payout (cost was debited on entry per-trade)
-        self._credit_bankroll(total_payout)
+            # Credit bankroll once for total payout (cost was debited on entry per-trade)
+            self._credit_bankroll(total_payout)
 
         # Keep portfolio in sync — all positions for this ticker are now closed
         self.portfolio.resolve(ticker)

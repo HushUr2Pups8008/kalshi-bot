@@ -22,6 +22,7 @@ Commands:
 
 import argparse
 import asyncio
+import dataclasses
 import itertools
 import signal
 import sys
@@ -169,9 +170,11 @@ class TradingBot:
             )
             return
 
-        # Use WS price if available
+        # Use WS price if available -- defensive copy before mutation so the shared cache
+        # object is never modified in-place (avoids race with concurrent WS price updates)
         ws_price = self.ws.get_yes_price(market.ticker)
         if ws_price is not None:
+            market = dataclasses.replace(market)
             market.yes_price = ws_price
             market.yes_bid   = max(1, ws_price - 1)
             market.yes_ask   = min(99, ws_price + 1)
@@ -296,6 +299,7 @@ class TradingBot:
 
         ws_price = self.ws.get_yes_price(market.ticker)
         if ws_price is not None:
+            market = dataclasses.replace(market)
             market.yes_price = ws_price
             market.yes_bid   = max(1, ws_price - 1)
             market.yes_ask   = min(99, ws_price + 1)
@@ -468,7 +472,8 @@ class TradingBot:
             log.debug("[PRICE_FADE] %s not in geo cache, skipping", ticker)
             return
 
-        # Update market price to reflect live WS data
+        # Update market price to reflect live WS data -- defensive copy first
+        market = dataclasses.replace(market)
         market.yes_price = now_mid
         market.yes_bid   = max(1, yes_bid)
         market.yes_ask   = min(99, yes_ask)

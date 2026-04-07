@@ -6,6 +6,33 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.23.0] - 2026-04-07
+
+### Fixed
+- **Bankroll desync bug (CRITICAL):** `_credit_bankroll(total_payout)` was called outside
+  the `with self._conn:` atomic block in `resolve_market()`. A process crash between the
+  trade resolution commit and the bankroll credit would permanently understate the notional
+  bankroll. Moved inside the block so both writes are committed atomically (`paper_trader.py`).
+
+### Added
+- **Defensive market object copy:** Three sites in `main.py` that mutated `KalshiMarket`
+  objects pulled from the shared cache now call `dataclasses.replace(market)` before any
+  field write. Eliminates a latent race condition where a concurrent WebSocket price update
+  could see a partially-mutated object.
+- **Kelly shadow sizing:** `paper_trades` gains a `kelly_contracts` column (INTEGER) via
+  migration. Every paper trade now also computes and stores what Kelly sizing would have
+  recommended (without applying it -- flat 5 still used for paper). Enables retrospective
+  comparison of flat-5 vs Kelly P&L trajectories before going live (`paper_trader.py`).
+- **Section 7e -- Kelly Shadow Sizing** in `scripts/performance_analysis.py`: shows flat-5
+  net P&L, capital deployed, and ROI vs what Kelly shadow would have returned on the same
+  resolved trades, with a Delta column.
+
+### Changed
+- Paper trade log line now includes `kelly_shadow=N` annotation when in paper mode, showing
+  what Kelly would have sized for that trade.
+
+---
+
 ## [0.22.0] - 2026-04-07
 
 ### Added
