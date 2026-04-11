@@ -748,6 +748,20 @@ class TradingBot:
                             moved_count += 1
                             log.debug("[LOG_MAINT] Migrated %s -> app/", p.name)
 
+                # Move orphaned active logs (bot.log / errors.log in root).
+                # After a restart from <v0.25.0 these are no longer written --
+                # the new service opens logs/app/bot.log instead. Safe to move.
+                for name in ("bot.log", "errors.log"):
+                    p = LOGS_DIR / name
+                    dest = _LOG_APP_DIR / name
+                    if p.exists() and p.stat().st_size > 0:
+                        if not dest.exists() or dest.stat().st_size == 0:
+                            p.rename(dest)
+                            moved_count += 1
+                            log.info("[LOG_MAINT] Migrated orphaned %s -> app/", name)
+                        # If dest already has data (new service is writing there),
+                        # leave the root copy in place -- it will age out naturally.
+
                 # Move old report_*.txt and analysis_*.txt from root to logs/reports/
                 for pattern in ("report_*.txt", "analysis_*.txt"):
                     for p in LOGS_DIR.glob(pattern):
