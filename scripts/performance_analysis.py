@@ -339,14 +339,22 @@ def section_pipeline_funnel(entries, db_trades):
         "  Opportunities identified    : %4d  (%s of signals)"
         % (n_opp, _pct(n_opp, n_sig))
     )
+    n_executor = n_trd + n_skip   # opportunities that actually reached the executor
+    silent_drops = max(0, n_opp - n_executor)
     lines.append(
         "  Trades placed (PAPER_TRADE) : %4d  (%s of opportunities)"
-        % (n_trd, _pct(n_trd, n_opp + n_skip))
+        % (n_trd, _pct(n_trd, n_opp))
     )
     lines.append(
         "  Skipped by executor        : %4d  (%s of opportunities)"
-        % (n_skip, _pct(n_skip, n_opp + n_skip))
+        % (n_skip, _pct(n_skip, n_opp))
     )
+    if silent_drops > 0:
+        lines.append(
+            "  Silent drops (pre-executor): %4d  (%s of opportunities)"
+            "  [Kelly gate bug, fixed v0.24.1]"
+            % (silent_drops, _pct(silent_drops, n_opp))
+        )
     lines.append("")
     lines.append("  DB resolved trades         : %4d" % db_resolved)
     lines.append("  DB open trades             : %4d" % db_open)
@@ -885,7 +893,7 @@ def section_per_series_win_rate():
         rows = conn.execute(
             """
             SELECT
-                COALESCE(series_ticker, '(unknown)') AS series,
+                COALESCE(NULLIF(series_ticker, ''), '(unknown)') AS series,
                 count(*) AS total,
                 sum(CASE WHEN pnl_dollars > 0 THEN 1 ELSE 0 END) AS wins,
                 sum(pnl_dollars) AS net_pnl
@@ -1185,17 +1193,28 @@ def section_edge_calibration(db_trades):
     if not resolved:
         return "No resolved trades for calibration."
 
+    # Buckets span the full 0-1 range so NO-side trades (estimated_prob < 0.50)
+    # are included.  Below 0.50 = bot took NO; above 0.50 = bot took YES.
+    # "YES Resolved Rate" is the raw calibration metric regardless of side taken.
+    # Calib Error = avg_est - YES_resolved_rate (+ = overestimates YES probability).
     buckets = [
+        ("0.20-0.30", 0.20, 0.30),
+        ("0.30-0.40", 0.30, 0.40),
+        ("0.40-0.50", 0.40, 0.50),
         ("0.50-0.60", 0.50, 0.60),
         ("0.60-0.70", 0.60, 0.70),
         ("0.70-0.80", 0.70, 0.80),
-        ("0.80+", 0.80, 1.01),
+        ("0.80+",     0.80, 1.01),
     ]
 
     lines = ["Edge calibration (estimated_prob vs actual outcome):", ""]
     lines.append(
         "  NOTE: Only %d resolved trades -- results are directional, not statistically robust."
         % len(resolved)
+    )
+    lines.append(
+        "  Calib Error: positive = model overestimates YES probability; "
+        "negative = underestimates."
     )
     lines.append("")
 
@@ -1206,18 +1225,18 @@ def section_edge_calibration(db_trades):
         ]
         if not bucket_trades:
             continue
-        wins = sum(1 for t in bucket_trades if t.get("resolved_yes"))
+        yes_resolved = sum(1 for t in bucket_trades if t.get("resolved_yes"))
         avg_est = sum(t.get("estimated_prob") or 0 for t in bucket_trades) / len(
             bucket_trades
         )
-        actual = wins / len(bucket_trades)
-        calib_err = avg_est - actual
+        yes_rate = yes_resolved / len(bucket_trades)
+        calib_err = avg_est - yes_rate
         rows.append(
             [
                 label,
                 len(bucket_trades),
                 "%.2f" % avg_est,
-                "%.2f" % actual,
+                "%.0f%%" % (yes_rate * 100),
                 "%+.2f" % calib_err,
             ]
         )
@@ -1230,7 +1249,7 @@ def section_edge_calibration(db_trades):
                     "Est.P Bucket",
                     "N",
                     "Avg Est.P",
-                    "Actual Win Rate",
+                    "YES Resolved Rate",
                     "Calib Error",
                 ],
                 tablefmt="simple",

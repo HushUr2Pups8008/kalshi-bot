@@ -170,7 +170,7 @@ async def run_discovery_pass(
                         continue
                     if _is_known(sub, conn):
                         continue
-                    conn.execute(
+                    cur = conn.execute(
                         """
                         INSERT INTO subreddit_candidates
                             (sub, discovered_ts, discovered_via, probe_count, last_probed, status)
@@ -179,7 +179,7 @@ async def run_discovery_pass(
                         """,
                         (sub, now_ts, query),
                     )
-                    new_count += conn.changes()
+                    new_count += cur.rowcount
 
             conn.commit()
         finally:
