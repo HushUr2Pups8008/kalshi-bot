@@ -1041,7 +1041,25 @@ def _handle_go_live(paper: PaperTrader) -> None:
     Checks config-driven readiness gates first, then prints the full report
     and requires the user to type CONFIRM to proceed.
     This is the ONLY way to switch the bot to live trading.
+
+    Requires LIVE_TRADING_ENABLED=true in .env -- a hard kill-switch that prevents
+    accidental live activation. Policy: do not enable until Mac Studio is in place.
     """
+    if not cfg.live_trading_enabled:
+        print("=" * 60)
+        print("  LIVE TRADING BLOCKED")
+        print("=" * 60)
+        print()
+        print("  LIVE_TRADING_ENABLED is not set to 'true' in .env.")
+        print()
+        print("  Policy: no live trading until Mac Studio hardware is in place,")
+        print("  or until an explicit request is made with stated goals and costs.")
+        print()
+        print("  To unlock: set LIVE_TRADING_ENABLED=true in .env, then re-run")
+        print("  python main.py --go-live")
+        print()
+        print("=" * 60)
+        return
     print(paper.generate_report())
     print()
     print("=" * 60)

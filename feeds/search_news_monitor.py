@@ -87,6 +87,29 @@ _SPORTS_TOKENS = frozenset({
     "oscars", "grammy", "emmy", "celebrity",
 })
 
+# Economic/financial tokens that indicate a market query will produce off-topic results
+# for a geopolitical bot.  Treasury yields, CPI, GDP, Fed rate decisions, etc. have no
+# bearing on the geopolitical events we trade.  If ANY of the query's 4 tokens appear
+# here the market is skipped -- same secondary-gate pattern as _SPORTS_TOKENS.
+_ECONOMIC_TOKENS = frozenset({
+    # Interest rates / bonds
+    "treasury", "yield", "yields", "note", "notes", "bond", "bonds",
+    "coupon", "maturity", "spread", "basis",
+    # Inflation / macro indicators
+    "cpi", "pce", "inflation", "deflation", "gdp", "deficit", "debt",
+    "yoy", "qoq", "mom",          # year-over-year / quarter-over-quarter / month-over-month
+    # Central banks (abbreviations safe to block -- no geopolitical market uses them)
+    "fomc", "boe", "ecb", "boj", "pboc",
+    # Rates / employment
+    "payroll", "unemployment", "nfp",
+    # Commodities (price-level markets, not geopolitical events)
+    "brent", "wti", "barrel",
+    # Stock indices
+    "nasdaq", "snp", "djia",
+    # Earnings / corporate finance
+    "earnings", "revenue", "ebitda", "eps",
+})
+
 
 def _gnews_url(query: str) -> str:
     """Build a Google News RSS URL for a search query."""
@@ -150,11 +173,11 @@ def _markets_to_queries(markets: Sequence[KalshiMarket]) -> list[str]:
         tokens = _tokenize(market.title)[:4]
         if len(tokens) < 2:
             continue
-        # Secondary gate: content-based sports/entertainment token filter.
+        # Secondary gate: content-based off-topic token filter.
         # Catches markets whose series_ticker doesn't match any blocklist prefix
-        # but whose title contains known off-topic terms (e.g. IPL cricket series
-        # with non-standard tickers, celebrity golf markets, crypto price markets).
-        if frozenset(tokens) & _SPORTS_TOKENS:
+        # but whose title contains known off-topic terms: sports, entertainment,
+        # economic indicators (treasury yields, CPI, GDP, etc.).
+        if frozenset(tokens) & (_SPORTS_TOKENS | _ECONOMIC_TOKENS):
             continue
         token_set = frozenset(tokens)
         if token_set in seen_sets:

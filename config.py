@@ -432,6 +432,14 @@ class BotConfig:
     go_live_min_win_rate:    float = field(default_factory=lambda: float(os.getenv("GO_LIVE_MIN_WIN_RATE", "0.52")))
     go_live_max_drawdown_pct: float = field(default_factory=lambda: float(os.getenv("GO_LIVE_MAX_DRAWDOWN_PCT", "0.20")))
 
+    # Hard kill-switch for live trading.  Must be explicitly set to "true" in .env.
+    # Without this flag: --go-live is refused, and go_live_confirmed in the DB is
+    # ignored at startup -- the bot stays in paper mode regardless.
+    # Policy: do NOT enable until Mac Studio hardware is in place.
+    live_trading_enabled: bool = field(
+        default_factory=lambda: os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true"
+    )
+
     # Live session loss limit: halt all trading if live Kalshi balance drops more than
     # this fraction of BANKROLL below the session-start balance. Default 10% ($50 on $500).
     # Set to 1.0 to disable. Checked on every live trade attempt via get_balance().

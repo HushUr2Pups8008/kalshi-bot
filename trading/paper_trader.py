@@ -195,13 +195,23 @@ class PaperTrader:
             self._set_state("notional_bankroll", str(cfg.bankroll))
             log.info("Notional bankroll initialised at $%.2f", cfg.bankroll)
 
-        # Go-live flag — sets cfg.is_paper_trading
+        # Go-live flag -- sets cfg.is_paper_trading only if LIVE_TRADING_ENABLED=true.
+        # The env var is a hard kill-switch: even if the DB says go_live_confirmed,
+        # the bot stays in paper mode until the operator explicitly unlocks it.
         row = self._conn.execute(
             "SELECT value FROM bot_state WHERE key = 'go_live_confirmed'"
         ).fetchone()
         if row and row["value"] == "true":
-            cfg.set_paper_mode(False)
-            log.warning("GO-LIVE confirmed -- bot is in LIVE TRADING mode.")
+            if cfg.live_trading_enabled:
+                cfg.set_paper_mode(False)
+                log.warning("GO-LIVE confirmed -- bot is in LIVE TRADING mode.")
+            else:
+                log.warning(
+                    "LIVE TRADING BLOCKED -- go_live_confirmed=true in DB but "
+                    "LIVE_TRADING_ENABLED is not set in .env. "
+                    "Staying in paper mode. Set LIVE_TRADING_ENABLED=true to unlock."
+                )
+                cfg.set_paper_mode(True)
         else:
             cfg.set_paper_mode(True)
 
