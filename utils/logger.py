@@ -9,11 +9,13 @@ Provides:
   - trade_log                 -- structured JSON logger for paper/live records
 
 File layout (logs/):
-  bot.log              -- active DEBUG+ log; rotated to bot.log.YYYY-MM-DD
-  errors.log           -- active WARNING+ log; same rotation scheme
-  bot.log.YYYY-MM-DD   -- 90-day archive
-  errors.log.YYYY-MM-DD
-  trades.jsonl         -- structured trade records (append-only, never rotated)
+  app/bot.log                  -- active DEBUG+ log; rotated to bot.log.YYYY-MM-DD
+  app/errors.log               -- active WARNING+ log; same rotation scheme
+  app/bot.log.YYYY-MM-DD       -- 90-day archive
+  app/errors.log.YYYY-MM-DD
+  trades/trades.jsonl          -- structured trade records (monthly rotation)
+  trades/archive/              -- trades-YYYYMM.jsonl.gz (12-month retention)
+  reports/                     -- report_YYYYMMDD.txt, analysis_*.txt
 
 Architecture:
   _app_fh and _err_fh are module-level singletons.  get_logger() creates one
@@ -34,10 +36,20 @@ import colorlog
 
 from config import LOGS_DIR
 
+# ── Subdirectory layout ───────────────────────────────────────────────────────
+_LOG_APP_DIR     = LOGS_DIR / "app"
+_LOG_TRADES_DIR  = LOGS_DIR / "trades"
+_LOG_REPORTS_DIR = LOGS_DIR / "reports"
+_LOG_ARCHIVE_DIR = LOGS_DIR / "trades" / "archive"
+
+for _d in (_LOG_APP_DIR, _LOG_TRADES_DIR, _LOG_REPORTS_DIR, _LOG_ARCHIVE_DIR):
+    _d.mkdir(parents=True, exist_ok=True)
+
 # ── Log file paths ────────────────────────────────────────────────────────────
-APP_LOG_FILE   = LOGS_DIR / "bot.log"
-ERROR_LOG_FILE = LOGS_DIR / "errors.log"     # WARNING+ only -- quick triage
-TRADE_LOG_FILE = LOGS_DIR / "trades.jsonl"   # newline-delimited JSON
+APP_LOG_FILE   = _LOG_APP_DIR    / "bot.log"
+ERROR_LOG_FILE = _LOG_APP_DIR    / "errors.log"   # WARNING+ only -- quick triage
+TRADE_LOG_FILE = _LOG_TRADES_DIR / "trades.jsonl" # newline-delimited JSON
+LOG_REPORTS_DIR = _LOG_REPORTS_DIR                # for paper_trader report output
 
 # ── Formatters ────────────────────────────────────────────────────────────────
 _COLOR_FORMAT = (

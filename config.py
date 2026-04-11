@@ -260,7 +260,13 @@ MARKET_SERIES_BLOCKLIST_PREFIXES = [
     "KXTRUMPSAYMONTH",  # Will Trump say [word] this month?
     # Entertainment / crypto / weather
     "KXENTERTAIN", # Entertainment / pop culture
-    "KXCRYPTO",    # Crypto price markets
+    "KXCRYPTO",    # Crypto price markets (generic)
+    # Individual crypto-coin series (Kalshi uses per-coin prefixes outside KXCRYPTO)
+    "KXDOGE",      # Dogecoin markets
+    "KXBTC",       # Bitcoin markets
+    "KXETH",       # Ethereum markets
+    "KXSOL",       # Solana markets
+    "KXXRP",       # XRP markets
     "KXWEATHER",   # Weather markets
     # Multi-event parlay packages
     "KXMVESPORT",  # Multi-event sports

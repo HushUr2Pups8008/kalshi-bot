@@ -42,10 +42,11 @@ from tabulate import tabulate
 # Paths
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).parent.parent
-JSONL_PATH = REPO_ROOT / "logs" / "trades.jsonl"
+JSONL_PATH = REPO_ROOT / "logs" / "trades" / "trades.jsonl"
 DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
 CACHE_PATH = REPO_ROOT / "logs" / "market_resolution_cache.json"
 LOGS_DIR = REPO_ROOT / "logs"
+REPORTS_DIR = LOGS_DIR / "reports"
 
 PAPER_MIN_EDGE = 0.02
 PAPER_FLAT_CONTRACTS = 5
@@ -1450,9 +1451,9 @@ def main():
     report_text = "\n".join(report_lines)
 
     # Write output file
-    LOGS_DIR.mkdir(exist_ok=True)
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     out_name = "analysis_%s.txt" % now.strftime("%Y%m%d_%H%M")
-    out_path = LOGS_DIR / out_name
+    out_path = REPORTS_DIR / out_name
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(report_text)
 

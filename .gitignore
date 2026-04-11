@@ -12,12 +12,13 @@ env/
 dist/
 build/
 
-# Bot data (paper trades DB, logs — too large/personal for version control)
+# Bot data (paper trades DB, logs -- too large/personal for version control)
 data/*.db
 logs/*.log
 logs/*.log.*
-logs/*.jsonl
-logs/report_*.txt
+logs/app/
+logs/reports/
+logs/trades/
 
 # Keep the placeholder files
 !data/.gitkeep

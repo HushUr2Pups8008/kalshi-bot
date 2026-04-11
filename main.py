@@ -530,12 +530,12 @@ class TradingBot:
     # ── Scheduled tasks ───────────────────────────────────────────────────────
 
     async def _daily_report_task(self) -> None:
-        from config import LOGS_DIR
+        from utils.logger import LOG_REPORTS_DIR
         while True:
             await asyncio.sleep(86_400)
             self.paper.daily_summary()
             report      = self.paper.generate_report()
-            report_path = LOGS_DIR / f"report_{datetime.now(timezone.utc).strftime('%Y%m%d')}.txt"
+            report_path = LOG_REPORTS_DIR / f"report_{datetime.now(timezone.utc).strftime('%Y%m%d')}.txt"
             report_path.write_text(report, encoding="utf-8")
             log.info("Daily report written to %s", report_path)
 
@@ -648,6 +648,143 @@ class TradingBot:
                 self._known_market_tickers = new_tickers
             except Exception as exc:
                 log.warning("Market refresh task error: %s", exc)
+
+    async def _log_maintenance_task(self) -> None:
+        """
+        Daily housekeeping for the logs/ directory.
+
+        Retention rules:
+          logs/reports/report_*.txt       -- 90 days
+          logs/reports/analysis_*.txt     -- 30 days
+          logs/service_stderr-*.log       -- 30 days (NSSM archives in root)
+          logs/trades/archive/*.jsonl.gz  -- 12 months
+
+        Monthly rotation:
+          When the month rolls over, gzip-compresses trades.jsonl to
+          logs/trades/archive/trades-YYYYMM.jsonl.gz and truncates it in-place.
+          The active file is never deleted -- only truncated.
+
+        Migration sweep (one-time, idempotent):
+          Moves any bot.log.YYYY-MM-DD / errors.log.YYYY-MM-DD files still
+          in logs/ root to logs/app/ so the TimedRotatingFileHandler's
+          backupCount=90 enforcement covers them.
+        """
+        import gzip
+        import shutil as _shutil
+        from config import LOGS_DIR
+        from utils.logger import _LOG_APP_DIR, _LOG_TRADES_DIR, _LOG_REPORTS_DIR, _LOG_ARCHIVE_DIR
+
+        _MAINT_INTERVAL = 86_400  # 24 hours
+        _INITIAL_DELAY  = 60      # 1 minute -- let the bot fully start first
+
+        await asyncio.sleep(_INITIAL_DELAY)
+
+        while True:
+            now = datetime.now(timezone.utc)
+            deleted_count = 0
+            moved_count   = 0
+
+            try:
+                # ── Retention: reports/ ───────────────────────────────────────
+                for pattern, max_days in (("report_*.txt", 90), ("analysis_*.txt", 30)):
+                    for p in _LOG_REPORTS_DIR.glob(pattern):
+                        age_days = (now.timestamp() - p.stat().st_mtime) / 86_400
+                        if age_days > max_days:
+                            p.unlink()
+                            deleted_count += 1
+                            log.info("[LOG_MAINT] Deleted old report: %s (%.0f days)", p.name, age_days)
+
+                # ── Retention: NSSM service log archives in logs/ root ────────
+                for p in LOGS_DIR.glob("service_stderr-*.log"):
+                    age_days = (now.timestamp() - p.stat().st_mtime) / 86_400
+                    if age_days > 30:
+                        p.unlink()
+                        deleted_count += 1
+                        log.info("[LOG_MAINT] Deleted old service log: %s (%.0f days)", p.name, age_days)
+
+                # ── Retention: trade archives older than 12 months ────────────
+                for p in _LOG_ARCHIVE_DIR.glob("*.jsonl.gz"):
+                    age_days = (now.timestamp() - p.stat().st_mtime) / 86_400
+                    if age_days > 366:
+                        p.unlink()
+                        deleted_count += 1
+                        log.info("[LOG_MAINT] Deleted old trade archive: %s (%.0f days)", p.name, age_days)
+
+                # ── Monthly trades.jsonl rotation ─────────────────────────────
+                trades_path   = _LOG_TRADES_DIR / "trades.jsonl"
+                current_month = now.strftime("%Y%m")
+                archive_name  = f"trades-{current_month}.jsonl.gz"
+                archive_path  = _LOG_ARCHIVE_DIR / archive_name
+
+                # Rotate if: trades.jsonl exists with content AND this month's
+                # archive is missing (means month just rolled over)
+                if trades_path.exists() and trades_path.stat().st_size > 0 and not archive_path.exists():
+                    # Check the file contains records from a prior month
+                    prev_month = (now.replace(day=1) - __import__("datetime").timedelta(days=1)).strftime("%Y%m")
+                    prev_archive = _LOG_ARCHIVE_DIR / f"trades-{prev_month}.jsonl.gz"
+                    # Only rotate if previous month's archive doesn't already exist OR
+                    # this is a genuine new month with unarchived records
+                    if not prev_archive.exists():
+                        # Compress to archive
+                        with open(trades_path, "rb") as f_in:
+                            with gzip.open(archive_path, "wb") as f_out:
+                                _shutil.copyfileobj(f_in, f_out)
+                        # Truncate in-place (never delete -- logger has file open)
+                        with open(trades_path, "w", encoding="utf-8"):
+                            pass
+                        log.info(
+                            "[LOG_MAINT] Rotated trades.jsonl -> %s (%.1f KB compressed)",
+                            archive_name,
+                            archive_path.stat().st_size / 1024,
+                        )
+
+                # ── Migration sweep ───────────────────────────────────────────
+                # Move rotated app logs from root to logs/app/
+                for prefix in ("bot.log.", "errors.log."):
+                    for p in LOGS_DIR.glob(f"{prefix}????-??-??"):
+                        dest = _LOG_APP_DIR / p.name
+                        if not dest.exists():
+                            p.rename(dest)
+                            moved_count += 1
+                            log.debug("[LOG_MAINT] Migrated %s -> app/", p.name)
+
+                # Move old report_*.txt and analysis_*.txt from root to logs/reports/
+                for pattern in ("report_*.txt", "analysis_*.txt"):
+                    for p in LOGS_DIR.glob(pattern):
+                        dest = _LOG_REPORTS_DIR / p.name
+                        if not dest.exists():
+                            p.rename(dest)
+                            moved_count += 1
+                            log.debug("[LOG_MAINT] Migrated %s -> reports/", p.name)
+
+                # Move trades.jsonl from root to logs/trades/ (one-time)
+                old_trades = LOGS_DIR / "trades.jsonl"
+                new_trades = _LOG_TRADES_DIR / "trades.jsonl"
+                if old_trades.exists() and old_trades.stat().st_size > 0:
+                    if not new_trades.exists() or new_trades.stat().st_size == 0:
+                        old_trades.rename(new_trades)
+                        moved_count += 1
+                        log.info("[LOG_MAINT] Migrated trades.jsonl -> trades/")
+                    else:
+                        # Both exist with data -- append old root content to new, then remove
+                        with open(old_trades, "rb") as src, open(new_trades, "ab") as dst:
+                            _shutil.copyfileobj(src, dst)
+                        old_trades.unlink()
+                        moved_count += 1
+                        log.info("[LOG_MAINT] Merged root trades.jsonl -> trades/ and removed original")
+
+                if deleted_count or moved_count:
+                    log.info(
+                        "[LOG_MAINT] Maintenance complete: %d deleted, %d migrated",
+                        deleted_count, moved_count,
+                    )
+                else:
+                    log.debug("[LOG_MAINT] Maintenance pass complete -- nothing to clean")
+
+            except Exception as exc:
+                log.warning("[LOG_MAINT] Maintenance pass failed: %s", exc)
+
+            await asyncio.sleep(_MAINT_INTERVAL)
 
     async def _subreddit_discovery_task(self) -> None:
         """
@@ -791,6 +928,7 @@ class TradingBot:
             asyncio.create_task(self._market_refresh_task(),            name="market_refresh"),
             asyncio.create_task(self._auto_resolve_task(),              name="auto_resolve"),
             asyncio.create_task(self._subreddit_discovery_task(),       name="sub_discovery"),
+            asyncio.create_task(self._log_maintenance_task(),           name="log_maint"),
             *([asyncio.create_task(
                 run_rss_monitor(self._on_fade_tweet, feeds=FADE_TWEET_FEED_URLS),
                 name="fade_tweets",
