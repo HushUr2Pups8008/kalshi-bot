@@ -350,7 +350,7 @@ class PaperTrader:
 
         kelly_note = f" (kelly_shadow={kelly_contracts})" if cfg.is_paper_trading else ""
         log.info(
-            "[PAPER] %s: BUY %d%s %s @ %d¢ | cost=$%.2f | edge=%+.3f | "
+            "[PAPER] %s: BUY %d%s %s @ %dc | cost=$%.2f | edge=%+.3f | "
             "bankroll=$%.2f->$%.2f | src_mult=%.2fx | %s",
             trade_id, contracts, kelly_note, analysis.side.upper(), price_cents,
             cost_dollars, analysis.edge,

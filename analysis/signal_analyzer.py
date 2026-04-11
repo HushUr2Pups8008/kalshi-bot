@@ -158,7 +158,7 @@ def keyword_estimate(
         return (
             market.yes_prob, 0.05, keywords,
             f"Geo-entity mismatch: article mentions {article_countries} "
-            f"but market concerns {market_countries} — signal suppressed.",
+            f"but market concerns {market_countries} -- signal suppressed.",
         )
 
     # Dampen shift by current market price: shifts near extremes are smaller
@@ -178,8 +178,8 @@ def keyword_estimate(
     reasoning = (
         f"Keyword analysis found {len(keywords)} signal(s): [{', '.join(keywords[:5])}]. "
         f"Net shift: {shift:+.3f} (dampened: {adjusted_shift:+.3f}). "
-        f"Base prob: {base_probability:.3f} → estimated: {estimated_prob:.3f}. "
-        f"Edge vs market ({market.yes_price:.1f}¢): {edge:+.3f}. "
+        f"Base prob: {base_probability:.3f} -> estimated: {estimated_prob:.3f}. "
+        f"Edge vs market ({market.yes_price:.1f}c): {edge:+.3f}. "
         f"Betting {side.upper()}."
     )
 

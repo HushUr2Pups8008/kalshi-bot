@@ -95,7 +95,7 @@ def _build_ws_auth_headers() -> dict:
         )
         sig_b64 = base64.b64encode(sig).decode()
     except Exception as exc:
-        log.warning("Could not sign WS handshake: %s — connecting unsigned", exc)
+        log.warning("Could not sign WS handshake: %s -- connecting unsigned", exc)
         return {}
     return {
         "KALSHI-ACCESS-KEY":       cfg.api_key_id,
@@ -211,7 +211,7 @@ class KalshiWebSocketClient:
     async def run(self) -> None:
         """Connect and maintain the WebSocket connection. Runs indefinitely."""
         if not _WS_AVAILABLE:
-            log.error("websockets package not installed — WebSocket feed disabled")
+            log.error("websockets package not installed -- WebSocket feed disabled")
             return
 
         self._running = True
@@ -239,9 +239,9 @@ class KalshiWebSocketClient:
                         await self._handle_message(message)
 
             except ConnectionClosed as exc:
-                log.warning("WS connection closed: %s — reconnecting in %ds", exc, delay)
+                log.warning("WS connection closed: %s -- reconnecting in %ds", exc, delay)
             except Exception as exc:
-                log.error("WS error: %s — reconnecting in %ds", exc, delay)
+                log.error("WS error: %s -- reconnecting in %ds", exc, delay)
             finally:
                 self._ws = None
 
