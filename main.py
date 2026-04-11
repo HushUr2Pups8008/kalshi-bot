@@ -36,7 +36,8 @@ from analysis.keyword_stats import KeywordStats
 from analysis.market_matcher import MarketMatcher
 from analysis.signal_analyzer import estimate_probability
 from analysis.source_stats import SourceStats
-from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, VERSION, FADE_TWEET_FEED_URLS,
+from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, VERSION,
+                    FADE_TWEET_FEED_URLS,
                     MARKET_SERIES_BLOCKLIST_PREFIXES, MAX_NEWS_AGE_SECONDS,
                     FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD,
                     DRIFT_ALERT_CENTS, DRIFT_LOG_COOLDOWN_SECS,
@@ -243,8 +244,13 @@ class TradingBot:
         self.source_stats.increment_opportunities(news.source)
 
         if capped_dollars <= 0:
-            log.debug("No bet for %s: edge=%+.4f below threshold", market.ticker, edge)
-            return
+            if not cfg.is_paper_trading:
+                log.debug("No bet for %s: edge=%+.4f below threshold", market.ticker, edge)
+                return
+            # Paper mode uses flat contracts regardless of Kelly sizing.
+            # Set a placeholder so the executor runs its own edge/position checks
+            # and logs a proper SKIPPED event if needed.
+            capped_dollars = PAPER_FLAT_CONTRACTS * max(1, min(99, int(market.yes_price))) / 100.0
 
         analysis = SignalAnalysis(
             news_item=news,
