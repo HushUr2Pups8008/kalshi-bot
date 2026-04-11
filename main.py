@@ -711,27 +711,21 @@ class TradingBot:
                         log.info("[LOG_MAINT] Deleted old trade archive: %s (%.0f days)", p.name, age_days)
 
                 # ── Monthly trades.jsonl rotation ─────────────────────────────
-                trades_path   = _LOG_TRADES_DIR / "trades.jsonl"
-                current_month = now.strftime("%Y%m")
-                archive_name  = f"trades-{current_month}.jsonl.gz"
-                archive_path  = _LOG_ARCHIVE_DIR / archive_name
-
-                # Rotate if: trades.jsonl exists with content AND this month's
-                # archive is missing (means month just rolled over)
-                if trades_path.exists() and trades_path.stat().st_size > 0 and not archive_path.exists():
-                    # Check the file contains records from a prior month
-                    prev_month = (now.replace(day=1) - __import__("datetime").timedelta(days=1)).strftime("%Y%m")
-                    prev_archive = _LOG_ARCHIVE_DIR / f"trades-{prev_month}.jsonl.gz"
-                    # Only rotate if previous month's archive doesn't already exist OR
-                    # this is a genuine new month with unarchived records
-                    if not prev_archive.exists():
-                        # Compress to archive
+                # Rotates on the 1st of each month: archives last month's records
+                # to trades/archive/trades-YYYYMM.jsonl.gz and truncates in-place.
+                # Only fires on the 1st so mid-month restarts never prematurely
+                # archive the current month's active data.
+                trades_path = _LOG_TRADES_DIR / "trades.jsonl"
+                if now.day == 1 and trades_path.exists() and trades_path.stat().st_size > 0:
+                    prev_month   = (now.replace(day=1) - __import__("datetime").timedelta(days=1)).strftime("%Y%m")
+                    archive_name = f"trades-{prev_month}.jsonl.gz"
+                    archive_path = _LOG_ARCHIVE_DIR / archive_name
+                    if not archive_path.exists():
                         with open(trades_path, "rb") as f_in:
                             with gzip.open(archive_path, "wb") as f_out:
                                 _shutil.copyfileobj(f_in, f_out)
-                        # Truncate in-place (never delete -- logger has file open)
                         with open(trades_path, "w", encoding="utf-8"):
-                            pass
+                            pass  # truncate in-place -- never delete the active file
                         log.info(
                             "[LOG_MAINT] Rotated trades.jsonl -> %s (%.1f KB compressed)",
                             archive_name,
@@ -759,8 +753,12 @@ class TradingBot:
                             p.rename(dest)
                             moved_count += 1
                             log.info("[LOG_MAINT] Migrated orphaned %s -> app/", name)
-                        # If dest already has data (new service is writing there),
-                        # leave the root copy in place -- it will age out naturally.
+                        elif (now.timestamp() - p.stat().st_mtime) > 3600:
+                            # dest has data AND root copy hasn't been written to in
+                            # over an hour -- it's a true orphan, safe to delete
+                            p.unlink()
+                            deleted_count += 1
+                            log.info("[LOG_MAINT] Removed stale orphan %s from root", name)
 
                 # Move old report_*.txt and analysis_*.txt from root to logs/reports/
                 for pattern in ("report_*.txt", "analysis_*.txt"):
