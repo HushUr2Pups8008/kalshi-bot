@@ -28,8 +28,8 @@ VERSION = (BASE_DIR / "VERSION").read_text(encoding="utf-8").strip()
 # Production URL per official OpenAPI spec (api.elections.kalshi.com)
 KALSHI_PROD_REST = "https://api.elections.kalshi.com/trade-api/v2"
 KALSHI_DEMO_REST = "https://demo-api.kalshi.co/trade-api/v2"
-KALSHI_PROD_WS   = "wss://api.elections.kalshi.com/trade-api/ws/v2"
-KALSHI_DEMO_WS   = "wss://demo-api.kalshi.co/trade-api/ws/v2"
+KALSHI_PROD_WS = "wss://api.elections.kalshi.com/trade-api/ws/v2"
+KALSHI_DEMO_WS = "wss://demo-api.kalshi.co/trade-api/ws/v2"
 
 # ── RSS feeds to monitor ──────────────────────────────────────────────────────
 RSS_FEEDS = [
@@ -39,33 +39,25 @@ RSS_FEEDS = [
     # AP News
     "https://feeds.apnews.com/rss/apf-topnews",
     "https://feeds.apnews.com/rss/apf-intlnews",
-    # BBC
-    "https://feeds.bbci.co.uk/news/world/rss.xml",
-    "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml",
-    "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
-    "https://feeds.bbci.co.uk/news/world/asia/rss.xml",
     # Al Jazeera
     "https://www.aljazeera.com/xml/rss/all.xml",
     # The Guardian
     "https://www.theguardian.com/world/rss",
     "https://www.theguardian.com/world/ukraine/rss",
     "https://www.theguardian.com/world/middleeast/rss",
-    # NPR
-    "https://feeds.npr.org/1004/rss.xml",  # World
-    # Foreign Policy
-    "https://foreignpolicy.com/feed/",
-    # Defense One
-    "https://www.defenseone.com/rss/all/",
     # Politico
     "https://rss.politico.com/politics-news.xml",
     # NY Times World
     "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
-    # France 24
-    "https://www.france24.com/en/rss",
-    # Deutsche Welle
-    "https://rss.dw.com/xml/rss-en-world",
     # Radio Free Europe
     "https://www.rferl.org/api/zyqopjmxel",
+    # Disabled (in DISABLED_NEWS_SOURCES -- re-enable one at a time with measurement):
+    # BBC         -- "BBC News"
+    # NPR         -- "NPR Topics: World"
+    # Foreign Policy -- "Foreign Policy"
+    # Defense One -- "Defense One - All Content"
+    # France 24   -- "France 24 - International breaking news, top stories and headlines"
+    # Deutsche Welle -- "World | Deutsche Welle"
 ]
 RSS_POLL_INTERVAL_SECONDS = 60
 
@@ -73,6 +65,59 @@ RSS_POLL_INTERVAL_SECONDS = 60
 # this were either slow through the queue or stale when they arrived — skip
 # them to avoid trading on already-priced-in information.
 MAX_NEWS_AGE_SECONDS: int = int(os.getenv("MAX_NEWS_AGE_SECONDS", "300"))  # 5 min
+
+# Early age pre-filter applied before news enters the deeper queue/matching
+# path. This is an optimization only; _process_candidate() still enforces the
+# authoritative stale-news guard with MAX_NEWS_AGE_SECONDS.
+EARLY_MAX_NEWS_AGE_SECONDS: int = int(
+    os.getenv("EARLY_MAX_NEWS_AGE_SECONDS", "300")
+)  # 5 min default
+
+# Curated per-source overrides for the early freshness pre-filter.
+# Exact source strings are preferred for predictability; main.py also does a
+# simple case-insensitive fallback match for readability.
+EARLY_MAX_NEWS_AGE_BY_SOURCE: dict[str, int] = {
+    "NYT > World News": 300,
+    "World news | The Guardian": 300,
+    "Al Jazeera – Breaking News, World News and Video from Al Jazeera": 300,
+    "Middle East and north Africa | The Guardian": 300,
+    "Ukraine | The Guardian": 300,
+}
+
+# If a feed item arrives without a valid timestamp, drop it before enqueueing
+# rather than letting it into the deeper analysis path.
+EARLY_DROP_IF_NO_TIMESTAMP: bool = os.getenv(
+    "EARLY_DROP_IF_NO_TIMESTAMP", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
+
+# Sources disabled at intake based on operator review of stale-heavy / low-value
+# behavior. Exact source strings are preferred; main.py also applies a simple
+# case-insensitive exact-match fallback.
+DISABLED_NEWS_SOURCES: set[str] = {
+    "BBC News",
+    "Politics",
+    "Foreign Policy",
+    "Defense One - All Content",
+    "r/worldnews",
+    "r/politics",
+    "r/InternationalNews",
+    "r/economics",
+    "r/iran",
+    "r/worldpolitics",
+    "r/IRstudies",
+    "r/PoliticalDiscussion",
+    "r/WarCollege",
+    "France 24 - International breaking news, top stories and headlines",
+    "r/geopolitics",
+    "World | Deutsche Welle",
+    "r/CredibleDefense",
+    "NPR Topics: World",
+}
+
+DISABLED_SOURCE_FAMILIES: set[str] = {
+    "bing_news_query",
+    "google_news_query",
+}
 
 # Optional RSSHub feed for @Kalshi tweets — enables "fade the Kalshi tweet" signal.
 # Leave empty (default) to disable. Set to https://rsshub.app/twitter/user/Kalshi
@@ -86,7 +131,7 @@ FADE_TWEET_FEED_URLS: list[str] = [u.strip() for u in _fade_raw.split(",") if u.
 # A market crossing above HIGH → buy NO (fade the spike).
 # A market crossing below LOW  → buy YES (fade the collapse).
 FADE_PRICE_HIGH_THRESHOLD: int = int(os.getenv("FADE_PRICE_HIGH_THRESHOLD", "85"))
-FADE_PRICE_LOW_THRESHOLD:  int = int(os.getenv("FADE_PRICE_LOW_THRESHOLD",  "15"))
+FADE_PRICE_LOW_THRESHOLD: int = int(os.getenv("FADE_PRICE_LOW_THRESHOLD", "15"))
 
 # ── Reddit subreddits to monitor ──────────────────────────────────────────────
 REDDIT_SUBREDDITS = [
@@ -124,7 +169,7 @@ REDDIT_SUBREDDITS = [
     "foreignpolicy",
     "military",
 ]
-REDDIT_MIN_SCORE  = 50
+REDDIT_MIN_SCORE = 50
 
 # ── Adaptive subreddit selection ──────────────────────────────────────────────
 # Tier-1: always polled every cycle regardless of active markets
@@ -139,70 +184,200 @@ REDDIT_CORE_SUBREDDITS: list[str] = [
 # Tier-2: topic -> subreddits (ordered by signal quality within each topic)
 REDDIT_SUBREDDIT_TOPIC_MAP: dict[str, list[str]] = {
     "military_conflict": ["WarCollege", "GlobalAffairs", "ukraine", "NATO"],
-    "elections":         ["worldpolitics", "GlobalTalk", "IRstudies"],
-    "trade_economic":    ["economics", "worldpolitics", "GlobalAffairs"],
-    "nuclear":           ["NorthKorea", "iran", "WarCollege"],
-    "sanctions":         ["sanctions", "foreignpolicy", "IRstudies"],
-    "us_domestic":       ["politics", "PoliticalDiscussion"],
-    "regional_europe":   ["europe", "EasternEurope", "ukraine"],
-    "regional_mideast":  ["MiddleEast", "Israel", "iran", "Syria"],
-    "regional_asia":     ["China", "taiwan", "NorthKorea", "southasia", "pakistan"],
-    "regional_latam":    ["LatinAmerica"],
-    "regional_africa":   ["Africa"],
-    "regional_eurasia":  ["Eurasia", "Turkey"],
+    "elections": ["worldpolitics", "GlobalTalk", "IRstudies"],
+    "trade_economic": ["economics", "worldpolitics", "GlobalAffairs"],
+    "nuclear": ["NorthKorea", "iran", "WarCollege"],
+    "sanctions": ["sanctions", "foreignpolicy", "IRstudies"],
+    "us_domestic": ["politics", "PoliticalDiscussion"],
+    "regional_europe": ["europe", "EasternEurope", "ukraine"],
+    "regional_mideast": ["MiddleEast", "Israel", "iran", "Syria"],
+    "regional_asia": ["China", "taiwan", "NorthKorea", "southasia", "pakistan"],
+    "regional_latam": ["LatinAmerica"],
+    "regional_africa": ["Africa"],
+    "regional_eurasia": ["Eurasia", "Turkey"],
 }
 
 # Per-topic keyword sets used to match active Kalshi market titles
 REDDIT_TOPIC_KEYWORDS: dict[str, frozenset] = {
-    "military_conflict": frozenset({
-        "war", "invasion", "military", "ceasefire", "troops", "attack",
-        "strike", "offensive", "conflict", "soldiers", "weapons",
-    }),
-    "elections": frozenset({
-        "election", "vote", "president", "prime", "minister", "senator",
-        "governor", "ballot", "polling", "runoff", "candidate",
-    }),
-    "trade_economic": frozenset({
-        "tariff", "tariffs", "trade", "import", "export", "embargo",
-        "customs", "commerce", "duty", "duties", "reciprocal", "liberation",
-    }),
-    "nuclear": frozenset({
-        "nuclear", "icbm", "ballistic", "missile", "warhead",
-        "enrichment", "uranium", "plutonium",
-    }),
-    "sanctions": frozenset({
-        "sanctions", "sanction", "embargo", "expelled", "diplomatic",
-        "ambassador", "alliance", "bilateral",
-    }),
-    "us_domestic": frozenset({
-        "executive", "shutdown", "impeach", "congress", "senate", "cabinet",
-        "supreme", "legislation", "regulation", "pardon", "indictment",
-        "confirmation", "doge", "budget", "debt",
-    }),
-    "regional_europe": frozenset({
-        "europe", "european", "ukraine", "russia", "nato", "germany",
-        "france", "britain", "poland", "czech", "hungary", "moldova",
-    }),
-    "regional_mideast": frozenset({
-        "israel", "gaza", "iran", "lebanon", "syria", "hamas", "hezbollah",
-        "saudi", "iraq", "yemen", "qatar", "jordan",
-    }),
-    "regional_asia": frozenset({
-        "china", "taiwan", "korea", "japan", "pakistan", "india", "vietnam",
-        "philippines", "myanmar", "bangladesh", "tibet",
-    }),
-    "regional_latam": frozenset({
-        "venezuela", "cuba", "mexico", "colombia", "brazil", "argentina",
-        "nicaragua", "ecuador", "peru", "chile",
-    }),
-    "regional_africa": frozenset({
-        "africa", "ethiopia", "sudan", "somalia", "nigeria", "kenya",
-        "congo", "libya", "egypt", "sahel", "mali", "niger",
-    }),
-    "regional_eurasia": frozenset({
-        "turkey", "georgia", "armenia", "azerbaijan", "kazakhstan",
-        "belarus", "erdogan", "caucasus", "eurasia",
-    }),
+    "military_conflict": frozenset(
+        {
+            "war",
+            "invasion",
+            "military",
+            "ceasefire",
+            "troops",
+            "attack",
+            "strike",
+            "offensive",
+            "conflict",
+            "soldiers",
+            "weapons",
+        }
+    ),
+    "elections": frozenset(
+        {
+            "election",
+            "vote",
+            "president",
+            "prime",
+            "minister",
+            "senator",
+            "governor",
+            "ballot",
+            "polling",
+            "runoff",
+            "candidate",
+        }
+    ),
+    "trade_economic": frozenset(
+        {
+            "tariff",
+            "tariffs",
+            "trade",
+            "import",
+            "export",
+            "embargo",
+            "customs",
+            "commerce",
+            "duty",
+            "duties",
+            "reciprocal",
+            "liberation",
+        }
+    ),
+    "nuclear": frozenset(
+        {
+            "nuclear",
+            "icbm",
+            "ballistic",
+            "missile",
+            "warhead",
+            "enrichment",
+            "uranium",
+            "plutonium",
+        }
+    ),
+    "sanctions": frozenset(
+        {
+            "sanctions",
+            "sanction",
+            "embargo",
+            "expelled",
+            "diplomatic",
+            "ambassador",
+            "alliance",
+            "bilateral",
+        }
+    ),
+    "us_domestic": frozenset(
+        {
+            "executive",
+            "shutdown",
+            "impeach",
+            "congress",
+            "senate",
+            "cabinet",
+            "supreme",
+            "legislation",
+            "regulation",
+            "pardon",
+            "indictment",
+            "confirmation",
+            "doge",
+            "budget",
+            "debt",
+        }
+    ),
+    "regional_europe": frozenset(
+        {
+            "europe",
+            "european",
+            "ukraine",
+            "russia",
+            "nato",
+            "germany",
+            "france",
+            "britain",
+            "poland",
+            "czech",
+            "hungary",
+            "moldova",
+        }
+    ),
+    "regional_mideast": frozenset(
+        {
+            "israel",
+            "gaza",
+            "iran",
+            "lebanon",
+            "syria",
+            "hamas",
+            "hezbollah",
+            "saudi",
+            "iraq",
+            "yemen",
+            "qatar",
+            "jordan",
+        }
+    ),
+    "regional_asia": frozenset(
+        {
+            "china",
+            "taiwan",
+            "korea",
+            "japan",
+            "pakistan",
+            "india",
+            "vietnam",
+            "philippines",
+            "myanmar",
+            "bangladesh",
+            "tibet",
+        }
+    ),
+    "regional_latam": frozenset(
+        {
+            "venezuela",
+            "cuba",
+            "mexico",
+            "colombia",
+            "brazil",
+            "argentina",
+            "nicaragua",
+            "ecuador",
+            "peru",
+            "chile",
+        }
+    ),
+    "regional_africa": frozenset(
+        {
+            "africa",
+            "ethiopia",
+            "sudan",
+            "somalia",
+            "nigeria",
+            "kenya",
+            "congo",
+            "libya",
+            "egypt",
+            "sahel",
+            "mali",
+            "niger",
+        }
+    ),
+    "regional_eurasia": frozenset(
+        {
+            "turkey",
+            "georgia",
+            "armenia",
+            "azerbaijan",
+            "kazakhstan",
+            "belarus",
+            "erdogan",
+            "caucasus",
+            "eurasia",
+        }
+    ),
 }
 
 # Max subreddits per poll cycle (core always included; topic subs fill remaining slots)
@@ -214,8 +389,15 @@ REDDIT_MAX_SUBREDDITS: int = 20
 # no open markets under them. The market cache now uses series-title keyword
 # discovery via _GEO_SERIES_KEYWORDS in analysis/market_matcher.py.
 KALSHI_GEOPOLITICAL_SERIES = [
-    "KXPRESGELECT", "KXINTL", "KXUKR", "KXMIDEAST",
-    "KXCHINA", "KXNATO", "KXRUSSIA", "KXIRAN", "KXNK",
+    "KXPRESGELECT",
+    "KXINTL",
+    "KXUKR",
+    "KXMIDEAST",
+    "KXCHINA",
+    "KXNATO",
+    "KXRUSSIA",
+    "KXIRAN",
+    "KXNK",
 ]
 
 # Series ticker PREFIXES to reject — used as a second filter after keyword
@@ -223,93 +405,101 @@ KALSHI_GEOPOLITICAL_SERIES = [
 # League matches "saudi", J-League matches "japan").
 MARKET_SERIES_BLOCKLIST_PREFIXES = [
     # US major sports
-    "KXNCAA",      # NCAA sports
-    "KXNFL",       # NFL football
-    "KXNBA",       # NBA basketball
-    "KXMLB",       # MLB baseball
-    "KXNHL",       # NHL hockey
-    "KXMLS",       # MLS soccer
+    "KXNCAA",  # NCAA sports
+    "KXNFL",  # NFL football
+    "KXNBA",  # NBA basketball
+    "KXMLB",  # MLB baseball
+    "KXNHL",  # NHL hockey
+    "KXMLS",  # MLS soccer
     # International soccer leagues / cups
-    "KXSOCCER",    # Generic international soccer
-    "KXUCL",       # UEFA Champions League
-    "KXUEL",       # UEFA Europa League
-    "KXSAUDIPL",   # Saudi Pro League
-    "KXJLEAGUE",   # Japan J-League
+    "KXSOCCER",  # Generic international soccer
+    "KXUCL",  # UEFA Champions League
+    "KXUEL",  # UEFA Europa League
+    "KXSAUDIPL",  # Saudi Pro League
+    "KXJLEAGUE",  # Japan J-League
     "KXJBLEAGUE",  # Japan B-League (basketball)
-    "KXKLEAGUE",   # Korea K-League
-    "KXLIGUE1",    # French Ligue 1
-    "KXBUNDESLIGA",# German Bundesliga
+    "KXKLEAGUE",  # Korea K-League
+    "KXLIGUE1",  # French Ligue 1
+    "KXBUNDESLIGA",  # German Bundesliga
     "KXVENFUTVE",  # Venezuela soccer
     # Other international sports
-    "KXTENNIS",    # Tennis
-    "KXGOLF",      # Golf
-    "KXBOXING",    # Boxing
-    "KXMMA",       # MMA / UFC
-    "KXNASCAR",    # NASCAR
-    "KXFORMULA",   # Formula 1
-    "KXOLYMPIC",   # Olympics
-    "KXBSL",       # Basketball Super Lig (Turkey)
+    "KXTENNIS",  # Tennis
+    "KXGOLF",  # Golf
+    "KXBOXING",  # Boxing
+    "KXMMA",  # MMA / UFC
+    "KXNASCAR",  # NASCAR
+    "KXFORMULA",  # Formula 1
+    "KXOLYMPIC",  # Olympics
+    "KXBSL",  # Basketball Super Lig (Turkey)
     "KXFIBAECUP",  # FIBA Europe Cup
     # Polling / approval rating markets (not geopolitical events)
     "KXAPRPOTUS",  # Presidential approval rating polls
-    "KXPOLLPOTUS", # Presidential polls
+    "KXPOLLPOTUS",  # Presidential polls
     # Central bank decision markets (monetary policy, not geopolitical events)
-    "KXCBDECISION", # Central bank rate decisions (Russia, China, etc.)
+    "KXCBDECISION",  # Central bank rate decisions (Russia, China, etc.)
     # Trump quote-prediction markets (not event markets; match any Trump headline)
     "KXTRUMPSAY",  # Will Trump say [word] this week?
     "KXTRUMPSAYMONTH",  # Will Trump say [word] this month?
     # Entertainment / crypto / weather
-    "KXENTERTAIN", # Entertainment / pop culture
-    "KXCRYPTO",    # Crypto price markets (generic)
+    "KXENTERTAIN",  # Entertainment / pop culture
+    "KXCRYPTO",  # Crypto price markets (generic)
     # Individual crypto-coin series (Kalshi uses per-coin prefixes outside KXCRYPTO)
-    "KXDOGE",      # Dogecoin markets
-    "KXBTC",       # Bitcoin markets
-    "KXETH",       # Ethereum markets
-    "KXSOL",       # Solana markets
-    "KXXRP",       # XRP markets
-    "KXWEATHER",   # Weather markets
+    "KXDOGE",  # Dogecoin markets
+    "KXBTC",  # Bitcoin markets
+    "KXETH",  # Ethereum markets
+    "KXSOL",  # Solana markets
+    "KXXRP",  # XRP markets
+    "KXWEATHER",  # Weather markets
     # Multi-event parlay packages
     "KXMVESPORT",  # Multi-event sports
     "KXMVECROSS",  # Cross-category multi-event
 ]
 
-MARKET_CACHE_TTL_SECONDS  = 1800  # 30 min — geo market refresh takes ~3 min; no need to refresh every 5
+MARKET_CACHE_TTL_SECONDS = (
+    1800  # 30 min — geo market refresh takes ~3 min; no need to refresh every 5
+)
 MAX_MARKET_DAYS_TO_EXPIRY = 30
 
 # ── Market feedback loop thresholds ──────────────────────────────────────────
 # Loop C: open position drift alert
 # Log a POSITION_DRIFT event to trades.jsonl when an open position's market
 # price moves this many cents from the entry price. Rate-limited per ticker.
-DRIFT_ALERT_CENTS: int       = int(os.getenv("DRIFT_ALERT_CENTS",       "15"))
+DRIFT_ALERT_CENTS: int = int(os.getenv("DRIFT_ALERT_CENTS", "15"))
 DRIFT_LOG_COOLDOWN_SECS: int = int(os.getenv("DRIFT_LOG_COOLDOWN_SECS", "3600"))
 
 # Loop A: price-velocity-driven targeted news search
 # Trigger a targeted Google News + GDELT search for a geo market when its price
 # moves this many cents within the last 5 minutes (PRICE_VELOCITY_WINDOW_SECS).
-PRICE_MOVE_THRESHOLD_CENTS: int  = int(os.getenv("PRICE_MOVE_THRESHOLD_CENTS",  "10"))
-PRICE_SEARCH_COOLDOWN_SECS: int  = int(os.getenv("PRICE_SEARCH_COOLDOWN_SECS",  "1800"))
-PRICE_VELOCITY_WINDOW_SECS: int  = int(os.getenv("PRICE_VELOCITY_WINDOW_SECS",  "300"))
+PRICE_MOVE_THRESHOLD_CENTS: int = int(os.getenv("PRICE_MOVE_THRESHOLD_CENTS", "10"))
+PRICE_SEARCH_COOLDOWN_SECS: int = int(os.getenv("PRICE_SEARCH_COOLDOWN_SECS", "1800"))
+PRICE_VELOCITY_WINDOW_SECS: int = int(os.getenv("PRICE_VELOCITY_WINDOW_SECS", "300"))
 
 # ── Paper trading thresholds (cast a wide net for data collection) ────────────
 # These are more permissive than live thresholds to maximise resolved trades
 # and build source credibility data during the paper phase.
-PAPER_MIN_EDGE                  = 0.02   # vs live 0.04
-PAPER_MIN_MATCH_SCORE           = 0.06   # raised from 0.03 -- scores <0.06 are almost always wrong-market
-                                         # noise (e.g. "Trump fires Bondi" -> China visit at 0.033).
-                                         # Real relevance starts at ~0.06 based on match score distribution.
-PAPER_MAX_CANDIDATES            = 3      # raised from 1 -- evaluate top 3 market matches per article.
-                                         # With max_candidates=1 the LLM was forced to evaluate wrong
-                                         # markets (top Jaccard match != best conceptual match) and
-                                         # correctly returned neutral, suppressing real signals.
-                                         # CPU CONSTRAINT: at 20-40s/call this means up to ~120s inference
-                                         # per article. On Mac Studio M4 Max (<5s/call) raise to 8-10.
-PAPER_FLAT_CONTRACTS            = 5      # flat contract count during paper training (no bankroll gating)
-PAPER_BLOCK_SAME_SIDE_DUPLICATE = True   # block any same-ticker same-side position during paper phase
+PAPER_MIN_EDGE = 0.02  # vs live 0.04
+PAPER_MIN_MATCH_SCORE = (
+    0.06  # raised from 0.03 -- scores <0.06 are almost always wrong-market
+)
+# noise (e.g. "Trump fires Bondi" -> China visit at 0.033).
+# Real relevance starts at ~0.06 based on match score distribution.
+PAPER_MAX_CANDIDATES = 3  # raised from 1 -- evaluate top 3 market matches per article.
+# With max_candidates=1 the LLM was forced to evaluate wrong
+# markets (top Jaccard match != best conceptual match) and
+# correctly returned neutral, suppressing real signals.
+# CPU CONSTRAINT: at 20-40s/call this means up to ~120s inference
+# per article. On Mac Studio M4 Max (<5s/call) raise to 8-10.
+PAPER_FLAT_CONTRACTS = (
+    5  # flat contract count during paper training (no bankroll gating)
+)
+PAPER_BLOCK_SAME_SIDE_DUPLICATE = (
+    True  # block any same-ticker same-side position during paper phase
+)
 
 # ── Source credibility settings ───────────────────────────────────────────────
-CREDIBILITY_MIN_SAMPLE = 10     # trades needed before multiplier takes effect
-CREDIBILITY_MIN_MULT   = 0.5    # floor multiplier (unreliable source)
-CREDIBILITY_MAX_MULT   = 1.5    # ceiling multiplier (very reliable source)
+CREDIBILITY_MIN_SAMPLE = 10  # trades needed before multiplier takes effect
+CREDIBILITY_MIN_MULT = 0.5  # floor multiplier (unreliable source)
+CREDIBILITY_MAX_MULT = 1.5  # ceiling multiplier (very reliable source)
 # Half-life (days) for exponential time decay on credibility outcomes.
 # A win/loss CREDIBILITY_HALF_LIFE_DAYS days ago counts 50% as much as today's.
 CREDIBILITY_HALF_LIFE_DAYS: float = 30.0
@@ -318,126 +508,317 @@ CREDIBILITY_HALF_LIFE_DAYS: float = 30.0
 # Signal rate (signals / posts_seen) is available in 24-48h vs win_rate which
 # needs 10+ resolved trades per source (weeks to months).  Quality gates fire
 # only after MIN_POSTS posts so brand-new sources get a fair trial first.
-SOURCE_STATS_MIN_POSTS: int         = int(os.getenv("SOURCE_STATS_MIN_POSTS",         "100"))
-SOURCE_STATS_LOW_SIGNAL_RATE: float = float(os.getenv("SOURCE_STATS_LOW_SIGNAL_RATE", "0.005"))
-SOURCE_STATS_ZERO_SIGNAL_POSTS: int = int(os.getenv("SOURCE_STATS_ZERO_SIGNAL_POSTS", "200"))
+SOURCE_STATS_MIN_POSTS: int = int(os.getenv("SOURCE_STATS_MIN_POSTS", "100"))
+SOURCE_STATS_LOW_SIGNAL_RATE: float = float(
+    os.getenv("SOURCE_STATS_LOW_SIGNAL_RATE", "0.005")
+)
+SOURCE_STATS_ZERO_SIGNAL_POSTS: int = int(
+    os.getenv("SOURCE_STATS_ZERO_SIGNAL_POSTS", "200")
+)
 
 # Subreddit discovery (v0.21.0) -- Reddit post search finds candidate subreddits
 # organically active on our market topics; source_stats then evaluates quality.
-SUBREDDIT_DISCOVERY_INTERVAL_SECS: int = int(os.getenv("SUBREDDIT_DISCOVERY_INTERVAL_SECS", "21600"))   # 6h between passes
-SUBREDDIT_PROBE_COOLDOWN_SECS: int     = int(os.getenv("SUBREDDIT_PROBE_COOLDOWN_SECS",     "10800"))   # 3h cooldown per candidate
-SUBREDDIT_PROBE_SLOTS: int             = int(os.getenv("SUBREDDIT_PROBE_SLOTS",             "3"))       # candidates per poll cycle
-SUBREDDIT_DISCOVERY_MAX_QUERIES: int   = int(os.getenv("SUBREDDIT_DISCOVERY_MAX_QUERIES",   "10"))      # queries per pass
+SUBREDDIT_DISCOVERY_INTERVAL_SECS: int = int(
+    os.getenv("SUBREDDIT_DISCOVERY_INTERVAL_SECS", "21600")
+)  # 6h between passes
+SUBREDDIT_PROBE_COOLDOWN_SECS: int = int(
+    os.getenv("SUBREDDIT_PROBE_COOLDOWN_SECS", "10800")
+)  # 3h cooldown per candidate
+SUBREDDIT_PROBE_SLOTS: int = int(
+    os.getenv("SUBREDDIT_PROBE_SLOTS", "3")
+)  # candidates per poll cycle
+SUBREDDIT_DISCOVERY_MAX_QUERIES: int = int(
+    os.getenv("SUBREDDIT_DISCOVERY_MAX_QUERIES", "10")
+)  # queries per pass
 
 # ── Signal keyword categories ─────────────────────────────────────────────────
 GEOPOLITICAL_SIGNALS = [
-    {"keywords": ["missile strike", "bombs", "shelling", "invasion", "military attack",
-                  "war declared", "troops deployed", "offensive launched"],
-     "direction": "yes", "strength": 0.15},
-    {"keywords": ["ceasefire", "peace deal", "withdrawal", "troops pull back",
-                  "de-escalation", "peace talks success"],
-     "direction": "no", "strength": 0.12},
-    {"keywords": ["election results", "wins election", "wins presidency", "elected president",
-                  "projected winner", "victory declared"],
-     "direction": "yes", "strength": 0.25},
-    {"keywords": ["concedes", "loses election", "runoff", "recount ordered"],
-     "direction": "no", "strength": 0.15},
-    {"keywords": ["sanctions imposed", "embargo", "expelled ambassador",
-                  "diplomatic relations severed"],
-     "direction": "yes", "strength": 0.08},
-    {"keywords": ["sanctions lifted", "diplomatic breakthrough",
-                  "summit agreement", "deal signed"],
-     "direction": "no", "strength": 0.07},
-    {"keywords": ["nuclear test", "nuclear weapon", "detonation", "icbm test",
-                  "ballistic missile test"],
-     "direction": "yes", "strength": 0.20},
-    {"keywords": ["coup", "overthrown", "government toppled", "military takeover",
-                  "martial law"],
-     "direction": "yes", "strength": 0.22},
-    {"keywords": ["terror attack", "bombing", "assassination", "mass shooting",
-                  "hostage"],
-     "direction": "yes", "strength": 0.10},
+    {
+        "keywords": [
+            "missile strike",
+            "bombs",
+            "shelling",
+            "invasion",
+            "military attack",
+            "war declared",
+            "troops deployed",
+            "offensive launched",
+        ],
+        "direction": "yes",
+        "strength": 0.15,
+    },
+    {
+        "keywords": [
+            "ceasefire",
+            "peace deal",
+            "withdrawal",
+            "troops pull back",
+            "de-escalation",
+            "peace talks success",
+        ],
+        "direction": "no",
+        "strength": 0.12,
+    },
+    {
+        "keywords": [
+            "election results",
+            "wins election",
+            "wins presidency",
+            "elected president",
+            "projected winner",
+            "victory declared",
+        ],
+        "direction": "yes",
+        "strength": 0.25,
+    },
+    {
+        "keywords": ["concedes", "loses election", "runoff", "recount ordered"],
+        "direction": "no",
+        "strength": 0.15,
+    },
+    {
+        "keywords": [
+            "sanctions imposed",
+            "embargo",
+            "expelled ambassador",
+            "diplomatic relations severed",
+        ],
+        "direction": "yes",
+        "strength": 0.08,
+    },
+    {
+        "keywords": [
+            "sanctions lifted",
+            "diplomatic breakthrough",
+            "summit agreement",
+            "deal signed",
+        ],
+        "direction": "no",
+        "strength": 0.07,
+    },
+    {
+        "keywords": [
+            "nuclear test",
+            "nuclear weapon",
+            "detonation",
+            "icbm test",
+            "ballistic missile test",
+        ],
+        "direction": "yes",
+        "strength": 0.20,
+    },
+    {
+        "keywords": [
+            "coup",
+            "overthrown",
+            "government toppled",
+            "military takeover",
+            "martial law",
+        ],
+        "direction": "yes",
+        "strength": 0.22,
+    },
+    {
+        "keywords": [
+            "terror attack",
+            "bombing",
+            "assassination",
+            "mass shooting",
+            "hostage",
+        ],
+        "direction": "yes",
+        "strength": 0.10,
+    },
     # Trade & economic policy
-    {"keywords": ["tariff imposed", "new tariff", "tariff hike", "trade war",
-                  "import ban", "export ban", "trade embargo", "reciprocal tariff"],
-     "direction": "yes", "strength": 0.10},
-    {"keywords": ["tariff removed", "tariff reduced", "trade deal signed",
-                  "trade agreement", "free trade", "tariff exemption"],
-     "direction": "no", "strength": 0.08},
+    {
+        "keywords": [
+            "tariff imposed",
+            "new tariff",
+            "tariff hike",
+            "trade war",
+            "import ban",
+            "export ban",
+            "trade embargo",
+            "reciprocal tariff",
+        ],
+        "direction": "yes",
+        "strength": 0.10,
+    },
+    {
+        "keywords": [
+            "tariff removed",
+            "tariff reduced",
+            "trade deal signed",
+            "trade agreement",
+            "free trade",
+            "tariff exemption",
+        ],
+        "direction": "no",
+        "strength": 0.08,
+    },
     # Foreign policy
-    {"keywords": ["diplomatic expulsion", "ambassador recalled", "embassy closed",
-                  "foreign aid suspended", "alliance withdrawal", "nato invoked",
-                  "security pact", "defense agreement"],
-     "direction": "yes", "strength": 0.10},
-    {"keywords": ["diplomatic talks", "foreign aid restored", "embassy reopened",
-                  "alliance renewed", "security guarantee"],
-     "direction": "no", "strength": 0.07},
+    {
+        "keywords": [
+            "diplomatic expulsion",
+            "ambassador recalled",
+            "embassy closed",
+            "foreign aid suspended",
+            "alliance withdrawal",
+            "nato invoked",
+            "security pact",
+            "defense agreement",
+        ],
+        "direction": "yes",
+        "strength": 0.10,
+    },
+    {
+        "keywords": [
+            "diplomatic talks",
+            "foreign aid restored",
+            "embassy reopened",
+            "alliance renewed",
+            "security guarantee",
+        ],
+        "direction": "no",
+        "strength": 0.07,
+    },
     # Domestic policy (US-focused -- Kalshi heavy on US markets)
-    {"keywords": ["executive order signed", "government shutdown", "debt ceiling",
-                  "impeachment vote", "cabinet fired", "attorney general fired",
-                  "special counsel appointed", "national emergency declared"],
-     "direction": "yes", "strength": 0.12},
-    {"keywords": ["government reopened", "debt ceiling raised", "budget passed",
-                  "bipartisan deal", "confirmation vote passed"],
-     "direction": "no", "strength": 0.08},
+    {
+        "keywords": [
+            "executive order signed",
+            "government shutdown",
+            "debt ceiling",
+            "impeachment vote",
+            "cabinet fired",
+            "attorney general fired",
+            "special counsel appointed",
+            "national emergency declared",
+        ],
+        "direction": "yes",
+        "strength": 0.12,
+    },
+    {
+        "keywords": [
+            "government reopened",
+            "debt ceiling raised",
+            "budget passed",
+            "bipartisan deal",
+            "confirmation vote passed",
+        ],
+        "direction": "no",
+        "strength": 0.08,
+    },
     # Senate confirmations / testimony (KXSENATECONFIRM, KXBONDITESTIFY, etc.)
     # These markets are active on Kalshi but the keyword gate was previously silent
     # on confirmation-specific language.
-    {"keywords": ["confirmation hearing", "senate confirms", "senate vote",
-                  "confirmation vote", "cabinet confirmed", "filibuster",
-                  "cloture vote", "nominee confirmed", "nominee rejected",
-                  "testimony begins", "testifies before", "senate judiciary",
-                  "senate armed services", "advise and consent"],
-     "direction": "yes", "strength": 0.12},
+    {
+        "keywords": [
+            "confirmation hearing",
+            "senate confirms",
+            "senate vote",
+            "confirmation vote",
+            "cabinet confirmed",
+            "filibuster",
+            "cloture vote",
+            "nominee confirmed",
+            "nominee rejected",
+            "testimony begins",
+            "testifies before",
+            "senate judiciary",
+            "senate armed services",
+            "advise and consent",
+        ],
+        "direction": "yes",
+        "strength": 0.12,
+    },
     # Trump executive actions -- high-volume Kalshi market category covering
     # firings, pardons, and executive orders where the headline IS the market event.
-    {"keywords": ["trump fires", "trump pardons", "executive order signed",
-                  "fired by trump", "dismissed by trump", "removed from office",
-                  "trump dismisses", "white house fires", "trump terminates"],
-     "direction": "yes", "strength": 0.10},
+    {
+        "keywords": [
+            "trump fires",
+            "trump pardons",
+            "executive order signed",
+            "fired by trump",
+            "dismissed by trump",
+            "removed from office",
+            "trump dismisses",
+            "white house fires",
+            "trump terminates",
+        ],
+        "direction": "yes",
+        "strength": 0.10,
+    },
 ]
 
 
 @dataclass
 class BotConfig:
     # Kalshi credentials
-    api_key_id:     str = field(default_factory=lambda: os.getenv("KALSHI_API_KEY_ID", ""))
-    api_key_secret: str = field(default_factory=lambda: os.getenv("KALSHI_API_KEY_SECRET", ""))
-    kalshi_env:     str = field(default_factory=lambda: os.getenv("KALSHI_ENV", "demo"))
+    api_key_id: str = field(default_factory=lambda: os.getenv("KALSHI_API_KEY_ID", ""))
+    api_key_secret: str = field(
+        default_factory=lambda: os.getenv("KALSHI_API_KEY_SECRET", "")
+    )
+    kalshi_env: str = field(default_factory=lambda: os.getenv("KALSHI_ENV", "demo"))
 
     # Live trading params
-    bankroll:        float = field(default_factory=lambda: float(os.getenv("BANKROLL", "500")))
-    kelly_fraction:  float = field(default_factory=lambda: float(os.getenv("KELLY_FRACTION", "0.5")))
-    min_edge:        float = field(default_factory=lambda: float(os.getenv("MIN_EDGE", "0.04")))
+    bankroll: float = field(default_factory=lambda: float(os.getenv("BANKROLL", "500")))
+    kelly_fraction: float = field(
+        default_factory=lambda: float(os.getenv("KELLY_FRACTION", "0.5"))
+    )
+    min_edge: float = field(
+        default_factory=lambda: float(os.getenv("MIN_EDGE", "0.04"))
+    )
 
     # Dynamic bet sizing: max_bet = min(hard_cap, max_bet_pct_bankroll * notional_bankroll)
     # max_bet_pct_bankroll is the operating ceiling (scales with bankroll).
     # max_bet_hard_cap is a safety backstop (rarely the binding constraint).
-    max_bet_pct_bankroll: float = field(default_factory=lambda: float(os.getenv("MAX_BET_PCT_BANKROLL", "0.15")))
-    max_bet_hard_cap:     float = field(default_factory=lambda: float(os.getenv("MAX_BET_HARD_CAP", "200.0")))
-    min_bet_dollars:      float = field(default_factory=lambda: float(os.getenv("MIN_BET_DOLLARS", "2.0")))
+    max_bet_pct_bankroll: float = field(
+        default_factory=lambda: float(os.getenv("MAX_BET_PCT_BANKROLL", "0.15"))
+    )
+    max_bet_hard_cap: float = field(
+        default_factory=lambda: float(os.getenv("MAX_BET_HARD_CAP", "200.0"))
+    )
+    min_bet_dollars: float = field(
+        default_factory=lambda: float(os.getenv("MIN_BET_DOLLARS", "2.0"))
+    )
 
     # Time discount parameters -- passed through to kelly_bet() to penalise bets
     # that lock up capital for months. Exponential decay with a configurable floor.
-    time_discount_half_life: float = field(default_factory=lambda: float(os.getenv("TIME_DISCOUNT_HALF_LIFE", "14.0")))
-    time_discount_floor:     float = field(default_factory=lambda: float(os.getenv("TIME_DISCOUNT_FLOOR", "0.20")))
+    time_discount_half_life: float = field(
+        default_factory=lambda: float(os.getenv("TIME_DISCOUNT_HALF_LIFE", "14.0"))
+    )
+    time_discount_floor: float = field(
+        default_factory=lambda: float(os.getenv("TIME_DISCOUNT_FLOOR", "0.20"))
+    )
 
     # Ticker cooldowns (configurable to tune via .env without code changes)
-    live_ticker_cooldown:  int = field(default_factory=lambda: int(os.getenv("LIVE_TICKER_COOLDOWN", "600")))    # 10 min
-    paper_ticker_cooldown: int = field(default_factory=lambda: int(os.getenv("PAPER_TICKER_COOLDOWN", "14400")))  # 4h
+    live_ticker_cooldown: int = field(
+        default_factory=lambda: int(os.getenv("LIVE_TICKER_COOLDOWN", "600"))
+    )  # 10 min
+    paper_ticker_cooldown: int = field(
+        default_factory=lambda: int(os.getenv("PAPER_TICKER_COOLDOWN", "14400"))
+    )  # 4h
 
     # Go-live gate thresholds -- evaluated by --go-live before allowing confirmation.
     # Set these to 0/1.0 to disable any individual gate.
-    go_live_min_resolved:    int   = field(default_factory=lambda: int(os.getenv("GO_LIVE_MIN_RESOLVED", "20")))
-    go_live_min_win_rate:    float = field(default_factory=lambda: float(os.getenv("GO_LIVE_MIN_WIN_RATE", "0.52")))
-    go_live_max_drawdown_pct: float = field(default_factory=lambda: float(os.getenv("GO_LIVE_MAX_DRAWDOWN_PCT", "0.20")))
+    go_live_min_resolved: int = field(
+        default_factory=lambda: int(os.getenv("GO_LIVE_MIN_RESOLVED", "20"))
+    )
+    go_live_min_win_rate: float = field(
+        default_factory=lambda: float(os.getenv("GO_LIVE_MIN_WIN_RATE", "0.52"))
+    )
+    go_live_max_drawdown_pct: float = field(
+        default_factory=lambda: float(os.getenv("GO_LIVE_MAX_DRAWDOWN_PCT", "0.20"))
+    )
 
     # Hard kill-switch for live trading.  Must be explicitly set to "true" in .env.
     # Without this flag: --go-live is refused, and go_live_confirmed in the DB is
     # ignored at startup -- the bot stays in paper mode regardless.
     # Policy: do NOT enable until Mac Studio hardware is in place.
     live_trading_enabled: bool = field(
-        default_factory=lambda: os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true"
+        default_factory=lambda: (
+            os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true"
+        )
     )
 
     # Live session loss limit: halt all trading if live Kalshi balance drops more than
@@ -460,17 +841,29 @@ class BotConfig:
     )
 
     # Reddit OAuth2 (optional — public JSON fallback if missing)
-    reddit_client_id:     Optional[str] = field(default_factory=lambda: os.getenv("REDDIT_CLIENT_ID"))
-    reddit_client_secret: Optional[str] = field(default_factory=lambda: os.getenv("REDDIT_CLIENT_SECRET"))
-    reddit_user_agent:    Optional[str] = field(default_factory=lambda: os.getenv("REDDIT_USER_AGENT"))
+    reddit_client_id: Optional[str] = field(
+        default_factory=lambda: os.getenv("REDDIT_CLIENT_ID")
+    )
+    reddit_client_secret: Optional[str] = field(
+        default_factory=lambda: os.getenv("REDDIT_CLIENT_SECRET")
+    )
+    reddit_user_agent: Optional[str] = field(
+        default_factory=lambda: os.getenv("REDDIT_USER_AGENT")
+    )
 
     @property
     def reddit_oauth_available(self) -> bool:
         return bool(self.reddit_client_id and self.reddit_client_secret)
 
     # Local Ollama settings (primary LLM backend)
-    ollama_base_url: str = field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"))
-    ollama_model:    str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen2.5:3b"))
+    ollama_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "OLLAMA_BASE_URL", "http://localhost:11434/v1"
+        )
+    )
+    ollama_model: str = field(
+        default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+    )
 
     # Paper trading mode — True until explicitly confirmed via --go-live
     # Set at runtime via set_paper_mode() — do not mutate directly.
@@ -497,6 +890,7 @@ class BotConfig:
         if self.api_key_secret:
             try:
                 from cryptography.hazmat.primitives import serialization
+
                 pem = self.api_key_secret
                 if isinstance(pem, str):
                     pem = pem.replace("\\n", "\n").strip()
@@ -514,6 +908,7 @@ class BotConfig:
                 )
         if errors:
             import sys
+
             for e in errors:
                 print("[CONFIG ERROR] %s" % e, file=sys.stderr)
             print(
