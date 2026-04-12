@@ -14,11 +14,16 @@ build/
 
 # Bot data (paper trades DB, logs -- too large/personal for version control)
 data/*.db
+data/*.db-journal
 logs/*.log
 logs/*.log.*
 logs/app/
 logs/reports/
 logs/trades/
+logs/service/
+
+# Test temp directories
+tests/_tmp_*/
 
 # Keep the placeholder files
 !data/.gitkeep
