@@ -559,8 +559,11 @@ GEOPOLITICAL_SIGNALS = [
             "troops pull back",
             "de-escalation",
             "peace talks success",
-            # Natural-language variants for ongoing / resuming negotiations
-            "peace talks",    # umbrella: catches "peace talks resume/underway/begin"
+            # Natural-language variants for resuming / successful negotiations.
+            # NOTE: "peace talks" intentionally omitted -- too ambiguous for a directional
+            # group. "peace talks fail" would get NO direction in keyword-only fallback,
+            # which is wrong. Failure phrasing is covered by the negotiations-failure group
+            # (YES). Resumption is covered by "talks resume" below.
             "truce",          # informal ceasefire, common in wire copy
             "talks resume",   # resumption of dialogue after breakdown
         ],
