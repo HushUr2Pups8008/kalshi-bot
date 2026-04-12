@@ -1,14 +1,23 @@
 """
 Tests for analysis/signal_analyzer.py
 
-Covers: JSON extraction edge cases, _parse_llm_response probability mapping,
-        keyword scoring with and without KeywordStats, geo-coherence suppression.
+Covers: JSON extraction edge cases, probability mapping, keyword scoring,
+        geo-coherence suppression, and estimator fallback behaviour.
 """
 
-import pytest
-from unittest.mock import MagicMock
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
-from analysis.signal_analyzer import _extract_json, _parse_llm_response, _keyword_score
+import pytest
+
+from analysis.signal_analyzer import (
+    _extract_json,
+    _parse_llm_response,
+    _keyword_score,
+    estimate_probability,
+    keyword_estimate,
+)
+from feeds import NewsItem
 
 
 # ---------------------------------------------------------------------------
@@ -245,3 +254,169 @@ class TestKeywordScore:
         stats.get_multiplier.assert_not_called()
         # Score should be the same as base
         assert s_stats_no_series == pytest.approx(s_base, abs=1e-9)
+
+
+def _make_news(headline: str, body: str = ""):
+    return NewsItem(
+        headline=headline,
+        url="https://example.com/story",
+        source="Reuters",
+        published=datetime.now(timezone.utc),
+        body=body,
+        item_id="news-1",
+    )
+
+
+def _make_full_market(
+    *,
+    title="Will Iran attack U.S. forces in 2026?",
+    subtitle="Resolves YES if Iran attacks U.S. forces before Dec 31, 2026.",
+    yes_price=50.0,
+    series_ticker="KXIRAN",
+):
+    market = MagicMock()
+    market.ticker = "KXTEST-25DEC31"
+    market.title = title
+    market.subtitle = subtitle
+    market.yes_price = yes_price
+    market.yes_prob = yes_price / 100.0
+    market.series_ticker = series_ticker
+    market.close_time = "2026-12-31T23:59:59Z"
+    return market
+
+
+class TestKeywordEstimate:
+    def test_geo_coherence_suppresses_cross_country_signal(self):
+        news = _make_news("Iran missile strike hits regional target")
+        market = _make_full_market(
+            title="Will Russia invade Ukraine in 2026?",
+            subtitle="Resolves YES if Russia invades Ukraine before Dec 31, 2026.",
+            series_ticker="KXUKR",
+        )
+
+        prob, side, keywords, reasoning = keyword_estimate(news, market)
+        assert prob == pytest.approx(market.yes_prob, abs=1e-9)
+        assert side == 0.05
+        assert keywords
+        assert "Geo-entity mismatch" in reasoning
+
+    @pytest.mark.parametrize(
+        ("headline", "expected_direction"),
+        [
+            ("Missile strike prompts fears of wider conflict", "yes"),
+            ("Ceasefire agreement signed after peace deal", "no"),
+        ],
+    )
+    def test_keyword_estimate_produces_directional_signal(self, headline, expected_direction):
+        news = _make_news(headline)
+        market = _make_full_market()
+
+        prob, side, keywords, reasoning = keyword_estimate(news, market)
+        assert keywords
+        assert side == expected_direction
+        assert "Keyword analysis found" in reasoning
+
+    def test_keyword_estimate_returns_no_signal_when_no_keywords(self):
+        news = _make_news("Quarterly corporate earnings beat expectations")
+        market = _make_full_market()
+
+        prob, side, keywords, reasoning = keyword_estimate(news, market)
+        assert prob == pytest.approx(market.yes_prob, abs=1e-9)
+        assert side == "no"
+        assert keywords == []
+
+
+class TestEstimateProbability:
+    @pytest.mark.asyncio
+    async def test_keyword_gated_no_signal_short_circuits_before_llm(self, monkeypatch):
+        news = _make_news("Quarterly corporate earnings beat expectations")
+        market = _make_full_market()
+
+        async def _unexpected_llm(*args, **kwargs):
+            raise AssertionError("llm_estimate should not be called when no keywords match")
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate", _unexpected_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
+            result = await estimate_probability(news, market)
+
+        assert result == (
+            market.yes_prob,
+            0.1,
+            [],
+            "No relevant keywords found -- no signal.",
+            None,
+            None,
+            None,
+        )
+        detail_mock.assert_called_once_with(
+            ticker=market.ticker,
+            source=news.source,
+            headline=news.headline,
+            method="keyword_gate",
+            keywords=[],
+            keyword_contributions=[],
+            base_probability=market.yes_prob,
+            final_probability=market.yes_prob,
+            market_price=market.yes_prob,
+        )
+
+    @pytest.mark.asyncio
+    async def test_llm_result_takes_precedence_when_available(self, monkeypatch):
+        news = _make_news("Missile strike prompts fears of wider conflict")
+        market = _make_full_market()
+
+        async def _fake_llm(*args, **kwargs):
+            return 0.72, 0.9, "LLM says this is market-moving", "yes", "moderate"
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
+            prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
+                await estimate_probability(news, market)
+
+        assert prob == pytest.approx(0.72)
+        assert confidence == pytest.approx(0.9)
+        assert keywords
+        assert reasoning.startswith("[LLM]")
+        assert llm_dir == "yes"
+        assert llm_mag == "moderate"
+        assert llm_conf == pytest.approx(0.9)
+        detail_mock.assert_called_once()
+        kwargs = detail_mock.call_args.kwargs
+        assert kwargs["method"] == "llm"
+        assert kwargs["base_probability"] == pytest.approx(market.yes_prob)
+        assert kwargs["final_probability"] == pytest.approx(0.72)
+        assert kwargs["market_price"] == pytest.approx(market.yes_prob)
+        assert kwargs["llm_direction"] == "yes"
+        assert kwargs["llm_magnitude"] == "moderate"
+        assert kwargs["llm_confidence"] == pytest.approx(0.9)
+        assert kwargs["keywords"]
+        assert kwargs["keyword_contributions"]
+
+    @pytest.mark.asyncio
+    async def test_keyword_fallback_used_when_llm_unavailable(self, monkeypatch):
+        news = _make_news("Missile strike prompts fears of wider conflict")
+        market = _make_full_market()
+
+        async def _no_llm(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate", _no_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
+            prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
+                await estimate_probability(news, market)
+
+        assert keywords
+        assert prob != pytest.approx(market.yes_prob)
+        assert confidence > 0.3
+        assert reasoning.startswith("Keyword analysis found")
+        assert llm_dir is None
+        assert llm_mag is None
+        assert llm_conf is None
+        detail_mock.assert_called_once()
+        kwargs = detail_mock.call_args.kwargs
+        assert kwargs["method"] == "keyword"
+        assert kwargs["base_probability"] == pytest.approx(market.yes_prob)
+        assert kwargs["final_probability"] == pytest.approx(prob)
+        assert kwargs["market_price"] == pytest.approx(market.yes_prob)
+        assert kwargs["keywords"]
+        assert kwargs["keyword_contributions"]

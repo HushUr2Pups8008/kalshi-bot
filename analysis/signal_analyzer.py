@@ -19,7 +19,7 @@ from typing import Optional
 from config import cfg, GEOPOLITICAL_SIGNALS
 from feeds import NewsItem
 from kalshi import KalshiMarket
-from utils.logger import get_logger
+from utils.logger import get_logger, trade_log
 
 log = get_logger("signal_analyzer")
 
@@ -108,6 +108,40 @@ def _keyword_score(
     net_shift = direction_weights["yes"] - direction_weights["no"]
     dominant  = "yes" if net_shift >= 0 else "no"
     return net_shift, dominant, matched
+
+
+def _keyword_contributions(
+    text: str,
+    keyword_stats=None,
+    series_ticker: str = "",
+) -> list[dict]:
+    """Return compact per-keyword contribution details for observability only."""
+    text_lower = text.lower()
+    contributions: list[dict] = []
+
+    for sig_def in GEOPOLITICAL_SIGNALS:
+        keywords = sig_def["keywords"]
+        direction = sig_def["direction"]
+        strength = sig_def["strength"]
+
+        hits = [kw for kw in keywords if kw.lower() in text_lower]
+        if not hits:
+            continue
+
+        group_weight = strength * (1 + 0.1 * (len(hits) - 1))
+        multiplier = 1.0
+        if keyword_stats is not None and series_ticker:
+            multiplier = keyword_stats.get_multiplier(hits[0], series_ticker)
+        applied_weight = group_weight * multiplier
+
+        for keyword in hits:
+            contributions.append({
+                "keyword": keyword,
+                "direction": direction,
+                "weight": round(applied_weight, 4),
+            })
+
+    return contributions
 
 
 def keyword_estimate(
@@ -479,12 +513,29 @@ async def estimate_probability(
         llm_* fields are None when keyword-only path is used.
     """
     # Always run keyword scoring for the keyword list
+    base_probability = market.yes_prob
+    combined_text = f"{news.headline} {news.body}"
+    series_ticker = getattr(market, "series_ticker", "") or ""
     kw_prob, kw_side, keywords, kw_reasoning = keyword_estimate(
         news, market, keyword_stats=keyword_stats
+    )
+    keyword_contribs = _keyword_contributions(
+        combined_text, keyword_stats=keyword_stats, series_ticker=series_ticker
     )
 
     if not keywords:
         # News doesn't seem related to this market
+        trade_log.log_signal_analysis_detail(
+            ticker=market.ticker,
+            source=news.source,
+            headline=news.headline,
+            method="keyword_gate",
+            keywords=[],
+            keyword_contributions=[],
+            base_probability=base_probability,
+            final_probability=market.yes_prob,
+            market_price=market.yes_prob,
+        )
         return market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", None, None, None
 
     # Try LLM if available
@@ -499,8 +550,33 @@ async def estimate_probability(
             f"[LLM] {llm_reasoning} "
             f"(LLM: {llm_prob:.3f}, Keywords(ref): {kw_prob:.3f})"
         )
+        trade_log.log_signal_analysis_detail(
+            ticker=market.ticker,
+            source=news.source,
+            headline=news.headline,
+            method="llm",
+            keywords=keywords,
+            keyword_contributions=keyword_contribs,
+            base_probability=base_probability,
+            final_probability=llm_prob,
+            market_price=market.yes_prob,
+            llm_direction=llm_direction,
+            llm_magnitude=llm_magnitude,
+            llm_confidence=llm_confidence,
+        )
         return llm_prob, llm_confidence, keywords, reasoning, llm_direction, llm_magnitude, llm_confidence
 
     # Keyword only
     confidence = min(0.7, 0.3 + 0.05 * len(keywords))   # more keywords -> more confident
+    trade_log.log_signal_analysis_detail(
+        ticker=market.ticker,
+        source=news.source,
+        headline=news.headline,
+        method="keyword",
+        keywords=keywords,
+        keyword_contributions=keyword_contribs,
+        base_probability=base_probability,
+        final_probability=kw_prob,
+        market_price=market.yes_prob,
+    )
     return kw_prob, confidence, keywords, kw_reasoning, None, None, None

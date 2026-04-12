@@ -320,8 +320,12 @@ class TradeLogger:
         price_cents: int,
         cost_dollars: float,
         status: str,
+        model_probability: float | None = None,
+        market_price: float | None = None,
+        edge: float | None = None,
+        min_edge_threshold: float | None = None,
     ) -> None:
-        self._write({
+        record = {
             "type": "LIVE_ORDER",
             "order_id": order_id,
             "ticker": ticker,
@@ -330,15 +334,127 @@ class TradeLogger:
             "price_cents": price_cents,
             "cost_dollars": round(cost_dollars, 2),
             "status": status,
-        })
+        }
+        if model_probability is not None:
+            record["model_probability"] = round(model_probability, 4)
+        if market_price is not None:
+            record["market_price"] = round(market_price, 4)
+        if edge is not None:
+            record["edge"] = round(edge, 4)
+        if min_edge_threshold is not None:
+            record["min_edge_threshold"] = round(min_edge_threshold, 4)
+        self._write(record)
 
-    def log_skipped(self, *, reason: str, ticker: str | None = None, headline: str | None = None) -> None:
-        self._write({
+    def log_skipped(
+        self,
+        *,
+        reason: str,
+        ticker: str | None = None,
+        headline: str | None = None,
+        model_probability: float | None = None,
+        market_price: float | None = None,
+        edge: float | None = None,
+        min_edge_threshold: float | None = None,
+    ) -> None:
+        record = {
             "type": "SKIPPED",
             "reason": reason,
             "ticker": ticker,
             "headline": headline,
-        })
+        }
+        if model_probability is not None:
+            record["model_probability"] = round(model_probability, 4)
+        if market_price is not None:
+            record["market_price"] = round(market_price, 4)
+        if model_probability is not None and market_price is not None:
+            signed_diff = model_probability - market_price
+            record["signed_diff"] = round(signed_diff, 4)
+            record["absolute_diff"] = round(abs(signed_diff), 4)
+        if edge is not None:
+            record["edge"] = round(edge, 4)
+        if min_edge_threshold is not None:
+            record["min_edge_threshold"] = round(min_edge_threshold, 4)
+        self._write(record)
+
+    def log_analysis_rejected(
+        self,
+        *,
+        reason: str,
+        ticker: str,
+        source: str,
+        headline: str,
+        match_score: float,
+        age_seconds: float | None = None,
+    ) -> None:
+        record = {
+            "type": "ANALYSIS_REJECTED",
+            "reason": reason,
+            "ticker": ticker,
+            "source": source,
+            "headline": headline,
+            "match_score": round(match_score, 4),
+        }
+        if age_seconds is not None:
+            record["age_seconds"] = round(age_seconds, 2)
+        self._write(record)
+
+    def log_early_stale_drop(
+        self,
+        *,
+        reason: str,
+        source: str,
+        headline: str,
+        age_seconds: float | None = None,
+        threshold_seconds: float | None = None,
+    ) -> None:
+        record = {
+            "type": "EARLY_STALE_DROP",
+            "reason": reason,
+            "source": source,
+            "headline": headline,
+        }
+        if age_seconds is not None:
+            record["age_seconds"] = round(age_seconds, 2)
+        if threshold_seconds is not None:
+            record["threshold_seconds"] = round(threshold_seconds, 2)
+        self._write(record)
+
+    def log_signal_analysis_detail(
+        self,
+        *,
+        ticker: str,
+        source: str,
+        headline: str,
+        method: str,
+        keywords: list[str],
+        keyword_contributions: list[dict[str, Any]] | None,
+        base_probability: float,
+        final_probability: float,
+        market_price: float,
+        llm_direction: str | None = None,
+        llm_magnitude: str | None = None,
+        llm_confidence: float | None = None,
+    ) -> None:
+        record = {
+            "type": "SIGNAL_ANALYSIS_DETAIL",
+            "ticker": ticker,
+            "source": source,
+            "headline": headline,
+            "method": method,
+            "keywords": keywords,
+            "base_probability": round(base_probability, 4),
+            "final_probability": round(final_probability, 4),
+            "market_price": round(market_price, 4),
+        }
+        if keyword_contributions:
+            record["keyword_contributions"] = keyword_contributions
+        if llm_direction is not None:
+            record["llm_direction"] = llm_direction
+        if llm_magnitude is not None:
+            record["llm_magnitude"] = llm_magnitude
+        if llm_confidence is not None:
+            record["llm_confidence"] = round(llm_confidence, 4)
+        self._write(record)
 
     def log_position_drift(
         self,

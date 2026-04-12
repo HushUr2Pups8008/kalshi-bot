@@ -93,23 +93,64 @@ class TradeExecutor:
         """
         Evaluate and execute a trade. Returns trade/order ID or None if skipped.
         """
+        log.debug(
+            "[DECISION] start ticker=%s mode=%s side=%s edge=%+.4f "
+            "capped=$%.2f yes_price=%.1fc est_prob=%.3f confidence=%.2f",
+            analysis.market.ticker,
+            "paper" if cfg.is_paper_trading else "live",
+            analysis.side.upper(),
+            analysis.edge,
+            analysis.capped_dollars,
+            analysis.market.yes_price,
+            analysis.estimated_probability,
+            analysis.confidence,
+        )
         skip_reason = self._validate(analysis)
         if skip_reason:
-            log.debug("Skipping %s: %s", analysis.market.ticker, skip_reason)
+            effective_min_edge = PAPER_MIN_EDGE if cfg.is_paper_trading else cfg.min_edge
+            log.debug(
+                "[DECISION] skip ticker=%s mode=%s side=%s reason=%s",
+                analysis.market.ticker,
+                "paper" if cfg.is_paper_trading else "live",
+                analysis.side.upper(),
+                skip_reason,
+            )
             trade_log.log_skipped(
                 reason=skip_reason,
                 ticker=analysis.market.ticker,
                 headline=analysis.news_item.headline[:80],
+                model_probability=analysis.estimated_probability,
+                market_price=analysis.market_yes_price,
+                edge=analysis.edge,
+                min_edge_threshold=effective_min_edge,
             )
             return None
 
         if cfg.is_paper_trading:
+            log.debug(
+                "[DECISION] route ticker=%s mode=paper side=%s",
+                analysis.market.ticker,
+                analysis.side.upper(),
+            )
             trade_id = await self._execute_paper(analysis)
         else:
+            log.debug(
+                "[DECISION] route ticker=%s mode=live side=%s",
+                analysis.market.ticker,
+                analysis.side.upper(),
+            )
             trade_id = await self._execute_live(analysis)
 
         if trade_id:
             self._last_traded[analysis.market.ticker] = time.monotonic()
+        else:
+            log.debug(
+                "[DECISION] no_trade_id ticker=%s mode=%s side=%s "
+                "after successful validation",
+                analysis.market.ticker,
+                "paper" if cfg.is_paper_trading else "live",
+                analysis.side.upper(),
+            )
 
         return trade_id
 
@@ -327,6 +368,10 @@ class TradeExecutor:
                 price_cents=price_cents,
                 cost_dollars=cost_dollars,
                 status=result.status,
+                model_probability=analysis.estimated_probability,
+                market_price=analysis.market_yes_price,
+                edge=analysis.edge,
+                min_edge_threshold=(PAPER_MIN_EDGE if cfg.is_paper_trading else cfg.min_edge),
             )
             if attempt > 0:
                 log.info(

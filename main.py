@@ -39,6 +39,8 @@ from analysis.source_stats import SourceStats
 from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, VERSION,
                     FADE_TWEET_FEED_URLS,
                     MARKET_SERIES_BLOCKLIST_PREFIXES, MAX_NEWS_AGE_SECONDS,
+                    EARLY_MAX_NEWS_AGE_SECONDS, EARLY_MAX_NEWS_AGE_BY_SOURCE,
+                    EARLY_DROP_IF_NO_TIMESTAMP, DISABLED_NEWS_SOURCES,
                     FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD,
                     DRIFT_ALERT_CENTS, DRIFT_LOG_COOLDOWN_SECS,
                     PRICE_MOVE_THRESHOLD_CENTS, PRICE_SEARCH_COOLDOWN_SECS,
@@ -67,12 +69,31 @@ def _source_priority(source: str) -> int:
     return 2 if source.startswith("r/") else 1
 
 
+def _early_max_news_age_seconds_for_source(source: str) -> int:
+    if source in EARLY_MAX_NEWS_AGE_BY_SOURCE:
+        return EARLY_MAX_NEWS_AGE_BY_SOURCE[source]
+    source_lower = source.strip().lower()
+    for key, value in EARLY_MAX_NEWS_AGE_BY_SOURCE.items():
+        if key.strip().lower() == source_lower:
+            return value
+    return EARLY_MAX_NEWS_AGE_SECONDS
+
+
+def _is_disabled_news_source(source: str) -> bool:
+    if source in DISABLED_NEWS_SOURCES:
+        return True
+    source_lower = source.strip().lower()
+    return any(key.strip().lower() == source_lower for key in DISABLED_NEWS_SOURCES)
+
+
 def _account_from_rsshub_url(url: str) -> str:
-    """Extract account name from RSSHub URL. e.g. .../user/Kalshi → 'Kalshi'"""
+    """Extract account name from RSSHub URL. e.g. .../user/Kalshi -> 'Kalshi'"""
+    if not url:
+        return "unknown"
     parts = url.rstrip("/").split("/")
-    if len(parts) >= 1:
+    if len(parts) >= 2:
         return parts[-1]
-    return url.split("/")[2]  # fallback: domain
+    return parts[0]  # fallback: domain or bare token
 
 
 def parse_args() -> argparse.Namespace:
@@ -124,16 +145,91 @@ class TradingBot:
 
     # ── News pipeline ─────────────────────────────────────────────────────────
 
+    def _source_family(self, source: str) -> str:
+        if not source:
+            return "other"
+
+        s = source.strip()
+
+        if s.endswith(" - BingNews"):
+            return "bing_news_query"
+        if s.endswith(" - Google News"):
+            return "google_news_query"
+        if s.startswith("r/"):
+            return "reddit"
+
+        lower = s.lower()
+        if any(k in lower for k in [
+            "reuters", "bbc", "nyt", "guardian",
+            "al jazeera", "france 24", "deutsche welle",
+            "defense one", "foreign policy", "politics"
+        ]):
+            return "publisher_rss"
+
+        if s == "Just In News":
+            return "direct_feed"
+
+        return "other"
+
+    def _is_disabled_source_family(self, source: str) -> bool:
+        from config import DISABLED_SOURCE_FAMILIES
+        family = self._source_family(source)
+        return family in DISABLED_SOURCE_FAMILIES
+
     async def _enqueue_news(self, news: NewsItem) -> None:
         """Non-blocking enqueue from feed pollers. Drops items if queue is full."""
-        if self._dedup.is_duplicate(news.headline, source=news.source):
+        from utils.logger import trade_log
+        source = news.source
+        headline = news.headline
+        if self._is_disabled_source_family(source):
+            trade_log.log_early_stale_drop(
+                reason="disabled_source_family",
+                source=source,
+                headline=headline,
+            )
             return
-        priority = _source_priority(news.source)
+        if _is_disabled_news_source(source):
+            trade_log.log_early_stale_drop(
+                reason="disabled_source",
+                source=source,
+                headline=headline,
+            )
+            log.debug("News dropped for disabled source [%s]: %s", source, headline[:60])
+            return
+        published = getattr(news, "published", None)
+        if not isinstance(published, datetime) or published.tzinfo is None:
+            if EARLY_DROP_IF_NO_TIMESTAMP:
+                trade_log.log_early_stale_drop(
+                    reason="missing_timestamp",
+                    source=source,
+                    headline=headline,
+                )
+                log.debug("News dropped for missing/invalid timestamp: %s", headline[:60])
+                return
+        else:
+            age_secs = (datetime.now(timezone.utc) - published).total_seconds()
+            threshold_secs = _early_max_news_age_seconds_for_source(source)
+            if age_secs > threshold_secs:
+                trade_log.log_early_stale_drop(
+                    reason="stale_by_source_policy",
+                    source=source,
+                    headline=headline,
+                    age_seconds=age_secs,
+                    threshold_seconds=threshold_secs,
+                )
+                log.debug(
+                    "Early stale news dropped (%.0fs > %ds for %s): %s",
+                    age_secs, threshold_secs, source, headline[:60],
+                )
+                return
+        if self._dedup.is_duplicate(headline, source=source):
+            return
+        priority = _source_priority(source)
         try:
             self._news_queue.put_nowait((priority, next(_news_counter), news))
         except asyncio.QueueFull:
             log.warning("News queue full (%d items) -- dropping: %s",
-                        self._news_queue.maxsize, news.headline[:60])
+                        self._news_queue.maxsize, headline[:60])
 
     async def _news_consumer_task(self) -> None:
         """Drain the priority news queue, processing one item at a time."""
@@ -166,10 +262,20 @@ class TradingBot:
             await self._process_candidate(news, market, match_score)
 
     async def _process_candidate(self, news: NewsItem, market, match_score: float) -> None:
+        from utils.logger import trade_log
         # Staleness check: skip if the article is too old when we process it.
         # With a queue, items can sit for several minutes; old news is already priced in.
         age_secs = (datetime.now(timezone.utc) - news.published).total_seconds()
+        market_yes_price = market.yes_price
         if age_secs > MAX_NEWS_AGE_SECONDS:
+            trade_log.log_analysis_rejected(
+                reason="stale_news",
+                ticker=market.ticker,
+                source=news.source,
+                headline=news.headline,
+                match_score=match_score,
+                age_seconds=age_secs,
+            )
             log.debug(
                 "Stale news skipped (%.0fs > %ds): %s",
                 age_secs, MAX_NEWS_AGE_SECONDS, news.headline[:60],
@@ -184,10 +290,38 @@ class TradingBot:
             market.yes_price = ws_price
             market.yes_bid   = max(1, ws_price - 1)
             market.yes_ask   = min(99, ws_price + 1)
+            price_source = "ws"
+        else:
+            price_source = "cache"
+
+        log.debug(
+            "[ANALYSIS] candidate ticker=%s source=%s match_score=%.3f age=%.0fs "
+            "price_source=%s yes_price=%.1fc cache_yes_price=%.1fc",
+            market.ticker,
+            news.source,
+            match_score,
+            age_secs,
+            price_source,
+            market.yes_price,
+            market_yes_price,
+        )
 
         estimated_prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
             await estimate_probability(news, market, keyword_stats=self.keyword_stats)
         if not keywords:
+            trade_log.log_analysis_rejected(
+                reason="no_keywords",
+                ticker=market.ticker,
+                source=news.source,
+                headline=news.headline,
+                match_score=match_score,
+            )
+            log.debug(
+                "[ANALYSIS] no_signal ticker=%s source=%s match_score=%.3f",
+                market.ticker,
+                news.source,
+                match_score,
+            )
             return
 
         self.source_stats.increment_signals(news.source)
@@ -221,7 +355,25 @@ class TradingBot:
             time_discount_floor=cfg.time_discount_floor,
         )
 
-        from utils.logger import trade_log
+        log.debug(
+            "[ANALYSIS] decision_input ticker=%s source=%s side=%s edge=%+.4f "
+            "est_prob=%.3f market_prob=%.3f confidence=%.2f keywords=%d "
+            "src_mult=%.2f kelly=$%.2f capped=$%.2f llm_dir=%s llm_mag=%s",
+            market.ticker,
+            news.source,
+            side.upper(),
+            edge,
+            estimated_prob,
+            market.yes_prob,
+            confidence,
+            len(keywords),
+            source_mult,
+            kelly_dollars,
+            capped_dollars,
+            llm_dir or "-",
+            llm_mag or "-",
+        )
+
         trade_log.log_signal(
             source=news.source,
             headline=news.headline,
@@ -251,6 +403,11 @@ class TradingBot:
             # Set a placeholder so the executor runs its own edge/position checks
             # and logs a proper SKIPPED event if needed.
             capped_dollars = PAPER_FLAT_CONTRACTS * max(1, min(99, int(market.yes_price))) / 100.0
+            log.debug(
+                "[ANALYSIS] paper_placeholder ticker=%s placeholder=$%.2f",
+                market.ticker,
+                capped_dollars,
+            )
 
         analysis = SignalAnalysis(
             news_item=news,
@@ -272,9 +429,25 @@ class TradingBot:
             llm_confidence=llm_conf,
         )
 
+        log.debug(
+            "[ANALYSIS] handoff ticker=%s side=%s signal_type=%s "
+            "capped=$%.2f match_score=%.3f",
+            analysis.market.ticker,
+            analysis.side.upper(),
+            analysis.signal_type,
+            analysis.capped_dollars,
+            analysis.match_score,
+        )
+
         trade_id = await self.executor.execute(analysis)
         if trade_id:
             self.source_stats.increment_trades(news.source)
+        else:
+            log.debug(
+                "[ANALYSIS] no_execution ticker=%s source=%s",
+                market.ticker,
+                news.source,
+            )
         self.ws.watch([market.ticker])
 
     # ── Fade tweet pipeline ────────────────────────────────────────────────────
@@ -382,7 +555,7 @@ class TradingBot:
                     "[PRICE_MOVE] %s moved %.1fc in %.0fs -- triggering targeted search",
                     ticker, price_move, PRICE_VELOCITY_WINDOW_SECS,
                 )
-                asyncio.ensure_future(self._trigger_targeted_search(ticker))
+                asyncio.create_task(self._trigger_targeted_search(ticker))
 
         # ── Loop C: open position drift logging ───────────────────────────────
         # If we have an open paper position on this ticker and the price has
@@ -438,7 +611,6 @@ class TradingBot:
             from feeds.search_news_monitor import _markets_to_queries, _gnews_url, _bing_url
             from feeds.rss_monitor import poll_feed
             from collections import OrderedDict
-            import aiohttp
 
             queries = _markets_to_queries([market])
             if not queries:
@@ -447,13 +619,12 @@ class TradingBot:
 
             seen: OrderedDict = OrderedDict()
             log.debug("[PRICE_MOVE] %s: targeted search query='%s'", ticker, queries[0])
-            async with aiohttp.ClientSession() as session:
-                for q in queries[:1]:  # single query per triggered search
-                    await asyncio.gather(
-                        poll_feed(_gnews_url(q), self._enqueue_news, seen),
-                        poll_feed(_bing_url(q),  self._enqueue_news, seen),
-                        return_exceptions=True,
-                    )
+            for q in queries[:1]:  # single query per triggered search
+                await asyncio.gather(
+                    poll_feed(_gnews_url(q), self._enqueue_news, seen),
+                    poll_feed(_bing_url(q),  self._enqueue_news, seen),
+                    return_exceptions=True,
+                )
         except Exception as exc:
             log.warning("[PRICE_MOVE] Targeted search failed for %s: %s", ticker, exc)
 
@@ -644,7 +815,7 @@ class TradingBot:
                             "[NEW_MARKET] %s listed: '%s' -- triggering targeted search",
                             m.ticker, m.title[:60],
                         )
-                        asyncio.ensure_future(self._trigger_targeted_search(m.ticker))
+                        asyncio.create_task(self._trigger_targeted_search(m.ticker))
                 self._known_market_tickers = new_tickers
             except Exception as exc:
                 log.warning("Market refresh task error: %s", exc)

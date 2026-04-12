@@ -1,0 +1,417 @@
+import sqlite3
+import uuid
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from scripts.paper_performance_drilldown import print_summary, summarize
+
+BASE_COLUMNS = [
+    ("trade_id", "TEXT PRIMARY KEY"),
+    ("ts", "TEXT"),
+    ("ticker", "TEXT"),
+    ("signal_source", "TEXT"),
+    ("resolved", "INTEGER"),
+    ("pnl_dollars", "REAL"),
+]
+
+
+OPTIONAL_COLUMNS = [
+    ("resolved_ts", "TEXT"),
+    ("signal_type", "TEXT"),
+    ("series_ticker", "TEXT"),
+]
+
+
+@pytest.fixture
+def local_db_case():
+    root = Path(__file__).resolve().parent / "_tmp_paper_performance_drilldown"
+    root.mkdir(parents=True, exist_ok=True)
+    fake_path = root / f"paper-performance-{uuid.uuid4().hex}.db"
+    fake_path.write_text("", encoding="utf-8")
+    db_uri = f"file:{fake_path.stem}?mode=memory&cache=shared"
+    keeper = sqlite3.connect(db_uri, uri=True, check_same_thread=False)
+    keeper.row_factory = sqlite3.Row
+
+    real_connect = sqlite3.connect
+
+    def _connect(target, *args, **kwargs):
+        if str(target) == str(fake_path):
+            conn = real_connect(db_uri, uri=True, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            return conn
+        conn = real_connect(target, *args, **kwargs)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    try:
+        yield fake_path, keeper, _connect
+    finally:
+        keeper.close()
+        try:
+            fake_path.unlink()
+        except (FileNotFoundError, PermissionError):
+            pass
+
+
+def _make_db(conn: sqlite3.Connection, include_optional: bool = True, rows=None) -> None:
+    rows = rows or []
+    columns = list(BASE_COLUMNS)
+    if include_optional:
+        columns.extend(OPTIONAL_COLUMNS)
+
+    ddl = ", ".join(f"{name} {decl}" for name, decl in columns)
+    conn.execute(f"CREATE TABLE paper_trades ({ddl})")
+    if rows:
+        names = [name for name, _decl in columns]
+        placeholders = ", ".join("?" for _ in names)
+        conn.executemany(
+            f"INSERT INTO paper_trades ({', '.join(names)}) VALUES ({placeholders})",
+            [tuple(row.get(name) for name in names) for row in rows],
+        )
+    conn.commit()
+
+
+def test_missing_db_handling():
+    path = Path("paper-performance-missing.db")
+
+    stats = summarize(path)
+
+    assert stats["exists"] is False
+    assert stats["total_trades"] == 0
+    assert stats["resolved_trades"] == 0
+    assert stats["open_trades"] == 0
+
+
+def test_empty_table_handling(local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(keeper)
+
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path)
+
+    assert stats["exists"] is True
+    assert stats["total_trades"] == 0
+    assert stats["resolved_trades"] == 0
+    assert stats["open_trades"] == 0
+    assert stats["sources"] == []
+    assert stats["tickers"] == []
+
+
+def test_resolved_vs_open_trade_counting(local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(
+        keeper,
+        rows=[
+            {
+                "trade_id": "t1",
+                "ts": "2026-04-10T00:00:00+00:00",
+                "ticker": "KX1",
+                "signal_source": "Reuters",
+                "resolved": 1,
+                "pnl_dollars": 2.5,
+            },
+            {
+                "trade_id": "t2",
+                "ts": "2026-04-11T00:00:00+00:00",
+                "ticker": "KX2",
+                "signal_source": "AP",
+                "resolved": 0,
+                "pnl_dollars": None,
+            },
+        ],
+    )
+
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path)
+
+    assert stats["total_trades"] == 2
+    assert stats["resolved_trades"] == 1
+    assert stats["open_trades"] == 1
+
+
+def test_win_rate_and_pnl_summary(local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(
+        keeper,
+        rows=[
+            {
+                "trade_id": "t1",
+                "ts": "2026-04-10T00:00:00+00:00",
+                "ticker": "KX1",
+                "signal_source": "Reuters",
+                "resolved": 1,
+                "pnl_dollars": 3.0,
+            },
+            {
+                "trade_id": "t2",
+                "ts": "2026-04-10T01:00:00+00:00",
+                "ticker": "KX2",
+                "signal_source": "Reuters",
+                "resolved": 1,
+                "pnl_dollars": -2.0,
+            },
+            {
+                "trade_id": "t3",
+                "ts": "2026-04-10T02:00:00+00:00",
+                "ticker": "KX3",
+                "signal_source": "AP",
+                "resolved": 1,
+                "pnl_dollars": 1.0,
+            },
+        ],
+    )
+
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path)
+
+    assert stats["win_rate"] == pytest.approx(2 / 3)
+    assert stats["total_pnl"] == pytest.approx(2.0)
+    assert stats["avg_pnl"] == pytest.approx(2.0 / 3.0)
+
+
+def test_average_win_and_average_loss(local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(
+        keeper,
+        rows=[
+            {
+                "trade_id": "t1",
+                "ts": "2026-04-10T00:00:00+00:00",
+                "ticker": "KX1",
+                "signal_source": "Reuters",
+                "resolved": 1,
+                "pnl_dollars": 4.0,
+            },
+            {
+                "trade_id": "t2",
+                "ts": "2026-04-10T01:00:00+00:00",
+                "ticker": "KX2",
+                "signal_source": "Reuters",
+                "resolved": 1,
+                "pnl_dollars": 2.0,
+            },
+            {
+                "trade_id": "t3",
+                "ts": "2026-04-10T02:00:00+00:00",
+                "ticker": "KX3",
+                "signal_source": "AP",
+                "resolved": 1,
+                "pnl_dollars": -3.0,
+            },
+        ],
+    )
+
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path)
+
+    assert stats["avg_win"] == pytest.approx(3.0)
+    assert stats["avg_loss"] == pytest.approx(-3.0)
+
+
+def test_source_breakdown(local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(
+        keeper,
+        rows=[
+            {
+                "trade_id": "t1",
+                "ts": "2026-04-10T00:00:00+00:00",
+                "ticker": "KX1",
+                "signal_source": "Reuters",
+                "resolved": 1,
+                "pnl_dollars": 2.0,
+            },
+            {
+                "trade_id": "t2",
+                "ts": "2026-04-10T01:00:00+00:00",
+                "ticker": "KX2",
+                "signal_source": "Reuters",
+                "resolved": 0,
+                "pnl_dollars": None,
+            },
+            {
+                "trade_id": "t3",
+                "ts": "2026-04-10T02:00:00+00:00",
+                "ticker": "KX3",
+                "signal_source": "AP",
+                "resolved": 1,
+                "pnl_dollars": -1.0,
+            },
+        ],
+    )
+
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path)
+
+    assert stats["sources"][0]["name"] == "Reuters"
+    assert stats["sources"][0]["trades"] == 2
+    assert stats["sources"][0]["resolved"] == 1
+    assert stats["sources"][0]["pnl"] == pytest.approx(2.0)
+
+
+def test_ticker_breakdown(local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(
+        keeper,
+        rows=[
+            {
+                "trade_id": "t1",
+                "ts": "2026-04-10T00:00:00+00:00",
+                "ticker": "KX1",
+                "signal_source": "Reuters",
+                "resolved": 1,
+                "pnl_dollars": 1.0,
+            },
+            {
+                "trade_id": "t2",
+                "ts": "2026-04-10T01:00:00+00:00",
+                "ticker": "KX1",
+                "signal_source": "AP",
+                "resolved": 1,
+                "pnl_dollars": -1.0,
+            },
+            {
+                "trade_id": "t3",
+                "ts": "2026-04-10T02:00:00+00:00",
+                "ticker": "KX2",
+                "signal_source": "AP",
+                "resolved": 0,
+                "pnl_dollars": None,
+            },
+        ],
+    )
+
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path)
+
+    assert stats["tickers"][0]["name"] == "KX1"
+    assert stats["tickers"][0]["trades"] == 2
+    assert stats["tickers"][0]["resolved"] == 2
+    assert stats["tickers"][0]["pnl"] == pytest.approx(0.0)
+
+
+def test_signal_type_breakdown_when_column_exists(local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(
+        keeper,
+        rows=[
+            {
+                "trade_id": "t1",
+                "ts": "2026-04-10T00:00:00+00:00",
+                "ticker": "KX1",
+                "signal_source": "Reuters",
+                "resolved": 1,
+                "pnl_dollars": 1.0,
+                "signal_type": "news",
+            },
+            {
+                "trade_id": "t2",
+                "ts": "2026-04-10T01:00:00+00:00",
+                "ticker": "KX2",
+                "signal_source": "AP",
+                "resolved": 1,
+                "pnl_dollars": 2.0,
+                "signal_type": "fade_tweet",
+            },
+        ],
+    )
+
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path)
+
+    names = {row["name"] for row in stats["signal_types"]}
+    assert names == {"news", "fade_tweet"}
+
+
+def test_graceful_degradation_without_optional_columns(local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(
+        keeper,
+        include_optional=False,
+        rows=[
+            {
+                "trade_id": "t1",
+                "ts": "2026-04-10T00:00:00+00:00",
+                "ticker": "KX1",
+                "signal_source": "Reuters",
+                "resolved": 1,
+                "pnl_dollars": 2.0,
+            },
+        ],
+    )
+
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path)
+
+    assert stats["signal_types"][0]["name"] == "news (default/legacy schema)"
+    assert stats["series"] == []
+    assert stats["holding_period_count"] == 0
+
+
+def test_holding_period_summary_only_when_derivable(local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(
+        keeper,
+        rows=[
+            {
+                "trade_id": "t1",
+                "ts": "2026-04-10T00:00:00+00:00",
+                "ticker": "KX1",
+                "signal_source": "Reuters",
+                "resolved": 1,
+                "pnl_dollars": 2.0,
+                "resolved_ts": "2026-04-10T12:00:00+00:00",
+            },
+            {
+                "trade_id": "t2",
+                "ts": "2026-04-11T00:00:00+00:00",
+                "ticker": "KX2",
+                "signal_source": "AP",
+                "resolved": 1,
+                "pnl_dollars": -1.0,
+                "resolved_ts": "2026-04-12T00:00:00+00:00",
+            },
+            {
+                "trade_id": "t3",
+                "ts": "2026-04-11T05:00:00+00:00",
+                "ticker": "KX3",
+                "signal_source": "AP",
+                "resolved": 1,
+                "pnl_dollars": 1.0,
+                "resolved_ts": None,
+            },
+        ],
+    )
+
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path)
+
+    assert stats["holding_period_count"] == 2
+    assert stats["holding_period_avg_hours"] == pytest.approx(18.0)
+    assert stats["holding_period_median_hours"] == pytest.approx(18.0)
+
+
+def test_print_summary_missing_db(capsys):
+    path = Path("paper-performance-missing.db")
+    stats = summarize(path)
+
+    print_summary(stats, top=5)
+    output = capsys.readouterr().out
+
+    assert "PAPER TRADING PERFORMANCE DRILLDOWN" in output
+    assert "Database file not found." in output
+
+
+def test_print_summary_empty_db(capsys, local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(keeper)
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path)
+
+    print_summary(stats, top=5)
+    output = capsys.readouterr().out
+
+    assert "PAPER TRADING PERFORMANCE DRILLDOWN" in output
+    assert "No paper trades found." in output

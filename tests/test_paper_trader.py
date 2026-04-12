@@ -9,6 +9,7 @@ Uses :memory: SQLite so no disk I/O or shared state between tests.
 
 import json
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -17,6 +18,28 @@ import pytest
 
 # Patch cfg before importing PaperTrader to avoid needing a real .env
 import config as _cfg_module
+
+_REAL_SQLITE_CONNECT = sqlite3.connect
+
+
+def _shared_memory_connect(name: str):
+    """
+    Create a named shared in-memory SQLite DB plus a connect factory.
+
+    PaperTrader opens multiple SQLite connections internally (its main handle,
+    SourceCredibility, and occasionally reconnect-style test flows). A named
+    shared-memory URI lets the tests exercise the real persistence logic
+    without relying on filesystem temp directories in this environment.
+    """
+    db_uri = f"file:{name}-{uuid.uuid4().hex}?mode=memory&cache=shared"
+    keeper = _REAL_SQLITE_CONNECT(db_uri, uri=True, check_same_thread=False)
+
+    def _connect(*args, **kwargs):
+        conn = _REAL_SQLITE_CONNECT(db_uri, uri=True, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    return keeper, _connect
 
 
 def _make_mock_analysis(
@@ -81,8 +104,8 @@ def _make_mock_analysis(
 
 
 @pytest.fixture()
-def trader(tmp_path, monkeypatch):
-    """Return a PaperTrader backed by a fresh :memory: DB."""
+def trader(monkeypatch):
+    """Return a PaperTrader backed by a fresh workspace-local SQLite DB."""
     # Prevent cfg validation from running (needs real API keys)
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
@@ -91,16 +114,18 @@ def trader(tmp_path, monkeypatch):
 
     from trading.paper_trader import PaperTrader
 
-    db_file = tmp_path / "test_trades.db"
+    keeper, connect = _shared_memory_connect("test-trades")
 
     # Patch credibility and portfolio to avoid needing full DB state
-    with patch("trading.paper_trader.SourceCredibility") as MockCred:
+    with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+         patch("trading.paper_trader.SourceCredibility") as MockCred:
         MockCred.return_value.get_multiplier.return_value = 1.0
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
-            pt = PaperTrader(db_path=db_file)
+            pt = PaperTrader(db_path=":memory:")
             # Seed bankroll
             pt._set_state("notional_bankroll", "500.0")
             yield pt
+    keeper.close()
 
 
 class TestBankrollAtomicity:
@@ -252,3 +277,88 @@ class TestKellyShadow:
         # Both use flat 5
         assert rows[0]["contracts"] == 5
         assert rows[1]["contracts"] == 5
+
+
+class TestModeSelection:
+    @pytest.mark.parametrize("kill_switch_enabled", [False, True])
+    def test_missing_go_live_flag_starts_in_paper_mode(self, monkeypatch, kill_switch_enabled):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", kill_switch_enabled)
+
+        from trading.paper_trader import PaperTrader
+
+        keeper, connect = _shared_memory_connect("mode-default-paper")
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            PaperTrader(db_path=":memory:")
+
+        assert _cfg_module.cfg.is_paper_trading is True
+        keeper.close()
+
+    def test_false_go_live_flag_stays_in_paper_mode_even_when_kill_switch_enabled(self, monkeypatch):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", True)
+
+        from trading.paper_trader import PaperTrader
+
+        keeper, connect = _shared_memory_connect("mode-explicit-false")
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            pt = PaperTrader(db_path=":memory:")
+            pt._set_state("go_live_confirmed", "false")
+
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            PaperTrader(db_path=":memory:")
+
+        assert _cfg_module.cfg.is_paper_trading is True
+        keeper.close()
+
+    def test_go_live_confirmed_stays_paper_when_env_kill_switch_disabled(self, monkeypatch):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+
+        from trading.paper_trader import PaperTrader
+
+        keeper, connect = _shared_memory_connect("mode-blocked")
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            pt = PaperTrader(db_path=":memory:")
+            pt._set_state("go_live_confirmed", "true")
+
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            PaperTrader(db_path=":memory:")
+
+        assert _cfg_module.cfg.is_paper_trading is True
+        keeper.close()
+
+    def test_go_live_confirmed_enables_live_when_env_kill_switch_enabled(self, monkeypatch):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", True)
+
+        from trading.paper_trader import PaperTrader
+
+        keeper, connect = _shared_memory_connect("mode-live")
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            pt = PaperTrader(db_path=":memory:")
+            pt._set_state("go_live_confirmed", "true")
+
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            PaperTrader(db_path=":memory:")
+
+        assert _cfg_module.cfg.is_paper_trading is False
+        keeper.close()
