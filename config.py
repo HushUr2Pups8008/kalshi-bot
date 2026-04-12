@@ -543,6 +543,10 @@ GEOPOLITICAL_SIGNALS = [
             "war declared",
             "troops deployed",
             "offensive launched",
+            # Natural-language variants observed missing from keyword gate (2026-04-12)
+            "war with",       # "War With Iran is Not Yet Over" -- was missed
+            "at war",         # "at war with"
+            "airstrikes",     # standard wire-service military phrasing
         ],
         "direction": "yes",
         "strength": 0.15,
@@ -555,9 +559,33 @@ GEOPOLITICAL_SIGNALS = [
             "troops pull back",
             "de-escalation",
             "peace talks success",
+            # Natural-language variants for ongoing / resuming negotiations
+            "peace talks",    # umbrella: catches "peace talks resume/underway/begin"
+            "truce",          # informal ceasefire, common in wire copy
+            "talks resume",   # resumption of dialogue after breakdown
         ],
         "direction": "no",
         "strength": 0.12,
+    },
+    # Negotiations / talks failure -- opposite direction from ceasefire group.
+    # Failed talks signal continued conflict; must be a separate YES group so the
+    # keyword-only fallback direction is correct.
+    # All phrases observed as keyword_gate misses in the 2026-04-12 signal audit.
+    {
+        "keywords": [
+            "talks fail",
+            "talks collapse",
+            "talks break down",
+            "without a deal",
+            "no deal reached",
+            "failed to agree",
+            "negotiations collapse",
+            "negotiations fail",
+            "deal rejected",
+            "ceasefire collapses",
+        ],
+        "direction": "yes",
+        "strength": 0.10,
     },
     {
         "keywords": [
@@ -592,6 +620,8 @@ GEOPOLITICAL_SIGNALS = [
             "diplomatic breakthrough",
             "summit agreement",
             "deal signed",
+            "agreement reached",  # "agreement reached after talks"
+            "deal reached",       # "deal reached between"
         ],
         "direction": "no",
         "strength": 0.07,
