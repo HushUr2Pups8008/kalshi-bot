@@ -6,6 +6,30 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.26.1] - 2026-04-12
+
+### Fixed
+
+- `analysis/market_matcher.py` -- Phase 3.1: add token-in-ticker guard to suppression
+  criteria. Suppression no longer fires when any matched token is a substring of the
+  market ticker (case-insensitive). Prevents valid topic-aligned weak matches from being
+  dropped (e.g. "iran" headline against KXTRUMPIRAN market). Fourth condition added to
+  `_meets_suppression_criteria`; debug log and suppression block remain in sync via the
+  shared local boolean. No behavior change when `ENABLE_LOW_QUALITY_MATCH_SUPPRESSION`
+  is off (default).
+- `analysis/market_matcher.py` -- fix pre-existing em dash in two `log.debug()` runtime
+  strings (lines 495 and 546) that would silently crash Windows NSSM cp1252 log handlers.
+
+### Tests
+
+- `tests/test_market_matcher.py` -- updated two existing suppression tests to use ticker
+  `KXMIL-25A` (matched token not in ticker) so suppression fires correctly under new
+  criteria. Added `test_suppression_skips_when_token_in_ticker` validating the Iran case:
+  flags injected, suppression on, but token "iran" in ticker -> candidate preserved.
+  323 tests passing.
+
+---
+
 ## [0.26.0] - 2026-04-12
 
 ### Added

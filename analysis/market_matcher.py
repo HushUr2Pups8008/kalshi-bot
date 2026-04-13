@@ -447,10 +447,12 @@ class MarketMatcher:
             )
 
             flag_set = set(heuristic_flags)
+            ticker_lower = market.ticker.lower()
             _meets_suppression_criteria = (
                 bool(heuristic_flags)
                 and "near_threshold_score" in flag_set
                 and ("minimal_overlap" in flag_set or "single_named_entity_only" in flag_set)
+                and not any(token in ticker_lower for token in overlap)
             )
 
             if ENABLE_MATCH_SUPPRESSION_DEBUG and _meets_suppression_criteria:
@@ -490,7 +492,7 @@ class MarketMatcher:
 
         if results:
             log.debug(
-                "[%s] Matched %d markets for '%s...' — top: %s (%.3f)",
+                "[%s] Matched %d markets for '%s...' -- top: %s (%.3f)",
                 "PAPER" if is_paper else "LIVE",
                 len(results),
                 news.headline[:50],
@@ -541,7 +543,7 @@ class MarketMatcher:
         results = scored[:max_results]
         if results:
             log.debug(
-                "[FADE] Matched %d market(s) for '%s...' — top: %s (%.3f)",
+                "[FADE] Matched %d market(s) for '%s...' -- top: %s (%.3f)",
                 len(results), news.headline[:50],
                 results[0][0].ticker, results[0][1],
             )

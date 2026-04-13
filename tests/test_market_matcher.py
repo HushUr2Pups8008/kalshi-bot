@@ -263,7 +263,8 @@ class TestFindCandidates:
 
 class TestLowQualityMatchSuppression:
     """Suppression is config-gated (ENABLE_LOW_QUALITY_MATCH_SUPPRESSION).
-    Criteria: near_threshold_score AND (minimal_overlap OR single_named_entity_only).
+    Criteria: near_threshold_score AND (minimal_overlap OR single_named_entity_only)
+              AND NOT any matched token appears in the market ticker.
     MATCH_DIAGNOSTIC is always logged; MATCH_SUPPRESSED only when criteria met and flag on.
     """
 
@@ -303,9 +304,10 @@ class TestLowQualityMatchSuppression:
 
     @pytest.mark.asyncio
     async def test_suppression_on_drops_single_named_entity_near_threshold(self, matcher):
-        """When suppression is on, near_threshold_score + single_named_entity_only -> suppressed."""
+        """When suppression is on and matched token is NOT in ticker -> suppressed.
+        Uses KXMIL-25A (no 'trump' substring) so ticker guard does not block suppression."""
         market = _make_market(
-            "KXTRUMP-25A",
+            "KXMIL-25A",
             "Will Trump order military action under the 25th Amendment this year?",
         )
         matcher._cache.get_markets = AsyncMock(return_value=[market])
@@ -331,14 +333,15 @@ class TestLowQualityMatchSuppression:
         assert results == [], "suppressed candidate must not be returned to caller"
         assert len(suppressed_calls) == 1, "MATCH_SUPPRESSED must be logged"
         payload = suppressed_calls[0]
-        assert payload["ticker"] == "KXTRUMP-25A"
+        assert payload["ticker"] == "KXMIL-25A"
         assert "single_named_entity_only" in payload["heuristic_flags"]
 
     @pytest.mark.asyncio
     async def test_suppression_diagnostic_always_logged(self, matcher):
-        """MATCH_DIAGNOSTIC is always logged, even when the candidate is suppressed."""
+        """MATCH_DIAGNOSTIC is always logged, even when the candidate is suppressed.
+        Uses KXMIL-25A so the ticker guard does not block suppression."""
         market = _make_market(
-            "KXTRUMP-25A",
+            "KXMIL-25A",
             "Will Trump order military action under the 25th Amendment this year?",
         )
         matcher._cache.get_markets = AsyncMock(return_value=[market])
@@ -394,3 +397,36 @@ class TestLowQualityMatchSuppression:
 
         assert results, "high-quality match must not be suppressed"
         assert suppressed_calls == [], "no MATCH_SUPPRESSED event for high-quality match"
+
+    @pytest.mark.asyncio
+    async def test_suppression_skips_when_token_in_ticker(self, matcher):
+        """Suppression does NOT fire when the matched token appears in the market ticker.
+        Prevents valid, topic-aligned weak matches from being dropped.
+        Real-world case: 'iran' headline -> KXTRUMPIRAN-26MAY01 (ticker contains 'iran')."""
+        market = _make_market(
+            "KXTRUMPIRAN-26MAY01",
+            "Will Trump reach an Iran nuclear deal before May 1?",
+        )
+        matcher._cache.get_markets = AsyncMock(return_value=[market])
+        news = _make_news("Iran War Live Updates: U.S. to Blockade Ships From Iranian Ports")
+
+        import analysis.market_matcher as mm
+        import config as cfg_module
+        orig_flag = cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION
+        # Inject the first 3 suppression conditions so only the ticker guard can block suppression
+        suppression_flags = ["near_threshold_score", "single_named_entity_only"]
+        suppressed_calls = []
+        orig_supp = mm.trade_log.log_match_suppressed
+        mm.trade_log.log_match_suppressed = lambda **kw: suppressed_calls.append(kw)
+        try:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            with patch("analysis.market_matcher._match_quality_flags", return_value=suppression_flags):
+                results = await matcher.find_candidates(news)
+        finally:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+            mm.trade_log.log_match_suppressed = orig_supp
+
+        assert results, "token-in-ticker match must not be suppressed"
+        assert suppressed_calls == [], "MATCH_SUPPRESSED must not be logged when token is in ticker"
