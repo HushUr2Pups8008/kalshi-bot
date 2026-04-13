@@ -5,7 +5,7 @@ Covers: tokenization, similarity scoring, and candidate matching behaviour.
 """
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -212,3 +212,185 @@ class TestFindCandidates:
         results = await matcher.find_candidates(news)
 
         assert len(results) <= 5
+
+    @pytest.mark.asyncio
+    async def test_match_diagnostics_logs_good_match_without_low_quality_flag(self, matcher):
+        markets = [
+            _make_market("KXIRAN-1", "Will Iran close the Strait of Hormuz in 2026?"),
+        ]
+        matcher._cache.get_markets = AsyncMock(return_value=markets)
+        news = _make_news("Iran threatens Strait of Hormuz closure")
+
+        with pytest.MonkeyPatch.context() as mp:
+            from analysis import market_matcher as mm
+            calls = []
+            mp.setattr(mm.trade_log, "log_match_diagnostic", lambda **kwargs: calls.append(kwargs))
+            results = await matcher.find_candidates(news)
+
+        assert results
+        assert len(calls) == 1
+        payload = calls[0]
+        assert payload["ticker"] == "KXIRAN-1"
+        assert payload["source"] == "Reuters"
+        assert payload["low_match_quality"] is False
+        assert "iran" in payload["matched_tokens"]
+
+    @pytest.mark.asyncio
+    async def test_match_diagnostics_flags_single_named_entity_overlap_as_low_quality(self, matcher):
+        markets = [
+            _make_market("KXTRUMP-25A", "Will Trump order military action under the 25th Amendment this year?"),
+        ]
+        matcher._cache.get_markets = AsyncMock(return_value=markets)
+        news = _make_news("Trump says Iran talks have collapsed again")
+
+        with pytest.MonkeyPatch.context() as mp:
+            from analysis import market_matcher as mm
+            calls = []
+            mp.setattr(mm.trade_log, "log_match_diagnostic", lambda **kwargs: calls.append(kwargs))
+            results = await matcher.find_candidates(news)
+
+        assert results
+        assert len(calls) == 1
+        payload = calls[0]
+        assert payload["low_match_quality"] is True
+        assert "single_named_entity_only" in payload["heuristic_flags"]
+        assert payload["matched_tokens"] == ["trump"]
+
+
+# ---------------------------------------------------------------------------
+# Low-quality match suppression
+# ---------------------------------------------------------------------------
+
+class TestLowQualityMatchSuppression:
+    """Suppression is config-gated (ENABLE_LOW_QUALITY_MATCH_SUPPRESSION).
+    Criteria: near_threshold_score AND (minimal_overlap OR single_named_entity_only).
+    MATCH_DIAGNOSTIC is always logged; MATCH_SUPPRESSED only when criteria met and flag on.
+    """
+
+    @pytest.fixture
+    def matcher(self):
+        rest = MagicMock()
+        rest.get_markets = AsyncMock(return_value=[])
+        rest.get_series = AsyncMock(return_value=[])
+        return MarketMatcher(rest)
+
+    @pytest.mark.asyncio
+    async def test_suppression_off_by_default_candidate_returned(self, matcher):
+        """When suppression flag is off, low-quality candidates still reach caller.
+        Uses patched _match_quality_flags to inject near-threshold suppression flags
+        without needing a score that is genuinely near threshold in this fixture."""
+        market = _make_market(
+            "KXTRUMP-25A",
+            "Will Trump order military action under the 25th Amendment this year?",
+        )
+        matcher._cache.get_markets = AsyncMock(return_value=[market])
+        news = _make_news("Trump says Iran talks have collapsed again")
+
+        import analysis.market_matcher as mm
+        import config as cfg_module
+        orig_flag = cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION
+        suppression_flags = ["near_threshold_score", "single_named_entity_only"]
+        try:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = False
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = False
+            with patch("analysis.market_matcher._match_quality_flags", return_value=suppression_flags):
+                results = await matcher.find_candidates(news)
+        finally:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+
+        assert results, "candidate should be returned when suppression is off"
+
+    @pytest.mark.asyncio
+    async def test_suppression_on_drops_single_named_entity_near_threshold(self, matcher):
+        """When suppression is on, near_threshold_score + single_named_entity_only -> suppressed."""
+        market = _make_market(
+            "KXTRUMP-25A",
+            "Will Trump order military action under the 25th Amendment this year?",
+        )
+        matcher._cache.get_markets = AsyncMock(return_value=[market])
+        news = _make_news("Trump says Iran talks have collapsed again")
+
+        import analysis.market_matcher as mm
+        import config as cfg_module
+        orig_flag = cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION
+        suppression_flags = ["near_threshold_score", "single_named_entity_only"]
+        suppressed_calls = []
+        orig_supp = mm.trade_log.log_match_suppressed
+        mm.trade_log.log_match_suppressed = lambda **kw: suppressed_calls.append(kw)
+        try:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            with patch("analysis.market_matcher._match_quality_flags", return_value=suppression_flags):
+                results = await matcher.find_candidates(news)
+        finally:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+            mm.trade_log.log_match_suppressed = orig_supp
+
+        assert results == [], "suppressed candidate must not be returned to caller"
+        assert len(suppressed_calls) == 1, "MATCH_SUPPRESSED must be logged"
+        payload = suppressed_calls[0]
+        assert payload["ticker"] == "KXTRUMP-25A"
+        assert "single_named_entity_only" in payload["heuristic_flags"]
+
+    @pytest.mark.asyncio
+    async def test_suppression_diagnostic_always_logged(self, matcher):
+        """MATCH_DIAGNOSTIC is always logged, even when the candidate is suppressed."""
+        market = _make_market(
+            "KXTRUMP-25A",
+            "Will Trump order military action under the 25th Amendment this year?",
+        )
+        matcher._cache.get_markets = AsyncMock(return_value=[market])
+        news = _make_news("Trump says Iran talks have collapsed again")
+
+        import analysis.market_matcher as mm
+        import config as cfg_module
+        orig_flag = cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION
+        suppression_flags = ["near_threshold_score", "single_named_entity_only"]
+        diag_calls = []
+        orig_diag = mm.trade_log.log_match_diagnostic
+        mm.trade_log.log_match_diagnostic = lambda **kw: diag_calls.append(kw)
+        orig_supp = mm.trade_log.log_match_suppressed
+        mm.trade_log.log_match_suppressed = lambda **kw: None
+        try:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            with patch("analysis.market_matcher._match_quality_flags", return_value=suppression_flags):
+                await matcher.find_candidates(news)
+        finally:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+            mm.trade_log.log_match_diagnostic = orig_diag
+            mm.trade_log.log_match_suppressed = orig_supp
+
+        assert len(diag_calls) == 1, "MATCH_DIAGNOSTIC must be logged even for suppressed candidates"
+
+    @pytest.mark.asyncio
+    async def test_suppression_does_not_drop_high_quality_match(self, matcher):
+        """Candidates passing threshold with multiple overlapping tokens are not suppressed."""
+        market = _make_market(
+            "KXUKR-1",
+            "Will Russia launch a major offensive in Ukraine before July?",
+        )
+        matcher._cache.get_markets = AsyncMock(return_value=[market])
+        # russia + ukraine overlap -> multi-token, not near_threshold
+        news = _make_news("Russia launches new attack on Ukraine border")
+
+        import analysis.market_matcher as mm
+        import config as cfg_module
+        original = cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION
+        suppressed_calls = []
+        orig_supp = mm.trade_log.log_match_suppressed
+        mm.trade_log.log_match_suppressed = lambda **kw: suppressed_calls.append(kw)
+        try:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            results = await matcher.find_candidates(news)
+        finally:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = original
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = original
+            mm.trade_log.log_match_suppressed = orig_supp
+
+        assert results, "high-quality match must not be suppressed"
+        assert suppressed_calls == [], "no MATCH_SUPPRESSED event for high-quality match"

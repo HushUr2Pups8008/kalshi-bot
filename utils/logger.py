@@ -28,6 +28,7 @@ import json
 import logging
 import logging.handlers
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -53,10 +54,10 @@ LOG_REPORTS_DIR = _LOG_REPORTS_DIR                # for paper_trader report outp
 
 # ── Formatters ────────────────────────────────────────────────────────────────
 _COLOR_FORMAT = (
-    "%(log_color)s%(asctime)s %(levelname)-8s%(reset)s "
+    "%(log_color)s%(asctime)s UTC %(levelname)-8s%(reset)s "
     "%(cyan)s%(name)-20s%(reset)s %(message)s"
 )
-_FILE_FORMAT = "%(asctime)s %(levelname)-8s %(name)-20s %(message)s"
+_FILE_FORMAT = "%(asctime)s UTC %(levelname)-8s %(name)-20s %(message)s"
 
 _COLOR_MAP = {
     "DEBUG":    "white",
@@ -65,6 +66,12 @@ _COLOR_MAP = {
     "ERROR":    "red",
     "CRITICAL": "bold_red",
 }
+
+
+def _utc_formatter(fmt: str) -> logging.Formatter:
+    formatter = logging.Formatter(fmt)
+    formatter.converter = time.gmtime
+    return formatter
 
 
 class _DailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
@@ -138,13 +145,13 @@ def _ensure_file_handlers() -> tuple[_DailyRotatingFileHandler, _DailyRotatingFi
             APP_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8"
         )
         _app_fh.setLevel(logging.DEBUG)
-        _app_fh.setFormatter(logging.Formatter(_FILE_FORMAT))
+        _app_fh.setFormatter(_utc_formatter(_FILE_FORMAT))
     if _err_fh is None:
         _err_fh = _DailyRotatingFileHandler(
             ERROR_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8"
         )
         _err_fh.setLevel(logging.WARNING)
-        _err_fh.setFormatter(logging.Formatter(_FILE_FORMAT))
+        _err_fh.setFormatter(_utc_formatter(_FILE_FORMAT))
         # bot.log rotates on every DEBUG+ message at midnight; nudge errors.log
         # along with it so it rotates even during quiet (no-WARNING) periods.
         _app_fh._peers.append(_err_fh)
@@ -189,7 +196,9 @@ def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:
     # Console handler -- one per named logger (colored, INFO+)
     ch = colorlog.StreamHandler()
     ch.setLevel(logging.INFO)
-    ch.setFormatter(colorlog.ColoredFormatter(_COLOR_FORMAT, log_colors=_COLOR_MAP))
+    ch_formatter = colorlog.ColoredFormatter(_COLOR_FORMAT, log_colors=_COLOR_MAP)
+    ch_formatter.converter = time.gmtime
+    ch.setFormatter(ch_formatter)
 
     # Shared file handlers -- same objects attached to every logger
     logger.addHandler(ch)
@@ -243,8 +252,13 @@ class TradeLogger:
         capped_dollars: float,
         side: str,           # "yes" or "no"
         reasoning: str,
+        source: str | None = None,
+        headline: str | None = None,
+        method: str | None = None,
+        llm_direction: str | None = None,
+        llm_magnitude: str | None = None,
     ) -> None:
-        self._write({
+        record = {
             "type": "OPPORTUNITY",
             "ticker": ticker,
             "market_title": market_title,
@@ -256,7 +270,18 @@ class TradeLogger:
             "capped_dollars": round(capped_dollars, 2),
             "side": side,
             "reasoning": reasoning,
-        })
+        }
+        if source is not None:
+            record["source"] = source
+        if headline is not None:
+            record["headline"] = headline
+        if method is not None:
+            record["method"] = method
+        if llm_direction is not None:
+            record["llm_direction"] = llm_direction
+        if llm_magnitude is not None:
+            record["llm_magnitude"] = llm_magnitude
+        self._write(record)
 
     def log_paper_trade(
         self,
@@ -351,6 +376,10 @@ class TradeLogger:
         reason: str,
         ticker: str | None = None,
         headline: str | None = None,
+        source: str | None = None,
+        method: str | None = None,
+        llm_direction: str | None = None,
+        llm_magnitude: str | None = None,
         model_probability: float | None = None,
         market_price: float | None = None,
         edge: float | None = None,
@@ -362,6 +391,14 @@ class TradeLogger:
             "ticker": ticker,
             "headline": headline,
         }
+        if source is not None:
+            record["source"] = source
+        if method is not None:
+            record["method"] = method
+        if llm_direction is not None:
+            record["llm_direction"] = llm_direction
+        if llm_magnitude is not None:
+            record["llm_magnitude"] = llm_magnitude
         if model_probability is not None:
             record["model_probability"] = round(model_probability, 4)
         if market_price is not None:
@@ -419,6 +456,20 @@ class TradeLogger:
             record["threshold_seconds"] = round(threshold_seconds, 2)
         self._write(record)
 
+    def log_early_fresh_pass(
+        self,
+        *,
+        source: str,
+        headline: str,
+        age_seconds: float,
+    ) -> None:
+        self._write({
+            "type": "EARLY_FRESH_PASS",
+            "source": source,
+            "headline": headline,
+            "age_seconds": round(age_seconds, 2),
+        })
+
     def log_signal_analysis_detail(
         self,
         *,
@@ -454,6 +505,94 @@ class TradeLogger:
             record["llm_magnitude"] = llm_magnitude
         if llm_confidence is not None:
             record["llm_confidence"] = round(llm_confidence, 4)
+        self._write(record)
+
+    def log_match_diagnostic(
+        self,
+        *,
+        source: str,
+        headline: str,
+        ticker: str,
+        market_title: str,
+        match_score: float,
+        matched_tokens: list[str],
+        token_overlap_count: int,
+        geo_overlap_count: int,
+        generic_overlap_count: int,
+        headline_token_count: int,
+        market_title_token_count: int,
+        overlap_ratio: float,
+        low_match_quality: bool,
+        heuristic_flags: list[str] | None = None,
+    ) -> None:
+        record = {
+            "type": "MATCH_DIAGNOSTIC",
+            "source": source,
+            "headline": headline,
+            "ticker": ticker,
+            "market_title": market_title,
+            "match_score": round(match_score, 4),
+            "matched_tokens": matched_tokens,
+            "token_overlap_count": token_overlap_count,
+            "geo_overlap_count": geo_overlap_count,
+            "generic_overlap_count": generic_overlap_count,
+            "headline_token_count": headline_token_count,
+            "market_title_token_count": market_title_token_count,
+            "overlap_ratio": round(overlap_ratio, 4),
+            "low_match_quality": low_match_quality,
+        }
+        if heuristic_flags:
+            record["heuristic_flags"] = heuristic_flags
+        self._write(record)
+
+    def log_match_suppressed(
+        self,
+        *,
+        source: str,
+        headline: str,
+        ticker: str,
+        market_title: str,
+        match_score: float,
+        matched_tokens: list[str],
+        heuristic_flags: list[str],
+        reason: str,
+    ) -> None:
+        self._write({
+            "type": "MATCH_SUPPRESSED",
+            "source": source,
+            "headline": headline,
+            "ticker": ticker,
+            "market_title": market_title,
+            "match_score": round(match_score, 4),
+            "matched_tokens": matched_tokens,
+            "heuristic_flags": heuristic_flags,
+            "reason": reason,
+        })
+
+    def log_match_suppression_candidate(
+        self,
+        *,
+        source: str,
+        headline: str,
+        ticker: str,
+        match_score: float,
+        overlap_count: int,
+        overlap_ratio: float,
+        heuristic_flags: list[str],
+        matched_tokens: list[str] | None = None,
+    ) -> None:
+        record: dict = {
+            "type": "MATCH_SUPPRESSION_CANDIDATE",
+            "source": source,
+            "headline": headline[:200],
+            "ticker": ticker,
+            "match_score": round(match_score, 4),
+            "overlap_count": overlap_count,
+            "overlap_ratio": round(overlap_ratio, 4),
+            "heuristic_flags": heuristic_flags,
+        }
+        if matched_tokens is not None:
+            record["matched_tokens"] = matched_tokens
         self._write(record)
 
     def log_position_drift(

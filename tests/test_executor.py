@@ -62,6 +62,9 @@ def _make_analysis(ticker="KXTEST-25DEC31", side="yes", yes_price=50.0,
     a.confidence         = 0.8
     a.kelly_fraction     = 0.5
     a.kelly_dollars      = capped_dollars
+    a.llm_direction      = None
+    a.llm_magnitude      = None
+    a.llm_confidence     = None
     return a
 
 
@@ -446,6 +449,10 @@ class TestStructuredBoundaryLogging:
             reason="edge +0.0100 below min_edge 0.04",
             ticker=analysis.market.ticker,
             headline=analysis.news_item.headline[:80],
+            source=analysis.news_item.source,
+            method="keyword",
+            llm_direction=None,
+            llm_magnitude=None,
             model_probability=analysis.estimated_probability,
             market_price=analysis.market_yes_price,
             edge=analysis.edge,
@@ -461,6 +468,8 @@ class TestStructuredBoundaryLogging:
                 reason="edge +0.0100 below min_edge 0.04",
                 ticker="KXTEST-25DEC31",
                 headline="Test headline",
+                source="Reuters",
+                method="keyword",
                 model_probability=0.51234,
                 market_price=0.50001,
                 edge=0.01233,
@@ -472,6 +481,8 @@ class TestStructuredBoundaryLogging:
         assert record["market_price"] == pytest.approx(0.5)
         assert record["signed_diff"] == pytest.approx(0.0123)
         assert record["absolute_diff"] == pytest.approx(0.0123)
+        assert record["source"] == "Reuters"
+        assert record["method"] == "keyword"
 
     @pytest.mark.asyncio
     async def test_execute_live_logs_edge_context_on_success(self, monkeypatch):

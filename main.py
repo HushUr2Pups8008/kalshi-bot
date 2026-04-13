@@ -40,7 +40,7 @@ from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, VERSION
                     FADE_TWEET_FEED_URLS,
                     MARKET_SERIES_BLOCKLIST_PREFIXES, MAX_NEWS_AGE_SECONDS,
                     EARLY_MAX_NEWS_AGE_SECONDS, EARLY_MAX_NEWS_AGE_BY_SOURCE,
-                    EARLY_DROP_IF_NO_TIMESTAMP, DISABLED_NEWS_SOURCES,
+                    EARLY_DROP_IF_NO_TIMESTAMP, DISABLED_NEWS_SOURCES, SOURCE_PRIORITY_TIERS,
                     FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD,
                     DRIFT_ALERT_CENTS, DRIFT_LOG_COOLDOWN_SECS,
                     PRICE_MOVE_THRESHOLD_CENTS, PRICE_SEARCH_COOLDOWN_SECS,
@@ -65,8 +65,17 @@ _news_counter = itertools.count()
 
 
 def _source_priority(source: str) -> int:
-    """Lower number = higher priority. Wire services (RSS) = 1, Reddit = 2."""
-    return 2 if source.startswith("r/") else 1
+    """Lower number = higher priority in the processing queue.
+    Tier 1 = wire services (Reuters, BBC), Tier 2 = RSS default, Tier 3 = Reddit."""
+    if source.startswith("r/"):
+        return 3
+    if source in SOURCE_PRIORITY_TIERS:
+        return SOURCE_PRIORITY_TIERS[source]
+    source_lower = source.strip().lower()
+    for key, value in SOURCE_PRIORITY_TIERS.items():
+        if key.strip().lower() == source_lower:
+            return value
+    return 2
 
 
 def _early_max_news_age_seconds_for_source(source: str) -> int:
@@ -142,6 +151,7 @@ class TradingBot:
         self._last_drift_logged: dict[str, float] = {}
         # Loop D: previous market ticker set for new-market detection
         self._known_market_tickers: set[str] = set()
+        self._market_refresh_lock = asyncio.Lock()
 
     # ── News pipeline ─────────────────────────────────────────────────────────
 
@@ -224,7 +234,16 @@ class TradingBot:
                 return
         if self._dedup.is_duplicate(headline, source=source):
             return
+        if isinstance(published, datetime) and published.tzinfo is not None:
+            trade_log.log_early_fresh_pass(
+                source=source,
+                headline=headline,
+                age_seconds=age_secs,
+            )
         priority = _source_priority(source)
+        if priority == 1:
+            log.debug("[FAST_LANE] tier-1 source priority=%d source=[%s]: %s",
+                      priority, source, headline[:60])
         try:
             self._news_queue.put_nowait((priority, next(_news_counter), news))
         except asyncio.QueueFull:
@@ -327,6 +346,7 @@ class TradingBot:
         self.source_stats.increment_signals(news.source)
         edge = estimated_prob - market.yes_prob
         side = "yes" if edge > 0 else "no"
+        method = "llm" if any(value is not None for value in (llm_dir, llm_mag, llm_conf)) else "keyword"
 
         # Get source credibility multiplier
         source_mult = self.paper.credibility.get_multiplier(news.source)
@@ -392,6 +412,11 @@ class TradingBot:
             capped_dollars=capped_dollars,
             side=side,
             reasoning=reasoning,
+            source=news.source,
+            headline=news.headline,
+            method=method,
+            llm_direction=llm_dir,
+            llm_magnitude=llm_mag,
         )
         self.source_stats.increment_opportunities(news.source)
 
@@ -788,35 +813,49 @@ class TradingBot:
                 self.paper.get_notional_bankroll(),
             )
 
+    async def _refresh_market_cache_once(self, *, initial: bool = False) -> None:
+        async with self._market_refresh_lock:
+            if initial:
+                log.info("Initial market cache population starting")
+
+            await self.matcher.refresh_cache()
+
+            markets = await self.matcher._cache.get_markets()
+            new_tickers = {m.ticker for m in markets}
+            self.ws.watch(list(new_tickers))
+
+            if initial:
+                log.info("Initial market cache populated: %d markets", len(markets))
+
+            # Loop D: detect newly listed markets and proactively search for news
+            if self._known_market_tickers:
+                added = new_tickers - self._known_market_tickers
+                for m in markets:
+                    if m.ticker not in added:
+                        continue
+                    from utils.logger import trade_log as _tl
+                    _tl.log_new_market(
+                        ticker=m.ticker,
+                        title=m.title,
+                        series_ticker=m.series_ticker,
+                    )
+                    log.info(
+                        "[NEW_MARKET] %s listed: '%s' -- triggering targeted search",
+                        m.ticker, m.title[:60],
+                    )
+                    asyncio.create_task(self._trigger_targeted_search(m.ticker))
+            self._known_market_tickers = new_tickers
+
     async def _market_refresh_task(self) -> None:
         from config import MARKET_CACHE_TTL_SECONDS
+        try:
+            await self._refresh_market_cache_once(initial=True)
+        except Exception as exc:
+            log.error("Initial market cache population failed: %s", exc)
         while True:
             await asyncio.sleep(MARKET_CACHE_TTL_SECONDS)
-            await self.matcher.refresh_cache()
-            # Re-subscribe WS to catch any newly listed geo markets
             try:
-                markets    = await self.matcher._cache.get_markets()
-                new_tickers = {m.ticker for m in markets}
-                self.ws.watch(list(new_tickers))
-
-                # Loop D: detect newly listed markets and proactively search for news
-                if self._known_market_tickers:
-                    added = new_tickers - self._known_market_tickers
-                    for m in markets:
-                        if m.ticker not in added:
-                            continue
-                        from utils.logger import trade_log as _tl
-                        _tl.log_new_market(
-                            ticker=m.ticker,
-                            title=m.title,
-                            series_ticker=m.series_ticker,
-                        )
-                        log.info(
-                            "[NEW_MARKET] %s listed: '%s' -- triggering targeted search",
-                            m.ticker, m.title[:60],
-                        )
-                        asyncio.create_task(self._trigger_targeted_search(m.ticker))
-                self._known_market_tickers = new_tickers
+                await self._refresh_market_cache_once()
             except Exception as exc:
                 log.warning("Market refresh task error: %s", exc)
 

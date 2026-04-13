@@ -79,10 +79,43 @@ EARLY_MAX_NEWS_AGE_SECONDS: int = int(
 EARLY_MAX_NEWS_AGE_BY_SOURCE: dict[str, int] = {
     "NYT > World News": 300,
     "World news | The Guardian": 300,
-    "Al Jazeera – Breaking News, World News and Video from Al Jazeera": 300,
+    "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera": 300,
     "Middle East and north Africa | The Guardian": 300,
     "Ukraine | The Guardian": 300,
 }
+
+# Per-source queue priority overrides. Lower number = processed first.
+# Tier 1: wire services -- fastest, break news earliest, highest signal density.
+# Tier 2: quality editorial / regional RSS (default for any unlisted RSS source).
+# Tier 3: Reddit -- community discussion, slowest to arrive, lowest signal density.
+#
+# Keys must match the exact source string on NewsItem (comes from RSS channel title).
+# Add new tier-1 sources here as their exact strings are confirmed from logs.
+# NOTE: AP feeds are configured in RSS_FEEDS but their source string is unconfirmed
+# (never observed in trades.jsonl). Add when string is confirmed from live logs.
+SOURCE_PRIORITY_TIERS: dict[str, int] = {
+    "Reuters": 1,   # confirmed source string
+    "BBC News": 1,  # confirmed source string (currently disabled -- pre-wired for re-enable)
+}
+
+# When enabled, candidates that are almost certainly spurious matches are silently
+# dropped before reaching LLM analysis. Off by default -- enable after reviewing
+# MATCH_SUPPRESSED events in trades.jsonl to confirm suppression is accurate.
+# Suppression criteria (all three must hold):
+#   - low_match_quality flag is set (at least one heuristic flag present)
+#   - heuristic_flags includes minimal_overlap OR single_named_entity_only
+#   - heuristic_flags includes near_threshold_score (score within 0.02 of min_score)
+ENABLE_LOW_QUALITY_MATCH_SUPPRESSION: bool = os.getenv(
+    "ENABLE_LOW_QUALITY_MATCH_SUPPRESSION", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
+
+# When enabled, logs a MATCH_SUPPRESSION_CANDIDATE event for every match that meets
+# suppression criteria, regardless of whether suppression itself is on. Use this to
+# inspect would-be suppressions before enabling ENABLE_LOW_QUALITY_MATCH_SUPPRESSION.
+# Safe to leave on during validation -- fires only at DEBUG level into trades.jsonl.
+ENABLE_MATCH_SUPPRESSION_DEBUG: bool = os.getenv(
+    "ENABLE_MATCH_SUPPRESSION_DEBUG", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
 
 # If a feed item arrives without a valid timestamp, drop it before enqueueing
 # rather than letting it into the deeper analysis path.
@@ -98,7 +131,10 @@ DISABLED_NEWS_SOURCES: set[str] = {
     "Politics",
     "Foreign Policy",
     "Defense One - All Content",
+    "GDELT",
     "r/worldnews",
+    "r/ukraine",
+    "r/europe",
     "r/politics",
     "r/InternationalNews",
     "r/economics",

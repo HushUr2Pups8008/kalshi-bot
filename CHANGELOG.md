@@ -6,6 +6,48 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.26.0] - 2026-04-12
+
+### Added
+- **Phase 1 -- Fast-lane source prioritization:** `SOURCE_PRIORITY_TIERS` dict in `config.py`
+  maps named sources to queue priority tiers (1=wire services, 2=RSS default, 3=Reddit).
+  `_source_priority()` in `main.py` expanded from 2-tier to 3-tier lookup with
+  case-insensitive fallback, mirroring the `EARLY_MAX_NEWS_AGE_BY_SOURCE` pattern. Reuters
+  confirmed tier-1; AP left untiered until source string confirmed from live logs. Reddit
+  moved from priority 2 to 3 to open room for the tier-1 fast lane. Debug log emitted for
+  every tier-1 item enqueued (`[FAST_LANE]`).
+- **Phase 2 -- Match quality diagnostics in daily report:** `_match_quality_report_section()`
+  added to `trading/paper_trader.py`. Reads `trades.jsonl` at report time and appends a
+  compact MATCH QUALITY block showing candidate count, low-quality flagged rate, top flag
+  reasons, and top flagged tickers. Infrastructure (`log_match_diagnostic()`, `_match_quality_flags()`,
+  `scripts/match_quality_diagnostics.py`) was already in place; this closes the last gap
+  by surfacing the data in the daily report.
+- **Phase 3 -- Conservative low-quality match suppression:** Config-gated suppression step
+  in `analysis/market_matcher.py` (`ENABLE_LOW_QUALITY_MATCH_SUPPRESSION`, default off).
+  Suppresses a candidate before LLM invocation only when all three conditions hold:
+  `near_threshold_score` AND (`minimal_overlap` OR `single_named_entity_only`). Every
+  suppressed candidate emits a `MATCH_SUPPRESSED` event to `trades.jsonl` via new
+  `log_match_suppressed()` in `utils/logger.py`. `MATCH_DIAGNOSTIC` is always logged
+  regardless of suppression state.
+- **Phase 3 validation -- Suppression debug observability:** `ENABLE_MATCH_SUPPRESSION_DEBUG`
+  flag (default off) logs `MATCH_SUPPRESSION_CANDIDATE` events for every match meeting
+  suppression criteria, whether or not suppression is enabled. Lets operators inspect
+  would-be suppressions safely before flipping the suppression flag. New
+  `log_match_suppression_candidate()` in `utils/logger.py`. Validated live: first real
+  candidate was "Iran War Live Updates: U.S. to Blockade Ships" -> KXTRUMPIRAN -- correctly
+  identified as topic-aligned weak match, informing future criteria refinement.
+- **4 new suppression tests** in `tests/test_market_matcher.py` covering: flag off leaves
+  candidates through, flag on drops criteria-meeting candidates, `MATCH_DIAGNOSTIC` always
+  logged, high-quality matches never suppressed.
+
+### Fixed
+- **Non-ASCII runtime strings in `trading/paper_trader.py`:** Replaced cent sign (U+00A2)
+  with `c` and em dashes (U+2014) with `--` in `generate_report()` output strings. These
+  characters silently crashed Windows log handlers (cp1252 encoding) and were dropped from
+  NSSM service output.
+
+---
+
 ## [0.24.0] - 2026-04-07
 
 ### Added

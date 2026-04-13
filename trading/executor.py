@@ -108,6 +108,11 @@ class TradeExecutor:
         skip_reason = self._validate(analysis)
         if skip_reason:
             effective_min_edge = PAPER_MIN_EDGE if cfg.is_paper_trading else cfg.min_edge
+            method = (
+                "llm"
+                if any(value is not None for value in (analysis.llm_direction, analysis.llm_magnitude, analysis.llm_confidence))
+                else "keyword"
+            )
             log.debug(
                 "[DECISION] skip ticker=%s mode=%s side=%s reason=%s",
                 analysis.market.ticker,
@@ -119,6 +124,10 @@ class TradeExecutor:
                 reason=skip_reason,
                 ticker=analysis.market.ticker,
                 headline=analysis.news_item.headline[:80],
+                source=analysis.news_item.source,
+                method=method,
+                llm_direction=analysis.llm_direction,
+                llm_magnitude=analysis.llm_magnitude,
                 model_probability=analysis.estimated_probability,
                 market_price=analysis.market_yes_price,
                 edge=analysis.edge,

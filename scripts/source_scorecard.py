@@ -333,6 +333,19 @@ def classify_source(row: dict[str, Any]) -> str:
     return "investigate"
 
 
+def top_performer(row: dict[str, Any]) -> bool:
+    resolved = row["resolved_paper_trades"]
+    pnl = row["total_pnl"] if resolved > 0 else None
+    win_rate = row["win_rate"]
+    return (
+        resolved >= 2
+        and pnl is not None
+        and pnl > 0
+        and win_rate is not None
+        and win_rate >= 0.75
+    )
+
+
 def rank_tuple(row: dict[str, Any]) -> tuple[Any, ...]:
     pnl = row["total_pnl"] if row["resolved_paper_trades"] > 0 else float("-inf")
     return (
@@ -367,6 +380,21 @@ def watchlist_candidate(row: dict[str, Any]) -> bool:
     return burden >= 0.60 and row["signals"] <= 1
 
 
+def recommendation_tier(row: dict[str, Any]) -> str:
+    classification = row["classification"]
+    if auto_disable_candidate(row):
+        return "remove immediately"
+    if classification == "likely prune":
+        return "prune"
+    if top_performer(row):
+        return "top performers"
+    if classification == "likely keep":
+        return "keep"
+    if watchlist_candidate(row) or classification == "investigate":
+        return "watch / investigate"
+    return "watch / investigate"
+
+
 def summarize(
     logs_path: Path,
     db_path: Path,
@@ -399,22 +427,19 @@ def summarize(
         rows.append(row)
 
     grouped = {
-        "likely keep": [],
-        "investigate": [],
-        "likely prune": [],
-        "disabled by config": [],
-        "auto-disable candidates": [],
-        "watchlist": [],
+        "remove immediately": [],
+        "prune": [],
+        "watch / investigate": [],
+        "keep": [],
+        "top performers": [],
+        "disabled by source": [],
+        "disabled by family": [],
     }
     for row in rows:
         if row["is_disabled"]:
-            grouped["disabled by config"].append(row)
+            grouped[f"disabled by {row['disabled_reason']}"].append(row)
         else:
-            grouped[row["classification"]].append(row)
-            if auto_disable_candidate(row):
-                grouped["auto-disable candidates"].append(row)
-            elif watchlist_candidate(row):
-                grouped["watchlist"].append(row)
+            grouped[recommendation_tier(row)].append(row)
     for key in grouped:
         grouped[key].sort(key=rank_tuple)
 
@@ -490,35 +515,50 @@ def print_summary(stats: dict[str, Any], top: int, hide_disabled: bool = False) 
     print(f"  Log records included   : {stats['log_meta']['records_kept']}")
     print(f"  DB available           : {'yes' if stats['db_exists'] else 'no'}")
     print(f"  Sources scored         : {len(stats['rows'])}")
-    print(f"  Disabled in config     : {len(stats['grouped']['disabled by config'])}")
+    print(
+        "  Disabled in config     : "
+        f"{len(stats['grouped']['disabled by source']) + len(stats['grouped']['disabled by family'])}"
+    )
 
     if not stats["rows"]:
         print()
         print("No source-attributable records found.")
         return
 
-    for title in ("likely keep", "investigate", "likely prune"):
+    print()
+    print("Active Source Recommendations")
+    for title in (
+        "top performers",
+        "keep",
+        "watch / investigate",
+        "prune",
+        "remove immediately",
+    ):
         print()
         print(title.title())
+        if title == "top performers":
+            print("  Sources with strong realized outcomes (>=2 resolved trades, positive P&L, >=75% win rate)")
+        elif title == "keep":
+            print("  Sources producing acceptable signals with no major issues")
+        elif title == "watch / investigate":
+            print("  Mixed performance; needs more data or review")
+        elif title == "prune":
+            print("  Low value; consider removal soon")
+        elif title == "remove immediately":
+            print("  High-confidence zero-value sources; safe to disable")
         for line in format_group_rows(stats["grouped"][title], top):
             print(line)
 
-    print()
-    print("Auto-Disable Candidates")
-    print("  Conservative rule: obs>=15, stale/drop burden>=80%, signals=0, paper=0")
-    for line in format_group_rows(stats["grouped"]["auto-disable candidates"], top):
-        print(line)
-
-    print()
-    print("Watchlist")
-    print("  Borderline rule: obs>=10, stale/drop burden>=60%, signals<=1, paper=0")
-    for line in format_group_rows(stats["grouped"]["watchlist"], top):
-        print(line)
-
     if not hide_disabled:
         print()
-        print("Disabled By Config")
-        for line in format_group_rows(stats["grouped"]["disabled by config"], top):
+        print("Disabled Sources")
+        print()
+        print("Disabled By Source")
+        for line in format_group_rows(stats["grouped"]["disabled by source"], top):
+            print(line)
+        print()
+        print("Disabled By Family")
+        for line in format_group_rows(stats["grouped"]["disabled by family"], top):
             print(line)
 
 

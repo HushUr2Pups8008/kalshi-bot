@@ -67,6 +67,46 @@ Every version bump requires a `CHANGELOG.md` entry in the same commit. No except
 
 ---
 
+## Cross-Platform Workflow
+
+- Prefer Python for operational scripts and report runners
+- Do not introduce new `.ps1`-only workflows when a Python entrypoint is practical
+- Treat PowerShell wrappers as optional Windows conveniences, not the canonical interface
+- When adding or updating tooling, consider the macOS runtime path first
+- If a script is currently PowerShell-only but is operationally important, prefer migrating the core logic to Python
+
+--- 
+
+## Time Handling (CRITICAL)
+
+**All system time must be handled in UTC.**
+
+Requirements:
+* All timestamps in logs, events, and persisted data must be UTC
+* Use ISO-8601 or explicitly marked UTC timestamps
+* Do not use local system time for:
+  * logging
+  * event timestamps
+  * comparisons
+  * freshness calculations
+
+Logging:
+* Application logs (e.g. `bot.log`) must use UTC timestamps
+* Structured logs (e.g. `trades.jsonl`) must use UTC timestamps
+* If using Python logging, set:
+  ```python
+  logging.Formatter.converter = time.gmtime
+  ```
+Conversions:
+* Only convert to local time at presentation layer (if ever needed)
+* Internal logic must remain UTC-only
+
+Enforcement:
+* Mixed timezones are considered a defect
+* Any component emitting non-UTC timestamps must be corrected
+
+--- 
+
 ## Plan Archiving
 After every non-trivial implementation (new feature, architectural change, version bump):
 - Archive the plan to docs/plans/vX.Y.Z_short_description.md in the repo

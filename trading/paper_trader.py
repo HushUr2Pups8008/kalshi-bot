@@ -24,7 +24,7 @@ from analysis import SignalAnalysis
 from analysis.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR, PAPER_FLAT_CONTRACTS
 from trading.portfolio import Portfolio, Position
-from utils.logger import get_logger, trade_log
+from utils.logger import get_logger, trade_log, TRADE_LOG_FILE
 
 log = get_logger("paper_trader")
 
@@ -105,6 +105,64 @@ CREATE TABLE IF NOT EXISTS subreddit_candidates (
     status         TEXT DEFAULT 'candidate'
 );
 """
+
+
+def _match_quality_report_section() -> list[str]:
+    """
+    Return a compact MATCH QUALITY section for the daily report.
+
+    Reads MATCH_DIAGNOSTIC records from trades.jsonl (read-only).
+    Diagnostic only -- no runtime behavior is affected by these metrics.
+    """
+    if not TRADE_LOG_FILE.exists():
+        return ["MATCH QUALITY", "  No trades.jsonl found.", ""]
+
+    from collections import Counter
+    total = 0
+    low = 0
+    flag_counts: Counter[str] = Counter()
+    ticker_low: Counter[str] = Counter()
+    try:
+        with TRADE_LOG_FILE.open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") != "MATCH_DIAGNOSTIC":
+                    continue
+                total += 1
+                if ev.get("low_match_quality"):
+                    low += 1
+                    ticker = str(ev.get("ticker") or "").strip()
+                    if ticker:
+                        ticker_low[ticker] += 1
+                    for f in (ev.get("heuristic_flags") or []):
+                        flag_counts[str(f)] += 1
+    except OSError:
+        return ["MATCH QUALITY", "  Could not read trades.jsonl.", ""]
+
+    if total == 0:
+        return ["MATCH QUALITY", "  No MATCH_DIAGNOSTIC records yet.", ""]
+
+    low_pct = 100 * low / total
+    lines = [
+        "MATCH QUALITY  (approximate heuristics; diagnostic only -- not suppressed)",
+        f"  Matched candidates:       {total}",
+        f"  Low-quality flagged:      {low} ({low_pct:.0f}%)",
+    ]
+    if flag_counts:
+        top_flags = ", ".join(f"{f}({c})" for f, c in flag_counts.most_common(3))
+        lines.append(f"  Top flag reasons:         {top_flags}")
+    if ticker_low:
+        top_tickers = ", ".join(f"{t}({c})" for t, c in ticker_low.most_common(5))
+        lines.append(f"  Top flagged tickers:      {top_tickers}")
+    lines.append("  Full analysis: python scripts/match_quality_diagnostics.py --exclude-test")
+    lines.append("")
+    return lines
 
 
 class PaperTrader:
@@ -546,6 +604,8 @@ class PaperTrader:
             "",
         ]
 
+        lines += _match_quality_report_section()
+
         # Resolved trades table (last 20)
         if resolved:
             lines.append("RESOLVED TRADES  (most recent 20)")
@@ -556,7 +616,7 @@ class PaperTrader:
                     t["ticker"][:18],
                     t["side"].upper(),
                     t["contracts"],
-                    f"{t['price_cents']}¢",
+                    f"{t['price_cents']}c",
                     f"${t['cost_dollars']:.2f}",
                     f"{t['estimated_prob']:.3f}",
                     f"{t['edge']:+.3f}",
@@ -582,7 +642,7 @@ class PaperTrader:
                     t["ticker"][:18],
                     t["side"].upper(),
                     t["contracts"],
-                    f"{t['price_cents']}¢",
+                    f"{t['price_cents']}c",
                     f"${t['cost_dollars']:.2f}",
                     f"{t['estimated_prob']:.3f}",
                     f"{t['edge']:+.3f}",
@@ -620,13 +680,13 @@ class PaperTrader:
         # Go-live assessment
         lines.append("GO-LIVE ASSESSMENT")
         if len(resolved) < 10:
-            lines.append(f"  INSUFFICIENT DATA — {len(resolved)}/10 resolved trades. Keep running.")
+            lines.append(f"  INSUFFICIENT DATA --{len(resolved)}/10 resolved trades. Keep running.")
         elif win_rate >= 0.55 and total_pnl > 0 and avg_edge > 0.03:
-            lines.append("  POSITIVE — Strategy shows edge. Run `python main.py --go-live` to confirm.")
+            lines.append("  POSITIVE --Strategy shows edge. Run `python main.py --go-live` to confirm.")
         elif total_pnl < -50:
-            lines.append("  NEGATIVE — Significant losses. Review strategy before considering live trading.")
+            lines.append("  NEGATIVE --Significant losses. Review strategy before considering live trading.")
         else:
-            lines.append("  NEUTRAL — Mixed results. Continue paper trading and review next week.")
+            lines.append("  NEUTRAL --Mixed results. Continue paper trading and review next week.")
 
         lines += ["", "Run `python main.py --go-live` only after you are satisfied with these results.", "=" * 70]
         return "\n".join(lines)

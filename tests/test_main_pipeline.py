@@ -91,7 +91,7 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
         0.65, 0.8, ["missile strike"], "test reasoning", "yes", "moderate", 0.8
     ))), patch("main.kelly_bet", return_value=(0.12, 15.0, 12.0)), \
          patch("utils.logger.trade_log.log_signal"), \
-         patch("utils.logger.trade_log.log_opportunity"):
+         patch("utils.logger.trade_log.log_opportunity") as opportunity_mock:
         await bot._process_candidate(news, market, 0.42)
 
     bot.executor.execute.assert_awaited_once()
@@ -117,6 +117,23 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     bot.source_stats.increment_opportunities.assert_called_with("Reuters")
     bot.source_stats.increment_trades.assert_called_with("Reuters")
     bot.ws.watch.assert_called_with(["KXTEST-25DEC31"])
+    opportunity_mock.assert_called_once_with(
+        ticker=market.ticker,
+        market_title=market.title,
+        market_yes_price=market.yes_price,
+        estimated_probability=0.65,
+        edge=pytest.approx(0.15),
+        kelly_fraction=0.12,
+        kelly_dollars=15.0,
+        capped_dollars=12.0,
+        side="yes",
+        reasoning="test reasoning",
+        source=news.source,
+        headline=news.headline,
+        method="llm",
+        llm_direction="yes",
+        llm_magnitude="moderate",
+    )
 
 
 @pytest.mark.asyncio
@@ -411,10 +428,16 @@ async def test_enqueue_news_fresh_item_passes_through_unchanged(monkeypatch):
     news = _make_news()
     news.published = datetime.now(timezone.utc) - timedelta(seconds=120)
 
-    with patch("utils.logger.trade_log.log_early_stale_drop") as early_drop_mock:
+    with patch("utils.logger.trade_log.log_early_stale_drop") as early_drop_mock, \
+         patch("utils.logger.trade_log.log_early_fresh_pass") as fresh_pass_mock:
         await bot._enqueue_news(news)
 
     early_drop_mock.assert_not_called()
+    fresh_pass_mock.assert_called_once()
+    kwargs = fresh_pass_mock.call_args.kwargs
+    assert kwargs["source"] == news.source
+    assert kwargs["headline"] == news.headline
+    assert kwargs["age_seconds"] == pytest.approx(120.0, abs=5.0)
     bot._dedup.is_duplicate.assert_called_once_with(news.headline, source=news.source)
     assert bot._news_queue.qsize() == 1
 
@@ -429,15 +452,17 @@ async def test_enqueue_news_assigns_source_priority(monkeypatch):
     wire_news = _make_news()
     wire_news.source = "Reuters"
 
-    with patch("utils.logger.trade_log.log_early_stale_drop") as early_drop_mock:
+    with patch("utils.logger.trade_log.log_early_stale_drop") as early_drop_mock, \
+         patch("utils.logger.trade_log.log_early_fresh_pass") as fresh_pass_mock:
         await bot._enqueue_news(reddit_news)
         await bot._enqueue_news(wire_news)
 
     first_priority, _first_seq, first_news = bot._news_queue.get_nowait()
     second_priority, _second_seq, second_news = bot._news_queue.get_nowait()
     assert (first_priority, first_news.source) == (1, "Reuters")
-    assert (second_priority, second_news.source) == (2, "r/internationalnews")
+    assert (second_priority, second_news.source) == (3, "r/internationalnews")
     early_drop_mock.assert_not_called()
+    assert fresh_pass_mock.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -475,7 +500,8 @@ async def test_enqueue_news_drops_when_queue_is_full(monkeypatch):
     second.item_id = "id-2"
     second.headline = "Second headline"
 
-    with patch("utils.logger.trade_log.log_early_stale_drop") as early_drop_mock:
+    with patch("utils.logger.trade_log.log_early_stale_drop") as early_drop_mock, \
+         patch("utils.logger.trade_log.log_early_fresh_pass") as fresh_pass_mock:
         await bot._enqueue_news(first)
         await bot._enqueue_news(second)
 
@@ -483,6 +509,7 @@ async def test_enqueue_news_drops_when_queue_is_full(monkeypatch):
     _priority, _seq, queued_news = bot._news_queue.get_nowait()
     assert queued_news.item_id == "id-1"
     early_drop_mock.assert_not_called()
+    assert fresh_pass_mock.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -533,10 +560,12 @@ async def test_enqueue_news_keeps_publisher_rss(monkeypatch):
     news = _make_news()
     news.source = "BBC News"
 
-    with patch("utils.logger.trade_log.log_early_stale_drop") as early_drop_mock:
+    with patch("utils.logger.trade_log.log_early_stale_drop") as early_drop_mock, \
+         patch("utils.logger.trade_log.log_early_fresh_pass") as fresh_pass_mock:
         await bot._enqueue_news(news)
 
     early_drop_mock.assert_not_called()
+    fresh_pass_mock.assert_called_once()
     bot._dedup.is_duplicate.assert_called_once_with(news.headline, source=news.source)
     assert bot._news_queue.qsize() == 1
 

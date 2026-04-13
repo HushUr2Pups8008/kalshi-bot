@@ -14,75 +14,36 @@ param(
     [switch]$ExcludeTest
 )
 
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $venvPython = Join-Path $repoRoot ".venv\Scripts\python.exe"
-$reportsDir = Join-Path $repoRoot "logs\reports"
-$null = New-Item -ItemType Directory -Path $reportsDir -Force
-$reportPath = Join-Path $reportsDir ("daily_review_{0}.txt" -f (Get-Date -Format "yyyyMMdd"))
+$dailyReviewPy = Join-Path $repoRoot "scripts\daily_review.py"
+
+if (-not (Test-Path $dailyReviewPy)) {
+    throw "daily_review.py not found at: $dailyReviewPy"
+}
 
 if (Test-Path $venvPython) {
     $pythonExe = $venvPython
-} else {
+}
+else {
     $pythonExe = "python"
 }
 
-$sharedArgs = @()
+$argsList = @($dailyReviewPy)
 if ($Since) {
-    $sharedArgs += @("--since", $Since)
+    $argsList += @("--since", $Since)
 }
 if ($Until) {
-    $sharedArgs += @("--until", $Until)
+    $argsList += @("--until", $Until)
 }
 if ($PSBoundParameters.ContainsKey("Top")) {
-    $sharedArgs += @("--top", $Top)
+    $argsList += @("--top", $Top)
 }
 if ($ExcludeTest) {
-    $sharedArgs += "--exclude-test"
+    $argsList += "--exclude-test"
 }
 
-$reports = @(
-    @{
-        Title = "Trade Log Summary"
-        Script = "scripts/trade_log_summary.py"
-    },
-    @{
-        Title = "Decision Funnel Summary"
-        Script = "scripts/decision_funnel_summary.py"
-    },
-    @{
-        Title = "Paper Performance Drilldown"
-        Script = "scripts/paper_performance_drilldown.py"
-    }
-)
-
-function Write-ReportLine {
-    param(
-        [string]$Text = ""
-    )
-
-    $Text | Tee-Object -FilePath $reportPath -Append
-}
-
-foreach ($report in $reports) {
-    Write-ReportLine ""
-    Write-ReportLine ("=" * 72)
-    Write-ReportLine $report.Title
-    Write-ReportLine ("=" * 72)
-
-    $scriptPath = Join-Path $repoRoot $report.Script
-    $args = @($scriptPath) + $sharedArgs
-
-    try {
-        & $pythonExe @args 2>&1 | Tee-Object -FilePath $reportPath -Append
-        if ($LASTEXITCODE -ne 0) {
-            Write-ReportLine ("WARNING: {0} exited with code {1}" -f $report.Script, $LASTEXITCODE)
-        }
-    } catch {
-        Write-ReportLine ("WARNING: Failed to run {0}: {1}" -f $report.Script, $_.Exception.Message)
-    }
-}
-
-Write-ReportLine ""
-Write-ReportLine ("Daily review report saved to: {0}" -f $reportPath)
+& $pythonExe @argsList
+exit $LASTEXITCODE

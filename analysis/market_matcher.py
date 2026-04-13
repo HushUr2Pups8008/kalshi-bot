@@ -18,10 +18,11 @@ from typing import Optional
 
 from config import cfg, MARKET_CACHE_TTL_SECONDS, MAX_MARKET_DAYS_TO_EXPIRY
 from config import PAPER_MIN_MATCH_SCORE, PAPER_MAX_CANDIDATES, MARKET_SERIES_BLOCKLIST_PREFIXES
+from config import ENABLE_LOW_QUALITY_MATCH_SUPPRESSION, ENABLE_MATCH_SUPPRESSION_DEBUG
 from feeds import NewsItem
 from kalshi import KalshiMarket
 from kalshi.rest_client import KalshiRestClient
-from utils.logger import get_logger
+from utils.logger import get_logger, trade_log
 
 log = get_logger("market_matcher")
 
@@ -98,6 +99,10 @@ def _tokenize(text: str) -> set[str]:
     return tokens - _STOP_WORDS
 
 
+def _meaningful_tokens(tokens: set[str]) -> set[str]:
+    return {t for t in tokens if len(t) >= 3 and not t.isdigit()}
+
+
 def _similarity(tokens_a: set[str], tokens_b: set[str]) -> float:
     if not tokens_a or not tokens_b:
         return 0.0
@@ -107,6 +112,29 @@ def _similarity(tokens_a: set[str], tokens_b: set[str]) -> float:
         return 0.0
     boost = sum(1.5 for t in intersection if t in _GEOPOLITICAL_BOOST)
     return min(1.0, len(intersection) / len(union) + boost * 0.03)
+
+
+def _match_quality_flags(
+    *,
+    overlap: set[str],
+    geo_overlap: set[str],
+    generic_overlap: set[str],
+    headline_meaningful: set[str],
+    market_title_meaningful: set[str],
+    score: float,
+    min_score: float,
+) -> list[str]:
+    flags: list[str] = []
+    overlap_ratio = len(overlap) / max(1, min(len(headline_meaningful), len(market_title_meaningful)))
+    if score <= min_score + 0.02:
+        flags.append("near_threshold_score")
+    if overlap_ratio < 0.2:
+        flags.append("low_token_overlap")
+    if len(geo_overlap) == 1 and len(generic_overlap) == 0:
+        flags.append("single_named_entity_only")
+    if len(overlap) <= 1:
+        flags.append("minimal_overlap")
+    return flags
 
 
 def _days_to_close(close_time_str: str) -> Optional[float]:
@@ -367,8 +395,8 @@ class MarketMatcher:
             # appear in the market title. Filter out short/numeric tokens first
             # to prevent date fragments like '1' (from 'Apr 1') or 's' (from
             # 'U.S.') from creating false positives.
-            meaningful_hl = {t for t in headline_tokens if len(t) >= 3 and not t.isdigit()}
-            meaningful_mt = {t for t in market_title_tokens if len(t) >= 3 and not t.isdigit()}
+            meaningful_hl = _meaningful_tokens(headline_tokens)
+            meaningful_mt = _meaningful_tokens(market_title_tokens)
             overlap = meaningful_hl & meaningful_mt
             # Tiered gate: a specific named geo-entity (country, person) is
             # distinctive enough to pass alone. Generic words like "bank",
@@ -390,7 +418,72 @@ class MarketMatcher:
                 elif days <= 14:
                     score *= 1.1
 
-            scored.append((market, round(score, 4)))
+            score = round(score, 4)
+            heuristic_flags = _match_quality_flags(
+                overlap=overlap,
+                geo_overlap=geo_overlap,
+                generic_overlap=generic_overlap,
+                headline_meaningful=meaningful_hl,
+                market_title_meaningful=meaningful_mt,
+                score=score,
+                min_score=min_score,
+            )
+            overlap_ratio = len(overlap) / max(1, min(len(meaningful_hl), len(meaningful_mt)))
+            trade_log.log_match_diagnostic(
+                source=news.source,
+                headline=news.headline,
+                ticker=market.ticker,
+                market_title=market.title,
+                match_score=score,
+                matched_tokens=sorted(overlap),
+                token_overlap_count=len(overlap),
+                geo_overlap_count=len(geo_overlap),
+                generic_overlap_count=len(generic_overlap),
+                headline_token_count=len(meaningful_hl),
+                market_title_token_count=len(meaningful_mt),
+                overlap_ratio=overlap_ratio,
+                low_match_quality=bool(heuristic_flags),
+                heuristic_flags=heuristic_flags,
+            )
+
+            flag_set = set(heuristic_flags)
+            _meets_suppression_criteria = (
+                bool(heuristic_flags)
+                and "near_threshold_score" in flag_set
+                and ("minimal_overlap" in flag_set or "single_named_entity_only" in flag_set)
+            )
+
+            if ENABLE_MATCH_SUPPRESSION_DEBUG and _meets_suppression_criteria:
+                trade_log.log_match_suppression_candidate(
+                    source=news.source,
+                    headline=news.headline,
+                    ticker=market.ticker,
+                    match_score=score,
+                    overlap_count=len(overlap),
+                    overlap_ratio=overlap_ratio,
+                    heuristic_flags=heuristic_flags,
+                    matched_tokens=sorted(overlap),
+                )
+
+            if ENABLE_LOW_QUALITY_MATCH_SUPPRESSION and _meets_suppression_criteria:
+                reason = "+".join(sorted(flag_set))
+                trade_log.log_match_suppressed(
+                    source=news.source,
+                    headline=news.headline,
+                    ticker=market.ticker,
+                    market_title=market.title,
+                    match_score=score,
+                    matched_tokens=sorted(overlap),
+                    heuristic_flags=heuristic_flags,
+                    reason=reason,
+                )
+                log.debug(
+                    "[SUPPRESSED] %s -> %s (score=%.3f flags=%s)",
+                    news.headline[:60], market.ticker, score, reason,
+                )
+                continue
+
+            scored.append((market, score))
 
         scored.sort(key=lambda x: x[1], reverse=True)
         results = scored[:max_results]
