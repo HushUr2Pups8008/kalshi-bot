@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.26.2] - 2026-04-13
+
+### Added
+
+- `scripts/keyword_shadow_eval.py` -- Phase 6A: offline shadow evaluation for a
+  handpicked set of high-specificity candidate phrases. Reads
+  `ANALYSIS_REJECTED(reason=no_keywords)` events from trades.jsonl, checks each
+  miss against the shadow phrases using tokenised consecutive-subsequence matching
+  (same tokenisation as keyword_feedback.py), and reports per-phrase hit count,
+  source/ticker coverage, concentration risk, example headlines, and phrase overlap.
+  Default phrases: "strait hormuz", "hormuz blockade", "blockade iran".
+  Passive only -- no live config mutation, no runtime behavior change.
+- `tests/test_keyword_shadow_eval.py` -- 24 tests covering evaluate_phrases()
+  (pure computation: hits, overlap, concentration, dedup, caps) and
+  load_miss_corpus() (I/O: filtering, date window, exclude-test, malformed lines).
+
+---
+
 ## [0.26.1] - 2026-04-12
 
 ### Fixed
