@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.26.3] - 2026-04-12
+
+### Added
+- `scripts/keyword_shadow_eval.py`: Phase 6B -- promotion-readiness scoring and recommendation
+  buckets. New `score_phrases()` pure function adds `score`, `bucket`, and `reason` to each phrase
+  result after `evaluate_phrases()`. Score formula: `hits*4 + sources*6 + tickers*3 - 10*(conc_flag)
+  - overlap_hits*2`. Three conservative buckets: `promote candidate` (score >= 20, hits >= 5,
+  sources >= 2, no concentration flag), `continue shadowing`, `reject for now`. Report now groups
+  phrases by bucket instead of flat list. New `overlap_hits` field added to each phrase in
+  `evaluate_phrases()` output. 11 new tests in `TestScorePhrases` class. No live runtime changes.
+
 ## [0.26.2] - 2026-04-13
 
 ### Added

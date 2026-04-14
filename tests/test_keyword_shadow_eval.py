@@ -12,13 +12,20 @@ import uuid
 from pathlib import Path
 
 from scripts.keyword_shadow_eval import (
+    BUCKET_PROMOTE,
+    BUCKET_REJECT,
+    BUCKET_SHADOW,
     CONCENTRATION_FLAG_THRESHOLD,
     DEFAULT_SHADOW_PHRASES,
+    PROMOTE_MIN_HITS,
+    PROMOTE_MIN_SCORE,
+    PROMOTE_MIN_SOURCES,
     _phrase_matches,
     evaluate_phrases,
     load_miss_corpus,
     parse_date_end,
     parse_date_start,
+    score_phrases,
 )
 
 
@@ -323,3 +330,131 @@ class TestLoadMissCorpus:
             assert total == 3
         finally:
             _cleanup_tmp_dir(tmp)
+
+
+# ---------------------------------------------------------------------------
+# score_phrases -- promotion-readiness scoring tests
+# ---------------------------------------------------------------------------
+
+
+def _phrase_result(
+    phrase: str = "strait hormuz",
+    hits: int = 5,
+    sources: list[str] | None = None,
+    tickers: list[str] | None = None,
+    overlap_hits: int = 0,
+    concentration_flag: bool = False,
+) -> dict:
+    """Build a minimal phrase result dict as returned by evaluate_phrases."""
+    if sources is None:
+        sources = ["Reuters", "BBC"]
+    if tickers is None:
+        tickers = ["KXIRAN-1", "KXIRAN-2", "KXIRAN-3"]
+    conc: dict = {}
+    if hits > 0 and tickers:
+        top = tickers[0]
+        top_count = 2 if concentration_flag else 1
+        conc = {
+            "top_ticker": top,
+            "top_ticker_hits": top_count,
+            "fraction": round(top_count / hits, 3),
+            "flag": concentration_flag,
+        }
+    return {
+        "phrase": phrase,
+        "hits": hits,
+        "sources": sources,
+        "tickers": tickers,
+        "ticker_counts": {t: 1 for t in tickers},
+        "examples": [],
+        "concentration": conc,
+        "overlap_hits": overlap_hits,
+    }
+
+
+class TestScorePhrases:
+    def test_score_fields_added_to_result(self):
+        results = [_phrase_result(hits=5, sources=["Reuters", "BBC"], tickers=["KXIRAN-1", "KXIRAN-2"])]
+        score_phrases(results)
+        assert "score" in results[0]
+        assert "bucket" in results[0]
+        assert "reason" in results[0]
+
+    def test_score_formula_no_penalties(self):
+        # score = hits*4 + sources*6 + tickers*3 (no concentration, no overlap)
+        pr = _phrase_result(hits=5, sources=["Reuters", "BBC"], tickers=["KXIRAN-1", "KXIRAN-2"], overlap_hits=0)
+        score_phrases([pr])
+        expected = 5 * 4 + 2 * 6 + 2 * 3
+        assert pr["score"] == expected
+
+    def test_concentration_penalty_applied(self):
+        pr_clean = _phrase_result(hits=5, sources=["Reuters", "BBC"], tickers=["KXIRAN-1", "KXIRAN-2"],
+                                  concentration_flag=False)
+        pr_conc = _phrase_result(hits=5, sources=["Reuters", "BBC"], tickers=["KXIRAN-1", "KXIRAN-2"],
+                                 concentration_flag=True)
+        score_phrases([pr_clean, pr_conc])
+        assert pr_clean["score"] == pr_conc["score"] + 10
+
+    def test_overlap_penalty_applied(self):
+        pr_no_overlap = _phrase_result(hits=5, sources=["Reuters", "BBC"], tickers=["KXIRAN-1", "KXIRAN-2"],
+                                       overlap_hits=0)
+        pr_overlap = _phrase_result(hits=5, sources=["Reuters", "BBC"], tickers=["KXIRAN-1", "KXIRAN-2"],
+                                    overlap_hits=3)
+        score_phrases([pr_no_overlap, pr_overlap])
+        assert pr_no_overlap["score"] == pr_overlap["score"] + 3 * 2
+
+    def test_bucket_promote_candidate_when_all_thresholds_met(self):
+        # hits >= PROMOTE_MIN_HITS, sources >= PROMOTE_MIN_SOURCES, score >= PROMOTE_MIN_SCORE,
+        # no concentration flag
+        pr = _phrase_result(hits=PROMOTE_MIN_HITS, sources=["Reuters", "BBC"],
+                            tickers=["KXIRAN-1", "KXIRAN-2", "KXIRAN-3"],
+                            concentration_flag=False, overlap_hits=0)
+        score_phrases([pr])
+        assert pr["score"] >= PROMOTE_MIN_SCORE
+        assert pr["bucket"] == BUCKET_PROMOTE
+
+    def test_bucket_reject_when_hits_zero(self):
+        pr = _phrase_result(hits=0, sources=[], tickers=[])
+        score_phrases([pr])
+        assert pr["bucket"] == BUCKET_REJECT
+        assert "zero hits" in pr["reason"]
+
+    def test_bucket_shadow_when_hits_below_min(self):
+        pr = _phrase_result(hits=PROMOTE_MIN_HITS - 1, sources=["Reuters", "BBC"],
+                            tickers=["KXIRAN-1", "KXIRAN-2", "KXIRAN-3"], overlap_hits=0)
+        score_phrases([pr])
+        assert pr["bucket"] == BUCKET_SHADOW
+        assert f"hits {pr['hits']} < {PROMOTE_MIN_HITS}" in pr["reason"]
+
+    def test_bucket_shadow_when_sources_below_min(self):
+        pr = _phrase_result(hits=10, sources=["Reuters"],
+                            tickers=["KXIRAN-1", "KXIRAN-2", "KXIRAN-3"], overlap_hits=0)
+        score_phrases([pr])
+        assert pr["bucket"] == BUCKET_SHADOW
+        assert f"sources 1 < {PROMOTE_MIN_SOURCES}" in pr["reason"]
+
+    def test_bucket_shadow_when_concentration_flagged(self):
+        pr = _phrase_result(hits=10, sources=["Reuters", "BBC"],
+                            tickers=["KXIRAN-1", "KXIRAN-2", "KXIRAN-3"],
+                            concentration_flag=True, overlap_hits=0)
+        score_phrases([pr])
+        assert pr["bucket"] == BUCKET_SHADOW
+        assert "concentration flag" in pr["reason"]
+
+    def test_evaluate_phrases_includes_overlap_hits_field(self):
+        # Two phrases that both match the same event -- each should have overlap_hits=1
+        headline = "UK will not join strait of Hormuz blockade, sources say"
+        records = [_miss(headline)]
+        result = evaluate_phrases(records, ["strait hormuz", "hormuz blockade"])
+        for pr in result["phrases"]:
+            assert "overlap_hits" in pr
+            assert pr["overlap_hits"] == 1
+
+    def test_overlap_hits_zero_when_phrases_hit_different_events(self):
+        records = [
+            _miss("Iran War: U.S. Begins Blockade in Strait of Hormuz"),
+            _miss("Trump Plans to Blockade Iran, Experts Are Skeptical"),
+        ]
+        result = evaluate_phrases(records, ["strait hormuz", "blockade iran"])
+        for pr in result["phrases"]:
+            assert pr["overlap_hits"] == 0

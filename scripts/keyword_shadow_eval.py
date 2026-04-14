@@ -56,6 +56,16 @@ DEFAULT_SHADOW_PHRASES: list[str] = [
 # High concentration means the phrase is useful for one market, not broadly.
 CONCENTRATION_FLAG_THRESHOLD = 0.50
 
+# Promotion-readiness thresholds. Conservative by design -- only promote when
+# evidence is broad (multi-source, multi-ticker) and not ticker-concentrated.
+PROMOTE_MIN_HITS = 5
+PROMOTE_MIN_SOURCES = 2
+PROMOTE_MIN_SCORE = 20
+
+BUCKET_PROMOTE = "promote candidate"
+BUCKET_SHADOW = "continue shadowing"
+BUCKET_REJECT = "reject for now"
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -274,6 +284,13 @@ def evaluate_phrases(
                     data["examples"].append(raw_headline)
                 event_phrase_hits[idx].add(phrase)
 
+    # Per-phrase overlap: events where this phrase matched AND >=1 other phrase also matched
+    phrase_overlap_hits: dict[str, int] = {phrase: 0 for phrase in phrases}
+    for hits in event_phrase_hits:
+        if len(hits) >= 2:
+            for ph in hits:
+                phrase_overlap_hits[ph] += 1
+
     # Overlap: events that matched 2+ phrases
     events_with_overlap = sum(1 for hits in event_phrase_hits if len(hits) >= 2)
 
@@ -312,6 +329,7 @@ def evaluate_phrases(
                 "ticker_counts": ticker_counts,
                 "examples": data["examples"],
                 "concentration": concentration,
+                "overlap_hits": phrase_overlap_hits[phrase],
             }
         )
 
@@ -330,6 +348,74 @@ def evaluate_phrases(
 
 
 # ---------------------------------------------------------------------------
+# Promotion-readiness scoring (pure -- no I/O, testable)
+# ---------------------------------------------------------------------------
+
+
+def score_phrases(phrase_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add score, bucket, and reason to each phrase result in-place. Pure, no I/O.
+
+    Scoring formula (all factors are explicit and explainable):
+      hits * 4         -- raw hit weight
+      sources * 6      -- source diversity (multi-source = broader signal)
+      tickers * 3      -- ticker diversity (multi-market = broader utility)
+      - 10             -- concentration penalty (top ticker fraction >= threshold)
+      - overlap_hits*2 -- overlap penalty (shared hits add less unique value)
+
+    Bucket rules (conservative):
+      promote candidate  -- score >= PROMOTE_MIN_SCORE AND hits >= PROMOTE_MIN_HITS
+                            AND sources >= PROMOTE_MIN_SOURCES AND no concentration flag
+      continue shadowing -- hits >= 1 but not eligible to promote
+      reject for now     -- hits == 0
+    """
+    for pr in phrase_results:
+        hits = pr["hits"]
+        source_count = len(pr["sources"])
+        ticker_count = len(pr["tickers"])
+        conc = pr.get("concentration") or {}
+        concentration_flagged = conc.get("flag", False)
+        overlap_hits = pr.get("overlap_hits", 0)
+
+        score = hits * 4 + source_count * 6 + ticker_count * 3
+        if concentration_flagged:
+            score -= 10
+        score -= overlap_hits * 2
+
+        if hits == 0:
+            bucket = BUCKET_REJECT
+            reason = "zero hits in miss corpus"
+        elif (
+            score >= PROMOTE_MIN_SCORE
+            and hits >= PROMOTE_MIN_HITS
+            and source_count >= PROMOTE_MIN_SOURCES
+            and not concentration_flagged
+        ):
+            bucket = BUCKET_PROMOTE
+            reason = (
+                f"score={score}, hits={hits}, sources={source_count},"
+                f" tickers={ticker_count}, no concentration flag"
+            )
+        else:
+            bucket = BUCKET_SHADOW
+            causes: list[str] = []
+            if score < PROMOTE_MIN_SCORE:
+                causes.append(f"score {score} < {PROMOTE_MIN_SCORE}")
+            if hits < PROMOTE_MIN_HITS:
+                causes.append(f"hits {hits} < {PROMOTE_MIN_HITS}")
+            if source_count < PROMOTE_MIN_SOURCES:
+                causes.append(f"sources {source_count} < {PROMOTE_MIN_SOURCES}")
+            if concentration_flagged:
+                causes.append("concentration flag set")
+            reason = "; ".join(causes) if causes else "below promote thresholds"
+
+        pr["score"] = score
+        pr["bucket"] = bucket
+        pr["reason"] = reason
+
+    return phrase_results
+
+
+# ---------------------------------------------------------------------------
 # Report formatting
 # ---------------------------------------------------------------------------
 
@@ -338,6 +424,47 @@ def _pct(numerator: int, denominator: int) -> str:
     if not denominator:
         return "n/a"
     return f"{numerator / denominator * 100:.1f}%"
+
+
+def _print_phrase_block(pr: dict[str, Any], total: int, max_examples: int) -> None:
+    """Print one phrase's stats block. Called once per phrase in the grouped report."""
+    hits = pr["hits"]
+    print(f"  {pr['phrase']}")
+    print(f"    shadow hits   : {hits}  (of {total} misses, {_pct(hits, total)})")
+    overlap_hits = pr.get("overlap_hits", 0)
+    if hits > 0 and overlap_hits:
+        print(f"    overlap hits  : {overlap_hits}  (hits also matched by another phrase)")
+    if pr["sources"]:
+        print(f"    sources       : {len(pr['sources'])}  [{', '.join(pr['sources'])}]")
+    else:
+        print("    sources       : 0")
+    if pr["tickers"]:
+        shown_tickers = pr["tickers"][:6]
+        more = f" +{len(pr['tickers']) - 6} more" if len(pr["tickers"]) > 6 else ""
+        print(f"    tickers hit   : {len(pr['tickers'])}  [{', '.join(shown_tickers)}{more}]")
+    else:
+        print("    tickers hit   : 0")
+    conc = pr.get("concentration") or {}
+    if conc:
+        flag_note = "  [HIGH -- single-market concentration]" if conc.get("flag") else ""
+        print(
+            f"    concentration : {conc['top_ticker']} in"
+            f" {conc['top_ticker_hits']}/{hits}"
+            f" ({conc['fraction'] * 100:.0f}%){flag_note}"
+        )
+    score = pr.get("score")
+    if score is not None:
+        print(f"    score         : {score}  [{pr.get('bucket', '')}]")
+        print(f"    reason        : {pr.get('reason', '')}")
+    if hits > 0:
+        print("    examples      :")
+        for ex in pr["examples"][:max_examples]:
+            # Encode to ASCII with replacement to avoid Windows console cp1252 errors
+            safe = ex.encode("ascii", "replace").decode("ascii")
+            print(f"      \"{safe}\"")
+    else:
+        print("    examples      : (none -- phrase had zero hits)")
+    print()
 
 
 def print_report(
@@ -377,39 +504,29 @@ def print_report(
         print(f"  '{p}'")
     print()
 
+    # Grouped by bucket (promote -> shadow -> reject)
+    bucket_order = [BUCKET_PROMOTE, BUCKET_SHADOW, BUCKET_REJECT]
+    bucket_labels = {
+        BUCKET_PROMOTE: "PROMOTE CANDIDATES",
+        BUCKET_SHADOW:  "CONTINUE SHADOWING",
+        BUCKET_REJECT:  "REJECT FOR NOW",
+    }
+    grouped: dict[str, list[dict[str, Any]]] = {b: [] for b in bucket_order}
+    for pr in result["phrases"]:
+        bucket = pr.get("bucket", BUCKET_SHADOW)
+        grouped[bucket].append(pr)
+
     print("Results by Phrase")
     print(thin)
-    for pr in result["phrases"]:
-        hits = pr["hits"]
-        print(f"  {pr['phrase']}")
-        print(f"    shadow hits   : {hits}  (of {total} misses, {_pct(hits, total)})")
-        if pr["sources"]:
-            print(f"    sources       : {len(pr['sources'])}  [{', '.join(pr['sources'])}]")
-        else:
-            print("    sources       : 0")
-        if pr["tickers"]:
-            shown_tickers = pr["tickers"][:6]
-            more = f" +{len(pr['tickers']) - 6} more" if len(pr["tickers"]) > 6 else ""
-            print(f"    tickers hit   : {len(pr['tickers'])}  [{', '.join(shown_tickers)}{more}]")
-        else:
-            print("    tickers hit   : 0")
-        conc = pr["concentration"]
-        if conc:
-            flag_note = "  [HIGH -- single-market concentration]" if conc["flag"] else ""
-            print(
-                f"    concentration : {conc['top_ticker']} in"
-                f" {conc['top_ticker_hits']}/{hits}"
-                f" ({conc['fraction'] * 100:.0f}%){flag_note}"
-            )
-        if hits > 0:
-            print("    examples      :")
-            for ex in pr["examples"][:max_examples]:
-                # Encode to ASCII with replacement to avoid Windows console cp1252 errors
-                safe = ex.encode("ascii", "replace").decode("ascii")
-                print(f"      \"{safe}\"")
-        else:
-            print("    examples      : (none -- phrase had zero hits)")
-        print()
+    for bucket in bucket_order:
+        group = grouped[bucket]
+        print(f"  {bucket_labels[bucket]}")
+        if not group:
+            print("    (none)")
+            print()
+            continue
+        for pr in group:
+            _print_phrase_block(pr, total, max_examples)
 
     print("Aggregate")
     print(thin)
@@ -461,6 +578,10 @@ def build_json_result(
                 "ticker_counts": pr["ticker_counts"],
                 "examples": pr["examples"],
                 "concentration": pr["concentration"],
+                "overlap_hits": pr.get("overlap_hits", 0),
+                "score": pr.get("score"),
+                "bucket": pr.get("bucket"),
+                "reason": pr.get("reason"),
             }
             for pr in result["phrases"]
         ],
@@ -483,6 +604,7 @@ def main() -> int:
         path, since=since, until=until, exclude_test=args.exclude_test
     )
     result = evaluate_phrases(records, phrases, max_examples=args.max_examples)
+    score_phrases(result["phrases"])
 
     print_report(
         result,
