@@ -397,7 +397,11 @@ async def _ollama_estimate_detailed(news, market):
         ],
         "max_tokens": 256,
         "temperature": 0,
-        "repetition_penalty": 1.05,
+        # NOTE: repetition_penalty is a native Ollama API field, NOT a standard OpenAI
+        # Chat Completions field.  Ollama's /v1/chat/completions endpoint returns 422 for
+        # unrecognized fields, which was the dominant ollama_http_error failure mode.
+        # If rep-penalty is needed in future, pass it via "options": {"repeat_penalty": 1.05}
+        # and only when using the native /api/generate endpoint instead.
     }
 
     try:
@@ -408,7 +412,16 @@ async def _ollama_estimate_detailed(news, market):
                 timeout=aiohttp.ClientTimeout(total=60),
             ) as resp:
                 if resp.status != 200:
-                    log.debug("Ollama returned HTTP %d", resp.status)
+                    body_snippet = ""
+                    try:
+                        raw = await resp.text()
+                        body_snippet = raw[:200]
+                    except Exception:
+                        pass
+                    log.warning(
+                        "Ollama HTTP %d from /v1/chat/completions -- body: %s",
+                        resp.status, body_snippet,
+                    )
                     return None, _llm_meta(attempted=True, status="ollama_http_error", provider="ollama")
                 data = await resp.json()
 

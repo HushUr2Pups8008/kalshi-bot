@@ -6,6 +6,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.27.1] - 2026-04-15
+
+### Fixed
+- `analysis/signal_analyzer.py`: Removed `repetition_penalty` from the Ollama OpenAI-compat
+  payload (`/v1/chat/completions`). This field is native to Ollama's `/api/generate` endpoint and
+  is not a standard OpenAI Chat Completions parameter. Ollama's compat layer returned HTTP 422 for
+  unrecognized fields, producing the `ollama_http_error` status on every inference attempt -- the
+  dominant non-success LLM failure mode observed via the new observability fields. Fix: field
+  removed; a comment documents where to re-introduce it correctly if rep-penalty is needed later.
+- `analysis/signal_analyzer.py`: `ollama_http_error` branch now logs at WARNING level with the
+  HTTP status code and response body snippet (up to 200 chars). Previously logged at DEBUG only,
+  making transient non-200 responses invisible in production logs.
+
+---
+
 ## [0.27.0] - 2026-04-15
 
 ### Added
