@@ -114,6 +114,34 @@ def _similarity(tokens_a: set[str], tokens_b: set[str]) -> float:
     return min(1.0, len(intersection) / len(union) + boost * 0.03)
 
 
+def _structure_quality_flags(
+    *,
+    overlap: set[str],
+    geo_overlap: set[str],
+    generic_overlap: set[str],
+    headline_meaningful: set[str],
+    market_title_meaningful: set[str],
+) -> list[str]:
+    flags: list[str] = []
+    overlap_ratio = len(overlap) / max(1, min(len(headline_meaningful), len(market_title_meaningful)))
+    if overlap_ratio < 0.2:
+        flags.append("low_token_overlap")
+    if len(geo_overlap) == 1 and len(generic_overlap) == 0:
+        flags.append("single_named_entity_only")
+    if len(overlap) <= 1:
+        flags.append("minimal_overlap")
+    return flags
+
+
+def _weak_match_penalty_multiplier(flags: set[str]) -> float:
+    """Apply a lightweight penalty to structurally weak matches before thresholding."""
+    if "single_named_entity_only" in flags and "minimal_overlap" in flags:
+        return 0.75
+    if "single_named_entity_only" in flags:
+        return 0.9
+    return 1.0
+
+
 def _match_quality_flags(
     *,
     overlap: set[str],
@@ -124,16 +152,15 @@ def _match_quality_flags(
     score: float,
     min_score: float,
 ) -> list[str]:
-    flags: list[str] = []
-    overlap_ratio = len(overlap) / max(1, min(len(headline_meaningful), len(market_title_meaningful)))
+    flags = _structure_quality_flags(
+        overlap=overlap,
+        geo_overlap=geo_overlap,
+        generic_overlap=generic_overlap,
+        headline_meaningful=headline_meaningful,
+        market_title_meaningful=market_title_meaningful,
+    )
     if score <= min_score + 0.02:
         flags.append("near_threshold_score")
-    if overlap_ratio < 0.2:
-        flags.append("low_token_overlap")
-    if len(geo_overlap) == 1 and len(generic_overlap) == 0:
-        flags.append("single_named_entity_only")
-    if len(overlap) <= 1:
-        flags.append("minimal_overlap")
     return flags
 
 
@@ -223,6 +250,12 @@ def _is_geo_series(series: dict) -> bool:
 # ── Market cache ──────────────────────────────────────────────────────────────
 
 _REFRESH_DEBOUNCE_SECONDS = 60  # min seconds between back-to-back refreshes
+_TEST_MARKET_TICKER_PREFIX = "KXTEST"
+
+
+def _is_excluded_test_market(market: KalshiMarket) -> bool:
+    """Return True for explicit test-market tickers that must never enter shared caches."""
+    return market.ticker.upper().startswith(_TEST_MARKET_TICKER_PREFIX)
 
 
 class MarketCache:
@@ -298,6 +331,8 @@ class MarketCache:
                     series_ticker=series_ticker, limit=200
                 )
                 for m in page:
+                    if _is_excluded_test_market(m):
+                        continue
                     days = _days_to_close(m.close_time)
                     if days is None or 0 < days <= MAX_MARKET_DAYS_TO_EXPIRY:
                         filtered.append(m)
@@ -344,6 +379,8 @@ class MarketCache:
                 status="open", cursor=cursor, limit=200
             )
             for m in page:
+                if _is_excluded_test_market(m):
+                    continue
                 days = _days_to_close(m.close_time)
                 if days is None or 0 < days <= MAX_MARKET_DAYS_TO_EXPIRY:
                     markets.append(m)
@@ -406,8 +443,6 @@ class MarketMatcher:
             if not geo_overlap and len(generic_overlap) < 2:
                 continue
             score = _similarity(news_tokens, market_tokens)
-            if score < min_score:
-                continue
 
             days = _days_to_close(market.close_time)
             if days is not None:
@@ -417,6 +452,17 @@ class MarketMatcher:
                     score *= 1.2
                 elif days <= 14:
                     score *= 1.1
+
+            structure_flags = _structure_quality_flags(
+                overlap=overlap,
+                geo_overlap=geo_overlap,
+                generic_overlap=generic_overlap,
+                headline_meaningful=meaningful_hl,
+                market_title_meaningful=meaningful_mt,
+            )
+            score *= _weak_match_penalty_multiplier(set(structure_flags))
+            if score < min_score:
+                continue
 
             score = round(score, 4)
             heuristic_flags = _match_quality_flags(

@@ -55,6 +55,9 @@ def test_summarize_builds_edge_audit_and_group_metrics():
                     "method": "llm",
                     "llm_direction": "yes",
                     "llm_magnitude": "moderate",
+                    "llm_attempted": True,
+                    "llm_result_used": True,
+                    "llm_result_status": "ollama_success",
                     "final_probability": 0.62,
                     "market_price": 0.62,
                     "ts": "2026-04-12T12:00:00+00:00",
@@ -93,6 +96,9 @@ def test_summarize_builds_edge_audit_and_group_metrics():
                     "source": "Reuters",
                     "headline": "Ceasefire tested",
                     "method": "keyword",
+                    "llm_attempted": True,
+                    "llm_result_used": False,
+                    "llm_result_status": "ollama_timeout",
                     "final_probability": 0.58,
                     "market_price": 0.54,
                     "ts": "2026-04-12T12:05:00+00:00",
@@ -133,6 +139,11 @@ def test_summarize_builds_edge_audit_and_group_metrics():
         assert stats["counts"]["EXECUTED"] == 1
         assert stats["skip_breakdown"]["zero_edge"] == 1
         assert stats["skip_breakdown"]["duplicate"] == 0
+        assert stats["llm_observability"]["attempted"] == 2
+        assert stats["llm_observability"]["result_used"] == 1
+        assert stats["llm_observability"]["fallback"] == 1
+        assert stats["llm_observability"]["status_counts"]["ollama_success"] == 1
+        assert stats["llm_observability"]["status_counts"]["ollama_timeout"] == 1
 
         first_row = stats["audit_rows"][0]
         second_row = stats["audit_rows"][1]
@@ -229,6 +240,7 @@ def test_print_summary_includes_edge_sections(capsys):
         assert "Per-Event Edge Audit" in output
         assert "Aggregate by Source" in output
         assert "Aggregate by Ticker" in output
+        assert "LLM Path Observability" in output
         assert "Live orders are counted in the cohort summary" in output
     finally:
         _cleanup_tmp_dir(tmp)

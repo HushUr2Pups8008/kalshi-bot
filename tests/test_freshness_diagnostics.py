@@ -229,13 +229,13 @@ def test_print_summary_includes_ranked_sections(capsys):
         print_summary(stats, top=5, min_observations=1, since=None, until=None)
         output = capsys.readouterr().out
 
-        assert "Source Freshness Metrics" in output
-        assert "Worst Offenders" in output
-        assert "Borderline Sources" in output
-        assert "Strategy-Misaligned Sources" in output
-        assert "Freshest Sources" in output
+        assert "Operational Summary" in output
+        assert "Fast / Operational" in output
+        assert "Near Threshold" in output
+        assert "Chronically Late" in output
+        assert "Hidden Long Tail" in output
         assert "Reuters" in output
-        assert "AP" in output
+        assert "AP" not in output
         assert "EARLY_STALE_DROP and EARLY_FRESH_PASS" in output
         assert "fresh_pass=" in output
         assert "label=" in output
@@ -293,3 +293,34 @@ def test_borderline_and_strategy_misaligned_candidates():
     assert borderline_candidate(misaligned) is False
     assert borderline_candidate(insufficient) is False
     assert strategy_misaligned_candidate(insufficient) is False
+
+
+def test_print_summary_show_all_reveals_hidden_buckets(capsys):
+    tmp = _make_tmp_dir()
+    try:
+        path = tmp / "trades.jsonl"
+        _write_jsonl(
+            path,
+            [
+                {"type": "EARLY_STALE_DROP", "source": "Dead Source", "ts": "2026-04-11T00:00:00+00:00"},
+                {"type": "EARLY_STALE_DROP", "source": "Dead Source", "ts": "2026-04-11T00:01:00+00:00"},
+                {"type": "EARLY_STALE_DROP", "source": "Dead Source", "ts": "2026-04-11T00:02:00+00:00"},
+                {"type": "EARLY_STALE_DROP", "source": "Dead Source", "ts": "2026-04-11T00:03:00+00:00"},
+                {"type": "EARLY_STALE_DROP", "source": "Dead Source", "ts": "2026-04-11T00:04:00+00:00"},
+                {"type": "EARLY_STALE_DROP", "source": "Fast Source", "age_seconds": 100, "ts": "2026-04-11T00:05:00+00:00"},
+                {"type": "EARLY_FRESH_PASS", "source": "Fast Source", "age_seconds": 90, "ts": "2026-04-11T00:06:00+00:00"},
+                {"type": "EARLY_FRESH_PASS", "source": "Fast Source", "age_seconds": 120, "ts": "2026-04-11T00:07:00+00:00"},
+                {"type": "EARLY_FRESH_PASS", "source": "Fast Source", "age_seconds": 140, "ts": "2026-04-11T00:08:00+00:00"},
+                {"type": "EARLY_FRESH_PASS", "source": "Fast Source", "age_seconds": 160, "ts": "2026-04-11T00:09:00+00:00"},
+            ],
+        )
+        stats = summarize(path, since=None, until=None)
+
+        print_summary(stats, top=5, min_observations=1, since=None, until=None, show_all=True)
+        output = capsys.readouterr().out
+
+        assert "Dead / Filtered Out" in output
+        assert "Dead Source" in output
+        assert "Fast Source" in output
+    finally:
+        _cleanup_tmp_dir(tmp)

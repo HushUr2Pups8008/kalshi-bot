@@ -24,6 +24,7 @@ logs/service/
 
 # Test temp directories
 tests/_tmp_*/
+tests/_tmp_*.jsonl
 
 # Keep the placeholder files
 !data/.gitkeep

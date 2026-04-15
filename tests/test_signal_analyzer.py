@@ -328,14 +328,60 @@ class TestKeywordEstimate:
 
 class TestEstimateProbability:
     @pytest.mark.asyncio
-    async def test_keyword_gated_no_signal_short_circuits_before_llm(self, monkeypatch):
+    async def test_no_keyword_headline_can_use_llm_when_available(self, monkeypatch):
         news = _make_news("Quarterly corporate earnings beat expectations")
         market = _make_full_market()
 
-        async def _unexpected_llm(*args, **kwargs):
-            raise AssertionError("llm_estimate should not be called when no keywords match")
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "LLM found relevant directional information", "yes", "moderate"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
 
-        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate", _unexpected_llm)
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
+            result = await estimate_probability(news, market)
+
+        assert result == (
+            0.64,
+            0.85,
+            [],
+            f"[LLM] LLM found relevant directional information (LLM: {0.64:.3f}, Keywords(ref): {market.yes_prob:.3f})",
+            "yes",
+            "moderate",
+            0.85,
+        )
+        detail_mock.assert_called_once_with(
+            ticker=market.ticker,
+            source=news.source,
+            headline=news.headline,
+            method="llm",
+            keywords=[],
+            keyword_contributions=[],
+            base_probability=market.yes_prob,
+            final_probability=0.64,
+            market_price=market.yes_prob,
+            llm_direction="yes",
+            llm_magnitude="moderate",
+            llm_confidence=0.85,
+            llm_attempted=True,
+            llm_result_used=True,
+            llm_result_status="ollama_success",
+            llm_provider="ollama",
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_keyword_headline_uses_keyword_gate_when_llm_unavailable(self, monkeypatch):
+        news = _make_news("Quarterly corporate earnings beat expectations")
+        market = _make_full_market()
+
+        async def _no_llm(*args, **kwargs):
+            return (
+                None,
+                {"attempted": True, "status": "ollama_timeout", "provider": "ollama", "result_used": False},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _no_llm)
         with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
             result = await estimate_probability(news, market)
 
@@ -358,6 +404,10 @@ class TestEstimateProbability:
             base_probability=market.yes_prob,
             final_probability=market.yes_prob,
             market_price=market.yes_prob,
+            llm_attempted=True,
+            llm_result_used=False,
+            llm_result_status="ollama_timeout",
+            llm_provider="ollama",
         )
 
     @pytest.mark.asyncio
@@ -366,9 +416,12 @@ class TestEstimateProbability:
         market = _make_full_market()
 
         async def _fake_llm(*args, **kwargs):
-            return 0.72, 0.9, "LLM says this is market-moving", "yes", "moderate"
+            return (
+                (0.72, 0.9, "LLM says this is market-moving", "yes", "moderate"),
+                {"attempted": True, "status": "anthropic_success", "provider": "anthropic", "result_used": True},
+            )
 
-        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate", _fake_llm)
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
         with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
             prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
                 await estimate_probability(news, market)
@@ -389,6 +442,10 @@ class TestEstimateProbability:
         assert kwargs["llm_direction"] == "yes"
         assert kwargs["llm_magnitude"] == "moderate"
         assert kwargs["llm_confidence"] == pytest.approx(0.9)
+        assert kwargs["llm_attempted"] is True
+        assert kwargs["llm_result_used"] is True
+        assert kwargs["llm_result_status"] == "anthropic_success"
+        assert kwargs["llm_provider"] == "anthropic"
         assert kwargs["keywords"]
         assert kwargs["keyword_contributions"]
 
@@ -398,9 +455,12 @@ class TestEstimateProbability:
         market = _make_full_market()
 
         async def _no_llm(*args, **kwargs):
-            return None
+            return (
+                None,
+                {"attempted": False, "status": "no_provider_available", "provider": None, "result_used": False},
+            )
 
-        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate", _no_llm)
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _no_llm)
         with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
             prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
                 await estimate_probability(news, market)
@@ -418,5 +478,9 @@ class TestEstimateProbability:
         assert kwargs["base_probability"] == pytest.approx(market.yes_prob)
         assert kwargs["final_probability"] == pytest.approx(prob)
         assert kwargs["market_price"] == pytest.approx(market.yes_prob)
+        assert kwargs["llm_attempted"] is False
+        assert kwargs["llm_result_used"] is False
+        assert kwargs["llm_result_status"] == "no_provider_available"
+        assert kwargs["llm_provider"] is None
         assert kwargs["keywords"]
         assert kwargs["keyword_contributions"]

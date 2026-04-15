@@ -14,7 +14,7 @@ shift, our estimated probability is 0.45.
 import asyncio
 import json as _json
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from config import cfg, GEOPOLITICAL_SIGNALS
 from feeds import NewsItem
@@ -34,6 +34,21 @@ _OLLAMA_FAILURE_THRESHOLD = 3     # consecutive failures before circuit opens
 _OLLAMA_PROBE_INTERVAL    = 300   # seconds between recovery probes (5 min)
 _ollama_consecutive_failures: int = 0
 _ollama_down_until: float = 0.0   # monotonic — skip Ollama until this time
+
+
+def _llm_meta(
+    *,
+    attempted: bool,
+    status: str,
+    provider: str | None = None,
+    result_used: bool = False,
+) -> dict[str, Any]:
+    return {
+        "attempted": attempted,
+        "status": status,
+        "provider": provider,
+        "result_used": result_used,
+    }
 
 
 def _extract_json(text: str) -> dict:
@@ -345,7 +360,7 @@ async def _ollama_ping() -> bool:
         return False
 
 
-async def _ollama_estimate(news, market):
+async def _ollama_estimate_detailed(news, market):
     """
     Call local Ollama server (OpenAI-compatible endpoint).
     Returns (prob, confidence, reasoning) or None if Ollama is not running.
@@ -354,7 +369,7 @@ async def _ollama_estimate(news, market):
 
     if _ollama_down_until > 0.0:
         if time.monotonic() < _ollama_down_until:
-            return None  # circuit open -- not probe time yet
+            return None, _llm_meta(attempted=True, status="ollama_circuit_open", provider="ollama")
         # Probe window: run a cheap ping before committing to 60s inference.
         # A failed ping just extends the timer without incrementing the failure
         # counter -- prevents probes from keeping the circuit permanently open.
@@ -364,7 +379,7 @@ async def _ollama_estimate(news, market):
                 "Ollama probe (ping) failed -- circuit stays open for %.0fm",
                 _OLLAMA_PROBE_INTERVAL / 60,
             )
-            return None
+            return None, _llm_meta(attempted=True, status="ollama_probe_failed", provider="ollama")
         log.info(
             "Ollama ping succeeded after %d failures -- attempting inference",
             _ollama_consecutive_failures,
@@ -394,7 +409,7 @@ async def _ollama_estimate(news, market):
             ) as resp:
                 if resp.status != 200:
                     log.debug("Ollama returned HTTP %d", resp.status)
-                    return None
+                    return None, _llm_meta(attempted=True, status="ollama_http_error", provider="ollama")
                 data = await resp.json()
 
         text   = data["choices"][0]["message"]["content"].strip()
@@ -406,7 +421,12 @@ async def _ollama_estimate(news, market):
             _ollama_down_until = 0.0
         log.debug("Ollama: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
                   direction, magnitude, confidence, prob, market.ticker)
-        return prob, confidence, reasoning, direction, magnitude
+        return (prob, confidence, reasoning, direction, magnitude), _llm_meta(
+            attempted=True,
+            status="ollama_success",
+            provider="ollama",
+            result_used=True,
+        )
 
     except aiohttp.ClientConnectorError:
         _ollama_consecutive_failures += 1
@@ -418,7 +438,7 @@ async def _ollama_estimate(news, market):
             )
         else:
             log.debug("Ollama not running -- falling back to keyword scoring")
-        return None
+        return None, _llm_meta(attempted=True, status="ollama_unavailable", provider="ollama")
     except asyncio.TimeoutError:
         _ollama_consecutive_failures += 1
         if _ollama_consecutive_failures >= _OLLAMA_FAILURE_THRESHOLD:
@@ -429,25 +449,25 @@ async def _ollama_estimate(news, market):
             )
         else:
             log.warning("Ollama estimation failed: timed out after 60s (model loading or CPU overloaded)")
-        return None
+        return None, _llm_meta(attempted=True, status="ollama_timeout", provider="ollama")
     except _json.JSONDecodeError as exc:
         log.warning("Ollama estimation failed: invalid JSON in response -- %s", exc)
-        return None
+        return None, _llm_meta(attempted=True, status="ollama_parse_error", provider="ollama")
     except ValueError as exc:
         log.warning("Ollama estimation failed: %s", exc)
-        return None
+        return None, _llm_meta(attempted=True, status="ollama_parse_error", provider="ollama")
     except Exception as exc:
         log.warning("Ollama estimation failed: %s (%s)", exc, type(exc).__name__)
-        return None
+        return None, _llm_meta(attempted=True, status="ollama_error", provider="ollama")
 
 
-async def _anthropic_estimate(news, market):
+async def _anthropic_estimate_detailed(news, market):
     """
     Call Anthropic Claude API (fallback if Ollama unavailable).
     Returns None if ANTHROPIC_API_KEY is not set or the call fails.
     """
     if not cfg.anthropic_api_key:
-        return None
+        return None, _llm_meta(attempted=False, status="anthropic_unavailable", provider="anthropic")
 
     try:
         import anthropic
@@ -465,17 +485,22 @@ async def _anthropic_estimate(news, market):
         prob, confidence, reasoning, direction, magnitude = _parse_llm_response(parsed, market)
         log.debug("Anthropic: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
                   direction, magnitude, confidence, prob, market.ticker)
-        return prob, confidence, reasoning, direction, magnitude
+        return (prob, confidence, reasoning, direction, magnitude), _llm_meta(
+            attempted=True,
+            status="anthropic_success",
+            provider="anthropic",
+            result_used=True,
+        )
 
     except ImportError:
         log.warning("anthropic package not installed -- Anthropic estimation disabled")
-        return None
+        return None, _llm_meta(attempted=True, status="anthropic_import_error", provider="anthropic")
     except Exception as exc:
         log.warning("Anthropic estimation failed: %s", exc)
-        return None
+        return None, _llm_meta(attempted=True, status="anthropic_error", provider="anthropic")
 
 
-async def llm_estimate(news, market):
+async def llm_estimate_detailed(news, market):
     """
     Best-available LLM estimate. Tries Ollama first (free, local, no rate
     limits), then Anthropic (requires ANTHROPIC_API_KEY). Returns None if
@@ -485,10 +510,24 @@ async def llm_estimate(news, market):
     of how many consumer workers are active.
     """
     async with _LLM_SEMAPHORE:
-        result = await _ollama_estimate(news, market)
+        result, meta = await _ollama_estimate_detailed(news, market)
         if result:
-            return result
-        return await _anthropic_estimate(news, market)
+            return result, meta
+        anthropic_result, anthropic_meta = await _anthropic_estimate_detailed(news, market)
+        if anthropic_result:
+            return anthropic_result, anthropic_meta
+        if anthropic_meta["attempted"]:
+            return None, anthropic_meta
+        return None, meta if meta["attempted"] else _llm_meta(
+            attempted=False,
+            status="no_provider_available",
+            provider=None,
+        )
+
+
+async def llm_estimate(news, market):
+    result, _meta = await llm_estimate_detailed(news, market)
+    return result
 
 
 # ── Combined estimator ────────────────────────────────────────────────────────
@@ -523,23 +562,8 @@ async def estimate_probability(
         combined_text, keyword_stats=keyword_stats, series_ticker=series_ticker
     )
 
-    if not keywords:
-        # News doesn't seem related to this market
-        trade_log.log_signal_analysis_detail(
-            ticker=market.ticker,
-            source=news.source,
-            headline=news.headline,
-            method="keyword_gate",
-            keywords=[],
-            keyword_contributions=[],
-            base_probability=base_probability,
-            final_probability=market.yes_prob,
-            market_price=market.yes_prob,
-        )
-        return market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", None, None, None
-
     # Try LLM if available
-    llm_result = await llm_estimate(news, market)
+    llm_result, llm_meta = await llm_estimate_detailed(news, market)
     if llm_result:
         llm_prob, llm_confidence, llm_reasoning, llm_direction, llm_magnitude = llm_result
         # Use LLM probability directly -- keywords only gate the match, not the estimate.
@@ -563,8 +587,31 @@ async def estimate_probability(
             llm_direction=llm_direction,
             llm_magnitude=llm_magnitude,
             llm_confidence=llm_confidence,
+            llm_attempted=llm_meta["attempted"],
+            llm_result_used=True,
+            llm_result_status=llm_meta["status"],
+            llm_provider=llm_meta["provider"],
         )
         return llm_prob, llm_confidence, keywords, reasoning, llm_direction, llm_magnitude, llm_confidence
+
+    if not keywords:
+        # No keyword support and no LLM estimate available: stop here.
+        trade_log.log_signal_analysis_detail(
+            ticker=market.ticker,
+            source=news.source,
+            headline=news.headline,
+            method="keyword_gate",
+            keywords=[],
+            keyword_contributions=[],
+            base_probability=base_probability,
+            final_probability=market.yes_prob,
+            market_price=market.yes_prob,
+            llm_attempted=llm_meta["attempted"],
+            llm_result_used=False,
+            llm_result_status=llm_meta["status"],
+            llm_provider=llm_meta["provider"],
+        )
+        return market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", None, None, None
 
     # Keyword only
     confidence = min(0.7, 0.3 + 0.05 * len(keywords))   # more keywords -> more confident
@@ -578,5 +625,9 @@ async def estimate_probability(
         base_probability=base_probability,
         final_probability=kw_prob,
         market_price=market.yes_prob,
+        llm_attempted=llm_meta["attempted"],
+        llm_result_used=False,
+        llm_result_status=llm_meta["status"],
+        llm_provider=llm_meta["provider"],
     )
     return kw_prob, confidence, keywords, kw_reasoning, None, None, None

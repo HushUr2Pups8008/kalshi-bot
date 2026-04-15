@@ -94,7 +94,7 @@ EARLY_MAX_NEWS_AGE_BY_SOURCE: dict[str, int] = {
 # NOTE: AP feeds are configured in RSS_FEEDS but their source string is unconfirmed
 # (never observed in trades.jsonl). Add when string is confirmed from live logs.
 SOURCE_PRIORITY_TIERS: dict[str, int] = {
-    "Reuters": 1,   # confirmed source string
+    "Reuters": 1,  # confirmed source string
     "BBC News": 1,  # confirmed source string (currently disabled -- pre-wired for re-enable)
 }
 
@@ -580,9 +580,12 @@ GEOPOLITICAL_SIGNALS = [
             "troops deployed",
             "offensive launched",
             # Natural-language variants observed missing from keyword gate (2026-04-12)
-            "war with",       # "War With Iran is Not Yet Over" -- was missed
-            "at war",         # "at war with"
-            "airstrikes",     # standard wire-service military phrasing
+            "war with",  # "War With Iran is Not Yet Over" -- was missed
+            "at war",  # "at war with"
+            "airstrikes",  # standard wire-service military phrasing
+            # Phase 7.1 supervised promotion (shadow-validated, 2026-04-13)
+            "strait hormuz",
+            "hormuz blockade",
         ],
         "direction": "yes",
         "strength": 0.15,
@@ -600,8 +603,8 @@ GEOPOLITICAL_SIGNALS = [
             # group. "peace talks fail" would get NO direction in keyword-only fallback,
             # which is wrong. Failure phrasing is covered by the negotiations-failure group
             # (YES). Resumption is covered by "talks resume" below.
-            "truce",          # informal ceasefire, common in wire copy
-            "talks resume",   # resumption of dialogue after breakdown
+            "truce",  # informal ceasefire, common in wire copy
+            "talks resume",  # resumption of dialogue after breakdown
         ],
         "direction": "no",
         "strength": 0.12,
@@ -660,7 +663,7 @@ GEOPOLITICAL_SIGNALS = [
             "summit agreement",
             "deal signed",
             "agreement reached",  # "agreement reached after talks"
-            "deal reached",       # "deal reached between"
+            "deal reached",  # "deal reached between"
         ],
         "direction": "no",
         "strength": 0.07,

@@ -6,6 +6,55 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.27.0] - 2026-04-15
+
+### Added
+- `analysis/signal_analyzer.py`: `llm_estimate_detailed()` returns `(result, meta)` with structured
+  LLM observability metadata (`attempted`, `status`, `provider`, `result_used`). Backward-compat
+  `llm_estimate()` wrapper preserved. Internal `_llm_meta()` helper centralises metadata construction.
+- `analysis/signal_analyzer.py`: LLM is now attempted BEFORE the keyword gate. Headlines without
+  keyword matches can now generate signals if the LLM finds them relevant. When LLM is unavailable,
+  behavior falls back to the original keyword gate. This enables LLM-driven signals on headlines
+  that keyword scoring alone would have suppressed.
+- `utils/logger.py`: `log_signal_analysis_detail()` gains four optional fields (`llm_attempted`,
+  `llm_result_used`, `llm_result_status`, `llm_provider`) written to `SIGNAL_ANALYSIS_DETAIL` events
+  in `trades.jsonl` for downstream observability.
+- `scripts/signal_edge_diagnostics.py`: LLM Path Observability section in the report --
+  `llm_attempted`, `llm_result_used`, `llm_fallback`, and per-status counts surfaced from
+  `SIGNAL_ANALYSIS_DETAIL` events.
+- `analysis/market_matcher.py`: `_structure_quality_flags()` extracted from `_match_quality_flags()`
+  so structural flags can be used for pre-threshold penalty scoring.
+- `analysis/market_matcher.py`: `_weak_match_penalty_multiplier()` applies a 10-25% score penalty
+  to structurally weak matches (single named entity + minimal overlap) before thresholding. Penalty
+  is applied before the `min_score` gate, allowing it to suppress genuinely weak matches cleanly.
+- `analysis/market_matcher.py`: `_is_excluded_test_market()` filters KXTEST-prefixed markets from
+  both geo-series and full-market cache fetches, preventing test markets from entering shared state.
+- `scripts/daily_review.py`: Refactored from subprocess runner to direct module import. Report now
+  follows the observable pipeline flow (Ingestion -> Matching -> Analysis -> Edge -> Execution)
+  instead of a flat list of subscript outputs.
+- `scripts/freshness_diagnostics.py`: `--show-all` flag; `bucket_sources()` segments sources into
+  Fast/Operational, Near Threshold, Chronically Late, Dead, and Insufficient Data buckets; hidden
+  long tail suppressed by default to reduce noise. `format_compact_rows()` replaces the verbose
+  `format_rows()` for operational summary sections.
+- `scripts/keyword_feedback.py`: Phase 5 keyword feedback audit (new script, surface missed-keyword
+  candidate phrases for human review from `ANALYSIS_REJECTED(no_keywords)` corpus).
+- `scripts/keyword_promotion_report.py`: Passive governance layer over shadow evaluation --
+  produces explicit Promote / Watch / Reject recommendations for handpicked shadow phrases.
+- `scripts/pipeline_impact_audit.py`: Before/after audit for recent pipeline-quality changes;
+  compares current window against the immediately preceding equal-length window.
+
+### Changed
+- `config.py`: Promoted `strait hormuz` and `hormuz blockade` to live `GEOPOLITICAL_SIGNALS`
+  (shadow-validated via Phase 6A/6B; 9 and 5 miss-corpus hits respectively, multi-source,
+  multi-ticker, no concentration flag). Minor inline comment whitespace fixes throughout.
+- `.gitignore`: Added `tests/_tmp_*.jsonl` to exclude stray flat test-fixture files alongside
+  the existing `tests/_tmp_*/` directory exclusion.
+
+### Fixed
+- `analysis/signal_analyzer.py`: `_ollama_estimate_detailed()` and `_anthropic_estimate_detailed()`
+  now return structured meta on every exit path (circuit open, probe fail, HTTP error, timeout,
+  parse error, unavailable) rather than bare `None`, so callers always have observability context.
+
 ## [0.26.3] - 2026-04-12
 
 ### Added

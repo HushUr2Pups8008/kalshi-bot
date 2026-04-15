@@ -256,6 +256,73 @@ class TestFindCandidates:
         assert "single_named_entity_only" in payload["heuristic_flags"]
         assert payload["matched_tokens"] == ["trump"]
 
+    @pytest.mark.asyncio
+    async def test_single_named_entity_match_is_penalized_below_threshold(self, matcher, monkeypatch):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
+        markets = [
+            _make_market("KXTRUMP-25A", "Will Trump order military action under the 25th Amendment this year?"),
+        ]
+        matcher._cache.get_markets = AsyncMock(return_value=markets)
+        news = _make_news("Trump says Iran talks have collapsed again")
+
+        with pytest.MonkeyPatch.context() as mp:
+            from analysis import market_matcher as mm
+            calls = []
+            mp.setattr(mm.trade_log, "log_match_diagnostic", lambda **kwargs: calls.append(kwargs))
+            mp.setattr(mm, "_similarity", lambda *_args, **_kwargs: 0.07)
+            mp.setattr(mm, "_days_to_close", lambda *_args, **_kwargs: None)
+            results = await matcher.find_candidates(news)
+
+        assert results == []
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_strong_multi_token_match_is_not_penalized(self, matcher):
+        markets = [
+            _make_market("KXUKR-1", "Will Russia invade Ukraine in 2026?"),
+        ]
+        matcher._cache.get_markets = AsyncMock(return_value=markets)
+        news = _make_news("Russia launches new attack on Ukraine border")
+
+        results = await matcher.find_candidates(news)
+
+        assert results
+        assert results[0][0].ticker == "KXUKR-1"
+
+
+class TestMarketCacheTestTickerExclusion:
+    def test_fetch_geo_markets_excludes_kxtest_tickers(self):
+        rest = MagicMock()
+        rest.get_all_series.return_value = [
+            {"ticker": "KXIRAN", "title": "Iran"},
+        ]
+        rest.get_markets.return_value = ([
+            _make_market("KXTEST-25DEC31", "Will test market resolve yes?"),
+            _make_market("KXIRAN-1", "Will Iran close the Strait of Hormuz in 2026?", series_ticker="KXIRAN"),
+        ], None)
+
+        matcher = MarketMatcher(rest)
+
+        markets, series_count = matcher._cache._fetch_geo_markets()
+
+        assert series_count == 1
+        assert [m.ticker for m in markets] == ["KXIRAN-1"]
+
+    def test_fetch_all_markets_excludes_kxtest_tickers(self):
+        rest = MagicMock()
+        rest.get_markets.side_effect = [
+            ([
+                _make_market("KXTEST-25DEC31", "Will test market resolve yes?"),
+                _make_market("KXNBA-1", "Will the Nuggets win tonight?", series_ticker="KXNBA"),
+            ], None),
+        ]
+
+        matcher = MarketMatcher(rest)
+
+        markets = matcher._cache._fetch_all_markets()
+
+        assert [m.ticker for m in markets] == ["KXNBA-1"]
+
 
 # ---------------------------------------------------------------------------
 # Low-quality match suppression

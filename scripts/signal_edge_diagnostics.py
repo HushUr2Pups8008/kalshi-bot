@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from datetime import datetime, time, timezone
 from pathlib import Path
 from statistics import median
@@ -292,6 +292,12 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             "duplicate": 0,
             "other": 0,
         },
+        "llm_observability": {
+            "attempted": 0,
+            "result_used": 0,
+            "fallback": 0,
+            "status_counts": Counter(),
+        },
         "live_execution_attribution_limited": False,
         "audit_rows": [],
         "by_source": [],
@@ -345,6 +351,10 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                     "method": str(record.get("method") or "").strip() or None,
                     "llm_direction": str(record.get("llm_direction") or "").strip() or None,
                     "llm_magnitude": str(record.get("llm_magnitude") or "").strip() or None,
+                    "llm_attempted": (bool(record.get("llm_attempted")) if "llm_attempted" in record else None),
+                    "llm_result_used": (bool(record.get("llm_result_used")) if "llm_result_used" in record else None),
+                    "llm_result_status": str(record.get("llm_result_status") or "").strip() or None,
+                    "llm_provider": str(record.get("llm_provider") or "").strip() or None,
                     "estimated_probability": safe_float(record.get("final_probability")),
                     "market_price": safe_float(record.get("market_price")),
                     "edge": None,
@@ -412,6 +422,14 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
     )
 
     for row in rows:
+        if row.get("llm_attempted") is True:
+            stats["llm_observability"]["attempted"] += 1
+        if row.get("llm_result_used") is True:
+            stats["llm_observability"]["result_used"] += 1
+        if row.get("llm_attempted") is True and not row.get("llm_result_used"):
+            stats["llm_observability"]["fallback"] += 1
+        if row.get("llm_result_status"):
+            stats["llm_observability"]["status_counts"][row["llm_result_status"]] += 1
         source = row["source"]
         ticker = row["ticker"]
         if source:
@@ -544,6 +562,14 @@ def print_summary(
     print(f"  Non-zero below-threshold  : {stats['skip_breakdown']['below_threshold']}")
     print(f"  Duplicate-position skips  : {stats['skip_breakdown']['duplicate']}")
     print(f"  Other skip reasons        : {stats['skip_breakdown']['other']}")
+
+    print()
+    print("LLM Path Observability")
+    print(f"  LLM attempted             : {stats['llm_observability']['attempted']}")
+    print(f"  LLM result used           : {stats['llm_observability']['result_used']}")
+    print(f"  LLM fallback              : {stats['llm_observability']['fallback']}")
+    for status, count in stats["llm_observability"]["status_counts"].most_common(5):
+        print(f"  status[{status}]          : {count}")
 
     print()
     print(f"Per-Event Edge Audit (most recent {recent})")

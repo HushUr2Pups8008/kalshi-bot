@@ -61,6 +61,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
     )
+    parser.add_argument(
+        "--show-all",
+        action="store_true",
+        help="Show dead / insufficient-data long-tail rows in addition to the default operational view",
+    )
     return parser.parse_args()
 
 
@@ -291,20 +296,14 @@ def fmt_seconds(value: float | None) -> str:
     return f"{value:.0f}s"
 
 
-def format_rows(rows: list[dict[str, Any]], top: int) -> list[str]:
+def format_compact_rows(rows: list[dict[str, Any]], top: int) -> list[str]:
     if not rows:
         return ["  (none)"]
 
     shown = rows[:top]
     source_width = max(len(row["source"]) for row in shown)
     obs_width = max(len(str(row["observed_records"])) for row in shown)
-    stale_width = max(len(str(row["early_stale_drops"])) for row in shown)
     fresh_width = max(len(str(row["fresh_passes"])) for row in shown)
-    age_count_width = max(len(str(row["age_samples_count"])) for row in shown)
-    c60_width = max(len(str(row["within_60s"])) for row in shown)
-    c300_width = max(len(str(row["within_300s"])) for row in shown)
-    o300_width = max(len(str(row["over_300s"])) for row in shown)
-    o900_width = max(len(str(row["over_900s"])) for row in shown)
     label_width = max(len(str(row["interpretation"])) for row in shown)
 
     lines = []
@@ -313,20 +312,85 @@ def format_rows(rows: list[dict[str, Any]], top: int) -> list[str]:
             "  "
             f"{row['source']:<{source_width}}  "
             f"obs={row['observed_records']:>{obs_width}}  "
-            f"early_stale={row['early_stale_drops']:>{stale_width}}  "
             f"fresh_pass={row['fresh_passes']:>{fresh_width}}  "
             f"stale_rate={fmt_pct(row['stale_rate'])}  "
-            f"age_samples={row['age_samples_count']:>{age_count_width}}  "
             f"median_age={fmt_seconds(row['median_age_seconds'])}  "
-            f"p90_age={fmt_seconds(row['p90_age_seconds'])}  "
             f"freshest={fmt_seconds(row['freshest_age_seconds'])}  "
-            f"<=60s={row['within_60s']:>{c60_width}}  "
-            f"<=300s={row['within_300s']:>{c300_width}}  "
-            f">300s={row['over_300s']:>{o300_width}}  "
-            f">900s={row['over_900s']:>{o900_width}}  "
             f"label={row['interpretation']:<{label_width}}"
         )
     return lines
+
+
+def is_dead_filtered_source(row: dict[str, Any]) -> bool:
+    stale_rate = row.get("stale_rate")
+    return (
+        stale_rate is not None
+        and stale_rate >= 0.999
+        and row.get("fresh_passes", 0) == 0
+        and row.get("within_300s", 0) == 0
+    )
+
+
+def operational_candidate(row: dict[str, Any]) -> bool:
+    return (
+        row["interpretation"] in {"near-threshold", "late but salvageable"}
+        and (row["fresh_passes"] > 0 or row["within_300s"] > 0)
+    )
+
+
+def bucket_sources(
+    rows: list[dict[str, Any]],
+    *,
+    show_all: bool,
+) -> dict[str, list[dict[str, Any]]]:
+    insufficient = [row for row in rows if row["interpretation"] == "insufficient data"]
+    dead = [row for row in rows if is_dead_filtered_source(row) and row["interpretation"] != "insufficient data"]
+    active_rows = [
+        row for row in rows
+        if row["interpretation"] != "insufficient data" and not is_dead_filtered_source(row)
+    ]
+
+    used_sources: set[str] = set()
+
+    fast_operational = sorted(
+        [row for row in active_rows if operational_candidate(row)],
+        key=freshest_rank,
+    )
+    used_sources.update(row["source"] for row in fast_operational)
+
+    near_threshold = sorted(
+        [
+            row for row in active_rows
+            if row["source"] not in used_sources and borderline_candidate(row)
+        ],
+        key=borderline_rank,
+    )
+    used_sources.update(row["source"] for row in near_threshold)
+
+    chronically_late = sorted(
+        [
+            row for row in active_rows
+            if row["source"] not in used_sources and strategy_misaligned_candidate(row)
+        ],
+        key=strategy_misaligned_rank,
+    )
+
+    buckets = {
+        "fast_operational": fast_operational,
+        "near_threshold": near_threshold,
+        "chronically_late": chronically_late,
+        "dead": sorted(dead, key=worst_offender_rank),
+        "insufficient": sorted(insufficient, key=lambda row: (-row["observed_records"], row["source"].lower())),
+    }
+    if show_all:
+        return buckets
+    return {
+        "fast_operational": fast_operational,
+        "near_threshold": near_threshold,
+        "chronically_late": chronically_late,
+        "dead": [],
+        "insufficient": [],
+    }
 
 
 def worst_offender_rank(row: dict[str, Any]) -> tuple[Any, ...]:
@@ -420,7 +484,14 @@ def strategy_misaligned_rank(row: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def print_summary(stats: dict[str, Any], top: int, min_observations: int, since: datetime | None, until: datetime | None) -> None:
+def print_summary(
+    stats: dict[str, Any],
+    top: int,
+    min_observations: int,
+    since: datetime | None,
+    until: datetime | None,
+    show_all: bool = False,
+) -> None:
     print("FRESHNESS DIAGNOSTICS")
     print(f"Path: {stats['path']}")
     if since or until:
@@ -447,46 +518,61 @@ def print_summary(stats: dict[str, Any], top: int, min_observations: int, since:
         for row in stats["sources"].values()
         if row["observed_records"] >= min_observations
     ]
-    eligible_rows.sort(key=lambda row: (-row["observed_records"], row["source"].lower()))
-
-    print()
-    print(f"Source Freshness Metrics (min {min_observations} observations)")
-    for line in format_rows(eligible_rows, top=max(top, len(eligible_rows))):
-        print(line)
-
-    print()
-    print(f"Worst Offenders (top {top})")
-    print("  Ranked by stale rate, then observation count, then poor age distribution.")
-    worst_rows = sorted(eligible_rows, key=worst_offender_rank)
-    for line in format_rows(worst_rows, top):
-        print(line)
-
-    print()
-    print(f"Borderline Sources (top {top})")
-    print("  Often just outside the 300s window; plausible candidates for future per-source policy review.")
-    borderline_rows = sorted(
-        [row for row in eligible_rows if borderline_candidate(row)],
-        key=borderline_rank,
+    buckets = bucket_sources(eligible_rows, show_all=show_all)
+    hidden_insufficient = sum(1 for row in eligible_rows if row["interpretation"] == "insufficient data")
+    hidden_dead = sum(
+        1
+        for row in eligible_rows
+        if is_dead_filtered_source(row) and row["interpretation"] != "insufficient data"
     )
-    for line in format_rows(borderline_rows, top):
+
+    print()
+    print("Operational Summary")
+    print(f"  Eligible sources (min {min_observations} obs) : {len(eligible_rows)}")
+    print(f"  Fast / Operational surfaced                    : {len(buckets['fast_operational'])}")
+    print(f"  Near Threshold surfaced                        : {len(buckets['near_threshold'])}")
+    print(f"  Chronically Late surfaced                      : {len(buckets['chronically_late'])}")
+    if show_all:
+        print(f"  Dead / Filtered Out surfaced                   : {len(buckets['dead'])}")
+        print(f"  Insufficient Data surfaced                     : {len(buckets['insufficient'])}")
+    else:
+        print(f"  Hidden 100%-stale dead sources                 : {hidden_dead}")
+        print(f"  Hidden insufficient-data sources               : {hidden_insufficient}")
+
+    print()
+    print(f"Fast / Operational (top {top})")
+    print("  Sources with some timely arrivals and the best odds of affecting live decisions.")
+    for line in format_compact_rows(buckets["fast_operational"], top):
         print(line)
 
     print()
-    print(f"Strategy-Misaligned Sources (top {top})")
+    print(f"Near Threshold (top {top})")
+    print("  Plausible candidates for future per-source policy review.")
+    for line in format_compact_rows(buckets["near_threshold"], top):
+        print(line)
+
+    print()
+    print(f"Chronically Late (top {top})")
     print("  High-confidence late sources that appear structurally incompatible with a 300s strategy.")
-    misaligned_rows = sorted(
-        [row for row in eligible_rows if strategy_misaligned_candidate(row)],
-        key=strategy_misaligned_rank,
-    )
-    for line in format_rows(misaligned_rows, top):
+    for line in format_compact_rows(buckets["chronically_late"], top):
         print(line)
 
-    print()
-    print(f"Freshest Sources (top {top})")
-    print("  Ranked by meaningful sample size, low stale rate, and low absolute ages.")
-    fresh_rows = sorted(eligible_rows, key=freshest_rank)
-    for line in format_rows(fresh_rows, top):
-        print(line)
+    if show_all:
+        print()
+        print(f"Dead / Filtered Out (top {top})")
+        print("  Hidden by default: 100%-stale, zero-fresh-pass sources with no timely evidence.")
+        for line in format_compact_rows(buckets["dead"], top):
+            print(line)
+
+        print()
+        print(f"Insufficient Data (top {top})")
+        print("  Hidden by default: rows without enough age-bearing evidence for operational ranking.")
+        for line in format_compact_rows(buckets["insufficient"], top):
+            print(line)
+    else:
+        print()
+        print("Hidden Long Tail")
+        print("  Use --show-all to inspect dead / filtered-out and insufficient-data sources.")
 
 
 def main() -> int:
@@ -513,6 +599,7 @@ def main() -> int:
         min_observations=max(1, args.min_observations),
         since=since,
         until=until,
+        show_all=args.show_all,
     )
     return 0
 

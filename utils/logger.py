@@ -485,6 +485,10 @@ class TradeLogger:
         llm_direction: str | None = None,
         llm_magnitude: str | None = None,
         llm_confidence: float | None = None,
+        llm_attempted: bool | None = None,
+        llm_result_used: bool | None = None,
+        llm_result_status: str | None = None,
+        llm_provider: str | None = None,
     ) -> None:
         record = {
             "type": "SIGNAL_ANALYSIS_DETAIL",
@@ -505,6 +509,14 @@ class TradeLogger:
             record["llm_magnitude"] = llm_magnitude
         if llm_confidence is not None:
             record["llm_confidence"] = round(llm_confidence, 4)
+        if llm_attempted is not None:
+            record["llm_attempted"] = llm_attempted
+        if llm_result_used is not None:
+            record["llm_result_used"] = llm_result_used
+        if llm_result_status is not None:
+            record["llm_result_status"] = llm_result_status
+        if llm_provider is not None:
+            record["llm_provider"] = llm_provider
         self._write(record)
 
     def log_match_diagnostic(
