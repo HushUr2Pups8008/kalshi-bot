@@ -24,6 +24,7 @@ _REAL_SQLITE_CONNECT = sqlite3.connect
 
 
 def _write_jsonl(path: Path, records) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     for record in records:
         if isinstance(record, str):
@@ -78,8 +79,49 @@ def _create_shared_memory_db(uri: str, rows: list[dict]) -> sqlite3.Connection:
             )
         conn.commit()
         return conn
+    except Exception:
+        conn.close()
+        raise
+
+
+def test_summarize_reads_partitioned_trade_root():
+    tmp = _make_tmp_dir()
+    try:
+        logs_root = tmp / "trades"
+        _write_jsonl(
+            logs_root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
+            [
+                {
+                    "type": "SIGNAL",
+                    "source": "Reuters",
+                    "ticker": "KX1",
+                    "ts": "2026-04-11T00:00:00+00:00",
+                },
+            ],
+        )
+        _write_jsonl(
+            logs_root / "live" / "trades.jsonl",
+            [
+                {
+                    "type": "EARLY_STALE_DROP",
+                    "reason": "stale_by_source_policy",
+                    "source": "Reuters",
+                    "ticker": "KX1",
+                    "ts": "2026-04-12T00:00:00+00:00",
+                },
+            ],
+        )
+
+        db_path = tmp / "missing_paper_trades.db"
+
+        stats = summarize(logs_root, db_path, since=None, until=None, exclude_test=False)
+
+        assert stats["log_meta"]["lines_total"] == 2
+        reuters = next(row for row in stats["rows"] if row["source"] == "Reuters")
+        assert reuters["signals"] == 1
+        assert reuters["early_stale_drops"] == 1
     finally:
-        pass
+        _cleanup_tmp_dir(tmp)
 
 
 def test_summarize_combines_log_and_db_metrics():

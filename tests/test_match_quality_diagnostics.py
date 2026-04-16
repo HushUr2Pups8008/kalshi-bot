@@ -25,6 +25,7 @@ def _cleanup_tmp_dir(path: Path) -> None:
 
 
 def _write_jsonl(path: Path, records) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     for record in records:
         if isinstance(record, str):
@@ -130,6 +131,49 @@ def test_summarize_respects_date_filter_and_missing_score_note():
         assert stats["match_records"] == 1
         assert stats["low_quality_matches"] == 0
         assert stats["match_score_available"] is False
+    finally:
+        _cleanup_tmp_dir(tmp)
+
+
+def test_summarize_reads_partitioned_trade_root():
+    tmp = _make_tmp_dir()
+    try:
+        root = tmp / "trades"
+        _write_jsonl(
+            root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
+            [
+                {
+                    "type": "MATCH_DIAGNOSTIC",
+                    "source": "Reuters",
+                    "headline": "Old item",
+                    "ticker": "KXOLD",
+                    "market_title": "Old market",
+                    "low_match_quality": False,
+                    "ts": "2026-04-11T12:00:00+00:00",
+                },
+            ],
+        )
+        _write_jsonl(
+            root / "live" / "trades.jsonl",
+            [
+                {
+                    "type": "MATCH_DIAGNOSTIC",
+                    "source": "AP",
+                    "headline": "New item",
+                    "ticker": "KXNEW",
+                    "market_title": "New market",
+                    "low_match_quality": True,
+                    "heuristic_flags": ["minimal_overlap"],
+                    "ts": "2026-04-12T12:00:00+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(root, since=None, until=None)
+
+        assert stats["lines_total"] == 2
+        assert stats["match_records"] == 2
+        assert stats["low_quality_matches"] == 1
     finally:
         _cleanup_tmp_dir(tmp)
 

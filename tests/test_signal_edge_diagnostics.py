@@ -24,6 +24,7 @@ def _cleanup_tmp_dir(path: Path) -> None:
 
 
 def _write_jsonl(path: Path, records) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     for record in records:
         if isinstance(record, str):
@@ -157,6 +158,49 @@ def test_summarize_builds_edge_audit_and_group_metrics():
         assert by_source["Reuters"]["opportunities"] == 1
         assert by_source["Reuters"]["avg_edge"] == 0.04
         assert by_source["NYT > World News"]["zero_edge"] == 1
+    finally:
+        _cleanup_tmp_dir(tmp)
+
+
+def test_summarize_reads_partitioned_trade_root():
+    tmp = _make_tmp_dir()
+    try:
+        root = tmp / "trades"
+        _write_jsonl(
+            root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
+            [
+                {
+                    "type": "SIGNAL_ANALYSIS_DETAIL",
+                    "ticker": "KXONE",
+                    "source": "Reuters",
+                    "headline": "Talks resume",
+                    "final_probability": 0.60,
+                    "market_price": 0.55,
+                    "ts": "2026-04-11T12:00:00+00:00",
+                },
+            ],
+        )
+        _write_jsonl(
+            root / "live" / "trades.jsonl",
+            [
+                {
+                    "type": "OPPORTUNITY",
+                    "ticker": "KXONE",
+                    "source": "Reuters",
+                    "headline": "Talks resume",
+                    "estimated_probability": 0.60,
+                    "market_yes_price": 0.55,
+                    "edge": 0.05,
+                    "ts": "2026-04-12T12:00:00+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(root, since=None, until=None)
+
+        assert stats["lines_total"] == 2
+        assert stats["counts"]["SIGNAL_ANALYSIS_DETAIL"] == 1
+        assert stats["counts"]["OPPORTUNITY"] == 1
     finally:
         _cleanup_tmp_dir(tmp)
 

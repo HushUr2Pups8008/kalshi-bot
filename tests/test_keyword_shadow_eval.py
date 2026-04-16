@@ -46,6 +46,7 @@ def _cleanup_tmp_dir(path: Path) -> None:
 
 
 def _write_jsonl(path: Path, records: list) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     for record in records:
         if isinstance(record, str):
@@ -75,6 +76,29 @@ def _other(headline: str) -> dict:
         "headline": headline,
         "ts": "2026-04-12T12:00:00+00:00",
     }
+
+
+def test_load_miss_corpus_reads_partitioned_trade_root():
+    tmp = _make_tmp_dir()
+    try:
+        root = tmp / "trades"
+        _write_jsonl(
+            root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
+            [_miss("Strait of Hormuz blockade threatens shipping", ticker="KX1")],
+        )
+        _write_jsonl(
+            root / "live" / "trades.jsonl",
+            [_other("Ignore me")],
+        )
+
+        records, total, malformed = load_miss_corpus(root, None, None, exclude_test=False)
+
+        assert total == 2
+        assert malformed == 0
+        assert len(records) == 1
+        assert records[0]["ticker"] == "KX1"
+    finally:
+        _cleanup_tmp_dir(tmp)
 
 
 # ---------------------------------------------------------------------------

@@ -23,6 +23,7 @@ def _cleanup_tmp_dir(path: Path) -> None:
 
 
 def _write_jsonl(path: Path, records) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     for record in records:
         if isinstance(record, str):
@@ -78,6 +79,47 @@ def test_summarize_collects_no_keyword_misses_and_candidate_phrases():
         assert phrases["talks collapse"]["category"] == "specific event phrase"
         assert phrases["talks collapse"]["review_bucket"] == "strongest specific candidates"
         assert phrases["talks collapse"]["candidate_score"] > phrases["iran war"]["candidate_score"]
+    finally:
+        _cleanup_tmp_dir(tmp)
+
+
+def test_summarize_reads_partitioned_trade_root():
+    tmp = _make_tmp_dir()
+    try:
+        root = tmp / "trades"
+        _write_jsonl(
+            root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
+            [
+                {
+                    "type": "ANALYSIS_REJECTED",
+                    "reason": "no_keywords",
+                    "source": "Reuters",
+                    "ticker": "KX1",
+                    "headline": "Hormuz blockade threat grows",
+                    "ts": "2026-04-11T00:00:00+00:00",
+                },
+            ],
+        )
+        _write_jsonl(
+            root / "live" / "trades.jsonl",
+            [
+                {
+                    "type": "SIGNAL_ANALYSIS_DETAIL",
+                    "method": "keyword_gate",
+                    "keywords": [],
+                    "source": "Reuters",
+                    "ticker": "KX1",
+                    "headline": "Hormuz blockade threat grows",
+                    "ts": "2026-04-12T00:00:00+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(root, since=None, until=None)
+
+        assert stats["lines_total"] == 2
+        assert stats["no_keyword_misses"] == 1
+        assert stats["corroborating_keyword_gate_records"] == 1
     finally:
         _cleanup_tmp_dir(tmp)
 

@@ -27,6 +27,7 @@ def local_tmp_dir():
 
 
 def _write_jsonl(path: Path, records) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     for record in records:
         if isinstance(record, str):
@@ -73,6 +74,29 @@ def test_summarize_skips_malformed_json_lines(local_tmp_dir):
     assert stats["lines_malformed"] == 2
     assert stats["records_kept"] == 1
     assert stats["event_counts"]["SIGNAL"] == 1
+
+
+def test_summarize_reads_partitioned_trade_root(local_tmp_dir):
+    root = local_tmp_dir / "trades"
+    _write_jsonl(
+        root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
+        [
+            {"type": "SIGNAL", "source": "Reuters", "ticker": "KXOLD", "ts": "2026-04-11T00:00:00+00:00"},
+        ],
+    )
+    _write_jsonl(
+        root / "live" / "trades.jsonl",
+        [
+            {"type": "SKIPPED", "reason": "cooldown", "source": "AP", "ticker": "KXNEW", "ts": "2026-04-12T00:00:00+00:00"},
+        ],
+    )
+
+    stats = summarize(root, since=None, until=None)
+
+    assert stats["lines_total"] == 2
+    assert stats["records_kept"] == 2
+    assert stats["event_counts"]["SIGNAL"] == 1
+    assert stats["event_counts"]["SKIPPED"] == 1
 
 
 def test_summarize_handles_missing_optional_fields_gracefully(local_tmp_dir):

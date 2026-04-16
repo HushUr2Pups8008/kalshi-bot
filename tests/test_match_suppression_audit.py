@@ -24,6 +24,7 @@ def _cleanup_tmp_dir(path: Path) -> None:
 
 
 def _write_jsonl(path: Path, records) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     for record in records:
         if isinstance(record, str):
@@ -88,6 +89,45 @@ def test_summarize_collects_safe_and_risky_counts():
         assert stats["by_source"]["NYT > World News"]["risky"] == 1
         assert stats["safe_examples"][0]["ticker"] == "KXMOCTRUMP25-26-APR24"
         assert stats["risky_examples"][0]["ticker"] == "KXTRUMPIRAN-26MAY01"
+    finally:
+        _cleanup_tmp_dir(tmp)
+
+
+def test_summarize_reads_partitioned_trade_root():
+    tmp = _make_tmp_dir()
+    try:
+        root = tmp / "trades"
+        _write_jsonl(
+            root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
+            [
+                {
+                    "type": "MATCH_SUPPRESSION_CANDIDATE",
+                    "source": "Reuters",
+                    "headline": "Iran update",
+                    "ticker": "KXSAFE",
+                    "matched_tokens": ["iran"],
+                    "ts": "2026-04-11T00:00:00+00:00",
+                },
+            ],
+        )
+        _write_jsonl(
+            root / "live" / "trades.jsonl",
+            [
+                {
+                    "type": "MATCH_SUPPRESSION_CANDIDATE",
+                    "source": "Reuters",
+                    "headline": "Trump Iran update",
+                    "ticker": "KXIRAN",
+                    "matched_tokens": ["iran"],
+                    "ts": "2026-04-12T00:00:00+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(root, since=None, until=None)
+
+        assert stats["lines_total"] == 2
+        assert stats["total_candidates"] == 2
     finally:
         _cleanup_tmp_dir(tmp)
 
