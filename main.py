@@ -1084,6 +1084,13 @@ class TradingBot:
                         models = [m["name"] for m in data.get("models", [])]
                         log.info("LLM: Ollama running | model=%s | available=%s",
                                  cfg.ollama_model, models)
+                        if models and cfg.ollama_model not in models:
+                            log.warning(
+                                "LLM: configured model '%s' not in Ollama available list %s"
+                                " -- every inference call will return 404;"
+                                " set OLLAMA_MODEL env var or run: ollama pull %s",
+                                cfg.ollama_model, models, cfg.ollama_model,
+                            )
                         return
         except Exception:
             pass

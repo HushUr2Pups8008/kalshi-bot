@@ -6,6 +6,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.27.2] - 2026-04-15
+
+### Fixed
+- `main.py`: `_check_llm_health()` now emits a WARNING at startup when the configured
+  `OLLAMA_MODEL` is not present in Ollama's available model list. Previously the mismatch
+  was visible in the INFO log (`model=qwen2.5:3b | available=['qwen2.5:7b']`) but silent --
+  every subsequent inference attempt returned HTTP 404 without any startup alert.
+- `config.py`: Changed `OLLAMA_MODEL` default from `qwen2.5:3b` to `qwen2.5:7b`. The 3b
+  model was never pulled on this machine; 7b has been the confirmed working model since the
+  initial Ollama setup. This prevents fresh-deploy regressions when the env var is not set.
+
+### Changed
+- `scripts/daily_review.py`: Section 3 (ANALYSIS) now includes a concise LLM path health
+  block: `LLM attempted`, `LLM result used` with success rate percentage, `LLM fallback to
+  keyword`, and a per-status breakdown (e.g. `ollama_http_error: 14`). Data comes from the
+  `llm_observability` dict already produced by `signal_edge_diagnostics.summarize()`.
+
+---
+
 ## [0.27.1] - 2026-04-15
 
 ### Fixed

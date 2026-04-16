@@ -934,7 +934,7 @@ class BotConfig:
         )
     )
     ollama_model: str = field(
-        default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+        default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
     )
 
     # Paper trading mode — True until explicitly confirmed via --go-live

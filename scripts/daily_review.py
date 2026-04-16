@@ -232,6 +232,22 @@ def build_daily_review(
     lines.append(f"  Keyword-gate exits               : {keyword_gate_rows}")
     lines.append(f"  Keyword fallback rows            : {keyword_rows}")
     lines.append(f"  LLM rows                         : {llm_rows}")
+    llm_obs = edge_stats.get("llm_observability", {})
+    llm_attempted = llm_obs.get("attempted", 0)
+    llm_result_used = llm_obs.get("result_used", 0)
+    llm_fallback = llm_obs.get("fallback", 0)
+    llm_status_counts = llm_obs.get("status_counts", Counter())
+    if llm_attempted:
+        success_rate = f"{llm_result_used / llm_attempted * 100:.0f}%"
+    else:
+        success_rate = "n/a"
+    lines.append(f"  LLM attempted                    : {llm_attempted}")
+    lines.append(f"  LLM result used                  : {llm_result_used}  (success rate: {success_rate})")
+    lines.append(f"  LLM fallback to keyword          : {llm_fallback}")
+    if llm_status_counts:
+        lines.append("  LLM status breakdown:")
+        for status, count in llm_status_counts.most_common():
+            lines.append(f"    {status}: {count}")
     lines.append(f"  Analysis rejections total        : {total_rejections}")
     for reason, count in analysis_rejections.most_common(top):
         lines.append(f"    rejected[{reason}] = {count}")
