@@ -6,6 +6,35 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.27.4] - 2026-04-15
+
+### Added
+- `analysis/signal_analyzer.py`: per-attempt LLM latency measurement. `_llm_meta()` now
+  accepts `latency_ms: int | None`; `_ollama_estimate_detailed()` wraps the HTTP request
+  with `time.monotonic()` and captures elapsed time on every return path (success, HTTP
+  error, timeout, connector error, parse error). `_anthropic_estimate_detailed()` does the
+  same around `client.messages.create()`.
+- `utils/logger.py`: `log_signal_analysis_detail()` accepts optional `llm_latency_ms: int | None`
+  and writes it to the `SIGNAL_ANALYSIS_DETAIL` JSON record when present. Non-LLM rows and
+  rows where the LLM was not reached (circuit open, no provider) do not emit the field.
+- `scripts/signal_edge_diagnostics.py`: `summarize()` collects `llm_latency_ms` from
+  `SIGNAL_ANALYSIS_DETAIL` rows into `llm_observability["latency_ms_samples"]`. New helpers
+  `_p95()` and `fmt_latency_stats()` compute avg / median / p95 / max / n and render them
+  as a single line. `print_summary()` surfaces latency stats in the LLM Path Observability
+  section.
+- `scripts/daily_review.py`: Section 3 (ANALYSIS) now includes `LLM latency` line showing
+  `avg / median / p95 / max / n` from the same samples collected by `signal_edge_diagnostics`.
+- `tests/test_llm_latency_observability.py`: 19 tests covering `_llm_meta` latency field,
+  `log_signal_analysis_detail` conditional write, `summarize()` sample collection, keyword-
+  only-with-latency rows, empty-log edge case, `fmt_latency_stats()` arithmetic, and `_p95()`
+  correctness.
+
+### Changed
+- `tests/test_signal_analyzer.py`: Updated two `assert_called_once_with()` assertions to
+  include `llm_latency_ms=None` following the new kwarg addition to `log_signal_analysis_detail`.
+
+---
+
 ## [0.27.3] - 2026-04-16
 
 ### Added

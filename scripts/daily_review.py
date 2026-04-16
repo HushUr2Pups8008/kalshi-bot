@@ -9,7 +9,11 @@ system flow from ingestion through execution.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
+import urllib.error
+import urllib.request
 from collections import Counter
 from datetime import datetime, time, timezone
 from pathlib import Path
@@ -110,6 +114,54 @@ def _top_source_rows(freshness_stats: dict[str, Any], *, limit: int) -> list[dic
         )
     )
     return rows[:limit]
+
+
+def _report_ollama_settings() -> tuple[str, str]:
+    env_values: dict[str, str] = {}
+    env_path = REPO_ROOT / ".env"
+    if env_path.exists():
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            env_values[key.strip()] = value.strip()
+    model = str(
+        os.getenv("OLLAMA_MODEL")
+        or env_values.get("OLLAMA_MODEL")
+        or "qwen2.5:7b"
+    ).strip()
+    base_url = str(
+        os.getenv("OLLAMA_BASE_URL")
+        or env_values.get("OLLAMA_BASE_URL")
+        or "http://localhost:11434/v1"
+    ).strip()
+    return model, base_url
+
+
+def _ollama_tags_url(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    return f"{base}/api/tags"
+
+
+def _ollama_runtime_summary() -> str:
+    configured, base_url = _report_ollama_settings()
+    try:
+        with urllib.request.urlopen(_ollama_tags_url(base_url), timeout=3) as response:
+            payload = json.load(response)
+        available = [
+            item.get("name")
+            for item in payload.get("models", [])
+            if item.get("name")
+        ]
+        if available:
+            health = "ok" if configured in available else "mismatch"
+            return f"configured={configured} health={health} available={available}"
+        return f"configured={configured} health=unknown available=[]"
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        return f"configured={configured} health=unreachable detail={exc.__class__.__name__}"
 
 
 def build_daily_review(
@@ -244,6 +296,9 @@ def build_daily_review(
     lines.append(f"  LLM attempted                    : {llm_attempted}")
     lines.append(f"  LLM result used                  : {llm_result_used}  (success rate: {success_rate})")
     lines.append(f"  LLM fallback to keyword          : {llm_fallback}")
+    lines.append(f"  Ollama runtime                   : {_ollama_runtime_summary()}")
+    latency_samples = llm_obs.get("latency_ms_samples", [])
+    lines.append(f"  LLM latency                      : {signal_edge_diagnostics.fmt_latency_stats(latency_samples)}")
     if llm_status_counts:
         lines.append("  LLM status breakdown:")
         for status, count in llm_status_counts.most_common():

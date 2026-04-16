@@ -368,6 +368,7 @@ class TestEstimateProbability:
             llm_result_used=True,
             llm_result_status="ollama_success",
             llm_provider="ollama",
+            llm_latency_ms=None,
         )
 
     @pytest.mark.asyncio
@@ -408,6 +409,7 @@ class TestEstimateProbability:
             llm_result_used=False,
             llm_result_status="ollama_timeout",
             llm_provider="ollama",
+            llm_latency_ms=None,
         )
 
     @pytest.mark.asyncio

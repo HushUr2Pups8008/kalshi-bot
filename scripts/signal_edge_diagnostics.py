@@ -145,6 +145,29 @@ def fmt_median(values: list[float]) -> str:
     return f"{median(values):.4f}"
 
 
+def _p95(values: list[float]) -> float | None:
+    """Return approximate 95th percentile; requires at least 2 samples."""
+    if len(values) < 2:
+        return None
+    from statistics import quantiles
+    # quantiles(n=20) returns 19 cut-points; index 18 (0-based) = p95
+    return quantiles(sorted(values), n=20)[18]
+
+
+def fmt_latency_stats(samples: list[float]) -> str:
+    """Return 'avg=Xms  median=Xms  p95=Xms  max=Xms  n=N' or 'n/a'."""
+    if not samples:
+        return "n/a"
+    avg = sum(samples) / len(samples)
+    med = median(samples)
+    p95_val = _p95(samples)
+    mx = max(samples)
+    p95_str = f"{p95_val:.0f}ms" if p95_val is not None else "n/a"
+    return (
+        f"avg={avg:.0f}ms  median={med:.0f}ms  p95={p95_str}  max={mx:.0f}ms  n={len(samples)}"
+    )
+
+
 def default_group_metrics() -> dict[str, Any]:
     return {
         "signals": 0,
@@ -297,6 +320,7 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             "result_used": 0,
             "fallback": 0,
             "status_counts": Counter(),
+            "latency_ms_samples": [],
         },
         "live_execution_attribution_limited": False,
         "audit_rows": [],
@@ -355,6 +379,7 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                     "llm_result_used": (bool(record.get("llm_result_used")) if "llm_result_used" in record else None),
                     "llm_result_status": str(record.get("llm_result_status") or "").strip() or None,
                     "llm_provider": str(record.get("llm_provider") or "").strip() or None,
+                    "llm_latency_ms": safe_float(record.get("llm_latency_ms")),
                     "estimated_probability": safe_float(record.get("final_probability")),
                     "market_price": safe_float(record.get("market_price")),
                     "edge": None,
@@ -430,6 +455,8 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             stats["llm_observability"]["fallback"] += 1
         if row.get("llm_result_status"):
             stats["llm_observability"]["status_counts"][row["llm_result_status"]] += 1
+        if row.get("llm_latency_ms") is not None:
+            stats["llm_observability"]["latency_ms_samples"].append(row["llm_latency_ms"])
         source = row["source"]
         ticker = row["ticker"]
         if source:
@@ -570,6 +597,7 @@ def print_summary(
     print(f"  LLM fallback              : {stats['llm_observability']['fallback']}")
     for status, count in stats["llm_observability"]["status_counts"].most_common(5):
         print(f"  status[{status}]          : {count}")
+    print(f"  LLM latency               : {fmt_latency_stats(stats['llm_observability']['latency_ms_samples'])}")
 
     print()
     print(f"Per-Event Edge Audit (most recent {recent})")

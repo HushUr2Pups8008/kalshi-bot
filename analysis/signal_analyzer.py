@@ -42,12 +42,14 @@ def _llm_meta(
     status: str,
     provider: str | None = None,
     result_used: bool = False,
+    latency_ms: int | None = None,
 ) -> dict[str, Any]:
     return {
         "attempted": attempted,
         "status": status,
         "provider": provider,
         "result_used": result_used,
+        "latency_ms": latency_ms,
     }
 
 
@@ -404,6 +406,7 @@ async def _ollama_estimate_detailed(news, market):
         # and only when using the native /api/generate endpoint instead.
     }
 
+    t0 = time.monotonic()
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -412,6 +415,7 @@ async def _ollama_estimate_detailed(news, market):
                 timeout=aiohttp.ClientTimeout(total=60),
             ) as resp:
                 if resp.status != 200:
+                    latency_ms = int((time.monotonic() - t0) * 1000)
                     body_snippet = ""
                     try:
                         raw = await resp.text()
@@ -422,8 +426,9 @@ async def _ollama_estimate_detailed(news, market):
                         "Ollama HTTP %d from /v1/chat/completions -- body: %s",
                         resp.status, body_snippet,
                     )
-                    return None, _llm_meta(attempted=True, status="ollama_http_error", provider="ollama")
+                    return None, _llm_meta(attempted=True, status="ollama_http_error", provider="ollama", latency_ms=latency_ms)
                 data = await resp.json()
+                latency_ms = int((time.monotonic() - t0) * 1000)
 
         text   = data["choices"][0]["message"]["content"].strip()
         parsed = _extract_json(text)
@@ -439,9 +444,11 @@ async def _ollama_estimate_detailed(news, market):
             status="ollama_success",
             provider="ollama",
             result_used=True,
+            latency_ms=latency_ms,
         )
 
     except aiohttp.ClientConnectorError:
+        latency_ms = int((time.monotonic() - t0) * 1000)
         _ollama_consecutive_failures += 1
         if _ollama_consecutive_failures >= _OLLAMA_FAILURE_THRESHOLD:
             _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
@@ -451,8 +458,9 @@ async def _ollama_estimate_detailed(news, market):
             )
         else:
             log.debug("Ollama not running -- falling back to keyword scoring")
-        return None, _llm_meta(attempted=True, status="ollama_unavailable", provider="ollama")
+        return None, _llm_meta(attempted=True, status="ollama_unavailable", provider="ollama", latency_ms=latency_ms)
     except asyncio.TimeoutError:
+        latency_ms = int((time.monotonic() - t0) * 1000)
         _ollama_consecutive_failures += 1
         if _ollama_consecutive_failures >= _OLLAMA_FAILURE_THRESHOLD:
             _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
@@ -462,16 +470,19 @@ async def _ollama_estimate_detailed(news, market):
             )
         else:
             log.warning("Ollama estimation failed: timed out after 60s (model loading or CPU overloaded)")
-        return None, _llm_meta(attempted=True, status="ollama_timeout", provider="ollama")
+        return None, _llm_meta(attempted=True, status="ollama_timeout", provider="ollama", latency_ms=latency_ms)
     except _json.JSONDecodeError as exc:
+        latency_ms = int((time.monotonic() - t0) * 1000)
         log.warning("Ollama estimation failed: invalid JSON in response -- %s", exc)
-        return None, _llm_meta(attempted=True, status="ollama_parse_error", provider="ollama")
+        return None, _llm_meta(attempted=True, status="ollama_parse_error", provider="ollama", latency_ms=latency_ms)
     except ValueError as exc:
+        latency_ms = int((time.monotonic() - t0) * 1000)
         log.warning("Ollama estimation failed: %s", exc)
-        return None, _llm_meta(attempted=True, status="ollama_parse_error", provider="ollama")
+        return None, _llm_meta(attempted=True, status="ollama_parse_error", provider="ollama", latency_ms=latency_ms)
     except Exception as exc:
+        latency_ms = int((time.monotonic() - t0) * 1000)
         log.warning("Ollama estimation failed: %s (%s)", exc, type(exc).__name__)
-        return None, _llm_meta(attempted=True, status="ollama_error", provider="ollama")
+        return None, _llm_meta(attempted=True, status="ollama_error", provider="ollama", latency_ms=latency_ms)
 
 
 async def _anthropic_estimate_detailed(news, market):
@@ -482,16 +493,18 @@ async def _anthropic_estimate_detailed(news, market):
     if not cfg.anthropic_api_key:
         return None, _llm_meta(attempted=False, status="anthropic_unavailable", provider="anthropic")
 
+    t0 = time.monotonic()
     try:
         import anthropic
 
-        client   = anthropic.AsyncAnthropic(api_key=cfg.anthropic_api_key)
+        client = anthropic.AsyncAnthropic(api_key=cfg.anthropic_api_key)
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=256,
             system=_LLM_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": _build_user_msg(news, market)}],
         )
+        latency_ms = int((time.monotonic() - t0) * 1000)
 
         text   = response.content[0].text.strip()
         parsed = _extract_json(text)
@@ -503,14 +516,16 @@ async def _anthropic_estimate_detailed(news, market):
             status="anthropic_success",
             provider="anthropic",
             result_used=True,
+            latency_ms=latency_ms,
         )
 
     except ImportError:
         log.warning("anthropic package not installed -- Anthropic estimation disabled")
         return None, _llm_meta(attempted=True, status="anthropic_import_error", provider="anthropic")
     except Exception as exc:
+        latency_ms = int((time.monotonic() - t0) * 1000)
         log.warning("Anthropic estimation failed: %s", exc)
-        return None, _llm_meta(attempted=True, status="anthropic_error", provider="anthropic")
+        return None, _llm_meta(attempted=True, status="anthropic_error", provider="anthropic", latency_ms=latency_ms)
 
 
 async def llm_estimate_detailed(news, market):
@@ -604,6 +619,7 @@ async def estimate_probability(
             llm_result_used=True,
             llm_result_status=llm_meta["status"],
             llm_provider=llm_meta["provider"],
+            llm_latency_ms=llm_meta.get("latency_ms"),
         )
         return llm_prob, llm_confidence, keywords, reasoning, llm_direction, llm_magnitude, llm_confidence
 
@@ -623,6 +639,7 @@ async def estimate_probability(
             llm_result_used=False,
             llm_result_status=llm_meta["status"],
             llm_provider=llm_meta["provider"],
+            llm_latency_ms=llm_meta.get("latency_ms"),
         )
         return market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", None, None, None
 
@@ -642,5 +659,6 @@ async def estimate_probability(
         llm_result_used=False,
         llm_result_status=llm_meta["status"],
         llm_provider=llm_meta["provider"],
+        llm_latency_ms=llm_meta.get("latency_ms"),
     )
     return kw_prob, confidence, keywords, kw_reasoning, None, None, None

@@ -489,6 +489,7 @@ class TradeLogger:
         llm_result_used: bool | None = None,
         llm_result_status: str | None = None,
         llm_provider: str | None = None,
+        llm_latency_ms: int | None = None,
     ) -> None:
         record = {
             "type": "SIGNAL_ANALYSIS_DETAIL",
@@ -517,6 +518,8 @@ class TradeLogger:
             record["llm_result_status"] = llm_result_status
         if llm_provider is not None:
             record["llm_provider"] = llm_provider
+        if llm_latency_ms is not None:
+            record["llm_latency_ms"] = llm_latency_ms
         self._write(record)
 
     def log_match_diagnostic(
