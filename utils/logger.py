@@ -13,8 +13,10 @@ File layout (logs/):
   app/errors.log               -- active WARNING+ log; same rotation scheme
   app/bot.log.YYYY-MM-DD       -- 90-day archive
   app/errors.log.YYYY-MM-DD
-  trades/trades.jsonl          -- structured trade records (monthly rotation)
-  trades/archive/              -- trades-YYYYMM.jsonl.gz (12-month retention)
+  trades/live/trades.jsonl     -- active structured trade records
+  trades/archive/              -- day-partitioned historical trade records
+  trades/trades.jsonl          -- legacy monolithic file retained temporarily
+                                  for validation / rollback confidence
   reports/                     -- report_YYYYMMDD.txt, analysis_*.txt
 
 Architecture:
@@ -27,6 +29,7 @@ Architecture:
 import json
 import logging
 import logging.handlers
+import os
 import shutil
 import time
 from datetime import datetime, timezone
@@ -40,16 +43,18 @@ from config import LOGS_DIR
 # ── Subdirectory layout ───────────────────────────────────────────────────────
 _LOG_APP_DIR     = LOGS_DIR / "app"
 _LOG_TRADES_DIR  = LOGS_DIR / "trades"
+_LOG_TRADES_LIVE_DIR = _LOG_TRADES_DIR / "live"
 _LOG_REPORTS_DIR = LOGS_DIR / "reports"
 _LOG_ARCHIVE_DIR = LOGS_DIR / "trades" / "archive"
 
-for _d in (_LOG_APP_DIR, _LOG_TRADES_DIR, _LOG_REPORTS_DIR, _LOG_ARCHIVE_DIR):
+for _d in (_LOG_APP_DIR, _LOG_TRADES_DIR, _LOG_TRADES_LIVE_DIR, _LOG_REPORTS_DIR, _LOG_ARCHIVE_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 # ── Log file paths ────────────────────────────────────────────────────────────
 APP_LOG_FILE   = _LOG_APP_DIR    / "bot.log"
 ERROR_LOG_FILE = _LOG_APP_DIR    / "errors.log"   # WARNING+ only -- quick triage
-TRADE_LOG_FILE = _LOG_TRADES_DIR / "trades.jsonl" # newline-delimited JSON
+LEGACY_TRADE_LOG_FILE = _LOG_TRADES_DIR / "trades.jsonl"  # temporary legacy read path during cutover validation
+TRADE_LOG_FILE = _LOG_TRADES_LIVE_DIR / "trades.jsonl"    # preferred active newline-delimited JSON target
 LOG_REPORTS_DIR = _LOG_REPORTS_DIR                # for paper_trader report output
 
 # ── Formatters ────────────────────────────────────────────────────────────────
@@ -209,17 +214,142 @@ def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:
 
 # ── Structured trade logger ───────────────────────────────────────────────────
 
+def _parse_trade_ts(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+class TradeLogStore:
+    """Manages active trade-log writes and day-based archive rotation.
+
+    Invariants:
+      - `live/trades.jsonl` is the only active append target for in-order writes.
+      - closed UTC days live under `archive/YYYY/MM/YYYY-MM-DD.jsonl`
+      - older out-of-order records are appended to their archive partition rather
+        than rotating the active live file backward in time
+      - the live file is truncated only after archive data has been durably
+        flushed, so a failed rotation cannot silently drop records
+    """
+
+    def __init__(
+        self,
+        root: Path = _LOG_TRADES_DIR,
+        live_path: Path = TRADE_LOG_FILE,
+        legacy_path: Path = LEGACY_TRADE_LOG_FILE,
+    ) -> None:
+        self._root = root
+        self._live_path = live_path
+        self._legacy_path = legacy_path
+        self._archive_root = root / "archive"
+        self._log = get_logger("trade_log_store")
+        self._live_path.parent.mkdir(parents=True, exist_ok=True)
+        self._archive_root.mkdir(parents=True, exist_ok=True)
+
+    def append(self, record: dict[str, Any]) -> None:
+        ts = _parse_trade_ts(record.get("ts"))
+        if ts is None:
+            ts = datetime.now(timezone.utc)
+            record["ts"] = ts.isoformat()
+        current_day = self._current_live_day()
+        record_day = ts.date()
+
+        if current_day is None or current_day == record_day:
+            self._append_line(self._live_path, json.dumps(record) + "\n")
+            return
+
+        if record_day < current_day:
+            self._log.warning(
+                "[TRADE_LOG] Out-of-order record for %s arrived while live file is %s; appending to archive",
+                record_day.isoformat(),
+                current_day.isoformat(),
+            )
+            self._append_line(self._archive_path_for_day(record_day), json.dumps(record) + "\n")
+            return
+
+        self._rotate_live_to_archive(current_day)
+        self._append_line(self._live_path, json.dumps(record) + "\n")
+
+    def _append_line(self, path: Path, line: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
+
+    def _archive_path_for_day(self, day: datetime.date) -> Path:
+        return self._archive_root / f"{day:%Y}" / f"{day:%m}" / f"{day:%Y-%m-%d}.jsonl"
+
+    def _rotate_live_to_archive(self, current_day: datetime.date) -> None:
+        archive_path = self._archive_path_for_day(current_day)
+        if archive_path.exists():
+            self._append_file(self._live_path, archive_path)
+            self._truncate_live()
+            return
+
+        try:
+            os.replace(self._live_path, archive_path)
+        except PermissionError:
+            # Windows can transiently reject a replace even after the write
+            # handle is closed. Copy durably first, then truncate the source.
+            self._append_file(self._live_path, archive_path)
+            self._truncate_live()
+
+    def _current_live_day(self) -> datetime.date | None:
+        return self._infer_day_from_file(self._live_path)
+
+    def _append_file(self, source: Path, dest: Path) -> None:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest, "a", encoding="utf-8", newline="\n") as dst:
+            with open(source, "r", encoding="utf-8") as src:
+                shutil.copyfileobj(src, dst)
+            dst.flush()
+            os.fsync(dst.fileno())
+
+    def _truncate_live(self) -> None:
+        with open(self._live_path, "w", encoding="utf-8", newline="\n"):
+            pass
+
+    def _infer_day_from_file(self, path: Path) -> datetime.date | None:
+        if not path.exists():
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                for raw_line in fh:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(record, dict):
+                        continue
+                    ts = _parse_trade_ts(record.get("ts"))
+                    if ts is not None:
+                        return ts.date()
+        except OSError:
+            return None
+        return None
+
+
 class TradeLogger:
-    """Appends structured JSON records to trades.jsonl for easy analysis."""
+    """Appends structured JSON records to the preferred live trade log for easy analysis."""
 
     def __init__(self, path: Path = TRADE_LOG_FILE):
         self._path = path
+        self._store = TradeLogStore(live_path=path)
         self._log  = get_logger("trade_logger")
 
     def _write(self, record: dict[str, Any]) -> None:
         record.setdefault("ts", datetime.now(timezone.utc).isoformat())
-        with open(self._path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
+        self._store.append(record)
 
     def log_signal(
         self,

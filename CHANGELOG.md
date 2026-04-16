@@ -6,6 +6,44 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.28.0] - 2026-04-16
+
+### Added
+- `utils/trade_log_reader.py`: Shared reader abstraction for trade logs with support for both
+  legacy monolithic `trades.jsonl` and new day-partitioned archive format. `iter_trade_records()`
+  yields structured records with date filtering. `TradeLogReadStats` tracks parse statistics.
+- `utils/app_log_reader.py`: Structured parser for `bot.log` with field extraction (`ts`, `level`,
+  `task`, `message`). `iter_app_log_records()` yields parsed records; `_parse_app_log_line()` 
+  handles individual lines.
+- `utils/logger.py`: `TradeLogStore` class for day-based archive rotation. Appends new records
+  to `logs/trades/live/trades.jsonl`; closes completed UTC days to `logs/trades/archive/YYYY/MM/DD.jsonl`.
+  Handles out-of-order records gracefully. Includes `_parse_trade_ts()` helper for timestamp normalization.
+
+### Changed
+- `utils/logger.py`: Added `LEGACY_TRADE_LOG_FILE` path (`logs/trades/trades.jsonl`) to support
+  backward-compatible access during cutover validation. File layout documentation updated to
+  reflect new partition strategy.
+- `main.py`: Log retention rules refactored to scan `logs/service/` directory for NSSM archives
+  (service_*, ollama_*) with 30-day TTL. Maintains backward compatibility with legacy paths in
+  `logs/` root.
+- 13 diagnostic scripts migrated to shared reader: `freshness_diagnostics.py`, `signal_edge_diagnostics.py`,
+  `match_quality_diagnostics.py`, `trade_log_summary.py`, `source_scorecard.py`, `decision_funnel_summary.py`,
+  `keyword_feedback.py`, `keyword_shadow_eval.py`, `match_suppression_audit.py`, `performance_analysis.py`,
+  `pipeline_impact_audit.py`. All now use `iter_trade_records()` instead of ad-hoc JSON parsing and file scanning.
+- `scripts/ollama_error_audit.py`: Refactored to use `app_log_reader` for structured line parsing.
+  Replaced ad-hoc regex with centralized `_parse_app_log_line()`. Simplifies archive handling via
+  `iter_app_log_records()` pattern.
+
+### Technical Details
+- Trade-log reader supports both single-file and directory paths transparently.
+- Day partitioning follows `YYYY/MM/DD.jsonl` convention under `logs/trades/archive/`.
+- Out-of-order records (older than live file date) are appended to their partition instead of
+  holding up the active log.
+- App log reader uses standardized timestamp parsing via `_parse_app_log_line()`.
+- All readers yield generators for memory efficiency on large logs.
+
+---
+
 ## [0.27.4] - 2026-04-15
 
 ### Added
