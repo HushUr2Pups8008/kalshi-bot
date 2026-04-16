@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,6 +70,19 @@ def _first_valid_ts(path: Path) -> datetime | None:
     return None
 
 
+def _is_legacy_root_file(file_path: Path, root: Path) -> bool:
+    """Return True when *file_path* is the legacy root trades.jsonl for *root*.
+
+    This intentionally avoids ``Path == Path`` comparisons. On Windows/Python 3.14
+    those comparisons can end up deep in pathlib's cached normcase machinery, and
+    this reader only needs a stable identity check for the legacy compatibility file.
+    """
+
+    return file_path.name == "trades.jsonl" and os.path.normcase(os.fspath(file_path.parent)) == os.path.normcase(
+        os.fspath(root)
+    )
+
+
 def _iter_records_from_file(path: Path, stats: TradeLogReadStats | None = None) -> Iterator[dict[str, Any]]:
     opener = gzip.open if path.suffix == ".gz" else open
     try:
@@ -126,7 +140,7 @@ def iter_trade_records(
             if (
                 live_cutover_ts is not None
                 and path.is_dir()
-                and file_path == (path / "trades.jsonl")
+                and _is_legacy_root_file(file_path, path)
                 and ts is not None
                 and ts >= live_cutover_ts
             ):

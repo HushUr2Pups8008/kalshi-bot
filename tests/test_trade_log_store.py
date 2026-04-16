@@ -197,6 +197,30 @@ def test_iter_trade_records_skips_legacy_overlap_when_live_exists():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_iter_trade_records_handles_legacy_and_live_without_path_equality():
+    root = _tmp_root()
+    try:
+        _write_jsonl(
+            root / "trades.jsonl",
+            [
+                {"type": "SIGNAL", "ts": "2026-04-15T23:59:00+00:00", "ticker": "LEGACY_KEEP"},
+                {"type": "SIGNAL", "ts": "2026-04-16T00:05:00+00:00", "ticker": "LEGACY_SKIP"},
+            ],
+        )
+        _write_jsonl(
+            root / "live" / "trades.jsonl",
+            [
+                {"type": "SIGNAL", "ts": "2026-04-16T00:05:00+00:00", "ticker": "LIVE"},
+            ],
+        )
+
+        rows = list(iter_trade_records(root))
+
+        assert [row["ticker"] for row in rows] == ["LEGACY_KEEP", "LIVE"]
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_iter_trade_records_skips_malformed_lines_and_filters_event_type():
     root = _tmp_root()
     try:
