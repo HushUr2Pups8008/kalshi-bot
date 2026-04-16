@@ -2,7 +2,7 @@
 Read-only keyword feedback audit for missed keyword-gate events.
 
 This script mines recent ANALYSIS_REJECTED(reason=no_keywords) records from
-logs/trades/trades.jsonl and surfaces repeated headline phrases as candidate
+the preferred trade-log root at logs/trades/ and surfaces repeated headline phrases as candidate
 keyword additions for human review.
 
 Notes:
@@ -11,21 +11,24 @@ Notes:
   - SIGNAL_ANALYSIS_DETAIL(method=keyword_gate, keywords=[]) is counted only as
     corroborating context, not as the primary mining corpus, to avoid double
     counting.
+  - The legacy monolithic logs/trades/trades.jsonl path is still supported
+    during the cutover validation window.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from collections import defaultdict
 from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
+from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "trades.jsonl"
+DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9']+")
 STOPWORDS = {
     "a",
@@ -145,7 +148,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--path",
         default=str(DEFAULT_LOG_PATH),
-        help="Path to trades.jsonl (default: logs/trades/trades.jsonl)",
+        help="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
     )
     parser.add_argument("--since", help="Inclusive start date in YYYY-MM-DD")
     parser.add_argument("--until", help="Inclusive end date in YYYY-MM-DD")
@@ -345,58 +348,42 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
         }
     )
 
-    if not path.exists():
-        return stats
+    read_stats = TradeLogReadStats()
+    for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
+        if exclude_test and is_test_record(record):
+            continue
 
-    with path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            stats["lines_total"] += 1
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                stats["lines_malformed"] += 1
-                continue
-            if not isinstance(record, dict):
-                stats["lines_malformed"] += 1
-                continue
+        stats["records_kept"] += 1
 
-            ts = parse_iso_ts(record.get("ts"))
-            if not in_window(ts, since, until):
-                continue
-            if exclude_test and is_test_record(record):
-                continue
+        event_type = str(record.get("type") or "").strip()
+        if event_type == "SIGNAL_ANALYSIS_DETAIL":
+            method = str(record.get("method") or "").strip()
+            keywords = record.get("keywords")
+            if method == "keyword_gate" and isinstance(keywords, list) and not keywords:
+                stats["corroborating_keyword_gate_records"] += 1
 
-            stats["records_kept"] += 1
+        if event_type != "ANALYSIS_REJECTED" or record.get("reason") != "no_keywords":
+            continue
 
-            event_type = str(record.get("type") or "").strip()
-            if event_type == "SIGNAL_ANALYSIS_DETAIL":
-                method = str(record.get("method") or "").strip()
-                keywords = record.get("keywords")
-                if method == "keyword_gate" and isinstance(keywords, list) and not keywords:
-                    stats["corroborating_keyword_gate_records"] += 1
+        headline = str(record.get("headline") or "").strip()
+        source = str(record.get("source") or "").strip()
+        ticker = str(record.get("ticker") or "").strip()
+        if not headline:
+            continue
 
-            if event_type != "ANALYSIS_REJECTED" or record.get("reason") != "no_keywords":
-                continue
+        stats["no_keyword_misses"] += 1
+        for phrase in iter_candidate_phrases(headline):
+            row = phrase_hits[phrase]
+            row["phrase"] = phrase
+            row["count"] += 1
+            row["sources"].add(source)
+            if ticker:
+                row["tickers"].add(ticker)
+            if headline not in row["examples"] and len(row["examples"]) < 5:
+                row["examples"].append(headline)
 
-            headline = str(record.get("headline") or "").strip()
-            source = str(record.get("source") or "").strip()
-            ticker = str(record.get("ticker") or "").strip()
-            if not headline:
-                continue
-
-            stats["no_keyword_misses"] += 1
-            for phrase in iter_candidate_phrases(headline):
-                row = phrase_hits[phrase]
-                row["phrase"] = phrase
-                row["count"] += 1
-                row["sources"].add(source)
-                if ticker:
-                    row["tickers"].add(ticker)
-                if headline not in row["examples"] and len(row["examples"]) < 5:
-                    row["examples"].append(headline)
+    stats["lines_total"] = read_stats.lines_total
+    stats["lines_malformed"] = read_stats.lines_malformed
 
     phrase_rows: list[dict[str, Any]] = []
     for row in phrase_hits.values():

@@ -2,7 +2,7 @@
 Read-only source scorecard for operator review.
 
 Combines source-attributed metrics from:
-  - logs/trades/trades.jsonl
+  - logs/trades/
   - data/paper_trades.db
 
 This report is intentionally conservative:
@@ -12,12 +12,15 @@ This report is intentionally conservative:
     paper_trades.db.
   - OPPORTUNITY and SKIPPED are not currently source-attributable from the log
     schema, so the report says so instead of guessing.
+
+The preferred source is logs/trades/. The legacy monolithic
+logs/trades/trades.jsonl path is still supported during the cutover
+validation window.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sqlite3
 import sys
 from collections import defaultdict
@@ -30,8 +33,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from config import DISABLED_NEWS_SOURCES, DISABLED_SOURCE_FAMILIES
+from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
-DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "trades.jsonl"
+DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
 DEFAULT_DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
 
 KNOWN_PUBLISHER_MARKERS = (
@@ -61,7 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--logs-path",
         default=str(DEFAULT_LOG_PATH),
-        help="Path to trades.jsonl (default: logs/trades/trades.jsonl)",
+        help="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
     )
     parser.add_argument(
         "--db-path",
@@ -222,49 +226,32 @@ def collect_log_metrics(
     metrics: dict[str, dict[str, Any]] = defaultdict(default_source_metrics)
     meta = {"lines_total": 0, "lines_malformed": 0, "records_kept": 0}
 
-    if not path.exists():
-        return {}, meta
+    read_stats = TradeLogReadStats()
+    for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
+        event_type = str(record.get("type") or "").strip()
+        source = str(record.get("source") or "").strip()
+        ticker = str(record.get("ticker") or "").strip()
 
-    with path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            meta["lines_total"] += 1
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                meta["lines_malformed"] += 1
-                continue
-            if not isinstance(record, dict):
-                meta["lines_malformed"] += 1
-                continue
+        if exclude_test and is_test_source_ticker(source, ticker):
+            continue
 
-            ts = parse_iso_ts(record.get("ts"))
-            if not in_window(ts, since, until):
-                continue
+        meta["records_kept"] += 1
 
-            event_type = str(record.get("type") or "").strip()
-            source = str(record.get("source") or "").strip()
-            ticker = str(record.get("ticker") or "").strip()
+        if not source:
+            continue
 
-            if exclude_test and is_test_source_ticker(source, ticker):
-                continue
+        row = metrics[source]
+        row["observed_records"] += 1
 
-            meta["records_kept"] += 1
+        if event_type == "EARLY_STALE_DROP" and str(record.get("reason") or "") == "stale_by_source_policy":
+            row["early_stale_drops"] += 1
+        elif event_type == "ANALYSIS_REJECTED" and str(record.get("reason") or "") == "stale_news":
+            row["analysis_stale_rejections"] += 1
+        elif event_type == "SIGNAL":
+            row["signals"] += 1
 
-            if not source:
-                continue
-
-            row = metrics[source]
-            row["observed_records"] += 1
-
-            if event_type == "EARLY_STALE_DROP" and str(record.get("reason") or "") == "stale_by_source_policy":
-                row["early_stale_drops"] += 1
-            elif event_type == "ANALYSIS_REJECTED" and str(record.get("reason") or "") == "stale_news":
-                row["analysis_stale_rejections"] += 1
-            elif event_type == "SIGNAL":
-                row["signals"] += 1
+    meta["lines_total"] = read_stats.lines_total
+    meta["lines_malformed"] = read_stats.lines_malformed
 
     return dict(metrics), meta
 

@@ -9,16 +9,17 @@ edge, and the final recorded outcome.
 from __future__ import annotations
 
 import argparse
-import json
 from collections import Counter, defaultdict, deque
 from datetime import datetime, time, timezone
 from pathlib import Path
 from statistics import median
 from typing import Any
 
+from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "trades.jsonl"
+DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
 RECENT_AUDIT_DEFAULT = 20
 
 
@@ -27,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--path",
         default=str(DEFAULT_LOG_PATH),
-        help="Path to trades.jsonl (default: logs/trades/trades.jsonl)",
+        help="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
     )
     parser.add_argument("--since", help="Inclusive start date in YYYY-MM-DD")
     parser.add_argument("--until", help="Inclusive end date in YYYY-MM-DD")
@@ -328,9 +329,6 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
         "by_ticker": [],
     }
 
-    if not path.exists():
-        return stats
-
     detail_rows: list[dict[str, Any]] = []
     opportunities: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -338,93 +336,81 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
     source_groups: dict[str, dict[str, Any]] = defaultdict(default_group_metrics)
     ticker_groups: dict[str, dict[str, Any]] = defaultdict(default_group_metrics)
 
-    with path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            stats["lines_total"] += 1
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                stats["lines_malformed"] += 1
-                continue
-            if not isinstance(record, dict):
-                stats["lines_malformed"] += 1
-                continue
+    read_stats = TradeLogReadStats()
+    for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
+        if exclude_test and is_test_record(record):
+            continue
 
-            ts = parse_iso_ts(record.get("ts"))
-            if not in_window(ts, since, until):
-                continue
-            if exclude_test and is_test_record(record):
-                continue
+        stats["records_kept"] += 1
+        event_type = str(record.get("type") or "").strip()
+        ts = parse_iso_ts(record.get("ts"))
 
-            stats["records_kept"] += 1
-            event_type = str(record.get("type") or "").strip()
+        if event_type == "SIGNAL_ANALYSIS_DETAIL":
+            stats["counts"]["SIGNAL_ANALYSIS_DETAIL"] += 1
+            detail_rows.append({
+                "ts": ts,
+                "signal_ts": ts,
+                "opportunity_ts": None,
+                "final_ts": None,
+                "ticker": str(record.get("ticker") or "").strip(),
+                "source": str(record.get("source") or "").strip(),
+                "headline": str(record.get("headline") or "").strip(),
+                "method": str(record.get("method") or "").strip() or None,
+                "llm_direction": str(record.get("llm_direction") or "").strip() or None,
+                "llm_magnitude": str(record.get("llm_magnitude") or "").strip() or None,
+                "llm_attempted": (bool(record.get("llm_attempted")) if "llm_attempted" in record else None),
+                "llm_result_used": (bool(record.get("llm_result_used")) if "llm_result_used" in record else None),
+                "llm_result_status": str(record.get("llm_result_status") or "").strip() or None,
+                "llm_provider": str(record.get("llm_provider") or "").strip() or None,
+                "llm_latency_ms": safe_float(record.get("llm_latency_ms")),
+                "estimated_probability": safe_float(record.get("final_probability")),
+                "market_price": safe_float(record.get("market_price")),
+                "edge": None,
+                "outcome": "signal only",
+                "skip_reason": None,
+            })
+        elif event_type == "SIGNAL":
+            stats["counts"]["SIGNAL"] += 1
+        elif event_type == "OPPORTUNITY":
+            stats["counts"]["OPPORTUNITY"] += 1
+            opportunities.append({
+                "ts": ts,
+                "ticker": str(record.get("ticker") or "").strip(),
+                "source": str(record.get("source") or "").strip(),
+                "headline": str(record.get("headline") or "").strip(),
+                "method": str(record.get("method") or "").strip() or None,
+                "llm_direction": str(record.get("llm_direction") or "").strip() or None,
+                "llm_magnitude": str(record.get("llm_magnitude") or "").strip() or None,
+                "estimated_probability": safe_float(record.get("estimated_probability")),
+                "market_yes_price": safe_float(record.get("market_yes_price")),
+                "edge": safe_float(record.get("edge")),
+            })
+        elif event_type == "SKIPPED":
+            stats["counts"]["SKIPPED"] += 1
+            skip_type = classify_skip_reason(record)
+            stats["skip_breakdown"][skip_type] += 1
+            skipped.append({
+                "ts": ts,
+                "ticker": str(record.get("ticker") or "").strip(),
+                "source": str(record.get("source") or "").strip(),
+                "headline": str(record.get("headline") or "").strip(),
+                "reason": str(record.get("reason") or "").strip(),
+                "skip_type": skip_type,
+            })
+        elif event_type == "PAPER_TRADE":
+            stats["counts"]["EXECUTED"] += 1
+            paper_trades.append({
+                "ts": ts,
+                "ticker": str(record.get("ticker") or "").strip(),
+                "source": str(record.get("signal_source") or "").strip(),
+                "headline": str(record.get("signal_headline") or "").strip(),
+            })
+        elif event_type == "LIVE_ORDER":
+            stats["counts"]["EXECUTED"] += 1
+            stats["live_execution_attribution_limited"] = True
 
-            if event_type == "SIGNAL_ANALYSIS_DETAIL":
-                stats["counts"]["SIGNAL_ANALYSIS_DETAIL"] += 1
-                detail_rows.append({
-                    "ts": ts,
-                    "signal_ts": ts,
-                    "opportunity_ts": None,
-                    "final_ts": None,
-                    "ticker": str(record.get("ticker") or "").strip(),
-                    "source": str(record.get("source") or "").strip(),
-                    "headline": str(record.get("headline") or "").strip(),
-                    "method": str(record.get("method") or "").strip() or None,
-                    "llm_direction": str(record.get("llm_direction") or "").strip() or None,
-                    "llm_magnitude": str(record.get("llm_magnitude") or "").strip() or None,
-                    "llm_attempted": (bool(record.get("llm_attempted")) if "llm_attempted" in record else None),
-                    "llm_result_used": (bool(record.get("llm_result_used")) if "llm_result_used" in record else None),
-                    "llm_result_status": str(record.get("llm_result_status") or "").strip() or None,
-                    "llm_provider": str(record.get("llm_provider") or "").strip() or None,
-                    "llm_latency_ms": safe_float(record.get("llm_latency_ms")),
-                    "estimated_probability": safe_float(record.get("final_probability")),
-                    "market_price": safe_float(record.get("market_price")),
-                    "edge": None,
-                    "outcome": "signal only",
-                    "skip_reason": None,
-                })
-            elif event_type == "SIGNAL":
-                stats["counts"]["SIGNAL"] += 1
-            elif event_type == "OPPORTUNITY":
-                stats["counts"]["OPPORTUNITY"] += 1
-                opportunities.append({
-                    "ts": ts,
-                    "ticker": str(record.get("ticker") or "").strip(),
-                    "source": str(record.get("source") or "").strip(),
-                    "headline": str(record.get("headline") or "").strip(),
-                    "method": str(record.get("method") or "").strip() or None,
-                    "llm_direction": str(record.get("llm_direction") or "").strip() or None,
-                    "llm_magnitude": str(record.get("llm_magnitude") or "").strip() or None,
-                    "estimated_probability": safe_float(record.get("estimated_probability")),
-                    "market_yes_price": safe_float(record.get("market_yes_price")),
-                    "edge": safe_float(record.get("edge")),
-                })
-            elif event_type == "SKIPPED":
-                stats["counts"]["SKIPPED"] += 1
-                skip_type = classify_skip_reason(record)
-                stats["skip_breakdown"][skip_type] += 1
-                skipped.append({
-                    "ts": ts,
-                    "ticker": str(record.get("ticker") or "").strip(),
-                    "source": str(record.get("source") or "").strip(),
-                    "headline": str(record.get("headline") or "").strip(),
-                    "reason": str(record.get("reason") or "").strip(),
-                    "skip_type": skip_type,
-                })
-            elif event_type == "PAPER_TRADE":
-                stats["counts"]["EXECUTED"] += 1
-                paper_trades.append({
-                    "ts": ts,
-                    "ticker": str(record.get("ticker") or "").strip(),
-                    "source": str(record.get("signal_source") or "").strip(),
-                    "headline": str(record.get("signal_headline") or "").strip(),
-                })
-            elif event_type == "LIVE_ORDER":
-                stats["counts"]["EXECUTED"] += 1
-                stats["live_execution_attribution_limited"] = True
+    stats["lines_total"] = read_stats.lines_total
+    stats["lines_malformed"] = read_stats.lines_malformed
 
     rows = attach_opportunities(detail_rows, opportunities)
     attach_outcomes(

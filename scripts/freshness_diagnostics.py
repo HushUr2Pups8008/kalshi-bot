@@ -1,7 +1,7 @@
 """
 Read-only source freshness / latency diagnostics for structured trade logs.
 
-Uses logs/trades/trades.jsonl to summarize which sources are systematically
+Uses the preferred trade-log root at logs/trades/ to summarize which sources are systematically
 arriving too late to be useful. This report is intentionally conservative:
 
   - Total observed items are counted from source-attributed structured records.
@@ -10,21 +10,26 @@ arriving too late to be useful. This report is intentionally conservative:
   - Publish-age statistics are only computed when age_seconds is present.
   - Historical windows may lack EARLY_FRESH_PASS, so some date ranges still have
     age coverage only for stale items.
+
+The preferred source is logs/trades/. The legacy monolithic
+logs/trades/trades.jsonl path is still supported during the cutover
+validation window.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 from collections import defaultdict
 from datetime import datetime, time, timezone
 from pathlib import Path
 from statistics import median
 from typing import Any
 
+from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "trades.jsonl"
+DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
 FRESHNESS_THRESHOLD_SECONDS = 300
 MIN_AGE_SAMPLES_FOR_STRONG_RANKING = 3
 
@@ -34,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--path",
         default=str(DEFAULT_LOG_PATH),
-        help="Path to trades.jsonl (default: logs/trades/trades.jsonl)",
+        help="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
     )
     parser.add_argument(
         "--since",
@@ -196,66 +201,49 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
 
     metrics: dict[str, dict[str, Any]] = defaultdict(default_source_metrics)
 
-    if not path.exists():
-        stats["sources"] = {}
-        return stats
+    read_stats = TradeLogReadStats()
+    for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
+        if exclude_test and is_test_record(record):
+            continue
 
-    with path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            stats["lines_total"] += 1
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                stats["lines_malformed"] += 1
-                continue
-            if not isinstance(record, dict):
-                stats["lines_malformed"] += 1
-                continue
+        stats["records_kept"] += 1
 
-            ts = parse_iso_ts(record.get("ts"))
-            if not in_window(ts, since, until):
-                continue
-            if exclude_test and is_test_record(record):
-                continue
+        source = str(record.get("source") or record.get("signal_source") or "").strip()
+        if not source:
+            continue
 
-            stats["records_kept"] += 1
+        row = metrics[source]
+        row["observed_records"] += 1
 
-            source = str(record.get("source") or record.get("signal_source") or "").strip()
-            if not source:
-                continue
+        event_type = str(record.get("type") or "").strip()
+        if event_type == "EARLY_STALE_DROP":
+            row["early_stale_drops"] += 1
+        elif event_type == "EARLY_FRESH_PASS":
+            row["fresh_passes"] += 1
+        else:
+            continue
 
-            row = metrics[source]
-            row["observed_records"] += 1
+        age = safe_age_seconds(record.get("age_seconds"))
+        if age is None:
+            continue
 
-            event_type = str(record.get("type") or "").strip()
-            if event_type == "EARLY_STALE_DROP":
-                row["early_stale_drops"] += 1
-            elif event_type == "EARLY_FRESH_PASS":
-                row["fresh_passes"] += 1
-            else:
-                continue
+        stats["age_bearing_early_stale_records"] += 1
+        row["age_samples"].append(age)
 
-            age = safe_age_seconds(record.get("age_seconds"))
-            if age is None:
-                continue
+        bucket = age_bucket(age)
+        if bucket == "<=60s":
+            row["within_60s"] += 1
+            row["within_300s"] += 1
+        elif bucket == "<=300s":
+            row["within_300s"] += 1
+        elif bucket == "301-900s":
+            row["over_300s"] += 1
+        else:
+            row["over_300s"] += 1
+            row["over_900s"] += 1
 
-            stats["age_bearing_early_stale_records"] += 1
-            row["age_samples"].append(age)
-
-            bucket = age_bucket(age)
-            if bucket == "<=60s":
-                row["within_60s"] += 1
-                row["within_300s"] += 1
-            elif bucket == "<=300s":
-                row["within_300s"] += 1
-            elif bucket == "301-900s":
-                row["over_300s"] += 1
-            else:
-                row["over_300s"] += 1
-                row["over_900s"] += 1
+    stats["lines_total"] = read_stats.lines_total
+    stats["lines_malformed"] = read_stats.lines_malformed
 
     rows: list[dict[str, Any]] = []
     for source, row in metrics.items():

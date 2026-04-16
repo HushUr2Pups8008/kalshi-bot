@@ -11,20 +11,25 @@ using a simple first-pass proxy:
 from __future__ import annotations
 
 import argparse
-import json
 from collections import Counter, defaultdict
 from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
+from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "trades.jsonl"
+DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Audit MATCH_SUPPRESSION_CANDIDATE events")
-    parser.add_argument("--path", default=str(DEFAULT_LOG_PATH), help="Path to trades.jsonl")
+    parser.add_argument(
+        "--path",
+        default=str(DEFAULT_LOG_PATH),
+        help="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
+    )
     parser.add_argument("--since", help="Inclusive start date in YYYY-MM-DD")
     parser.add_argument("--until", help="Inclusive end date in YYYY-MM-DD")
     parser.add_argument("--top", type=int, default=10, help="Max rows to show in grouped sections")
@@ -115,63 +120,47 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
         "risky_examples": [],
     }
 
-    if not path.exists():
-        return stats
+    read_stats = TradeLogReadStats()
+    for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
+        if exclude_test and is_test_record(record):
+            continue
 
-    with path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            stats["lines_total"] += 1
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                stats["lines_malformed"] += 1
-                continue
-            if not isinstance(record, dict):
-                stats["lines_malformed"] += 1
-                continue
+        stats["records_kept"] += 1
+        if str(record.get("type") or "").strip() != "MATCH_SUPPRESSION_CANDIDATE":
+            continue
 
-            ts = parse_iso_ts(record.get("ts"))
-            if not in_window(ts, since, until):
-                continue
-            if exclude_test and is_test_record(record):
-                continue
+        classification = classify_candidate(record)
+        stats["total_candidates"] += 1
+        if classification == "safe":
+            stats["safe_count"] += 1
+        else:
+            stats["risky_count"] += 1
 
-            stats["records_kept"] += 1
-            if str(record.get("type") or "").strip() != "MATCH_SUPPRESSION_CANDIDATE":
-                continue
+        source = str(record.get("source") or "").strip()
+        ticker = str(record.get("ticker") or "").strip()
+        if source:
+            stats["by_source"][source][classification] += 1
+        if ticker:
+            stats["by_ticker"][ticker][classification] += 1
 
-            classification = classify_candidate(record)
-            stats["total_candidates"] += 1
-            if classification == "safe":
-                stats["safe_count"] += 1
-            else:
-                stats["risky_count"] += 1
+        row = {
+            "ts": parse_iso_ts(record.get("ts")),
+            "source": source,
+            "headline": str(record.get("headline") or "").strip(),
+            "ticker": ticker,
+            "match_score": record.get("match_score"),
+            "overlap_count": record.get("overlap_count"),
+            "overlap_ratio": record.get("overlap_ratio"),
+            "heuristic_flags": list(record.get("heuristic_flags") or []),
+            "matched_tokens": list(record.get("matched_tokens") or []),
+        }
+        if classification == "safe":
+            stats["safe_examples"].append(row)
+        else:
+            stats["risky_examples"].append(row)
 
-            source = str(record.get("source") or "").strip()
-            ticker = str(record.get("ticker") or "").strip()
-            if source:
-                stats["by_source"][source][classification] += 1
-            if ticker:
-                stats["by_ticker"][ticker][classification] += 1
-
-            row = {
-                "ts": ts,
-                "source": source,
-                "headline": str(record.get("headline") or "").strip(),
-                "ticker": ticker,
-                "match_score": record.get("match_score"),
-                "overlap_count": record.get("overlap_count"),
-                "overlap_ratio": record.get("overlap_ratio"),
-                "heuristic_flags": list(record.get("heuristic_flags") or []),
-                "matched_tokens": list(record.get("matched_tokens") or []),
-            }
-            if classification == "safe":
-                stats["safe_examples"].append(row)
-            else:
-                stats["risky_examples"].append(row)
+    stats["lines_total"] = read_stats.lines_total
+    stats["lines_malformed"] = read_stats.lines_malformed
 
     stats["safe_examples"].sort(key=lambda row: row["ts"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     stats["risky_examples"].sort(key=lambda row: row["ts"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)

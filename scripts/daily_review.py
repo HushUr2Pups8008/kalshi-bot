@@ -29,7 +29,7 @@ from scripts import signal_edge_diagnostics
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REPORTS_DIR = REPO_ROOT / "logs" / "reports"
 DEFAULT_REPORT_PATH = REPORTS_DIR / f"daily_review_{datetime.now().strftime('%Y%m%d')}.txt"
-DEFAULT_TRADES_LOG_PATH = REPO_ROOT / "logs" / "trades" / "trades.jsonl"
+DEFAULT_TRADES_LOG_PATH = REPO_ROOT / "logs" / "trades"
 DEFAULT_PAPER_DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
 RECENT_MATCH_EXAMPLES = 5
 RECENT_EDGE_AUDIT = 5

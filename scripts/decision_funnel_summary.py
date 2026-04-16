@@ -1,7 +1,7 @@
 """
 Concise read-only decision funnel summary for structured trade logs.
 
-Uses logs/trades/trades.jsonl to show what is directly observable from the
+Uses the preferred trade-log root at logs/trades/ to show what is directly observable from the
 structured event stream:
   - total records considered
   - signal / opportunity counts where present
@@ -10,20 +10,24 @@ structured event stream:
   - news vs fade path contributions where inferable
 
 This tool does not modify runtime or trading behavior.
+The preferred source is logs/trades/. The legacy monolithic
+logs/trades/trades.jsonl path is still supported during the cutover
+validation window.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 from collections import Counter
 from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
+from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "trades.jsonl"
+DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
 DECISION_EVENT_TYPES = {"ANALYSIS_REJECTED", "SIGNAL", "OPPORTUNITY", "SKIPPED", "PAPER_TRADE", "LIVE_ORDER"}
 
 
@@ -32,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--path",
         default=str(DEFAULT_LOG_PATH),
-        help="Path to trades.jsonl (default: logs/trades/trades.jsonl)",
+        help="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
     )
     parser.add_argument(
         "--since",
@@ -160,56 +164,40 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
         "execution_paths": Counter(),
     }
 
-    if not path.exists():
-        return stats
+    read_stats = TradeLogReadStats()
+    for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
+        if exclude_test and is_test_record(record):
+            continue
 
-    with path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            stats["lines_total"] += 1
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                stats["lines_malformed"] += 1
-                continue
-            if not isinstance(record, dict):
-                stats["lines_malformed"] += 1
-                continue
+        stats["records_kept"] += 1
+        event_type = str(record.get("type") or "UNKNOWN").strip() or "UNKNOWN"
+        stats["event_counts"][event_type] += 1
 
-            ts = parse_iso_ts(record.get("ts"))
-            if not in_window(ts, since, until):
-                continue
-            if exclude_test and is_test_record(record):
-                continue
+        signal_type = infer_signal_type(record)
+        if event_type in DECISION_EVENT_TYPES:
+            stats["path_counts"][signal_type] += 1
 
-            stats["records_kept"] += 1
-            event_type = str(record.get("type") or "UNKNOWN").strip() or "UNKNOWN"
-            stats["event_counts"][event_type] += 1
+        if event_type == "SKIPPED":
+            reason = str(record.get("reason") or "unknown").strip() or "unknown"
+            stats["skip_reasons"][reason] += 1
+        elif event_type == "ANALYSIS_REJECTED":
+            reason = str(record.get("reason") or "unknown").strip() or "unknown"
+            stats["analysis_rejected_reasons"][reason] += 1
+            if reason == "stale_news":
+                bucket = stale_age_bucket(record.get("age_seconds"))
+                if bucket:
+                    stats["stale_news_age_buckets"][bucket] += 1
+                source = str(record.get("source") or record.get("signal_source") or "").strip()
+                if source:
+                    stats["stale_news_sources"][source] += 1
+                ticker = str(record.get("ticker") or "").strip()
+                if ticker:
+                    stats["stale_news_tickers"][ticker] += 1
+        if event_type in {"PAPER_TRADE", "LIVE_ORDER"}:
+            stats["execution_paths"][signal_type] += 1
 
-            signal_type = infer_signal_type(record)
-            if event_type in DECISION_EVENT_TYPES:
-                stats["path_counts"][signal_type] += 1
-
-            if event_type == "SKIPPED":
-                reason = str(record.get("reason") or "unknown").strip() or "unknown"
-                stats["skip_reasons"][reason] += 1
-            elif event_type == "ANALYSIS_REJECTED":
-                reason = str(record.get("reason") or "unknown").strip() or "unknown"
-                stats["analysis_rejected_reasons"][reason] += 1
-                if reason == "stale_news":
-                    bucket = stale_age_bucket(record.get("age_seconds"))
-                    if bucket:
-                        stats["stale_news_age_buckets"][bucket] += 1
-                    source = str(record.get("source") or record.get("signal_source") or "").strip()
-                    if source:
-                        stats["stale_news_sources"][source] += 1
-                    ticker = str(record.get("ticker") or "").strip()
-                    if ticker:
-                        stats["stale_news_tickers"][ticker] += 1
-            if event_type in {"PAPER_TRADE", "LIVE_ORDER"}:
-                stats["execution_paths"][signal_type] += 1
+    stats["lines_total"] = read_stats.lines_total
+    stats["lines_malformed"] = read_stats.lines_malformed
 
     return stats
 

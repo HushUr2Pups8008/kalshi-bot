@@ -3,10 +3,12 @@ Keyword shadow evaluation -- passive offline analysis tool.
 
 Measures what would have happened if a small set of handpicked candidate
 phrases had been active keyword triggers, using the historical miss corpus
-from ANALYSIS_REJECTED(reason=no_keywords) events in trades.jsonl.
+from ANALYSIS_REJECTED(reason=no_keywords) events in the preferred trade-log
+root at logs/trades/.
 
 PASSIVE ONLY -- this script does not modify live config, live behavior, or
-any runtime data. It reads trades.jsonl and prints a report. Nothing else.
+any runtime data. It reads the trade-log root or a compatible legacy file and
+prints a report. Nothing else.
 
 Usage:
     python scripts/keyword_shadow_eval.py
@@ -24,11 +26,11 @@ from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
-
+from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 import re
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "trades.jsonl"
+DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
 
 # Tokeniser -- mirrors keyword_feedback.py so phrase tokens are consistent.
 # Shadow phrases (e.g. "strait hormuz") are bigrams of tokenised tokens;
@@ -82,7 +84,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--path",
         default=str(DEFAULT_LOG_PATH),
-        help="Path to trades.jsonl (default: logs/trades/trades.jsonl)",
+        help="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
     )
     parser.add_argument("--since", help="Inclusive start date YYYY-MM-DD (UTC)")
     parser.add_argument("--until", help="Inclusive end date YYYY-MM-DD (UTC)")
@@ -205,33 +207,17 @@ def load_miss_corpus(
     total = 0
     malformed = 0
 
-    if not path.exists():
-        return records, total, malformed
+    read_stats = TradeLogReadStats()
+    for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
+        if exclude_test and is_test_record(record):
+            continue
 
-    with path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            total += 1
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                malformed += 1
-                continue
-            if not isinstance(record, dict):
-                malformed += 1
-                continue
+        event_type = str(record.get("type") or record.get("event") or "").strip()
+        if event_type == "ANALYSIS_REJECTED" and record.get("reason") == "no_keywords":
+            records.append(record)
 
-            ts = parse_iso_ts(record.get("ts"))
-            if not in_window(ts, since, until):
-                continue
-            if exclude_test and is_test_record(record):
-                continue
-
-            event_type = str(record.get("type") or record.get("event") or "").strip()
-            if event_type == "ANALYSIS_REJECTED" and record.get("reason") == "no_keywords":
-                records.append(record)
+    total = read_stats.lines_total
+    malformed = read_stats.lines_malformed
 
     return records, total, malformed
 

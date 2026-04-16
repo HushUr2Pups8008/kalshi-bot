@@ -8,7 +8,6 @@ matches that may be semantically irrelevant but still pass the current matcher.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from collections import Counter, defaultdict, deque
 from datetime import datetime, time, timezone
@@ -26,12 +25,17 @@ from analysis.market_matcher import (
     _meaningful_tokens,
     _tokenize,
 )
-DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "trades.jsonl"
+from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
+DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Summarize market-match quality diagnostics")
-    parser.add_argument("--path", default=str(DEFAULT_LOG_PATH), help="Path to trades.jsonl")
+    parser.add_argument(
+        "--path",
+        default=str(DEFAULT_LOG_PATH),
+        help="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
+    )
     parser.add_argument("--since", help="Inclusive start date in YYYY-MM-DD")
     parser.add_argument("--until", help="Inclusive end date in YYYY-MM-DD")
     parser.add_argument("--top", type=int, default=10, help="Max rows in grouped sections")
@@ -195,69 +199,52 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
     }
     all_rows: list[dict[str, Any]] = []
 
-    if not path.exists():
-        stats["rows"] = all_rows
-        return stats
+    read_stats = TradeLogReadStats()
+    for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
+        if exclude_test and is_test_record(record):
+            continue
 
-    with path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            stats["lines_total"] += 1
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                stats["lines_malformed"] += 1
-                continue
-            if not isinstance(record, dict):
-                stats["lines_malformed"] += 1
-                continue
+        stats["records_kept"] += 1
+        if str(record.get("type") or "").strip() != "MATCH_DIAGNOSTIC":
+            continue
 
-            ts = parse_iso_ts(record.get("ts"))
-            if not in_window(ts, since, until):
-                continue
-            if exclude_test and is_test_record(record):
-                continue
+        stats["match_records"] += 1
+        low_quality = safe_bool(record.get("low_match_quality"))
+        source = str(record.get("source") or "").strip()
+        ticker = str(record.get("ticker") or "").strip()
+        match_score = safe_float(record.get("match_score"))
+        if match_score is None:
+            stats["match_score_available"] = False
 
-            stats["records_kept"] += 1
-            if str(record.get("type") or "").strip() != "MATCH_DIAGNOSTIC":
-                continue
+        row = {
+            "ts": parse_iso_ts(record.get("ts")),
+            "source": source,
+            "headline": str(record.get("headline") or "").strip(),
+            "ticker": ticker,
+            "market_title": str(record.get("market_title") or "").strip(),
+            "match_score": match_score,
+            "matched_tokens": list(record.get("matched_tokens") or []),
+            "token_overlap_count": int(record.get("token_overlap_count") or 0),
+            "geo_overlap_count": int(record.get("geo_overlap_count") or 0),
+            "generic_overlap_count": int(record.get("generic_overlap_count") or 0),
+            "headline_token_count": int(record.get("headline_token_count") or 0),
+            "market_title_token_count": int(record.get("market_title_token_count") or 0),
+            "overlap_ratio": safe_float(record.get("overlap_ratio")),
+            "low_match_quality": low_quality,
+            "heuristic_flags": list(record.get("heuristic_flags") or []),
+        }
+        all_rows.append(row)
+        if low_quality:
+            stats["low_quality_matches"] += 1
+            if source:
+                stats["by_source"][source] += 1
+            if ticker:
+                stats["by_ticker"][ticker] += 1
+        for flag in row["heuristic_flags"]:
+            stats["heuristic_flags"][flag] += 1
 
-            stats["match_records"] += 1
-            low_quality = safe_bool(record.get("low_match_quality"))
-            source = str(record.get("source") or "").strip()
-            ticker = str(record.get("ticker") or "").strip()
-            match_score = safe_float(record.get("match_score"))
-            if match_score is None:
-                stats["match_score_available"] = False
-
-            row = {
-                "ts": ts,
-                "source": source,
-                "headline": str(record.get("headline") or "").strip(),
-                "ticker": ticker,
-                "market_title": str(record.get("market_title") or "").strip(),
-                "match_score": match_score,
-                "matched_tokens": list(record.get("matched_tokens") or []),
-                "token_overlap_count": int(record.get("token_overlap_count") or 0),
-                "geo_overlap_count": int(record.get("geo_overlap_count") or 0),
-                "generic_overlap_count": int(record.get("generic_overlap_count") or 0),
-                "headline_token_count": int(record.get("headline_token_count") or 0),
-                "market_title_token_count": int(record.get("market_title_token_count") or 0),
-                "overlap_ratio": safe_float(record.get("overlap_ratio")),
-                "low_match_quality": low_quality,
-                "heuristic_flags": list(record.get("heuristic_flags") or []),
-            }
-            all_rows.append(row)
-            if low_quality:
-                stats["low_quality_matches"] += 1
-                if source:
-                    stats["by_source"][source] += 1
-                if ticker:
-                    stats["by_ticker"][ticker] += 1
-            for flag in row["heuristic_flags"]:
-                stats["heuristic_flags"][flag] += 1
+    stats["lines_total"] = read_stats.lines_total
+    stats["lines_malformed"] = read_stats.lines_malformed
 
     stats["rows"] = sorted(
         all_rows,
@@ -315,85 +302,70 @@ def summarize_backfill(
         "by_source": [],
         "by_ticker": [],
     }
-    if not path.exists():
-        return stats
-
     detail_rows: list[dict[str, Any]] = []
     paper_rows: list[dict[str, Any]] = []
     skip_queues: dict[tuple[str, str], deque[dict[str, Any]]] = defaultdict(deque)
     title_by_ticker: dict[str, str] = {}
     opp_by_ticker: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
-    with path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            stats["lines_total"] += 1
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                stats["lines_malformed"] += 1
-                continue
-            if not isinstance(record, dict):
-                stats["lines_malformed"] += 1
-                continue
+    read_stats = TradeLogReadStats()
+    for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
+        if exclude_test and is_test_record(record):
+            continue
+        stats["records_kept"] += 1
+        event_type = str(record.get("type") or "").strip()
+        ts = parse_iso_ts(record.get("ts"))
 
-            ts = parse_iso_ts(record.get("ts"))
-            if not in_window(ts, since, until):
-                continue
-            if exclude_test and is_test_record(record):
-                continue
-            stats["records_kept"] += 1
-            event_type = str(record.get("type") or "").strip()
-
-            if event_type == "OPPORTUNITY":
-                ticker = str(record.get("ticker") or "").strip()
-                market_title = str(record.get("market_title") or "").strip()
-                if ticker and market_title:
-                    title_by_ticker[ticker] = market_title
-                    opp_by_ticker[ticker].append({"ts": ts, "market_title": market_title})
-            elif event_type == "SKIPPED":
-                ticker = str(record.get("ticker") or "").strip()
-                headline = str(record.get("headline") or "").strip()
-                if ticker and headline:
-                    skip_queues[(ticker, headline)].append(
-                        {
-                            "reason": str(record.get("reason") or "").strip(),
-                            "edge": safe_float(record.get("edge")),
-                            "ts": ts,
-                        }
-                    )
-            elif event_type == "SIGNAL_ANALYSIS_DETAIL":
-                detail_rows.append(
+        if event_type == "OPPORTUNITY":
+            ticker = str(record.get("ticker") or "").strip()
+            market_title = str(record.get("market_title") or "").strip()
+            if ticker and market_title:
+                title_by_ticker[ticker] = market_title
+                opp_by_ticker[ticker].append({"ts": ts, "market_title": market_title})
+        elif event_type == "SKIPPED":
+            ticker = str(record.get("ticker") or "").strip()
+            headline = str(record.get("headline") or "").strip()
+            if ticker and headline:
+                skip_queues[(ticker, headline)].append(
                     {
-                        "event_type": event_type,
-                        "ts": ts,
-                        "source": str(record.get("source") or "").strip(),
-                        "headline": str(record.get("headline") or "").strip(),
-                        "ticker": str(record.get("ticker") or "").strip(),
-                        "market_title": "",
-                        "title_source": "unavailable",
-                        "match_score": None,
-                        "edge": None,
-                        "skip_reason": None,
-                    }
-                )
-            elif event_type == "PAPER_TRADE":
-                paper_rows.append(
-                    {
-                        "event_type": event_type,
-                        "ts": ts,
-                        "source": str(record.get("signal_source") or "").strip(),
-                        "headline": str(record.get("signal_headline") or "").strip(),
-                        "ticker": str(record.get("ticker") or "").strip(),
-                        "market_title": str(record.get("market_title") or "").strip(),
-                        "title_source": "paper_trade",
-                        "match_score": None,
+                        "reason": str(record.get("reason") or "").strip(),
                         "edge": safe_float(record.get("edge")),
-                        "skip_reason": None,
+                        "ts": ts,
                     }
                 )
+        elif event_type == "SIGNAL_ANALYSIS_DETAIL":
+            detail_rows.append(
+                {
+                    "event_type": event_type,
+                    "ts": ts,
+                    "source": str(record.get("source") or "").strip(),
+                    "headline": str(record.get("headline") or "").strip(),
+                    "ticker": str(record.get("ticker") or "").strip(),
+                    "market_title": "",
+                    "title_source": "unavailable",
+                    "match_score": None,
+                    "edge": None,
+                    "skip_reason": None,
+                }
+            )
+        elif event_type == "PAPER_TRADE":
+            paper_rows.append(
+                {
+                    "event_type": event_type,
+                    "ts": ts,
+                    "source": str(record.get("signal_source") or "").strip(),
+                    "headline": str(record.get("signal_headline") or "").strip(),
+                    "ticker": str(record.get("ticker") or "").strip(),
+                    "market_title": str(record.get("market_title") or "").strip(),
+                    "title_source": "paper_trade",
+                    "match_score": None,
+                    "edge": safe_float(record.get("edge")),
+                    "skip_reason": None,
+                }
+            )
+
+    stats["lines_total"] = read_stats.lines_total
+    stats["lines_malformed"] = read_stats.lines_malformed
 
     rows = sorted(detail_rows + paper_rows, key=lambda row: row["ts"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     rows = rows[: max(1, event_limit)]

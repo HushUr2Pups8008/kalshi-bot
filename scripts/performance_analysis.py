@@ -1,7 +1,7 @@
 """
 Performance analysis script for kalshi-bot.
 
-Reads logs/trades.jsonl and data/paper_trades.db to produce an end-to-end
+Reads the preferred trade-log root at logs/trades/ and data/paper_trades.db to produce an end-to-end
 report covering:
   1. Signal pipeline funnel (signal -> opportunity -> trade conversion rates)
   2. Placed trades performance (win rate, P&L, edge calibration)
@@ -25,6 +25,10 @@ Run from the repo root (same directory as config.py).
 From bash:
   cd /e/VS_Code/kalshi-bot
   .venv/Scripts/python.exe scripts/performance_analysis.py
+
+The preferred source is logs/trades/. The legacy monolithic
+logs/trades/trades.jsonl path remains readable during the cutover validation
+window.
 """
 
 import argparse
@@ -37,12 +41,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from tabulate import tabulate
+from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).parent.parent
-JSONL_PATH = REPO_ROOT / "logs" / "trades" / "trades.jsonl"
+JSONL_PATH = REPO_ROOT / "logs" / "trades"
 DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
 CACHE_PATH = REPO_ROOT / "logs" / "market_resolution_cache.json"
 LOGS_DIR = REPO_ROOT / "logs"
@@ -162,25 +167,15 @@ def _fmt_pnl(v):
 
 
 def load_jsonl(since_dt, until_dt):
-    """Load and filter trades.jsonl entries within the date window."""
-    if not JSONL_PATH.exists():
-        print("WARNING: trades.jsonl not found at %s" % JSONL_PATH)
-        return []
+    """Load and filter trade-log entries within the date window."""
     entries = []
-    with open(JSONL_PATH, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            # Normalize event type key (some older entries use 'event' not 'type')
-            if "event" in obj and "type" not in obj:
-                obj["type"] = obj["event"]
-            if _in_window(obj.get("ts", ""), since_dt, until_dt):
-                entries.append(obj)
+    read_stats = TradeLogReadStats()
+    for obj in iter_trade_records(JSONL_PATH, since=since_dt, until=until_dt, stats=read_stats):
+        if "event" in obj and "type" not in obj:
+            obj["type"] = obj["event"]
+        entries.append(obj)
+    if read_stats.lines_total == 0 and not JSONL_PATH.exists():
+        print("WARNING: trade log not found at %s" % JSONL_PATH)
     return entries
 
 
@@ -238,7 +233,7 @@ def build_resolution_map(db_trades, jsonl_entries, enrich):
                 "source": "db",
             }
 
-    # From JSONL PAPER_RESOLUTION entries
+    # From trade-log PAPER_RESOLUTION entries
     for e in jsonl_entries:
         if e.get("type") == "PAPER_RESOLUTION":
             ticker = e.get("ticker", "")
