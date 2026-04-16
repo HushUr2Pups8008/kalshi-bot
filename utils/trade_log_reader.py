@@ -38,28 +38,35 @@ def _in_window(ts: datetime | None, since: datetime | None, until: datetime | No
 
 
 def _iter_candidate_files(path: Path) -> Iterator[Path]:
-    if path.is_file():
+    path_str = os.fspath(path)
+
+    if os.path.isfile(path_str):
         yield path
         return
 
-    live_path = path / "live" / "trades.jsonl"
-    legacy_path = path / "trades.jsonl"
-    archive_root = path / "archive"
+    live_path_str = os.path.join(path_str, "live", "trades.jsonl")
+    legacy_path_str = os.path.join(path_str, "trades.jsonl")
+    archive_root_str = os.path.join(path_str, "archive")
 
-    if archive_root.exists():
-        archive_files = list(archive_root.rglob("*.jsonl")) + list(archive_root.rglob("*.jsonl.gz"))
-        for candidate in sorted(archive_files):
-            yield candidate
+    if os.path.exists(archive_root_str):
+        archive_files = []
+        for root, dirs, files in os.walk(archive_root_str):
+            for file in files:
+                if file.endswith(".jsonl") or file.endswith(".jsonl.gz"):
+                    full_path = os.path.join(root, file)
+                    archive_files.append(full_path)
+        for candidate_str in sorted(archive_files):
+            yield Path(candidate_str)
 
-    if legacy_path.exists() and live_path.exists():
-        yield legacy_path
-        yield live_path
+    if os.path.exists(legacy_path_str) and os.path.exists(live_path_str):
+        yield Path(legacy_path_str)
+        yield Path(live_path_str)
         return
 
-    if legacy_path.exists():
-        yield legacy_path
-    if live_path.exists():
-        yield live_path
+    if os.path.exists(legacy_path_str):
+        yield Path(legacy_path_str)
+    if os.path.exists(live_path_str):
+        yield Path(live_path_str)
 
 
 def _first_valid_ts(path: Path) -> datetime | None:
@@ -73,20 +80,24 @@ def _first_valid_ts(path: Path) -> datetime | None:
 def _is_legacy_root_file(file_path: Path, root: Path) -> bool:
     """Return True when *file_path* is the legacy root trades.jsonl for *root*.
 
-    This intentionally avoids ``Path == Path`` comparisons. On Windows/Python 3.14
-    those comparisons can end up deep in pathlib's cached normcase machinery, and
-    this reader only needs a stable identity check for the legacy compatibility file.
+    Avoids pathlib property access (.name, .parent) on Windows/Python 3.14, where
+    accessing these properties can trigger internal caching machinery that blocks.
+    Uses os.path functions with string paths instead for robust comparisons.
     """
 
-    return file_path.name == "trades.jsonl" and os.path.normcase(os.fspath(file_path.parent)) == os.path.normcase(
-        os.fspath(root)
-    )
+    file_str = os.fspath(file_path)
+    root_str = os.fspath(root)
+
+    # Construct expected legacy path and compare (case-insensitive on Windows)
+    expected_path = os.path.join(root_str, "trades.jsonl")
+    return os.path.normcase(file_str) == os.path.normcase(expected_path)
 
 
 def _iter_records_from_file(path: Path, stats: TradeLogReadStats | None = None) -> Iterator[dict[str, Any]]:
-    opener = gzip.open if path.suffix == ".gz" else open
+    path_str = os.fspath(path)
+    opener = gzip.open if path_str.endswith(".gz") else open
     try:
-        with opener(path, "rt", encoding="utf-8") as fh:
+        with opener(path_str, "rt", encoding="utf-8") as fh:
             for raw_line in fh:
                 if stats is not None:
                     stats.lines_total += 1
@@ -125,11 +136,15 @@ def iter_trade_records(
 
     normalized_event_types = {event.strip() for event in event_types or set() if event.strip()}
     live_cutover_ts: datetime | None = None
-    if path.is_dir():
-        live_path = path / "live" / "trades.jsonl"
-        legacy_path = path / "trades.jsonl"
-        if live_path.exists() and legacy_path.exists():
-            live_cutover_ts = _first_valid_ts(live_path)
+
+    # Convert Path to string once at entry to avoid Windows/Python 3.14 pathlib fragility
+    path_str = os.fspath(path)
+
+    if os.path.isdir(path_str):
+        live_path_str = os.path.join(path_str, "live", "trades.jsonl")
+        legacy_path_str = os.path.join(path_str, "trades.jsonl")
+        if os.path.exists(live_path_str) and os.path.exists(legacy_path_str):
+            live_cutover_ts = _first_valid_ts(Path(live_path_str))
 
     for file_path in _iter_candidate_files(path):
         for record in _iter_records_from_file(file_path, stats=stats):
@@ -139,7 +154,7 @@ def iter_trade_records(
             ts = _parse_iso_ts(record.get("ts"))
             if (
                 live_cutover_ts is not None
-                and path.is_dir()
+                and os.path.isdir(path_str)
                 and _is_legacy_root_file(file_path, path)
                 and ts is not None
                 and ts >= live_cutover_ts

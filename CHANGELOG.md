@@ -6,6 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.28.1] - 2026-04-16
+
+### Fixed
+- `utils/trade_log_reader.py`: Complete Windows/Python 3.14 pathlib hardening. Replaced all
+  pathlib method/property access (`.is_dir()`, `.is_file()`, `.exists()`, `.suffix`, `.rglob()`,
+  `/` operator) with equivalent `os.path.*()` functions to prevent internal caching machinery
+  hangs on Windows. Functions `_iter_candidate_files()`, `_iter_records_from_file()`, and
+  `iter_trade_records()` now use `os.fspath()`, `os.path.join()`, `os.path.isdir()`,
+  `os.path.exists()`, and `os.walk()` for all path operations. Archive discovery changed from
+  `.rglob()` to `os.walk()` with manual suffix filtering. Resolves `pipeline-audit.py` hang at
+  `path.is_dir()` call inside record iteration loop.
+
+---
+
 ## [0.28.0] - 2026-04-16
 
 ### Added
