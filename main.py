@@ -866,7 +866,9 @@ class TradingBot:
         Retention rules:
           logs/reports/report_*.txt       -- 90 days
           logs/reports/analysis_*.txt     -- 30 days
-          logs/service_stderr-*.log       -- 30 days (NSSM archives in root)
+          logs/service/service_*.log      -- active NSSM service logs (never touched)
+          logs/service/*-*.log            -- 30 days (rotated NSSM archives)
+          logs/service_stderr-*.log       -- 30 days (legacy NSSM archives in root)
           logs/trades/archive/*.jsonl.gz  -- 12 months
 
         Monthly rotation:
@@ -904,13 +906,25 @@ class TradingBot:
                             deleted_count += 1
                             log.info("[LOG_MAINT] Deleted old report: %s (%.0f days)", p.name, age_days)
 
-                # ── Retention: NSSM service log archives in logs/ root ────────
-                for p in LOGS_DIR.glob("service_stderr-*.log"):
-                    age_days = (now.timestamp() - p.stat().st_mtime) / 86_400
-                    if age_days > 30:
-                        p.unlink()
-                        deleted_count += 1
-                        log.info("[LOG_MAINT] Deleted old service log: %s (%.0f days)", p.name, age_days)
+                # ── Retention: NSSM service log archives only (never active files) ──
+                service_log_dir = LOGS_DIR / "service"
+                service_archive_patterns = (
+                    (service_log_dir, "service_stderr-*.log"),
+                    (service_log_dir, "service_stdout-*.log"),
+                    (service_log_dir, "ollama_stderr-*.log"),
+                    (service_log_dir, "ollama_stdout-*.log"),
+                    (LOGS_DIR, "service_stderr-*.log"),
+                    (LOGS_DIR, "service_stdout-*.log"),
+                    (LOGS_DIR, "ollama_stderr-*.log"),
+                    (LOGS_DIR, "ollama_stdout-*.log"),
+                )
+                for base_dir, pattern in service_archive_patterns:
+                    for p in base_dir.glob(pattern):
+                        age_days = (now.timestamp() - p.stat().st_mtime) / 86_400
+                        if age_days > 30:
+                            p.unlink()
+                            deleted_count += 1
+                            log.info("[LOG_MAINT] Deleted old service archive: %s (%.0f days)", p, age_days)
 
                 # ── Retention: trade archives older than 12 months ────────────
                 for p in _LOG_ARCHIVE_DIR.glob("*.jsonl.gz"):
