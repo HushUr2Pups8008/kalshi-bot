@@ -297,7 +297,7 @@ def attach_outcomes(
                 break
 
 
-def summarize(path: Path, since: datetime | None, until: datetime | None, exclude_test: bool = False) -> dict[str, Any]:
+def summarize(path: Path, since: datetime | None, until: datetime | None, exclude_test: bool = False, *, progress_tracker=None) -> dict[str, Any]:
     stats: dict[str, Any] = {
         "path": path,
         "lines_total": 0,
@@ -338,6 +338,8 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
 
     read_stats = TradeLogReadStats()
     for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
+        if progress_tracker is not None:
+            progress_tracker.tick()
         if exclude_test and is_test_record(record):
             continue
 

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from collections import Counter
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 from scripts import decision_funnel_summary
 from scripts import match_quality_diagnostics
 from scripts import signal_edge_diagnostics
+from utils.reporting_helpers import ProgressTracker, stage_timer, _eprint
 
 
 DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
@@ -47,6 +49,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
     )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print record-scan progress to stderr every 10k records",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Print per-stage elapsed time to stderr",
+    )
     return parser.parse_args()
 
 
@@ -61,7 +73,7 @@ def parse_date_end(value: str | None) -> datetime | None:
     if not value:
         return None
     dt = datetime.strptime(value, "%Y-%m-%d")
-    return datetime.combine(dt.date(), time.max, tzinfo=timezone.utc)
+    return datetime.combine(dt.date(), dt_time.max, tzinfo=timezone.utc)
 
 
 def resolve_windows(
@@ -101,10 +113,24 @@ def collect_window_metrics(
     since: datetime,
     until: datetime,
     exclude_test: bool,
+    show_progress: bool = False,
+    show_profile: bool = False,
 ) -> dict[str, Any]:
-    match_stats = match_quality_diagnostics.summarize(path, since, until, exclude_test=exclude_test)
-    funnel_stats = decision_funnel_summary.summarize(path, since, until, exclude_test=exclude_test)
-    edge_stats = signal_edge_diagnostics.summarize(path, since, until, exclude_test=exclude_test)
+    with stage_timer("match quality diagnostics", enabled=show_profile):
+        match_stats = match_quality_diagnostics.summarize(
+            path, since, until, exclude_test=exclude_test,
+            progress_tracker=ProgressTracker() if show_progress else None,
+        )
+    with stage_timer("decision funnel summary", enabled=show_profile):
+        funnel_stats = decision_funnel_summary.summarize(
+            path, since, until, exclude_test=exclude_test,
+            progress_tracker=ProgressTracker() if show_progress else None,
+        )
+    with stage_timer("signal edge diagnostics", enabled=show_profile):
+        edge_stats = signal_edge_diagnostics.summarize(
+            path, since, until, exclude_test=exclude_test,
+            progress_tracker=ProgressTracker() if show_progress else None,
+        )
 
     detail_rows = edge_stats.get("audit_rows", [])
     llm_rows = sum(1 for row in detail_rows if row.get("method") == "llm")
@@ -360,18 +386,25 @@ def main() -> int:
         raise SystemExit(str(exc)) from exc
 
     path = Path(args.path)
+    _t0 = time.perf_counter()
     current_stats = collect_window_metrics(
         path=path,
         since=current_window[0],
         until=current_window[1],
         exclude_test=args.exclude_test,
+        show_progress=args.progress,
+        show_profile=args.profile,
     )
     previous_stats = collect_window_metrics(
         path=path,
         since=previous_window[0],
         until=previous_window[1],
         exclude_test=args.exclude_test,
+        show_progress=args.progress,
+        show_profile=args.profile,
     )
+    if args.profile:
+        _eprint(f"[total] 6 stages completed in {time.perf_counter() - _t0:.1f}s")
     for line in render_report(current_stats, previous_stats):
         print(line)
     return 0

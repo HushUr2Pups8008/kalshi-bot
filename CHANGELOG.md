@@ -6,6 +6,29 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.0] - 2026-04-16
+
+### Added
+- `utils/reporting_helpers.py`: Lightweight utilities for long-running reporting scripts. `ProgressTracker`
+  counts records and prints a progress line every 10k records to stderr with elapsed time. `stage_timer`
+  context manager prints stage start and completion time. Both utilities are opt-in via CLI flags and do
+  not affect report output.
+- `scripts/daily_review.py`: New CLI flags `--progress` and `--profile` for optional progress reporting.
+  `--progress` prints record counts every 10k records during each summarize stage. `--profile` prints
+  per-stage elapsed time and a total elapsed time for all 5 stages. Both outputs go to stderr; stdout
+  report remains unchanged. Default behavior (no flags) is identical to prior version.
+- `scripts/pipeline_impact_audit.py`: Same `--progress` and `--profile` flags. Reports per-stage timing
+  and total elapsed for 6 stages (3 per window x 2 windows).
+
+### Changed
+- `scripts/freshness_diagnostics.py`, `scripts/signal_edge_diagnostics.py`,
+  `scripts/match_quality_diagnostics.py`, `scripts/decision_funnel_summary.py`: Added optional
+  `progress_tracker=None` keyword-only parameter to `summarize()` functions. Inner loop calls
+  `progress_tracker.tick()` immediately after record is read, before any filtering. Backward
+  compatible: when `progress_tracker=None` (default), no progress output is produced.
+
+---
+
 ## [0.28.1] - 2026-04-16
 
 ### Fixed

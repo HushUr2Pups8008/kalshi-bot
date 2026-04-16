@@ -12,10 +12,11 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from collections import Counter
-from datetime import datetime, time, timezone
+from datetime import datetime, time as dt_time, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from scripts import freshness_diagnostics
 from scripts import match_quality_diagnostics
 from scripts import paper_performance_drilldown
 from scripts import signal_edge_diagnostics
+from utils.reporting_helpers import ProgressTracker, stage_timer, _eprint
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -45,6 +47,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
     )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print record-scan progress to stderr every 10k records",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Print per-stage elapsed time to stderr",
+    )
     return parser.parse_args()
 
 
@@ -59,7 +71,7 @@ def parse_date_end(value: str | None) -> datetime | None:
     if not value:
         return None
     dt = datetime.strptime(value, "%Y-%m-%d")
-    return datetime.combine(dt.date(), time.max, tzinfo=timezone.utc)
+    return datetime.combine(dt.date(), dt_time.max, tzinfo=timezone.utc)
 
 
 def fmt_int(value: Any) -> str:
@@ -172,22 +184,38 @@ def build_daily_review(
     until: datetime | None,
     top: int,
     exclude_test: bool,
+    show_progress: bool = False,
+    show_profile: bool = False,
 ) -> list[str]:
-    freshness_stats = freshness_diagnostics.summarize(
-        trades_path, since, until, exclude_test=exclude_test
-    )
-    match_stats = match_quality_diagnostics.summarize(
-        trades_path, since, until, exclude_test=exclude_test
-    )
-    funnel_stats = decision_funnel_summary.summarize(
-        trades_path, since, until, exclude_test=exclude_test
-    )
-    edge_stats = signal_edge_diagnostics.summarize(
-        trades_path, since, until, exclude_test=exclude_test
-    )
-    paper_stats = paper_performance_drilldown.summarize(
-        paper_db_path, exclude_test=exclude_test
-    )
+    _t0 = time.perf_counter()
+
+    with stage_timer("freshness diagnostics", enabled=show_profile):
+        freshness_stats = freshness_diagnostics.summarize(
+            trades_path, since, until, exclude_test=exclude_test,
+            progress_tracker=ProgressTracker() if show_progress else None,
+        )
+    with stage_timer("match quality diagnostics", enabled=show_profile):
+        match_stats = match_quality_diagnostics.summarize(
+            trades_path, since, until, exclude_test=exclude_test,
+            progress_tracker=ProgressTracker() if show_progress else None,
+        )
+    with stage_timer("decision funnel summary", enabled=show_profile):
+        funnel_stats = decision_funnel_summary.summarize(
+            trades_path, since, until, exclude_test=exclude_test,
+            progress_tracker=ProgressTracker() if show_progress else None,
+        )
+    with stage_timer("signal edge diagnostics", enabled=show_profile):
+        edge_stats = signal_edge_diagnostics.summarize(
+            trades_path, since, until, exclude_test=exclude_test,
+            progress_tracker=ProgressTracker() if show_progress else None,
+        )
+    with stage_timer("paper performance", enabled=show_profile):
+        paper_stats = paper_performance_drilldown.summarize(
+            paper_db_path, exclude_test=exclude_test
+        )
+
+    if show_profile:
+        _eprint(f"[total] 5 stages completed in {time.perf_counter() - _t0:.1f}s")
 
     event_counts = funnel_stats.get("event_counts", {})
     analysis_rejections = Counter(funnel_stats.get("analysis_rejected_reasons", {}))
@@ -372,6 +400,8 @@ def main() -> int:
         until=until,
         top=max(1, args.top),
         exclude_test=args.exclude_test,
+        show_progress=args.progress,
+        show_profile=args.profile,
     )
 
     for line in lines:
