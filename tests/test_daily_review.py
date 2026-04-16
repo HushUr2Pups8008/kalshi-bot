@@ -7,6 +7,10 @@ from scripts.daily_review import build_daily_review
 
 def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     monkeypatch.setattr(
+        "scripts.daily_review._ollama_runtime_summary",
+        lambda: "configured=qwen2.5:7b health=ok available=['qwen2.5:7b']",
+    )
+    monkeypatch.setattr(
         "scripts.daily_review.freshness_diagnostics.summarize",
         lambda *args, **kwargs: {
             "sources": {
@@ -115,4 +119,5 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Appendix" in rendered
     assert "Low-quality flagged              : 2 (25.0%)" in rendered
     assert "LLM rows                         : 1" in rendered
+    assert "Ollama runtime                   : configured=qwen2.5:7b health=ok available=['qwen2.5:7b']" in rendered
     assert "Paper trades                     : 2" in rendered

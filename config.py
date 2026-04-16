@@ -944,6 +944,8 @@ class BotConfig:
     def __post_init__(self) -> None:
         """Validate critical config at startup -- fail fast, not hours later."""
         errors: list[str] = []
+        self.ollama_base_url = self.ollama_base_url.strip()
+        self.ollama_model = self.ollama_model.strip()
         if not self.api_key_id:
             errors.append("KALSHI_API_KEY_ID is missing or empty")
         if not self.api_key_secret:
@@ -958,6 +960,8 @@ class BotConfig:
             errors.append(
                 "KELLY_FRACTION must be in (0, 1], got %.2f" % self.kelly_fraction
             )
+        if not self.ollama_model:
+            errors.append("OLLAMA_MODEL is missing or empty")
         # Validate RSA key can be loaded (catches bad PEM before first trade)
         if self.api_key_secret:
             try:
@@ -1000,6 +1004,13 @@ class BotConfig:
     @property
     def ws_url(self) -> str:
         return KALSHI_DEMO_WS if self.kalshi_env == "demo" else KALSHI_PROD_WS
+
+    @property
+    def ollama_tags_url(self) -> str:
+        base = self.ollama_base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3]
+        return f"{base}/api/tags"
 
     def dynamic_max_bet(self, notional_bankroll: float) -> float:
         """

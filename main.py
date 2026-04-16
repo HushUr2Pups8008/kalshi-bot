@@ -1070,13 +1070,10 @@ class TradingBot:
     async def _check_llm_health(self) -> None:
         """Log LLM availability at startup so the operator knows what's active."""
         import aiohttp
-        base = cfg.ollama_base_url.rstrip("/")
-        if base.endswith("/v1"):
-            base = base[:-3]
         try:
             async with aiohttp.ClientSession() as s:
                 async with s.get(
-                    f"{base}/api/tags",
+                    cfg.ollama_tags_url,
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as r:
                     if r.status == 200:
