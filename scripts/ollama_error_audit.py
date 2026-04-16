@@ -27,6 +27,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
+from utils.app_log_reader import _parse_app_log_line, iter_app_log_records
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -53,10 +55,6 @@ _OLLAMA_HTTP_RE = re.compile(
     r"(?:\s+from\s+\S+\s+--\s+body:\s+(?P<body>.*))?",
     re.IGNORECASE,
 )
-
-# Matches the standard log line timestamp prefix:
-# "2026-04-15 12:22:47,529 UTC"
-_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} UTC)")
 
 # Additional Ollama error patterns that do NOT produce HTTP status lines
 _TIMEOUT_KEYWORDS = ("timed out", "timeout", "clientconnectorerror")
@@ -118,17 +116,27 @@ def classify(status: int | None, body: str, line: str) -> str:
 
 def parse_log_line(line: str) -> OllamaErrorEvent | None:
     """Parse a single log line.  Returns None if it is not an Ollama error event."""
+    return _event_from_record(_parse_app_log_line(line))
+
+
+def _format_ts(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    return value.strftime("%Y-%m-%d %H:%M:%S,%f")[:-3] + " UTC"
+
+
+def _event_from_record(record: dict[str, object]) -> OllamaErrorEvent | None:
+    line = str(record.get("raw") or "")
+    message = str(record.get("message") or "")
+
     # Fast pre-check before the heavier regex
     if "Ollama" not in line and "ollama" not in line:
         return None
 
-    ts = ""
-    m_ts = _TS_RE.match(line)
-    if m_ts:
-        ts = m_ts.group(1)
+    ts = _format_ts(record.get("ts") if isinstance(record.get("ts"), datetime) else None)
 
     # Primary: Ollama HTTP <status> lines (both old DEBUG and new WARNING formats)
-    m_http = _OLLAMA_HTTP_RE.search(line)
+    m_http = _OLLAMA_HTTP_RE.search(message or line)
     if m_http:
         status = int(m_http.group("status"))
         body = (m_http.group("body") or "")[:200].strip()
@@ -152,11 +160,7 @@ def parse_log_line(line: str) -> OllamaErrorEvent | None:
 
 def parse_log_file(path: Path) -> list[OllamaErrorEvent]:
     """Parse one log file and return all Ollama error events in order."""
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except FileNotFoundError:
-        return []
-    return [e for line in text.splitlines() if (e := parse_log_line(line)) is not None]
+    return [event for record in iter_app_log_records(path) if (event := _event_from_record(record)) is not None]
 
 
 def collect(paths: list[Path]) -> list[OllamaErrorEvent]:
@@ -379,12 +383,10 @@ def main() -> None:
     args = parser.parse_args()
 
     log_path = Path(args.log)
-    paths: list[Path] = []
     if args.rotated:
-        log_dir = log_path.parent
-        rotated = sorted(log_dir.glob(f"{log_path.name}.*"))
-        paths.extend(rotated)  # oldest first
-    paths.append(log_path)
+        paths = [log_path.parent / f"{log_path.name}*"]
+    else:
+        paths = [log_path]
 
     events = collect(paths)
     max_ex = 9999 if args.show_all else 5
