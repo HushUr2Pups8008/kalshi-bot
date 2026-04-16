@@ -16,7 +16,8 @@ places Kelly-sized bets.
 | Windows Gaming Desktop | `e:/VS_Code/kalshi-bot/` | NSSM service (`kalshi-bot`) |
 | Mac Studio (incoming) | `/Users/Jake/vscode/kalshi_bot` | `python main.py` (planned) |
 
-**Rule:** Always `git pull` before starting a session on any machine.
+**Rule:** Before syncing on any machine, inspect `git status` and local diffs first.
+If local work exists, review/stash/commit it intentionally, then `git pull`.
 
 **Bot is currently in paper trading mode.** Do not go live without Jake's explicit
 instruction and the `--go-live` confirmation gate. Mac and Windows share the same Kalshi

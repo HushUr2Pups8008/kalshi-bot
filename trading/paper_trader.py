@@ -12,6 +12,8 @@ Key additions vs. original:
 
 import dataclasses
 import json
+import logging
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -20,6 +22,7 @@ from typing import Optional
 
 from tabulate import tabulate
 
+import config as config_module
 from analysis import SignalAnalysis
 from analysis.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR, PAPER_FLAT_CONTRACTS
@@ -107,6 +110,13 @@ CREATE TABLE IF NOT EXISTS subreddit_candidates (
 """
 
 
+@dataclasses.dataclass(frozen=True)
+class _StartupStateSnapshot:
+    existing_keys: set[str]
+    paper_start_inserted: bool
+    bankroll_inserted: bool
+
+
 def _match_quality_report_section() -> list[str]:
     """
     Return a compact MATCH QUALITY section for the daily report.
@@ -168,27 +178,74 @@ def _match_quality_report_section() -> list[str]:
 class PaperTrader:
     """Paper trading engine backed by SQLite."""
 
-    def __init__(self, db_path: Path = DB_PATH):
-        self._db_path    = db_path
-        self._conn       = sqlite3.connect(str(db_path), check_same_thread=False)
+    _runtime_owner_pid: int | None = None
+
+    def __init__(self, db_path: Path = DB_PATH, *, startup_context: str = "runtime"):
+        self._db_path = db_path
+        self._startup_context = startup_context
+        self._initialized = False
+        self._validate_startup_context()
+        self._enforce_runtime_guards()
+        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self.credibility: SourceCredibility
+        self.portfolio: Portfolio
+        self.initialize()
+
+    def initialize(self) -> None:
+        """Explicit bootstrap hook kept idempotent for repeated construction safety.
+
+        The constructor still auto-calls this so existing runtime and CLI call
+        sites keep working. That is the safer option here: the app assumes a
+        ready-to-use PaperTrader in many places, and `initialize()` exists to
+        make repeated construction/tests safe rather than to force a broad API
+        change through startup code.
+        """
+        if self._initialized:
+            return
         self._conn.executescript(_DDL)
         self._conn.commit()
         self._migrate_db()
-        self.credibility = SourceCredibility(db_path)
-        self.portfolio   = Portfolio()
+        self.credibility = SourceCredibility(self._db_path)
+        self.portfolio = Portfolio()
         self.portfolio.load_from_db(self._conn)
-        self._load_state()
+        startup_state = self._load_state()
+        self._log_startup_diagnostics(startup_state)
+        self._log_state_initialization(startup_state)
+        if self._startup_context == "runtime":
+            type(self)._runtime_owner_pid = os.getpid()
+        self._initialized = True
+
+    def _validate_startup_context(self) -> None:
+        if self._startup_context not in {"runtime", "cli", "test"}:
+            raise ValueError(f"Unsupported startup_context: {self._startup_context}")
+
+    def _enforce_runtime_guards(self) -> None:
+        if self._startup_context != "runtime":
+            return
+        if self._is_in_memory_db_path():
+            log.error(
+                "[PAPER_INIT_GUARD] runtime_in_memory_db_blocked=true pid=%s db=%s",
+                os.getpid(),
+                self._db_path_for_logging(),
+            )
+            raise ValueError("PaperTrader runtime context cannot use an in-memory SQLite database")
+        if type(self)._runtime_owner_pid == os.getpid():
+            log.error(
+                "[PAPER_INIT_GUARD] duplicate_runtime_init_blocked=true pid=%s db=%s",
+                os.getpid(),
+                self._db_path_for_logging(),
+            )
+            raise RuntimeError("PaperTrader runtime initialization attempted more than once in the same process")
 
     # ── Schema migrations ─────────────────────────────────────────────────────
 
     def _migrate_db(self) -> None:
         """Add columns introduced after initial schema without dropping existing data."""
-        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(paper_trades)")}
-        if "market_snapshot" not in cols:
-            self._conn.execute("ALTER TABLE paper_trades ADD COLUMN market_snapshot TEXT")
-            self._conn.commit()
-            log.info("DB migrated: added market_snapshot column to paper_trades")
+        cols = self._paper_trades_columns()
+        added_cols: list[str] = []
+        if "market_snapshot" not in cols and self._ensure_paper_trades_column("market_snapshot", "TEXT", cols):
+            added_cols.append("market_snapshot")
 
         # v0.22.0: feedback-loop columns
         new_cols = [
@@ -204,18 +261,11 @@ class PaperTrader:
             ("kelly_contracts", "INTEGER"),
         ]
         for col, col_type in new_cols:
-            if col not in cols:
-                try:
-                    self._conn.execute(
-                        f"ALTER TABLE paper_trades ADD COLUMN {col} {col_type}"
-                    )
-                    self._conn.commit()
-                    log.info("DB migrated: added %s column to paper_trades", col)
-                except Exception as exc:
-                    log.warning("DB migration failed for column %s: %s", col, exc)
+            if col not in cols and self._ensure_paper_trades_column(col, col_type, cols):
+                added_cols.append(col)
 
         # Backfill series_ticker from market_snapshot JSON for historical rows
-        if "series_ticker" not in cols:
+        if "series_ticker" in added_cols:
             try:
                 cur = self._conn.execute(
                     """UPDATE paper_trades
@@ -230,28 +280,44 @@ class PaperTrader:
             except Exception as exc:
                 log.warning("DB backfill of series_ticker failed: %s", exc)
 
+        if added_cols:
+            log.info("DB migration complete (added: %s)", ", ".join(added_cols))
+
+    def _paper_trades_columns(self) -> set[str]:
+        return {row[1] for row in self._conn.execute("PRAGMA table_info(paper_trades)")}
+
+    def _ensure_paper_trades_column(self, col: str, col_type: str, cols: set[str]) -> bool:
+        try:
+            self._conn.execute(f"ALTER TABLE paper_trades ADD COLUMN {col} {col_type}")
+            self._conn.commit()
+            cols.add(col)
+            return True
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" in str(exc).lower():
+                cols.update(self._paper_trades_columns())
+                return False
+            log.warning("DB migration failed for column %s: %s", col, exc)
+            return False
+
     # ── State management ──────────────────────────────────────────────────────
 
-    def _load_state(self) -> None:
-        """Read persisted state; initialise defaults on first run."""
-        # Paper trading start time
-        row = self._conn.execute(
-            "SELECT value FROM bot_state WHERE key = 'paper_start_time'"
-        ).fetchone()
-        if not row:
-            now = datetime.now(timezone.utc).isoformat()
-            self._set_state("paper_start_time", now)
-            log.info("Paper trading phase started -- runs until you confirm --go-live.")
-        else:
-            log.info("Paper trading resumed (started %s).", row["value"])
+    def _load_state(self) -> _StartupStateSnapshot:
+        """Read persisted state; initialise defaults atomically on first run."""
+        existing_keys = self._existing_state_keys()
+        paper_start_inserted = False
+        bankroll_inserted = False
 
-        # Notional bankroll
-        row = self._conn.execute(
-            "SELECT value FROM bot_state WHERE key = 'notional_bankroll'"
-        ).fetchone()
-        if not row:
-            self._set_state("notional_bankroll", str(cfg.bankroll))
-            log.info("Notional bankroll initialised at $%.2f", cfg.bankroll)
+        if "paper_start_time" not in existing_keys:
+            paper_start_inserted = self._ensure_state_default(
+                "paper_start_time",
+                datetime.now(timezone.utc).isoformat(),
+            )
+
+        if "notional_bankroll" not in existing_keys:
+            bankroll_inserted = self._ensure_state_default(
+                "notional_bankroll",
+                str(cfg.bankroll),
+            )
 
         # Go-live flag -- sets cfg.is_paper_trading only if LIVE_TRADING_ENABLED=true.
         # The env var is a hard kill-switch: even if the DB says go_live_confirmed,
@@ -272,6 +338,79 @@ class PaperTrader:
                 cfg.set_paper_mode(True)
         else:
             cfg.set_paper_mode(True)
+
+        return _StartupStateSnapshot(
+            existing_keys=existing_keys,
+            paper_start_inserted=paper_start_inserted,
+            bankroll_inserted=bankroll_inserted,
+        )
+
+    def _existing_state_keys(self) -> set[str]:
+        rows = self._conn.execute(
+            "SELECT key FROM bot_state WHERE key IN ('paper_start_time', 'notional_bankroll', 'go_live_confirmed')"
+        ).fetchall()
+        return {str(row["key"]) for row in rows}
+
+    def _ensure_state_default(self, key: str, value: str) -> bool:
+        before = self._conn.total_changes
+        self._conn.execute(
+            """
+            INSERT INTO bot_state (key, value)
+            SELECT ?, ?
+            WHERE NOT EXISTS (
+                SELECT 1 FROM bot_state WHERE key = ?
+            )
+            """,
+            (key, value, key),
+        )
+        self._conn.commit()
+        return self._conn.total_changes > before
+
+    def _log_startup_diagnostics(self, startup_state: _StartupStateSnapshot) -> None:
+        if self._startup_context == "test":
+            return
+        level = logging.INFO if self._startup_context == "runtime" else logging.DEBUG
+        config_path = getattr(config_module, "__file__", "unknown")
+        log.log(
+            level,
+            "[PAPER_INIT] pid=%s ctx=%s cwd=%s db=%s config=%s bankroll=%.2f "
+            "paper_start_exists=%s bankroll_exists=%s go_live_exists=%s",
+            os.getpid(),
+            self._startup_context,
+            os.getcwd(),
+            self._db_path_for_logging(),
+            Path(config_path).resolve() if config_path != "unknown" else "unknown",
+            cfg.bankroll,
+            "paper_start_time" in startup_state.existing_keys,
+            "notional_bankroll" in startup_state.existing_keys,
+            "go_live_confirmed" in startup_state.existing_keys,
+        )
+
+    def _log_state_initialization(self, startup_state: _StartupStateSnapshot) -> None:
+        if self._startup_context == "test":
+            return
+        if startup_state.paper_start_inserted:
+            log.info("Paper trading phase started -- runs until you confirm --go-live.")
+        elif "paper_start_time" not in startup_state.existing_keys:
+            log.warning("Paper trading phase state row was created concurrently during startup.")
+
+        if startup_state.bankroll_inserted:
+            log.info("Notional bankroll initialised at $%.2f", cfg.bankroll)
+        elif "notional_bankroll" not in startup_state.existing_keys:
+            log.warning(
+                "Notional bankroll state row was created concurrently during startup; existing value preserved at $%.2f",
+                self.get_notional_bankroll(),
+            )
+
+    def _db_path_for_logging(self) -> str:
+        raw = str(self._db_path)
+        if self._is_in_memory_db_path():
+            return raw
+        return str(Path(raw).resolve())
+
+    def _is_in_memory_db_path(self) -> bool:
+        raw = str(self._db_path)
+        return raw == ":memory:" or (raw.startswith("file:") and "mode=memory" in raw)
 
     def _set_state(self, key: str, value: str) -> None:
         self._conn.execute(

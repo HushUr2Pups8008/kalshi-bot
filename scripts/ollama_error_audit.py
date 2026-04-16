@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 from collections import Counter
 from datetime import datetime
@@ -384,7 +385,12 @@ def main() -> None:
 
     log_path = Path(args.log)
     if args.rotated:
-        paths = [log_path.parent / f"{log_path.name}*"]
+        # Extract parent dir and filename as strings to avoid pathlib property access on Windows/Python 3.14
+        log_path_str = os.fspath(log_path)
+        parent_dir = os.path.dirname(log_path_str)
+        filename = os.path.basename(log_path_str)
+        glob_pattern = f"{parent_dir}{os.sep}{filename}*" if parent_dir else f"{filename}*"
+        paths = [Path(glob_pattern)]
     else:
         paths = [log_path]
 

@@ -24,11 +24,15 @@ import argparse
 import asyncio
 import dataclasses
 import itertools
+import json
+import logging
+import os
 import signal
 import sys
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from types import ModuleType
 
 from analysis import SignalAnalysis
 from analysis.kelly import kelly_bet
@@ -55,9 +59,11 @@ from kalshi.rest_client import KalshiRestClient
 from kalshi.websocket_client import KalshiWebSocketClient
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
-from utils.logger import get_logger, emit_startup_banner
+from utils.logger import get_logger, emit_startup_banner, rotate_logs
 
 log = get_logger("main")
+
+_BOT_RUNTIME_LOCK = DATA_DIR / "bot_runtime.lock"
 
 # Monotonic counter used as PriorityQueue tiebreaker so NewsItem objects
 # are never compared against each other (dataclasses without __lt__ would raise).
@@ -115,7 +121,153 @@ def parse_args() -> argparse.Namespace:
                    help="Review report then confirm switching to live trading")
     p.add_argument("--credibility", action="store_true",
                    help="Print source credibility table and exit")
+    p.add_argument("--rotate-logs", action="store_true",
+                   help="Force a safe rollover of logs/app/bot.log and logs/app/errors.log, then exit")
     return p.parse_args()
+
+
+def _is_cli_only_command(args: argparse.Namespace) -> bool:
+    return bool(args.report or args.credibility or args.resolve or args.go_live or args.rotate_logs)
+
+
+def _log_boot_summary(startup_context: str) -> None:
+    level = logging.INFO if startup_context == "runtime" else logging.DEBUG
+    log.log(
+        level,
+        "[BOOT] version=%s pid=%s ctx=%s cwd=%s",
+        VERSION,
+        os.getpid(),
+        startup_context,
+        os.getcwd(),
+    )
+
+
+class _RuntimeInstanceGuard:
+    """Best-effort singleton guard for the long-running bot runtime.
+
+    A file lock is used instead of command-line substring matching so we can
+    block duplicate launches without depending on psutil or fragile process-name
+    heuristics. The lock is held only for the normal long-running bot path; CLI
+    commands remain unaffected.
+    """
+
+    def __init__(self, lock_path):
+        self._lock_path = lock_path
+        self._handle = None
+
+    def acquire(self) -> bool:
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self._lock_path.open("a+", encoding="utf-8")
+        try:
+            self._lock_handle(handle)
+        except OSError:
+            handle.close()
+            return False
+
+        metadata = {
+            "pid": os.getpid(),
+            "cwd": os.getcwd(),
+            "started_utc": datetime.now(timezone.utc).isoformat(),
+            "argv": sys.argv,
+        }
+        handle.seek(0)
+        handle.truncate()
+        handle.write(json.dumps(metadata, separators=(",", ":")) + "\n")
+        handle.flush()
+        try:
+            os.fsync(handle.fileno())
+        except OSError:
+            pass
+        self._handle = handle
+        return True
+
+    def describe_owner(self) -> str:
+        try:
+            text = self._lock_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return "unknown"
+        if not text:
+            return "unknown"
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+        pid = payload.get("pid", "?")
+        cwd = payload.get("cwd", "?")
+        started = payload.get("started_utc", "?")
+        return f"pid={pid} cwd={cwd} started_utc={started}"
+
+    def release(self) -> None:
+        handle = self._handle
+        if handle is None:
+            return
+        try:
+            self._unlock_handle(handle)
+        finally:
+            handle.close()
+            self._handle = None
+
+    @staticmethod
+    def _lock_handle(handle) -> None:
+        if os.name == "nt":
+            _RuntimeInstanceGuard._lock_handle_windows(handle)
+            return
+
+        _RuntimeInstanceGuard._lock_handle_posix(handle)
+
+    @staticmethod
+    def _unlock_handle(handle) -> None:
+        if os.name == "nt":
+            _RuntimeInstanceGuard._unlock_handle_windows(handle)
+            return
+
+        _RuntimeInstanceGuard._unlock_handle_posix(handle)
+
+    @staticmethod
+    def _lock_handle_windows(handle, msvcrt_module: ModuleType | None = None) -> None:
+        msvcrt = msvcrt_module
+        if msvcrt is None:
+            import msvcrt as msvcrt_import
+
+            msvcrt = msvcrt_import
+
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write("0")
+            handle.flush()
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+
+    @staticmethod
+    def _unlock_handle_windows(handle, msvcrt_module: ModuleType | None = None) -> None:
+        msvcrt = msvcrt_module
+        if msvcrt is None:
+            import msvcrt as msvcrt_import
+
+            msvcrt = msvcrt_import
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+    @staticmethod
+    def _lock_handle_posix(handle, fcntl_module: ModuleType | None = None) -> None:
+        fcntl = fcntl_module
+        if fcntl is None:
+            import fcntl as fcntl_import
+
+            fcntl = fcntl_import
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    @staticmethod
+    def _unlock_handle_posix(handle, fcntl_module: ModuleType | None = None) -> None:
+        fcntl = fcntl_module
+        if fcntl is None:
+            import fcntl as fcntl_import
+
+            fcntl = fcntl_import
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 class TradingBot:
@@ -123,7 +275,7 @@ class TradingBot:
         self.rest          = KalshiRestClient()
         self.ws            = KalshiWebSocketClient()
         self.matcher       = MarketMatcher(self.rest)
-        self.paper         = PaperTrader()
+        self.paper         = PaperTrader(startup_context="runtime")
         self.executor      = TradeExecutor(self.rest, self.paper)
         # Wire live loss limit shutdown: executor calls this when the session loss
         # threshold is breached. Uses asyncio.create_task so it's safe from any context.
@@ -1192,9 +1344,15 @@ class TradingBot:
 
 async def async_main() -> None:
     args = parse_args()
+    startup_context = "cli" if _is_cli_only_command(args) else "runtime"
+    _log_boot_summary(startup_context)
 
-    if args.report or args.credibility or args.resolve or args.go_live:
-        paper = PaperTrader()
+    if startup_context == "cli":
+        if args.rotate_logs:
+            rotated = rotate_logs()
+            log.info("[BOOT] manual_log_rotation_complete=true files=%s", ", ".join(str(path) for path in rotated))
+            return
+        paper = PaperTrader(startup_context="cli")
         if args.report:
             print(paper.generate_report())
             return
@@ -1212,16 +1370,28 @@ async def async_main() -> None:
             _handle_go_live(paper)
             return
 
-    bot = TradingBot()
+    runtime_guard = _RuntimeInstanceGuard(_BOT_RUNTIME_LOCK)
+    if not runtime_guard.acquire():
+        log.warning(
+            "[BOOT] duplicate_runtime_blocked=true lock=%s owner=%s",
+            _BOT_RUNTIME_LOCK,
+            runtime_guard.describe_owner(),
+        )
+        raise SystemExit(1)
 
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, lambda: asyncio.create_task(_shutdown(bot)))
-        except (NotImplementedError, RuntimeError):
-            pass
+    try:
+        bot = TradingBot()
 
-    await bot.run()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, lambda: asyncio.create_task(_shutdown(bot)))
+            except (NotImplementedError, RuntimeError):
+                pass
+
+        await bot.run()
+    finally:
+        runtime_guard.release()
 
 
 def _check_go_live_gates(paper: PaperTrader) -> list[str]:

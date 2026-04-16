@@ -99,7 +99,10 @@ def _remove_generated_outputs(
     current_generated_files: list[str],
 ) -> None:
     manifest_src = str(manifest.get("src") or "")
-    if Path(manifest_src).resolve() != src.resolve():
+    # Normalize paths as strings to avoid pathlib property access issues on Windows/Python 3.14
+    manifest_src_normalized = os.path.normcase(os.path.normpath(os.fspath(Path(manifest_src).resolve())))
+    src_normalized = os.path.normcase(os.path.normpath(os.fspath(src.resolve())))
+    if manifest_src_normalized != src_normalized:
         raise MigrationError(
             "--overwrite-generated refused: manifest source does not match requested --src"
         )

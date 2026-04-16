@@ -3,6 +3,7 @@ Logging setup for the Kalshi bot.
 
 Provides:
   - get_logger(name)          -- colored console + rotating file logger
+  - rotate_logs()             -- force a safe rollover of app log files at runtime
   - emit_startup_banner(...)  -- write context line at startup and after each
                                  midnight rotation so every archived file is
                                  self-describing
@@ -107,6 +108,18 @@ class _DailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
         self._banner: str = ""
         self._peers: list["_DailyRotatingFileHandler"] = []
 
+    def _write_banner(self) -> None:
+        if self._banner and self.stream:
+            try:
+                self.stream.write(self._banner + "\n")
+                self.stream.flush()
+            except Exception:
+                pass
+
+    def _rollover_self(self) -> None:
+        super().doRollover()
+        self._write_banner()
+
     def rotate(self, source: str, dest: str) -> None:
         try:
             shutil.copy2(source, dest)
@@ -119,21 +132,20 @@ class _DailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
             pass
 
     def doRollover(self) -> None:
-        super().doRollover()
-        # Re-emit the banner at the top of the freshly-rotated (empty) file
-        if self._banner and self.stream:
-            try:
-                self.stream.write(self._banner + "\n")
-                self.stream.flush()
-            except Exception:
-                pass
+        self._rollover_self()
         # Nudge peer handlers that may not have received any messages since
         # midnight (e.g. errors.log during a quiet period).
         for peer in self._peers:
             if peer.shouldRollover(logging.LogRecord(
                 "", 0, "", 0, None, None, None
             )):
-                peer.doRollover()
+                peer._rollover_self()
+
+    def force_rollover(self) -> None:
+        """Rotate this handler and its peers immediately."""
+        self._rollover_self()
+        for peer in self._peers:
+            peer._rollover_self()
 
 
 # ── Shared file handler singletons ────────────────────────────────────────────
@@ -182,12 +194,19 @@ def emit_startup_banner(version: str, model: str, env: str) -> None:
     fh, eh = _ensure_file_handlers()
     for handler in (fh, eh):
         handler._banner = banner
-        if handler.stream:
-            try:
-                handler.stream.write(banner + "\n")
-                handler.stream.flush()
-            except Exception:
-                pass
+        handler._write_banner()
+
+
+def rotate_logs() -> list[Path]:
+    """Force a safe rollover of the shared app log handlers.
+
+    This is safe to call while the bot is running: the timed rotating handlers
+    manage their own file handles, archive the current contents, truncate the
+    active file in place, and keep logging to the same active path.
+    """
+    fh, eh = _ensure_file_handlers()
+    fh.force_rollover()
+    return [Path(fh.baseFilename), Path(eh.baseFilename)]
 
 
 def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:

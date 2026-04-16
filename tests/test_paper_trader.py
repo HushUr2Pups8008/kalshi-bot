@@ -8,10 +8,10 @@ Uses :memory: SQLite so no disk I/O or shared state between tests.
 """
 
 import json
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -40,8 +40,6 @@ def _shared_memory_connect(name: str):
         return conn
 
     return keeper, _connect
-
-
 def _make_mock_analysis(
     ticker="KXTEST-25DEC31",
     series_ticker="KXTEST",
@@ -121,7 +119,7 @@ def trader(monkeypatch):
          patch("trading.paper_trader.SourceCredibility") as MockCred:
         MockCred.return_value.get_multiplier.return_value = 1.0
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
-            pt = PaperTrader(db_path=":memory:")
+            pt = PaperTrader(db_path=":memory:", startup_context="test")
             # Seed bankroll
             pt._set_state("notional_bankroll", "500.0")
             yield pt
@@ -292,7 +290,7 @@ class TestModeSelection:
         with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
              patch("trading.paper_trader.SourceCredibility") as MockCred:
             MockCred.return_value.get_multiplier.return_value = 1.0
-            PaperTrader(db_path=":memory:")
+            PaperTrader(db_path=":memory:", startup_context="test")
 
         assert _cfg_module.cfg.is_paper_trading is True
         keeper.close()
@@ -308,13 +306,13 @@ class TestModeSelection:
         with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
              patch("trading.paper_trader.SourceCredibility") as MockCred:
             MockCred.return_value.get_multiplier.return_value = 1.0
-            pt = PaperTrader(db_path=":memory:")
+            pt = PaperTrader(db_path=":memory:", startup_context="test")
             pt._set_state("go_live_confirmed", "false")
 
         with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
              patch("trading.paper_trader.SourceCredibility") as MockCred:
             MockCred.return_value.get_multiplier.return_value = 1.0
-            PaperTrader(db_path=":memory:")
+            PaperTrader(db_path=":memory:", startup_context="test")
 
         assert _cfg_module.cfg.is_paper_trading is True
         keeper.close()
@@ -330,13 +328,13 @@ class TestModeSelection:
         with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
              patch("trading.paper_trader.SourceCredibility") as MockCred:
             MockCred.return_value.get_multiplier.return_value = 1.0
-            pt = PaperTrader(db_path=":memory:")
+            pt = PaperTrader(db_path=":memory:", startup_context="test")
             pt._set_state("go_live_confirmed", "true")
 
         with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
              patch("trading.paper_trader.SourceCredibility") as MockCred:
             MockCred.return_value.get_multiplier.return_value = 1.0
-            PaperTrader(db_path=":memory:")
+            PaperTrader(db_path=":memory:", startup_context="test")
 
         assert _cfg_module.cfg.is_paper_trading is True
         keeper.close()
@@ -352,13 +350,130 @@ class TestModeSelection:
         with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
              patch("trading.paper_trader.SourceCredibility") as MockCred:
             MockCred.return_value.get_multiplier.return_value = 1.0
-            pt = PaperTrader(db_path=":memory:")
+            pt = PaperTrader(db_path=":memory:", startup_context="test")
             pt._set_state("go_live_confirmed", "true")
 
         with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
              patch("trading.paper_trader.SourceCredibility") as MockCred:
             MockCred.return_value.get_multiplier.return_value = 1.0
-            PaperTrader(db_path=":memory:")
+            PaperTrader(db_path=":memory:", startup_context="test")
 
         assert _cfg_module.cfg.is_paper_trading is False
         keeper.close()
+
+
+class TestStartupInitialization:
+    def test_existing_bankroll_is_not_overwritten_on_repeated_construction(self, monkeypatch, caplog):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+
+        from trading.paper_trader import PaperTrader
+
+        keeper, connect = _shared_memory_connect("startup-idempotent-bankroll")
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            first = PaperTrader(db_path=":memory:", startup_context="test")
+            first._set_state("notional_bankroll", "123.45")
+
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 50.0)
+        caplog.clear()
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred, \
+             caplog.at_level(logging.INFO, logger="paper_trader"):
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            second = PaperTrader(db_path=":memory:", startup_context="test")
+
+        assert second.get_notional_bankroll() == pytest.approx(123.45, abs=0.001)
+        assert "Notional bankroll initialised" not in caplog.text
+        assert "Paper trading phase started" not in caplog.text
+        assert "[PAPER_INIT]" not in caplog.text
+        keeper.close()
+
+    def test_initialize_is_idempotent_on_same_instance(self, monkeypatch, caplog):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+
+        from trading.paper_trader import PaperTrader
+
+        keeper, connect = _shared_memory_connect("startup-same-instance")
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred, \
+             caplog.at_level(logging.INFO, logger="paper_trader"):
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            trader = PaperTrader(db_path=":memory:", startup_context="test")
+            caplog.clear()
+            trader.initialize()
+
+        assert "Paper trading phase started" not in caplog.text
+        assert "Notional bankroll initialised" not in caplog.text
+        assert "[PAPER_INIT]" not in caplog.text
+        keeper.close()
+
+    def test_cli_startup_uses_debug_diagnostics_without_runtime_info_noise(self, monkeypatch, caplog):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+
+        from trading.paper_trader import PaperTrader
+
+        keeper, connect = _shared_memory_connect("startup-cli-diagnostics")
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            PaperTrader(db_path=":memory:", startup_context="test")
+
+        caplog.clear()
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred, \
+             caplog.at_level(logging.DEBUG, logger="paper_trader"):
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            PaperTrader(db_path=":memory:", startup_context="cli")
+
+        assert "[PAPER_INIT]" in caplog.text
+        assert "ctx=cli" in caplog.text
+        assert "Paper trading phase started" not in caplog.text
+        assert "Notional bankroll initialised" not in caplog.text
+        keeper.close()
+
+    def test_runtime_context_rejects_in_memory_db(self, monkeypatch, caplog):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+
+        from trading.paper_trader import PaperTrader
+
+        monkeypatch.setattr(PaperTrader, "_runtime_owner_pid", None)
+        with caplog.at_level(logging.ERROR, logger="paper_trader"):
+            with pytest.raises(ValueError, match="cannot use an in-memory SQLite database"):
+                PaperTrader(db_path=":memory:", startup_context="runtime")
+
+        assert "[PAPER_INIT_GUARD]" in caplog.text
+        assert "runtime_in_memory_db_blocked=true" in caplog.text
+
+    def test_runtime_context_blocks_repeated_runtime_init_in_same_process(self, monkeypatch, caplog):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 50.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+
+        from trading.paper_trader import PaperTrader
+
+        monkeypatch.setattr(PaperTrader, "_runtime_owner_pid", None)
+        keeper, connect = _shared_memory_connect("runtime-repeat-guard")
+        try:
+            with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+                 patch("trading.paper_trader.SourceCredibility") as MockCred:
+                MockCred.return_value.get_multiplier.return_value = 1.0
+                first = PaperTrader(db_path="paper_trades.db", startup_context="runtime")
+                with caplog.at_level(logging.ERROR, logger="paper_trader"):
+                    with pytest.raises(RuntimeError, match="attempted more than once"):
+                        PaperTrader(db_path="paper_trades.db", startup_context="runtime")
+
+            assert first.get_notional_bankroll() == pytest.approx(50.0, abs=0.001)
+            assert "[PAPER_INIT_GUARD]" in caplog.text
+            assert "duplicate_runtime_init_blocked=true" in caplog.text
+        finally:
+            monkeypatch.setattr(PaperTrader, "_runtime_owner_pid", None)
+            keeper.close()

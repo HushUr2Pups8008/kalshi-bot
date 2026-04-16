@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -82,8 +83,10 @@ def _sort_key(path: Path) -> tuple[int, float, str]:
         mtime = path.stat().st_mtime
     except OSError:
         mtime = 0.0
-    is_active = 1 if path.name == "bot.log" else 0
-    return (is_active, mtime, path.name.lower())
+    # Extract filename as string to avoid repeated pathlib property access on Windows/Python 3.14
+    filename = os.path.basename(os.fspath(path))
+    is_active = 1 if filename == "bot.log" else 0
+    return (is_active, mtime, filename.lower())
 
 
 def _resolve_app_log_files(path: Path) -> list[Path]:
@@ -95,8 +98,15 @@ def _resolve_app_log_files(path: Path) -> list[Path]:
         return sorted(files, key=_sort_key)
 
     if _has_glob(path):
-        parent = path.parent if str(path.parent) not in {"", "."} else Path(".")
-        files = [candidate for candidate in parent.glob(path.name) if candidate.is_file()]
+        # Extract parent dir and glob pattern as strings to avoid repeated pathlib property access on Windows/Python 3.14
+        path_str = os.fspath(path)
+        parent_dir = os.path.dirname(path_str)
+        if not parent_dir or parent_dir == ".":
+            parent = Path(".")
+        else:
+            parent = Path(parent_dir)
+        glob_pattern = os.path.basename(path_str)
+        files = [candidate for candidate in parent.glob(glob_pattern) if candidate.is_file()]
         return sorted(files, key=_sort_key)
 
     return []
