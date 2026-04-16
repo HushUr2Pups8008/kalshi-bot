@@ -6,6 +6,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.27.3] - 2026-04-16
+
+### Added
+- `scripts/ollama_error_audit.py`: read-only diagnostic that parses `logs/app/bot.log`
+  for Ollama HTTP error lines, classifies them into five buckets (`model_not_found`,
+  `timeout_or_connection`, `server_error`, `bad_request`, `other`), and prints a concise
+  report with per-bucket examples, most-recent-10 errors, time-gap / burst analysis, and
+  a plain-English interpretation of the dominant failure mode. Accepts `--rotated` to scan
+  archived log files and `--show-all` to remove per-bucket truncation. No live Ollama
+  required; reads only the log file.
+- `tests/test_ollama_error_audit.py`: 36 tests covering line parsing (new WARNING format,
+  old DEBUG format, timeout lines), all five classify() branches, file I/O edge cases,
+  aggregation, report rendering, gap analysis (burst detection), and multi-file collect.
+
+---
+
 ## [0.27.2] - 2026-04-15
 
 ### Fixed
