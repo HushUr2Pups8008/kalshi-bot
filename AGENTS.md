@@ -34,7 +34,23 @@ This system ingests external data, generates probability estimates, and executes
 * Live trading must always be gated behind explicit configuration
 * Never bypass mode checks
 
-## Time Handling (CRITICAL)
+## Cross-Platform Requirement (CRITICAL)
+
+All engineering changes must work on both Windows and macOS unless the task explicitly states otherwise.
+
+Requirements:
+- Do not introduce OS-specific behavior unless it is guarded by a platform-aware abstraction.
+- Review file paths, locking, process handling, shell assumptions, and service/runtime behavior for portability on every engineering change.
+- If platform-specific code is necessary, it must:
+  - detect the platform explicitly
+  - use the appropriate native implementation per OS
+  - preserve the same external behavior and logs across platforms
+- Windows-only (`msvcrt`) or Unix/macOS-only (`fcntl`) implementations are not acceptable unless both paths are implemented behind the same abstraction.
+- Prefer standard-library, cross-platform solutions when practical.
+- New tests should cover cross-platform logic boundaries where feasible.
+- Do not assume PowerShell-only or Bash-only execution for core runtime behavior.
+
+## Time Handling 
 
 **All system time must be handled in UTC.**
 
@@ -91,6 +107,22 @@ Changes must:
 * Not increase number of trades without justification
 * Not reduce signal quality
 * Maintain or improve decision consistency
+
+## Git Workflow (CRITICAL)
+
+Default git workflow for this repo:
+
+* Always inspect `git status`, `git diff`, and `git diff --staged` before committing
+* Review changes for safety, scope, and relevance before staging
+* Look for unrelated edits, temp artifacts, debug files, generated files, and suspicious changes
+* Stage files intentionally by logical change group
+* Do not use `git add .` as the default workflow unless explicitly justified after review
+* Prefer multiple clean commits when work spans distinct concerns
+* Verify each staged commit with `git diff --staged` before committing
+* Use clear commit messages that explain what changed and why
+* Run relevant validation/tests before pushing
+* Confirm the working tree is clean and commit history is readable before push
+* Push only after review is complete
 
 ## Cross-Platform Script Standards
 

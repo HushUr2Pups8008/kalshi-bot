@@ -105,6 +105,18 @@ python main.py --resolve TICKER YES   # manually resolve a paper trade
 python main.py --go-live         # interactive prompt to enable live trading
 ```
 
+## Git Workflow
+
+Default repo workflow:
+
+- Review first: run `git status`, `git diff`, and `git diff --staged`
+- Stage intentionally by logical change group, not with blind `git add .`
+- Keep commits understandable and reversible; split unrelated work into multiple commits
+- Run relevant validation/tests before push
+- Confirm a clean working tree and sensible commit history before pushing
+
+See [AGENTS.md](AGENTS.md) and [WINDOWS_COMMANDS.md](WINDOWS_COMMANDS.md) for the repo-specific operational workflow.
+
 ---
 
 ## Windows Service (24/7)

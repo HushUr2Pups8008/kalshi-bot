@@ -35,6 +35,24 @@ Never revert to a hardcoded name.
 
 ---
 
+## Portability Guardrail
+
+Before finalizing any infrastructure/runtime change, explicitly check:
+- Windows behavior
+- macOS behavior
+- path handling
+- process/locking semantics
+- shell/CLI assumptions
+
+Rules:
+- Engineering changes must work on both Windows and macOS by default unless the task explicitly scopes otherwise.
+- Hide OS-specific behavior behind one platform-aware abstraction with the same external behavior and logs on both platforms.
+- Windows-only (`msvcrt`) or Unix/macOS-only (`fcntl`) code is not acceptable unless both paths are implemented.
+- Prefer standard-library cross-platform approaches where practical.
+- Add tests around platform-boundary logic when feasible.
+
+---
+
 ## Market Discovery
 
 - Do NOT use `KALSHI_GEOPOLITICAL_SERIES` allowlist -- obsolete, zero open markets.
@@ -51,6 +69,30 @@ Never revert to a hardcoded name.
 - LLM outputs categorical JSON: `relevant`, `new_info`, `direction`, `magnitude`, `confidence`.
 - Multi-position guard must query ALL open trades for a ticker, not just the most recent.
 - Use `json.JSONDecoder().raw_decode()` for JSON extraction -- never greedy `{.*}` regex.
+
+---
+
+## Git Workflow — Safe Commits
+
+**Always use a review-first, logically-grouped workflow:**
+
+1. Run `git status`, `git diff`, `git diff --staged` before committing
+2. Validate changes against project constraints before staging or committing
+3. Look for unrelated edits, temp artifacts, debug files, generated files, and suspicious changes
+4. Stage files intentionally by logical group (never `git add .` blindly)
+5. Verify `git diff --staged` before each commit
+6. Write clear commit messages with rationale, not just filenames
+7. Run relevant tests or validation before pushing
+8. Confirm the working tree is clean and commit history is sensible before push
+9. Push only after review is complete
+
+**Safety gates:**
+- NO changes to `analysis/`, `trading/`, or core decision logic unless explicitly intentional
+- NO temporary files, debug artifacts, or credentials
+- NO monolithic commits mixing unrelated concerns unless clearly justified
+- NO push without a clean review of `git log`
+
+See global `~/.claude/rules/version_control.md` for detailed workflow and examples.
 
 ---
 
