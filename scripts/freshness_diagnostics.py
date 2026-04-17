@@ -29,7 +29,9 @@ from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
+# Default to the active live file -- freshness is a current-state metric.
+# Pass --path logs/trades to include archive data for multi-day analysis.
+DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "live" / "trades.jsonl"
 FRESHNESS_THRESHOLD_SECONDS = 300
 MIN_AGE_SAMPLES_FOR_STRONG_RANKING = 3
 

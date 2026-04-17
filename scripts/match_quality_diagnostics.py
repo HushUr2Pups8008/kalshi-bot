@@ -26,7 +26,9 @@ from analysis.market_matcher import (
     _tokenize,
 )
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
-DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
+# Default to the active live file -- match quality is a current-run metric.
+# Pass --path logs/trades to include archive data for multi-day analysis.
+DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "live" / "trades.jsonl"
 
 
 def parse_args() -> argparse.Namespace:

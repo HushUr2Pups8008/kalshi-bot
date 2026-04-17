@@ -6,6 +6,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.5] - 2026-04-17
+
+### Fixed
+- `scripts/daily_review.py` (`DEFAULT_TRADES_LOG_PATH`): Changed default from `logs/trades`
+  (full directory scan including all archive partitions) to `logs/trades/live/trades.jsonl`.
+  Daily review is a current-state report; it was scanning 334k+ historical records instead of
+  only the active live log. Also added `--path` argument so users can pass `logs/trades` when
+  historical analysis across day boundaries is needed.
+- `scripts/freshness_diagnostics.py` (`DEFAULT_LOG_PATH`): Same fix -- freshness is a
+  current-state metric; default now targets the active live file.
+- `scripts/match_quality_diagnostics.py` (`DEFAULT_LOG_PATH`): Same fix.
+- `scripts/decision_funnel_summary.py` (`DEFAULT_LOG_PATH`): Same fix.
+- `scripts/signal_edge_diagnostics.py` (`DEFAULT_LOG_PATH`): Same fix.
+- `scripts/pipeline_impact_audit.py` (`DEFAULT_LOG_PATH`): **Kept as `logs/trades` root.**
+  This script compares a current window against the previous equal-length window across day
+  boundaries; the previous window requires archive data. Changing to live-only would silently
+  break the historical comparison.
+- `tests/test_report_default_paths.py` (new): 8 tests locking in the correct default for each
+  script and confirming `daily_review` now accepts a `--path` override.
+
 ## [0.29.4] - 2026-04-16
 
 ### Fixed

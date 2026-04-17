@@ -31,7 +31,9 @@ from utils.reporting_helpers import ProgressTracker, stage_timer, _eprint
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REPORTS_DIR = REPO_ROOT / "logs" / "reports"
 DEFAULT_REPORT_PATH = REPORTS_DIR / f"daily_review_{datetime.now().strftime('%Y%m%d')}.txt"
-DEFAULT_TRADES_LOG_PATH = REPO_ROOT / "logs" / "trades"
+# Default to the active live file -- daily review is a current-state report.
+# Pass --path logs/trades to include archive data for historical analysis.
+DEFAULT_TRADES_LOG_PATH = REPO_ROOT / "logs" / "trades" / "live" / "trades.jsonl"
 DEFAULT_PAPER_DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
 RECENT_MATCH_EXAMPLES = 5
 RECENT_EDGE_AUDIT = 5
@@ -39,6 +41,11 @@ RECENT_EDGE_AUDIT = 5
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the kalshi-bot daily review suite")
+    parser.add_argument(
+        "--path",
+        default=str(DEFAULT_TRADES_LOG_PATH),
+        help="Trade log path -- file for live-only, directory (logs/trades) to include archive",
+    )
     parser.add_argument("--since", help="Inclusive start date in YYYY-MM-DD")
     parser.add_argument("--until", help="Inclusive end date in YYYY-MM-DD")
     parser.add_argument("--top", type=int, default=5, help="Max rows to show in top breakdowns")
@@ -416,7 +423,7 @@ def main() -> int:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     report_path = DEFAULT_REPORT_PATH
     lines = build_daily_review(
-        trades_path=DEFAULT_TRADES_LOG_PATH,
+        trades_path=Path(args.path),
         paper_db_path=DEFAULT_PAPER_DB_PATH,
         since=since,
         until=until,

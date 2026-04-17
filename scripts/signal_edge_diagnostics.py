@@ -19,7 +19,9 @@ from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
+# Default to the active live file -- signal edge is a current-run diagnostic.
+# Pass --path logs/trades to include archive data for multi-day analysis.
+DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "live" / "trades.jsonl"
 RECENT_AUDIT_DEFAULT = 20
 
 
