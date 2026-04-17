@@ -26,6 +26,7 @@ from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
+from utils.reporting_helpers import warn_if_full_trade_root_scan
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 import re
 
@@ -584,6 +585,7 @@ def main() -> int:
     path = Path(args.path)
     since = parse_date_start(args.since)
     until = parse_date_end(args.until)
+    warn_if_full_trade_root_scan(path, since=since, until=until)
     phrases = args.phrases if args.phrases else DEFAULT_SHADOW_PHRASES
 
     records, total_lines, malformed = load_miss_corpus(

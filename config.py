@@ -28,6 +28,24 @@ DATA_DIR.mkdir(exist_ok=True)
 # ── Version ───────────────────────────────────────────────────────────────────
 VERSION = (BASE_DIR / "VERSION").read_text(encoding="utf-8").strip()
 
+
+def _parse_float_band_pairs(value: str, *, default: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    text = str(value or "").strip()
+    if not text:
+        return list(default)
+    bands: list[tuple[float, float]] = []
+    for raw_part in text.split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        if "-" not in part:
+            raise ValueError(f"invalid band '{part}' (expected low-high)")
+        low_text, high_text = part.split("-", 1)
+        low = float(low_text.strip())
+        high = float(high_text.strip())
+        bands.append((low, high))
+    return bands
+
 # ── Kalshi REST base URLs ─────────────────────────────────────────────────────
 # Production URL per official OpenAPI spec (api.elections.kalshi.com)
 KALSHI_PROD_REST = "https://api.elections.kalshi.com/trade-api/v2"
@@ -949,6 +967,24 @@ class BotConfig:
     ollama_probe_timeout_seconds: int = field(
         default_factory=lambda: int(os.getenv("OLLAMA_PROBE_TIMEOUT_SECONDS", "5"))
     )
+    enable_llm_routing_filter: bool = field(
+        default_factory=lambda: os.getenv("ENABLE_LLM_ROUTING_FILTER", "false").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    llm_allowed_price_bands: list[tuple[float, float]] = field(
+        default_factory=lambda: _parse_float_band_pairs(
+            os.getenv("LLM_ALLOWED_PRICE_BANDS", "0.00-0.35,0.65-1.00"),
+            default=[(0.00, 0.35), (0.65, 1.00)],
+        )
+    )
+    llm_excluded_price_bands: list[tuple[float, float]] = field(
+        default_factory=lambda: _parse_float_band_pairs(
+            os.getenv("LLM_EXCLUDED_PRICE_BANDS", ""),
+            default=[],
+        )
+    )
+    llm_min_keyword_signal: float = field(
+        default_factory=lambda: float(os.getenv("LLM_MIN_KEYWORD_SIGNAL", "0.0"))
+    )
 
     # Paper trading mode — True until explicitly confirmed via --go-live
     # Set at runtime via set_paper_mode() — do not mutate directly.
@@ -994,6 +1030,17 @@ class BotConfig:
                 "OLLAMA_PROBE_TIMEOUT_SECONDS must be positive, got %d"
                 % self.ollama_probe_timeout_seconds
             )
+        if self.llm_min_keyword_signal < 0:
+            errors.append("LLM_MIN_KEYWORD_SIGNAL must be non-negative")
+        for label, bands in (
+            ("LLM_ALLOWED_PRICE_BANDS", self.llm_allowed_price_bands),
+            ("LLM_EXCLUDED_PRICE_BANDS", self.llm_excluded_price_bands),
+        ):
+            for low, high in bands:
+                if not (0.0 <= low <= 1.0 and 0.0 <= high <= 1.0 and low < high):
+                    errors.append(
+                        f"{label} entries must satisfy 0.0 <= low < high <= 1.0; got ({low}, {high})"
+                    )
         # Validate RSA key can be loaded (catches bad PEM before first trade)
         if self.api_key_secret:
             try:

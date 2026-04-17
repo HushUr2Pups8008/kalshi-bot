@@ -33,6 +33,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from config import DISABLED_NEWS_SOURCES, DISABLED_SOURCE_FAMILIES
+from utils.reporting_helpers import warn_if_full_trade_root_scan
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
 DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
@@ -559,6 +560,8 @@ def main() -> int:
 
     if since and until and since > until:
         raise SystemExit("--since must be on or before --until")
+
+    warn_if_full_trade_root_scan(Path(args.logs_path), since=since, until=until)
 
     stats = summarize(
         logs_path=Path(args.logs_path),

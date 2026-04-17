@@ -38,6 +38,7 @@ from scripts.keyword_shadow_eval import (
     parse_date_start,
     score_phrases,
 )
+from utils.reporting_helpers import warn_if_full_trade_root_scan
 
 
 RECOMMEND_PROMOTE = "promote"
@@ -324,6 +325,7 @@ def main() -> int:
     path = Path(args.path)
     since = parse_date_start(args.since)
     until = parse_date_end(args.until)
+    warn_if_full_trade_root_scan(path, since=since, until=until)
     phrases = args.phrases if args.phrases else DEFAULT_SHADOW_PHRASES
 
     stats = summarize(

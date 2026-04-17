@@ -26,6 +26,7 @@ from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
+from utils.reporting_helpers import warn_if_full_trade_root_scan
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
 
@@ -283,6 +284,7 @@ def main() -> int:
         raise SystemExit("--since must be on or before --until")
 
     path = Path(args.path)
+    warn_if_full_trade_root_scan(path, since=since, until=until)
     stats = summarize(path, since, until, exclude_test=args.exclude_test)
     print_summary(stats, top=max(1, args.top), since=since, until=until)
     return 0

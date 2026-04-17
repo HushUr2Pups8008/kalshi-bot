@@ -3,6 +3,8 @@ import shutil
 import uuid
 from pathlib import Path
 
+import pytest
+
 from scripts.signal_edge_diagnostics import (
     classify_skip_reason,
     parse_date_end,
@@ -114,6 +116,21 @@ def test_summarize_builds_edge_audit_and_group_metrics():
                     "ts": "2026-04-12T12:05:00+00:00",
                 },
                 {
+                    "type": "SIGNAL_ANALYSIS_DETAIL",
+                    "ticker": "KXTHREE",
+                    "source": "AP",
+                    "headline": "Balanced market skip",
+                    "method": "keyword",
+                    "llm_attempted": False,
+                    "llm_result_used": False,
+                    "llm_result_status": "llm_skipped_routing_price_band_excluded",
+                    "llm_routing_passed": False,
+                    "llm_routing_reason": "price_band_excluded",
+                    "final_probability": 0.52,
+                    "market_price": 0.50,
+                    "ts": "2026-04-12T12:06:00+00:00",
+                },
+                {
                     "type": "SIGNAL",
                     "source": "Reuters",
                     "headline": "Ceasefire tested",
@@ -142,7 +159,7 @@ def test_summarize_builds_edge_audit_and_group_metrics():
 
         stats = summarize(path, since=None, until=None)
 
-        assert stats["counts"]["SIGNAL_ANALYSIS_DETAIL"] == 2
+        assert stats["counts"]["SIGNAL_ANALYSIS_DETAIL"] == 3
         assert stats["counts"]["SIGNAL"] == 2
         assert stats["counts"]["OPPORTUNITY"] == 2
         assert stats["counts"]["SKIPPED"] == 1
@@ -152,6 +169,8 @@ def test_summarize_builds_edge_audit_and_group_metrics():
         assert stats["llm_observability"]["attempted"] == 2
         assert stats["llm_observability"]["result_used"] == 1
         assert stats["llm_observability"]["fallback"] == 1
+        assert stats["llm_observability"]["skipped_routing"] == 1
+        assert stats["llm_observability"]["skipped_routing_reasons"]["price_band_excluded"] == 1
         assert stats["llm_observability"]["status_counts"]["ollama_success"] == 1
         assert stats["llm_observability"]["status_counts"]["ollama_http_5xx"] == 1
         assert stats["llm_observability"]["queue_wait_ms_samples"] == [200.0, 350.0]
@@ -159,18 +178,37 @@ def test_summarize_builds_edge_audit_and_group_metrics():
         assert stats["llm_observability"]["parse_ms_samples"] == [40.0]
         assert stats["llm_observability"]["contention_observed"] == 1
         assert stats["llm_observability"]["max_in_flight_at_entry"] == 1
+        assert stats["llm_value_add"]["llm_rows"] == 1
+        assert stats["llm_value_add"]["probability_movement_buckets"]["moderate"] == 1
+        assert stats["llm_value_add"]["edge_magnitude_buckets"]["zero_neutral"] == 1
+        assert stats["llm_value_add"]["impact_classifications"]["weak_signal"] == 1
+        assert stats["llm_value_add"]["near_neutral_outputs"] == 0
+        assert stats["llm_value_add"]["non_zero_edge_outputs"] == 0
+        by_source_seg = {
+            row["source"]: row for row in stats["llm_value_add"]["segmentation"]["by_source"]
+        }
+        assert by_source_seg["NYT > World News"]["llm_rows"] == 1
+        assert by_source_seg["NYT > World News"]["meaningful_signal_rate"] == pytest.approx(0.0)
+        by_price_band_seg = {
+            row["price_band"]: row for row in stats["llm_value_add"]["segmentation"]["by_price_band"]
+        }
+        assert by_price_band_seg["0.60-0.80"]["llm_rows"] == 1
+        assert stats["llm_value_add"]["segmentation"]["timing"]["available"] is False
 
         first_row = stats["audit_rows"][0]
         second_row = stats["audit_rows"][1]
-        assert first_row["ticker"] == "KXTWO"
-        assert first_row["outcome"] == "executed"
-        assert second_row["ticker"] == "KXONE"
-        assert second_row["outcome"] == "opportunity skipped: zero edge"
+        third_row = stats["audit_rows"][2]
+        assert first_row["ticker"] == "KXTHREE"
+        assert first_row["outcome"] == "signal only"
+        assert second_row["ticker"] == "KXTWO"
+        assert second_row["outcome"] == "executed"
+        assert third_row["ticker"] == "KXONE"
+        assert third_row["outcome"] == "opportunity skipped: zero edge"
 
         by_source = {row["source"]: row for row in stats["by_source"]}
         assert by_source["Reuters"]["signals"] == 1
         assert by_source["Reuters"]["opportunities"] == 1
-        assert by_source["Reuters"]["avg_edge"] == 0.04
+        assert by_source["Reuters"]["avg_edge"] == pytest.approx(0.04)
         assert by_source["NYT > World News"]["zero_edge"] == 1
     finally:
         _cleanup_tmp_dir(tmp)
@@ -299,6 +337,15 @@ def test_print_summary_includes_edge_sections(capsys):
         assert "Aggregate by Source" in output
         assert "Aggregate by Ticker" in output
         assert "LLM Path Observability" in output
+        assert "LLM Value-Add Analysis" in output
+        assert "LLM Value-Add Segmentation" in output
+        assert "LLM skipped (routing)" in output
+        assert "Top sources by meaningful signal rate" in output
+        assert "Market price bands by meaningful signal rate" in output
+        assert "Rare non-neutral examples" in output
+        assert "Near-neutral outputs" in output
+        assert "Strong LLM Signal Examples" in output
+        assert "Neutral Confirmation Examples" in output
         assert "LLM total stage" in output
         assert "LLM queue wait" in output
         assert "Live orders are counted in the cohort summary" in output

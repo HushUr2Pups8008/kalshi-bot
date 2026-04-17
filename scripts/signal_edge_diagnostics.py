@@ -15,6 +15,8 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+from config import PAPER_MIN_EDGE, cfg
+from utils.reporting_helpers import DEFAULT_CURRENT_STATE_WINDOW_HOURS, resolve_recent_window
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
 
@@ -23,6 +25,22 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Pass --path logs/trades to include archive data for multi-day analysis.
 DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "live" / "trades.jsonl"
 RECENT_AUDIT_DEFAULT = 20
+LLM_NEAR_NEUTRAL_PROB_MAX = 0.02
+LLM_WEAK_PROB_MAX = 0.10
+LLM_MODERATE_PROB_MAX = 0.20
+LLM_ZERO_EDGE_MAX = 0.01
+LLM_WEAK_EDGE_MAX = 0.05
+LLM_MODERATE_EDGE_MAX = 0.10
+LLM_MARKET_NEUTRAL_MAX = 0.01
+LLM_MEANINGFUL_EDGE_MIN = PAPER_MIN_EDGE
+LLM_TRADE_CANDIDATE_EDGE_MIN = max(cfg.min_edge, PAPER_MIN_EDGE)
+LLM_PRICE_BAND_LABELS = [
+    "0.00-0.20",
+    "0.20-0.40",
+    "0.40-0.60",
+    "0.60-0.80",
+    "0.80-1.00",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,10 +48,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--path",
         default=str(DEFAULT_LOG_PATH),
-        help="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
+        help=(
+            "Path to trade-log file or root "
+            "(default: logs/trades/live/trades.jsonl; pass logs/trades/ for archive scans; "
+            f"default window: last {DEFAULT_CURRENT_STATE_WINDOW_HOURS} hours when dates omitted; "
+            "legacy logs/trades/trades.jsonl still supported)"
+        ),
     )
     parser.add_argument("--since", help="Inclusive start date in YYYY-MM-DD")
-    parser.add_argument("--until", help="Inclusive end date in YYYY-MM-DD")
+    parser.add_argument(
+        "--until",
+        help=f"Inclusive end date in YYYY-MM-DD (default: now when both dates omitted; last {DEFAULT_CURRENT_STATE_WINDOW_HOURS} hours)",
+    )
     parser.add_argument(
         "--top",
         type=int,
@@ -181,6 +207,189 @@ def default_group_metrics() -> dict[str, Any]:
     }
 
 
+def _llm_probability_movement_bucket(movement: float) -> str:
+    if movement < LLM_NEAR_NEUTRAL_PROB_MAX:
+        return "near_neutral"
+    if movement < LLM_WEAK_PROB_MAX:
+        return "weak"
+    if movement <= LLM_MODERATE_PROB_MAX:
+        return "moderate"
+    return "strong"
+
+
+def _llm_edge_bucket(abs_edge: float) -> str:
+    if abs_edge < LLM_ZERO_EDGE_MAX:
+        return "zero_neutral"
+    if abs_edge < LLM_WEAK_EDGE_MAX:
+        return "weak"
+    if abs_edge <= LLM_MODERATE_EDGE_MAX:
+        return "moderate"
+    return "strong"
+
+
+def _llm_decision_impact_classification(*, est_prob: float, market_price: float) -> str:
+    abs_edge = abs(est_prob - market_price)
+    if abs(est_prob - 0.5) < LLM_NEAR_NEUTRAL_PROB_MAX and abs(market_price - 0.5) < LLM_MARKET_NEUTRAL_MAX and abs_edge < LLM_ZERO_EDGE_MAX:
+        return "neutral_confirmation"
+    if abs_edge >= LLM_TRADE_CANDIDATE_EDGE_MIN:
+        return "trade_candidate"
+    if abs_edge >= LLM_MEANINGFUL_EDGE_MIN:
+        return "meaningful_signal"
+    return "weak_signal"
+
+
+def _default_llm_value_add() -> dict[str, Any]:
+    return {
+        "llm_rows": 0,
+        "near_neutral_outputs": 0,
+        "meaningful_signals": 0,
+        "non_zero_edge_outputs": 0,
+        "trade_candidates": 0,
+        "llm_created_edge": 0,
+        "probability_movement_buckets": Counter(),
+        "edge_magnitude_buckets": Counter(),
+        "impact_classifications": Counter(),
+        "meaningful_sources": Counter(),
+        "meaningful_tickers": Counter(),
+        "strong_examples": [],
+        "neutral_examples": [],
+        "rare_non_neutral_examples": [],
+        "segmentation": {
+            "by_source": [],
+            "by_ticker": [],
+            "by_price_band": [],
+            "timing": {
+                "available": False,
+                "reason": "publish/event age is not present on SIGNAL_ANALYSIS_DETAIL rows",
+            },
+            "headline_category": {
+                "available": False,
+                "reason": "no safe built-in category derivation is present in reporting inputs",
+            },
+        },
+    }
+
+
+def _default_llm_segment_metrics() -> dict[str, int]:
+    return {
+        "llm_rows": 0,
+        "near_neutral_outputs": 0,
+        "non_zero_edge_outputs": 0,
+        "meaningful_signals": 0,
+        "trade_candidates": 0,
+        "neutral_confirmations": 0,
+    }
+
+
+def _llm_market_price_band(market_price: float) -> str:
+    if market_price < 0.20:
+        return "0.00-0.20"
+    if market_price < 0.40:
+        return "0.20-0.40"
+    if market_price < 0.60:
+        return "0.40-0.60"
+    if market_price < 0.80:
+        return "0.60-0.80"
+    return "0.80-1.00"
+
+
+def _update_llm_segment_metrics(
+    metrics: dict[str, int],
+    *,
+    movement_bucket: str,
+    abs_edge: float,
+    impact: str,
+) -> None:
+    metrics["llm_rows"] += 1
+    if movement_bucket == "near_neutral":
+        metrics["near_neutral_outputs"] += 1
+    if abs_edge >= LLM_ZERO_EDGE_MAX:
+        metrics["non_zero_edge_outputs"] += 1
+    if impact in {"meaningful_signal", "trade_candidate"}:
+        metrics["meaningful_signals"] += 1
+    if impact == "trade_candidate":
+        metrics["trade_candidates"] += 1
+    if impact == "neutral_confirmation":
+        metrics["neutral_confirmations"] += 1
+
+
+def _finalize_llm_segment_rows(
+    groups: dict[str, dict[str, int]],
+    *,
+    key_name: str,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for label, metrics in groups.items():
+        llm_rows = metrics["llm_rows"]
+        rows.append(
+            {
+                key_name: label,
+                "llm_rows": llm_rows,
+                "near_neutral_outputs": metrics["near_neutral_outputs"],
+                "near_neutral_rate": (metrics["near_neutral_outputs"] / llm_rows) if llm_rows else None,
+                "non_zero_edge_outputs": metrics["non_zero_edge_outputs"],
+                "non_zero_edge_rate": (metrics["non_zero_edge_outputs"] / llm_rows) if llm_rows else None,
+                "meaningful_signals": metrics["meaningful_signals"],
+                "meaningful_signal_rate": (metrics["meaningful_signals"] / llm_rows) if llm_rows else None,
+                "trade_candidates": metrics["trade_candidates"],
+                "trade_candidate_rate": (metrics["trade_candidates"] / llm_rows) if llm_rows else None,
+                "neutral_confirmations": metrics["neutral_confirmations"],
+                "neutral_confirmation_rate": (metrics["neutral_confirmations"] / llm_rows) if llm_rows else None,
+            }
+        )
+    return rows
+
+
+def _pct(count: int, total: int) -> str:
+    if total <= 0:
+        return "n/a"
+    return f"{(100.0 * count / total):.1f}%"
+
+
+def _format_bucket_counter(counter: Counter[str], labels: list[tuple[str, str]]) -> str:
+    if not counter:
+        return "n/a"
+    return ", ".join(f"{label}={counter.get(key, 0)}" for key, label in labels)
+
+
+def _sort_segment_rows(
+    rows: list[dict[str, Any]],
+    *,
+    label_key: str,
+    rate_key: str,
+) -> list[dict[str, Any]]:
+    return sorted(
+        rows,
+        key=lambda row: (
+            -(row.get(rate_key) or 0.0),
+            -(row.get("llm_rows") or 0),
+            str(row.get(label_key) or "").lower(),
+        ),
+    )
+
+
+def format_llm_segmentation_rows(
+    rows: list[dict[str, Any]],
+    *,
+    label_key: str,
+    limit: int,
+) -> list[str]:
+    if not rows:
+        return ["  (none)"]
+    lines: list[str] = []
+    for row in rows[:limit]:
+        lines.append(
+            "  "
+            f"{row.get(label_key) or 'n/a'}  "
+            f"rows={row.get('llm_rows', 0)}  "
+            f"near-neutral={_pct(row.get('near_neutral_outputs', 0), row.get('llm_rows', 0))}  "
+            f"non-zero-edge={_pct(row.get('non_zero_edge_outputs', 0), row.get('llm_rows', 0))}  "
+            f"meaningful={_pct(row.get('meaningful_signals', 0), row.get('llm_rows', 0))}  "
+            f"trade-candidate={_pct(row.get('trade_candidates', 0), row.get('llm_rows', 0))}"
+        )
+    return lines
+
+
 def attach_opportunities(
     rows: list[dict[str, Any]],
     opportunities: list[dict[str, Any]],
@@ -322,6 +531,8 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             "attempted": 0,
             "result_used": 0,
             "fallback": 0,
+            "skipped_routing": 0,
+            "skipped_routing_reasons": Counter(),
             "status_counts": Counter(),
             "latency_ms_samples": [],
             "total_stage_ms_samples": [],
@@ -331,6 +542,7 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             "contention_observed": 0,
             "max_in_flight_at_entry": 0,
         },
+        "llm_value_add": _default_llm_value_add(),
         "live_execution_attribution_limited": False,
         "audit_rows": [],
         "by_source": [],
@@ -343,6 +555,9 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
     paper_trades: list[dict[str, Any]] = []
     source_groups: dict[str, dict[str, Any]] = defaultdict(default_group_metrics)
     ticker_groups: dict[str, dict[str, Any]] = defaultdict(default_group_metrics)
+    llm_source_segments: dict[str, dict[str, int]] = defaultdict(_default_llm_segment_metrics)
+    llm_ticker_segments: dict[str, dict[str, int]] = defaultdict(_default_llm_segment_metrics)
+    llm_price_band_segments: dict[str, dict[str, int]] = defaultdict(_default_llm_segment_metrics)
 
     read_stats = TradeLogReadStats()
     for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
@@ -383,6 +598,12 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                     if "llm_contention_observed" in record
                     else None
                 ),
+                "llm_routing_passed": (
+                    bool(record.get("llm_routing_passed"))
+                    if "llm_routing_passed" in record
+                    else None
+                ),
+                "llm_routing_reason": str(record.get("llm_routing_reason") or "").strip() or None,
                 "llm_in_flight_at_entry": (
                     int(record.get("llm_in_flight_at_entry"))
                     if isinstance(record.get("llm_in_flight_at_entry"), int)
@@ -390,7 +611,11 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                 ),
                 "estimated_probability": safe_float(record.get("final_probability")),
                 "market_price": safe_float(record.get("market_price")),
-                "edge": None,
+                "edge": (
+                    safe_float(record.get("final_probability")) - safe_float(record.get("market_price"))
+                    if safe_float(record.get("final_probability")) is not None and safe_float(record.get("market_price")) is not None
+                    else None
+                ),
                 "outcome": "signal only",
                 "skip_reason": None,
             })
@@ -466,6 +691,11 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             stats["llm_observability"]["fallback"] += 1
         if row.get("llm_result_status"):
             stats["llm_observability"]["status_counts"][row["llm_result_status"]] += 1
+            if str(row["llm_result_status"]).startswith("llm_skipped_routing_"):
+                stats["llm_observability"]["skipped_routing"] += 1
+                stats["llm_observability"]["skipped_routing_reasons"][
+                    str(row["llm_result_status"]).removeprefix("llm_skipped_routing_")
+                ] += 1
         if row.get("llm_latency_ms") is not None:
             stats["llm_observability"]["latency_ms_samples"].append(row["llm_latency_ms"])
         if row.get("llm_total_stage_ms") is not None:
@@ -484,6 +714,67 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             stats["llm_observability"]["max_in_flight_at_entry"] = max(
                 stats["llm_observability"]["max_in_flight_at_entry"],
                 int(row["llm_in_flight_at_entry"]),
+            )
+        if row.get("method") == "llm" and row.get("estimated_probability") is not None and row.get("market_price") is not None:
+            est_prob = float(row["estimated_probability"])
+            market_price = float(row["market_price"])
+            abs_move = abs(est_prob - 0.5)
+            edge = est_prob - market_price
+            abs_edge = abs(edge)
+            movement_bucket = _llm_probability_movement_bucket(abs_move)
+            edge_bucket = _llm_edge_bucket(abs_edge)
+            impact = _llm_decision_impact_classification(est_prob=est_prob, market_price=market_price)
+            created_edge = abs(market_price - 0.5) < LLM_MARKET_NEUTRAL_MAX and abs_edge >= LLM_ZERO_EDGE_MAX
+
+            row["llm_probability_movement"] = abs_move
+            row["llm_probability_movement_bucket"] = movement_bucket
+            row["llm_abs_edge"] = abs_edge
+            row["llm_edge_bucket"] = edge_bucket
+            row["llm_created_edge"] = created_edge
+            row["llm_decision_impact"] = impact
+
+            stats["llm_value_add"]["llm_rows"] += 1
+            stats["llm_value_add"]["probability_movement_buckets"][movement_bucket] += 1
+            stats["llm_value_add"]["edge_magnitude_buckets"][edge_bucket] += 1
+            stats["llm_value_add"]["impact_classifications"][impact] += 1
+            if movement_bucket == "near_neutral":
+                stats["llm_value_add"]["near_neutral_outputs"] += 1
+            if abs_edge >= LLM_ZERO_EDGE_MAX:
+                stats["llm_value_add"]["non_zero_edge_outputs"] += 1
+            if created_edge:
+                stats["llm_value_add"]["llm_created_edge"] += 1
+            if impact in {"meaningful_signal", "trade_candidate"}:
+                stats["llm_value_add"]["meaningful_signals"] += 1
+                if row["source"]:
+                    stats["llm_value_add"]["meaningful_sources"][row["source"]] += 1
+                if row["ticker"]:
+                    stats["llm_value_add"]["meaningful_tickers"][row["ticker"]] += 1
+                stats["llm_value_add"]["strong_examples"].append(row)
+            if impact == "trade_candidate":
+                stats["llm_value_add"]["trade_candidates"] += 1
+            if impact == "neutral_confirmation":
+                stats["llm_value_add"]["neutral_examples"].append(row)
+            if impact != "neutral_confirmation":
+                stats["llm_value_add"]["rare_non_neutral_examples"].append(row)
+            if row["source"]:
+                _update_llm_segment_metrics(
+                    llm_source_segments[row["source"]],
+                    movement_bucket=movement_bucket,
+                    abs_edge=abs_edge,
+                    impact=impact,
+                )
+            if row["ticker"]:
+                _update_llm_segment_metrics(
+                    llm_ticker_segments[row["ticker"]],
+                    movement_bucket=movement_bucket,
+                    abs_edge=abs_edge,
+                    impact=impact,
+                )
+            _update_llm_segment_metrics(
+                llm_price_band_segments[_llm_market_price_band(market_price)],
+                movement_bucket=movement_bucket,
+                abs_edge=abs_edge,
+                impact=impact,
             )
         source = row["source"]
         ticker = row["ticker"]
@@ -523,6 +814,36 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
         rows,
         key=lambda row: row["ts"] or datetime.min.replace(tzinfo=timezone.utc),
         reverse=True,
+    )
+    stats["llm_value_add"]["strong_examples"] = sorted(
+        stats["llm_value_add"]["strong_examples"],
+        key=lambda row: (-(row.get("llm_abs_edge") or 0.0), row["ts"] or datetime.min.replace(tzinfo=timezone.utc)),
+        reverse=False,
+    )
+    stats["llm_value_add"]["strong_examples"].reverse()
+    stats["llm_value_add"]["neutral_examples"] = sorted(
+        stats["llm_value_add"]["neutral_examples"],
+        key=lambda row: row["ts"] or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    stats["llm_value_add"]["rare_non_neutral_examples"] = sorted(
+        stats["llm_value_add"]["rare_non_neutral_examples"],
+        key=lambda row: (
+            -(row.get("llm_abs_edge") or 0.0),
+            row["ts"] or datetime.min.replace(tzinfo=timezone.utc),
+        ),
+    )
+    stats["llm_value_add"]["segmentation"]["by_source"] = _finalize_llm_segment_rows(
+        llm_source_segments,
+        key_name="source",
+    )
+    stats["llm_value_add"]["segmentation"]["by_ticker"] = _finalize_llm_segment_rows(
+        llm_ticker_segments,
+        key_name="ticker",
+    )
+    stats["llm_value_add"]["segmentation"]["by_price_band"] = _finalize_llm_segment_rows(
+        llm_price_band_segments,
+        key_name="price_band",
     )
     stats["by_source"] = sorted(
         [finalize_group(name, metrics, "source") for name, metrics in source_groups.items()],
@@ -581,6 +902,25 @@ def format_group_rows(rows: list[dict[str, Any]], *, label: str, top: int) -> li
     return lines
 
 
+def format_llm_value_rows(rows: list[dict[str, Any]], limit: int) -> list[str]:
+    if not rows:
+        return ["  (none)"]
+    lines = []
+    for row in rows[:limit]:
+        lines.append(
+            "  "
+            f"{fmt_ts(row['ts'])}  "
+            f"ticker={row['ticker'] or 'n/a'}  "
+            f"source={row['source'] or 'n/a'}  "
+            f"est_prob={fmt_prob(row.get('estimated_probability'))}  "
+            f"market_prob={fmt_prob(row.get('market_price'))}  "
+            f"edge={fmt_prob(row.get('edge'))}  "
+            f"impact={row.get('llm_decision_impact') or 'n/a'}  "
+            f"headline={row['headline'][:80] if row['headline'] else 'n/a'}"
+        )
+    return lines
+
+
 def print_summary(
     stats: dict[str, Any],
     *,
@@ -623,8 +963,17 @@ def print_summary(
     print(f"  LLM attempted             : {stats['llm_observability']['attempted']}")
     print(f"  LLM result used           : {stats['llm_observability']['result_used']}")
     print(f"  LLM fallback              : {stats['llm_observability']['fallback']}")
+    print(f"  LLM skipped (routing)     : {stats['llm_observability']['skipped_routing']}")
     for status, count in stats["llm_observability"]["status_counts"].most_common(5):
         print(f"  status[{status}]          : {count}")
+    if stats["llm_observability"]["skipped_routing_reasons"]:
+        print(
+            "  Routing skip reasons      : "
+            + ", ".join(
+                f"{reason}={count}"
+                for reason, count in stats["llm_observability"]["skipped_routing_reasons"].most_common()
+            )
+        )
     print(f"  LLM latency               : {fmt_latency_stats(stats['llm_observability']['latency_ms_samples'])}")
     print(f"  LLM total stage           : {fmt_latency_stats(stats['llm_observability']['total_stage_ms_samples'])}")
     print(f"  LLM queue wait            : {fmt_latency_stats(stats['llm_observability']['queue_wait_ms_samples'])}")
@@ -632,6 +981,121 @@ def print_summary(
     print(f"  LLM parse time            : {fmt_latency_stats(stats['llm_observability']['parse_ms_samples'])}")
     print(f"  LLM contention observed   : {stats['llm_observability']['contention_observed']}")
     print(f"  LLM max in-flight entry   : {stats['llm_observability']['max_in_flight_at_entry']}")
+
+    print()
+    print("LLM Value-Add Analysis")
+    llm_value = stats["llm_value_add"]
+    llm_rows = llm_value["llm_rows"]
+    print(f"  LLM rows                  : {llm_rows}")
+    print(f"  Near-neutral outputs      : {llm_value['near_neutral_outputs']} ({_pct(llm_value['near_neutral_outputs'], llm_rows)})")
+    print(f"  Non-zero edge outputs     : {llm_value['non_zero_edge_outputs']} ({_pct(llm_value['non_zero_edge_outputs'], llm_rows)})")
+    print(f"  Meaningful signals        : {llm_value['meaningful_signals']} ({_pct(llm_value['meaningful_signals'], llm_rows)})")
+    print(f"  Trade candidates          : {llm_value['trade_candidates']} ({_pct(llm_value['trade_candidates'], llm_rows)})")
+    print(
+        f"  LLM created edge @0.50    : {llm_value['llm_created_edge']} "
+        f"({_pct(llm_value['llm_created_edge'], llm_rows)})"
+    )
+    print(
+        "  Probability movement      : "
+        + _format_bucket_counter(
+            llm_value["probability_movement_buckets"],
+            [
+                ("near_neutral", "near-neutral"),
+                ("weak", "weak"),
+                ("moderate", "moderate"),
+                ("strong", "strong"),
+            ],
+        )
+    )
+    print(
+        "  Edge magnitude            : "
+        + _format_bucket_counter(
+            llm_value["edge_magnitude_buckets"],
+            [
+                ("zero_neutral", "zero/neutral"),
+                ("weak", "weak"),
+                ("moderate", "moderate"),
+                ("strong", "strong"),
+            ],
+        )
+    )
+    print(
+        "  Decision impact           : "
+        + _format_bucket_counter(
+            llm_value["impact_classifications"],
+            [
+                ("neutral_confirmation", "neutral_confirmation"),
+                ("weak_signal", "weak_signal"),
+                ("meaningful_signal", "meaningful_signal"),
+                ("trade_candidate", "trade_candidate"),
+            ],
+        )
+    )
+    if llm_value["meaningful_sources"]:
+        print("  Top meaningful sources")
+        for label, count in llm_value["meaningful_sources"].most_common(top):
+            print(f"    {label}: {count}")
+    if llm_value["meaningful_tickers"]:
+        print("  Top meaningful tickers")
+        for label, count in llm_value["meaningful_tickers"].most_common(top):
+            print(f"    {label}: {count}")
+
+    print()
+    print("LLM Value-Add Segmentation")
+    source_segments = llm_value["segmentation"].get("by_source", [])
+    ticker_segments = llm_value["segmentation"].get("by_ticker", [])
+    price_band_segments = llm_value["segmentation"].get("by_price_band", [])
+    print("  Top sources by meaningful signal rate")
+    for line in format_llm_segmentation_rows(
+        _sort_segment_rows(source_segments, label_key="source", rate_key="meaningful_signal_rate"),
+        label_key="source",
+        limit=top,
+    ):
+        print(line)
+    print("  Top sources by neutral-confirmation rate")
+    for line in format_llm_segmentation_rows(
+        _sort_segment_rows(source_segments, label_key="source", rate_key="neutral_confirmation_rate"),
+        label_key="source",
+        limit=top,
+    ):
+        print(line)
+    print("  Top tickers by meaningful signal rate")
+    for line in format_llm_segmentation_rows(
+        _sort_segment_rows(ticker_segments, label_key="ticker", rate_key="meaningful_signal_rate"),
+        label_key="ticker",
+        limit=top,
+    ):
+        print(line)
+    print("  Market price bands by meaningful signal rate")
+    for line in format_llm_segmentation_rows(
+        _sort_segment_rows(price_band_segments, label_key="price_band", rate_key="meaningful_signal_rate"),
+        label_key="price_band",
+        limit=len(LLM_PRICE_BAND_LABELS),
+    ):
+        print(line)
+    timing_segmentation = llm_value["segmentation"].get("timing", {})
+    print(
+        "  Freshness/timing segmentation   : "
+        + ("available" if timing_segmentation.get("available") else f"unavailable ({timing_segmentation.get('reason', 'n/a')})")
+    )
+    category_segmentation = llm_value["segmentation"].get("headline_category", {})
+    print(
+        "  Headline/category segmentation  : "
+        + ("available" if category_segmentation.get("available") else f"unavailable ({category_segmentation.get('reason', 'n/a')})")
+    )
+    print("  Rare non-neutral examples")
+    for line in format_llm_value_rows(llm_value["rare_non_neutral_examples"], recent):
+        print(line)
+
+    print()
+    print("Strong LLM Signal Examples")
+    for line in format_llm_value_rows(llm_value["strong_examples"], recent):
+        print(line)
+
+    print()
+    print("Neutral Confirmation Examples")
+    for line in format_llm_value_rows(llm_value["neutral_examples"], recent):
+        print(line)
 
     print()
     print(f"Per-Event Edge Audit (most recent {recent})")
@@ -652,10 +1116,12 @@ def print_summary(
 def main() -> int:
     args = parse_args()
     try:
-        since = parse_date_start(args.since)
-        until = parse_date_end(args.until)
+        since_input = parse_date_start(args.since)
+        until_input = parse_date_end(args.until)
     except ValueError as exc:
         raise SystemExit(f"Invalid date: {exc}") from exc
+
+    since, until, _ = resolve_recent_window(since_input, until_input)
 
     if since and until and since > until:
         raise SystemExit("--since must be on or before --until")

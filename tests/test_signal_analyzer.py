@@ -381,6 +381,7 @@ class TestEstimateProbability:
             llm_http_status=None,
             llm_contention_observed=None,
             llm_in_flight_at_entry=None,
+            llm_routing_passed=True,
         )
 
     @pytest.mark.asyncio
@@ -429,6 +430,8 @@ class TestEstimateProbability:
             llm_http_status=None,
             llm_contention_observed=None,
             llm_in_flight_at_entry=None,
+            llm_routing_passed=True,
+            llm_routing_reason=None,
         )
 
     @pytest.mark.asyncio
@@ -467,6 +470,8 @@ class TestEstimateProbability:
         assert kwargs["llm_result_used"] is True
         assert kwargs["llm_result_status"] == "anthropic_success"
         assert kwargs["llm_provider"] == "anthropic"
+        assert kwargs["llm_routing_passed"] is True
+        assert "llm_routing_reason" not in kwargs
         assert kwargs["keywords"]
         assert kwargs["keyword_contributions"]
 
@@ -503,8 +508,71 @@ class TestEstimateProbability:
         assert kwargs["llm_result_used"] is False
         assert kwargs["llm_result_status"] == "no_provider_available"
         assert kwargs["llm_provider"] is None
+        assert kwargs["llm_routing_passed"] is True
+        assert kwargs["llm_routing_reason"] is None
         assert kwargs["keywords"]
         assert kwargs["keyword_contributions"]
+
+    @pytest.mark.asyncio
+    async def test_routing_filter_skips_llm_and_logs_keyword_fallback(self, monkeypatch):
+        news = _make_news("Missile strike prompts fears of wider conflict")
+        market = _make_full_market(yes_price=50.0)
+        monkeypatch.setattr(signal_analyzer.cfg, "enable_llm_routing_filter", True)
+        monkeypatch.setattr(signal_analyzer.cfg, "llm_allowed_price_bands", [(0.0, 0.35), (0.65, 1.0)])
+        monkeypatch.setattr(signal_analyzer.cfg, "llm_excluded_price_bands", [])
+
+        async def _should_not_run(*args, **kwargs):
+            raise AssertionError("llm_estimate_detailed should not run when routing excludes the price band")
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _should_not_run)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock, \
+             patch("analysis.signal_analyzer.trade_log.log_llm_skipped_routing") as skip_mock:
+            prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = await estimate_probability(news, market)
+
+        assert keywords
+        assert prob != pytest.approx(market.yes_prob)
+        assert confidence > 0.3
+        assert reasoning.startswith("Keyword analysis found")
+        assert llm_dir is None and llm_mag is None and llm_conf is None
+        skip_mock.assert_called_once_with(
+            ticker=market.ticker,
+            source=news.source,
+            headline=news.headline,
+            reason="price_band_excluded",
+            market_price=market.yes_prob,
+        )
+        kwargs = detail_mock.call_args.kwargs
+        assert kwargs["method"] == "keyword"
+        assert kwargs["llm_attempted"] is False
+        assert kwargs["llm_result_used"] is False
+        assert kwargs["llm_result_status"] == "llm_skipped_routing_price_band_excluded"
+        assert kwargs["llm_provider"] is None
+        assert kwargs["llm_routing_passed"] is False
+        assert kwargs["llm_routing_reason"] == "price_band_excluded"
+
+    @pytest.mark.asyncio
+    async def test_routing_filter_disabled_keeps_llm_path_unchanged(self, monkeypatch):
+        news = _make_news("Quarterly corporate earnings beat expectations")
+        market = _make_full_market(yes_price=50.0)
+        monkeypatch.setattr(signal_analyzer.cfg, "enable_llm_routing_filter", False)
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "LLM found relevant directional information", "yes", "moderate"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock, \
+             patch("analysis.signal_analyzer.trade_log.log_llm_skipped_routing") as skip_mock:
+            result = await estimate_probability(news, market)
+
+        assert result[0] == pytest.approx(0.64)
+        skip_mock.assert_not_called()
+        kwargs = detail_mock.call_args.kwargs
+        assert kwargs["method"] == "llm"
+        assert kwargs["llm_routing_passed"] is True
+        assert "llm_routing_reason" not in kwargs
 
 
 class _FakeResponse:

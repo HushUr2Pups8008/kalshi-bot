@@ -5,12 +5,16 @@ All output goes to stderr; stdout is reserved for report content.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Generator
 
 _PROGRESS_INTERVAL = 10_000
+DEFAULT_CURRENT_STATE_WINDOW_HOURS = 24
 
 
 class ProgressTracker:
@@ -53,3 +57,55 @@ def _eprint(msg: str) -> None:
     """Write msg to stderr immediately. ASCII-only by design (Windows-safe)."""
     sys.stderr.write(msg + "\n")
     sys.stderr.flush()
+
+
+def resolve_recent_window(
+    since: datetime | None,
+    until: datetime | None,
+    *,
+    hours: int = DEFAULT_CURRENT_STATE_WINDOW_HOURS,
+    now: datetime | None = None,
+) -> tuple[datetime | None, datetime | None, bool]:
+    """Return an effective window for current-state scripts.
+
+    If both bounds are omitted, default to the last ``hours`` hours in UTC.
+    Explicit user-supplied bounds always win.
+    """
+
+    if since is not None or until is not None:
+        return since, until, False
+
+    ref = now or datetime.now(timezone.utc)
+    effective_until = ref
+    effective_since = ref - timedelta(hours=hours)
+    return effective_since, effective_until, True
+
+
+def is_trade_log_root_path(path: Path) -> bool:
+    """True when path looks like the trade-log root directory."""
+
+    path_str = os.fspath(path)
+    if not os.path.isdir(path_str):
+        return False
+    archive_dir = os.path.join(path_str, "archive")
+    live_file = os.path.join(path_str, "live", "trades.jsonl")
+    legacy_file = os.path.join(path_str, "trades.jsonl")
+    return os.path.exists(archive_dir) or os.path.exists(live_file) or os.path.exists(legacy_file)
+
+
+def warn_if_full_trade_root_scan(
+    path: Path,
+    *,
+    since: datetime | None,
+    until: datetime | None,
+) -> None:
+    """Warn once when a command is about to scan the full trade-log root."""
+
+    if since is not None or until is not None:
+        return
+    if not is_trade_log_root_path(path):
+        return
+    _eprint(
+        "[warning] scanning full trade-log root with no time filter; "
+        "this may read archive history and take longer than expected"
+    )

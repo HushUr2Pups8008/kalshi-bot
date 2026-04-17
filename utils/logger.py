@@ -647,6 +647,8 @@ class TradeLogger:
         llm_http_status: int | None = None,
         llm_contention_observed: bool | None = None,
         llm_in_flight_at_entry: int | None = None,
+        llm_routing_passed: bool | None = None,
+        llm_routing_reason: str | None = None,
     ) -> None:
         record = {
             "type": "SIGNAL_ANALYSIS_DETAIL",
@@ -691,7 +693,31 @@ class TradeLogger:
             record["llm_contention_observed"] = llm_contention_observed
         if llm_in_flight_at_entry is not None:
             record["llm_in_flight_at_entry"] = llm_in_flight_at_entry
+        if llm_routing_passed is not None:
+            record["llm_routing_passed"] = llm_routing_passed
+        if llm_routing_reason is not None:
+            record["llm_routing_reason"] = llm_routing_reason
         self._write(record)
+
+    def log_llm_skipped_routing(
+        self,
+        *,
+        ticker: str,
+        source: str,
+        headline: str,
+        reason: str,
+        market_price: float,
+    ) -> None:
+        self._write(
+            {
+                "type": "LLM_SKIPPED_ROUTING",
+                "ticker": ticker,
+                "source": source,
+                "headline": headline,
+                "reason": reason,
+                "market_price": round(market_price, 4),
+            }
+        )
 
     def log_match_diagnostic(
         self,

@@ -37,6 +37,26 @@ _ollama_consecutive_failures: int = 0
 _ollama_down_until: float = 0.0   # monotonic — skip Ollama until this time
 
 
+def _market_price_in_band(price: float, low: float, high: float) -> bool:
+    if high >= 1.0:
+        return low <= price <= high
+    return low <= price < high
+
+
+def _llm_routing_reason(news: NewsItem, market: KalshiMarket) -> str | None:
+    del news
+    if not cfg.enable_llm_routing_filter:
+        return None
+    price = float(market.yes_prob)
+    if any(_market_price_in_band(price, low, high) for low, high in cfg.llm_excluded_price_bands):
+        return "price_band_excluded"
+    if cfg.llm_allowed_price_bands and not any(
+        _market_price_in_band(price, low, high) for low, high in cfg.llm_allowed_price_bands
+    ):
+        return "price_band_excluded"
+    return None
+
+
 def _llm_meta(
     *,
     attempted: bool,
@@ -98,6 +118,18 @@ def _emit_llm_observability_log(meta: dict[str, Any], *, ticker: str) -> None:
         meta.get("http_status", "n/a"),
         meta.get("in_flight_at_entry", "n/a"),
         meta.get("contention_observed", "n/a"),
+    )
+
+
+def _emit_llm_routing_log(*, ticker: str, source: str, reason: str, market_price: float) -> None:
+    log.info(
+        "[LLM_FALLBACK] provider=route ticker=%s source=%s status=llm_skipped_routing_%s "
+        "reason=%s market_price=%.4f",
+        ticker,
+        source,
+        reason,
+        reason,
+        market_price,
     )
 
 
@@ -774,8 +806,32 @@ async def estimate_probability(
         combined_text, keyword_stats=keyword_stats, series_ticker=series_ticker
     )
 
-    # Try LLM if available
-    llm_result, llm_meta = await llm_estimate_detailed(news, market)
+    routing_reason = _llm_routing_reason(news, market)
+    if routing_reason is not None:
+        llm_meta = _llm_meta(
+            attempted=False,
+            status=f"llm_skipped_routing_{routing_reason}",
+            provider=None,
+            result_used=False,
+        )
+        _emit_llm_routing_log(
+            ticker=market.ticker,
+            source=news.source,
+            reason=routing_reason,
+            market_price=market.yes_prob,
+        )
+        trade_log.log_llm_skipped_routing(
+            ticker=market.ticker,
+            source=news.source,
+            headline=news.headline,
+            reason=routing_reason,
+            market_price=market.yes_prob,
+        )
+        llm_result = None
+    else:
+        # Try LLM if available
+        llm_result, llm_meta = await llm_estimate_detailed(news, market)
+
     if llm_result:
         llm_prob, llm_confidence, llm_reasoning, llm_direction, llm_magnitude = llm_result
         # Use LLM probability directly -- keywords only gate the match, not the estimate.
@@ -811,6 +867,7 @@ async def estimate_probability(
             llm_http_status=llm_meta.get("http_status"),
             llm_contention_observed=llm_meta.get("contention_observed"),
             llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
+            llm_routing_passed=True,
         )
         return llm_prob, llm_confidence, keywords, reasoning, llm_direction, llm_magnitude, llm_confidence
 
@@ -838,6 +895,8 @@ async def estimate_probability(
             llm_http_status=llm_meta.get("http_status"),
             llm_contention_observed=llm_meta.get("contention_observed"),
             llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
+            llm_routing_passed=(routing_reason is None),
+            llm_routing_reason=routing_reason,
         )
         return market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", None, None, None
 
@@ -865,5 +924,7 @@ async def estimate_probability(
         llm_http_status=llm_meta.get("http_status"),
         llm_contention_observed=llm_meta.get("contention_observed"),
         llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
+        llm_routing_passed=(routing_reason is None),
+        llm_routing_reason=routing_reason,
     )
     return kw_prob, confidence, keywords, kw_reasoning, None, None, None

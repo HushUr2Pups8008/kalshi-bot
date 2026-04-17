@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from utils.logger import TradeLogStore
+from utils import trade_log_reader
 from utils.trade_log_reader import iter_trade_records
 
 
@@ -261,5 +262,46 @@ def test_trade_log_store_permission_error_fallback_preserves_records(monkeypatch
         archive_path = root / "archive" / "2026" / "04" / "2026-04-15.jsonl"
         assert [row["ticker"] for row in _read_jsonl(archive_path)] == ["DAY1"]
         assert [row["ticker"] for row in _read_jsonl(root / "live" / "trades.jsonl")] == ["DAY2"]
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_iter_trade_records_skips_archive_partitions_outside_requested_window(monkeypatch):
+    root = _tmp_root()
+    try:
+        _write_jsonl(
+            root / "archive" / "2026" / "04" / "2026-04-14.jsonl",
+            [{"type": "SIGNAL", "ts": "2026-04-14T09:00:00+00:00", "ticker": "DAY14"}],
+        )
+        _write_jsonl(
+            root / "archive" / "2026" / "04" / "2026-04-15.jsonl",
+            [{"type": "SIGNAL", "ts": "2026-04-15T09:00:00+00:00", "ticker": "DAY15"}],
+        )
+        _write_jsonl(
+            root / "archive" / "2026" / "04" / "2026-04-16.jsonl",
+            [{"type": "SIGNAL", "ts": "2026-04-16T09:00:00+00:00", "ticker": "DAY16"}],
+        )
+        _write_jsonl(
+            root / "live" / "trades.jsonl",
+            [{"type": "SIGNAL", "ts": "2026-04-17T09:00:00+00:00", "ticker": "LIVE"}],
+        )
+
+        opened_files: list[str] = []
+        original_iter_records = trade_log_reader._iter_records_from_file
+
+        def _record_open(path: Path, stats=None):
+            opened_files.append(path.name)
+            yield from original_iter_records(path, stats=stats)
+
+        monkeypatch.setattr("utils.trade_log_reader._iter_records_from_file", _record_open)
+
+        since = datetime(2026, 4, 15, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2026, 4, 15, 23, 59, 59, tzinfo=timezone.utc)
+        rows = list(iter_trade_records(root, since=since, until=until))
+
+        assert [row["ticker"] for row in rows] == ["DAY15"]
+        assert "2026-04-14.jsonl" not in opened_files
+        assert "2026-04-16.jsonl" not in opened_files
+        assert "2026-04-15.jsonl" in opened_files
     finally:
         shutil.rmtree(root, ignore_errors=True)

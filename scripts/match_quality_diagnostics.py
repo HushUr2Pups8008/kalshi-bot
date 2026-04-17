@@ -25,6 +25,7 @@ from analysis.market_matcher import (
     _meaningful_tokens,
     _tokenize,
 )
+from utils.reporting_helpers import DEFAULT_CURRENT_STATE_WINDOW_HOURS, resolve_recent_window
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 # Default to the active live file -- match quality is a current-run metric.
 # Pass --path logs/trades to include archive data for multi-day analysis.
@@ -36,10 +37,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--path",
         default=str(DEFAULT_LOG_PATH),
-        help="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
+        help=(
+            "Path to trade-log file or root "
+            "(default: logs/trades/live/trades.jsonl; pass logs/trades/ for archive scans; "
+            f"default window: last {DEFAULT_CURRENT_STATE_WINDOW_HOURS} hours when dates omitted; "
+            "legacy logs/trades/trades.jsonl still supported)"
+        ),
     )
     parser.add_argument("--since", help="Inclusive start date in YYYY-MM-DD")
-    parser.add_argument("--until", help="Inclusive end date in YYYY-MM-DD")
+    parser.add_argument(
+        "--until",
+        help=f"Inclusive end date in YYYY-MM-DD (default: now when both dates omitted; last {DEFAULT_CURRENT_STATE_WINDOW_HOURS} hours)",
+    )
     parser.add_argument("--top", type=int, default=10, help="Max rows in grouped sections")
     parser.add_argument("--recent", type=int, default=10, help="Max example rows per section")
     parser.add_argument(
@@ -646,10 +655,11 @@ def print_backfill_summary(
 def main() -> int:
     args = parse_args()
     try:
-        since = parse_date_start(args.since)
-        until = parse_date_end(args.until)
+        since_input = parse_date_start(args.since)
+        until_input = parse_date_end(args.until)
     except ValueError as exc:
         raise SystemExit(f"Invalid date: {exc}") from exc
+    since, until, _ = resolve_recent_window(since_input, until_input)
     if since and until and since > until:
         raise SystemExit("--since must be on or before --until")
 

@@ -4,7 +4,7 @@ import gzip
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -67,6 +67,41 @@ def _iter_candidate_files(path: Path) -> Iterator[Path]:
         yield Path(legacy_path_str)
     if os.path.exists(live_path_str):
         yield Path(live_path_str)
+
+
+def _archive_partition_date(path: Path) -> date | None:
+    """Return the UTC day encoded in a daily archive filename, if present."""
+
+    path_str = os.fspath(path)
+    basename = os.path.basename(path_str)
+    stem = basename[:-3] if basename.endswith(".gz") else basename
+    if not stem.endswith(".jsonl"):
+        return None
+    day_text = stem[:-6]
+    try:
+        return datetime.strptime(day_text, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _archive_file_definitely_outside_window(
+    path: Path,
+    *,
+    since: datetime | None,
+    until: datetime | None,
+) -> bool:
+    partition_day = _archive_partition_date(path)
+    if partition_day is None:
+        return False
+    if since is not None:
+        partition_end = datetime.combine(partition_day, time.max, tzinfo=timezone.utc)
+        if partition_end < since:
+            return True
+    if until is not None:
+        partition_start = datetime.combine(partition_day, time.min, tzinfo=timezone.utc)
+        if partition_start > until:
+            return True
+    return False
 
 
 def _first_valid_ts(path: Path) -> datetime | None:
@@ -147,6 +182,8 @@ def iter_trade_records(
             live_cutover_ts = _first_valid_ts(Path(live_path_str))
 
     for file_path in _iter_candidate_files(path):
+        if _archive_file_definitely_outside_window(file_path, since=since, until=until):
+            continue
         for record in _iter_records_from_file(file_path, stats=stats):
             event_type = str(record.get("type") or "").strip()
             if normalized_event_types and event_type not in normalized_event_types:

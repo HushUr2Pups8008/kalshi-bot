@@ -178,6 +178,9 @@ def collect_window_metrics(
             "llm_queue_wait_ms_samples": edge_stats.get("llm_observability", {}).get("queue_wait_ms_samples", []),
             "llm_http_round_trip_ms_samples": edge_stats.get("llm_observability", {}).get("http_round_trip_ms_samples", []),
             "llm_contention_observed": edge_stats.get("llm_observability", {}).get("contention_observed", 0),
+            "llm_skipped_routing": edge_stats.get("llm_observability", {}).get("skipped_routing", 0),
+            "llm_skipped_routing_reasons": edge_stats.get("llm_observability", {}).get("skipped_routing_reasons", Counter()),
+            "llm_value_add": edge_stats.get("llm_value_add", {}),
         },
         "edge": {
             "opportunities": opportunities,
@@ -230,6 +233,32 @@ def metric_line(
     previous_text = fmt_pct(previous) if is_pct else fmt_count(previous)
     delta_text = fmt_delta(current, previous, is_pct=is_pct)
     return f"  {label:<32} current={current_text:<8} previous={previous_text:<8} delta={delta_text}"
+
+
+def _segment_snapshot(
+    rows: list[dict[str, Any]],
+    *,
+    label_key: str,
+    rate_key: str,
+    limit: int = 3,
+) -> str:
+    if not rows:
+        return "(none)"
+    ordered = sorted(
+        rows,
+        key=lambda row: (
+            -(row.get(rate_key) or 0.0),
+            -(row.get("llm_rows") or 0),
+            str(row.get(label_key) or "").lower(),
+        ),
+    )
+    parts: list[str] = []
+    for row in ordered[:limit]:
+        parts.append(
+            f"{row.get(label_key) or 'n/a'}="
+            f"{fmt_pct(row.get(rate_key))} rows={row.get('llm_rows', 0)}"
+        )
+    return "; ".join(parts) if parts else "(none)"
 
 
 def render_report(current_stats: dict[str, Any], previous_stats: dict[str, Any]) -> list[str]:
@@ -304,6 +333,11 @@ def render_report(current_stats: dict[str, Any], previous_stats: dict[str, Any])
         previous=previous_stats["analysis"]["llm_attempted"],
     ))
     lines.append(metric_line(
+        "LLM skipped (routing)",
+        current=current_stats["analysis"]["llm_skipped_routing"],
+        previous=previous_stats["analysis"]["llm_skipped_routing"],
+    ))
+    lines.append(metric_line(
         "LLM result used",
         current=current_stats["analysis"]["llm_result_used"],
         previous=previous_stats["analysis"]["llm_result_used"],
@@ -317,6 +351,16 @@ def render_report(current_stats: dict[str, Any], previous_stats: dict[str, Any])
     previous_status = previous_stats["analysis"]["llm_status_counts"].most_common(3)
     lines.append(f"  Current LLM statuses            : {', '.join(f'{k}={v}' for k, v in current_status) or 'n/a'}")
     lines.append(f"  Previous LLM statuses           : {', '.join(f'{k}={v}' for k, v in previous_status) or 'n/a'}")
+    current_routing = current_stats["analysis"]["llm_skipped_routing_reasons"]
+    previous_routing = previous_stats["analysis"]["llm_skipped_routing_reasons"]
+    lines.append(
+        "  Current routing skips         : "
+        + (", ".join(f"{k}={v}" for k, v in current_routing.most_common()) if current_routing else "(none)")
+    )
+    lines.append(
+        "  Previous routing skips        : "
+        + (", ".join(f"{k}={v}" for k, v in previous_routing.most_common()) if previous_routing else "(none)")
+    )
     lines.append(
         "  Current LLM total latency      : "
         f"{signal_edge_diagnostics.fmt_latency_stats(current_stats['analysis']['llm_total_stage_ms_samples'])}"
@@ -349,7 +393,163 @@ def render_report(current_stats: dict[str, Any], previous_stats: dict[str, Any])
     )
     lines.append("")
 
-    lines.append("3. Edge Formation")
+    current_value = current_stats["analysis"].get("llm_value_add", {})
+    previous_value = previous_stats["analysis"].get("llm_value_add", {})
+    current_llm_rows = current_value.get("llm_rows", 0)
+    previous_llm_rows = previous_value.get("llm_rows", 0)
+    lines.append("3. LLM Value-Add Analysis")
+    lines.append(metric_line(
+        "LLM rows",
+        current=current_llm_rows,
+        previous=previous_llm_rows,
+    ))
+    lines.append(metric_line(
+        "Near-neutral outputs",
+        current=safe_pct(current_value.get("near_neutral_outputs", 0), current_llm_rows),
+        previous=safe_pct(previous_value.get("near_neutral_outputs", 0), previous_llm_rows),
+        is_pct=True,
+    ))
+    lines.append(metric_line(
+        "Non-zero edge outputs",
+        current=safe_pct(current_value.get("non_zero_edge_outputs", 0), current_llm_rows),
+        previous=safe_pct(previous_value.get("non_zero_edge_outputs", 0), previous_llm_rows),
+        is_pct=True,
+    ))
+    lines.append(metric_line(
+        "Meaningful signals",
+        current=safe_pct(current_value.get("meaningful_signals", 0), current_llm_rows),
+        previous=safe_pct(previous_value.get("meaningful_signals", 0), previous_llm_rows),
+        is_pct=True,
+    ))
+    lines.append(metric_line(
+        "Trade candidates",
+        current=safe_pct(current_value.get("trade_candidates", 0), current_llm_rows),
+        previous=safe_pct(previous_value.get("trade_candidates", 0), previous_llm_rows),
+        is_pct=True,
+    ))
+    lines.append(metric_line(
+        "Created edge @0.50 market",
+        current=safe_pct(current_value.get("llm_created_edge", 0), current_llm_rows),
+        previous=safe_pct(previous_value.get("llm_created_edge", 0), previous_llm_rows),
+        is_pct=True,
+    ))
+    current_prob_buckets = current_value.get("probability_movement_buckets", Counter())
+    previous_prob_buckets = previous_value.get("probability_movement_buckets", Counter())
+    lines.append(
+        "  Current prob movement         : "
+        + ", ".join(
+            f"{label}={current_prob_buckets.get(key, 0)}"
+            for key, label in (
+                ("near_neutral", "near-neutral"),
+                ("weak", "weak"),
+                ("moderate", "moderate"),
+                ("strong", "strong"),
+            )
+        )
+    )
+    lines.append(
+        "  Previous prob movement        : "
+        + ", ".join(
+            f"{label}={previous_prob_buckets.get(key, 0)}"
+            for key, label in (
+                ("near_neutral", "near-neutral"),
+                ("weak", "weak"),
+                ("moderate", "moderate"),
+                ("strong", "strong"),
+            )
+        )
+    )
+    current_edge_buckets = current_value.get("edge_magnitude_buckets", Counter())
+    previous_edge_buckets = previous_value.get("edge_magnitude_buckets", Counter())
+    lines.append(
+        "  Current edge buckets          : "
+        + ", ".join(
+            f"{label}={current_edge_buckets.get(key, 0)}"
+            for key, label in (
+                ("zero_neutral", "zero/neutral"),
+                ("weak", "weak"),
+                ("moderate", "moderate"),
+                ("strong", "strong"),
+            )
+        )
+    )
+    lines.append(
+        "  Previous edge buckets         : "
+        + ", ".join(
+            f"{label}={previous_edge_buckets.get(key, 0)}"
+            for key, label in (
+                ("zero_neutral", "zero/neutral"),
+                ("weak", "weak"),
+                ("moderate", "moderate"),
+                ("strong", "strong"),
+            )
+        )
+    )
+    lines.append("")
+
+    current_segmentation = current_value.get("segmentation", {})
+    previous_segmentation = previous_value.get("segmentation", {})
+    lines.append("4. LLM Value-Add Segmentation")
+    lines.append(
+        "  Current top sources (meaningful): "
+        + _segment_snapshot(
+            current_segmentation.get("by_source", []),
+            label_key="source",
+            rate_key="meaningful_signal_rate",
+        )
+    )
+    lines.append(
+        "  Previous top sources (meaningful): "
+        + _segment_snapshot(
+            previous_segmentation.get("by_source", []),
+            label_key="source",
+            rate_key="meaningful_signal_rate",
+        )
+    )
+    lines.append(
+        "  Current top sources (neutral): "
+        + _segment_snapshot(
+            current_segmentation.get("by_source", []),
+            label_key="source",
+            rate_key="neutral_confirmation_rate",
+        )
+    )
+    lines.append(
+        "  Previous top sources (neutral): "
+        + _segment_snapshot(
+            previous_segmentation.get("by_source", []),
+            label_key="source",
+            rate_key="neutral_confirmation_rate",
+        )
+    )
+    lines.append(
+        "  Current top price bands       : "
+        + _segment_snapshot(
+            current_segmentation.get("by_price_band", []),
+            label_key="price_band",
+            rate_key="meaningful_signal_rate",
+            limit=5,
+        )
+    )
+    lines.append(
+        "  Previous top price bands      : "
+        + _segment_snapshot(
+            previous_segmentation.get("by_price_band", []),
+            label_key="price_band",
+            rate_key="meaningful_signal_rate",
+            limit=5,
+        )
+    )
+    current_timing = current_segmentation.get("timing", {})
+    previous_timing = previous_segmentation.get("timing", {})
+    lines.append(
+        "  Timing segmentation           : "
+        f"current={'available' if current_timing.get('available') else 'unavailable'} "
+        f"previous={'available' if previous_timing.get('available') else 'unavailable'}"
+    )
+    lines.append("")
+
+    lines.append("5. Edge Formation")
     lines.append(metric_line(
         "OPPORTUNITY count",
         current=current_stats["edge"]["opportunities"],
@@ -372,7 +572,7 @@ def render_report(current_stats: dict[str, Any], previous_stats: dict[str, Any])
     ))
     lines.append("")
 
-    lines.append("4. Execution Quality")
+    lines.append("6. Execution Quality")
     lines.append(metric_line(
         "Executed count",
         current=current_stats["execution"]["executed"],

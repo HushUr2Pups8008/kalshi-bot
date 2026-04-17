@@ -25,7 +25,13 @@ from scripts import freshness_diagnostics
 from scripts import match_quality_diagnostics
 from scripts import paper_performance_drilldown
 from scripts import signal_edge_diagnostics
-from utils.reporting_helpers import ProgressTracker, stage_timer, _eprint
+from utils.reporting_helpers import (
+    DEFAULT_CURRENT_STATE_WINDOW_HOURS,
+    ProgressTracker,
+    resolve_recent_window,
+    stage_timer,
+    _eprint,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -44,10 +50,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--path",
         default=str(DEFAULT_TRADES_LOG_PATH),
-        help="Trade log path -- file for live-only, directory (logs/trades) to include archive",
+        help=(
+            "Trade log path -- default: logs/trades/live/trades.jsonl; pass logs/trades to include archive "
+            f"(default window: last {DEFAULT_CURRENT_STATE_WINDOW_HOURS} hours when dates omitted)"
+        ),
     )
     parser.add_argument("--since", help="Inclusive start date in YYYY-MM-DD")
-    parser.add_argument("--until", help="Inclusive end date in YYYY-MM-DD")
+    parser.add_argument(
+        "--until",
+        help=f"Inclusive end date in YYYY-MM-DD (default: now when both dates omitted; last {DEFAULT_CURRENT_STATE_WINDOW_HOURS} hours)",
+    )
     parser.add_argument("--top", type=int, default=5, help="Max rows to show in top breakdowns")
     parser.add_argument(
         "--exclude-test",
@@ -110,6 +122,42 @@ def fmt_ts(value: datetime | None) -> str:
     if value is None:
         return "n/a"
     return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def fmt_counter_line(counter: Counter[str], keys: list[tuple[str, str]]) -> str:
+    if not counter:
+        return "n/a"
+    return ", ".join(f"{label}={counter.get(key, 0)}" for key, label in keys)
+
+
+def _format_segment_rate_lines(
+    rows: list[dict[str, Any]],
+    *,
+    label_key: str,
+    rate_key: str,
+    top: int,
+) -> list[str]:
+    if not rows:
+        return ["    (none)"]
+    ordered = sorted(
+        rows,
+        key=lambda row: (
+            -(row.get(rate_key) or 0.0),
+            -(row.get("llm_rows") or 0),
+            str(row.get(label_key) or "").lower(),
+        ),
+    )
+    lines: list[str] = []
+    for row in ordered[:top]:
+        llm_rows = row.get("llm_rows", 0)
+        lines.append(
+            f"    {row.get(label_key) or 'n/a'}: rows={llm_rows} "
+            f"meaningful={fmt_pct(row.get('meaningful_signals', 0), llm_rows)} "
+            f"near_neutral={fmt_pct(row.get('near_neutral_outputs', 0), llm_rows)} "
+            f"non_zero_edge={fmt_pct(row.get('non_zero_edge_outputs', 0), llm_rows)} "
+            f"trade_candidate={fmt_pct(row.get('trade_candidates', 0), llm_rows)}"
+        )
+    return lines
 
 
 def write_report_line(report_path: Path, text: str = "") -> None:
@@ -399,6 +447,159 @@ def build_daily_review(
         lines.append(f"    Total P&L: {fmt_money(paper_stats.get('total_pnl'))}")
     lines.append("")
 
+    llm_value = edge_stats.get("llm_value_add", {})
+    llm_observability = edge_stats.get("llm_observability", {})
+    llm_rows = llm_value.get("llm_rows", 0)
+    lines.append("6. LLM VALUE-ADD ANALYSIS")
+    lines.append(f"  Total LLM rows                    : {llm_rows}")
+    lines.append(f"  LLM attempted (post-filter)       : {llm_observability.get('attempted', 0)}")
+    lines.append(f"  LLM skipped (routing)             : {llm_observability.get('skipped_routing', 0)}")
+    routing_skip_reasons = llm_observability.get("skipped_routing_reasons", Counter())
+    if routing_skip_reasons:
+        lines.append(
+            "  Routing skip reasons              : "
+            + ", ".join(f"{reason}={count}" for reason, count in routing_skip_reasons.most_common())
+        )
+    lines.append(
+        f"  Near-neutral outputs              : {llm_value.get('near_neutral_outputs', 0)} ({fmt_pct(llm_value.get('near_neutral_outputs', 0), llm_rows)})"
+    )
+    lines.append(
+        f"  Non-zero edge outputs             : {llm_value.get('non_zero_edge_outputs', 0)} ({fmt_pct(llm_value.get('non_zero_edge_outputs', 0), llm_rows)})"
+    )
+    lines.append(
+        f"  Meaningful signals                : {llm_value.get('meaningful_signals', 0)} ({fmt_pct(llm_value.get('meaningful_signals', 0), llm_rows)})"
+    )
+    lines.append(
+        f"  Trade candidates                  : {llm_value.get('trade_candidates', 0)} ({fmt_pct(llm_value.get('trade_candidates', 0), llm_rows)})"
+    )
+    lines.append(
+        f"  LLM created edge @0.50 market     : {llm_value.get('llm_created_edge', 0)} ({fmt_pct(llm_value.get('llm_created_edge', 0), llm_rows)})"
+    )
+    lines.append(
+        "  Probability movement buckets      : "
+        + fmt_counter_line(
+            llm_value.get("probability_movement_buckets", Counter()),
+            [
+                ("near_neutral", "near-neutral"),
+                ("weak", "weak"),
+                ("moderate", "moderate"),
+                ("strong", "strong"),
+            ],
+        )
+    )
+    lines.append(
+        "  Edge magnitude buckets            : "
+        + fmt_counter_line(
+            llm_value.get("edge_magnitude_buckets", Counter()),
+            [
+                ("zero_neutral", "zero/neutral"),
+                ("weak", "weak"),
+                ("moderate", "moderate"),
+                ("strong", "strong"),
+            ],
+        )
+    )
+    meaningful_sources = llm_value.get("meaningful_sources", Counter())
+    if meaningful_sources:
+        lines.append("  Top meaningful sources")
+        for label, count in meaningful_sources.most_common(top):
+            lines.append(f"    {label}: {count}")
+    meaningful_tickers = llm_value.get("meaningful_tickers", Counter())
+    if meaningful_tickers:
+        lines.append("  Top meaningful tickers")
+        for label, count in meaningful_tickers.most_common(top):
+            lines.append(f"    {label}: {count}")
+    strong_examples = llm_value.get("strong_examples", [])[: min(top, RECENT_EDGE_AUDIT)]
+    if strong_examples:
+        lines.append("  Strong LLM signal examples")
+        for row in strong_examples:
+            lines.append(
+                f"    {fmt_ts(row.get('ts'))} {row.get('ticker') or 'n/a'} "
+                f"est={fmt_prob(row.get('estimated_probability'))} "
+                f"market={fmt_prob(row.get('market_price'))} "
+                f"edge={fmt_prob(row.get('edge'))} "
+                f"impact={row.get('llm_decision_impact') or 'n/a'}"
+            )
+    neutral_examples = llm_value.get("neutral_examples", [])[: min(top, RECENT_EDGE_AUDIT)]
+    if neutral_examples:
+        lines.append("  Neutral confirmation examples")
+        for row in neutral_examples:
+            lines.append(
+                f"    {fmt_ts(row.get('ts'))} {row.get('ticker') or 'n/a'} "
+                f"est={fmt_prob(row.get('estimated_probability'))} "
+                f"market={fmt_prob(row.get('market_price'))} "
+                f"edge={fmt_prob(row.get('edge'))}"
+            )
+    lines.append("")
+
+    llm_segmentation = llm_value.get("segmentation", {})
+    lines.append("7. LLM VALUE-ADD SEGMENTATION")
+    lines.append("  Top sources by meaningful signal rate")
+    lines.extend(
+        _format_segment_rate_lines(
+            llm_segmentation.get("by_source", []),
+            label_key="source",
+            rate_key="meaningful_signal_rate",
+            top=top,
+        )
+    )
+    lines.append("  Top sources by neutral-confirmation rate")
+    lines.extend(
+        _format_segment_rate_lines(
+            llm_segmentation.get("by_source", []),
+            label_key="source",
+            rate_key="neutral_confirmation_rate",
+            top=top,
+        )
+    )
+    lines.append("  Top tickers by meaningful signal rate")
+    lines.extend(
+        _format_segment_rate_lines(
+            llm_segmentation.get("by_ticker", []),
+            label_key="ticker",
+            rate_key="meaningful_signal_rate",
+            top=top,
+        )
+    )
+    lines.append("  Market price bands by meaningful signal rate")
+    lines.extend(
+        _format_segment_rate_lines(
+            llm_segmentation.get("by_price_band", []),
+            label_key="price_band",
+            rate_key="meaningful_signal_rate",
+            top=max(1, top),
+        )
+    )
+    timing_segmentation = llm_segmentation.get("timing", {})
+    if timing_segmentation.get("available"):
+        lines.append("  Freshness/timing segmentation      : available")
+    else:
+        lines.append(
+            "  Freshness/timing segmentation      : "
+            f"unavailable ({timing_segmentation.get('reason', 'n/a')})"
+        )
+    category_segmentation = llm_segmentation.get("headline_category", {})
+    if category_segmentation.get("available"):
+        lines.append("  Headline/category segmentation     : available")
+    else:
+        lines.append(
+            "  Headline/category segmentation     : "
+            f"unavailable ({category_segmentation.get('reason', 'n/a')})"
+        )
+    rare_examples = llm_value.get("rare_non_neutral_examples", [])[: min(top, RECENT_EDGE_AUDIT)]
+    if rare_examples:
+        lines.append("  Rare non-neutral cases")
+        for row in rare_examples:
+            lines.append(
+                f"    {fmt_ts(row.get('ts'))} {row.get('ticker') or 'n/a'} "
+                f"source={row.get('source') or 'n/a'} "
+                f"est={fmt_prob(row.get('estimated_probability'))} "
+                f"market={fmt_prob(row.get('market_price'))} "
+                f"edge={fmt_prob(row.get('edge'))} "
+                f"impact={row.get('llm_decision_impact') or 'n/a'}"
+            )
+    lines.append("")
+
     lines.append("Appendix")
     lines.append("  Detailed drilldowns remain available via:")
     lines.append("  scripts/freshness_diagnostics.py")
@@ -412,10 +613,12 @@ def build_daily_review(
 def main() -> int:
     args = parse_args()
     try:
-        since = parse_date_start(args.since)
-        until = parse_date_end(args.until)
+        since_input = parse_date_start(args.since)
+        until_input = parse_date_end(args.until)
     except ValueError as exc:
         raise SystemExit(f"Invalid date: {exc}") from exc
+
+    since, until, _ = resolve_recent_window(since_input, until_input)
 
     if since and until and since > until:
         raise SystemExit("--since must be on or before --until")

@@ -60,6 +60,11 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                 "OPPORTUNITY": 3,
                 "EXECUTED": 2,
             },
+            "llm_observability": {
+                "attempted": 1,
+                "skipped_routing": 2,
+                "skipped_routing_reasons": Counter({"price_band_excluded": 2}),
+            },
             "skip_breakdown": {
                 "zero_edge": 1,
                 "below_threshold": 1,
@@ -86,6 +91,84 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                     "method": "keyword_gate",
                 },
             ],
+            "llm_value_add": {
+                "llm_rows": 1,
+                "near_neutral_outputs": 0,
+                "non_zero_edge_outputs": 1,
+                "meaningful_signals": 1,
+                "trade_candidates": 1,
+                "llm_created_edge": 0,
+                "probability_movement_buckets": Counter({"moderate": 1}),
+                "edge_magnitude_buckets": Counter({"moderate": 1}),
+                "meaningful_sources": Counter({"Reuters": 1}),
+                "meaningful_tickers": Counter({"KX1": 1}),
+                "strong_examples": [
+                    {
+                        "ts": datetime(2026, 4, 11, 12, 0, tzinfo=timezone.utc),
+                        "ticker": "KX1",
+                        "source": "Reuters",
+                        "estimated_probability": 0.62,
+                        "market_price": 0.55,
+                        "edge": 0.07,
+                        "llm_decision_impact": "trade_candidate",
+                    }
+                ],
+                "neutral_examples": [],
+                "rare_non_neutral_examples": [
+                    {
+                        "ts": datetime(2026, 4, 11, 12, 0, tzinfo=timezone.utc),
+                        "ticker": "KX1",
+                        "source": "Reuters",
+                        "estimated_probability": 0.62,
+                        "market_price": 0.55,
+                        "edge": 0.07,
+                        "llm_decision_impact": "trade_candidate",
+                    }
+                ],
+                "segmentation": {
+                    "by_source": [
+                        {
+                            "source": "Reuters",
+                            "llm_rows": 1,
+                            "near_neutral_outputs": 0,
+                            "non_zero_edge_outputs": 1,
+                            "meaningful_signals": 1,
+                            "trade_candidates": 1,
+                            "neutral_confirmations": 0,
+                            "meaningful_signal_rate": 1.0,
+                            "neutral_confirmation_rate": 0.0,
+                        }
+                    ],
+                    "by_ticker": [
+                        {
+                            "ticker": "KX1",
+                            "llm_rows": 1,
+                            "near_neutral_outputs": 0,
+                            "non_zero_edge_outputs": 1,
+                            "meaningful_signals": 1,
+                            "trade_candidates": 1,
+                            "neutral_confirmations": 0,
+                            "meaningful_signal_rate": 1.0,
+                            "neutral_confirmation_rate": 0.0,
+                        }
+                    ],
+                    "by_price_band": [
+                        {
+                            "price_band": "0.40-0.60",
+                            "llm_rows": 1,
+                            "near_neutral_outputs": 0,
+                            "non_zero_edge_outputs": 1,
+                            "meaningful_signals": 1,
+                            "trade_candidates": 1,
+                            "neutral_confirmations": 0,
+                            "meaningful_signal_rate": 1.0,
+                            "neutral_confirmation_rate": 0.0,
+                        }
+                    ],
+                    "timing": {"available": False, "reason": "not present"},
+                    "headline_category": {"available": False, "reason": "not present"},
+                },
+            },
         },
     )
     monkeypatch.setattr(
@@ -116,8 +199,18 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "3. ANALYSIS" in rendered
     assert "4. EDGE FORMATION" in rendered
     assert "5. EXECUTION" in rendered
+    assert "6. LLM VALUE-ADD ANALYSIS" in rendered
+    assert "7. LLM VALUE-ADD SEGMENTATION" in rendered
     assert "Appendix" in rendered
     assert "Low-quality flagged              : 2 (25.0%)" in rendered
     assert "LLM rows                         : 1" in rendered
+    assert "LLM attempted (post-filter)       : 1" in rendered
+    assert "LLM skipped (routing)             : 2" in rendered
+    assert "Routing skip reasons              : price_band_excluded=2" in rendered
+    assert "Meaningful signals                : 1 (100.0%)" in rendered
+    assert "Trade candidates                  : 1 (100.0%)" in rendered
+    assert "Top sources by meaningful signal rate" in rendered
+    assert "Market price bands by meaningful signal rate" in rendered
+    assert "Rare non-neutral cases" in rendered
     assert "Ollama runtime                   : configured=qwen2.5:7b health=ok available=['qwen2.5:7b']" in rendered
     assert "Paper trades                     : 2" in rendered
