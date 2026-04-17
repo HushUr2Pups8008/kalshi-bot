@@ -330,8 +330,10 @@ class TestMarketCacheTestTickerExclusion:
 
 class TestLowQualityMatchSuppression:
     """Suppression is config-gated (ENABLE_LOW_QUALITY_MATCH_SUPPRESSION).
-    Criteria: near_threshold_score AND (minimal_overlap OR single_named_entity_only)
-              AND NOT any matched token appears in the market ticker.
+    Two suppression paths:
+      Path A (original): near_threshold_score AND (minimal_overlap OR single_named_entity_only)
+      Path B (new):      single_named_entity_only AND minimal_overlap [score-independent]
+    Both paths also require: NOT any matched token in the market ticker.
     MATCH_DIAGNOSTIC is always logged; MATCH_SUPPRESSED only when criteria met and flag on.
     """
 
@@ -464,6 +466,130 @@ class TestLowQualityMatchSuppression:
 
         assert results, "high-quality match must not be suppressed"
         assert suppressed_calls == [], "no MATCH_SUPPRESSED event for high-quality match"
+
+    @pytest.mark.asyncio
+    async def test_path_b_suppresses_pure_single_entity_without_near_threshold(self, matcher):
+        """Path B: single-entity + minimal-overlap is suppressed even WITHOUT near_threshold_score.
+
+        We inject flags without near_threshold_score to isolate Path B behavior.
+        Under the original criteria (required near_threshold_score), this match would NOT
+        have been suppressed. Under the new criteria, Path B fires on
+        single_named_entity_only + minimal_overlap alone.
+
+        Uses KXMIL-25A (no 'trump' in ticker) so the ticker guard cannot block suppression.
+        """
+        market = _make_market(
+            "KXMIL-25A",
+            "Will Trump order military action under the 25th Amendment this year?",
+        )
+        matcher._cache.get_markets = AsyncMock(return_value=[market])
+        news = _make_news("Trump says Iran talks have collapsed again")
+
+        import analysis.market_matcher as mm
+        import config as cfg_module
+        orig_flag = cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION
+        # Inject Path B flags WITHOUT near_threshold_score.
+        # In the old criteria this match would NOT be suppressed.
+        # In the new criteria, Path B must fire.
+        path_b_flags = ["low_token_overlap", "minimal_overlap", "single_named_entity_only"]
+        suppressed_calls = []
+        diag_calls = []
+        orig_supp = mm.trade_log.log_match_suppressed
+        orig_diag = mm.trade_log.log_match_diagnostic
+        mm.trade_log.log_match_suppressed = lambda **kw: suppressed_calls.append(kw)
+        mm.trade_log.log_match_diagnostic = lambda **kw: diag_calls.append(kw)
+        try:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            with patch("analysis.market_matcher._match_quality_flags", return_value=path_b_flags):
+                results = await matcher.find_candidates(news)
+        finally:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+            mm.trade_log.log_match_suppressed = orig_supp
+            mm.trade_log.log_match_diagnostic = orig_diag
+
+        assert results == [], "pure single-entity match must be suppressed by Path B"
+        assert len(suppressed_calls) == 1, "MATCH_SUPPRESSED must be logged"
+        payload = suppressed_calls[0]
+        assert payload["ticker"] == "KXMIL-25A"
+        assert "single_named_entity_only" in payload["heuristic_flags"]
+        assert "minimal_overlap" in payload["heuristic_flags"]
+        # near_threshold_score absent confirms Path B fired, not Path A
+        assert "near_threshold_score" not in payload["heuristic_flags"]
+        # MATCH_DIAGNOSTIC must still be logged (observability preserved)
+        assert len(diag_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_path_b_blocked_by_ticker_guard(self, matcher):
+        """Path B respects the ticker guard: single-entity match is NOT suppressed
+        when the matched token appears in the market ticker.
+
+        Real-world case: 'trump' headline -> KXTRUMP-26JUN; 'trump' in 'kxtrump-26jun'
+        -> candidate must survive (the market is explicitly about Trump).
+        """
+        market = _make_market(
+            "KXTRUMP-26JUN",
+            "Will Trump sign a tariff order in June?",
+        )
+        matcher._cache.get_markets = AsyncMock(return_value=[market])
+        news = _make_news("Trump says Iran talks have collapsed again")
+
+        import analysis.market_matcher as mm
+        import config as cfg_module
+        orig_flag = cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION
+        suppressed_calls = []
+        orig_supp = mm.trade_log.log_match_suppressed
+        orig_diag = mm.trade_log.log_match_diagnostic
+        mm.trade_log.log_match_suppressed = lambda **kw: suppressed_calls.append(kw)
+        mm.trade_log.log_match_diagnostic = lambda **kw: None
+        try:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            results = await matcher.find_candidates(news)
+        finally:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+            mm.trade_log.log_match_suppressed = orig_supp
+            mm.trade_log.log_match_diagnostic = orig_diag
+
+        assert results, "token-in-ticker single-entity match must NOT be suppressed"
+        assert suppressed_calls == [], "MATCH_SUPPRESSED must not be logged when token is in ticker"
+
+    @pytest.mark.asyncio
+    async def test_multi_token_overlap_not_suppressed_by_path_b(self, matcher):
+        """Path B does not fire when overlap contains multiple tokens.
+
+        'Trump announces Iran nuclear breakthrough' -> 'Will Trump sign an Iran deal?'
+        overlap = {trump, iran} -> minimal_overlap=False -> Path B cannot fire.
+        """
+        market = _make_market(
+            "KXMIL-1",
+            "Will Trump sign an Iran nuclear deal in 2026?",
+        )
+        matcher._cache.get_markets = AsyncMock(return_value=[market])
+        news = _make_news("Trump announces Iran nuclear breakthrough")
+
+        import analysis.market_matcher as mm
+        import config as cfg_module
+        orig_flag = cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION
+        suppressed_calls = []
+        orig_supp = mm.trade_log.log_match_suppressed
+        orig_diag = mm.trade_log.log_match_diagnostic
+        mm.trade_log.log_match_suppressed = lambda **kw: suppressed_calls.append(kw)
+        mm.trade_log.log_match_diagnostic = lambda **kw: None
+        try:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = True
+            results = await matcher.find_candidates(news)
+        finally:
+            cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+            mm.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION = orig_flag
+            mm.trade_log.log_match_suppressed = orig_supp
+            mm.trade_log.log_match_diagnostic = orig_diag
+
+        assert results, "multi-token overlap must NOT be suppressed by Path B"
+        assert suppressed_calls == [], "no MATCH_SUPPRESSED for multi-token match"
 
     @pytest.mark.asyncio
     async def test_suppression_skips_when_token_in_ticker(self, matcher):

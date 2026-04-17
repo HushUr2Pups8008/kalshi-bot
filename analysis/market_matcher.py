@@ -494,11 +494,27 @@ class MarketMatcher:
 
             flag_set = set(heuristic_flags)
             ticker_lower = market.ticker.lower()
+            _token_not_in_ticker = not any(token in ticker_lower for token in overlap)
+            # Path A (original): near-threshold score + structural weakness.
+            # Catches fragile matches that barely passed the score floor.
+            _near_threshold_weak = (
+                "near_threshold_score" in flag_set
+                and ("minimal_overlap" in flag_set or "single_named_entity_only" in flag_set)
+            )
+            # Path B: pure single-entity match with no additional semantic support.
+            # A single named-entity token with no other overlap can inflate scores via
+            # the geopolitical boost, bypassing near_threshold detection. Suppressing
+            # score-independently is safe: any legitimately topic-aligned market will
+            # embed the entity in its ticker (e.g. KXTRUMP-*), which the ticker guard
+            # below preserves.
+            _pure_single_entity = (
+                "single_named_entity_only" in flag_set
+                and "minimal_overlap" in flag_set
+            )
             _meets_suppression_criteria = (
                 bool(heuristic_flags)
-                and "near_threshold_score" in flag_set
-                and ("minimal_overlap" in flag_set or "single_named_entity_only" in flag_set)
-                and not any(token in ticker_lower for token in overlap)
+                and _token_not_in_ticker
+                and (_near_threshold_weak or _pure_single_entity)
             )
 
             if ENABLE_MATCH_SUPPRESSION_DEBUG and _meets_suppression_criteria:

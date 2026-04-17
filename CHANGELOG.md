@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.1] - 2026-04-16
+
+### Changed
+- `analysis/market_matcher.py`: Tightened low-quality match suppression with a second suppression
+  path (Path B) that is score-independent. Path A (original) required `near_threshold_score` AND
+  structural weakness. Path B (new) fires on `single_named_entity_only` AND `minimal_overlap` alone,
+  without requiring the score to be near-threshold. This catches single-entity matches where the
+  geopolitical boost inflates scores above the near-threshold band, which Path A could not reach.
+  The ticker guard (match token in ticker symbol) still blocks both paths, preserving topic-aligned
+  markets (e.g. KXTRUMP-* remains unblocked for Trump-entity headlines).
+- `tests/test_market_matcher.py`: Added 3 targeted tests for Path B suppression behavior:
+  `test_path_b_suppresses_pure_single_entity_without_near_threshold` (Path B fires independently),
+  `test_path_b_blocked_by_ticker_guard` (ticker guard protects Path B), and
+  `test_multi_token_overlap_not_suppressed_by_path_b` (Path B does not fire for multi-token overlap).
+
+---
+
 ## [0.29.0] - 2026-04-16
 
 ### Added
