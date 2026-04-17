@@ -16,9 +16,13 @@ load_dotenv(Path(__file__).parent / ".env")
 
 # ── Directories ───────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
-LOGS_DIR = BASE_DIR / "logs"
+# KALSHI_LOG_ROOT lets tests redirect all log output to a temp directory without
+# touching the runtime default.  Set this env var BEFORE config is imported.
+# At runtime (no override) this resolves to BASE_DIR / "logs" as before.
+_log_root_env = os.environ.get("KALSHI_LOG_ROOT", "")
+LOGS_DIR = Path(_log_root_env) if _log_root_env else BASE_DIR / "logs"
 DATA_DIR = BASE_DIR / "data"
-LOGS_DIR.mkdir(exist_ok=True)
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 # ── Version ───────────────────────────────────────────────────────────────────
@@ -936,6 +940,15 @@ class BotConfig:
     ollama_model: str = field(
         default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
     )
+    ollama_request_timeout_seconds: int = field(
+        default_factory=lambda: int(os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "60"))
+    )
+    ollama_stage_budget_seconds: int = field(
+        default_factory=lambda: int(os.getenv("OLLAMA_STAGE_BUDGET_SECONDS", "45"))
+    )
+    ollama_probe_timeout_seconds: int = field(
+        default_factory=lambda: int(os.getenv("OLLAMA_PROBE_TIMEOUT_SECONDS", "5"))
+    )
 
     # Paper trading mode — True until explicitly confirmed via --go-live
     # Set at runtime via set_paper_mode() — do not mutate directly.
@@ -962,6 +975,25 @@ class BotConfig:
             )
         if not self.ollama_model:
             errors.append("OLLAMA_MODEL is missing or empty")
+        if self.ollama_request_timeout_seconds <= 0:
+            errors.append(
+                "OLLAMA_REQUEST_TIMEOUT_SECONDS must be positive, got %d"
+                % self.ollama_request_timeout_seconds
+            )
+        if self.ollama_stage_budget_seconds <= 0:
+            errors.append(
+                "OLLAMA_STAGE_BUDGET_SECONDS must be positive, got %d"
+                % self.ollama_stage_budget_seconds
+            )
+        if self.ollama_stage_budget_seconds > self.ollama_request_timeout_seconds:
+            errors.append(
+                "OLLAMA_STAGE_BUDGET_SECONDS must be <= OLLAMA_REQUEST_TIMEOUT_SECONDS"
+            )
+        if self.ollama_probe_timeout_seconds <= 0:
+            errors.append(
+                "OLLAMA_PROBE_TIMEOUT_SECONDS must be positive, got %d"
+                % self.ollama_probe_timeout_seconds
+            )
         # Validate RSA key can be loaded (catches bad PEM before first trade)
         if self.api_key_secret:
             try:

@@ -28,6 +28,7 @@ log = get_logger("signal_analyzer")
 # Using a semaphore here (not at the worker level) means this cap holds
 # even if we add more consumer workers in the future.
 _LLM_SEMAPHORE = asyncio.Semaphore(1)
+_llm_in_flight: int = 0
 
 # ── Ollama circuit breaker ─────────────────────────────────────────────────────
 _OLLAMA_FAILURE_THRESHOLD = 3     # consecutive failures before circuit opens
@@ -43,6 +44,13 @@ def _llm_meta(
     provider: str | None = None,
     result_used: bool = False,
     latency_ms: int | None = None,
+    total_stage_ms: int | None = None,
+    queue_wait_ms: int | None = None,
+    http_round_trip_ms: int | None = None,
+    parse_ms: int | None = None,
+    http_status: int | None = None,
+    contention_observed: bool | None = None,
+    in_flight_at_entry: int | None = None,
 ) -> dict[str, Any]:
     return {
         "attempted": attempted,
@@ -50,7 +58,71 @@ def _llm_meta(
         "provider": provider,
         "result_used": result_used,
         "latency_ms": latency_ms,
+        "total_stage_ms": total_stage_ms,
+        "queue_wait_ms": queue_wait_ms,
+        "http_round_trip_ms": http_round_trip_ms,
+        "parse_ms": parse_ms,
+        "http_status": http_status,
+        "contention_observed": contention_observed,
+        "in_flight_at_entry": in_flight_at_entry,
     }
+
+
+def _status_log_marker(status: str) -> str:
+    if status in {"ollama_success", "anthropic_success"}:
+        return "[LLM_LATENCY]"
+    if status in {"ollama_circuit_open", "ollama_probe_failed", "ollama_unavailable"}:
+        return "[LLM_HEALTH]"
+    return "[LLM_FALLBACK]"
+
+
+def _emit_llm_observability_log(meta: dict[str, Any], *, ticker: str) -> None:
+    status = str(meta.get("status") or "unknown")
+    provider = str(meta.get("provider") or "none")
+    marker = _status_log_marker(status)
+    level = log.debug if marker == "[LLM_LATENCY]" else log.warning
+    level(
+        "%s provider=%s ticker=%s status=%s attempted=%s result_used=%s "
+        "total_ms=%s queue_wait_ms=%s http_ms=%s parse_ms=%s http_status=%s "
+        "in_flight_at_entry=%s contention=%s",
+        marker,
+        provider,
+        ticker,
+        status,
+        meta.get("attempted"),
+        meta.get("result_used"),
+        meta.get("total_stage_ms", "n/a"),
+        meta.get("queue_wait_ms", "n/a"),
+        meta.get("http_round_trip_ms", "n/a"),
+        meta.get("parse_ms", "n/a"),
+        meta.get("http_status", "n/a"),
+        meta.get("in_flight_at_entry", "n/a"),
+        meta.get("contention_observed", "n/a"),
+    )
+
+
+def _finalize_llm_meta(
+    meta: dict[str, Any],
+    *,
+    queue_wait_ms: int,
+    total_stage_ms: int,
+    contention_observed: bool,
+    in_flight_at_entry: int,
+) -> dict[str, Any]:
+    completed = dict(meta)
+    completed["queue_wait_ms"] = queue_wait_ms
+    completed["total_stage_ms"] = total_stage_ms
+    completed["contention_observed"] = contention_observed
+    completed["in_flight_at_entry"] = in_flight_at_entry
+    return completed
+
+
+def _ollama_http_status_category(status_code: int) -> str:
+    if 400 <= status_code <= 499:
+        return "ollama_http_4xx"
+    if 500 <= status_code <= 599:
+        return "ollama_http_5xx"
+    return "ollama_http_error"
 
 
 def _extract_json(text: str) -> dict:
@@ -355,7 +427,7 @@ async def _ollama_ping() -> bool:
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 f"{base}/api/version",
-                timeout=aiohttp.ClientTimeout(total=5),
+                timeout=aiohttp.ClientTimeout(total=cfg.ollama_probe_timeout_seconds),
             ) as resp:
                 return resp.status == 200
     except Exception:
@@ -377,9 +449,9 @@ async def _ollama_estimate_detailed(news, market):
         # counter -- prevents probes from keeping the circuit permanently open.
         if not await _ollama_ping():
             _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
-            log.debug(
-                "Ollama probe (ping) failed -- circuit stays open for %.0fm",
-                _OLLAMA_PROBE_INTERVAL / 60,
+            log.warning(
+                "[LLM_HEALTH] provider=ollama probe_failed=true retry_in_s=%d",
+                _OLLAMA_PROBE_INTERVAL,
             )
             return None, _llm_meta(attempted=True, status="ollama_probe_failed", provider="ollama")
         log.info(
@@ -409,32 +481,105 @@ async def _ollama_estimate_detailed(news, market):
     t0 = time.monotonic()
     try:
         async with aiohttp.ClientSession() as session:
+            http_start = time.monotonic()
             async with session.post(
                 f"{cfg.ollama_base_url}/chat/completions",
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=60),
+                timeout=aiohttp.ClientTimeout(total=cfg.ollama_request_timeout_seconds),
             ) as resp:
+                raw = await resp.text()
+                http_round_trip_ms = int((time.monotonic() - http_start) * 1000)
                 if resp.status != 200:
                     latency_ms = int((time.monotonic() - t0) * 1000)
-                    body_snippet = ""
-                    try:
-                        raw = await resp.text()
-                        body_snippet = raw[:200]
-                    except Exception:
-                        pass
+                    body_snippet = raw[:200]
                     log.warning(
                         "Ollama HTTP %d from /v1/chat/completions -- body: %s",
                         resp.status, body_snippet,
                     )
-                    return None, _llm_meta(attempted=True, status="ollama_http_error", provider="ollama", latency_ms=latency_ms)
-                data = await resp.json()
-                latency_ms = int((time.monotonic() - t0) * 1000)
+                    return None, _llm_meta(
+                        attempted=True,
+                        status=_ollama_http_status_category(resp.status),
+                        provider="ollama",
+                        latency_ms=latency_ms,
+                        http_round_trip_ms=http_round_trip_ms,
+                        http_status=resp.status,
+                    )
+                if not raw.strip():
+                    latency_ms = int((time.monotonic() - t0) * 1000)
+                    log.warning("Ollama estimation failed: empty response body")
+                    return None, _llm_meta(
+                        attempted=True,
+                        status="ollama_empty_response",
+                        provider="ollama",
+                        latency_ms=latency_ms,
+                        http_round_trip_ms=http_round_trip_ms,
+                        http_status=resp.status,
+                    )
+                try:
+                    data = _json.loads(raw)
+                except _json.JSONDecodeError as exc:
+                    latency_ms = int((time.monotonic() - t0) * 1000)
+                    log.warning("Ollama estimation failed: malformed JSON body -- %s", exc)
+                    return None, _llm_meta(
+                        attempted=True,
+                        status="ollama_malformed_response",
+                        provider="ollama",
+                        latency_ms=latency_ms,
+                        http_round_trip_ms=http_round_trip_ms,
+                        http_status=resp.status,
+                    )
 
-        text   = data["choices"][0]["message"]["content"].strip()
-        parsed = _extract_json(text)
+        try:
+            text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            log.warning("Ollama estimation failed: malformed response shape -- %s", exc)
+            return None, _llm_meta(
+                attempted=True,
+                status="ollama_malformed_response",
+                provider="ollama",
+                latency_ms=latency_ms,
+                http_round_trip_ms=http_round_trip_ms,
+                http_status=200,
+            )
+
+        if not isinstance(text, str) or not text.strip():
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            log.warning("Ollama estimation failed: empty choice content")
+            return None, _llm_meta(
+                attempted=True,
+                status="ollama_empty_response",
+                provider="ollama",
+                latency_ms=latency_ms,
+                http_round_trip_ms=http_round_trip_ms,
+                http_status=200,
+            )
+
+        parse_start = time.monotonic()
+        parsed = _extract_json(text.strip())
+        parse_ms = int((time.monotonic() - parse_start) * 1000)
         prob, confidence, reasoning, direction, magnitude = _parse_llm_response(parsed, market)
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        if latency_ms > cfg.ollama_stage_budget_seconds * 1000:
+            log.warning(
+                "Ollama estimation exceeded stage budget: %dms > %dms",
+                latency_ms,
+                cfg.ollama_stage_budget_seconds * 1000,
+            )
+            return None, _llm_meta(
+                attempted=True,
+                status="ollama_slow_budget_exceeded",
+                provider="ollama",
+                latency_ms=latency_ms,
+                http_round_trip_ms=http_round_trip_ms,
+                parse_ms=parse_ms,
+                http_status=200,
+            )
         if _ollama_consecutive_failures > 0:
-            log.info("Ollama recovered after %d consecutive failures", _ollama_consecutive_failures)
+            log.info(
+                "[LLM_HEALTH] provider=ollama recovered=true failures=%d",
+                _ollama_consecutive_failures,
+            )
             _ollama_consecutive_failures = 0
             _ollama_down_until = 0.0
         log.debug("Ollama: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
@@ -445,6 +590,9 @@ async def _ollama_estimate_detailed(news, market):
             provider="ollama",
             result_used=True,
             latency_ms=latency_ms,
+            http_round_trip_ms=http_round_trip_ms,
+            parse_ms=parse_ms,
+            http_status=200,
         )
 
     except aiohttp.ClientConnectorError:
@@ -453,8 +601,8 @@ async def _ollama_estimate_detailed(news, market):
         if _ollama_consecutive_failures >= _OLLAMA_FAILURE_THRESHOLD:
             _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
             log.warning(
-                "Ollama circuit open -- %d consecutive failures, skipping for %.0fm",
-                _ollama_consecutive_failures, _OLLAMA_PROBE_INTERVAL / 60,
+                "[LLM_HEALTH] provider=ollama circuit_open=true failures=%d retry_in_s=%d reason=unavailable",
+                _ollama_consecutive_failures, _OLLAMA_PROBE_INTERVAL,
             )
         else:
             log.debug("Ollama not running -- falling back to keyword scoring")
@@ -465,20 +613,19 @@ async def _ollama_estimate_detailed(news, market):
         if _ollama_consecutive_failures >= _OLLAMA_FAILURE_THRESHOLD:
             _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
             log.warning(
-                "Ollama circuit open -- %d consecutive failures (timeout), skipping for %.0fm",
-                _ollama_consecutive_failures, _OLLAMA_PROBE_INTERVAL / 60,
+                "[LLM_HEALTH] provider=ollama circuit_open=true failures=%d retry_in_s=%d reason=timeout",
+                _ollama_consecutive_failures, _OLLAMA_PROBE_INTERVAL,
             )
         else:
-            log.warning("Ollama estimation failed: timed out after 60s (model loading or CPU overloaded)")
+            log.warning(
+                "Ollama estimation failed: timed out after %ss (model loading or CPU overloaded)",
+                cfg.ollama_request_timeout_seconds,
+            )
         return None, _llm_meta(attempted=True, status="ollama_timeout", provider="ollama", latency_ms=latency_ms)
-    except _json.JSONDecodeError as exc:
-        latency_ms = int((time.monotonic() - t0) * 1000)
-        log.warning("Ollama estimation failed: invalid JSON in response -- %s", exc)
-        return None, _llm_meta(attempted=True, status="ollama_parse_error", provider="ollama", latency_ms=latency_ms)
     except ValueError as exc:
         latency_ms = int((time.monotonic() - t0) * 1000)
         log.warning("Ollama estimation failed: %s", exc)
-        return None, _llm_meta(attempted=True, status="ollama_parse_error", provider="ollama", latency_ms=latency_ms)
+        return None, _llm_meta(attempted=True, status="ollama_parse_failure", provider="ollama", latency_ms=latency_ms)
     except Exception as exc:
         latency_ms = int((time.monotonic() - t0) * 1000)
         log.warning("Ollama estimation failed: %s (%s)", exc, type(exc).__name__)
@@ -537,20 +684,57 @@ async def llm_estimate_detailed(news, market):
     Serialized via _LLM_SEMAPHORE — only one call runs at a time regardless
     of how many consumer workers are active.
     """
+    global _llm_in_flight
+
+    queue_started = time.monotonic()
+    contention_observed = _LLM_SEMAPHORE.locked() or _llm_in_flight > 0
+    in_flight_at_entry = _llm_in_flight
+
     async with _LLM_SEMAPHORE:
-        result, meta = await _ollama_estimate_detailed(news, market)
-        if result:
-            return result, meta
-        anthropic_result, anthropic_meta = await _anthropic_estimate_detailed(news, market)
-        if anthropic_result:
-            return anthropic_result, anthropic_meta
-        if anthropic_meta["attempted"]:
-            return None, anthropic_meta
-        return None, meta if meta["attempted"] else _llm_meta(
-            attempted=False,
-            status="no_provider_available",
-            provider=None,
-        )
+        queue_wait_ms = int((time.monotonic() - queue_started) * 1000)
+        stage_started = time.monotonic()
+        _llm_in_flight += 1
+        try:
+            result, meta = await _ollama_estimate_detailed(news, market)
+            if result:
+                meta = _finalize_llm_meta(
+                    meta,
+                    queue_wait_ms=queue_wait_ms,
+                    total_stage_ms=queue_wait_ms + int((time.monotonic() - stage_started) * 1000),
+                    contention_observed=contention_observed,
+                    in_flight_at_entry=in_flight_at_entry,
+                )
+                _emit_llm_observability_log(meta, ticker=market.ticker)
+                return result, meta
+
+            anthropic_result, anthropic_meta = await _anthropic_estimate_detailed(news, market)
+            if anthropic_result:
+                anthropic_meta = _finalize_llm_meta(
+                    anthropic_meta,
+                    queue_wait_ms=queue_wait_ms,
+                    total_stage_ms=queue_wait_ms + int((time.monotonic() - stage_started) * 1000),
+                    contention_observed=contention_observed,
+                    in_flight_at_entry=in_flight_at_entry,
+                )
+                _emit_llm_observability_log(anthropic_meta, ticker=market.ticker)
+                return anthropic_result, anthropic_meta
+
+            final_meta = anthropic_meta if anthropic_meta["attempted"] else meta if meta["attempted"] else _llm_meta(
+                attempted=False,
+                status="no_provider_available",
+                provider=None,
+            )
+            final_meta = _finalize_llm_meta(
+                final_meta,
+                queue_wait_ms=queue_wait_ms,
+                total_stage_ms=queue_wait_ms + int((time.monotonic() - stage_started) * 1000),
+                contention_observed=contention_observed,
+                in_flight_at_entry=in_flight_at_entry,
+            )
+            _emit_llm_observability_log(final_meta, ticker=market.ticker)
+            return None, final_meta
+        finally:
+            _llm_in_flight = max(0, _llm_in_flight - 1)
 
 
 async def llm_estimate(news, market):
@@ -620,6 +804,13 @@ async def estimate_probability(
             llm_result_status=llm_meta["status"],
             llm_provider=llm_meta["provider"],
             llm_latency_ms=llm_meta.get("latency_ms"),
+            llm_total_stage_ms=llm_meta.get("total_stage_ms"),
+            llm_queue_wait_ms=llm_meta.get("queue_wait_ms"),
+            llm_http_round_trip_ms=llm_meta.get("http_round_trip_ms"),
+            llm_parse_ms=llm_meta.get("parse_ms"),
+            llm_http_status=llm_meta.get("http_status"),
+            llm_contention_observed=llm_meta.get("contention_observed"),
+            llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
         )
         return llm_prob, llm_confidence, keywords, reasoning, llm_direction, llm_magnitude, llm_confidence
 
@@ -640,6 +831,13 @@ async def estimate_probability(
             llm_result_status=llm_meta["status"],
             llm_provider=llm_meta["provider"],
             llm_latency_ms=llm_meta.get("latency_ms"),
+            llm_total_stage_ms=llm_meta.get("total_stage_ms"),
+            llm_queue_wait_ms=llm_meta.get("queue_wait_ms"),
+            llm_http_round_trip_ms=llm_meta.get("http_round_trip_ms"),
+            llm_parse_ms=llm_meta.get("parse_ms"),
+            llm_http_status=llm_meta.get("http_status"),
+            llm_contention_observed=llm_meta.get("contention_observed"),
+            llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
         )
         return market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", None, None, None
 
@@ -660,5 +858,12 @@ async def estimate_probability(
         llm_result_status=llm_meta["status"],
         llm_provider=llm_meta["provider"],
         llm_latency_ms=llm_meta.get("latency_ms"),
+        llm_total_stage_ms=llm_meta.get("total_stage_ms"),
+        llm_queue_wait_ms=llm_meta.get("queue_wait_ms"),
+        llm_http_round_trip_ms=llm_meta.get("http_round_trip_ms"),
+        llm_parse_ms=llm_meta.get("parse_ms"),
+        llm_http_status=llm_meta.get("http_status"),
+        llm_contention_observed=llm_meta.get("contention_observed"),
+        llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
     )
     return kw_prob, confidence, keywords, kw_reasoning, None, None, None

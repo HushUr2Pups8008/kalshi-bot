@@ -312,6 +312,7 @@ class TradeLogStore:
             self._truncate_live()
             return
 
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             os.replace(self._live_path, archive_path)
         except PermissionError:
@@ -639,6 +640,13 @@ class TradeLogger:
         llm_result_status: str | None = None,
         llm_provider: str | None = None,
         llm_latency_ms: int | None = None,
+        llm_total_stage_ms: int | None = None,
+        llm_queue_wait_ms: int | None = None,
+        llm_http_round_trip_ms: int | None = None,
+        llm_parse_ms: int | None = None,
+        llm_http_status: int | None = None,
+        llm_contention_observed: bool | None = None,
+        llm_in_flight_at_entry: int | None = None,
     ) -> None:
         record = {
             "type": "SIGNAL_ANALYSIS_DETAIL",
@@ -669,6 +677,20 @@ class TradeLogger:
             record["llm_provider"] = llm_provider
         if llm_latency_ms is not None:
             record["llm_latency_ms"] = llm_latency_ms
+        if llm_total_stage_ms is not None:
+            record["llm_total_stage_ms"] = llm_total_stage_ms
+        if llm_queue_wait_ms is not None:
+            record["llm_queue_wait_ms"] = llm_queue_wait_ms
+        if llm_http_round_trip_ms is not None:
+            record["llm_http_round_trip_ms"] = llm_http_round_trip_ms
+        if llm_parse_ms is not None:
+            record["llm_parse_ms"] = llm_parse_ms
+        if llm_http_status is not None:
+            record["llm_http_status"] = llm_http_status
+        if llm_contention_observed is not None:
+            record["llm_contention_observed"] = llm_contention_observed
+        if llm_in_flight_at_entry is not None:
+            record["llm_in_flight_at_entry"] = llm_in_flight_at_entry
         self._write(record)
 
     def log_match_diagnostic(

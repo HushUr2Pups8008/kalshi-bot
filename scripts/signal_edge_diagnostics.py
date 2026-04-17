@@ -322,6 +322,12 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             "fallback": 0,
             "status_counts": Counter(),
             "latency_ms_samples": [],
+            "total_stage_ms_samples": [],
+            "queue_wait_ms_samples": [],
+            "http_round_trip_ms_samples": [],
+            "parse_ms_samples": [],
+            "contention_observed": 0,
+            "max_in_flight_at_entry": 0,
         },
         "live_execution_attribution_limited": False,
         "audit_rows": [],
@@ -365,6 +371,21 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                 "llm_result_status": str(record.get("llm_result_status") or "").strip() or None,
                 "llm_provider": str(record.get("llm_provider") or "").strip() or None,
                 "llm_latency_ms": safe_float(record.get("llm_latency_ms")),
+                "llm_total_stage_ms": safe_float(record.get("llm_total_stage_ms")),
+                "llm_queue_wait_ms": safe_float(record.get("llm_queue_wait_ms")),
+                "llm_http_round_trip_ms": safe_float(record.get("llm_http_round_trip_ms")),
+                "llm_parse_ms": safe_float(record.get("llm_parse_ms")),
+                "llm_http_status": safe_float(record.get("llm_http_status")),
+                "llm_contention_observed": (
+                    bool(record.get("llm_contention_observed"))
+                    if "llm_contention_observed" in record
+                    else None
+                ),
+                "llm_in_flight_at_entry": (
+                    int(record.get("llm_in_flight_at_entry"))
+                    if isinstance(record.get("llm_in_flight_at_entry"), int)
+                    else None
+                ),
                 "estimated_probability": safe_float(record.get("final_probability")),
                 "market_price": safe_float(record.get("market_price")),
                 "edge": None,
@@ -445,6 +466,23 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             stats["llm_observability"]["status_counts"][row["llm_result_status"]] += 1
         if row.get("llm_latency_ms") is not None:
             stats["llm_observability"]["latency_ms_samples"].append(row["llm_latency_ms"])
+        if row.get("llm_total_stage_ms") is not None:
+            stats["llm_observability"]["total_stage_ms_samples"].append(row["llm_total_stage_ms"])
+        elif row.get("llm_latency_ms") is not None:
+            stats["llm_observability"]["total_stage_ms_samples"].append(row["llm_latency_ms"])
+        if row.get("llm_queue_wait_ms") is not None:
+            stats["llm_observability"]["queue_wait_ms_samples"].append(row["llm_queue_wait_ms"])
+        if row.get("llm_http_round_trip_ms") is not None:
+            stats["llm_observability"]["http_round_trip_ms_samples"].append(row["llm_http_round_trip_ms"])
+        if row.get("llm_parse_ms") is not None:
+            stats["llm_observability"]["parse_ms_samples"].append(row["llm_parse_ms"])
+        if row.get("llm_contention_observed") is True:
+            stats["llm_observability"]["contention_observed"] += 1
+        if row.get("llm_in_flight_at_entry") is not None:
+            stats["llm_observability"]["max_in_flight_at_entry"] = max(
+                stats["llm_observability"]["max_in_flight_at_entry"],
+                int(row["llm_in_flight_at_entry"]),
+            )
         source = row["source"]
         ticker = row["ticker"]
         if source:
@@ -586,6 +624,12 @@ def print_summary(
     for status, count in stats["llm_observability"]["status_counts"].most_common(5):
         print(f"  status[{status}]          : {count}")
     print(f"  LLM latency               : {fmt_latency_stats(stats['llm_observability']['latency_ms_samples'])}")
+    print(f"  LLM total stage           : {fmt_latency_stats(stats['llm_observability']['total_stage_ms_samples'])}")
+    print(f"  LLM queue wait            : {fmt_latency_stats(stats['llm_observability']['queue_wait_ms_samples'])}")
+    print(f"  LLM HTTP round-trip       : {fmt_latency_stats(stats['llm_observability']['http_round_trip_ms_samples'])}")
+    print(f"  LLM parse time            : {fmt_latency_stats(stats['llm_observability']['parse_ms_samples'])}")
+    print(f"  LLM contention observed   : {stats['llm_observability']['contention_observed']}")
+    print(f"  LLM max in-flight entry   : {stats['llm_observability']['max_in_flight_at_entry']}")
 
     print()
     print(f"Per-Event Edge Audit (most recent {recent})")

@@ -5,13 +5,18 @@ Covers: JSON extraction edge cases, probability mapping, keyword scoring,
         geo-coherence suppression, and estimator fallback behaviour.
 """
 
+import asyncio
+import sys
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import analysis.signal_analyzer as signal_analyzer
 from analysis.signal_analyzer import (
     _extract_json,
+    _ollama_estimate_detailed,
     _parse_llm_response,
     _keyword_score,
     estimate_probability,
@@ -369,6 +374,13 @@ class TestEstimateProbability:
             llm_result_status="ollama_success",
             llm_provider="ollama",
             llm_latency_ms=None,
+            llm_total_stage_ms=None,
+            llm_queue_wait_ms=None,
+            llm_http_round_trip_ms=None,
+            llm_parse_ms=None,
+            llm_http_status=None,
+            llm_contention_observed=None,
+            llm_in_flight_at_entry=None,
         )
 
     @pytest.mark.asyncio
@@ -410,6 +422,13 @@ class TestEstimateProbability:
             llm_result_status="ollama_timeout",
             llm_provider="ollama",
             llm_latency_ms=None,
+            llm_total_stage_ms=None,
+            llm_queue_wait_ms=None,
+            llm_http_round_trip_ms=None,
+            llm_parse_ms=None,
+            llm_http_status=None,
+            llm_contention_observed=None,
+            llm_in_flight_at_entry=None,
         )
 
     @pytest.mark.asyncio
@@ -486,3 +505,143 @@ class TestEstimateProbability:
         assert kwargs["llm_provider"] is None
         assert kwargs["keywords"]
         assert kwargs["keyword_contributions"]
+
+
+class _FakeResponse:
+    def __init__(self, *, status=200, text="", exc_on_enter=None):
+        self.status = status
+        self._text = text
+        self._exc_on_enter = exc_on_enter
+
+    async def __aenter__(self):
+        if self._exc_on_enter is not None:
+            raise self._exc_on_enter
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def text(self):
+        return self._text
+
+
+class _FakeClientSession:
+    def __init__(self, response):
+        self._response = response
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def post(self, *args, **kwargs):
+        return self._response
+
+    def get(self, *args, **kwargs):
+        return self._response
+
+
+class _FakeTimeout:
+    def __init__(self, total):
+        self.total = total
+
+
+def _fake_aiohttp_module(response):
+    class _ClientConnectorError(Exception):
+        pass
+
+    return SimpleNamespace(
+        ClientSession=lambda: _FakeClientSession(response),
+        ClientTimeout=lambda total: _FakeTimeout(total),
+        ClientConnectorError=_ClientConnectorError,
+    )
+
+
+class TestOllamaClassification:
+    @pytest.mark.asyncio
+    async def test_ollama_http_4xx_classified(self, monkeypatch):
+        news = _make_news("Headline")
+        market = _make_full_market()
+        response = _FakeResponse(status=422, text='{"error":"bad request"}')
+        monkeypatch.setitem(sys.modules, "aiohttp", _fake_aiohttp_module(response))
+        monkeypatch.setattr(signal_analyzer, "_ollama_consecutive_failures", 0)
+        monkeypatch.setattr(signal_analyzer, "_ollama_down_until", 0.0)
+
+        result, meta = await _ollama_estimate_detailed(news, market)
+
+        assert result is None
+        assert meta["status"] == "ollama_http_4xx"
+        assert meta["http_status"] == 422
+
+    @pytest.mark.asyncio
+    async def test_ollama_unavailable_classified(self, monkeypatch):
+        news = _make_news("Headline")
+        market = _make_full_market()
+        fake_aiohttp = _fake_aiohttp_module(_FakeResponse())
+        response = _FakeResponse(exc_on_enter=fake_aiohttp.ClientConnectorError())
+        fake_aiohttp.ClientSession = lambda: _FakeClientSession(response)
+        monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
+        monkeypatch.setattr(signal_analyzer, "_ollama_consecutive_failures", 0)
+        monkeypatch.setattr(signal_analyzer, "_ollama_down_until", 0.0)
+
+        result, meta = await _ollama_estimate_detailed(news, market)
+
+        assert result is None
+        assert meta["status"] == "ollama_unavailable"
+
+    @pytest.mark.asyncio
+    async def test_ollama_empty_response_classified(self, monkeypatch):
+        news = _make_news("Headline")
+        market = _make_full_market()
+        response = _FakeResponse(status=200, text="")
+        monkeypatch.setitem(sys.modules, "aiohttp", _fake_aiohttp_module(response))
+        monkeypatch.setattr(signal_analyzer, "_ollama_consecutive_failures", 0)
+        monkeypatch.setattr(signal_analyzer, "_ollama_down_until", 0.0)
+
+        result, meta = await _ollama_estimate_detailed(news, market)
+
+        assert result is None
+        assert meta["status"] == "ollama_empty_response"
+
+    @pytest.mark.asyncio
+    async def test_ollama_malformed_response_classified(self, monkeypatch):
+        news = _make_news("Headline")
+        market = _make_full_market()
+        response = _FakeResponse(status=200, text='{"choices":[{"message":{"content":')
+        monkeypatch.setitem(sys.modules, "aiohttp", _fake_aiohttp_module(response))
+        monkeypatch.setattr(signal_analyzer, "_ollama_consecutive_failures", 0)
+        monkeypatch.setattr(signal_analyzer, "_ollama_down_until", 0.0)
+
+        result, meta = await _ollama_estimate_detailed(news, market)
+
+        assert result is None
+        assert meta["status"] == "ollama_malformed_response"
+
+    @pytest.mark.asyncio
+    async def test_ollama_parse_failure_classified(self, monkeypatch):
+        news = _make_news("Headline")
+        market = _make_full_market()
+        response = _FakeResponse(status=200, text='{"choices":[{"message":{"content":"not json"}}]}')
+        monkeypatch.setitem(sys.modules, "aiohttp", _fake_aiohttp_module(response))
+        monkeypatch.setattr(signal_analyzer, "_ollama_consecutive_failures", 0)
+        monkeypatch.setattr(signal_analyzer, "_ollama_down_until", 0.0)
+
+        result, meta = await _ollama_estimate_detailed(news, market)
+
+        assert result is None
+        assert meta["status"] == "ollama_parse_failure"
+
+    @pytest.mark.asyncio
+    async def test_ollama_timeout_classified(self, monkeypatch):
+        news = _make_news("Headline")
+        market = _make_full_market()
+        response = _FakeResponse(exc_on_enter=asyncio.TimeoutError())
+        monkeypatch.setitem(sys.modules, "aiohttp", _fake_aiohttp_module(response))
+        monkeypatch.setattr(signal_analyzer, "_ollama_consecutive_failures", 0)
+        monkeypatch.setattr(signal_analyzer, "_ollama_down_until", 0.0)
+
+        result, meta = await _ollama_estimate_detailed(news, market)
+
+        assert result is None
+        assert meta["status"] == "ollama_timeout"

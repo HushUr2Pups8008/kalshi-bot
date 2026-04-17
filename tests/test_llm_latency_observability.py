@@ -53,6 +53,12 @@ def _base_detail(
     llm_result_used: bool = True,
     llm_result_status: str = "ollama_success",
     llm_latency_ms: int | None = None,
+    llm_total_stage_ms: int | None = None,
+    llm_queue_wait_ms: int | None = None,
+    llm_http_round_trip_ms: int | None = None,
+    llm_parse_ms: int | None = None,
+    llm_contention_observed: bool | None = None,
+    llm_in_flight_at_entry: int | None = None,
     ts: str = "2026-04-15T10:00:00+00:00",
 ) -> dict:
     record: dict = {
@@ -70,6 +76,18 @@ def _base_detail(
     }
     if llm_latency_ms is not None:
         record["llm_latency_ms"] = llm_latency_ms
+    if llm_total_stage_ms is not None:
+        record["llm_total_stage_ms"] = llm_total_stage_ms
+    if llm_queue_wait_ms is not None:
+        record["llm_queue_wait_ms"] = llm_queue_wait_ms
+    if llm_http_round_trip_ms is not None:
+        record["llm_http_round_trip_ms"] = llm_http_round_trip_ms
+    if llm_parse_ms is not None:
+        record["llm_parse_ms"] = llm_parse_ms
+    if llm_contention_observed is not None:
+        record["llm_contention_observed"] = llm_contention_observed
+    if llm_in_flight_at_entry is not None:
+        record["llm_in_flight_at_entry"] = llm_in_flight_at_entry
     return record
 
 
@@ -85,8 +103,20 @@ class TestLlmMeta:
             provider="ollama",
             result_used=True,
             latency_ms=1234,
+            total_stage_ms=1500,
+            queue_wait_ms=200,
+            http_round_trip_ms=1200,
+            parse_ms=50,
+            contention_observed=True,
+            in_flight_at_entry=1,
         )
         assert meta["latency_ms"] == 1234
+        assert meta["total_stage_ms"] == 1500
+        assert meta["queue_wait_ms"] == 200
+        assert meta["http_round_trip_ms"] == 1200
+        assert meta["parse_ms"] == 50
+        assert meta["contention_observed"] is True
+        assert meta["in_flight_at_entry"] == 1
 
     def test_latency_ms_none_by_default(self):
         meta = _llm_meta(attempted=True, status="ollama_success", provider="ollama")
@@ -115,46 +145,66 @@ class TestLlmMeta:
 # ---------------------------------------------------------------------------
 
 class TestLogSignalAnalysisDetail:
-    def test_latency_ms_written_to_record(self, tmp_path):
+    def test_latency_ms_written_to_record(self):
         from utils.logger import TradeLogger
-        log_file = tmp_path / "trades.jsonl"
+        tmp = _make_tmp_dir()
+        log_file = tmp / "trades.jsonl"
         logger = TradeLogger(log_file)
-        logger.log_signal_analysis_detail(
-            ticker="KXONE",
-            source="AP",
-            headline="Test",
-            method="llm",
-            keywords=["war"],
-            keyword_contributions=None,
-            base_probability=0.5,
-            final_probability=0.65,
-            market_price=0.5,
-            llm_attempted=True,
-            llm_result_used=True,
-            llm_result_status="ollama_success",
-            llm_provider="ollama",
-            llm_latency_ms=2500,
-        )
-        record = json.loads(log_file.read_text(encoding="utf-8").strip())
-        assert record["llm_latency_ms"] == 2500
+        try:
+            logger.log_signal_analysis_detail(
+                ticker="KXONE",
+                source="AP",
+                headline="Test",
+                method="llm",
+                keywords=["war"],
+                keyword_contributions=None,
+                base_probability=0.5,
+                final_probability=0.65,
+                market_price=0.5,
+                llm_attempted=True,
+                llm_result_used=True,
+                llm_result_status="ollama_success",
+                llm_provider="ollama",
+                llm_latency_ms=2500,
+                llm_total_stage_ms=3200,
+                llm_queue_wait_ms=600,
+                llm_http_round_trip_ms=2400,
+                llm_parse_ms=80,
+                llm_contention_observed=True,
+                llm_in_flight_at_entry=1,
+            )
+            record = json.loads(log_file.read_text(encoding="utf-8").strip())
+            assert record["llm_latency_ms"] == 2500
+            assert record["llm_total_stage_ms"] == 3200
+            assert record["llm_queue_wait_ms"] == 600
+            assert record["llm_http_round_trip_ms"] == 2400
+            assert record["llm_parse_ms"] == 80
+            assert record["llm_contention_observed"] is True
+            assert record["llm_in_flight_at_entry"] == 1
+        finally:
+            _cleanup(tmp)
 
-    def test_latency_ms_absent_when_none(self, tmp_path):
+    def test_latency_ms_absent_when_none(self):
         from utils.logger import TradeLogger
-        log_file = tmp_path / "trades.jsonl"
+        tmp = _make_tmp_dir()
+        log_file = tmp / "trades.jsonl"
         logger = TradeLogger(log_file)
-        logger.log_signal_analysis_detail(
-            ticker="KXONE",
-            source="AP",
-            headline="Test",
-            method="keyword",
-            keywords=["war"],
-            keyword_contributions=None,
-            base_probability=0.5,
-            final_probability=0.55,
-            market_price=0.5,
-        )
-        record = json.loads(log_file.read_text(encoding="utf-8").strip())
-        assert "llm_latency_ms" not in record
+        try:
+            logger.log_signal_analysis_detail(
+                ticker="KXONE",
+                source="AP",
+                headline="Test",
+                method="keyword",
+                keywords=["war"],
+                keyword_contributions=None,
+                base_probability=0.5,
+                final_probability=0.55,
+                market_price=0.5,
+            )
+            record = json.loads(log_file.read_text(encoding="utf-8").strip())
+            assert "llm_latency_ms" not in record
+        finally:
+            _cleanup(tmp)
 
 
 # ---------------------------------------------------------------------------
@@ -162,30 +212,40 @@ class TestLogSignalAnalysisDetail:
 # ---------------------------------------------------------------------------
 
 class TestSummarizeLatency:
-    def test_latency_samples_collected(self, tmp_path):
-        path = tmp_path / "trades.jsonl"
+    def test_latency_samples_collected(self):
+        tmp = _make_tmp_dir()
+        path = tmp / "trades.jsonl"
         _write_jsonl(path, [
-            _base_detail(llm_latency_ms=1000),
-            _base_detail(llm_latency_ms=2000, ts="2026-04-15T10:01:00+00:00"),
-            _base_detail(llm_latency_ms=3000, ts="2026-04-15T10:02:00+00:00"),
+            _base_detail(llm_latency_ms=1000, llm_total_stage_ms=1200),
+            _base_detail(llm_latency_ms=2000, llm_total_stage_ms=2200, ts="2026-04-15T10:01:00+00:00"),
+            _base_detail(llm_latency_ms=3000, llm_total_stage_ms=3200, ts="2026-04-15T10:02:00+00:00"),
         ])
-        stats = summarize(path, None, None)
-        samples = stats["llm_observability"]["latency_ms_samples"]
-        assert sorted(samples) == [1000.0, 2000.0, 3000.0]
+        try:
+            stats = summarize(path, None, None)
+            samples = stats["llm_observability"]["latency_ms_samples"]
+            assert sorted(samples) == [1000.0, 2000.0, 3000.0]
+            assert sorted(stats["llm_observability"]["total_stage_ms_samples"]) == [1200.0, 2200.0, 3200.0]
+        finally:
+            _cleanup(tmp)
 
-    def test_rows_without_latency_excluded_from_samples(self, tmp_path):
-        path = tmp_path / "trades.jsonl"
+    def test_rows_without_latency_excluded_from_samples(self):
+        tmp = _make_tmp_dir()
+        path = tmp / "trades.jsonl"
         _write_jsonl(path, [
             _base_detail(llm_latency_ms=500),
             _base_detail(ts="2026-04-15T10:01:00+00:00"),  # no latency field
         ])
-        stats = summarize(path, None, None)
-        samples = stats["llm_observability"]["latency_ms_samples"]
-        assert samples == [500.0]
+        try:
+            stats = summarize(path, None, None)
+            samples = stats["llm_observability"]["latency_ms_samples"]
+            assert samples == [500.0]
+        finally:
+            _cleanup(tmp)
 
-    def test_keyword_only_rows_can_have_latency(self, tmp_path):
+    def test_keyword_only_rows_can_have_latency(self):
         # keyword-only fallback still attempted Ollama (and got a latency)
-        path = tmp_path / "trades.jsonl"
+        tmp = _make_tmp_dir()
+        path = tmp / "trades.jsonl"
         _write_jsonl(path, [
             _base_detail(
                 method="keyword",
@@ -195,15 +255,46 @@ class TestSummarizeLatency:
                 llm_latency_ms=60000,
             ),
         ])
-        stats = summarize(path, None, None)
-        samples = stats["llm_observability"]["latency_ms_samples"]
-        assert samples == [60000.0]
+        try:
+            stats = summarize(path, None, None)
+            samples = stats["llm_observability"]["latency_ms_samples"]
+            assert samples == [60000.0]
+        finally:
+            _cleanup(tmp)
 
-    def test_empty_log_gives_empty_samples(self, tmp_path):
-        path = tmp_path / "trades.jsonl"
+    def test_timing_breakdown_samples_collected(self):
+        tmp = _make_tmp_dir()
+        path = tmp / "trades.jsonl"
+        _write_jsonl(path, [
+            _base_detail(
+                llm_latency_ms=2000,
+                llm_total_stage_ms=2400,
+                llm_queue_wait_ms=300,
+                llm_http_round_trip_ms=1900,
+                llm_parse_ms=40,
+                llm_contention_observed=True,
+                llm_in_flight_at_entry=1,
+            ),
+        ])
+        try:
+            stats = summarize(path, None, None)
+            assert stats["llm_observability"]["queue_wait_ms_samples"] == [300.0]
+            assert stats["llm_observability"]["http_round_trip_ms_samples"] == [1900.0]
+            assert stats["llm_observability"]["parse_ms_samples"] == [40.0]
+            assert stats["llm_observability"]["contention_observed"] == 1
+            assert stats["llm_observability"]["max_in_flight_at_entry"] == 1
+        finally:
+            _cleanup(tmp)
+
+    def test_empty_log_gives_empty_samples(self):
+        tmp = _make_tmp_dir()
+        path = tmp / "trades.jsonl"
         path.write_text("", encoding="utf-8")
-        stats = summarize(path, None, None)
-        assert stats["llm_observability"]["latency_ms_samples"] == []
+        try:
+            stats = summarize(path, None, None)
+            assert stats["llm_observability"]["latency_ms_samples"] == []
+        finally:
+            _cleanup(tmp)
 
 
 # ---------------------------------------------------------------------------

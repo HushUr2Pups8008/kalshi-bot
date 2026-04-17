@@ -327,6 +327,28 @@ def build_daily_review(
     lines.append(f"  Ollama runtime                   : {_ollama_runtime_summary()}")
     latency_samples = llm_obs.get("latency_ms_samples", [])
     lines.append(f"  LLM latency                      : {signal_edge_diagnostics.fmt_latency_stats(latency_samples)}")
+    lines.append(
+        "  LLM total stage                  : "
+        f"{signal_edge_diagnostics.fmt_latency_stats(llm_obs.get('total_stage_ms_samples', []))}"
+    )
+    lines.append(
+        "  LLM queue wait                   : "
+        f"{signal_edge_diagnostics.fmt_latency_stats(llm_obs.get('queue_wait_ms_samples', []))}"
+    )
+    lines.append(
+        "  LLM HTTP round-trip              : "
+        f"{signal_edge_diagnostics.fmt_latency_stats(llm_obs.get('http_round_trip_ms_samples', []))}"
+    )
+    lines.append(
+        "  LLM parse time                   : "
+        f"{signal_edge_diagnostics.fmt_latency_stats(llm_obs.get('parse_ms_samples', []))}"
+    )
+    lines.append(
+        f"  LLM contention observed          : {llm_obs.get('contention_observed', 0)}"
+    )
+    lines.append(
+        f"  LLM max in-flight at entry       : {llm_obs.get('max_in_flight_at_entry', 0)}"
+    )
     if llm_status_counts:
         lines.append("  LLM status breakdown:")
         for status, count in llm_status_counts.most_common():

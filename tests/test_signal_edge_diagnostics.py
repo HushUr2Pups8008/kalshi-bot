@@ -59,6 +59,12 @@ def test_summarize_builds_edge_audit_and_group_metrics():
                     "llm_attempted": True,
                     "llm_result_used": True,
                     "llm_result_status": "ollama_success",
+                    "llm_total_stage_ms": 1400,
+                    "llm_queue_wait_ms": 200,
+                    "llm_http_round_trip_ms": 1150,
+                    "llm_parse_ms": 40,
+                    "llm_contention_observed": True,
+                    "llm_in_flight_at_entry": 1,
                     "final_probability": 0.62,
                     "market_price": 0.62,
                     "ts": "2026-04-12T12:00:00+00:00",
@@ -99,7 +105,10 @@ def test_summarize_builds_edge_audit_and_group_metrics():
                     "method": "keyword",
                     "llm_attempted": True,
                     "llm_result_used": False,
-                    "llm_result_status": "ollama_timeout",
+                    "llm_result_status": "ollama_http_5xx",
+                    "llm_total_stage_ms": 2100,
+                    "llm_queue_wait_ms": 350,
+                    "llm_http_round_trip_ms": 1700,
                     "final_probability": 0.58,
                     "market_price": 0.54,
                     "ts": "2026-04-12T12:05:00+00:00",
@@ -144,7 +153,12 @@ def test_summarize_builds_edge_audit_and_group_metrics():
         assert stats["llm_observability"]["result_used"] == 1
         assert stats["llm_observability"]["fallback"] == 1
         assert stats["llm_observability"]["status_counts"]["ollama_success"] == 1
-        assert stats["llm_observability"]["status_counts"]["ollama_timeout"] == 1
+        assert stats["llm_observability"]["status_counts"]["ollama_http_5xx"] == 1
+        assert stats["llm_observability"]["queue_wait_ms_samples"] == [200.0, 350.0]
+        assert stats["llm_observability"]["http_round_trip_ms_samples"] == [1150.0, 1700.0]
+        assert stats["llm_observability"]["parse_ms_samples"] == [40.0]
+        assert stats["llm_observability"]["contention_observed"] == 1
+        assert stats["llm_observability"]["max_in_flight_at_entry"] == 1
 
         first_row = stats["audit_rows"][0]
         second_row = stats["audit_rows"][1]
@@ -285,6 +299,8 @@ def test_print_summary_includes_edge_sections(capsys):
         assert "Aggregate by Source" in output
         assert "Aggregate by Ticker" in output
         assert "LLM Path Observability" in output
+        assert "LLM total stage" in output
+        assert "LLM queue wait" in output
         assert "Live orders are counted in the cohort summary" in output
     finally:
         _cleanup_tmp_dir(tmp)

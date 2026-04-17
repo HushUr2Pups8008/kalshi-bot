@@ -174,6 +174,10 @@ def collect_window_metrics(
             "llm_result_used": llm_result_used,
             "llm_fallback": max(0, llm_attempted - llm_result_used),
             "llm_status_counts": llm_status_counts,
+            "llm_total_stage_ms_samples": edge_stats.get("llm_observability", {}).get("total_stage_ms_samples", []),
+            "llm_queue_wait_ms_samples": edge_stats.get("llm_observability", {}).get("queue_wait_ms_samples", []),
+            "llm_http_round_trip_ms_samples": edge_stats.get("llm_observability", {}).get("http_round_trip_ms_samples", []),
+            "llm_contention_observed": edge_stats.get("llm_observability", {}).get("contention_observed", 0),
         },
         "edge": {
             "opportunities": opportunities,
@@ -313,6 +317,36 @@ def render_report(current_stats: dict[str, Any], previous_stats: dict[str, Any])
     previous_status = previous_stats["analysis"]["llm_status_counts"].most_common(3)
     lines.append(f"  Current LLM statuses            : {', '.join(f'{k}={v}' for k, v in current_status) or 'n/a'}")
     lines.append(f"  Previous LLM statuses           : {', '.join(f'{k}={v}' for k, v in previous_status) or 'n/a'}")
+    lines.append(
+        "  Current LLM total latency      : "
+        f"{signal_edge_diagnostics.fmt_latency_stats(current_stats['analysis']['llm_total_stage_ms_samples'])}"
+    )
+    lines.append(
+        "  Previous LLM total latency     : "
+        f"{signal_edge_diagnostics.fmt_latency_stats(previous_stats['analysis']['llm_total_stage_ms_samples'])}"
+    )
+    lines.append(
+        "  Current LLM queue wait         : "
+        f"{signal_edge_diagnostics.fmt_latency_stats(current_stats['analysis']['llm_queue_wait_ms_samples'])}"
+    )
+    lines.append(
+        "  Previous LLM queue wait        : "
+        f"{signal_edge_diagnostics.fmt_latency_stats(previous_stats['analysis']['llm_queue_wait_ms_samples'])}"
+    )
+    lines.append(
+        "  Current LLM HTTP round-trip    : "
+        f"{signal_edge_diagnostics.fmt_latency_stats(current_stats['analysis']['llm_http_round_trip_ms_samples'])}"
+    )
+    lines.append(
+        "  Previous LLM HTTP round-trip   : "
+        f"{signal_edge_diagnostics.fmt_latency_stats(previous_stats['analysis']['llm_http_round_trip_ms_samples'])}"
+    )
+    lines.append(
+        f"  Current LLM contention         : {current_stats['analysis']['llm_contention_observed']}"
+    )
+    lines.append(
+        f"  Previous LLM contention        : {previous_stats['analysis']['llm_contention_observed']}"
+    )
     lines.append("")
 
     lines.append("3. Edge Formation")

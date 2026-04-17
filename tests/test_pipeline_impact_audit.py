@@ -52,9 +52,15 @@ def test_collect_window_metrics_uses_summary_modules(monkeypatch):
             "audit_rows": [
                 {"method": "llm", "llm_attempted": True, "llm_result_used": True, "llm_result_status": "ollama_success"},
                 {"method": "llm", "llm_attempted": True, "llm_result_used": True, "llm_result_status": "anthropic_success"},
-                {"method": "keyword", "llm_attempted": True, "llm_result_used": False, "llm_result_status": "ollama_timeout"},
+                {"method": "keyword", "llm_attempted": True, "llm_result_used": False, "llm_result_status": "ollama_timeout", "llm_total_stage_ms": 41000, "llm_queue_wait_ms": 5000, "llm_http_round_trip_ms": 35000},
                 {"method": "keyword_gate", "llm_attempted": False, "llm_result_used": False, "llm_result_status": "no_provider_available"},
             ],
+            "llm_observability": {
+                "total_stage_ms_samples": [41000],
+                "queue_wait_ms_samples": [5000],
+                "http_round_trip_ms_samples": [35000],
+                "contention_observed": 1,
+            },
         },
     )
 
@@ -75,6 +81,10 @@ def test_collect_window_metrics_uses_summary_modules(monkeypatch):
     assert stats["analysis"]["llm_result_used"] == 2
     assert stats["analysis"]["llm_fallback"] == 1
     assert stats["analysis"]["llm_status_counts"]["ollama_timeout"] == 1
+    assert stats["analysis"]["llm_total_stage_ms_samples"] == [41000]
+    assert stats["analysis"]["llm_queue_wait_ms_samples"] == [5000]
+    assert stats["analysis"]["llm_http_round_trip_ms_samples"] == [35000]
+    assert stats["analysis"]["llm_contention_observed"] == 1
     assert stats["edge"]["derived_non_zero_above_threshold"] == 2
     assert stats["execution"]["skipped_duplicate"] == 1
 
@@ -102,6 +112,10 @@ def test_render_report_includes_comparison_sections():
             "llm_result_used": 3,
             "llm_fallback": 2,
             "llm_status_counts": Counter({"ollama_success": 2, "ollama_timeout": 2, "anthropic_success": 1}),
+            "llm_total_stage_ms_samples": [12000, 14000, 45000],
+            "llm_queue_wait_ms_samples": [0, 1000, 8000],
+            "llm_http_round_trip_ms_samples": [11000, 13000, 36000],
+            "llm_contention_observed": 2,
         },
         "edge": {
             "opportunities": 4,
@@ -140,6 +154,10 @@ def test_render_report_includes_comparison_sections():
             "llm_result_used": 1,
             "llm_fallback": 3,
             "llm_status_counts": Counter({"no_provider_available": 2, "ollama_timeout": 2}),
+            "llm_total_stage_ms_samples": [20000, 48000],
+            "llm_queue_wait_ms_samples": [0, 9000],
+            "llm_http_round_trip_ms_samples": [18000, 37000],
+            "llm_contention_observed": 1,
         },
         "edge": {
             "opportunities": 3,
@@ -168,3 +186,5 @@ def test_render_report_includes_comparison_sections():
     assert "Keyword-gate exit fraction" in rendered
     assert "LLM attempted" in rendered
     assert "Current LLM statuses" in rendered
+    assert "Current LLM total latency" in rendered
+    assert "Current LLM queue wait" in rendered
