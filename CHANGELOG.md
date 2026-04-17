@@ -6,6 +6,32 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.2] - 2026-04-16
+
+### Fixed
+- `trading/executor.py`: Execution mode is now frozen at `TradeExecutor` construction time
+  (`self._is_paper = cfg.is_paper_trading`). Previously, every executor decision re-read the
+  mutable global `cfg.is_paper_trading`, meaning any code that ran `cfg.set_paper_mode()` after
+  construction (e.g. a test fixture creating a second PaperTrader with `go_live_confirmed=true`)
+  could silently switch a running executor from paper to live mid-process. All 14 call sites in
+  executor.py now use `self._is_paper` instead of `cfg.is_paper_trading`.
+- `trading/executor.py` (`_execute_live`): Added `[LIVE_GUARD]` hard gate at the top of
+  `_execute_live`. If called on an executor whose `self._is_paper=True`, it logs an error and
+  returns None without placing any order. Belt-and-suspenders against incorrect routing.
+- `trading/executor.py` (`_check_live_loss_limit`): Added paper-mode guard -- returns False
+  immediately for paper-mode executors without seeding `_session_start_balance`. This eliminates
+  spurious `[LOSS_LIMIT] Session start balance recorded` log entries appearing in paper-mode
+  processes when tests or CLI commands exercise the live code path.
+- `trading/executor.py` (`__init__`): Added `[EXECUTOR_STATE]` diagnostic log at construction
+  with `pid`, `mode`, and `bankroll_source` to make execution-mode ambiguity instantly visible
+  in logs at startup.
+- `tests/test_executor.py`: Added `TestExecutorModeSafety` class with 7 tests covering:
+  mode frozen at construction for paper and live executors; `execute()` routing to paper only;
+  `[LIVE_GUARD]` blocking `_execute_live` on paper executors; loss-limit not seeded in paper
+  mode; `[EXECUTOR_STATE]` log emitted at init.
+
+---
+
 ## [0.29.1] - 2026-04-16
 
 ### Changed

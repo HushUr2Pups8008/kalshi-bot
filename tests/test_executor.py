@@ -520,3 +520,106 @@ class TestStructuredBoundaryLogging:
             edge=analysis.edge,
             min_edge_threshold=0.04,
         )
+
+
+# ---------------------------------------------------------------------------
+# Execution-mode safety (mode frozen at construction, fail-closed guards)
+# ---------------------------------------------------------------------------
+
+def _make_paper_executor(monkeypatch):
+    """Create a paper-mode executor -- mode frozen to paper at construction."""
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+    monkeypatch.setattr(_cfg_module.cfg, "live_loss_limit_pct", 0.10)
+    monkeypatch.setattr(_cfg_module.cfg, "paper_ticker_cooldown", 14400)
+    monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
+    monkeypatch.setattr(_cfg_module.cfg, "max_ticker_exposure_pct", 1.0)
+
+    rest  = MagicMock()
+    paper = MagicMock()
+    paper.get_notional_bankroll.return_value = 500.0
+    paper.portfolio.open_positions.return_value = []
+    paper.portfolio.is_concentration_ok.return_value = True
+    paper.portfolio.exposure.return_value = 0.0
+
+    ex = TradeExecutor(rest, paper)
+    assert ex._is_paper is True
+    return ex, rest, paper
+
+
+class TestExecutorModeSafety:
+    def test_mode_frozen_at_construction_paper(self, monkeypatch):
+        """Paper executor stays paper even if cfg is mutated to live after construction."""
+        ex, _, _ = _make_paper_executor(monkeypatch)
+        # Mutate global to live after construction -- must have no effect
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
+        assert ex._is_paper is True
+
+    def test_mode_frozen_at_construction_live(self, monkeypatch):
+        """Live executor stays live even if cfg is mutated to paper after construction."""
+        ex, _, _ = _make_executor(monkeypatch)  # creates live executor
+        assert ex._is_paper is False
+        # Mutate global to paper after construction -- must have no effect
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        assert ex._is_paper is False
+
+    @pytest.mark.asyncio
+    async def test_paper_executor_routes_to_paper_not_live(self, monkeypatch):
+        """execute() on a paper executor must call _execute_paper, never _execute_live."""
+        ex, _, paper = _make_paper_executor(monkeypatch)
+
+        recorded = []
+
+        async def fake_paper(analysis):
+            recorded.append("paper")
+            return "paper-trade-id"
+
+        async def fake_live(analysis):
+            recorded.append("live")
+            return "live-order-id"
+
+        ex._execute_paper = fake_paper
+        ex._execute_live  = fake_live
+
+        analysis = _make_analysis(edge=0.05, estimated_prob=0.55, yes_price=50.0,
+                                  capped_dollars=0.25)
+        with patch("trading.executor.trade_log"):
+            result = await ex.execute(analysis)
+
+        assert result == "paper-trade-id"
+        assert recorded == ["paper"]
+
+    @pytest.mark.asyncio
+    async def test_live_guard_blocks_paper_executor(self, monkeypatch):
+        """_execute_live must return None and log [LIVE_GUARD] when called on a paper executor."""
+        ex, _, _ = _make_paper_executor(monkeypatch)
+        analysis = _make_analysis()
+        result = await ex._execute_live(analysis)
+        assert result is None
+
+    def test_loss_limit_not_seeded_in_paper_mode(self, monkeypatch):
+        """_check_live_loss_limit must return False and not seed balance for paper executors."""
+        ex, _, _ = _make_paper_executor(monkeypatch)
+        result = ex._check_live_loss_limit(500.0)
+        assert result is False
+        assert ex._session_start_balance is None
+
+    def test_loss_limit_seeded_in_live_mode(self, monkeypatch):
+        """_check_live_loss_limit must seed balance for live executors (existing behavior)."""
+        ex, _, _ = _make_executor(monkeypatch, bankroll=500.0)
+        result = ex._check_live_loss_limit(480.0)
+        assert result is False
+        assert ex._session_start_balance == 480.0
+
+    def test_executor_state_log_emitted_at_init(self, monkeypatch, caplog):
+        """[EXECUTOR_STATE] diagnostic log must be emitted at construction."""
+        import logging
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        rest  = MagicMock()
+        paper = MagicMock()
+        paper.portfolio.tickers.return_value = []
+        with caplog.at_level(logging.INFO, logger="executor"):
+            TradeExecutor(rest, paper)
+        state_logs = [r for r in caplog.records if "[EXECUTOR_STATE]" in r.message]
+        assert len(state_logs) == 1
+        assert "mode=paper" in state_logs[0].message

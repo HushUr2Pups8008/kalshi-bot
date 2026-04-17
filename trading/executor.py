@@ -1,15 +1,12 @@
 """
-Trade executor — the decision gate between analysis and action.
+Trade executor -- the decision gate between analysis and action.
 
-Paper mode: determined by cfg.is_paper_trading (set by PaperTrader reading DB).
-  - Relaxed edge and price checks — cast wide net for credibility data.
-  - Per-ticker cooldown 4h — prevents same ticker spammed by article bursts.
-  - Dynamic max bet based on notional bankroll.
+Execution mode is frozen at construction time from cfg.is_paper_trading.
+Once set, self._is_paper cannot change for the lifetime of this instance.
+Any post-construction change to cfg.is_paper_trading is deliberately ignored.
 
-Live mode: requires explicit --go-live confirmation. Tighter checks.
-  - Ticker cooldown active.
-  - Live balance verified before each order.
-  - Source credibility multiplier applied to Kelly sizing.
+Paper mode: relaxed edge/price checks, 4h ticker cooldown, flat contracts.
+Live mode: tighter checks, live balance verified, source credibility applied.
 """
 
 import asyncio
@@ -38,10 +35,20 @@ class TradeExecutor:
         self._rest         = rest_client
         self._paper        = paper_trader
         self._last_traded: dict[str, float] = {}
+        # Execution mode frozen at construction -- never re-derived from cfg or DB.
+        # cfg.is_paper_trading may be mutated by CLI commands or tests after this
+        # point; self._is_paper is intentionally immune to those mutations.
+        self._is_paper: bool = cfg.is_paper_trading
         # Live session loss limit state
         self._session_start_balance: Optional[float] = None
         self._live_halted:           bool             = False
         self._shutdown_callback:     Optional[Callable] = None
+        log.info(
+            "[EXECUTOR_STATE] pid=%s mode=%s bankroll_source=%s",
+            __import__("os").getpid(),
+            "paper" if self._is_paper else "live",
+            "notional_db" if self._is_paper else "kalshi_api",
+        )
         self._seed_cooldowns_from_db()
 
     def set_shutdown_callback(self, cb: Callable) -> None:
@@ -52,7 +59,10 @@ class TradeExecutor:
         """
         Track session-start Kalshi balance and return True if the loss limit is breached.
         First call seeds the baseline; subsequent calls compare against it.
+        Paper-mode executors: always returns False (no live balance to track).
         """
+        if self._is_paper:
+            return False
         if self._session_start_balance is None:
             self._session_start_balance = balance
             log.info(
@@ -97,7 +107,7 @@ class TradeExecutor:
             "[DECISION] start ticker=%s mode=%s side=%s edge=%+.4f "
             "capped=$%.2f yes_price=%.1fc est_prob=%.3f confidence=%.2f",
             analysis.market.ticker,
-            "paper" if cfg.is_paper_trading else "live",
+            "paper" if self._is_paper else "live",
             analysis.side.upper(),
             analysis.edge,
             analysis.capped_dollars,
@@ -107,7 +117,7 @@ class TradeExecutor:
         )
         skip_reason = self._validate(analysis)
         if skip_reason:
-            effective_min_edge = PAPER_MIN_EDGE if cfg.is_paper_trading else cfg.min_edge
+            effective_min_edge = PAPER_MIN_EDGE if self._is_paper else cfg.min_edge
             method = (
                 "llm"
                 if any(value is not None for value in (analysis.llm_direction, analysis.llm_magnitude, analysis.llm_confidence))
@@ -116,7 +126,7 @@ class TradeExecutor:
             log.debug(
                 "[DECISION] skip ticker=%s mode=%s side=%s reason=%s",
                 analysis.market.ticker,
-                "paper" if cfg.is_paper_trading else "live",
+                "paper" if self._is_paper else "live",
                 analysis.side.upper(),
                 skip_reason,
             )
@@ -135,7 +145,7 @@ class TradeExecutor:
             )
             return None
 
-        if cfg.is_paper_trading:
+        if self._is_paper:
             log.debug(
                 "[DECISION] route ticker=%s mode=paper side=%s",
                 analysis.market.ticker,
@@ -157,7 +167,7 @@ class TradeExecutor:
                 "[DECISION] no_trade_id ticker=%s mode=%s side=%s "
                 "after successful validation",
                 analysis.market.ticker,
-                "paper" if cfg.is_paper_trading else "live",
+                "paper" if self._is_paper else "live",
                 analysis.side.upper(),
             )
 
@@ -166,10 +176,10 @@ class TradeExecutor:
     def _validate(self, analysis: SignalAnalysis) -> Optional[str]:
         """Return skip reason, or None if the trade should proceed."""
         # Use relaxed edge threshold during paper trading
-        effective_min_edge = PAPER_MIN_EDGE if cfg.is_paper_trading else cfg.min_edge
+        effective_min_edge = PAPER_MIN_EDGE if self._is_paper else cfg.min_edge
 
         # Paper mode uses flat contracts -- skip the dollars gate entirely
-        if not cfg.is_paper_trading and analysis.capped_dollars <= 0:
+        if not self._is_paper and analysis.capped_dollars <= 0:
             return "capped_dollars=0 (below minimum bet size)"
 
         if abs(analysis.edge) < effective_min_edge:
@@ -180,14 +190,14 @@ class TradeExecutor:
 
         # Price sanity: during paper trading allow slightly wider range
         yes_price = analysis.market.yes_price
-        price_floor = 2 if cfg.is_paper_trading else 3
-        price_ceil  = 98 if cfg.is_paper_trading else 97
+        price_floor = 2 if self._is_paper else 3
+        price_ceil  = 98 if self._is_paper else 97
         if yes_price < price_floor or yes_price > price_ceil:
             return f"price {yes_price:.1f}c is near limit (too illiquid)"
 
         # Paper ticker cooldown (4h): prevents same ticker being spammed by a burst
         # of headlines on the same topic (e.g. 30 Iran-war articles in one poll cycle).
-        if cfg.is_paper_trading:
+        if self._is_paper:
             last    = self._last_traded.get(analysis.market.ticker, 0.0)
             elapsed = time.monotonic() - last
             if elapsed < cfg.paper_ticker_cooldown:
@@ -209,7 +219,7 @@ class TradeExecutor:
             # has shifted significantly (>=0.07) OR market price has moved (>=5c).
             # This replaces the former flat block (PAPER_BLOCK_SAME_SIDE_DUPLICATE)
             # which suppressed 11 valid follow-on signals over the first 30 days.
-            if cfg.is_paper_trading and PAPER_BLOCK_SAME_SIDE_DUPLICATE:
+            if self._is_paper and PAPER_BLOCK_SAME_SIDE_DUPLICATE:
                 prob_delta_paper  = abs(pos.estimated_prob - analysis.estimated_probability)
                 price_delta_paper = abs(pos.market_yes_price - analysis.market_yes_price)
                 if prob_delta_paper < 0.07 and price_delta_paper < 5.0:
@@ -233,7 +243,7 @@ class TradeExecutor:
         notional = self._paper.get_notional_bankroll()
         trade_cost = (
             PAPER_FLAT_CONTRACTS * max(1, min(99, int(analysis.market.yes_price))) / 100.0
-            if cfg.is_paper_trading
+            if self._is_paper
             else analysis.capped_dollars
         )
         if not self._paper.portfolio.is_concentration_ok(
@@ -251,7 +261,7 @@ class TradeExecutor:
             )
 
         # Live ticker cooldown + balance check + session loss limit
-        if not cfg.is_paper_trading:
+        if not self._is_paper:
             # Halt check: if a previous call already triggered the limit, reject all trades
             if self._live_halted:
                 return "LIVE HALTED: session loss limit reached -- all trading suspended"
@@ -310,6 +320,16 @@ class TradeExecutor:
 
     async def _execute_live(self, analysis: SignalAnalysis) -> Optional[str]:
         """Place a real limit order on Kalshi with exponential backoff on transient errors."""
+        # Hard safety gate: executor initialized in paper mode must never place live orders.
+        # This fires only if the routing logic is wrong -- belt-and-suspenders.
+        if self._is_paper:
+            log.error(
+                "[LIVE_GUARD] BLOCKED live order for %s -- executor initialized in paper mode. "
+                "This is a bug: _execute_live must only be called from live-mode executors.",
+                analysis.market.ticker,
+            )
+            return None
+
         price_cents = int(analysis.market.yes_ask) if analysis.side == "yes" \
                       else int(100 - analysis.market.yes_bid)
         price_cents  = max(1, min(99, price_cents))
@@ -380,7 +400,7 @@ class TradeExecutor:
                 model_probability=analysis.estimated_probability,
                 market_price=analysis.market_yes_price,
                 edge=analysis.edge,
-                min_edge_threshold=(PAPER_MIN_EDGE if cfg.is_paper_trading else cfg.min_edge),
+                min_edge_threshold=(PAPER_MIN_EDGE if self._is_paper else cfg.min_edge),
             )
             if attempt > 0:
                 log.info(
@@ -398,7 +418,7 @@ class TradeExecutor:
 
     def status(self) -> dict:
         return {
-            "mode":              "paper" if cfg.is_paper_trading else "live",
+            "mode":              "paper" if self._is_paper else "live",
             "notional_bankroll": self._paper.get_notional_bankroll(),
             "ticker_cooldowns":  len(self._last_traded),
             "portfolio":         self._paper.portfolio.summary(),
