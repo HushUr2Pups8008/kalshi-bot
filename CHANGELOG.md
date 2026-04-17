@@ -6,6 +6,43 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.4] - 2026-04-16
+
+### Fixed
+- `tests/conftest.py` (new): Added `pytest_configure` / `pytest_unconfigure` hooks that set
+  `KALSHI_LOG_ROOT` to a per-session temp directory before test collection begins. This ensures
+  module-level singletons in `utils/logger.py` (`_app_fh`, `_err_fh`, `APP_LOG_FILE`, etc.) are
+  initialized against the temp dir, never against `logs/app/bot.log`. The temp dir is removed
+  automatically on test session exit.
+- `tests/test_log_isolation.py` (new): 4 tests proving isolation -- `LOGS_DIR` is not the
+  runtime default during test runs; `APP_LOG_FILE` is not under `logs/`; runtime default path is
+  unchanged in a subprocess without `KALSHI_LOG_ROOT` set.
+
+## [0.29.3] - 2026-04-16
+
+### Added
+- `analysis/signal_analyzer.py`: Granular LLM latency instrumentation -- `_llm_meta()` now
+  captures `total_stage_ms`, `queue_wait_ms`, `http_round_trip_ms`, `parse_ms`, `http_status`,
+  `contention_observed`, and `in_flight_at_entry` alongside the existing `latency_ms`. Requires
+  Ollama 0.4+ HTTP API (existing endpoint, new timing fields only).
+- `config.py`: Three new env-var-backed fields on `BotConfig` -- `ollama_request_timeout_seconds`
+  (default 60), `ollama_stage_budget_seconds` (default 45), `ollama_probe_timeout_seconds`
+  (default 5) -- with validation in `validate()`. Also added `KALSHI_LOG_ROOT` env var for test
+  log redirection (see v0.29.4).
+- `utils/logger.py` (`log_signal_analysis_detail`): Seven new optional keyword args for the
+  granular latency fields; written into the `SIGNAL_ANALYSIS_DETAIL` trade log record when present.
+- `scripts/signal_edge_diagnostics.py`: Collects and aggregates the new latency field samples
+  (`total_stage_ms_samples`, `queue_wait_ms_samples`, `http_round_trip_ms_samples`,
+  `parse_ms_samples`, `contention_observed`, `max_in_flight_at_entry`) from trade log records.
+- `scripts/daily_review.py`: Surfaces the new per-stage latency breakdowns in the LLM
+  observability section of the daily report.
+- `scripts/pipeline_impact_audit.py`: Same latency fields surfaced in audit report.
+
+### Fixed
+- `utils/logger.py` (`_rotate_live_to_archive`): Create archive subdirectory before calling
+  `os.replace()` -- previously `FileNotFoundError` was raised on the first day-boundary rotation
+  because the `archive/YYYY/MM/` path did not yet exist.
+
 ## [0.29.2] - 2026-04-16
 
 ### Fixed
