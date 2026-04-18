@@ -18,71 +18,30 @@ Notes:
 from __future__ import annotations
 
 import argparse
-import re
 from collections import defaultdict
-from datetime import datetime, time, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from utils.diagnostics_script_helpers import (
+    add_exclude_test_arg,
+    add_path_arg,
+    add_since_arg,
+    add_top_arg,
+    add_until_arg,
+    in_window,
+    is_test_record_source_or_signal_source as is_test_record,
+    parse_date_end,
+    parse_date_start,
+    parse_iso_ts,
+)
+from utils.keyword_diagnostics_helpers import tokenize_keyword_text
 from utils.reporting_helpers import warn_if_full_trade_root_scan
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
-TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9']+")
-STOPWORDS = {
-    "a",
-    "after",
-    "again",
-    "all",
-    "amid",
-    "an",
-    "and",
-    "are",
-    "as",
-    "at",
-    "be",
-    "before",
-    "but",
-    "by",
-    "for",
-    "from",
-    "has",
-    "have",
-    "here",
-    "his",
-    "in",
-    "into",
-    "is",
-    "it",
-    "its",
-    "latest",
-    "live",
-    "more",
-    "new",
-    "not",
-    "of",
-    "on",
-    "or",
-    "over",
-    "says",
-    "said",
-    "that",
-    "the",
-    "their",
-    "this",
-    "to",
-    "updates",
-    "was",
-    "what",
-    "when",
-    "where",
-    "who",
-    "why",
-    "will",
-    "with",
-}
 GENERIC_RISK_TOKENS = {
     "deal",
     "dealmaker",
@@ -146,19 +105,14 @@ EVENT_SPECIFIC_TOKENS = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Mine keyword-gate misses for candidate phrases")
-    parser.add_argument(
-        "--path",
+    add_path_arg(
+        parser,
         default=str(DEFAULT_LOG_PATH),
-        help="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
+        help_text="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
     )
-    parser.add_argument("--since", help="Inclusive start date in YYYY-MM-DD")
-    parser.add_argument("--until", help="Inclusive end date in YYYY-MM-DD")
-    parser.add_argument(
-        "--top",
-        type=int,
-        default=20,
-        help="Max candidate phrases to show (default: 20)",
-    )
+    add_since_arg(parser, help_text="Inclusive start date in YYYY-MM-DD")
+    add_until_arg(parser, help_text="Inclusive end date in YYYY-MM-DD")
+    add_top_arg(parser, default=20, help_text="Max candidate phrases to show (default: 20)")
     parser.add_argument(
         "--min-count",
         type=int,
@@ -171,63 +125,15 @@ def parse_args() -> argparse.Namespace:
         default=3,
         help="Example headlines to show per phrase (default: 3)",
     )
-    parser.add_argument(
-        "--exclude-test",
-        action="store_true",
-        help="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
+    add_exclude_test_arg(
+        parser,
+        help_text="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
     )
     return parser.parse_args()
 
 
-def parse_iso_ts(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        dt = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
-def parse_date_start(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    dt = datetime.strptime(value, "%Y-%m-%d")
-    return dt.replace(tzinfo=timezone.utc)
-
-
-def parse_date_end(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    dt = datetime.strptime(value, "%Y-%m-%d")
-    return datetime.combine(dt.date(), time.max, tzinfo=timezone.utc)
-
-
-def in_window(ts: datetime | None, since: datetime | None, until: datetime | None) -> bool:
-    if ts is None:
-        return since is None and until is None
-    if since is not None and ts < since:
-        return False
-    if until is not None and ts > until:
-        return False
-    return True
-
-
-def is_test_record(record: dict[str, Any]) -> bool:
-    source = str(record.get("source") or record.get("signal_source") or "").lower()
-    ticker = str(record.get("ticker") or "").upper()
-    return "r/test" in source or "KXTEST" in ticker
-
-
 def tokenize_headline(headline: str) -> list[str]:
-    tokens = []
-    for token in TOKEN_RE.findall((headline or "").lower()):
-        if len(token) < 3 or token in STOPWORDS:
-            continue
-        tokens.append(token)
-    return tokens
+    return tokenize_keyword_text(headline)
 
 
 def iter_candidate_phrases(headline: str) -> set[str]:

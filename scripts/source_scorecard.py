@@ -24,7 +24,7 @@ import argparse
 import sqlite3
 import sys
 from collections import defaultdict
-from datetime import datetime, time, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,17 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from config import DISABLED_NEWS_SOURCES, DISABLED_SOURCE_FAMILIES
+from utils.diagnostic_reporting_helpers import fmt_money, fmt_pct
+from utils.diagnostics_script_helpers import (
+    add_exclude_test_arg,
+    add_since_arg,
+    add_top_arg,
+    add_until_arg,
+    in_window,
+    parse_date_end,
+    parse_date_start,
+    parse_iso_ts,
+)
 from utils.reporting_helpers import warn_if_full_trade_root_scan
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
@@ -73,24 +84,12 @@ def parse_args() -> argparse.Namespace:
         default=str(DEFAULT_DB_PATH),
         help="Path to paper_trades.db (default: data/paper_trades.db)",
     )
-    parser.add_argument(
-        "--since",
-        help="Inclusive start date in YYYY-MM-DD",
-    )
-    parser.add_argument(
-        "--until",
-        help="Inclusive end date in YYYY-MM-DD",
-    )
-    parser.add_argument(
-        "--top",
-        type=int,
-        default=10,
-        help="Max rows per group (default: 10)",
-    )
-    parser.add_argument(
-        "--exclude-test",
-        action="store_true",
-        help="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
+    add_since_arg(parser, help_text="Inclusive start date in YYYY-MM-DD")
+    add_until_arg(parser, help_text="Inclusive end date in YYYY-MM-DD")
+    add_top_arg(parser, default=10, help_text="Max rows per group (default: 10)")
+    add_exclude_test_arg(
+        parser,
+        help_text="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
     )
     parser.add_argument(
         "--hide-disabled",
@@ -98,42 +97,6 @@ def parse_args() -> argparse.Namespace:
         help="Hide the 'Disabled by Config' section",
     )
     return parser.parse_args()
-
-
-def parse_iso_ts(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        dt = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
-def parse_date_start(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    dt = datetime.strptime(value, "%Y-%m-%d")
-    return dt.replace(tzinfo=timezone.utc)
-
-
-def parse_date_end(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    dt = datetime.strptime(value, "%Y-%m-%d")
-    return datetime.combine(dt.date(), time.max, tzinfo=timezone.utc)
-
-
-def in_window(ts: datetime | None, since: datetime | None, until: datetime | None) -> bool:
-    if ts is None:
-        return since is None and until is None
-    if since is not None and ts < since:
-        return False
-    if until is not None and ts > until:
-        return False
-    return True
 
 
 def safe_int(value: Any) -> int | None:
@@ -152,19 +115,6 @@ def safe_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def fmt_pct(value: float | None) -> str:
-    if value is None:
-        return "n/a"
-    return f"{value * 100:.1f}%"
-
-
-def fmt_money(value: float | None) -> str:
-    if value is None:
-        return "n/a"
-    sign = "+" if value >= 0 else ""
-    return f"{sign}${value:.2f}"
 
 
 def is_test_source_ticker(source: str, ticker: str) -> bool:

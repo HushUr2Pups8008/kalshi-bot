@@ -18,6 +18,7 @@ import aiohttp
 
 from config import cfg, REDDIT_SUBREDDITS, REDDIT_MIN_SCORE
 from feeds import NewsItem
+from feeds.subreddit_selector import filter_disabled_subreddits
 from utils.logger import get_logger
 
 log = get_logger("reddit_monitor")
@@ -357,6 +358,12 @@ async def run_reddit_monitor(
 
             # Resolve subreddit list for this cycle (adaptive or static)
             current_subs = await _get_subs()
+            current_subs, skipped_disabled = filter_disabled_subreddits(current_subs)
+            if skipped_disabled:
+                log.debug(
+                    "Reddit cycle: skipped %d disabled subreddit sources before polling",
+                    len(skipped_disabled),
+                )
             log.debug("Reddit cycle: polling %d subreddits", len(current_subs))
 
             # Poll each subreddit sequentially with a stagger delay.

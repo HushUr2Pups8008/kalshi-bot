@@ -827,18 +827,30 @@ class TradingBot:
             from feeds.search_news_monitor import _markets_to_queries, _gnews_url, _bing_url
             from feeds.rss_monitor import poll_feed
             from collections import OrderedDict
+            from config import DISABLED_SOURCE_FAMILIES
 
             queries = _markets_to_queries([market])
             if not queries:
                 log.debug("[PRICE_MOVE] %s: no query tokens, skipping", ticker)
                 return
 
+            engine_urls = []
+            if "google_news_query" not in DISABLED_SOURCE_FAMILIES:
+                engine_urls.append(_gnews_url)
+            if "bing_news_query" not in DISABLED_SOURCE_FAMILIES:
+                engine_urls.append(_bing_url)
+            if not engine_urls:
+                log.debug("[PRICE_MOVE] %s: search families disabled, skipping", ticker)
+                return
+
             seen: OrderedDict = OrderedDict()
             log.debug("[PRICE_MOVE] %s: targeted search query='%s'", ticker, queries[0])
             for q in queries[:1]:  # single query per triggered search
                 await asyncio.gather(
-                    poll_feed(_gnews_url(q), self._enqueue_news, seen),
-                    poll_feed(_bing_url(q),  self._enqueue_news, seen),
+                    *[
+                        poll_feed(url_builder(q), self._enqueue_news, seen)
+                        for url_builder in engine_urls
+                    ],
                     return_exceptions=True,
                 )
         except Exception as exc:
@@ -928,17 +940,27 @@ class TradingBot:
 
     async def _warm_ws_subscriptions(self) -> None:
         """
-        Background task: wait for the market cache to populate on first run,
+        Background task: wait for the initial market cache warmup to finish,
         then subscribe the WS to every geo market ticker so the price-fade
         detector has live prices from the start.
+
+        This must not trigger its own cache refresh. Startup already has a
+        dedicated cache warmup path via _market_refresh_task(); calling
+        get_markets() here would race that path and duplicate the expensive
+        /series discovery scan.
         """
         try:
-            markets = await self.matcher._cache.get_markets()
-            tickers = [m.ticker for m in markets]
-            if tickers:
-                self.ws.watch(tickers)
-                log.info("WS: subscribed to %d geo market tickers for price fade",
-                         len(tickers))
+            while True:
+                markets = list(self.matcher._cache._markets)
+                if markets:
+                    tickers = [m.ticker for m in markets]
+                    self.ws.watch(tickers)
+                    log.info(
+                        "WS: subscribed to %d geo market tickers for price fade",
+                        len(tickers),
+                    )
+                    return
+                await asyncio.sleep(0.25)
         except Exception as exc:
             log.warning("WS price-fade warm-up failed: %s", exc)
 
@@ -1007,7 +1029,10 @@ class TradingBot:
     async def _refresh_market_cache_once(self, *, initial: bool = False) -> None:
         async with self._market_refresh_lock:
             if initial:
-                log.info("Initial market cache population starting")
+                log.info("[STARTUP] Market cache warmup started")
+                warmup_started_at = time.monotonic()
+            else:
+                warmup_started_at = None
 
             await self.matcher.refresh_cache()
 
@@ -1016,7 +1041,12 @@ class TradingBot:
             self.ws.watch(list(new_tickers))
 
             if initial:
-                log.info("Initial market cache populated: %d markets", len(markets))
+                warmup_elapsed = time.monotonic() - warmup_started_at
+                log.info(
+                    "[STARTUP] Market cache ready: %d markets (%.1fs)",
+                    len(markets),
+                    warmup_elapsed,
+                )
 
             # Loop D: detect newly listed markets and proactively search for news
             if self._known_market_tickers:

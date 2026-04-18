@@ -23,7 +23,7 @@ import urllib.parse
 from collections import OrderedDict
 from typing import Callable, Awaitable, Sequence
 
-from config import MARKET_SERIES_BLOCKLIST_PREFIXES
+from config import DISABLED_SOURCE_FAMILIES, MARKET_SERIES_BLOCKLIST_PREFIXES
 from feeds import NewsItem
 from feeds.rss_monitor import poll_feed
 from kalshi import KalshiMarket
@@ -109,6 +109,15 @@ _ECONOMIC_TOKENS = frozenset({
     # Earnings / corporate finance
     "earnings", "revenue", "ebitda", "eps",
 })
+
+
+def _enabled_search_engines() -> list[tuple[str, Callable[[str], str]]]:
+    engines: list[tuple[str, Callable[[str], str]]] = []
+    if "google_news_query" not in DISABLED_SOURCE_FAMILIES:
+        engines.append(("Google News", _gnews_url))
+    if "bing_news_query" not in DISABLED_SOURCE_FAMILIES:
+        engines.append(("BingNews", _bing_url))
+    return engines
 
 
 def _gnews_url(query: str) -> str:
@@ -212,10 +221,18 @@ async def run_search_news_monitor(
     """
     global _search_articles_cap
     seen: OrderedDict = OrderedDict()
+    engines = _enabled_search_engines()
+    if not engines:
+        log.info("Search news monitor disabled by source-family policy; skipping polling")
+        return
     log.info(
         "Search news monitor started (poll interval %ds, max %d queries/cycle,"
-        " 2 engines, AIMD articles/query start=%d max=%d)",
-        poll_interval, SEARCH_MAX_QUERIES, _search_articles_cap, _SEARCH_ARTICLES_MAX,
+        " engines=%s, AIMD articles/query start=%d max=%d)",
+        poll_interval,
+        SEARCH_MAX_QUERIES,
+        ",".join(name for name, _ in engines),
+        _search_articles_cap,
+        _SEARCH_ARTICLES_MAX,
     )
 
     while True:
@@ -247,9 +264,9 @@ async def run_search_news_monitor(
                     )
 
             log.debug(
-                "Search news: fetching %d queries x 2 engines for %d active markets"
+                "Search news: fetching %d queries x %d engines for %d active markets"
                 " (cap %d articles/query)",
-                len(queries), len(markets), _search_articles_cap,
+                len(queries), len(engines), len(markets), _search_articles_cap,
             )
 
             for q in queries:
@@ -264,8 +281,10 @@ async def run_search_news_monitor(
                     await _cb(item)
 
                 await asyncio.gather(
-                    poll_feed(_gnews_url(q), _capped, seen),
-                    poll_feed(_bing_url(q), _capped, seen),
+                    *[
+                        poll_feed(url_builder(q), _capped, seen)
+                        for _name, url_builder in engines
+                    ],
                     return_exceptions=True,
                 )
 

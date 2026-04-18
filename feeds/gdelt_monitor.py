@@ -27,6 +27,7 @@ from typing import Callable, Awaitable, Sequence
 
 import aiohttp
 
+from config import DISABLED_NEWS_SOURCES
 from feeds import NewsItem
 from feeds.search_news_monitor import _markets_to_queries
 from kalshi import KalshiMarket
@@ -131,6 +132,12 @@ async def run_gdelt_monitor(
     """
     global _gdelt_query_limit
     seen: OrderedDict = OrderedDict()
+    gdelt_disabled = "GDELT" in DISABLED_NEWS_SOURCES or any(
+        key.strip().lower() == "gdelt" for key in DISABLED_NEWS_SOURCES
+    )
+    if gdelt_disabled:
+        log.info("GDELT monitor disabled by source policy; skipping polling")
+        return
     log.info(
         "GDELT monitor started (poll interval %ds, AIMD query limit start=%d max=%d)",
         poll_interval, _gdelt_query_limit, _GDELT_QUERY_MAX,

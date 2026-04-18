@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import Counter, defaultdict, deque
-from datetime import datetime, time, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,18 @@ from analysis.market_matcher import (
     _meaningful_tokens,
     _tokenize,
 )
+from utils.diagnostics_script_helpers import (
+    add_exclude_test_arg,
+    add_path_arg,
+    add_since_arg,
+    add_top_arg,
+    add_until_arg,
+    in_window,
+    is_test_record_source_only as is_test_record,
+    parse_date_end,
+    parse_date_start,
+    parse_iso_ts,
+)
 from utils.reporting_helpers import DEFAULT_CURRENT_STATE_WINDOW_HOURS, resolve_recent_window
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 # Default to the active live file -- match quality is a current-run metric.
@@ -34,22 +46,22 @@ DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "live" / "trades.jsonl"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Summarize market-match quality diagnostics")
-    parser.add_argument(
-        "--path",
+    add_path_arg(
+        parser,
         default=str(DEFAULT_LOG_PATH),
-        help=(
+        help_text=(
             "Path to trade-log file or root "
             "(default: logs/trades/live/trades.jsonl; pass logs/trades/ for archive scans; "
             f"default window: last {DEFAULT_CURRENT_STATE_WINDOW_HOURS} hours when dates omitted; "
             "legacy logs/trades/trades.jsonl still supported)"
         ),
     )
-    parser.add_argument("--since", help="Inclusive start date in YYYY-MM-DD")
-    parser.add_argument(
-        "--until",
-        help=f"Inclusive end date in YYYY-MM-DD (default: now when both dates omitted; last {DEFAULT_CURRENT_STATE_WINDOW_HOURS} hours)",
+    add_since_arg(parser, help_text="Inclusive start date in YYYY-MM-DD")
+    add_until_arg(
+        parser,
+        help_text=f"Inclusive end date in YYYY-MM-DD (default: now when both dates omitted; last {DEFAULT_CURRENT_STATE_WINDOW_HOURS} hours)",
     )
-    parser.add_argument("--top", type=int, default=10, help="Max rows in grouped sections")
+    add_top_arg(parser, default=10, help_text="Max rows in grouped sections")
     parser.add_argument("--recent", type=int, default=10, help="Max example rows per section")
     parser.add_argument(
         "--backfill",
@@ -62,54 +74,11 @@ def parse_args() -> argparse.Namespace:
         default=100,
         help="Max backfilled signal-bearing events to evaluate (default: 100)",
     )
-    parser.add_argument(
-        "--exclude-test",
-        action="store_true",
-        help="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
+    add_exclude_test_arg(
+        parser,
+        help_text="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
     )
     return parser.parse_args()
-
-
-def parse_iso_ts(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        dt = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
-def parse_date_start(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    dt = datetime.strptime(value, "%Y-%m-%d")
-    return dt.replace(tzinfo=timezone.utc)
-
-
-def parse_date_end(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    dt = datetime.strptime(value, "%Y-%m-%d")
-    return datetime.combine(dt.date(), time.max, tzinfo=timezone.utc)
-
-
-def in_window(ts: datetime | None, since: datetime | None, until: datetime | None) -> bool:
-    if ts is None:
-        return since is None and until is None
-    if since is not None and ts < since:
-        return False
-    if until is not None and ts > until:
-        return False
-    return True
-
-
-def is_test_record(record: dict[str, Any]) -> bool:
-    source = str(record.get("source") or "").lower()
-    ticker = str(record.get("ticker") or "").upper()
-    return "r/test" in source or "KXTEST" in ticker
 
 
 def safe_bool(value: Any) -> bool:

@@ -22,10 +22,23 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from datetime import datetime, time, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from utils.diagnostics_script_helpers import (
+    add_exclude_test_arg,
+    add_path_arg,
+    add_since_arg,
+    add_top_arg,
+    add_until_arg,
+    in_window,
+    is_test_record_source_or_signal_source as is_test_record,
+    parse_date_end,
+    parse_date_start,
+    parse_iso_ts,
+)
+from utils.diagnostic_reporting_helpers import format_counter, print_standard_trade_log_header
 from utils.reporting_helpers import warn_if_full_trade_root_scan
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
@@ -36,67 +49,19 @@ DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Summarize kalshi-bot trade logs")
-    parser.add_argument(
-        "--path",
+    add_path_arg(
+        parser,
         default=str(DEFAULT_LOG_PATH),
-        help="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
+        help_text="Path to trade-log file or root (default: logs/trades/; legacy logs/trades/trades.jsonl still supported)",
     )
-    parser.add_argument(
-        "--since",
-        help="Inclusive start date in YYYY-MM-DD",
-    )
-    parser.add_argument(
-        "--until",
-        help="Inclusive end date in YYYY-MM-DD",
-    )
-    parser.add_argument(
-        "--top",
-        type=int,
-        default=10,
-        help="Max rows to show in top breakdowns (default: 10)",
-    )
-    parser.add_argument(
-        "--exclude-test",
-        action="store_true",
-        help="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
+    add_since_arg(parser, help_text="Inclusive start date in YYYY-MM-DD")
+    add_until_arg(parser, help_text="Inclusive end date in YYYY-MM-DD")
+    add_top_arg(parser, default=10, help_text="Max rows to show in top breakdowns (default: 10)")
+    add_exclude_test_arg(
+        parser,
+        help_text="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
     )
     return parser.parse_args()
-
-
-def parse_iso_ts(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        dt = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
-def parse_date_start(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    dt = datetime.strptime(value, "%Y-%m-%d")
-    return dt.replace(tzinfo=timezone.utc)
-
-
-def parse_date_end(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    dt = datetime.strptime(value, "%Y-%m-%d")
-    return datetime.combine(dt.date(), time.max, tzinfo=timezone.utc)
-
-
-def in_window(ts: datetime | None, since: datetime | None, until: datetime | None) -> bool:
-    if ts is None:
-        return since is None and until is None
-    if since is not None and ts < since:
-        return False
-    if until is not None and ts > until:
-        return False
-    return True
 
 
 def infer_signal_type(record: dict[str, Any]) -> str:
@@ -130,19 +95,6 @@ def stale_age_bucket(age_seconds: Any) -> str | None:
     if age_seconds < 60 * 60:
         return "30-60m"
     return "60m+"
-
-
-def format_counter(counter: Counter[str], top: int) -> list[str]:
-    if not counter:
-        return ["  (none)"]
-    width = max(len(str(count)) for count in counter.values())
-    return [f"  {count:>{width}}  {label}" for label, count in counter.most_common(top)]
-
-
-def is_test_record(record: dict[str, Any]) -> bool:
-    source = str(record.get("source") or record.get("signal_source") or "").lower()
-    ticker = str(record.get("ticker") or "").upper()
-    return "r/test" in source or "KXTEST" in ticker
 
 
 def summarize(path: Path, since: datetime | None, until: datetime | None, exclude_test: bool = False) -> dict[str, Any]:
@@ -204,15 +156,15 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
 
 
 def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until: datetime | None) -> None:
-    print("TRADE LOG SUMMARY")
-    print(f"Path: {stats['path']}")
-    if since or until:
-        since_text = since.date().isoformat() if since else "(beginning)"
-        until_text = until.date().isoformat() if until else "(latest)"
-        print(f"Date range: {since_text} -> {until_text}")
-    print(f"Lines read: {stats['lines_total']}")
-    print(f"Malformed lines skipped: {stats['lines_malformed']}")
-    print(f"Records included: {stats['records_kept']}")
+    print_standard_trade_log_header(
+        title="TRADE LOG SUMMARY",
+        path=stats["path"],
+        since=since,
+        until=until,
+        lines_total=stats["lines_total"],
+        lines_malformed=stats["lines_malformed"],
+        records_kept=stats["records_kept"],
+    )
 
     if stats["records_kept"] == 0:
         print()

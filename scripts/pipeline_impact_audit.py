@@ -11,7 +11,7 @@ import argparse
 import sys
 import time
 from collections import Counter
-from datetime import datetime, time as dt_time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 from scripts import decision_funnel_summary
 from scripts import match_quality_diagnostics
 from scripts import signal_edge_diagnostics
+from utils.diagnostics_script_helpers import parse_date_end, parse_date_start
 from utils.reporting_helpers import ProgressTracker, stage_timer, _eprint
 
 
@@ -60,20 +61,6 @@ def parse_args() -> argparse.Namespace:
         help="Print per-stage elapsed time to stderr",
     )
     return parser.parse_args()
-
-
-def parse_date_start(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    dt = datetime.strptime(value, "%Y-%m-%d")
-    return dt.replace(tzinfo=timezone.utc)
-
-
-def parse_date_end(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    dt = datetime.strptime(value, "%Y-%m-%d")
-    return datetime.combine(dt.date(), dt_time.max, tzinfo=timezone.utc)
 
 
 def resolve_windows(

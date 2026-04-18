@@ -13,6 +13,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import config as _cfg_module
+from feeds.subreddit_selector import filter_disabled_subreddits, select_subreddits
+from feeds.search_news_monitor import run_search_news_monitor
+from feeds.gdelt_monitor import run_gdelt_monitor
 from feeds import NewsItem
 from kalshi import KalshiMarket
 from main import TradingBot
@@ -43,6 +46,8 @@ def _make_bot_stub():
     bot._ws_velocity = defaultdict(lambda: deque(maxlen=60))
     bot._last_search_triggered = {}
     bot._last_drift_logged = {}
+    bot._market_refresh_lock = asyncio.Lock()
+    bot._known_market_tickers = set()
     return bot
 
 
@@ -645,6 +650,43 @@ async def test_process_fade_tweet_returns_early_without_pattern():
 
 
 @pytest.mark.asyncio
+async def test_warm_ws_subscriptions_waits_for_existing_cache_without_refresh():
+    bot = _make_bot_stub()
+    bot.matcher._cache._markets = []
+    market = _make_market()
+
+    async def _populate_cache():
+        await asyncio.sleep(0.01)
+        bot.matcher._cache._markets = [market]
+
+    populate_task = asyncio.create_task(_populate_cache())
+    try:
+        await asyncio.wait_for(bot._warm_ws_subscriptions(), timeout=0.5)
+    finally:
+        await populate_task
+
+    bot.matcher._cache.get_markets.assert_not_called()
+    bot.ws.watch.assert_called_once_with([market.ticker])
+
+
+@pytest.mark.asyncio
+async def test_refresh_market_cache_once_logs_startup_warmup_duration(caplog):
+    bot = _make_bot_stub()
+    market = _make_market()
+    bot.matcher.refresh_cache = AsyncMock()
+    bot.matcher._cache.get_markets = AsyncMock(return_value=[market])
+    bot.matcher._cache._markets = [market]
+
+    with caplog.at_level("INFO", logger="main"):
+        await bot._refresh_market_cache_once(initial=True)
+
+    assert "[STARTUP] Market cache warmup started" in caplog.text
+    assert "[STARTUP] Market cache ready: 1 markets (" in caplog.text
+    bot.matcher.refresh_cache.assert_awaited_once()
+    bot.ws.watch.assert_called_once_with([market.ticker])
+
+
+@pytest.mark.asyncio
 async def test_process_fade_tweet_builds_geo_fade_handoff_with_ws_price(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
     bot = _make_bot_stub()
@@ -878,16 +920,17 @@ async def test_trigger_targeted_search_exits_when_no_query_is_available():
 
 @pytest.mark.asyncio
 async def test_trigger_targeted_search_delegates_single_query_into_enqueue_path():
-    bot = _make_bot_stub()
-    market = _make_market()
-    bot.matcher._cache.get_markets.return_value = [market]
-    poll_feed_mock = AsyncMock()
+    with patch("config.DISABLED_SOURCE_FAMILIES", set()):
+        bot = _make_bot_stub()
+        market = _make_market()
+        bot.matcher._cache.get_markets.return_value = [market]
+        poll_feed_mock = AsyncMock()
 
-    with patch("feeds.search_news_monitor._markets_to_queries", return_value=["query one", "query two"]), \
-         patch("feeds.search_news_monitor._gnews_url", side_effect=lambda q: f"gnews:{q}") as gnews_mock, \
-         patch("feeds.search_news_monitor._bing_url", side_effect=lambda q: f"bing:{q}") as bing_mock, \
-         patch("feeds.rss_monitor.poll_feed", new=poll_feed_mock):
-        await bot._trigger_targeted_search(market.ticker)
+        with patch("feeds.search_news_monitor._markets_to_queries", return_value=["query one", "query two"]), \
+             patch("feeds.search_news_monitor._gnews_url", side_effect=lambda q: f"gnews:{q}") as gnews_mock, \
+             patch("feeds.search_news_monitor._bing_url", side_effect=lambda q: f"bing:{q}") as bing_mock, \
+             patch("feeds.rss_monitor.poll_feed", new=poll_feed_mock):
+            await bot._trigger_targeted_search(market.ticker)
 
     gnews_mock.assert_called_once_with("query one")
     bing_mock.assert_called_once_with("query one")
@@ -913,17 +956,98 @@ async def test_trigger_targeted_search_contains_internal_exceptions():
 
 @pytest.mark.asyncio
 async def test_trigger_targeted_search_does_not_use_extra_queries():
-    bot = _make_bot_stub()
-    market = _make_market()
-    bot.matcher._cache.get_markets.return_value = [market]
-    poll_feed_mock = AsyncMock()
+    with patch("config.DISABLED_SOURCE_FAMILIES", set()):
+        bot = _make_bot_stub()
+        market = _make_market()
+        bot.matcher._cache.get_markets.return_value = [market]
+        poll_feed_mock = AsyncMock()
 
-    with patch("feeds.search_news_monitor._markets_to_queries", return_value=["first", "second", "third"]), \
-         patch("feeds.search_news_monitor._gnews_url", side_effect=lambda q: f"gnews:{q}") as gnews_mock, \
-         patch("feeds.search_news_monitor._bing_url", side_effect=lambda q: f"bing:{q}") as bing_mock, \
-         patch("feeds.rss_monitor.poll_feed", new=poll_feed_mock):
-        await bot._trigger_targeted_search(market.ticker)
+        with patch("feeds.search_news_monitor._markets_to_queries", return_value=["first", "second", "third"]), \
+             patch("feeds.search_news_monitor._gnews_url", side_effect=lambda q: f"gnews:{q}") as gnews_mock, \
+             patch("feeds.search_news_monitor._bing_url", side_effect=lambda q: f"bing:{q}") as bing_mock, \
+             patch("feeds.rss_monitor.poll_feed", new=poll_feed_mock):
+            await bot._trigger_targeted_search(market.ticker)
 
     gnews_mock.assert_called_once_with("first")
     bing_mock.assert_called_once_with("first")
     assert poll_feed_mock.await_count == 2
+
+
+def test_filter_disabled_subreddits_removes_disabled_reddit_sources(monkeypatch):
+    monkeypatch.setattr(
+        "feeds.subreddit_selector.DISABLED_NEWS_SOURCES",
+        {"r/worldnews", "r/geopolitics"},
+    )
+
+    allowed, skipped = filter_disabled_subreddits(
+        ["worldnews", "ArmedConflicts", "geopolitics", "worldnews"]
+    )
+
+    assert allowed == ["ArmedConflicts"]
+    assert skipped == ["worldnews", "geopolitics"]
+
+
+def test_select_subreddits_filters_disabled_core_and_topic_subreddits(monkeypatch):
+    monkeypatch.setattr(
+        "feeds.subreddit_selector.DISABLED_NEWS_SOURCES",
+        {"r/worldnews", "r/CredibleDefense", "r/WarCollege"},
+    )
+    market = KalshiMarket(
+        ticker="KXTEST-25DEC31",
+        title="Will war in Ukraine escalate?",
+        yes_bid=49.0,
+        yes_ask=51.0,
+        yes_price=50.0,
+        volume=100,
+        open_interest=200,
+        close_time="2026-12-31T23:59:59Z",
+        status="open",
+        series_ticker="KXTEST",
+        subtitle="Military conflict",
+        result="",
+    )
+
+    selected = select_subreddits([market], source_stats=None, db_path=None)
+
+    assert "worldnews" not in selected
+    assert "CredibleDefense" not in selected
+    assert "WarCollege" not in selected
+    assert "ArmedConflicts" in selected
+
+
+@pytest.mark.asyncio
+async def test_search_monitor_exits_when_all_search_families_are_disabled(monkeypatch):
+    monkeypatch.setattr(
+        "feeds.search_news_monitor.DISABLED_SOURCE_FAMILIES",
+        {"google_news_query", "bing_news_query"},
+    )
+    callback = AsyncMock()
+
+    with patch("feeds.search_news_monitor.poll_feed", new=AsyncMock()) as poll_feed_mock:
+        await run_search_news_monitor(callback, get_markets=lambda: [_make_market()])
+
+    poll_feed_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_gdelt_monitor_exits_when_source_is_disabled(monkeypatch):
+    monkeypatch.setattr("feeds.gdelt_monitor.DISABLED_NEWS_SOURCES", {"GDELT"})
+    callback = AsyncMock()
+
+    await run_gdelt_monitor(callback, get_markets=lambda: [_make_market()])
+
+    callback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_trigger_targeted_search_skips_when_search_families_disabled(monkeypatch):
+    monkeypatch.setattr("config.DISABLED_SOURCE_FAMILIES", {"google_news_query", "bing_news_query"})
+    bot = _make_bot_stub()
+    market = _make_market()
+    bot.matcher._cache.get_markets.return_value = [market]
+
+    with patch("feeds.search_news_monitor._markets_to_queries", return_value=["query one"]), \
+         patch("feeds.rss_monitor.poll_feed", new=AsyncMock()) as poll_feed_mock:
+        await bot._trigger_targeted_search(market.ticker)
+
+    poll_feed_mock.assert_not_awaited()

@@ -25,20 +25,20 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.keyword_shadow_eval import (
+from utils.diagnostics_script_helpers import parse_date_end, parse_date_start
+from utils.keyword_diagnostics_helpers import (
     BUCKET_PROMOTE,
     DEFAULT_LOG_PATH,
     DEFAULT_SHADOW_PHRASES,
     PROMOTE_MIN_HITS,
     PROMOTE_MIN_SCORE,
     PROMOTE_MIN_SOURCES,
-    evaluate_phrases,
-    load_miss_corpus,
-    parse_date_end,
-    parse_date_start,
-    score_phrases,
+    evaluate_shadow_phrases as evaluate_phrases,
+    load_no_keyword_miss_corpus as load_miss_corpus,
+    score_shadow_phrases as score_phrases,
 )
 from utils.reporting_helpers import warn_if_full_trade_root_scan
+from utils.diagnostics_script_helpers import is_test_record_source_only as is_test_record
 
 
 RECOMMEND_PROMOTE = "promote"
@@ -170,6 +170,7 @@ def summarize(
         since=since,
         until=until,
         exclude_test=exclude_test,
+        is_test_record=is_test_record,
     )
     result = evaluate_phrases(records, phrases, max_examples=max_examples)
     score_phrases(result["phrases"])

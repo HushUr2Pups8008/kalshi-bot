@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Sequence
 
 from config import (
+    DISABLED_NEWS_SOURCES,
     REDDIT_CORE_SUBREDDITS,
     REDDIT_MAX_SUBREDDITS,
     REDDIT_SUBREDDIT_TOPIC_MAP,
@@ -35,6 +36,30 @@ _STOP_WORDS = frozenset({
     "how", "what", "when", "who", "which", "its", "has", "have",
     "can", "get", "per", "any", "all",
 })
+
+
+def _is_disabled_reddit_source(subreddit: str) -> bool:
+    source = f"r/{subreddit}"
+    if source in DISABLED_NEWS_SOURCES:
+        return True
+    source_lower = source.lower()
+    return any(key.strip().lower() == source_lower for key in DISABLED_NEWS_SOURCES)
+
+
+def filter_disabled_subreddits(subreddits: Sequence[str]) -> tuple[list[str], list[str]]:
+    """Remove subreddits whose corresponding r/<name> source is globally disabled."""
+    allowed: list[str] = []
+    skipped: list[str] = []
+    seen: set[str] = set()
+    for sub in subreddits:
+        if sub in seen:
+            continue
+        seen.add(sub)
+        if _is_disabled_reddit_source(sub):
+            skipped.append(sub)
+            continue
+        allowed.append(sub)
+    return allowed, skipped
 
 
 def _tokenize(text: str) -> frozenset:
@@ -150,10 +175,15 @@ def select_subreddits(
     source_stats: optional SourceStats instance for quality-aware filtering.
     db_path: optional Path to paper_trades.db for Tier 3 candidate loading.
     """
-    selected: list[str] = list(REDDIT_CORE_SUBREDDITS)
+    selected, skipped_disabled = filter_disabled_subreddits(REDDIT_CORE_SUBREDDITS)
     seen: set[str] = set(selected)
 
     if not markets:
+        if skipped_disabled:
+            logging.getLogger("subreddit_selector").debug(
+                "[SUBREDDIT] Skipped disabled sources: %s",
+                ", ".join(f"r/{sub}" for sub in skipped_disabled),
+            )
         return selected
 
     active = _active_topics(markets)
@@ -177,6 +207,9 @@ def select_subreddits(
             ordered = subs
 
         for sub in ordered:
+            if _is_disabled_reddit_source(sub):
+                skipped_disabled.append(sub)
+                continue
             if source_stats is not None and source_stats.is_suppressed("r/" + sub):
                 suppressed_log.append(sub)
                 continue
@@ -198,6 +231,9 @@ def select_subreddits(
         )
         probe_added = []
         for sub in probes:
+            if _is_disabled_reddit_source(sub):
+                skipped_disabled.append(sub)
+                continue
             if source_stats is not None and source_stats.is_suppressed("r/" + sub):
                 _mark_candidate_suppressed(db_path, sub)
                 continue
@@ -211,5 +247,11 @@ def select_subreddits(
             logging.getLogger("subreddit_selector").debug(
                 "[SUBREDDIT] Probing candidates: %s", ", ".join(probe_added)
             )
+
+    if skipped_disabled:
+        logging.getLogger("subreddit_selector").debug(
+            "[SUBREDDIT] Skipped disabled sources: %s",
+            ", ".join(f"r/{sub}" for sub in skipped_disabled),
+        )
 
     return selected

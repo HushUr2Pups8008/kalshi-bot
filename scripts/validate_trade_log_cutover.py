@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
-from datetime import datetime, time, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +11,7 @@ from scripts import decision_funnel_summary
 from scripts import freshness_diagnostics
 from scripts import source_scorecard
 from scripts import trade_log_summary
+from utils.diagnostics_script_helpers import parse_date_end, parse_date_start
 from utils.trade_log_reader import iter_trade_records
 
 
@@ -40,20 +41,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exclude-test", action="store_true", help="Exclude synthetic/test records")
     parser.add_argument("--report-path", help="Optional path to save the validation report")
     return parser.parse_args()
-
-
-def parse_date_start(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    dt = datetime.strptime(value, "%Y-%m-%d")
-    return dt.replace(tzinfo=timezone.utc)
-
-
-def parse_date_end(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    dt = datetime.strptime(value, "%Y-%m-%d")
-    return datetime.combine(dt.date(), time.max, tzinfo=timezone.utc)
 
 
 def _counter_to_dict(counter: Counter[str]) -> dict[str, int]:
