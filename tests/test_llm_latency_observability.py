@@ -206,6 +206,39 @@ class TestLogSignalAnalysisDetail:
         finally:
             _cleanup(tmp)
 
+    def test_pre_llm_fields_written_when_provided(self):
+        from utils.logger import TradeLogger
+        tmp = _make_tmp_dir()
+        log_file = tmp / "trades.jsonl"
+        logger = TradeLogger(log_file)
+        try:
+            logger.log_signal_analysis_detail(
+                ticker="KXONE",
+                source="AP",
+                headline="Test",
+                method="llm",
+                keywords=[],
+                keyword_contributions=None,
+                base_probability=0.5,
+                final_probability=0.65,
+                market_price=0.5,
+                pre_llm_quality_pass=False,
+                pre_llm_semantic_overlap_count=1,
+                pre_llm_semantic_overlap_ratio=0.2,
+                pre_llm_would_block=True,
+                pre_llm_keyword_override=False,
+                pre_llm_gate_reason="weak_semantic_overlap",
+            )
+            record = json.loads(log_file.read_text(encoding="utf-8").strip())
+            assert record["pre_llm_quality_pass"] is False
+            assert record["pre_llm_semantic_overlap_count"] == 1
+            assert record["pre_llm_semantic_overlap_ratio"] == 0.2
+            assert record["pre_llm_would_block"] is True
+            assert record["pre_llm_keyword_override"] is False
+            assert record["pre_llm_gate_reason"] == "weak_semantic_overlap"
+        finally:
+            _cleanup(tmp)
+
 
 # ---------------------------------------------------------------------------
 # 3. summarize() collects latency samples

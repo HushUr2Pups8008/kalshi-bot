@@ -649,6 +649,17 @@ class TradeLogger:
         llm_in_flight_at_entry: int | None = None,
         llm_routing_passed: bool | None = None,
         llm_routing_reason: str | None = None,
+        pre_llm_quality_pass: bool | None = None,
+        pre_llm_semantic_overlap_count: int | None = None,
+        pre_llm_semantic_overlap_ratio: float | None = None,
+        pre_llm_would_block: bool | None = None,
+        pre_llm_keyword_override: bool | None = None,
+        pre_llm_gate_reason: str | None = None,
+        pre_llm_headline_token_count: int | None = None,
+        pre_llm_market_token_count: int | None = None,
+        llm_probability_movement: float | None = None,
+        llm_useful: bool | None = None,
+        pre_llm_would_block_and_useful: bool | None = None,
     ) -> None:
         record = {
             "type": "SIGNAL_ANALYSIS_DETAIL",
@@ -697,6 +708,28 @@ class TradeLogger:
             record["llm_routing_passed"] = llm_routing_passed
         if llm_routing_reason is not None:
             record["llm_routing_reason"] = llm_routing_reason
+        if pre_llm_quality_pass is not None:
+            record["pre_llm_quality_pass"] = pre_llm_quality_pass
+        if pre_llm_semantic_overlap_count is not None:
+            record["pre_llm_semantic_overlap_count"] = pre_llm_semantic_overlap_count
+        if pre_llm_semantic_overlap_ratio is not None:
+            record["pre_llm_semantic_overlap_ratio"] = round(pre_llm_semantic_overlap_ratio, 4)
+        if pre_llm_would_block is not None:
+            record["pre_llm_would_block"] = pre_llm_would_block
+        if pre_llm_keyword_override is not None:
+            record["pre_llm_keyword_override"] = pre_llm_keyword_override
+        if pre_llm_gate_reason is not None:
+            record["pre_llm_gate_reason"] = pre_llm_gate_reason
+        if pre_llm_headline_token_count is not None:
+            record["pre_llm_headline_token_count"] = pre_llm_headline_token_count
+        if pre_llm_market_token_count is not None:
+            record["pre_llm_market_token_count"] = pre_llm_market_token_count
+        if llm_probability_movement is not None:
+            record["llm_probability_movement"] = round(llm_probability_movement, 4)
+        if llm_useful is not None:
+            record["llm_useful"] = llm_useful
+        if pre_llm_would_block_and_useful is not None:
+            record["pre_llm_would_block_and_useful"] = pre_llm_would_block_and_useful
         self._write(record)
 
     def log_llm_skipped_routing(
@@ -736,6 +769,11 @@ class TradeLogger:
         overlap_ratio: float,
         low_match_quality: bool,
         heuristic_flags: list[str] | None = None,
+        pre_llm_semantic_overlap_count: int | None = None,
+        pre_llm_semantic_overlap_ratio: float | None = None,
+        would_fail_pre_llm_gate: bool | None = None,
+        pre_llm_headline_token_count: int | None = None,
+        pre_llm_market_token_count: int | None = None,
     ) -> None:
         record = {
             "type": "MATCH_DIAGNOSTIC",
@@ -755,6 +793,16 @@ class TradeLogger:
         }
         if heuristic_flags:
             record["heuristic_flags"] = heuristic_flags
+        if pre_llm_semantic_overlap_count is not None:
+            record["pre_llm_semantic_overlap_count"] = pre_llm_semantic_overlap_count
+        if pre_llm_semantic_overlap_ratio is not None:
+            record["pre_llm_semantic_overlap_ratio"] = round(pre_llm_semantic_overlap_ratio, 4)
+        if would_fail_pre_llm_gate is not None:
+            record["would_fail_pre_llm_gate"] = would_fail_pre_llm_gate
+        if pre_llm_headline_token_count is not None:
+            record["pre_llm_headline_token_count"] = pre_llm_headline_token_count
+        if pre_llm_market_token_count is not None:
+            record["pre_llm_market_token_count"] = pre_llm_market_token_count
         self._write(record)
 
     def log_match_suppressed(

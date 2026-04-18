@@ -10,7 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import config as _cfg_module
-from analysis.market_matcher import MarketMatcher, _tokenize, _similarity
+from analysis.market_matcher import (
+    MarketMatcher,
+    _compute_pre_llm_match_meta,
+    _tokenize,
+    _similarity,
+)
 from feeds import NewsItem
 from kalshi import KalshiMarket
 
@@ -234,6 +239,9 @@ class TestFindCandidates:
         assert payload["source"] == "Reuters"
         assert payload["low_match_quality"] is False
         assert "iran" in payload["matched_tokens"]
+        assert payload["pre_llm_semantic_overlap_count"] == 3
+        assert payload["pre_llm_semantic_overlap_ratio"] == pytest.approx(0.75)
+        assert payload["would_fail_pre_llm_gate"] is False
 
     @pytest.mark.asyncio
     async def test_match_diagnostics_flags_single_named_entity_overlap_as_low_quality(self, matcher):
@@ -255,6 +263,22 @@ class TestFindCandidates:
         assert payload["low_match_quality"] is True
         assert "single_named_entity_only" in payload["heuristic_flags"]
         assert payload["matched_tokens"] == ["trump"]
+        assert payload["pre_llm_semantic_overlap_count"] == 1
+        assert payload["pre_llm_semantic_overlap_ratio"] == pytest.approx(1 / 6)
+        assert payload["would_fail_pre_llm_gate"] is True
+
+    def test_compute_pre_llm_match_meta_filters_feature_stopwords(self):
+        meta = _compute_pre_llm_match_meta(
+            "Trump says latest Iran report after talks",
+            "Will Trump report on Iran talks?",
+            ["trump", "say", "report", "iran"],
+        )
+
+        assert meta["pre_llm_semantic_overlap_tokens"] == ["trump", "iran"]
+        assert meta["pre_llm_semantic_overlap_count"] == 2
+        assert meta["pre_llm_semantic_overlap_ratio"] == pytest.approx(0.5)
+        assert meta["pre_llm_quality_pass"] is True
+        assert meta["pre_llm_gate_reason"] is None
 
     @pytest.mark.asyncio
     async def test_single_named_entity_match_is_penalized_below_threshold(self, matcher, monkeypatch):

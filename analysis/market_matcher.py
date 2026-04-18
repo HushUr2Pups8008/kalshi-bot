@@ -14,7 +14,7 @@ import asyncio
 import re
 import time
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 from config import cfg, MARKET_CACHE_TTL_SECONDS, MAX_MARKET_DAYS_TO_EXPIRY
 from config import PAPER_MIN_MATCH_SCORE, PAPER_MAX_CANDIDATES, MARKET_SERIES_BLOCKLIST_PREFIXES
@@ -91,6 +91,24 @@ _GEO_NAMED_ENTITIES = frozenset({
     "nato", "pentagon", "kremlin", "congress", "senate",
 })
 
+_PRE_LLM_GATE_STOPWORDS = frozenset(
+    {
+        "during",
+        "say",
+        "says",
+        "said",
+        "amid",
+        "after",
+        "before",
+        "latest",
+        "live",
+        "update",
+        "updates",
+        "report",
+        "reports",
+    }
+)
+
 
 def _tokenize(text: str) -> set[str]:
     text = text.lower()
@@ -162,6 +180,28 @@ def _match_quality_flags(
     if score <= min_score + 0.02:
         flags.append("near_threshold_score")
     return flags
+
+
+def _compute_pre_llm_match_meta(headline: str, market_title: str, matched_tokens: list[str]) -> dict[str, Any]:
+    normalized_tokens = [t.lower().strip() for t in matched_tokens]
+    semantic_tokens = [t for t in normalized_tokens if t not in _PRE_LLM_GATE_STOPWORDS]
+    headline_token_count = len(_meaningful_tokens(_tokenize(headline)))
+    market_token_count = len(_meaningful_tokens(_tokenize(market_title)))
+    semantic_overlap_count = len(semantic_tokens)
+    semantic_overlap_ratio = semantic_overlap_count / max(1, min(headline_token_count, market_token_count))
+    pre_llm_quality_pass = (
+        semantic_overlap_count >= 2
+        and semantic_overlap_ratio > 0.25
+    )
+    return {
+        "pre_llm_semantic_overlap_tokens": semantic_tokens,
+        "pre_llm_semantic_overlap_count": semantic_overlap_count,
+        "pre_llm_semantic_overlap_ratio": semantic_overlap_ratio,
+        "pre_llm_quality_pass": pre_llm_quality_pass,
+        "pre_llm_gate_reason": None if pre_llm_quality_pass else "weak_semantic_overlap",
+        "pre_llm_headline_token_count": headline_token_count,
+        "pre_llm_market_token_count": market_token_count,
+    }
 
 
 def _days_to_close(close_time_str: str) -> Optional[float]:
@@ -404,9 +444,9 @@ class MarketMatcher:
 
     async def find_candidates(
         self, news: NewsItem, max_results: int | None = None
-    ) -> list[tuple[KalshiMarket, float]]:
+    ) -> list[tuple[KalshiMarket, float, dict[str, Any]]]:
         """
-        Return (market, score) pairs sorted by score descending.
+        Return (market, score, match_meta) triples sorted by score descending.
 
         Thresholds and candidate count are automatically adjusted based on
         whether the bot is in paper trading mode.
@@ -420,7 +460,7 @@ class MarketMatcher:
 
         headline_tokens = _tokenize(news.headline)
 
-        scored: list[tuple[KalshiMarket, float]] = []
+        scored: list[tuple[KalshiMarket, float, dict[str, Any]]] = []
         for market in markets:
             market_title_tokens = _tokenize(market.title)
             market_tokens = market_title_tokens | _tokenize(market.subtitle)
@@ -475,6 +515,11 @@ class MarketMatcher:
                 min_score=min_score,
             )
             overlap_ratio = len(overlap) / max(1, min(len(meaningful_hl), len(meaningful_mt)))
+            match_meta = _compute_pre_llm_match_meta(
+                news.headline,
+                market.title,
+                sorted(overlap),
+            )
             trade_log.log_match_diagnostic(
                 source=news.source,
                 headline=news.headline,
@@ -490,6 +535,11 @@ class MarketMatcher:
                 overlap_ratio=overlap_ratio,
                 low_match_quality=bool(heuristic_flags),
                 heuristic_flags=heuristic_flags,
+                pre_llm_semantic_overlap_count=match_meta["pre_llm_semantic_overlap_count"],
+                pre_llm_semantic_overlap_ratio=match_meta["pre_llm_semantic_overlap_ratio"],
+                would_fail_pre_llm_gate=not match_meta["pre_llm_quality_pass"],
+                pre_llm_headline_token_count=match_meta["pre_llm_headline_token_count"],
+                pre_llm_market_token_count=match_meta["pre_llm_market_token_count"],
             )
 
             flag_set = set(heuristic_flags)
@@ -547,7 +597,7 @@ class MarketMatcher:
                 )
                 continue
 
-            scored.append((market, score))
+            scored.append((market, score, match_meta))
 
         scored.sort(key=lambda x: x[1], reverse=True)
         results = scored[:max_results]

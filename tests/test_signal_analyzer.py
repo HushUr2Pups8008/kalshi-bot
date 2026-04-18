@@ -382,6 +382,9 @@ class TestEstimateProbability:
             llm_contention_observed=None,
             llm_in_flight_at_entry=None,
             llm_routing_passed=True,
+            llm_probability_movement=pytest.approx(0.14),
+            llm_useful=True,
+            pre_llm_would_block_and_useful=False,
         )
 
     @pytest.mark.asyncio
@@ -573,6 +576,65 @@ class TestEstimateProbability:
         assert kwargs["method"] == "llm"
         assert kwargs["llm_routing_passed"] is True
         assert "llm_routing_reason" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_match_meta_logs_would_block_without_keywords(self, monkeypatch):
+        news = _make_news("Quarterly corporate earnings beat expectations")
+        market = _make_full_market()
+        match_meta = {
+            "pre_llm_quality_pass": False,
+            "pre_llm_semantic_overlap_count": 1,
+            "pre_llm_semantic_overlap_ratio": 0.2,
+            "pre_llm_gate_reason": "weak_semantic_overlap",
+        }
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "LLM found relevant directional information", "yes", "moderate"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
+            await estimate_probability(news, market, match_meta=match_meta)
+
+        kwargs = detail_mock.call_args.kwargs
+        assert kwargs["pre_llm_quality_pass"] is False
+        assert kwargs["pre_llm_semantic_overlap_count"] == 1
+        assert kwargs["pre_llm_semantic_overlap_ratio"] == pytest.approx(0.2)
+        assert kwargs["pre_llm_would_block"] is True
+        assert kwargs["pre_llm_keyword_override"] is False
+        assert kwargs["pre_llm_gate_reason"] == "weak_semantic_overlap"
+        assert kwargs["method"] == "llm"
+
+    @pytest.mark.asyncio
+    async def test_match_meta_logs_keyword_override_when_keywords_present(self, monkeypatch):
+        news = _make_news("Ceasefire agreement signed after peace deal")
+        market = _make_full_market()
+        match_meta = {
+            "pre_llm_quality_pass": False,
+            "pre_llm_semantic_overlap_count": 1,
+            "pre_llm_semantic_overlap_ratio": 0.2,
+            "pre_llm_gate_reason": "weak_semantic_overlap",
+        }
+
+        async def _no_llm(*args, **kwargs):
+            return (
+                None,
+                {"attempted": False, "status": "no_provider_available", "provider": None, "result_used": False},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _no_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
+            await estimate_probability(news, market, match_meta=match_meta)
+
+        kwargs = detail_mock.call_args.kwargs
+        assert kwargs["keywords"]
+        assert kwargs["pre_llm_quality_pass"] is False
+        assert kwargs["pre_llm_would_block"] is False
+        assert kwargs["pre_llm_keyword_override"] is True
+        assert kwargs["pre_llm_gate_reason"] == "weak_semantic_overlap"
+        assert kwargs["method"] == "keyword"
 
 
 class _FakeResponse:

@@ -985,6 +985,15 @@ class BotConfig:
     llm_min_keyword_signal: float = field(
         default_factory=lambda: float(os.getenv("LLM_MIN_KEYWORD_SIGNAL", "0.0"))
     )
+    enable_pre_llm_match_gate: bool = field(
+        default_factory=lambda: os.getenv("ENABLE_PRE_LLM_MATCH_GATE", "false").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    pre_llm_match_gate_diagnostics_only: bool = field(
+        default_factory=lambda: os.getenv("PRE_LLM_MATCH_GATE_DIAGNOSTICS_ONLY", "true").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    pre_llm_match_gate_keyword_override_any_hit: bool = field(
+        default_factory=lambda: os.getenv("PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_ANY_HIT", "true").strip().lower() in {"1", "true", "yes", "on"}
+    )
 
     # Paper trading mode — True until explicitly confirmed via --go-live
     # Set at runtime via set_paper_mode() — do not mutate directly.

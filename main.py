@@ -468,10 +468,10 @@ class TradingBot:
             log.debug("No matching markets for: %s", news.headline[:60])
             return
 
-        for market, match_score in candidates:
-            await self._process_candidate(news, market, match_score)
+        for market, match_score, match_meta in candidates:
+            await self._process_candidate(news, market, match_score, match_meta)
 
-    async def _process_candidate(self, news: NewsItem, market, match_score: float) -> None:
+    async def _process_candidate(self, news: NewsItem, market, match_score: float, match_meta: dict | None = None) -> None:
         from utils.logger import trade_log
         # Staleness check: skip if the article is too old when we process it.
         # With a queue, items can sit for several minutes; old news is already priced in.
@@ -517,7 +517,7 @@ class TradingBot:
         )
 
         estimated_prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
-            await estimate_probability(news, market, keyword_stats=self.keyword_stats)
+            await estimate_probability(news, market, keyword_stats=self.keyword_stats, match_meta=match_meta)
         if not keywords:
             trade_log.log_analysis_rejected(
                 reason="no_keywords",

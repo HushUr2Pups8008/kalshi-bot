@@ -149,6 +149,29 @@ def _finalize_llm_meta(
     return completed
 
 
+def _pre_llm_log_fields(
+    *,
+    match_meta: dict[str, Any] | None,
+    keywords_present: bool,
+) -> dict[str, Any]:
+    if match_meta is None:
+        return {}
+    pre_llm_quality_pass = match_meta["pre_llm_quality_pass"]
+    fields: dict[str, Any] = {
+        "pre_llm_quality_pass": pre_llm_quality_pass,
+        "pre_llm_semantic_overlap_count": match_meta["pre_llm_semantic_overlap_count"],
+        "pre_llm_semantic_overlap_ratio": match_meta["pre_llm_semantic_overlap_ratio"],
+        "pre_llm_would_block": (not pre_llm_quality_pass and not keywords_present),
+        "pre_llm_keyword_override": (not pre_llm_quality_pass and keywords_present),
+        "pre_llm_gate_reason": match_meta["pre_llm_gate_reason"],
+    }
+    if "pre_llm_headline_token_count" in match_meta:
+        fields["pre_llm_headline_token_count"] = match_meta["pre_llm_headline_token_count"]
+    if "pre_llm_market_token_count" in match_meta:
+        fields["pre_llm_market_token_count"] = match_meta["pre_llm_market_token_count"]
+    return fields
+
+
 def _ollama_http_status_category(status_code: int) -> str:
     if 400 <= status_code <= 499:
         return "ollama_http_4xx"
@@ -780,6 +803,7 @@ async def estimate_probability(
     news: NewsItem,
     market: KalshiMarket,
     keyword_stats=None,   # KeywordStats instance or None
+    match_meta: dict[str, Any] | None = None,
 ) -> tuple[float, float, list[str], str, Optional[str], Optional[str], Optional[float]]:
     """
     Best-available probability estimate for this (news, market) pair.
@@ -802,6 +826,8 @@ async def estimate_probability(
     kw_prob, kw_side, keywords, kw_reasoning = keyword_estimate(
         news, market, keyword_stats=keyword_stats
     )
+    keywords_present = bool(keywords)
+    pre_llm_fields = _pre_llm_log_fields(match_meta=match_meta, keywords_present=keywords_present)
     keyword_contribs = _keyword_contributions(
         combined_text, keyword_stats=keyword_stats, series_ticker=series_ticker
     )
@@ -834,6 +860,11 @@ async def estimate_probability(
 
     if llm_result:
         llm_prob, llm_confidence, llm_reasoning, llm_direction, llm_magnitude = llm_result
+        llm_probability_movement = abs(llm_prob - base_probability)
+        llm_useful = llm_probability_movement >= 0.01
+        pre_llm_would_block_and_useful = (
+            pre_llm_fields.get("pre_llm_would_block", False) and llm_useful
+        )
         # Use LLM probability directly -- keywords only gate the match, not the estimate.
         # Blending was removed because it allowed keyword scores to manufacture bets
         # that the LLM explicitly said were not market-moving (e.g. LLM: 0.50 + keywords
@@ -868,6 +899,10 @@ async def estimate_probability(
             llm_contention_observed=llm_meta.get("contention_observed"),
             llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
             llm_routing_passed=True,
+            llm_probability_movement=llm_probability_movement,
+            llm_useful=llm_useful,
+            pre_llm_would_block_and_useful=pre_llm_would_block_and_useful,
+            **pre_llm_fields,
         )
         return llm_prob, llm_confidence, keywords, reasoning, llm_direction, llm_magnitude, llm_confidence
 
@@ -897,6 +932,7 @@ async def estimate_probability(
             llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
             llm_routing_passed=(routing_reason is None),
             llm_routing_reason=routing_reason,
+            **pre_llm_fields,
         )
         return market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", None, None, None
 
@@ -926,5 +962,6 @@ async def estimate_probability(
         llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
         llm_routing_passed=(routing_reason is None),
         llm_routing_reason=routing_reason,
+        **pre_llm_fields,
     )
     return kw_prob, confidence, keywords, kw_reasoning, None, None, None

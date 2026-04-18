@@ -91,15 +91,27 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     bot = _make_bot_stub()
     news = _make_news()
     market = _make_market()
+    match_meta = {
+        "pre_llm_quality_pass": False,
+        "pre_llm_semantic_overlap_count": 1,
+        "pre_llm_semantic_overlap_ratio": 0.2,
+        "pre_llm_gate_reason": "weak_semantic_overlap",
+    }
 
     with patch("main.estimate_probability", new=AsyncMock(return_value=(
         0.65, 0.8, ["missile strike"], "test reasoning", "yes", "moderate", 0.8
-    ))), patch("main.kelly_bet", return_value=(0.12, 15.0, 12.0)), \
+    ))) as estimate_mock, patch("main.kelly_bet", return_value=(0.12, 15.0, 12.0)), \
          patch("utils.logger.trade_log.log_signal"), \
          patch("utils.logger.trade_log.log_opportunity") as opportunity_mock:
-        await bot._process_candidate(news, market, 0.42)
+        await bot._process_candidate(news, market, 0.42, match_meta)
 
     bot.executor.execute.assert_awaited_once()
+    estimate_mock.assert_awaited_once_with(
+        news,
+        market,
+        keyword_stats=bot.keyword_stats,
+        match_meta=match_meta,
+    )
     analysis = bot.executor.execute.await_args.args[0]
     assert analysis.news_item is news
     assert analysis.market.ticker == "KXTEST-25DEC31"
