@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "import_id": "2026-04-18_import",
+  "source_machine": "Windows (pre-Mac migration, NSSM-managed service)",
+  "import_date": "2026-04-18",
+  "tarball": "transfer/decision-support-sync-2026-04-18.tar.gz",
+  "raw_root": "windows_archive/raw/2026-04-18_import",
+  "analysis_root": "windows_archive/analysis/2026-04-18_import",
+
+  "artifacts": {
+    "trades_all.jsonl": {
+      "path": "windows_archive/analysis/2026-04-18_import/consolidated/trades_all.jsonl",
+      "description": "All Windows-era trade log events merged in chronological order",
+      "lines": 416595,
+      "size_mb": 105,
+      "coverage_start": "2026-03-11T15:52:23+00:00",
+      "coverage_end": "2026-04-18T16:23:26+00:00",
+      "sources_in_order": [
+        {
+          "file": "logs/trades/archive/trades-202604.jsonl.gz",
+          "type": "compressed_monthly_archive",
+          "lines": 15410,
+          "coverage": "2026-03-11 \u2192 2026-04-11T13:04 UTC",
+          "note": "Pre-restructure era; compressed by migration tool"
+        },
+        {
+          "file": "logs/trades/trades.jsonl",
+          "type": "legacy_monolithic",
+          "lines": 287299,
+          "coverage": "2026-04-11T16:07 \u2192 2026-04-16T19:16 UTC",
+          "note": "Active file during restructure transition; never partitioned"
+        },
+        {
+          "file": "logs/trades/archive/2026/04/2026-04-16.jsonl",
+          "type": "daily_partition",
+          "lines": 6985,
+          "coverage": "2026-04-16T19:34 \u2192 2026-04-16T23:59 UTC",
+          "note": "Post-restructure; first partitioned daily file"
+        },
+        {
+          "file": "logs/trades/archive/2026/04/2026-04-17.jsonl",
+          "type": "daily_partition",
+          "lines": 62463,
+          "coverage": "2026-04-17T00:03 \u2192 2026-04-17T23:59 UTC"
+        },
+        {
+          "file": "logs/trades/live/trades.jsonl",
+          "type": "live_at_sync",
+          "lines": 44438,
+          "coverage": "2026-04-18T00:00 \u2192 2026-04-18T16:23 UTC",
+          "note": "Active file at sync time; not a full day"
+        }
+      ],
+      "known_gaps": [
+        {
+          "gap": "2026-04-11 13:04 \u2192 2026-04-11 16:07 UTC (~3 hours)",
+          "cause": "Migration tool cutover timing between compressed archive and legacy monolithic"
+        },
+        {
+          "gap": "2026-04-16 19:16 \u2192 2026-04-16 19:34 UTC (~18 minutes)",
+          "cause": "Trade-log restructure cutover from monolithic to daily-partitioned format"
+        }
+      ],
+      "dedup_applied": false,
+      "overlap_detected": false
+    },
+
+    "bot_all.log": {
+      "path": "windows_archive/analysis/2026-04-18_import/consolidated/bot_all.log",
+      "description": "All Windows-era app log files concatenated in chronological order with source boundary markers",
+      "lines": 1915491,
+      "size_mb": 290,
+      "coverage_start": "2026-03-11",
+      "coverage_end": "2026-04-18",
+      "sources_in_order": [
+        {"file": "bot.log.1", "size_mb": 10, "coverage": "2026-03-11 \u2192 2026-03-17", "note": "Pre-daily-rotation era"},
+        {"file": "bot.log.2026-03-23", "size_mb": 6.1, "coverage": "2026-03-17 \u2192 2026-03-23"},
+        {"file": "bot.log.2026-03-24", "coverage": "2026-03-24"},
+        {"file": "bot.log.2026-03-25", "coverage": "2026-03-25"},
+        {"file": "bot.log.2026-03-26", "coverage": "2026-03-26"},
+        {"file": "bot.log.2026-03-27", "coverage": "2026-03-27"},
+        {"file": "bot.log.2026-03-28", "coverage": "2026-03-28"},
+        {"file": "bot.log.2026-03-29", "coverage": "2026-03-29"},
+        {"file": "bot.log.2026-03-30", "coverage": "2026-03-30"},
+        {"file": "bot.log.2026-03-31", "coverage": "2026-03-31"},
+        {"file": "bot.log.2026-04-01", "coverage": "2026-04-01"},
+        {"file": "bot.log.2026-04-02", "size_mb": 20, "coverage": "2026-04-02"},
+        {"file": "bot.log.2026-04-03", "size_mb": 28, "coverage": "2026-04-03"},
+        {"file": "bot.log.2026-04-04", "size_mb": 23, "coverage": "2026-04-04"},
+        {"file": "bot.log.2026-04-05", "size_mb": 28, "coverage": "2026-04-05"},
+        {"file": "bot.log.2026-04-06", "size_mb": 29, "coverage": "2026-04-06"},
+        {"file": "bot.log.2026-04-07", "size_mb": 29, "coverage": "2026-04-07"},
+        {"file": "bot.log.2026-04-08", "size_mb": 30, "coverage": "2026-04-08"},
+        {"file": "bot.log.2026-04-09", "size_mb": 24, "coverage": "2026-04-09"},
+        {"file": "bot.log.2026-04-10", "size_mb": 27, "coverage": "2026-04-10"},
+        {"file": "bot.log.2026-04-11", "size_mb": 15, "coverage": "2026-04-11"},
+        {"file": "bot.log.2026-04-12", "coverage": "2026-04-12"},
+        {"file": "bot.log.2026-04-13", "coverage": "2026-04-13"},
+        {"file": "bot.log.2026-04-14", "coverage": "2026-04-14"},
+        {"file": "bot.log.2026-04-15", "coverage": "2026-04-15"},
+        {"file": "bot.log.2026-04-16", "coverage": "2026-04-16 (until 16:18 local)"},
+        {"file": "bot.log.2026-04-17", "size_mb": 3.5, "coverage": "2026-04-16T22:18 \u2192 2026-04-18T05:59 UTC", "note": "UTC timestamps span two calendar days due to Windows timezone offset"},
+        {"file": "bot.log", "size_mb": 0.7, "coverage": "2026-04-18T16:25 UTC onward (sync-time snapshot)"}
+      ],
+      "boundary_marker_format": "# ===== SOURCE: <filename> =====",
+      "note": "Large file (~290 MB). For targeted analysis, use individual files under windows_archive/raw/2026-04-18_import/logs/app/"
+    },
+
+    "paper_trades_analysis.db": {
+      "path": "windows_archive/analysis/2026-04-18_import/db/paper_trades_analysis.db",
+      "description": "Copy of Windows-era paper_trades.db with analysis-safe name (prevents confusion with live data/paper_trades.db)",
+      "source": "windows_archive/raw/2026-04-18_import/data/paper_trades.db",
+      "size_kb": 324,
+      "tables": {
+        "paper_trades": {"rows": 15, "coverage": "2026-03-13 \u2192 2026-04-14"},
+        "bot_state": {"rows": 2, "note": "paper_start_time, notional_bankroll"},
+        "source_credibility": {"rows": 4},
+        "source_stats": {"rows": 422},
+        "subreddit_candidates": {"rows": 1497},
+        "keyword_outcomes": {"rows": 3}
+      },
+      "schema_version": "same as raw; no modifications"
+    }
+  },
+
+  "live_mac_paths": {
+    "note": "These paths are entirely separate and were NOT modified by this import",
+    "db": "data/paper_trades.db",
+    "trade_log": "logs/trades/live/trades.jsonl",
+    "app_log": "logs/app/bot.log"
+  }
+}
