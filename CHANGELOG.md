@@ -6,6 +6,47 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.6] - 2026-04-18
+
+### Added
+- `utils/diagnostics_script_helpers.py` (new): Shared date/window/test-record/CLI helper
+  module for the read-only diagnostics script family. Consolidates duplicated UTC parsing,
+  inclusive end-date handling, common argparse flags, and test-record detection without
+  changing operator-facing script behavior.
+- `utils/keyword_diagnostics_helpers.py` (new): Shared keyword-diagnostics helper module
+  for tokenization, phrase matching, miss-corpus loading, and shadow-evaluation scoring
+  used by the keyword audit/reporting scripts.
+- `utils/diagnostic_reporting_helpers.py` (new): Shared reporting primitive module for
+  percentage/money formatting, top-counter rendering, and standard trade-log header output.
+- `tests/test_diagnostics_script_helpers.py`, `tests/test_keyword_diagnostics_helpers.py`,
+  `tests/test_diagnostic_reporting_helpers.py` (new): Focused regression tests locking in
+  the behavior of the newly shared diagnostics helper layer.
+
+### Fixed
+- `main.py`: Eliminated duplicate initial market-cache warmup on startup. Previously
+  `_market_refresh_task()` and `_warm_ws_subscriptions()` could both trigger the expensive
+  initial cache population path, causing duplicate `/series` scans and extending the
+  early `0 active markets` window. Startup now performs one warmup path and logs explicit
+  cache-ready timing.
+- `main.py`: Added startup observability for market cache initialization, including INFO-level
+  warmup start/ready logs with elapsed seconds and loaded market count.
+- `feeds/subreddit_selector.py`, `feeds/reddit_monitor.py`: Disabled Reddit sources are now
+  filtered before polling rather than fetched and then dropped later at intake. This reduces
+  wasted cold-start polling, public API noise, and expected disabled-source drop spam.
+- `feeds/search_news_monitor.py`, `main.py`: Search-family polling now respects disabled
+  source-family policy before fetch. When Google/Bing query families are disabled, the
+  monitors skip that upstream work instead of fetching items that would be discarded later.
+- `feeds/gdelt_monitor.py`: GDELT monitor startup now respects the existing disabled-source
+  policy and skips polling entirely when `GDELT` is disabled at intake.
+- `scripts/trade_log_summary.py`, `scripts/decision_funnel_summary.py`,
+  `scripts/freshness_diagnostics.py`, `scripts/match_quality_diagnostics.py`,
+  `scripts/match_suppression_audit.py`, `scripts/signal_edge_diagnostics.py`,
+  `scripts/pipeline_impact_audit.py`, `scripts/validate_trade_log_cutover.py`,
+  `scripts/source_scorecard.py`, `scripts/keyword_feedback.py`,
+  `scripts/keyword_shadow_eval.py`, `scripts/keyword_promotion_report.py`:
+  Reduced duplicated internal helper logic via shared modules while preserving CLI behavior
+  and verified report output.
+
 ## [0.29.5] - 2026-04-17
 
 ### Fixed
