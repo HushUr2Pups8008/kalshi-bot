@@ -1,0 +1,64 @@
+======================================================================
+KEYWORD PROMOTION REPORT (PASSIVE -- READ-ONLY)
+======================================================================
+*** No live config changes were made. ***
+*** Recommendations are review aids only. ***
+
+Log   : tests/fixtures/report_snapshots/keyword_misses_sample.jsonl
+Lines : 8  (malformed: 0)
+Window: 2026-04-18T00:00:00+00:00 .. 2026-04-18T23:59:59.999999+00:00
+
+Promotion Criteria
+  Promote: Phase 6B promote candidate (hits >= 5, sources >= 2, score >= 20, no concentration flag)
+  Watch  : at least one shadow hit, but missing one or more promote conditions
+  Reject : zero hits, or very weak evidence (score < 10)
+
+Summary
+  Total phrases evaluated          : 3
+  Promote                          : 1
+  Watch                            : 2
+  Reject                           : 0
+  Miss corpus size                 : 8
+  Misses matched by >=1 phrase     : 7 (87.5%)
+
+Promote
+  strait hormuz
+    recommendation : promote  score=45  hits=5 (62.5%)
+    coverage       : sources=3  tickers=5  overlap_hits=4  concentration=KX1 20% [ok]
+    rationale      : meets promote thresholds: score 45 >= 20, hits 5 >= 5, sources 3 >= 2, no concentration flag
+    sources        : AP, BBC, Reuters
+    tickers        : KX1, KX2, KX3, KX4, KX5
+    examples       :
+      "Deadline passes for Strait of Hormuz blockade"
+      "U.S. begins blockade in Strait of Hormuz"
+
+Watch
+  hormuz blockade
+    recommendation : watch  score=38  hits=4 (50.0%)
+    coverage       : sources=3  tickers=4  overlap_hits=4  concentration=KX1 25% [ok]
+    rationale      : needs more hits (4/5); overlap burden 4 hit(s)
+    sources        : AP, BBC, Reuters
+    tickers        : KX1, KX3, KX4, KX5
+    examples       :
+      "Deadline passes for Strait of Hormuz blockade"
+      "Oil climbs as Strait of Hormuz blockade continues"
+
+  blockade iran
+    recommendation : watch  score=10  hits=2 (25.0%)
+    coverage       : sources=1  tickers=2  overlap_hits=0  concentration=KX6 50% [HIGH]
+    rationale      : needs more hits (2/5); needs broader source coverage (1/2); score below promote threshold (10/20); concentration flag set
+    sources        : Reuters
+    tickers        : KX6, KX7
+    examples       :
+      "Trump plans to blockade Iran, experts are skeptical"
+      "Lawmakers debate blockade Iran strategy"
+
+Reject
+  (none)
+
+Attribution Notes
+  This is passive evaluation only.
+  No phrase was added to live config.
+  Recommendations are review aids only.
+  Live promotion still requires explicit human approval and a config change.
+======================================================================

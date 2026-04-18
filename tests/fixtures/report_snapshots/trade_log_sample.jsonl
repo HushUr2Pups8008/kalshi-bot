@@ -1,0 +1,8 @@
+{"type":"SIGNAL","source":"Reuters","ticker":"KX1","ts":"2026-04-18T10:00:00+00:00"}
+{"type":"OPPORTUNITY","source":"Reuters","ticker":"KX1","ts":"2026-04-18T10:01:00+00:00"}
+{"type":"SKIPPED","source":"Reuters","ticker":"KX1","reason":"cooldown","ts":"2026-04-18T10:02:00+00:00"}
+{"type":"ANALYSIS_REJECTED","source":"AP","ticker":"KX2","reason":"stale_news","age_seconds":1200,"ts":"2026-04-18T10:03:00+00:00"}
+{"type":"ANALYSIS_REJECTED","source":"r/geopolitics","ticker":"KX3","reason":"no_keywords","ts":"2026-04-18T10:04:00+00:00"}
+{"type":"PAPER_TRADE","signal_source":"Reuters","ticker":"KX1","ts":"2026-04-18T10:05:00+00:00"}
+{"type":"LIVE_ORDER","source":"price_fade","ticker":"KX4","ts":"2026-04-18T10:06:00+00:00"}
+{"type":"SIGNAL","source":"@Kalshi","ticker":"KX5","reasoning":"[FADE/GEO/@Kalshi] bullish: hype","ts":"2026-04-18T10:07:00+00:00"}

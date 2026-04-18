@@ -1,0 +1,51 @@
+TRADE LOG SUMMARY
+Path: tests/fixtures/report_snapshots/trade_log_sample.jsonl
+Date range: 2026-04-18 -> 2026-04-18
+Lines read: 8
+Malformed lines skipped: 0
+Records included: 8
+
+Event Counts
+  2  SIGNAL
+  2  ANALYSIS_REJECTED
+  1  OPPORTUNITY
+  1  SKIPPED
+  1  PAPER_TRADE
+  1  LIVE_ORDER
+
+Executor Skip Reasons
+  Total skipped events: 1
+  1  cooldown
+
+Analysis Rejection Reasons
+  Total analysis rejections: 2
+  1  stale_news
+  1  no_keywords
+
+Stale-News Age Buckets
+  1  15-30m
+
+Stale-News Sources (top 5)
+  1  AP
+
+Stale-News Tickers (top 5)
+  1  KX2
+
+Top Sources (top 5)
+  4  Reuters
+  1  AP
+  1  r/geopolitics
+  1  price_fade
+  1  @Kalshi
+
+Top Tickers (top 5)
+  4  KX1
+  1  KX2
+  1  KX3
+  1  KX4
+  1  KX5
+
+Signal Type Split
+  6  news
+  1  price_fade
+  1  fade_tweet

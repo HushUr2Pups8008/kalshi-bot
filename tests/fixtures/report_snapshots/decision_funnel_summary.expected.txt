@@ -1,0 +1,51 @@
+DECISION FUNNEL SUMMARY
+Path: tests/fixtures/report_snapshots/trade_log_sample.jsonl
+Date range: 2026-04-18 -> 2026-04-18
+Lines read: 8
+Malformed lines skipped: 0
+Records included: 8
+
+Funnel
+  Structured records considered : 8
+  Pre-signal rejections         : 2
+  Signals logged                : 2
+  Opportunities logged          : 1 (50.0% of signals)
+  No-signal exits               : partially observable via ANALYSIS_REJECTED
+  Executor skips               : 1
+  Executions                   : 2
+  Note                         : window mixes stages from different decision lifecycles
+    Paper trades               : 1
+    Live orders                : 1
+
+Pre-Signal Rejection Reasons
+  1  stale_news
+  1  no_keywords
+
+Stale-News Age Buckets
+  1  15-30m
+
+Stale-News Sources (top 5)
+  1  AP
+
+Stale-News Tickers (top 5)
+  1  KX2
+
+Executor Skip Reasons
+  1  cooldown
+
+Path Contribution (decision-stage records)
+  6  news
+  1  price_fade
+  1  fade_tweet
+
+Execution Path Contribution
+  1  news
+  1  price_fade
+
+Observed Event Types
+  2  SIGNAL
+  2  ANALYSIS_REJECTED
+  1  OPPORTUNITY
+  1  SKIPPED
+  1  PAPER_TRADE
+  1  LIVE_ORDER

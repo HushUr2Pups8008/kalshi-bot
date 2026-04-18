@@ -1,0 +1,84 @@
+======================================================================
+KEYWORD SHADOW EVALUATION (PASSIVE -- READ-ONLY)
+======================================================================
+*** No live config changes were made. ***
+*** This report is passive analysis only. ***
+
+Log   : tests/fixtures/report_snapshots/keyword_misses_sample.jsonl
+Lines : 8  (malformed: 0)
+Window: 2026-04-18T00:00:00+00:00 .. 2026-04-18T23:59:59.999999+00:00
+
+Miss Corpus
+  Source event type    : ANALYSIS_REJECTED(reason=no_keywords)
+  Miss events in corpus: 8
+
+Shadow Phrases (3 evaluated)
+  'strait hormuz'
+  'hormuz blockade'
+  'blockade iran'
+
+Results by Phrase
+------------------------------------------------------------
+  PROMOTE CANDIDATES
+  strait hormuz
+    shadow hits   : 5  (of 8 misses, 62.5%)
+    overlap hits  : 4  (hits also matched by another phrase)
+    sources       : 3  [AP, BBC, Reuters]
+    tickers hit   : 5  [KX1, KX2, KX3, KX4, KX5]
+    concentration : KX1 in 1/5 (20%)
+    score         : 45  [promote candidate]
+    reason        : score=45, hits=5, sources=3, tickers=5, no concentration flag
+    examples      :
+      "Deadline passes for Strait of Hormuz blockade"
+      "U.S. begins blockade in Strait of Hormuz"
+      "Oil climbs as Strait of Hormuz blockade continues"
+
+  CONTINUE SHADOWING
+  hormuz blockade
+    shadow hits   : 4  (of 8 misses, 50.0%)
+    overlap hits  : 4  (hits also matched by another phrase)
+    sources       : 3  [AP, BBC, Reuters]
+    tickers hit   : 4  [KX1, KX3, KX4, KX5]
+    concentration : KX1 in 1/4 (25%)
+    score         : 38  [continue shadowing]
+    reason        : hits 4 < 5
+    examples      :
+      "Deadline passes for Strait of Hormuz blockade"
+      "Oil climbs as Strait of Hormuz blockade continues"
+      "Tanker traffic reroutes during Strait of Hormuz blockade"
+
+  blockade iran
+    shadow hits   : 2  (of 8 misses, 25.0%)
+    sources       : 1  [Reuters]
+    tickers hit   : 2  [KX6, KX7]
+    concentration : KX6 in 1/2 (50%)  [HIGH -- single-market concentration]
+    score         : 10  [continue shadowing]
+    reason        : score 10 < 20; hits 2 < 5; sources 1 < 2; concentration flag set
+    examples      :
+      "Trump plans to blockade Iran, experts are skeptical"
+      "Lawmakers debate blockade Iran strategy"
+
+  REJECT FOR NOW
+    (none)
+
+Aggregate
+------------------------------------------------------------
+  Total miss events              : 8
+  Matched by >=1 shadow phrase   : 7  (87.5%)
+  Matched by 0 shadow phrases    : 1
+  Matched by 2+ phrases (overlap): 4
+
+Phrase Overlap Detail
+------------------------------------------------------------
+  hormuz blockade + strait hormuz: 4 event(s)
+
+Evaluation Notes
+------------------------------------------------------------
+  This is passive shadow evaluation only.
+  No phrases were added to live keyword config.
+  No runtime behavior was changed.
+  To promote a phrase: manually add it to GEOPOLITICAL_SIGNALS in
+  config.py after reviewing concentration and false-positive risk.
+  High concentration means a phrase is tied to one active market --
+  review whether it is still useful after that market expires.
+======================================================================
