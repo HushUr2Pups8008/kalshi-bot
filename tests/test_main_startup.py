@@ -1,3 +1,4 @@
+import io
 import shutil
 import uuid
 from argparse import Namespace
@@ -7,7 +8,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from main import _RuntimeInstanceGuard, _is_cli_only_command, async_main
+from main import (
+    _RuntimeInstanceGuard,
+    _ensure_supported_python,
+    _is_cli_only_command,
+    _log_bankroll_summary,
+    async_main,
+)
 
 
 def _tmp_root() -> Path:
@@ -29,6 +36,23 @@ def test_is_cli_only_command_distinguishes_short_lived_modes():
     assert _is_cli_only_command(
         Namespace(report=False, credibility=False, resolve=None, go_live=False, rotate_logs=False)
     ) is False
+
+
+def test_supported_python_guard_allows_python_311_and_newer():
+    _ensure_supported_python((3, 11, 0))
+    _ensure_supported_python((3, 12, 1))
+
+
+def test_supported_python_guard_exits_with_actionable_message_for_older_versions():
+    stderr = io.StringIO()
+
+    with pytest.raises(SystemExit) as excinfo:
+        _ensure_supported_python((3, 9, 6), stderr=stderr)
+
+    assert excinfo.value.code == 1
+    output = stderr.getvalue()
+    assert "Python 3.11+ is required. Detected: 3.9.6" in output
+    assert "python3.11 -m venv .venv" in output
 
 
 def test_runtime_instance_guard_blocks_second_long_running_instance():
@@ -123,6 +147,20 @@ def test_runtime_instance_guard_posix_lock_branch_uses_fcntl_contract():
 
     assert ("write", "0") not in handle.calls
     assert calls == [(42, 0x03), (42, 0x04)]
+
+
+def test_log_bankroll_summary_warns_when_persisted_paper_state_differs(monkeypatch, caplog):
+    import config as _cfg_module
+
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 50.0)
+
+    with caplog.at_level("INFO", logger="main"):
+        _log_bankroll_summary(500.0)
+
+    assert "Notional bankroll: $500.00" in caplog.text
+    assert "Configured starting bankroll (.env BANKROLL): $50.00" in caplog.text
+    assert "Persisted paper bankroll ($500.00) differs from .env BANKROLL ($50.00)" in caplog.text
 
 
 @pytest.mark.asyncio

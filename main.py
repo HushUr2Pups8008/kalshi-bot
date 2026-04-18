@@ -20,6 +20,33 @@ Commands:
     python main.py --credibility            # print source credibility table and exit
 """
 
+import sys
+
+_MINIMUM_PYTHON = (3, 11)
+
+
+def _ensure_supported_python(version_info=None, stderr=None) -> None:
+    if version_info is None:
+        version_info = sys.version_info
+    if stderr is None:
+        stderr = sys.stderr
+    if tuple(version_info[:2]) >= _MINIMUM_PYTHON:
+        return
+
+    detected = ".".join(str(part) for part in version_info[:3])
+    print(
+        f"Python 3.11+ is required. Detected: {detected}",
+        file=stderr,
+    )
+    print(
+        "Recreate your virtual environment using: python3.11 -m venv .venv",
+        file=stderr,
+    )
+    raise SystemExit(1)
+
+
+_ensure_supported_python()
+
 import argparse
 import asyncio
 import dataclasses
@@ -28,7 +55,6 @@ import json
 import logging
 import os
 import signal
-import sys
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -140,6 +166,19 @@ def _log_boot_summary(startup_context: str) -> None:
         startup_context,
         os.getcwd(),
     )
+
+
+def _log_bankroll_summary(notional_bankroll: float) -> None:
+    log.info("Notional bankroll: $%.2f", notional_bankroll)
+    if cfg.is_paper_trading:
+        log.info("Configured starting bankroll (.env BANKROLL): $%.2f", cfg.bankroll)
+        if abs(notional_bankroll - cfg.bankroll) > 1e-9:
+            log.warning(
+                "Persisted paper bankroll ($%.2f) differs from .env BANKROLL ($%.2f); "
+                "paper mode resumes the saved SQLite state until you reset data/paper_trades.db.",
+                notional_bankroll,
+                cfg.bankroll,
+            )
 
 
 class _RuntimeInstanceGuard:
@@ -1271,7 +1310,7 @@ class TradingBot:
         log.info("=" * 60)
         log.info("Kalshi Trading Bot v%s starting", VERSION)
         log.info("Mode:             %s", "PAPER TRADING" if cfg.is_paper_trading else "LIVE TRADING")
-        log.info("Notional bankroll: $%.2f", notional)
+        _log_bankroll_summary(notional)
         log.info("Max bet (dynamic): $%.2f  (%.0f%% of bankroll, hard cap $%.2f)",
                  max_bet, cfg.max_bet_pct_bankroll * 100, cfg.max_bet_hard_cap)
         log.info("Kelly fraction:   %.0f%%", cfg.kelly_fraction * 100)

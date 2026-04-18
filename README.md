@@ -61,7 +61,7 @@ main.py                   — Async entry point; 6 concurrent tasks + optional f
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.11+ (3.11 recommended for the smoothest setup on fresh machines)
 - [Ollama](https://ollama.com) with `qwen2.5:7b` pulled (free, local inference)
 - Kalshi account with API key (RSA key pair)
 
@@ -69,12 +69,15 @@ main.py                   — Async entry point; 6 concurrent tasks + optional f
 
 ## Setup
 
+Verify your interpreter before creating `.venv`. On macOS, use Homebrew Python or another Python 3.11+ install rather than the system Python if `python3 --version` is older than 3.11.
+
 ### 1. Clone and create virtualenv
 
 ```bash
 git clone https://gitlab.com/HushUr2Pups8008/kalshi-bot.git
 cd kalshi-bot
-python3 -m venv .venv
+python3.11 --version
+python3.11 -m venv .venv
 source .venv/bin/activate        # macOS/Linux
 .venv\Scripts\activate           # Windows
 pip install -r requirements.txt
@@ -83,10 +86,20 @@ pip install -r requirements.txt
 ### 1a. macOS quick start
 
 ```bash
-python3 -m venv .venv
+python3.11 --version
+python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 python main.py
+```
+
+### 1b. Dev/test environment
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+python -m pytest
 ```
 
 ### 2. Configure `.env`

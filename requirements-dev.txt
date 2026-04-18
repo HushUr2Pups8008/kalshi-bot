@@ -1,0 +1,5 @@
+# Use Python 3.11+ when creating the venv for this test/dev environment.
+-r requirements.txt
+
+pytest>=8,<9
+pytest-asyncio>=0.23,<1
