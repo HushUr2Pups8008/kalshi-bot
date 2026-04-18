@@ -1,0 +1,48 @@
+FRESHNESS DIAGNOSTICS
+Path: windows_archive/analysis/2026-04-18_import/consolidated/trades_all.jsonl
+Date range: 2026-04-12 -> 2026-04-18
+Lines read: 416595
+Malformed lines skipped: 0
+Records included: 400201
+
+Attribution Notes
+  Publish-age metrics are based on age-bearing EARLY_STALE_DROP and EARLY_FRESH_PASS records.
+  Historical windows may still have age coverage only for stale items.
+  Age-bearing freshness records observed: 10169
+
+Operational Summary
+  Eligible sources (min 5 obs) : 458
+  Fast / Operational surfaced                    : 6
+  Near Threshold surfaced                        : 0
+  Chronically Late surfaced                      : 16
+  Hidden 100%-stale dead sources                 : 79
+  Hidden insufficient-data sources               : 346
+
+Fast / Operational (top 10)
+  Sources with some timely arrivals and the best odds of affecting live decisions.
+  Reuters                                                           obs= 328  fresh_pass= 36  stale_rate=0.0%  median_age=1200s  freshest=1200s  label=late but salvageable
+  Middle East and north Africa | The Guardian                       obs=1055  fresh_pass= 93  stale_rate=62.3%  median_age=90335s  freshest=18s  label=near-threshold      
+  NYT > World News                                                  obs=3307  fresh_pass=212  stale_rate=74.4%  median_age=54392s  freshest=7s  label=near-threshold      
+  World news | The Guardian                                         obs=2657  fresh_pass= 71  stale_rate=93.8%  median_age=19382s  freshest=65s  label=near-threshold      
+  Al Jazeera – Breaking News, World News and Video from Al Jazeera  obs=1613  fresh_pass= 15  stale_rate=94.3%  median_age=10997s  freshest=109s  label=near-threshold      
+  Ukraine | The Guardian                                            obs= 814  fresh_pass= 23  stale_rate=95.9%  median_age=252764s  freshest=10s  label=near-threshold      
+
+Near Threshold (top 10)
+  Plausible candidates for future per-source policy review.
+  (none)
+
+Chronically Late (top 10)
+  High-confidence late sources that appear structurally incompatible with a 300s strategy.
+  r/CredibleDefense                            obs= 567  fresh_pass=0  stale_rate=99.8%  median_age=843592s  freshest=147673s  label=chronically late
+  GDELT                                        obs=1041  fresh_pass=0  stale_rate=99.8%  median_age=53777s  freshest=9737s  label=chronically late
+  donald trump reza pahlavi - BingNews         obs=2350  fresh_pass=0  stale_rate=99.8%  median_age=1346986s  freshest=565041s  label=chronically late
+  donald trump issue executive - BingNews      obs=4151  fresh_pass=0  stale_rate=99.7%  median_age=704910s  freshest=464911s  label=chronically late
+  donald trump vladimir putin - BingNews       obs=2526  fresh_pass=0  stale_rate=99.7%  median_age=176245s  freshest=148717s  label=chronically late
+  donald trump zohran mamdani - BingNews       obs=2553  fresh_pass=0  stale_rate=99.5%  median_age=492937s  freshest=77435s  label=chronically late
+  senate vote save america - BingNews          obs=1874  fresh_pass=0  stale_rate=99.5%  median_age=1455094s  freshest=415482s  label=chronically late
+  donald trump jinping meet - BingNews         obs=2373  fresh_pass=0  stale_rate=99.4%  median_age=2223082s  freshest=554018s  label=chronically late
+  donald trump volodymyr zelenskyy - BingNews  obs=1909  fresh_pass=0  stale_rate=99.2%  median_age=1038241s  freshest=288293s  label=chronically late
+  donald trump issue official - BingNews       obs=1416  fresh_pass=0  stale_rate=99.1%  median_age=473267s  freshest=377789s  label=chronically late
+
+Hidden Long Tail
+  Use --show-all to inspect dead / filtered-out and insufficient-data sources.

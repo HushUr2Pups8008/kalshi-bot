@@ -1,0 +1,53 @@
+MATCH SUPPRESSION AUDIT
+Path: windows_archive/analysis/2026-04-18_import/consolidated/trades_all.jsonl
+Date range: 2026-04-12 -> 2026-04-18
+Lines read: 416595
+Malformed lines skipped: 0
+Records included: 400201
+
+Attribution Notes
+  This classification is heuristic only and intended as a first-pass audit.
+  Token-in-ticker is used as a proxy for market-subject alignment, not a semantic guarantee.
+
+Summary
+  Total candidates            : 77
+  Likely safe to suppress     : 72 (93.5%)
+  Likely risky to suppress    : 5 (6.5%)
+
+By Source (top 10)
+  Reuters                                      safe=47  risky=3  safe_rate=94.0%  risky_rate=6.0%
+  NYT > World News                             safe=20  risky=1  safe_rate=95.2%  risky_rate=4.8%
+  Middle East and north Africa | The Guardian  safe= 2  risky=1  safe_rate=66.7%  risky_rate=33.3%
+  World news | The Guardian                    safe= 2  risky=0  safe_rate=100.0%  risky_rate=0.0%
+  Ukraine | The Guardian                       safe= 1  risky=0  safe_rate=100.0%  risky_rate=0.0%
+
+By Ticker (top 10)
+  KXMIL-25A                    safe=47  risky=0  safe_rate=100.0%  risky_rate=0.0%
+  KXCABLEAVE-26APR-26APR       safe=14  risky=0  safe_rate=100.0%  risky_rate=0.0%
+  KXELECTIONEMERGENCY-26MAY01  safe= 5  risky=0  safe_rate=100.0%  risky_rate=0.0%
+  KXNEWDEAL-MAY01              safe= 2  risky=0  safe_rate=100.0%  risky_rate=0.0%
+  KXBONDITESTIFY-26MAY-PBON    safe= 1  risky=0  safe_rate=100.0%  risky_rate=0.0%
+  KXMOCTRUMP25-26-MAY01        safe= 1  risky=0  safe_rate=100.0%  risky_rate=0.0%
+  KXRUCRUDEX-26MAY13-T4.0      safe= 1  risky=0  safe_rate=100.0%  risky_rate=0.0%
+  KXUSAIRANAGREEMENT-27-26MAY  safe= 1  risky=0  safe_rate=100.0%  risky_rate=0.0%
+  KXTRUMP-25A                  safe= 0  risky=3  safe_rate=0.0%  risky_rate=100.0%
+  KXTRUMPIRAN-26MAY01          safe= 0  risky=2  safe_rate=0.0%  risky_rate=100.0%
+
+Recent Safe Examples (top 10)
+  2026-04-18 04:10:16  source=NYT > World News  ticker=KXELECTIONEMERGENCY-26MAY01  score=0.083  overlap=1  ratio=0.1429  matched_tokens=trump  flags=low_token_overlap,single_named_entity_only,minimal_overlap  headline=How Trump Helped Pope Leo Find His Voice
+  2026-04-17 21:48:07  source=NYT > World News  ticker=KXCABLEAVE-26APR-26APR  score=0.066  overlap=1  ratio=0.1667  matched_tokens=trump  flags=low_token_overlap,single_named_entity_only,minimal_overlap,near_threshold_score  headline=Trump Frames Iran War as All But Over in Optimistic Social Media Flurry
+  2026-04-17 21:21:05  source=NYT > World News  ticker=KXCABLEAVE-26APR-26APR  score=0.0635  overlap=1  ratio=0.1667  matched_tokens=trump  flags=low_token_overlap,single_named_entity_only,minimal_overlap,near_threshold_score  headline=Trump frames war in Iran as all but over in a flurry of optimistic social media 
+  2026-04-17 20:47:14  source=NYT > World News  ticker=KXELECTIONEMERGENCY-26MAY01  score=0.0635  overlap=1  ratio=0.1111  matched_tokens=trump  flags=low_token_overlap,single_named_entity_only,minimal_overlap,near_threshold_score  headline=Amid Conflicting Messages From Trump and Iran, Hopes for Peace Deal Emerge
+  2026-04-17 17:59:50  source=NYT > World News  ticker=KXCABLEAVE-26APR-26APR  score=0.0825  overlap=1  ratio=0.1667  matched_tokens=trump  flags=low_token_overlap,single_named_entity_only,minimal_overlap  headline=Iran War Live Updates: Tehran Declares Strait ‘Open’ but Trump Says U.S. Blockad
+  2026-04-17 17:54:46  source=NYT > World News  ticker=KXUSAIRANAGREEMENT-27-26MAY  score=0.0921  overlap=1  ratio=0.1667  matched_tokens=iranian  flags=low_token_overlap,single_named_entity_only,minimal_overlap  headline=Trump Is Urged to Act on Iranian Site Feared Impervious to Airstrikes
+  2026-04-17 17:24:21  source=NYT > World News  ticker=KXCABLEAVE-26APR-26APR  score=0.0825  overlap=1  ratio=0.1667  matched_tokens=trump  flags=low_token_overlap,single_named_entity_only,minimal_overlap  headline=Iran War Live Updates: Tehran Declares Strait ‘Open’ but Trump Says U.S. Blockad
+  2026-04-17 15:35:49  source=Middle East and north Africa | The Guardian  ticker=KXCABLEAVE-26APR-26APR  score=0.0874  overlap=1  ratio=0.1667  matched_tokens=trump  flags=low_token_overlap,single_named_entity_only,minimal_overlap  headline=Donald Trump claims to have ended a 10th war – but will the Lebanon ceasefire ho
+  2026-04-17 15:12:28  source=NYT > World News  ticker=KXCABLEAVE-26APR-26APR  score=0.075  overlap=1  ratio=0.1667  matched_tokens=trump  flags=low_token_overlap,single_named_entity_only,minimal_overlap,near_threshold_score  headline=Iran War Live Updates: Tehran Declares Strait ‘Open’ After Lebanon Truce, but Tr
+  2026-04-17 14:42:01  source=NYT > World News  ticker=KXCABLEAVE-26APR-26APR  score=0.075  overlap=1  ratio=0.1667  matched_tokens=trump  flags=low_token_overlap,single_named_entity_only,minimal_overlap,near_threshold_score  headline=Iran War Live Updates: Tehran Declares Strait ‘Open’ After Lebanon Deal, but Tru
+
+Recent Risky Examples (top 10)
+  2026-04-13 01:19:02  source=Middle East and north Africa | The Guardian  ticker=KXTRUMPIRAN-26MAY01  score=0.0713  overlap=1  ratio=0.25  matched_tokens=iran  flags=near_threshold_score,single_named_entity_only,minimal_overlap  headline=The Iran war has heightened the nuclear and climate threat. Australia must help 
+  2026-04-12 23:36:37  source=Reuters  ticker=KXTRUMP-25A  score=0.1  overlap=1  ratio=0.1667  matched_tokens=trump  flags=near_threshold_score,single_named_entity_only  headline=Trump says Iran talks have collapsed again
+  2026-04-12 23:36:37  source=Reuters  ticker=KXTRUMP-25A  score=0.1  overlap=1  ratio=0.1667  matched_tokens=trump  flags=near_threshold_score,single_named_entity_only  headline=Trump says Iran talks have collapsed again
+  2026-04-12 23:36:37  source=Reuters  ticker=KXTRUMP-25A  score=0.1  overlap=1  ratio=0.1667  matched_tokens=trump  flags=near_threshold_score,single_named_entity_only  headline=Trump says Iran talks have collapsed again
+  2026-04-12 22:21:10  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  score=0.0753  overlap=1  ratio=0.25  matched_tokens=iran  flags=near_threshold_score,single_named_entity_only,minimal_overlap  headline=Iran War Live Updates: U.S. to Blockade Ships From Iranian Ports

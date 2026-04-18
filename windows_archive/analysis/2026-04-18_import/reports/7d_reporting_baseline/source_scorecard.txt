@@ -1,0 +1,71 @@
+SOURCE SCORECARD
+Logs path: windows_archive/analysis/2026-04-18_import/consolidated/trades_all.jsonl
+DB path:   windows_archive/analysis/2026-04-18_import/db/paper_trades_analysis.db
+Date range: 2026-04-12 -> 2026-04-18
+
+Attribution Notes
+  Opportunities produced: not reliably attributable from current trades.jsonl schema.
+  Executor skips: not reliably attributable from current trades.jsonl schema.
+  Paper-trade outcomes are attributed from signal_source in paper_trades.db.
+
+Input Coverage
+  Log lines read         : 416595
+  Malformed log lines    : 0
+  Log records included   : 401055
+  DB available           : yes
+  Sources scored         : 459
+  Disabled in config     : 450
+
+Active Source Recommendations
+
+Top Performers
+  Sources with strong realized outcomes (>=2 resolved trades, positive P&L, >=75% win rate)
+  (none)
+
+Keep
+  Sources producing acceptable signals with no major issues
+  (none)
+
+Watch / Investigate
+  Mixed performance; needs more data or review
+  NYT > World News                                                  family=publisher_rss  disabled_by=-  obs=3307  early_stale=2403  analysis_stale=88  signals=22  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  World news | The Guardian                                         family=publisher_rss  disabled_by=-  obs=2657  early_stale=2453  analysis_stale=26  signals= 2  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  Al Jazeera – Breaking News, World News and Video from Al Jazeera  family=publisher_rss  disabled_by=-  obs=1613  early_stale=1496  analysis_stale=10  signals= 1  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  Reuters                                                           family=publisher_rss  disabled_by=-  obs= 638  early_stale=   0  analysis_stale= 0  signals= 0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+
+Prune
+  Low value; consider removal soon
+  Middle East and north Africa | The Guardian  family=publisher_rss  disabled_by=-  obs=1048  early_stale=637  analysis_stale=30  signals=36  paper=7  resolved=2  win_rate=0.0%  pnl=$-5.00
+  r/EasternEurope                              family=reddit         disabled_by=-  obs=  11  early_stale= 11  analysis_stale= 0  signals= 0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+
+Remove Immediately
+  High-confidence zero-value sources; safe to disable
+  Ukraine | The Guardian  family=publisher_rss  disabled_by=-  obs=814  early_stale=764  analysis_stale=7  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  r/GlobalTalk            family=reddit         disabled_by=-  obs= 58  early_stale= 58  analysis_stale=0  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  r/NorthKorea            family=reddit         disabled_by=-  obs= 17  early_stale= 14  analysis_stale=3  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+
+Disabled Sources
+
+Disabled By Source
+  Politics           family=publisher_rss  disabled_by=source  obs=1276  early_stale= 30  analysis_stale=23  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  GDELT              family=other          disabled_by=source  obs=1041  early_stale= 76  analysis_stale= 2  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  BBC News           family=publisher_rss  disabled_by=source  obs= 869  early_stale=102  analysis_stale=44  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  r/worldnews        family=reddit         disabled_by=source  obs= 781  early_stale= 20  analysis_stale=13  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  r/CredibleDefense  family=reddit         disabled_by=source  obs= 567  early_stale= 33  analysis_stale= 1  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  r/geopolitics      family=reddit         disabled_by=source  obs= 444  early_stale= 31  analysis_stale=16  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  r/ukraine          family=reddit         disabled_by=source  obs= 327  early_stale= 22  analysis_stale= 0  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  r/economics        family=reddit         disabled_by=source  obs= 280  early_stale= 14  analysis_stale= 6  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  r/europe           family=reddit         disabled_by=source  obs= 259  early_stale= 15  analysis_stale= 0  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  r/politics         family=reddit         disabled_by=source  obs= 256  early_stale= 15  analysis_stale=12  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+
+Disabled By Family
+  "donald trump say turning" - Google News     family=google_news_query  disabled_by=family  obs=5507  early_stale= 0  analysis_stale= 0  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  donald trump issue executive - BingNews      family=bing_news_query    disabled_by=family  obs=4151  early_stale=24  analysis_stale=12  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  "donald trump say roundtable" - Google News  family=google_news_query  disabled_by=family  obs=3902  early_stale= 0  analysis_stale= 0  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  "vance say turning point" - Google News      family=google_news_query  disabled_by=family  obs=3265  early_stale= 0  analysis_stale= 0  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  donald trump visit iran - BingNews           family=bing_news_query    disabled_by=family  obs=2912  early_stale= 0  analysis_stale= 0  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  pam bondi testify front - BingNews           family=bing_news_query    disabled_by=family  obs=2864  early_stale= 0  analysis_stale= 0  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  agree iranian nuclear deal - BingNews        family=bing_news_query    disabled_by=family  obs=2852  early_stale=11  analysis_stale= 0  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  dhs funding bill law - BingNews              family=bing_news_query    disabled_by=family  obs=2695  early_stale= 9  analysis_stale= 0  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  "trump announce trade deal" - Google News    family=google_news_query  disabled_by=family  obs=2623  early_stale= 2  analysis_stale= 0  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a
+  trump announce trade deal - BingNews         family=bing_news_query    disabled_by=family  obs=2607  early_stale=10  analysis_stale= 0  signals=0  paper=0  resolved=0  win_rate=n/a  pnl=n/a

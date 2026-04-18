@@ -124,6 +124,20 @@ python scripts/signal_edge_diagnostics.py \
 - The `trades_all.jsonl` contains events from the Windows-era only
   (through 2026-04-18T16:23 UTC). For Mac-era data use `logs/trades/live/trades.jsonl`.
 
+## Cold Storage
+
+`trades_all.jsonl` and `bot_all.log` are stored gzip-compressed as of 2026-04-18.
+Before running any script that reads them, decompress in place:
+
+```bash
+gunzip windows_archive/analysis/2026-04-18_import/consolidated/trades_all.jsonl.gz
+gunzip windows_archive/analysis/2026-04-18_import/consolidated/bot_all.log.gz
+```
+
+Compressed sizes: `trades_all.jsonl.gz` ~17 MB, `bot_all.log.gz` ~42 MB.
+Original sizes: `trades_all.jsonl` ~105 MB, `bot_all.log` ~290 MB.
+Re-compress after use: `gzip <file>` removes the uncompressed original.
+
 ## Derivation Provenance
 
 These artifacts were derived from:

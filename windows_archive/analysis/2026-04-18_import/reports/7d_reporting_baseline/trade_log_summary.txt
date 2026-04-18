@@ -1,0 +1,96 @@
+TRADE LOG SUMMARY
+Path: windows_archive/analysis/2026-04-18_import/consolidated/trades_all.jsonl
+Date range: 2026-04-12 -> 2026-04-18
+Lines read: 416595
+Malformed lines skipped: 0
+Records included: 400201
+
+Event Counts
+  397253  EARLY_STALE_DROP
+     688  ANALYSIS_REJECTED
+     686  MATCH_DIAGNOSTIC
+     661  NEW_MARKET
+     450  EARLY_FRESH_PASS
+     179  SIGNAL_ANALYSIS_DETAIL
+      77  MATCH_SUPPRESSION_CANDIDATE
+      61  SIGNAL
+      61  OPPORTUNITY
+      54  SKIPPED
+      22  MATCH_SUPPRESSED
+       7  PAPER_TRADE
+       2  PAPER_RESOLUTION
+
+Executor Skip Reasons
+  Total skipped events: 54
+  30  edge +0.0000 below min_edge 0.02
+  13  opposing position exists: open YES at est=0.530 -- no hedging
+   2  paper duplicate skip: open NO at est=0.432 (delta=0.000) -- prob shift too small to add position
+   2  paper duplicate skip: open YES at est=0.650 (delta=0.000) -- prob shift too small to add position
+   2  paper cooldown: last trade 1.5h ago (cooldown=4h)
+   1  paper cooldown: last trade 3.1h ago (cooldown=4h)
+   1  paper cooldown: last trade 0.8h ago (cooldown=4h)
+   1  paper duplicate skip: open YES at est=0.530 (delta=0.070) -- prob shift too small to add position
+   1  paper duplicate skip: open YES at est=0.530 (delta=0.050) -- prob shift too small to add position
+   1  paper duplicate skip: open YES at est=0.530 (delta=0.000) -- prob shift too small to add position
+
+Analysis Rejection Reasons
+  Total analysis rejections: 688
+  568  stale_news
+  120  no_keywords
+
+Stale-News Age Buckets
+  472  60m+
+   86  5-15m
+    8  30-60m
+    2  15-30m
+
+Stale-News Sources (top 10)
+  88  NYT > World News
+  44  BBC News
+  30  Middle East and north Africa | The Guardian
+  26  World news | The Guardian
+  23  Politics
+  19  Foreign Policy
+  16  r/geopolitics
+  15  donald trump make truth - BingNews
+  15  donald trump make 180 - BingNews
+  15  donald trump jinping meet - BingNews
+
+Stale-News Tickers (top 10)
+  181  KXTRUMPIRAN-26MAY01
+   70  KXMOCTRUMP25-26-APR17
+   69  KXMOCTRUMP25-26-APR24
+   38  KXMOCTRUMP25-26-MAY01
+   38  KXTRUMPCHINA-26-APR17
+   34  KXTRUMPCHINA-26-APR24
+   26  KXCABLEAVE-26APR-26APR
+   22  KXNEWDEAL-MAY01
+   12  KXTRUMPCHINA-26-MAY08
+   11  KXPARDONSTRUMP-26APR-1
+
+Top Sources (top 10)
+  5507  "donald trump say turning" - Google News
+  4151  donald trump issue executive - BingNews
+  3902  "donald trump say roundtable" - Google News
+  3307  NYT > World News
+  3265  "vance say turning point" - Google News
+  2912  donald trump visit iran - BingNews
+  2864  pam bondi testify front - BingNews
+  2852  agree iranian nuclear deal - BingNews
+  2695  dhs funding bill law - BingNews
+  2657  World news | The Guardian
+
+Top Tickers (top 10)
+  546  KXTRUMPIRAN-26MAY01
+  168  KXMOCTRUMP25-26-APR24
+  156  KXMOCTRUMP25-26-APR17
+  101  KXMOCTRUMP25-26-MAY01
+   75  KXUKR-1
+   68  KXMIL-25A
+   67  KXCABLEAVE-26APR-26APR
+   57  KXTRUMPCHINA-26-APR17
+   46  KXTRUMPCHINA-26-APR24
+   45  KXNEWDEAL-MAY01
+
+Signal Type Split
+  400201  news

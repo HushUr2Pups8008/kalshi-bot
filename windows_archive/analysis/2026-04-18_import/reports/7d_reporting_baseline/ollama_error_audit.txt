@@ -1,0 +1,63 @@
+============================================================
+OLLAMA ERROR AUDIT
+============================================================
+Total error events scanned: 51
+
+By category:
+  model_not_found                  11  (22%)
+  timeout_or_connection             8  (16%)
+  other                            32  (63%)
+
+By HTTP status code:
+  HTTP 404    38
+  HTTP 422    5
+  (no status)    8
+
+--- MODEL_NOT_FOUND (11 events)
+  2026-04-15 15:49:56,122 UTC  HTTP 404    {"error":{"message":"model 'qwen2.5:3b' not found","type":"not_found_error","param":null,"code":null
+  2026-04-15 17:12:08,336 UTC  HTTP 404    {"error":{"message":"model 'qwen2.5:3b' not found","type":"not_found_error","param":null,"code":null
+  2026-04-15 18:00:51,776 UTC  HTTP 404    {"error":{"message":"model 'qwen2.5:3b' not found","type":"not_found_error","param":null,"code":null
+  2026-04-15 18:06:56,978 UTC  HTTP 404    {"error":{"message":"model 'qwen2.5:3b' not found","type":"not_found_error","param":null,"code":null
+  2026-04-15 18:19:38,884 UTC  HTTP 404    {"error":{"message":"model 'qwen2.5:3b' not found","type":"not_found_error","param":null,"code":null
+  ... and 6 more
+
+--- TIMEOUT_OR_CONNECTION (8 events)
+  2026-04-15 10:42:30,142 UTC  HTTP n/a    2026-04-15 10:42:30,142 UTC WARNING  signal_analyzer      Ollama circuit open -- 3 consecutive failu
+  2026-04-16 23:41:27,384 UTC  HTTP n/a    2026-04-16 23:41:27,384 UTC WARNING  signal_analyzer      Ollama estimation failed:  (_ClientConnect
+  2026-04-16 23:41:27,536 UTC  HTTP n/a    2026-04-16 23:41:27,536 UTC WARNING  signal_analyzer      Ollama estimation failed: timed out after 
+  2026-04-16 23:42:45,216 UTC  HTTP n/a    2026-04-16 23:42:45,216 UTC WARNING  signal_analyzer      Ollama estimation failed:  (_ClientConnect
+  2026-04-16 23:42:45,363 UTC  HTTP n/a    2026-04-16 23:42:45,363 UTC WARNING  signal_analyzer      Ollama estimation failed: timed out after 
+  ... and 3 more
+
+--- OTHER (32 events)
+  2026-04-13 03:18:05,115 UTC  HTTP 404    (no body)
+  2026-04-13 03:18:05,405 UTC  HTTP 404    (no body)
+  2026-04-13 03:18:05,702 UTC  HTTP 404    (no body)
+  2026-04-13 06:21:34,359 UTC  HTTP 404    (no body)
+  2026-04-13 09:34:11,036 UTC  HTTP 404    (no body)
+  ... and 27 more
+
+--- MOST RECENT 10 ERRORS ---
+  2026-04-16 23:41:27,536 UTC  [timeout_or_connection]  HTTP n/a    2026-04-16 23:41:27,536 UTC WARNING  signal_analyzer      Ollama estimation fail
+  2026-04-16 23:42:45,213 UTC  [other]  HTTP 422    {"error":"bad request"}
+  2026-04-16 23:42:45,216 UTC  [timeout_or_connection]  HTTP n/a    2026-04-16 23:42:45,216 UTC WARNING  signal_analyzer      Ollama estimation fail
+  2026-04-16 23:42:45,363 UTC  [timeout_or_connection]  HTTP n/a    2026-04-16 23:42:45,363 UTC WARNING  signal_analyzer      Ollama estimation fail
+  2026-04-16 23:43:00,157 UTC  [other]  HTTP 422    {"error":"bad request"}
+  2026-04-16 23:43:00,169 UTC  [timeout_or_connection]  HTTP n/a    2026-04-16 23:43:00,169 UTC WARNING  signal_analyzer      Ollama estimation fail
+  2026-04-16 23:59:23,812 UTC  [other]  HTTP 422    {"error":"bad request"}
+  2026-04-16 23:59:23,825 UTC  [timeout_or_connection]  HTTP n/a    2026-04-16 23:59:23,825 UTC WARNING  signal_analyzer      Ollama estimation fail
+  2026-04-17 01:44:45,820 UTC  [other]  HTTP 422    {"error":"bad request"}
+  2026-04-17 01:44:45,832 UTC  [timeout_or_connection]  HTTP n/a    2026-04-17 01:44:45,832 UTC WARNING  signal_analyzer      Ollama estimation fail
+
+--- TIME GAPS BETWEEN CONSECUTIVE ERRORS ---
+  Errors with timestamps : 51
+  Avg gap : 6800s  Min : 0s  Max : 89979s
+  Burst groups (gap < 5s): 13  sizes: [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2]
+
+--- INTERPRETATION ---
+  Mixed failure modes. No single dominant category (>50%).
+  Review individual examples above for patterns.
+
+  Secondary buckets:
+    model_not_found: 11 (22%)
+    timeout_or_connection: 8 (16%)

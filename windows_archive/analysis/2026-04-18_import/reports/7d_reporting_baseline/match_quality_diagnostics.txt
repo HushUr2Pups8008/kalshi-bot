@@ -1,0 +1,64 @@
+MATCH QUALITY DIAGNOSTICS
+Path: windows_archive/analysis/2026-04-18_import/consolidated/trades_all.jsonl
+Date range: 2026-04-12 -> 2026-04-18
+Lines read: 416595
+Malformed lines skipped: 0
+Records included: 400201
+
+Attribution Notes
+  Match quality heuristics are approximate and non-blocking; they do not affect runtime behavior.
+  Match score is taken directly from MATCH_DIAGNOSTIC records.
+
+Summary
+  Total matched candidates     : 686
+  Low-quality flagged matches  : 425 (62.0%)
+
+Low-Quality Match Flags
+  408  single_named_entity_only
+  336  minimal_overlap
+  281  near_threshold_score
+  224  low_token_overlap
+
+Low-Quality Matches by Source (top 10)
+  204  NYT > World News
+   74  Reuters
+   72  Middle East and north Africa | The Guardian
+   56  Al Jazeera – Breaking News, World News and Video from Al Jazeera
+   18  World news | The Guardian
+    1  Ukraine | The Guardian
+
+Low-Quality Matches by Ticker (top 10)
+  103  KXTRUMPIRAN-26MAY01
+   34  KXMOCTRUMP25-26-MAY01
+   34  KXMOCTRUMP25-26-APR24
+   31  KXTRUMP-25A
+   27  KXMOCTRUMP25-26-APR17
+   21  KXMIL-25A
+   15  KXCABLEAVE-26APR-26APR
+   11  KXTRUMPCHINA-26-APR17
+    7  KXTRUMPCHINA-26-APR24
+    6  KXELECTIONEMERGENCY-26MAY01
+
+Recent Low-Quality Examples (top 10)
+  2026-04-18 15:05:21  score=0.0789  overlap=1  ratio=0.2500  source=Middle East and north Africa | The Guardian  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=trump  flags=single_named_entity_only,minimal_overlap,near_threshold_score  headline=Trump and Tehran’s series of mismanaged posts stall progress towards p  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-18 15:05:21  score=0.1040  overlap=1  ratio=0.1111  source=Middle East and north Africa | The Guardian  ticker=KXMOCTRUMP25-26-APR24  matched_tokens=trump  flags=low_token_overlap,single_named_entity_only,minimal_overlap  headline=Trump and Tehran’s series of mismanaged posts stall progress towards p  market=Will any Republican member of Congress calls on Trump to be removed as
+  2026-04-18 15:05:21  score=0.0857  overlap=1  ratio=0.1111  source=Middle East and north Africa | The Guardian  ticker=KXMOCTRUMP25-26-MAY01  matched_tokens=trump  flags=low_token_overlap,single_named_entity_only,minimal_overlap  headline=Trump and Tehran’s series of mismanaged posts stall progress towards p  market=Will any Republican member of Congress calls on Trump to be removed as
+  2026-04-18 12:48:32  score=0.0637  overlap=1  ratio=0.2500  source=Middle East and north Africa | The Guardian  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran  flags=single_named_entity_only,minimal_overlap,near_threshold_score  headline=Iran closes strait of Hormuz again ‘until US lifts blockade’  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-18 08:57:37  score=0.0637  overlap=1  ratio=0.2500  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran  flags=single_named_entity_only,minimal_overlap,near_threshold_score  headline=Iran War Live Updates: Iran’s Military Says It Has Reimposed ‘Strict C  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-18 07:51:45  score=0.0646  overlap=1  ratio=0.2500  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran  flags=single_named_entity_only,minimal_overlap,near_threshold_score  headline=A Potent Threat in Strait of Hormuz: Iran’s ‘Mosquito Fleet’  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-18 07:46:41  score=0.0857  overlap=1  ratio=0.2500  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran  flags=single_named_entity_only,minimal_overlap  headline=Iran War Live Updates: Uncertainty Remains at Strait of Hormuz After R  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-18 05:40:05  score=0.1006  overlap=1  ratio=0.2500  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran  flags=single_named_entity_only,minimal_overlap  headline=Hopes for Peace Deal Rise After Iran Says Strait Is Open  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-18 05:01:36  score=0.0771  overlap=1  ratio=0.1250  source=World news | The Guardian  ticker=KXMOCTRUMP25-26-APR24  matched_tokens=trump  flags=low_token_overlap,single_named_entity_only,minimal_overlap,near_threshold_score  headline=Two weeks that pushed Trump to the edge. Is his presidency unravelling  market=Will any Republican member of Congress calls on Trump to be removed as
+  2026-04-18 05:01:36  score=0.0640  overlap=1  ratio=0.1250  source=World news | The Guardian  ticker=KXMOCTRUMP25-26-MAY01  matched_tokens=trump  flags=low_token_overlap,single_named_entity_only,minimal_overlap,near_threshold_score  headline=Two weeks that pushed Trump to the edge. Is his presidency unravelling  market=Will any Republican member of Congress calls on Trump to be removed as
+
+Recent Higher-Quality Examples (top 10)
+  2026-04-18 14:47:06  score=0.0862  overlap=2  ratio=0.5000  source=Middle East and north Africa | The Guardian  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran,trump  flags=(none)  headline=Middle East crisis live: ships report attacks as Iran closes strait of  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-18 14:25:48  score=0.0858  overlap=2  ratio=0.5000  source=Middle East and north Africa | The Guardian  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran,trump  flags=(none)  headline=Middle East crisis live: Iran ‘reviewing new US proposals’ as Trump wa  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-18 01:01:13  score=0.1025  overlap=2  ratio=0.5000  source=Middle East and north Africa | The Guardian  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran,trump  flags=(none)  headline=Trump news at a glance: president celebrates strait of Hormuz reopenin  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-17 21:48:07  score=0.1452  overlap=2  ratio=0.5000  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran,trump  flags=(none)  headline=Trump Frames Iran War as All But Over in Optimistic Social Media Flurr  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-17 21:21:05  score=0.1412  overlap=2  ratio=0.5000  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran,trump  flags=(none)  headline=Trump frames war in Iran as all but over in a flurry of optimistic soc  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-17 20:47:14  score=0.1228  overlap=2  ratio=0.5000  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran,trump  flags=(none)  headline=Amid Conflicting Messages From Trump and Iran, Hopes for Peace Deal Em  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-17 20:01:34  score=0.1001  overlap=2  ratio=0.5000  source=World news | The Guardian  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran,trump  flags=(none)  headline=Trump’s Iran war victory boast has echoes of Bush’s ill-fated ‘mission  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-17 17:59:50  score=0.1717  overlap=2  ratio=0.5000  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran,trump  flags=(none)  headline=Iran War Live Updates: Tehran Declares Strait ‘Open’ but Trump Says U.  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-17 17:24:21  score=0.1717  overlap=2  ratio=0.5000  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  matched_tokens=iran,trump  flags=(none)  headline=Iran War Live Updates: Tehran Declares Strait ‘Open’ but Trump Says U.  market=Will Donald Trump visit Iran before May 1, 2026?
+  2026-04-17 16:38:43  score=0.1930  overlap=2  ratio=0.4000  source=NYT > World News  ticker=KXNEWDEAL-MAY01  matched_tokens=deal,trade  flags=(none)  headline=Lutnick Says Canada Trade Deal Needs to Be Reworked Ahead of Talks  market=When will Trump announce a new trade deal?

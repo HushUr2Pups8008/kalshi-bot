@@ -43,7 +43,9 @@ windows_archive/raw/2026-04-18_import/logs/
 # (git cannot un-ignore files inside an ignored directory, so we exclude
 #  specific files rather than the whole analysis/ tree)
 windows_archive/analysis/2026-04-18_import/consolidated/trades_all.jsonl
+windows_archive/analysis/2026-04-18_import/consolidated/trades_all.jsonl.gz
 windows_archive/analysis/2026-04-18_import/consolidated/bot_all.log
+windows_archive/analysis/2026-04-18_import/consolidated/bot_all.log.gz
 windows_archive/analysis/2026-04-18_import/db/
 # README, PROVENANCE.md, manifest.json, and notes.md are NOT listed above
 # and will be committed as the durable provenance record

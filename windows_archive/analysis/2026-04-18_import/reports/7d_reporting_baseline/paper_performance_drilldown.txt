@@ -1,0 +1,40 @@
+PAPER TRADING PERFORMANCE DRILLDOWN
+Path: windows_archive/analysis/2026-04-18_import/db/paper_trades_analysis.db
+Trades loaded: 15
+
+Overview
+  Resolved trades   : 9
+  Open trades       : 6
+  Win rate          : 55.6%
+  Total P&L         : +$2.50
+  Avg resolved P&L  : +$0.28
+  Avg win           : +$2.50
+  Avg loss          : $-2.50
+
+Holding Period
+  Trades with holding data : 2
+  Average hold             : 4.0d
+  Median hold              : 4.0d
+
+By Source (top 10)
+  Middle East and north Africa | The Guardian                       trades=11  resolved=5  win_rate=40.0%  pnl=$-2.50
+  Ukraine | The Guardian                                            trades= 2  resolved=2  win_rate=100.0%  pnl=+$5.00
+  Al Jazeera – Breaking News, World News and Video from Al Jazeera  trades= 1  resolved=1  win_rate=100.0%  pnl=+$2.50
+  Just In News                                                      trades= 1  resolved=1  win_rate=0.0%  pnl=$-2.50
+
+By Signal Type (top 10)
+  news  trades=15  resolved=9  win_rate=55.6%  pnl=+$2.50
+
+By Ticker (top 10)
+  KXTRUMPIRAN-26APR01          trades=3  resolved=3  win_rate=66.7%  pnl=+$2.50
+  KXMOCTRUMP25-26-APR17        trades=2  resolved=2  win_rate=0.0%  pnl=$-5.00
+  KXMOCTRUMP25-26-APR24        trades=2  resolved=0  win_rate=n/a  pnl=n/a
+  KXTRUMPIRAN-26MAY01          trades=2  resolved=0  win_rate=n/a  pnl=n/a
+  KXZELENSKYYOUT-26APR01       trades=2  resolved=2  win_rate=100.0%  pnl=+$5.00
+  KXMOCTRUMP25-26-MAY01        trades=1  resolved=0  win_rate=n/a  pnl=n/a
+  KXUSAIRANAGREEMENT-27-26APR  trades=1  resolved=1  win_rate=100.0%  pnl=+$2.50
+  KXUSAIRANAGREEMENT-27-26MAY  trades=1  resolved=0  win_rate=n/a  pnl=n/a
+  KXVANCEPAKISTAN-26-APR01     trades=1  resolved=1  win_rate=0.0%  pnl=$-2.50
+
+By Series Ticker (top 10)
+  (unknown)  trades=15  resolved=9  win_rate=55.6%  pnl=+$2.50

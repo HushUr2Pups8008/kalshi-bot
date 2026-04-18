@@ -1,0 +1,149 @@
+SIGNAL-TO-EDGE DIAGNOSTICS
+Path: windows_archive/analysis/2026-04-18_import/consolidated/trades_all.jsonl
+Date range: 2026-04-12 -> 2026-04-18
+Lines read: 416595
+Malformed lines skipped: 0
+Records included: 400201
+
+Attribution Notes
+  Signal-bearing rows are anchored on SIGNAL_ANALYSIS_DETAIL and stitched to OPPORTUNITY, SKIPPED, and PAPER_TRADE when structured keys line up.
+  Live orders are counted in the cohort summary, but source/headline attribution for LIVE_ORDER remains limited in current logs.
+
+Recent Signal Cohort
+  SIGNAL_ANALYSIS_DETAIL: 179
+  SIGNAL                : 61
+  OPPORTUNITY           : 61
+  SKIPPED               : 54
+  EXECUTED              : 7
+
+Zero-Edge Breakdown
+  Zero-edge skips           : 29
+  Non-zero below-threshold  : 1
+  Duplicate-position skips  : 7
+  Other skip reasons        : 17
+
+LLM Path Observability
+  LLM attempted             : 89
+  LLM result used           : 70
+  LLM fallback              : 19
+  LLM skipped (routing)     : 0
+  status[ollama_success]          : 70
+  status[ollama_http_error]          : 14
+  status[ollama_unavailable]          : 3
+  status[ollama_slow_budget_exceeded]          : 2
+  LLM latency               : avg=28786ms  median=34364ms  p95=43878ms  max=45790ms  n=65
+  LLM total stage           : avg=28787ms  median=34365ms  p95=43878ms  max=45792ms  n=65
+  LLM queue wait            : avg=0ms  median=0ms  p95=0ms  max=0ms  n=54
+  LLM HTTP round-trip       : avg=28506ms  median=34325ms  p95=43973ms  max=45790ms  n=54
+  LLM parse time            : avg=0ms  median=0ms  p95=0ms  max=0ms  n=54
+  LLM contention observed   : 0
+  LLM max in-flight entry   : 0
+
+LLM Value-Add Analysis
+  LLM rows                  : 84
+  Near-neutral outputs      : 83 (98.8%)
+  Non-zero edge outputs     : 1 (1.2%)
+  Meaningful signals        : 1 (1.2%)
+  Trade candidates          : 1 (1.2%)
+  LLM created edge @0.50    : 1 (1.2%)
+  Probability movement      : near-neutral=83, weak=1, moderate=0, strong=0
+  Edge magnitude            : zero/neutral=83, weak=0, moderate=1, strong=0
+  Decision impact           : neutral_confirmation=83, weak_signal=0, meaningful_signal=0, trade_candidate=1
+  Top meaningful sources
+    NYT > World News: 1
+  Top meaningful tickers
+    KXUSAIRANAGREEMENT-27-26MAY: 1
+
+LLM Value-Add Segmentation
+  Top sources by meaningful signal rate
+  NYT > World News  rows=58  near-neutral=98.3%  non-zero-edge=1.7%  meaningful=1.7%  trade-candidate=1.7%
+  Middle East and north Africa | The Guardian  rows=21  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  World news | The Guardian  rows=4  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  Al Jazeera – Breaking News, World News and Video from Al Jazeera  rows=1  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  Top sources by neutral-confirmation rate
+  Middle East and north Africa | The Guardian  rows=21  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  World news | The Guardian  rows=4  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  Al Jazeera – Breaking News, World News and Video from Al Jazeera  rows=1  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  NYT > World News  rows=58  near-neutral=98.3%  non-zero-edge=1.7%  meaningful=1.7%  trade-candidate=1.7%
+  Top tickers by meaningful signal rate
+  KXUSAIRANAGREEMENT-27-26MAY  rows=2  near-neutral=50.0%  non-zero-edge=50.0%  meaningful=50.0%  trade-candidate=50.0%
+  KXTRUMPIRAN-26MAY01  rows=47  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  KXMOCTRUMP25-26-APR24  rows=8  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  KXMOCTRUMP25-26-APR17  rows=5  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  KXMOCTRUMP25-26-MAY01  rows=5  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  KXNEWDEAL-MAY01  rows=4  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  KXTRADEDEALCUBA-27-B260501  rows=4  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  KXTRUMPCHINA-26-APR17  rows=3  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  KXTRUMPCHINA-26-APR24  rows=2  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  KXTRUMPCHINA-26-MAY15  rows=2  near-neutral=100.0%  non-zero-edge=0.0%  meaningful=0.0%  trade-candidate=0.0%
+  Market price bands by meaningful signal rate
+  0.40-0.60  rows=84  near-neutral=98.8%  non-zero-edge=1.2%  meaningful=1.2%  trade-candidate=1.2%
+  Freshness/timing segmentation   : unavailable (publish/event age is not present on SIGNAL_ANALYSIS_DETAIL rows)
+  Headline/category segmentation  : unavailable (no safe built-in category derivation is present in reporting inputs)
+  Rare non-neutral examples
+  2026-04-12 05:37:50  ticker=KXUSAIRANAGREEMENT-27-26MAY  source=NYT > World News  est_prob=0.4320  market_prob=0.5000  edge=-0.0680  impact=trade_candidate  headline=U.S. And Iran Fail to Agree on Peace Deal After 21 Hours of Talks, Vance Says
+
+Strong LLM Signal Examples
+  2026-04-12 05:37:50  ticker=KXUSAIRANAGREEMENT-27-26MAY  source=NYT > World News  est_prob=0.4320  market_prob=0.5000  edge=-0.0680  impact=trade_candidate  headline=U.S. And Iran Fail to Agree on Peace Deal After 21 Hours of Talks, Vance Says
+
+Neutral Confirmation Examples
+  2026-04-18 15:06:40  ticker=KXTRUMPIRAN-26MAY01  source=Middle East and north Africa | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Trump and Tehran’s series of mismanaged posts stall progress towards peace
+  2026-04-18 15:06:22  ticker=KXMOCTRUMP25-26-MAY01  source=Middle East and north Africa | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Trump and Tehran’s series of mismanaged posts stall progress towards peace
+  2026-04-18 15:06:02  ticker=KXMOCTRUMP25-26-APR24  source=Middle East and north Africa | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Trump and Tehran’s series of mismanaged posts stall progress towards peace
+  2026-04-18 14:47:47  ticker=KXTRUMPIRAN-26MAY01  source=Middle East and north Africa | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Middle East crisis live: ships report attacks as Iran closes strait of Hormuz; T
+  2026-04-18 14:26:30  ticker=KXTRUMPIRAN-26MAY01  source=Middle East and north Africa | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Middle East crisis live: Iran ‘reviewing new US proposals’ as Trump warns Tehran
+  2026-04-18 12:49:09  ticker=KXTRUMPIRAN-26MAY01  source=Middle East and north Africa | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Iran closes strait of Hormuz again ‘until US lifts blockade’
+  2026-04-18 08:58:11  ticker=KXTRUMPIRAN-26MAY01  source=NYT > World News  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Iran War Live Updates: Iran’s Military Says It Has Reimposed ‘Strict Control’ of
+  2026-04-18 07:51:56  ticker=KXTRUMPIRAN-26MAY01  source=NYT > World News  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=A Potent Threat in Strait of Hormuz: Iran’s ‘Mosquito Fleet’
+  2026-04-18 07:47:15  ticker=KXTRUMPIRAN-26MAY01  source=NYT > World News  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Iran War Live Updates: Uncertainty Remains at Strait of Hormuz After Reopening A
+  2026-04-18 05:40:38  ticker=KXTRUMPIRAN-26MAY01  source=NYT > World News  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Hopes for Peace Deal Rise After Iran Says Strait Is Open
+  2026-04-18 05:02:32  ticker=KXMOCTRUMP25-26-MAY01  source=World news | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Two weeks that pushed Trump to the edge. Is his presidency unravelling?
+  2026-04-18 05:02:13  ticker=KXTRUMPIRAN-26MAY01  source=World news | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Two weeks that pushed Trump to the edge. Is his presidency unravelling?
+  2026-04-18 05:01:55  ticker=KXMOCTRUMP25-26-APR24  source=World news | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Two weeks that pushed Trump to the edge. Is his presidency unravelling?
+  2026-04-18 05:01:15  ticker=KXTRUMPIRAN-26MAY01  source=Middle East and north Africa | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Six great reads: Iran’s social media memes, an abandoned department store and a 
+  2026-04-18 03:53:20  ticker=KXTRUMPIRAN-26MAY01  source=Middle East and north Africa | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Iran says strait of Hormuz ‘completely open’ but sounds warning on US blockade
+  2026-04-18 02:52:50  ticker=KXTRUMPIRAN-26MAY01  source=NYT > World News  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Trump Extends Sanctions Exemption on Some Russian Oil as High Gas Prices Persist
+  2026-04-18 01:02:34  ticker=KXMOCTRUMP25-26-MAY01  source=Middle East and north Africa | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Trump news at a glance: president celebrates strait of Hormuz reopening, though 
+  2026-04-18 01:02:15  ticker=KXTRUMPIRAN-26MAY01  source=Middle East and north Africa | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Trump news at a glance: president celebrates strait of Hormuz reopening, though 
+  2026-04-18 01:01:57  ticker=KXMOCTRUMP25-26-APR24  source=Middle East and north Africa | The Guardian  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Trump news at a glance: president celebrates strait of Hormuz reopening, though 
+  2026-04-17 21:48:44  ticker=KXTRUMPIRAN-26MAY01  source=NYT > World News  est_prob=0.5000  market_prob=0.5000  edge=0.0000  impact=neutral_confirmation  headline=Trump Frames Iran War as All But Over in Optimistic Social Media Flurry
+
+Per-Event Edge Audit (most recent 20)
+  2026-04-18 15:06:40  source=Middle East and north Africa | The Guardian  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Trump and Tehran’s series of mismanaged posts stall progress towards peace
+  2026-04-18 15:06:22  source=Middle East and north Africa | The Guardian  ticker=KXMOCTRUMP25-26-MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Trump and Tehran’s series of mismanaged posts stall progress towards peace
+  2026-04-18 15:06:02  source=Middle East and north Africa | The Guardian  ticker=KXMOCTRUMP25-26-APR24  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Trump and Tehran’s series of mismanaged posts stall progress towards peace
+  2026-04-18 14:47:47  source=Middle East and north Africa | The Guardian  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Middle East crisis live: ships report attacks as Iran closes strait of Hormuz; T
+  2026-04-18 14:26:30  source=Middle East and north Africa | The Guardian  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Middle East crisis live: Iran ‘reviewing new US proposals’ as Trump warns Tehran
+  2026-04-18 12:49:09  source=Middle East and north Africa | The Guardian  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Iran closes strait of Hormuz again ‘until US lifts blockade’
+  2026-04-18 08:58:11  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Iran War Live Updates: Iran’s Military Says It Has Reimposed ‘Strict Control’ of
+  2026-04-18 07:51:56  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=A Potent Threat in Strait of Hormuz: Iran’s ‘Mosquito Fleet’
+  2026-04-18 07:47:15  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Iran War Live Updates: Uncertainty Remains at Strait of Hormuz After Reopening A
+  2026-04-18 05:40:38  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=opportunity skipped: zero edge  headline=Hopes for Peace Deal Rise After Iran Says Strait Is Open
+  2026-04-18 05:02:32  source=World news | The Guardian  ticker=KXMOCTRUMP25-26-MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Two weeks that pushed Trump to the edge. Is his presidency unravelling?
+  2026-04-18 05:02:13  source=World news | The Guardian  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Two weeks that pushed Trump to the edge. Is his presidency unravelling?
+  2026-04-18 05:01:55  source=World news | The Guardian  ticker=KXMOCTRUMP25-26-APR24  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Two weeks that pushed Trump to the edge. Is his presidency unravelling?
+  2026-04-18 05:01:15  source=Middle East and north Africa | The Guardian  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Six great reads: Iran’s social media memes, an abandoned department store and a 
+  2026-04-18 03:53:20  source=Middle East and north Africa | The Guardian  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Iran says strait of Hormuz ‘completely open’ but sounds warning on US blockade
+  2026-04-18 02:52:50  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Trump Extends Sanctions Exemption on Some Russian Oil as High Gas Prices Persist
+  2026-04-18 01:02:34  source=Middle East and north Africa | The Guardian  ticker=KXMOCTRUMP25-26-MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Trump news at a glance: president celebrates strait of Hormuz reopening, though 
+  2026-04-18 01:02:15  source=Middle East and north Africa | The Guardian  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Trump news at a glance: president celebrates strait of Hormuz reopening, though 
+  2026-04-18 01:01:57  source=Middle East and north Africa | The Guardian  ticker=KXMOCTRUMP25-26-APR24  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=neutral  llm_mag=none  outcome=signal only  headline=Trump news at a glance: president celebrates strait of Hormuz reopening, though 
+  2026-04-17 21:48:44  source=NYT > World News  ticker=KXTRUMPIRAN-26MAY01  market_prob=0.5000  est_prob=0.5000  edge=0.0000  method=llm  llm_dir=no  llm_mag=none  outcome=signal only  headline=Trump Frames Iran War as All But Over in Optimistic Social Media Flurry
+
+Aggregate by Source (top 10)
+  NYT > World News                                                  signals=102  opportunities=18  avg_edge=-0.0018  median_edge=0.0000  zero_edge=16  duplicate_skip=1
+  Middle East and north Africa | The Guardian                       signals= 56  opportunities=36  avg_edge=-0.0131  median_edge=0.0000  zero_edge=11  duplicate_skip=3
+  World news | The Guardian                                         signals= 18  opportunities= 4  avg_edge=0.0044  median_edge=0.0000  zero_edge= 2  duplicate_skip=1
+  Al Jazeera – Breaking News, World News and Video from Al Jazeera  signals=  3  opportunities= 1  avg_edge=0.0500  median_edge=0.0000  zero_edge= 0  duplicate_skip=1
+
+Aggregate by Ticker (top 10)
+  KXTRUMPIRAN-26MAY01          signals=97  opportunities=32  avg_edge=-0.0014  median_edge=0.0000  zero_edge=16  duplicate_skip=4
+  KXMOCTRUMP25-26-APR24        signals=26  opportunities=11  avg_edge=-0.0065  median_edge=0.0000  zero_edge= 4  duplicate_skip=1
+  KXMOCTRUMP25-26-APR17        signals=23  opportunities=10  avg_edge=-0.0087  median_edge=0.0000  zero_edge= 4  duplicate_skip=0
+  KXMOCTRUMP25-26-MAY01        signals=11  opportunities= 3  avg_edge=-0.0109  median_edge=0.0000  zero_edge= 2  duplicate_skip=0
+  KXNEWDEAL-MAY01              signals= 5  opportunities= 0  avg_edge=0.0000  median_edge=0.0000  zero_edge= 0  duplicate_skip=0
+  KXTRADEDEALCUBA-27-B260501   signals= 5  opportunities= 0  avg_edge=0.0000  median_edge=0.0000  zero_edge= 0  duplicate_skip=0
+  KXUSAIRANAGREEMENT-27-26MAY  signals= 3  opportunities= 3  avg_edge=-0.0453  median_edge=-0.0680  zero_edge= 1  duplicate_skip=1
+  KXTRUMPCHINA-26-APR17        signals= 3  opportunities= 0  avg_edge=0.0000  median_edge=0.0000  zero_edge= 0  duplicate_skip=0
+  KXTRUMPCHINA-26-APR24        signals= 2  opportunities= 0  avg_edge=0.0000  median_edge=0.0000  zero_edge= 0  duplicate_skip=0
+  KXTRUMPCHINA-26-MAY15        signals= 2  opportunities= 0  avg_edge=0.0000  median_edge=0.0000  zero_edge= 0  duplicate_skip=0

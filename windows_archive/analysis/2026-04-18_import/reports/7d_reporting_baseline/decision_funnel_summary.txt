@@ -1,0 +1,68 @@
+DECISION FUNNEL SUMMARY
+Path: windows_archive/analysis/2026-04-18_import/consolidated/trades_all.jsonl
+Date range: 2026-04-12 -> 2026-04-18
+Lines read: 416595
+Malformed lines skipped: 0
+Records included: 400201
+
+Funnel
+  Structured records considered : 400201
+  Pre-signal rejections         : 688
+  Signals logged                : 61
+  Opportunities logged          : 61 (100.0% of signals)
+  No-signal exits               : partially observable via ANALYSIS_REJECTED
+  Executor skips               : 54 (88.5% of opportunities)
+  Executions                   : 7 (11.5% of opportunities)
+    Paper trades               : 7
+
+Pre-Signal Rejection Reasons
+  568  stale_news
+  120  no_keywords
+
+Stale-News Age Buckets
+  472  60m+
+   86  5-15m
+    8  30-60m
+    2  15-30m
+
+Stale-News Sources (top 5)
+  88  NYT > World News
+  44  BBC News
+  30  Middle East and north Africa | The Guardian
+  26  World news | The Guardian
+  23  Politics
+
+Stale-News Tickers (top 5)
+  181  KXTRUMPIRAN-26MAY01
+   70  KXMOCTRUMP25-26-APR17
+   69  KXMOCTRUMP25-26-APR24
+   38  KXMOCTRUMP25-26-MAY01
+   38  KXTRUMPCHINA-26-APR17
+
+Executor Skip Reasons
+  30  edge +0.0000 below min_edge 0.02
+  13  opposing position exists: open YES at est=0.530 -- no hedging
+   2  paper duplicate skip: open NO at est=0.432 (delta=0.000) -- prob shift too small to add position
+   2  paper duplicate skip: open YES at est=0.650 (delta=0.000) -- prob shift too small to add position
+   2  paper cooldown: last trade 1.5h ago (cooldown=4h)
+
+Path Contribution (decision-stage records)
+  871  news
+
+Execution Path Contribution
+  7  news
+
+Observed Event Types
+  397253  EARLY_STALE_DROP
+     688  ANALYSIS_REJECTED
+     686  MATCH_DIAGNOSTIC
+     661  NEW_MARKET
+     450  EARLY_FRESH_PASS
+     179  SIGNAL_ANALYSIS_DETAIL
+      77  MATCH_SUPPRESSION_CANDIDATE
+      61  SIGNAL
+      61  OPPORTUNITY
+      54  SKIPPED
+      22  MATCH_SUPPRESSED
+       7  PAPER_TRADE
+       2  PAPER_RESOLUTION

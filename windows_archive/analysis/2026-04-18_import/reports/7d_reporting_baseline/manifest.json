@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "bundle_id": "7d_reporting_baseline",
+  "generated_at": "2026-04-18T17:18:33Z",
+  "window": {
+    "since": "2026-04-12",
+    "until": "2026-04-18",
+    "rationale": "Final 7 days of Windows-era operation. Apr 12 chosen as start: event volume jumped from 1,603 (Apr 11) to 45,925 (Apr 12) following v0.29.3-v0.29.5 observability improvements, making it the first representative day. This window covers 400,201 of 416,595 total Windows-era events (96%)."
+  },
+  "source_artifacts": {
+    "trade_log": "windows_archive/analysis/2026-04-18_import/consolidated/trades_all.jsonl",
+    "db": "windows_archive/analysis/2026-04-18_import/db/paper_trades_analysis.db",
+    "app_log_7d": "Concatenated from windows_archive/raw/2026-04-18_import/logs/app/ (bot.log.2026-04-12 through bot.log.2026-04-16, bot.log.2026-04-17, bot.log)"
+  },
+  "reports": {
+    "trade_log_summary.txt": {
+      "script": "scripts/trade_log_summary.py",
+      "flags": "--path <trades> --since 2026-04-12 --until 2026-04-18 --exclude-test",
+      "lines": 96,
+      "description": "Event-type counts, executor skip reasons, analysis rejection reasons, stale-news buckets, top sources and tickers"
+    },
+    "decision_funnel_summary.txt": {
+      "script": "scripts/decision_funnel_summary.py",
+      "flags": "--path <trades> --since 2026-04-12 --until 2026-04-18 --exclude-test",
+      "lines": 68,
+      "description": "Full decision funnel from ingestion to execution: pass/drop rates at each stage"
+    },
+    "freshness_diagnostics.txt": {
+      "script": "scripts/freshness_diagnostics.py",
+      "flags": "--path <trades> --since 2026-04-12 --until 2026-04-18 --exclude-test",
+      "lines": 48,
+      "description": "News freshness distribution, stale-drop age buckets, freshness filter effectiveness"
+    },
+    "signal_edge_diagnostics.txt": {
+      "script": "scripts/signal_edge_diagnostics.py",
+      "flags": "--path <trades> --since 2026-04-12 --until 2026-04-18 --exclude-test",
+      "lines": 149,
+      "description": "Edge distribution for signals that reached execution gating; min-edge rejection analysis"
+    },
+    "match_quality_diagnostics.txt": {
+      "script": "scripts/match_quality_diagnostics.py",
+      "flags": "--path <trades> --since 2026-04-12 --until 2026-04-18 --exclude-test",
+      "lines": 64,
+      "description": "Headline-to-market match quality heuristics: low-quality flags, score distribution, near-threshold candidates"
+    },
+    "match_suppression_audit.txt": {
+      "script": "scripts/match_suppression_audit.py",
+      "flags": "--path <trades> --since 2026-04-12 --until 2026-04-18 --exclude-test",
+      "lines": 53,
+      "description": "Audit of suppressed matches: suppression reasons, affected tickers and sources"
+    },
+    "source_scorecard.txt": {
+      "script": "scripts/source_scorecard.py",
+      "flags": "--logs-path <trades> --db-path <db> --since 2026-04-12 --until 2026-04-18",
+      "lines": 71,
+      "description": "Per-source signal counts, acceptance rates, and credibility scoring from DB"
+    },
+    "paper_performance_drilldown.txt": {
+      "script": "scripts/paper_performance_drilldown.py",
+      "flags": "--path <db>",
+      "lines": 40,
+      "note": "No date filter — covers all 15 paper trades in DB (2026-03-13 through 2026-04-14)",
+      "description": "Paper trade P&L by ticker, hold duration, edge at entry, and resolution outcomes"
+    },
+    "ollama_error_audit.txt": {
+      "script": "scripts/ollama_error_audit.py",
+      "flags": "--log /tmp/win_7d_app.log",
+      "lines": 63,
+      "note": "App log has no date filter flag. Input was a temp concat of 7 daily files (Apr 12-18, ~124k lines). Not re-runnable from this manifest alone; re-run by concatenating raw daily files.",
+      "description": "Ollama inference errors, timeout patterns, model availability issues"
+    }
+  },
+  "bugs_fixed": [
+    {
+      "script": "scripts/match_quality_diagnostics.py",
+      "line": 13,
+      "fix": "Added `timezone` to `from datetime import datetime, timezone` — was missing, caused NameError at runtime"
+    }
+  ]
+}
