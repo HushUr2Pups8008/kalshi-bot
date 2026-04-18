@@ -32,6 +32,15 @@ tests/_tmp_*.jsonl
 !data/.gitkeep
 !logs/.gitkeep
 
+# Windows historical archive (extracted from transfer/*.tar.gz)
+# The tarball in transfer/ is the canonical git-tracked copy.
+# Extracted data and log files are large (~80 MB) and excluded here.
+# To re-populate: tar -xzf transfer/decision-support-sync-2026-04-18.tar.gz -C archive/windows-2026-04-18/
+archive/windows-2026-04-18/data/
+archive/windows-2026-04-18/logs/
+# Keep the provenance marker committed
+!archive/windows-2026-04-18/PROVENANCE.md
+
 # PAT / credential files
 *_pat.txt
 JRP_GamingDesktop_pat.txt
