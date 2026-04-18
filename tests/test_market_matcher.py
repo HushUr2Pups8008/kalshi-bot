@@ -279,6 +279,23 @@ class TestFindCandidates:
         assert meta["pre_llm_semantic_overlap_ratio"] == pytest.approx(0.5)
         assert meta["pre_llm_quality_pass"] is True
         assert meta["pre_llm_gate_reason"] is None
+        assert meta["pre_llm_filtered_stopword_count"] == 2
+        assert meta["pre_llm_filtered_generic_count"] == 0
+        assert meta["pre_llm_semantic_token_types"] == {"named_entity": 2, "generic": 0}
+
+    def test_compute_pre_llm_match_meta_filters_generic_low_information_tokens(self):
+        meta = _compute_pre_llm_match_meta(
+            "President Iran updates after talks",
+            "Will the president discuss Iran talks?",
+            [" President ", "Iran", "updates"],
+        )
+
+        assert meta["pre_llm_semantic_overlap_tokens"] == ["iran"]
+        assert meta["pre_llm_semantic_overlap_count"] == 1
+        assert meta["pre_llm_filtered_stopword_count"] == 1
+        assert meta["pre_llm_filtered_generic_count"] == 1
+        assert meta["pre_llm_semantic_token_types"] == {"named_entity": 1, "generic": 0}
+        assert meta["pre_llm_gate_reason"] == "insufficient_semantic_overlap"
 
     @pytest.mark.asyncio
     async def test_single_named_entity_match_is_penalized_below_threshold(self, matcher, monkeypatch):

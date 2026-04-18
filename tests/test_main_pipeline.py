@@ -182,6 +182,7 @@ async def test_process_candidate_returns_early_when_no_keywords(monkeypatch):
 @pytest.mark.asyncio
 async def test_process_candidate_skips_stale_news_before_estimation(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr("main.MAX_NEWS_AGE_SECONDS", 300)
     bot = _make_bot_stub()
     news = _make_news()
     news.published = datetime.now(timezone.utc) - timedelta(seconds=600)

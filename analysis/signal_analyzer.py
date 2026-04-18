@@ -153,23 +153,64 @@ def _pre_llm_log_fields(
     *,
     match_meta: dict[str, Any] | None,
     keywords_present: bool,
+    keyword_override: bool | None = None,
+    keyword_override_mode: str | None = None,
+    keyword_signal_strength: float | None = None,
+    gate_enforced: bool = False,
 ) -> dict[str, Any]:
     if match_meta is None:
         return {}
     pre_llm_quality_pass = match_meta["pre_llm_quality_pass"]
+    if keyword_override is None:
+        keyword_override = (not pre_llm_quality_pass and keywords_present)
     fields: dict[str, Any] = {
         "pre_llm_quality_pass": pre_llm_quality_pass,
         "pre_llm_semantic_overlap_count": match_meta["pre_llm_semantic_overlap_count"],
         "pre_llm_semantic_overlap_ratio": match_meta["pre_llm_semantic_overlap_ratio"],
-        "pre_llm_would_block": (not pre_llm_quality_pass and not keywords_present),
-        "pre_llm_keyword_override": (not pre_llm_quality_pass and keywords_present),
+        "pre_llm_would_block": (not pre_llm_quality_pass and not keyword_override),
+        "pre_llm_keyword_override": keyword_override,
         "pre_llm_gate_reason": match_meta["pre_llm_gate_reason"],
     }
+    if keyword_override_mode is not None:
+        fields["pre_llm_keyword_override_mode"] = keyword_override_mode
+    if keyword_signal_strength is not None:
+        fields["pre_llm_keyword_signal_strength"] = keyword_signal_strength
+    if gate_enforced:
+        fields["pre_llm_gate_enforced"] = True
     if "pre_llm_headline_token_count" in match_meta:
         fields["pre_llm_headline_token_count"] = match_meta["pre_llm_headline_token_count"]
     if "pre_llm_market_token_count" in match_meta:
         fields["pre_llm_market_token_count"] = match_meta["pre_llm_market_token_count"]
+    if "pre_llm_filtered_stopword_count" in match_meta:
+        fields["pre_llm_filtered_stopword_count"] = match_meta["pre_llm_filtered_stopword_count"]
+    if "pre_llm_filtered_generic_count" in match_meta:
+        fields["pre_llm_filtered_generic_count"] = match_meta["pre_llm_filtered_generic_count"]
+    if "pre_llm_semantic_token_types" in match_meta:
+        fields["pre_llm_semantic_token_types"] = match_meta["pre_llm_semantic_token_types"]
     return fields
+
+
+def _pre_llm_keyword_override_mode() -> str:
+    mode = str(getattr(cfg, "pre_llm_match_gate_keyword_override_mode", "") or "").strip().lower()
+    if mode:
+        return mode
+    return "any_hit" if getattr(cfg, "pre_llm_match_gate_keyword_override_any_hit", True) else "disabled"
+
+
+def _should_keyword_override_pre_llm_gate(
+    *,
+    match_meta: dict[str, Any] | None,
+    keywords_present: bool,
+    keyword_signal_strength: float,
+) -> tuple[bool, str]:
+    mode = _pre_llm_keyword_override_mode()
+    if match_meta is None or match_meta["pre_llm_quality_pass"] or not keywords_present:
+        return False, mode
+    if mode == "disabled":
+        return False, mode
+    if mode == "min_signal":
+        return keyword_signal_strength >= cfg.pre_llm_match_gate_keyword_override_min_signal, mode
+    return True, mode
 
 
 def _ollama_http_status_category(status_code: int) -> str:
@@ -804,6 +845,7 @@ async def estimate_probability(
     market: KalshiMarket,
     keyword_stats=None,   # KeywordStats instance or None
     match_meta: dict[str, Any] | None = None,
+    is_startup_probe: bool = False,
 ) -> tuple[float, float, list[str], str, Optional[str], Optional[str], Optional[float]]:
     """
     Best-available probability estimate for this (news, market) pair.
@@ -827,13 +869,55 @@ async def estimate_probability(
         news, market, keyword_stats=keyword_stats
     )
     keywords_present = bool(keywords)
-    pre_llm_fields = _pre_llm_log_fields(match_meta=match_meta, keywords_present=keywords_present)
+    keyword_signal_strength = abs(kw_prob - base_probability)
+    keyword_override, keyword_override_mode = _should_keyword_override_pre_llm_gate(
+        match_meta=match_meta,
+        keywords_present=keywords_present,
+        keyword_signal_strength=keyword_signal_strength,
+    )
+    pre_llm_fields = _pre_llm_log_fields(
+        match_meta=match_meta,
+        keywords_present=keywords_present,
+        keyword_override=keyword_override,
+        keyword_override_mode=keyword_override_mode,
+        keyword_signal_strength=keyword_signal_strength,
+    )
+    probe_fields = {"is_startup_probe": True} if is_startup_probe else {}
     keyword_contribs = _keyword_contributions(
         combined_text, keyword_stats=keyword_stats, series_ticker=series_ticker
     )
 
     routing_reason = _llm_routing_reason(news, market)
-    if routing_reason is not None:
+    pre_llm_gate_enforced = bool(
+        cfg.enable_pre_llm_match_gate
+        and not cfg.pre_llm_match_gate_diagnostics_only
+        and routing_reason is None
+        and pre_llm_fields.get("pre_llm_would_block", False)
+    )
+    if pre_llm_gate_enforced:
+        llm_meta = _llm_meta(
+            attempted=False,
+            status="llm_skipped_match_quality_gate",
+            provider=None,
+            result_used=False,
+        )
+        log.debug(
+            "[PRE_LLM_GATE] suppressed ticker=%s source=%s reason=%s keyword_override=%s",
+            market.ticker,
+            news.source,
+            pre_llm_fields.get("pre_llm_gate_reason"),
+            pre_llm_fields.get("pre_llm_keyword_override"),
+        )
+        llm_result = None
+        pre_llm_fields = _pre_llm_log_fields(
+            match_meta=match_meta,
+            keywords_present=keywords_present,
+            keyword_override=keyword_override,
+            keyword_override_mode=keyword_override_mode,
+            keyword_signal_strength=keyword_signal_strength,
+            gate_enforced=True,
+        )
+    elif routing_reason is not None:
         llm_meta = _llm_meta(
             attempted=False,
             status=f"llm_skipped_routing_{routing_reason}",
@@ -902,6 +986,7 @@ async def estimate_probability(
             llm_probability_movement=llm_probability_movement,
             llm_useful=llm_useful,
             pre_llm_would_block_and_useful=pre_llm_would_block_and_useful,
+            **probe_fields,
             **pre_llm_fields,
         )
         return llm_prob, llm_confidence, keywords, reasoning, llm_direction, llm_magnitude, llm_confidence
@@ -932,6 +1017,7 @@ async def estimate_probability(
             llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
             llm_routing_passed=(routing_reason is None),
             llm_routing_reason=routing_reason,
+            **probe_fields,
             **pre_llm_fields,
         )
         return market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", None, None, None
@@ -962,6 +1048,7 @@ async def estimate_probability(
         llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
         llm_routing_passed=(routing_reason is None),
         llm_routing_reason=routing_reason,
+        **probe_fields,
         **pre_llm_fields,
     )
     return kw_prob, confidence, keywords, kw_reasoning, None, None, None

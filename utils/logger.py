@@ -654,12 +654,19 @@ class TradeLogger:
         pre_llm_semantic_overlap_ratio: float | None = None,
         pre_llm_would_block: bool | None = None,
         pre_llm_keyword_override: bool | None = None,
+        pre_llm_keyword_override_mode: str | None = None,
+        pre_llm_keyword_signal_strength: float | None = None,
         pre_llm_gate_reason: str | None = None,
+        pre_llm_gate_enforced: bool | None = None,
         pre_llm_headline_token_count: int | None = None,
         pre_llm_market_token_count: int | None = None,
+        pre_llm_filtered_stopword_count: int | None = None,
+        pre_llm_filtered_generic_count: int | None = None,
+        pre_llm_semantic_token_types: dict[str, int] | None = None,
         llm_probability_movement: float | None = None,
         llm_useful: bool | None = None,
         pre_llm_would_block_and_useful: bool | None = None,
+        is_startup_probe: bool | None = None,
     ) -> None:
         record = {
             "type": "SIGNAL_ANALYSIS_DETAIL",
@@ -718,18 +725,32 @@ class TradeLogger:
             record["pre_llm_would_block"] = pre_llm_would_block
         if pre_llm_keyword_override is not None:
             record["pre_llm_keyword_override"] = pre_llm_keyword_override
+        if pre_llm_keyword_override_mode is not None:
+            record["pre_llm_keyword_override_mode"] = pre_llm_keyword_override_mode
+        if pre_llm_keyword_signal_strength is not None:
+            record["pre_llm_keyword_signal_strength"] = round(pre_llm_keyword_signal_strength, 4)
         if pre_llm_gate_reason is not None:
             record["pre_llm_gate_reason"] = pre_llm_gate_reason
+        if pre_llm_gate_enforced is not None:
+            record["pre_llm_gate_enforced"] = pre_llm_gate_enforced
         if pre_llm_headline_token_count is not None:
             record["pre_llm_headline_token_count"] = pre_llm_headline_token_count
         if pre_llm_market_token_count is not None:
             record["pre_llm_market_token_count"] = pre_llm_market_token_count
+        if pre_llm_filtered_stopword_count is not None:
+            record["pre_llm_filtered_stopword_count"] = pre_llm_filtered_stopword_count
+        if pre_llm_filtered_generic_count is not None:
+            record["pre_llm_filtered_generic_count"] = pre_llm_filtered_generic_count
+        if pre_llm_semantic_token_types is not None:
+            record["pre_llm_semantic_token_types"] = pre_llm_semantic_token_types
         if llm_probability_movement is not None:
             record["llm_probability_movement"] = round(llm_probability_movement, 4)
         if llm_useful is not None:
             record["llm_useful"] = llm_useful
         if pre_llm_would_block_and_useful is not None:
             record["pre_llm_would_block_and_useful"] = pre_llm_would_block_and_useful
+        if is_startup_probe is not None:
+            record["is_startup_probe"] = is_startup_probe
         self._write(record)
 
     def log_llm_skipped_routing(
@@ -774,6 +795,9 @@ class TradeLogger:
         would_fail_pre_llm_gate: bool | None = None,
         pre_llm_headline_token_count: int | None = None,
         pre_llm_market_token_count: int | None = None,
+        pre_llm_filtered_stopword_count: int | None = None,
+        pre_llm_filtered_generic_count: int | None = None,
+        pre_llm_semantic_token_types: dict[str, int] | None = None,
     ) -> None:
         record = {
             "type": "MATCH_DIAGNOSTIC",
@@ -803,6 +827,12 @@ class TradeLogger:
             record["pre_llm_headline_token_count"] = pre_llm_headline_token_count
         if pre_llm_market_token_count is not None:
             record["pre_llm_market_token_count"] = pre_llm_market_token_count
+        if pre_llm_filtered_stopword_count is not None:
+            record["pre_llm_filtered_stopword_count"] = pre_llm_filtered_stopword_count
+        if pre_llm_filtered_generic_count is not None:
+            record["pre_llm_filtered_generic_count"] = pre_llm_filtered_generic_count
+        if pre_llm_semantic_token_types is not None:
+            record["pre_llm_semantic_token_types"] = pre_llm_semantic_token_types
         self._write(record)
 
     def log_match_suppressed(

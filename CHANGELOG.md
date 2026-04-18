@@ -6,6 +6,29 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.7] - 2026-04-18
+
+### Added
+- `main.py`, `analysis/signal_analyzer.py`, `utils/logger.py`, `tests/test_main_startup.py`:
+  Added an isolated startup observability probe that emits exactly one tagged
+  `SIGNAL_ANALYSIS_DETAIL` self-test record, validates required pre-LLM diagnostic fields at
+  startup, and logs explicit `[STARTUP_PROBE][PASS]` / `[STARTUP_PROBE][FAIL]` markers without
+  entering the live ingest, opportunity, or trading paths.
+- `scripts/pipeline_impact_audit.py`, `scripts/signal_edge_diagnostics.py`,
+  `tests/test_pipeline_impact_audit.py`: Expanded the existing pipeline audit with a dedicated
+  pre-LLM match-gate section, gate/status consistency check, false-positive suppression review,
+  top gate-reason aggregation, and a compact Phase 3 planning summary while excluding startup
+  probe rows from main metrics.
+
+### Changed
+- `analysis/market_matcher.py`, `analysis/signal_analyzer.py`, `config.py`, `utils/logger.py`,
+  `tests/test_market_matcher.py`, `tests/test_signal_analyzer.py`: Implemented the pre-LLM
+  match gate end to end. Phase 1 adds diagnostics-only semantic-overlap metadata and startup
+  observability fields; Phase 2 enforces suppression of weak-match, no-keyword LLM attempts
+  while preserving existing keyword fallback behavior; Phase 3 refines gate-only token filtering,
+  adds configurable keyword-override modes (`any_hit`, `min_signal`, `disabled`), and keeps the
+  default override behavior backward-compatible.
+
 ## [0.29.6] - 2026-04-18
 
 ### Added

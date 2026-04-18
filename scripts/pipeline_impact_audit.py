@@ -130,6 +130,34 @@ def collect_window_metrics(
         for row in detail_rows
         if row.get("llm_result_status")
     )
+    startup_probe_rows = [row for row in detail_rows if row.get("is_startup_probe") is True]
+    non_probe_rows = [row for row in detail_rows if row.get("is_startup_probe") is not True]
+    instrumented_rows = [row for row in non_probe_rows if row.get("pre_llm_quality_pass") is not None]
+    block_rows = [row for row in instrumented_rows if row.get("pre_llm_would_block") is True]
+    enforced_rows = [row for row in instrumented_rows if row.get("pre_llm_gate_enforced") is True]
+    dangerous_rows = [row for row in instrumented_rows if row.get("pre_llm_would_block_and_useful") is True]
+    keyword_override_rows = [row for row in instrumented_rows if row.get("pre_llm_keyword_override") is True]
+    llm_skipped_match_quality_gate = sum(
+        1 for row in instrumented_rows if row.get("llm_result_status") == "llm_skipped_match_quality_gate"
+    )
+
+    def _counter(rows: list[dict[str, Any]], key: str) -> Counter:
+        return Counter(str(row.get(key) or "").strip() for row in rows if str(row.get(key) or "").strip())
+
+    def _recent_rows(rows: list[dict[str, Any]], *, limit: int = 5) -> list[dict[str, Any]]:
+        return sorted(
+            rows,
+            key=lambda row: row.get("ts") or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )[:limit]
+
+    gate_reason_counts = _counter(block_rows, "pre_llm_gate_reason")
+    blocked_with_stopwords = sum(
+        1 for row in block_rows if (row.get("pre_llm_filtered_stopword_count") or 0) > 0
+    )
+    blocked_with_generic = sum(
+        1 for row in block_rows if (row.get("pre_llm_filtered_generic_count") or 0) > 0
+    )
 
     opportunities = edge_stats.get("counts", {}).get("OPPORTUNITY", 0)
     zero_edge = edge_stats.get("skip_breakdown", {}).get("zero_edge", 0)
@@ -168,6 +196,82 @@ def collect_window_metrics(
             "llm_skipped_routing": edge_stats.get("llm_observability", {}).get("skipped_routing", 0),
             "llm_skipped_routing_reasons": edge_stats.get("llm_observability", {}).get("skipped_routing_reasons", Counter()),
             "llm_value_add": edge_stats.get("llm_value_add", {}),
+            "pre_llm_gate": {
+                "signal_analysis_detail_total": edge_stats.get("counts", {}).get("SIGNAL_ANALYSIS_DETAIL", 0),
+                "startup_probe_excluded": len(startup_probe_rows),
+                "instrumented_non_probe_records": len(instrumented_rows),
+                "would_block": len(block_rows),
+                "gate_enforced": len(enforced_rows),
+                "llm_skipped_match_quality_gate": llm_skipped_match_quality_gate,
+                "gate_status_consistent": len(enforced_rows) == llm_skipped_match_quality_gate,
+                "gate_status_delta": len(enforced_rows) - llm_skipped_match_quality_gate,
+                "would_block_and_useful": len(dangerous_rows),
+                "suppression_false_positive_candidate_count": len(dangerous_rows),
+                "suppression_false_positive_candidate_rate": safe_pct(len(dangerous_rows), len(instrumented_rows)),
+                "block_candidate_rate": safe_pct(len(block_rows), len(instrumented_rows)),
+                "enforced_suppression_rate": safe_pct(len(enforced_rows), len(instrumented_rows)),
+                "dangerous_suppression_rate": safe_pct(len(dangerous_rows), len(instrumented_rows)),
+                "keyword_override_count": len(keyword_override_rows),
+                "top_gate_reasons": gate_reason_counts,
+                "interpretation": (
+                    "Blocked calls appear safe"
+                    if len(dangerous_rows) == 0
+                    else "Review dangerous suppressions before trusting gate"
+                ),
+                "top_block_tickers": _counter(block_rows, "ticker"),
+                "top_enforced_tickers": _counter(enforced_rows, "ticker"),
+                "top_block_sources": _counter(block_rows, "source"),
+                "top_enforced_sources": _counter(enforced_rows, "source"),
+                "recent_enforced": _recent_rows(enforced_rows),
+                "recent_dangerous": _recent_rows(dangerous_rows),
+                "phase3_plan": {
+                    "gate_health": {
+                        "enforced_suppression_rate": safe_pct(len(enforced_rows), len(instrumented_rows)),
+                        "dangerous_suppression_rate": safe_pct(len(dangerous_rows), len(instrumented_rows)),
+                        "top_suppressed_tickers": _counter(enforced_rows, "ticker"),
+                        "top_suppressed_sources": _counter(enforced_rows, "source"),
+                    },
+                    "keyword_override_review": {
+                        "prevented_suppressions": len(keyword_override_rows),
+                        "assessment": (
+                            "No keyword overrides observed"
+                            if len(keyword_override_rows) == 0
+                            else (
+                                "Review keyword override precision"
+                                if len(dangerous_rows) > 0
+                                else "Keyword override appears acceptable under current evidence"
+                            )
+                        ),
+                    },
+                    "heuristic_tuning_candidates": [
+                        candidate
+                        for candidate in [
+                            (
+                                "review stopword/generic token filter candidates"
+                                if blocked_with_stopwords > 0 or blocked_with_generic > 0
+                                else None
+                            ),
+                            (
+                                "review overlap/ratio refinement opportunities"
+                                if len(dangerous_rows) > 0 or len(block_rows) > 0
+                                else None
+                            ),
+                            (
+                                "review keyword override precision"
+                                if len(keyword_override_rows) > 0
+                                else None
+                            ),
+                        ]
+                        if candidate is not None
+                    ]
+                    or ["No clear tuning candidate from current window"],
+                    "recommendation": _phase3_recommendation(
+                        dangerous_count=len(dangerous_rows),
+                        keyword_override_count=len(keyword_override_rows),
+                        enforced_count=len(enforced_rows),
+                    ),
+                },
+            },
         },
         "edge": {
             "opportunities": opportunities,
@@ -220,6 +324,40 @@ def metric_line(
     previous_text = fmt_pct(previous) if is_pct else fmt_count(previous)
     delta_text = fmt_delta(current, previous, is_pct=is_pct)
     return f"  {label:<32} current={current_text:<8} previous={previous_text:<8} delta={delta_text}"
+
+
+def _fmt_counter(counter: Counter, *, limit: int = 5) -> str:
+    if not counter:
+        return "(none)"
+    return ", ".join(f"{label}={count}" for label, count in counter.most_common(limit))
+
+
+def _fmt_recent_gate_rows(rows: list[dict[str, Any]], *, limit: int = 5) -> str:
+    if not rows:
+        return "(none)"
+    parts: list[str] = []
+    for row in rows[:limit]:
+        parts.append(
+            f"{fmt_ts(row.get('ts'))} | {row.get('source') or 'n/a'} | {row.get('ticker') or 'n/a'} | "
+            f"override={row.get('pre_llm_keyword_override')} | useful={row.get('llm_useful')} | "
+            f"reason={row.get('pre_llm_gate_reason') or 'n/a'} | {str(row.get('headline') or '')[:80]}"
+        )
+    return "\n".join(f"    {part}" for part in parts)
+
+
+def _phase3_recommendation(
+    *,
+    dangerous_count: int,
+    keyword_override_count: int,
+    enforced_count: int,
+) -> str:
+    if dangerous_count > 0:
+        return "investigate dangerous suppressions before tightening"
+    if keyword_override_count > 0 and enforced_count == 0:
+        return "review keyword override precision"
+    if enforced_count > 0:
+        return "leave gate as-is"
+    return "collect more data before tuning"
 
 
 def _segment_snapshot(
@@ -384,7 +522,102 @@ def render_report(current_stats: dict[str, Any], previous_stats: dict[str, Any])
     previous_value = previous_stats["analysis"].get("llm_value_add", {})
     current_llm_rows = current_value.get("llm_rows", 0)
     previous_llm_rows = previous_value.get("llm_rows", 0)
-    lines.append("3. LLM Value-Add Analysis")
+    current_gate = current_stats["analysis"].get("pre_llm_gate", {})
+    previous_gate = previous_stats["analysis"].get("pre_llm_gate", {})
+    lines.append("3. Pre-LLM Match Gate")
+    lines.append(metric_line(
+        "SIGNAL_ANALYSIS_DETAIL total",
+        current=current_gate.get("signal_analysis_detail_total"),
+        previous=previous_gate.get("signal_analysis_detail_total"),
+    ))
+    lines.append(metric_line(
+        "Instrumented non-probe",
+        current=current_gate.get("instrumented_non_probe_records"),
+        previous=previous_gate.get("instrumented_non_probe_records"),
+    ))
+    lines.append(metric_line(
+        "Startup probes excluded",
+        current=current_gate.get("startup_probe_excluded"),
+        previous=previous_gate.get("startup_probe_excluded"),
+    ))
+    lines.append(metric_line(
+        "Would block",
+        current=current_gate.get("would_block"),
+        previous=previous_gate.get("would_block"),
+    ))
+    lines.append(metric_line(
+        "Gate enforced",
+        current=current_gate.get("gate_enforced"),
+        previous=previous_gate.get("gate_enforced"),
+    ))
+    lines.append(metric_line(
+        "Skipped by gate status",
+        current=current_gate.get("llm_skipped_match_quality_gate"),
+        previous=previous_gate.get("llm_skipped_match_quality_gate"),
+    ))
+    lines.append(metric_line(
+        "Would block and useful",
+        current=current_gate.get("would_block_and_useful"),
+        previous=previous_gate.get("would_block_and_useful"),
+    ))
+    lines.append(metric_line(
+        "False-positive candidates",
+        current=current_gate.get("suppression_false_positive_candidate_count"),
+        previous=previous_gate.get("suppression_false_positive_candidate_count"),
+    ))
+    lines.append(metric_line(
+        "False-positive candidate rate",
+        current=current_gate.get("suppression_false_positive_candidate_rate"),
+        previous=previous_gate.get("suppression_false_positive_candidate_rate"),
+        is_pct=True,
+    ))
+    lines.append(metric_line(
+        "Block candidate rate",
+        current=current_gate.get("block_candidate_rate"),
+        previous=previous_gate.get("block_candidate_rate"),
+        is_pct=True,
+    ))
+    lines.append(metric_line(
+        "Enforced suppression rate",
+        current=current_gate.get("enforced_suppression_rate"),
+        previous=previous_gate.get("enforced_suppression_rate"),
+        is_pct=True,
+    ))
+    lines.append(metric_line(
+        "Dangerous suppression rate",
+        current=current_gate.get("dangerous_suppression_rate"),
+        previous=previous_gate.get("dangerous_suppression_rate"),
+        is_pct=True,
+    ))
+    current_gate_consistency = (
+        "OK"
+        if current_gate.get("gate_status_consistent", True)
+        else f"WARNING (delta={current_gate.get('gate_status_delta', 0):+d})"
+    )
+    previous_gate_consistency = (
+        "OK"
+        if previous_gate.get("gate_status_consistent", True)
+        else f"WARNING (delta={previous_gate.get('gate_status_delta', 0):+d})"
+    )
+    lines.append(f"  Gate/status consistency      : {current_gate_consistency}")
+    lines.append(f"  Previous gate consistency    : {previous_gate_consistency}")
+    lines.append(f"  Current interpretation         : {current_gate.get('interpretation', 'n/a')}")
+    lines.append(f"  Previous interpretation        : {previous_gate.get('interpretation', 'n/a')}")
+    lines.append(f"  Current keyword overrides      : {fmt_count(current_gate.get('keyword_override_count'))}")
+    lines.append(f"  Previous keyword overrides     : {fmt_count(previous_gate.get('keyword_override_count'))}")
+    lines.append(f"  Current top gate reasons       : {_fmt_counter(current_gate.get('top_gate_reasons', Counter()))}")
+    lines.append(f"  Previous top gate reasons      : {_fmt_counter(previous_gate.get('top_gate_reasons', Counter()))}")
+    lines.append(f"  Current top block tickers      : {_fmt_counter(current_gate.get('top_block_tickers', Counter()))}")
+    lines.append(f"  Current top enforced tickers   : {_fmt_counter(current_gate.get('top_enforced_tickers', Counter()))}")
+    lines.append(f"  Current top block sources      : {_fmt_counter(current_gate.get('top_block_sources', Counter()))}")
+    lines.append(f"  Current top enforced sources   : {_fmt_counter(current_gate.get('top_enforced_sources', Counter()))}")
+    lines.append("  Recent enforced suppressions   :")
+    lines.append(_fmt_recent_gate_rows(current_gate.get("recent_enforced", [])))
+    lines.append("  Recent dangerous suppressions  :")
+    lines.append(_fmt_recent_gate_rows(current_gate.get("recent_dangerous", [])))
+    lines.append("")
+
+    lines.append("4. LLM Value-Add Analysis")
     lines.append(metric_line(
         "LLM rows",
         current=current_llm_rows,
@@ -476,7 +709,7 @@ def render_report(current_stats: dict[str, Any], previous_stats: dict[str, Any])
 
     current_segmentation = current_value.get("segmentation", {})
     previous_segmentation = previous_value.get("segmentation", {})
-    lines.append("4. LLM Value-Add Segmentation")
+    lines.append("5. LLM Value-Add Segmentation")
     lines.append(
         "  Current top sources (meaningful): "
         + _segment_snapshot(
@@ -536,7 +769,7 @@ def render_report(current_stats: dict[str, Any], previous_stats: dict[str, Any])
     )
     lines.append("")
 
-    lines.append("5. Edge Formation")
+    lines.append("6. Edge Formation")
     lines.append(metric_line(
         "OPPORTUNITY count",
         current=current_stats["edge"]["opportunities"],
@@ -559,7 +792,7 @@ def render_report(current_stats: dict[str, Any], previous_stats: dict[str, Any])
     ))
     lines.append("")
 
-    lines.append("6. Execution Quality")
+    lines.append("7. Execution Quality")
     lines.append(metric_line(
         "Executed count",
         current=current_stats["execution"]["executed"],
@@ -590,6 +823,36 @@ def render_report(current_stats: dict[str, Any], previous_stats: dict[str, Any])
         current=current_stats["execution"]["skipped_other"],
         previous=previous_stats["execution"]["skipped_other"],
     ))
+    lines.append("")
+
+    current_plan = current_gate.get("phase3_plan", {})
+    lines.append("8. Phase 3 Planning Summary")
+    lines.append(
+        "  Gate health                  : "
+        f"enforced={fmt_pct(current_plan.get('gate_health', {}).get('enforced_suppression_rate'))} "
+        f"dangerous={fmt_pct(current_plan.get('gate_health', {}).get('dangerous_suppression_rate'))}"
+    )
+    lines.append(
+        "  Top suppressed tickers       : "
+        f"{_fmt_counter(current_plan.get('gate_health', {}).get('top_suppressed_tickers', Counter()))}"
+    )
+    lines.append(
+        "  Top suppressed sources       : "
+        f"{_fmt_counter(current_plan.get('gate_health', {}).get('top_suppressed_sources', Counter()))}"
+    )
+    lines.append(
+        "  Keyword override review      : "
+        f"prevented={fmt_count(current_plan.get('keyword_override_review', {}).get('prevented_suppressions'))} "
+        f"| {current_plan.get('keyword_override_review', {}).get('assessment', 'n/a')}"
+    )
+    lines.append(
+        "  Heuristic tuning candidates  : "
+        + "; ".join(current_plan.get("heuristic_tuning_candidates", ["n/a"]))
+    )
+    lines.append(
+        "  Recommendation               : "
+        f"{current_plan.get('recommendation', 'n/a')}"
+    )
     return lines
 
 

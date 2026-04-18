@@ -109,6 +109,19 @@ _PRE_LLM_GATE_STOPWORDS = frozenset(
     }
 )
 
+_PRE_LLM_GATE_GENERIC_TOKENS = frozenset(
+    {
+        "official",
+        "officials",
+        "leader",
+        "leaders",
+        "president",
+        "government",
+        "minister",
+        "ministers",
+    }
+)
+
 
 def _tokenize(text: str) -> set[str]:
     text = text.lower()
@@ -182,9 +195,45 @@ def _match_quality_flags(
     return flags
 
 
+def _normalize_pre_llm_gate_tokens(tokens: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in tokens:
+        token = str(raw or "").strip().lower()
+        if not token or token in seen:
+            continue
+        normalized.append(token)
+        seen.add(token)
+    return normalized
+
+
+def _pre_llm_gate_reason(
+    *,
+    semantic_overlap_count: int,
+    semantic_overlap_ratio: float,
+    filtered_stopword_count: int,
+    filtered_generic_count: int,
+) -> str | None:
+    if semantic_overlap_count >= 2 and semantic_overlap_ratio > 0.25:
+        return None
+    if semantic_overlap_count == 0:
+        if filtered_stopword_count and filtered_generic_count:
+            return "low_information_overlap"
+        if filtered_stopword_count:
+            return "stopword_only_overlap"
+        if filtered_generic_count:
+            return "generic_only_overlap"
+    if semantic_overlap_count < 2:
+        return "insufficient_semantic_overlap"
+    return "low_semantic_overlap_ratio"
+
+
 def _compute_pre_llm_match_meta(headline: str, market_title: str, matched_tokens: list[str]) -> dict[str, Any]:
-    normalized_tokens = [t.lower().strip() for t in matched_tokens]
-    semantic_tokens = [t for t in normalized_tokens if t not in _PRE_LLM_GATE_STOPWORDS]
+    normalized_tokens = _normalize_pre_llm_gate_tokens(matched_tokens)
+    filtered_stopword_count = sum(1 for token in normalized_tokens if token in _PRE_LLM_GATE_STOPWORDS)
+    candidate_tokens = [token for token in normalized_tokens if token not in _PRE_LLM_GATE_STOPWORDS]
+    filtered_generic_count = sum(1 for token in candidate_tokens if token in _PRE_LLM_GATE_GENERIC_TOKENS)
+    semantic_tokens = [token for token in candidate_tokens if token not in _PRE_LLM_GATE_GENERIC_TOKENS]
     headline_token_count = len(_meaningful_tokens(_tokenize(headline)))
     market_token_count = len(_meaningful_tokens(_tokenize(market_title)))
     semantic_overlap_count = len(semantic_tokens)
@@ -193,14 +242,27 @@ def _compute_pre_llm_match_meta(headline: str, market_title: str, matched_tokens
         semantic_overlap_count >= 2
         and semantic_overlap_ratio > 0.25
     )
+    semantic_named_entity_count = sum(1 for token in semantic_tokens if token in _GEO_NAMED_ENTITIES)
+    gate_reason = _pre_llm_gate_reason(
+        semantic_overlap_count=semantic_overlap_count,
+        semantic_overlap_ratio=semantic_overlap_ratio,
+        filtered_stopword_count=filtered_stopword_count,
+        filtered_generic_count=filtered_generic_count,
+    )
     return {
         "pre_llm_semantic_overlap_tokens": semantic_tokens,
         "pre_llm_semantic_overlap_count": semantic_overlap_count,
         "pre_llm_semantic_overlap_ratio": semantic_overlap_ratio,
         "pre_llm_quality_pass": pre_llm_quality_pass,
-        "pre_llm_gate_reason": None if pre_llm_quality_pass else "weak_semantic_overlap",
+        "pre_llm_gate_reason": gate_reason,
         "pre_llm_headline_token_count": headline_token_count,
         "pre_llm_market_token_count": market_token_count,
+        "pre_llm_filtered_stopword_count": filtered_stopword_count,
+        "pre_llm_filtered_generic_count": filtered_generic_count,
+        "pre_llm_semantic_token_types": {
+            "named_entity": semantic_named_entity_count,
+            "generic": semantic_overlap_count - semantic_named_entity_count,
+        },
     }
 
 
@@ -540,6 +602,9 @@ class MarketMatcher:
                 would_fail_pre_llm_gate=not match_meta["pre_llm_quality_pass"],
                 pre_llm_headline_token_count=match_meta["pre_llm_headline_token_count"],
                 pre_llm_market_token_count=match_meta["pre_llm_market_token_count"],
+                pre_llm_filtered_stopword_count=match_meta["pre_llm_filtered_stopword_count"],
+                pre_llm_filtered_generic_count=match_meta["pre_llm_filtered_generic_count"],
+                pre_llm_semantic_token_types=match_meta["pre_llm_semantic_token_types"],
             )
 
             flag_set = set(heuristic_flags)

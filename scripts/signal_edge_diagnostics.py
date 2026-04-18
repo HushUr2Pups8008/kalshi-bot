@@ -573,6 +573,66 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                     if isinstance(record.get("llm_in_flight_at_entry"), int)
                     else None
                 ),
+                "is_startup_probe": (
+                    bool(record.get("is_startup_probe"))
+                    if "is_startup_probe" in record
+                    else None
+                ),
+                "pre_llm_quality_pass": (
+                    bool(record.get("pre_llm_quality_pass"))
+                    if "pre_llm_quality_pass" in record
+                    else None
+                ),
+                "pre_llm_semantic_overlap_count": (
+                    int(record.get("pre_llm_semantic_overlap_count"))
+                    if isinstance(record.get("pre_llm_semantic_overlap_count"), int)
+                    else None
+                ),
+                "pre_llm_semantic_overlap_ratio": safe_float(record.get("pre_llm_semantic_overlap_ratio")),
+                "pre_llm_would_block": (
+                    bool(record.get("pre_llm_would_block"))
+                    if "pre_llm_would_block" in record
+                    else None
+                ),
+                "pre_llm_keyword_override": (
+                    bool(record.get("pre_llm_keyword_override"))
+                    if "pre_llm_keyword_override" in record
+                    else None
+                ),
+                "pre_llm_keyword_override_mode": str(record.get("pre_llm_keyword_override_mode") or "").strip() or None,
+                "pre_llm_keyword_signal_strength": safe_float(record.get("pre_llm_keyword_signal_strength")),
+                "pre_llm_gate_reason": str(record.get("pre_llm_gate_reason") or "").strip() or None,
+                "pre_llm_gate_enforced": (
+                    bool(record.get("pre_llm_gate_enforced"))
+                    if "pre_llm_gate_enforced" in record
+                    else None
+                ),
+                "pre_llm_filtered_stopword_count": (
+                    int(record.get("pre_llm_filtered_stopword_count"))
+                    if isinstance(record.get("pre_llm_filtered_stopword_count"), int)
+                    else None
+                ),
+                "pre_llm_filtered_generic_count": (
+                    int(record.get("pre_llm_filtered_generic_count"))
+                    if isinstance(record.get("pre_llm_filtered_generic_count"), int)
+                    else None
+                ),
+                "pre_llm_semantic_token_types": (
+                    dict(record.get("pre_llm_semantic_token_types"))
+                    if isinstance(record.get("pre_llm_semantic_token_types"), dict)
+                    else None
+                ),
+                "pre_llm_would_block_and_useful": (
+                    bool(record.get("pre_llm_would_block_and_useful"))
+                    if "pre_llm_would_block_and_useful" in record
+                    else None
+                ),
+                "llm_useful": (
+                    bool(record.get("llm_useful"))
+                    if "llm_useful" in record
+                    else None
+                ),
+                "llm_probability_movement": safe_float(record.get("llm_probability_movement")),
                 "estimated_probability": safe_float(record.get("final_probability")),
                 "market_price": safe_float(record.get("market_price")),
                 "edge": (

@@ -46,6 +46,13 @@ def _parse_float_band_pairs(value: str, *, default: list[tuple[float, float]]) -
         bands.append((low, high))
     return bands
 
+
+def _parse_string_tuple(value: str | None, *, default: tuple[str, ...]) -> tuple[str, ...]:
+    text = str(value or "").strip()
+    if not text:
+        return tuple(default)
+    return tuple(part.strip() for part in text.split(",") if part.strip())
+
 # ── Kalshi REST base URLs ─────────────────────────────────────────────────────
 # Production URL per official OpenAPI spec (api.elections.kalshi.com)
 KALSHI_PROD_REST = "https://api.elections.kalshi.com/trade-api/v2"
@@ -99,11 +106,11 @@ EARLY_MAX_NEWS_AGE_SECONDS: int = int(
 # Exact source strings are preferred for predictability; main.py also does a
 # simple case-insensitive fallback match for readability.
 EARLY_MAX_NEWS_AGE_BY_SOURCE: dict[str, int] = {
-    "NYT > World News": 300,
-    "World news | The Guardian": 300,
-    "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera": 300,
-    "Middle East and north Africa | The Guardian": 300,
-    "Ukraine | The Guardian": 300,
+    "NYT > World News": 1800,
+    "World news | The Guardian": 1800,
+    "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera": 1800,
+    "Middle East and north Africa | The Guardian": 1800,
+    "Ukraine | The Guardian": 1800,
 }
 
 # Per-source queue priority overrides. Lower number = processed first.
@@ -994,6 +1001,45 @@ class BotConfig:
     pre_llm_match_gate_keyword_override_any_hit: bool = field(
         default_factory=lambda: os.getenv("PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_ANY_HIT", "true").strip().lower() in {"1", "true", "yes", "on"}
     )
+    pre_llm_match_gate_keyword_override_mode: str = field(
+        default_factory=lambda: (
+            os.getenv("PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_MODE", "").strip().lower()
+            or (
+                "any_hit"
+                if os.getenv("PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_ANY_HIT", "true").strip().lower() in {"1", "true", "yes", "on"}
+                else "disabled"
+            )
+        )
+    )
+    pre_llm_match_gate_keyword_override_min_signal: float = field(
+        default_factory=lambda: float(
+            os.getenv(
+                "PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_MIN_SIGNAL",
+                os.getenv("LLM_MIN_KEYWORD_SIGNAL", "0.0"),
+            )
+        )
+    )
+    enable_startup_observability_probe: bool = field(
+        default_factory=lambda: os.getenv("ENABLE_STARTUP_OBSERVABILITY_PROBE", "true").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    startup_observability_probe_strict: bool = field(
+        default_factory=lambda: os.getenv("STARTUP_OBSERVABILITY_PROBE_STRICT", "false").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    startup_observability_probe_required_fields: tuple[str, ...] = field(
+        default_factory=lambda: _parse_string_tuple(
+            os.getenv("STARTUP_OBSERVABILITY_PROBE_REQUIRED_FIELDS"),
+            default=(
+                "pre_llm_quality_pass",
+                "pre_llm_semantic_overlap_count",
+                "pre_llm_semantic_overlap_ratio",
+                "pre_llm_headline_token_count",
+                "pre_llm_market_token_count",
+                "pre_llm_would_block",
+                "pre_llm_keyword_override",
+                "pre_llm_gate_reason",
+            ),
+        )
+    )
 
     # Paper trading mode — True until explicitly confirmed via --go-live
     # Set at runtime via set_paper_mode() — do not mutate directly.
@@ -1008,6 +1054,16 @@ class BotConfig:
             errors.append("KALSHI_API_KEY_ID is missing or empty")
         if not self.api_key_secret:
             errors.append("KALSHI_API_KEY_SECRET is missing or empty")
+        if self.pre_llm_match_gate_keyword_override_mode not in {"any_hit", "min_signal", "disabled"}:
+            errors.append(
+                "PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_MODE must be one of any_hit|min_signal|disabled, "
+                f"got '{self.pre_llm_match_gate_keyword_override_mode}'"
+            )
+        if self.pre_llm_match_gate_keyword_override_min_signal < 0:
+            errors.append(
+                "PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_MIN_SIGNAL must be non-negative, "
+                f"got {self.pre_llm_match_gate_keyword_override_min_signal}"
+            )
         if self.kalshi_env not in ("demo", "prod"):
             errors.append(
                 "KALSHI_ENV must be 'demo' or 'prod', got '%s'" % self.kalshi_env

@@ -8,11 +8,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from analysis.market_matcher import _compute_pre_llm_match_meta
 from main import (
     _RuntimeInstanceGuard,
     _ensure_supported_python,
     _is_cli_only_command,
     _log_bankroll_summary,
+    _startup_probe_matched_tokens,
+    _validate_startup_observability_probe_record,
     async_main,
 )
 
@@ -161,6 +164,139 @@ def test_log_bankroll_summary_warns_when_persisted_paper_state_differs(monkeypat
     assert "Notional bankroll: $500.00" in caplog.text
     assert "Configured starting bankroll (.env BANKROLL): $50.00" in caplog.text
     assert "Persisted paper bankroll ($500.00) differs from .env BANKROLL ($50.00)" in caplog.text
+
+
+def test_validate_startup_observability_probe_record_reports_missing_fields():
+    record = {
+        "type": "SIGNAL_ANALYSIS_DETAIL",
+        "is_startup_probe": True,
+        "pre_llm_quality_pass": False,
+    }
+
+    missing = _validate_startup_observability_probe_record(
+        record,
+        ("pre_llm_quality_pass", "pre_llm_semantic_overlap_count"),
+    )
+
+    assert missing == ["pre_llm_semantic_overlap_count"]
+
+
+def test_startup_probe_matched_tokens_are_raw_and_downstream_meta_normalizes_them():
+    raw_tokens = _startup_probe_matched_tokens()
+
+    assert raw_tokens == [" Iran ", "Says"]
+
+    match_meta = _compute_pre_llm_match_meta(
+        "U.S. and Iran fail to agree on peace deal after marathon talks",
+        "Will the U.S. and Iran agree to a peace deal this month?",
+        raw_tokens,
+    )
+
+    assert match_meta["pre_llm_semantic_overlap_tokens"] == ["iran"]
+    assert match_meta["pre_llm_semantic_overlap_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_startup_observability_probe_emits_one_tagged_detail_and_no_trade_artifacts(monkeypatch, caplog):
+    import config as _cfg_module
+    import main as main_module
+    from main import TradingBot
+    from utils.logger import trade_log
+
+    bot = TradingBot.__new__(TradingBot)
+    bot.keyword_stats = MagicMock()
+    bot.keyword_stats.get_multiplier.return_value = 1.0
+
+    monkeypatch.setattr(_cfg_module.cfg, "enable_startup_observability_probe", True)
+    monkeypatch.setattr(_cfg_module.cfg, "startup_observability_probe_strict", False)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_pre_llm_match_gate", True)
+    monkeypatch.setattr(_cfg_module.cfg, "pre_llm_match_gate_diagnostics_only", False)
+    monkeypatch.setattr(_cfg_module.cfg, "pre_llm_match_gate_keyword_override_any_hit", True)
+    monkeypatch.setattr(_cfg_module.cfg, "pre_llm_match_gate_keyword_override_mode", "any_hit")
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "startup_observability_probe_required_fields",
+        (
+            "pre_llm_quality_pass",
+            "pre_llm_semantic_overlap_count",
+            "pre_llm_semantic_overlap_ratio",
+            "pre_llm_headline_token_count",
+            "pre_llm_market_token_count",
+            "pre_llm_would_block",
+            "pre_llm_keyword_override",
+            "pre_llm_gate_reason",
+        ),
+    )
+
+    records: list[dict] = []
+    original_write = trade_log._write
+
+    def _capture(record):
+        records.append(dict(record))
+        original_write(record)
+
+    with patch.object(trade_log, "_write", side_effect=_capture), \
+         patch.object(trade_log, "log_signal") as signal_mock, \
+         patch.object(trade_log, "log_opportunity") as opp_mock, \
+         patch.object(trade_log, "log_analysis_rejected") as reject_mock, \
+         caplog.at_level("INFO", logger="main"):
+        await main_module.TradingBot._run_startup_observability_probe(bot)
+
+    signal_detail = [r for r in records if r.get("type") == "SIGNAL_ANALYSIS_DETAIL" and r.get("is_startup_probe") is True]
+    assert len(signal_detail) == 1
+    record = signal_detail[0]
+    assert record["is_startup_probe"] is True
+    assert record["pre_llm_quality_pass"] is False
+    assert record["pre_llm_semantic_overlap_count"] == 1
+    assert record["pre_llm_keyword_override"] is True
+    assert record["llm_probability_movement"] == pytest.approx(0.12)
+    assert record["llm_useful"] is True
+    assert record["pre_llm_would_block_and_useful"] is False
+    signal_mock.assert_not_called()
+    opp_mock.assert_not_called()
+    reject_mock.assert_not_called()
+    assert "[STARTUP_PROBE][PASS]" in caplog.text
+    assert "method=llm" in caplog.text
+    assert "ticker=KXSTARTUP-PROBE" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_startup_observability_probe_strict_fails_when_required_fields_missing(monkeypatch, caplog):
+    import config as _cfg_module
+    import main as main_module
+    from main import TradingBot
+    from utils.logger import trade_log
+
+    bot = TradingBot.__new__(TradingBot)
+    bot.keyword_stats = MagicMock()
+    bot.keyword_stats.get_multiplier.return_value = 1.0
+
+    monkeypatch.setattr(_cfg_module.cfg, "enable_startup_observability_probe", True)
+    monkeypatch.setattr(_cfg_module.cfg, "startup_observability_probe_strict", True)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_pre_llm_match_gate", True)
+    monkeypatch.setattr(_cfg_module.cfg, "pre_llm_match_gate_diagnostics_only", False)
+    monkeypatch.setattr(_cfg_module.cfg, "pre_llm_match_gate_keyword_override_any_hit", True)
+    monkeypatch.setattr(_cfg_module.cfg, "pre_llm_match_gate_keyword_override_mode", "any_hit")
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "startup_observability_probe_required_fields",
+        ("pre_llm_quality_pass", "pre_llm_semantic_overlap_count"),
+    )
+
+    original_method = trade_log.log_signal_analysis_detail
+    with patch.object(
+        trade_log,
+        "log_signal_analysis_detail",
+        side_effect=lambda **kwargs: original_method(
+            **{k: v for k, v in kwargs.items() if k != "pre_llm_semantic_overlap_count"}
+        ),
+    ), caplog.at_level("ERROR", logger="main"):
+        with pytest.raises(RuntimeError, match="missing required fields"):
+            await main_module.TradingBot._run_startup_observability_probe(bot)
+
+    assert "[STARTUP_PROBE][FAIL]" in caplog.text
+    assert "missing SIGNAL_ANALYSIS_DETAIL fields=pre_llm_semantic_overlap_count" in caplog.text
+    assert "strict=True" in caplog.text
 
 
 @pytest.mark.asyncio

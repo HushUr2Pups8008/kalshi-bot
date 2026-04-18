@@ -58,12 +58,12 @@ import signal
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 from analysis import SignalAnalysis
 from analysis.kelly import kelly_bet
 from analysis.keyword_stats import KeywordStats
-from analysis.market_matcher import MarketMatcher
+from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
 from analysis.source_stats import SourceStats
 from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, VERSION,
@@ -94,6 +94,19 @@ _BOT_RUNTIME_LOCK = DATA_DIR / "bot_runtime.lock"
 # Monotonic counter used as PriorityQueue tiebreaker so NewsItem objects
 # are never compared against each other (dataclasses without __lt__ would raise).
 _news_counter = itertools.count()
+
+
+def _validate_startup_observability_probe_record(record: dict, required_fields: tuple[str, ...]) -> list[str]:
+    missing = [field for field in required_fields if field not in record]
+    if record.get("type") != "SIGNAL_ANALYSIS_DETAIL":
+        missing.append("type=SIGNAL_ANALYSIS_DETAIL")
+    if record.get("is_startup_probe") is not True:
+        missing.append("is_startup_probe")
+    return missing
+
+
+def _startup_probe_matched_tokens() -> list[str]:
+    return [" Iran ", "Says"]
 
 
 def _source_priority(source: str) -> int:
@@ -1332,6 +1345,116 @@ class TradingBot:
             log.warning("LLM: Ollama not reachable and no ANTHROPIC_API_KEY "
                         "-- keyword scoring only (reduced signal accuracy)")
 
+    async def _run_startup_observability_probe(self) -> None:
+        if not cfg.enable_startup_observability_probe:
+            return
+
+        from analysis import signal_analyzer as signal_analyzer_module
+        from utils.logger import trade_log
+
+        news = NewsItem(
+            headline="U.S. and Iran fail to agree on peace deal after marathon talks",
+            url="startup-probe://signal-analysis-detail",
+            source="startup_probe",
+            published=datetime.now(timezone.utc),
+            body="Synthetic startup observability probe. Do not trade.",
+            item_id="startup-observability-probe",
+        )
+        market = SimpleNamespace(
+            ticker="KXSTARTUP-PROBE",
+            title="Will the U.S. and Iran agree to a peace deal this month?",
+            subtitle="Synthetic startup observability probe market",
+            yes_price=50.0,
+            yes_prob=0.50,
+            series_ticker="KXSTARTUP",
+            close_time="2026-12-31T23:59:59Z",
+        )
+        match_meta = _compute_pre_llm_match_meta(
+            news.headline,
+            market.title,
+            _startup_probe_matched_tokens(),
+        )
+
+        emitted_records: list[dict] = []
+        validation_missing: list[str] = []
+        original_write = trade_log._write
+        original_llm_estimate = signal_analyzer_module.llm_estimate_detailed
+
+        async def _probe_llm(*_args, **_kwargs):
+            return (
+                (0.38, 0.82, "Startup probe synthetic LLM analysis", "no", "moderate"),
+                {
+                    "attempted": True,
+                    "status": "startup_probe_success",
+                    "provider": "startup_probe",
+                    "result_used": True,
+                },
+            )
+
+        def _capture_probe_write(record: dict) -> None:
+            if record.get("type") == "SIGNAL_ANALYSIS_DETAIL" and record.get("is_startup_probe") is True:
+                captured = dict(record)
+                emitted_records.append(captured)
+                missing = _validate_startup_observability_probe_record(
+                    captured,
+                    cfg.startup_observability_probe_required_fields,
+                )
+                if missing:
+                    validation_missing[:] = missing
+                    log.error(
+                        "[STARTUP_PROBE][FAIL] missing SIGNAL_ANALYSIS_DETAIL fields=%s strict=%s ticker=%s method=%s",
+                        ",".join(missing),
+                        cfg.startup_observability_probe_strict,
+                        captured.get("ticker"),
+                        captured.get("method"),
+                    )
+                    if cfg.startup_observability_probe_strict:
+                        raise RuntimeError(
+                            "Startup observability probe missing required fields: "
+                            + ", ".join(missing)
+                        )
+            original_write(record)
+
+        signal_analyzer_module.llm_estimate_detailed = _probe_llm
+        trade_log._write = _capture_probe_write
+        try:
+            await estimate_probability(
+                news,
+                market,
+                keyword_stats=self.keyword_stats,
+                match_meta=match_meta,
+                is_startup_probe=True,
+            )
+        finally:
+            trade_log._write = original_write
+            signal_analyzer_module.llm_estimate_detailed = original_llm_estimate
+
+        if len(emitted_records) != 1:
+            message = (
+                "Startup observability probe expected exactly 1 SIGNAL_ANALYSIS_DETAIL "
+                f"record, got {len(emitted_records)}"
+            )
+            log.error(
+                "[STARTUP_PROBE][FAIL] %s strict=%s",
+                message,
+                cfg.startup_observability_probe_strict,
+            )
+            if cfg.startup_observability_probe_strict:
+                raise RuntimeError(message)
+            return
+
+        record = emitted_records[0]
+        if validation_missing:
+            return
+
+        log.info(
+            "[STARTUP_PROBE][PASS] SIGNAL_ANALYSIS_DETAIL verified fields=%s method=%s ticker=%s source=%s",
+            ",".join(cfg.startup_observability_probe_required_fields),
+            record.get("method"),
+            record.get("ticker"),
+            record.get("source"),
+        )
+
     async def run(self) -> None:
         notional = self.paper.get_notional_bankroll()
         max_bet  = cfg.dynamic_max_bet(notional)
@@ -1361,6 +1484,7 @@ class TradingBot:
             log.warning("Could not fetch Kalshi balance: %s", exc)
 
         await self._check_llm_health()
+        await self._run_startup_observability_probe()
 
         tasks = [
             asyncio.create_task(run_rss_monitor(self._enqueue_news),    name="rss"),
