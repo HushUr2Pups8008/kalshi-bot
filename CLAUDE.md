@@ -2,6 +2,7 @@
 
 ## Working Style
 
+- Understand and honor the intent of these local instructions fully: they direct the agent back to the broader global guidance, and that guidance must be followed accordingly rather than interpreted narrowly.
 - For non-trivial work, plan first and keep the user informed as scope changes.
 - Prefer direct execution once the scope is clear.
 - Prefer simple root-cause fixes over temporary patches.
