@@ -74,10 +74,19 @@ main.py                   — Async entry point; 6 concurrent tasks + optional f
 ```bash
 git clone https://gitlab.com/HushUr2Pups8008/kalshi-bot.git
 cd kalshi-bot
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate        # macOS/Linux
 .venv\Scripts\activate           # Windows
 pip install -r requirements.txt
+```
+
+### 1a. macOS quick start
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python main.py
 ```
 
 ### 2. Configure `.env`
@@ -99,11 +108,15 @@ ollama pull qwen2.5:7b
 
 ```bash
 python main.py                   # paper trading mode (default)
-python main.py --report          # print performance report
-python main.py --credibility     # print source credibility table
-python main.py --resolve TICKER YES   # manually resolve a paper trade
-python main.py --go-live         # interactive prompt to enable live trading
+python -m main                   # paper trading mode (default)
+python -m main --report          # print performance report
+python -m main --credibility     # print source credibility table
+python -m main --resolve TICKER YES   # manually resolve a paper trade
+python -m main --go-live         # interactive prompt to enable live trading
 ```
+
+`data/bot_runtime.lock` is a runtime-only lockfile used for duplicate-start protection.
+It is recreated automatically at runtime and should never be committed.
 
 ## Git Workflow
 
@@ -119,21 +132,21 @@ See [AGENTS.md](AGENTS.md) and [WINDOWS_COMMANDS.md](WINDOWS_COMMANDS.md) for th
 
 ---
 
-## Windows Service (24/7)
+## Windows Service (24/7, Windows only)
 
-Uses [NSSM](https://nssm.cc) to run as a Windows service. See `WINDOWS_COMMANDS.md` for service control, log watching, and management commands.
+Uses [NSSM](https://nssm.cc) to run as a Windows service. This is a Windows-only convenience path, not the canonical cross-platform startup flow. See `WINDOWS_COMMANDS.md` for service control, log watching, and management commands.
 
 ```powershell
 # Install (elevated PowerShell)
 Set-ExecutionPolicy Bypass -Scope Process -Force
-& "E:\VS_Code\kalshi-bot\setup_service.ps1"
+& ".\setup_service.ps1"
 ```
 
 > Ollama must be running before starting the service. On a fresh boot it starts automatically via the Ollama tray app (Windows startup).
 
 **Note:** After installing new dependencies, always install them into the service venv explicitly:
 ```powershell
-E:\VS_Code\kalshi-bot\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 ---
