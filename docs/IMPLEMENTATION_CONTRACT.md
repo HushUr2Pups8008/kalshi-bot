@@ -422,7 +422,7 @@ All `signal_meta` fields except `readiness_gate_min_edge_override` must not infl
 | `EVIDENCE_INGESTION` | `accumulation_task.py` | `market_ticker`, `evidence_id`, `source_class`, `is_duplicate`, `correlation_discount_applied`, `update_type` (`state`\|`confidence`), `dossier_version_before`, `dossier_version_after` |
 | `DOSSIER_UPDATE` | `accumulation_task.py` | `market_ticker`, `dossier_version`, `prior_estimate`, `new_estimate`, `update_delta`, `confidence_before`, `confidence_after`, `evidence_ids_contributing`, `llm_called`, `drift_suspect`, `in_recovery` |
 | `STRUCTURAL_PRIOR_RECOMPUTE` | `structural_task.py` | `market_ticker`, `prior_estimate`, `new_estimate`, `input_sources`, `llm_called`, `token_count` |
-| `BLEND_DECISION` | `blend_task.py` | `market_ticker`, `fast_lane_p`, `fast_lane_confidence`, `accumulation_p`, `accumulation_confidence`, `structural_p`, `structural_confidence`, `regime_weights`, `regime_confidence`, `blended_p`, `blended_confidence`, `disagreement_score`, `blend_mode`, `trade_considered`, `trade_blocked_reason` |
+| `BLEND_DECISION` | `blend_task.py` | `market_ticker`, `fast_lane_p`, `fast_lane_confidence`, `accumulation_p`, `accumulation_confidence`, `structural_p`, `structural_confidence`, `regime_weights`, `regime_confidence`, `blended_p`, `blended_confidence`, `disagreement_score`, `blend_mode`, `trade_considered`, `trade_blocked_reason`, `evidence_ids_contributing` |
 | `CALIBRATION_CHECK` | resolution handler | `market_ticker`, `lane`, `lane_estimate`, `final_resolution`, `error` |
 
 ### Traceability Requirement
