@@ -6,6 +6,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.12] - 2026-04-19
+
+### Added
+- `analysis/decision_blender.py`, `tests/test_decision_blender.py`:
+  Decision blender implementing S3.3. Pure function `blend(...) -> BlendResult` with
+  `LaneInput` and `BlendResult` frozen dataclasses. Implements DER-1 (confidence-weighted
+  blend with RHR-3 regime interpolation), DER-2 (dominance rule: single lane >2× others
+  adopts its p directly), DER-3 (structural fail-safe Tier 1: high-confidence structural
+  divergence + active fast signal → pass with doubled min-edge override), and DER-4
+  (Tier 2: stable structural veto when no fast signal). Disagreement score computed per
+  CL-9 (confidence-weighted std-dev). Zero-eff-confidence fallback avoids division by
+  zero. 34 new tests, 880 total passing.
+- `docs/ROADMAP.md`: S3.3 marked COMPLETE.
+
+---
+
 ## [0.29.11] - 2026-04-19
 
 ### Added
