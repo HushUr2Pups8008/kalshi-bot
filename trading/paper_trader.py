@@ -538,22 +538,26 @@ class PaperTrader:
             ts=datetime.now(timezone.utc).isoformat(),
         ))
 
-        trade_log.log_paper_trade(
-            trade_id=trade_id,
-            ticker=analysis.market.ticker,
-            market_title=analysis.market.title,
-            side=analysis.side,
-            contracts=contracts,
-            price_cents=price_cents,
-            cost_dollars=cost_dollars,
-            estimated_probability=analysis.estimated_probability,
-            market_yes_price=analysis.market_yes_price,
-            edge=analysis.edge,
-            kelly_dollars=analysis.kelly_dollars,
-            reasoning=analysis.reasoning,
-            signal_headline=analysis.news_item.headline,
-            signal_source=analysis.news_item.source,
-        )
+        paper_trade_kwargs = {
+            "trade_id": trade_id,
+            "ticker": analysis.market.ticker,
+            "market_title": analysis.market.title,
+            "side": analysis.side,
+            "contracts": contracts,
+            "price_cents": price_cents,
+            "cost_dollars": cost_dollars,
+            "estimated_probability": analysis.estimated_probability,
+            "market_yes_price": analysis.market_yes_price,
+            "edge": analysis.edge,
+            "kelly_dollars": analysis.kelly_dollars,
+            "reasoning": analysis.reasoning,
+            "signal_headline": analysis.news_item.headline,
+            "signal_source": analysis.news_item.source,
+        }
+        signal_meta = vars(analysis).get("signal_meta")
+        if signal_meta:
+            paper_trade_kwargs["signal_meta"] = signal_meta
+        trade_log.log_paper_trade(**paper_trade_kwargs)
 
         kelly_note = f" (kelly_shadow={kelly_contracts})" if cfg.is_paper_trading else ""
         log.info(

@@ -7,6 +7,7 @@ Covers: live loss limit breach triggers halt, halt persists across subsequent ca
 
 import asyncio
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import config as _cfg_module
@@ -66,6 +67,31 @@ def _make_analysis(ticker="KXTEST-25DEC31", side="yes", yes_price=50.0,
     a.llm_magnitude      = None
     a.llm_confidence     = None
     return a
+
+
+def _make_blended_candidate(
+    *,
+    base_analysis=None,
+    blended_probability=0.60,
+    side="yes",
+    signal_meta=None,
+):
+    base = base_analysis or _make_analysis(
+        edge=blended_probability - 0.50,
+        estimated_prob=blended_probability,
+    )
+    return SimpleNamespace(
+        fast_lane_analysis=base,
+        market=base.market,
+        blended_probability=blended_probability,
+        market_yes_price=base.market_yes_price,
+        side=side,
+        signal_meta=signal_meta or {
+            "source_lane": "blend",
+            "blended_p": blended_probability,
+            "readiness_gate_min_edge_override": None,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +459,110 @@ class TestValidateSkipReasons:
         reason = ex._validate(_make_analysis())
         assert reason == "LIVE HALTED: session loss limit reached -- all trading suspended"
         rest.get_balance.assert_not_called()
+
+
+class TestBlendedCandidateCompatibility:
+    @pytest.mark.asyncio
+    async def test_execute_accepts_blended_candidate_and_uses_override_only_for_edge_gate(
+        self,
+        monkeypatch,
+    ):
+        ex, _, _ = _make_paper_executor(monkeypatch)
+        ex._execute_paper = AsyncMock(return_value="paper-trade-id")
+        candidate = _make_blended_candidate(
+            blended_probability=0.515,
+            signal_meta={
+                "source_lane": "blend",
+                "blended_p": 0.515,
+                "readiness_gate_min_edge_override": 0.01,
+            },
+        )
+
+        with patch("trading.executor.trade_log"):
+            trade_id = await ex.execute(candidate)
+
+        assert trade_id == "paper-trade-id"
+        routed_analysis = ex._execute_paper.await_args.args[0]
+        assert routed_analysis.estimated_probability == pytest.approx(0.515)
+        assert routed_analysis.edge == pytest.approx(0.015)
+        assert routed_analysis.signal_type == "blend"
+        assert routed_analysis.signal_meta == candidate.signal_meta
+
+    @pytest.mark.asyncio
+    async def test_absent_override_preserves_existing_min_edge_behavior(self, monkeypatch):
+        ex, _, _ = _make_paper_executor(monkeypatch)
+        ex._execute_paper = AsyncMock(return_value="paper-trade-id")
+        candidate = _make_blended_candidate(
+            blended_probability=0.515,
+            signal_meta={
+                "source_lane": "blend",
+                "blended_p": 0.515,
+                "readiness_gate_min_edge_override": None,
+            },
+        )
+
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            trade_id = await ex.execute(candidate)
+
+        assert trade_id is None
+        ex._execute_paper.assert_not_called()
+        trade_log_mock.log_skipped.assert_called_once()
+        kwargs = trade_log_mock.log_skipped.call_args.kwargs
+        assert kwargs["reason"] == "edge +0.0150 below min_edge 0.02"
+        assert kwargs["min_edge_threshold"] == pytest.approx(0.02)
+        assert kwargs["signal_meta"] == candidate.signal_meta
+
+    def test_override_validation_fails_closed_for_malformed_metadata(self, monkeypatch):
+        ex, _, _ = _make_paper_executor(monkeypatch)
+        analysis = _make_analysis(edge=0.015, estimated_prob=0.515)
+        analysis.signal_meta = {"readiness_gate_min_edge_override": "0.01"}
+
+        with pytest.raises(ValueError, match="readiness_gate_min_edge_override"):
+            ex._validate(analysis)
+
+    @pytest.mark.asyncio
+    async def test_blended_signal_meta_logged_on_live_order_without_changing_pricing(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
+
+        rest = MagicMock()
+        paper = MagicMock()
+        ex = TradeExecutor(rest, paper)
+
+        result = MagicMock()
+        result.error = None
+        result.order_id = "live-order-456"
+        result.status = "resting"
+        result.filled = 0
+        rest.place_limit_order.return_value = result
+
+        analysis = _make_analysis(
+            edge=0.03,
+            estimated_prob=0.53,
+            yes_price=50.0,
+            capped_dollars=10.0,
+        )
+        analysis.signal_meta = {
+            "source_lane": "blend",
+            "blended_p": 0.53,
+            "readiness_gate_min_edge_override": 0.03,
+        }
+
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            order_id = await ex._execute_live(analysis)
+
+        assert order_id == "live-order-456"
+        trade_log_mock.log_live_order.assert_called_once()
+        kwargs = trade_log_mock.log_live_order.call_args.kwargs
+        assert kwargs["contracts"] == 19
+        assert kwargs["price_cents"] == 51
+        assert kwargs["cost_dollars"] == pytest.approx(9.69)
+        assert kwargs["min_edge_threshold"] == pytest.approx(0.03)
+        assert kwargs["signal_meta"] == analysis.signal_meta
 
 
 class TestStructuredBoundaryLogging:

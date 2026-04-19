@@ -512,8 +512,9 @@ class TradeLogger:
         reasoning: str,
         signal_headline: str,
         signal_source: str,
+        signal_meta: dict[str, Any] | None = None,
     ) -> None:
-        self._write({
+        record = {
             "type": "PAPER_TRADE",
             "trade_id": trade_id,
             "ticker": ticker,
@@ -529,7 +530,10 @@ class TradeLogger:
             "reasoning": reasoning,
             "signal_headline": signal_headline,
             "signal_source": signal_source,
-        })
+        }
+        if signal_meta:
+            record["signal_meta"] = signal_meta
+        self._write(record)
 
     def log_paper_resolution(
         self,
@@ -561,6 +565,7 @@ class TradeLogger:
         market_price: float | None = None,
         edge: float | None = None,
         min_edge_threshold: float | None = None,
+        signal_meta: dict[str, Any] | None = None,
     ) -> None:
         record = {
             "type": "LIVE_ORDER",
@@ -580,6 +585,8 @@ class TradeLogger:
             record["edge"] = round(edge, 4)
         if min_edge_threshold is not None:
             record["min_edge_threshold"] = round(min_edge_threshold, 4)
+        if signal_meta:
+            record["signal_meta"] = signal_meta
         self._write(record)
 
     def log_skipped(
@@ -596,6 +603,7 @@ class TradeLogger:
         market_price: float | None = None,
         edge: float | None = None,
         min_edge_threshold: float | None = None,
+        signal_meta: dict[str, Any] | None = None,
     ) -> None:
         record = {
             "type": "SKIPPED",
@@ -623,6 +631,8 @@ class TradeLogger:
             record["edge"] = round(edge, 4)
         if min_edge_threshold is not None:
             record["min_edge_threshold"] = round(min_edge_threshold, 4)
+        if signal_meta:
+            record["signal_meta"] = signal_meta
         self._write(record)
 
     def log_analysis_rejected(

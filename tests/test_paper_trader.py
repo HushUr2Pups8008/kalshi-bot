@@ -255,6 +255,24 @@ class TestKellyShadow:
         # In paper mode, flat 5 contracts are placed regardless of Kelly
         assert row["contracts"] == 5
 
+    def test_record_trade_logs_blended_signal_meta_when_present(self, trader):
+        analysis = _make_mock_analysis(yes_price=50.0, capped_dollars=10.0)
+        analysis.signal_meta = {
+            "source_lane": "blend",
+            "blended_p": 0.60,
+            "readiness_gate_min_edge_override": 0.03,
+        }
+
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}), \
+             patch("trading.paper_trader.trade_log") as trade_log_mock:
+            trader.record_trade(analysis)
+
+        trade_log_mock.log_paper_trade.assert_called_once()
+        assert (
+            trade_log_mock.log_paper_trade.call_args.kwargs["signal_meta"]
+            == analysis.signal_meta
+        )
+
     def test_kelly_contracts_independent_of_flat(self, trader):
         """kelly_contracts reflects capped_dollars sizing, not PAPER_FLAT_CONTRACTS."""
         # At 50c, $20 => 40 contracts; $2 => 4 contracts. Both still use flat 5 in contracts.

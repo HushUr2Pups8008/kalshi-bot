@@ -6,6 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.14] - 2026-04-19
+
+### Added
+- `trading/executor.py`, `trading/paper_trader.py`, `utils/logger.py`,
+  `tests/test_executor.py`:
+  Added S3.5 executor compatibility for blended `TradeCandidate` inputs. The executor now
+  normalizes blended candidates into the existing validation/execution path, preserves legacy
+  `SignalAnalysis` behavior, logs blended `signal_meta`, and applies only
+  `readiness_gate_min_edge_override` to the min-edge threshold. Existing paper/live gates,
+  sizing, pricing, duplicate, concentration, and loss-limit protections remain intact.
+- `docs/ROADMAP.md`: S3.5 marked COMPLETE.
+
+---
+
 ## [0.29.13] - 2026-04-19
 
 ### Added

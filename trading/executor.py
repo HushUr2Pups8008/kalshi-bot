@@ -10,9 +10,11 @@ Live mode: tighter checks, live balance verified, source credibility applied.
 """
 
 import asyncio
+import copy
 import time
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from numbers import Real
+from typing import Any, Callable, Optional
 
 from analysis import SignalAnalysis
 from analysis.kelly import contracts_from_dollars
@@ -99,10 +101,11 @@ class TradeExecutor:
                     ticker, age_secs / 3600,
                 )
 
-    async def execute(self, analysis: SignalAnalysis) -> Optional[str]:
+    async def execute(self, candidate: Any) -> Optional[str]:
         """
         Evaluate and execute a trade. Returns trade/order ID or None if skipped.
         """
+        analysis = self._analysis_from_candidate(candidate)
         log.debug(
             "[DECISION] start ticker=%s mode=%s side=%s edge=%+.4f "
             "capped=$%.2f yes_price=%.1fc est_prob=%.3f confidence=%.2f",
@@ -117,7 +120,8 @@ class TradeExecutor:
         )
         skip_reason = self._validate(analysis)
         if skip_reason:
-            effective_min_edge = PAPER_MIN_EDGE if self._is_paper else cfg.min_edge
+            effective_min_edge = self._min_edge_threshold(analysis)
+            signal_meta = self._signal_meta(analysis)
             method = (
                 "llm"
                 if any(value is not None for value in (analysis.llm_direction, analysis.llm_magnitude, analysis.llm_confidence))
@@ -130,19 +134,22 @@ class TradeExecutor:
                 analysis.side.upper(),
                 skip_reason,
             )
-            trade_log.log_skipped(
-                reason=skip_reason,
-                ticker=analysis.market.ticker,
-                headline=analysis.news_item.headline[:80],
-                source=analysis.news_item.source,
-                method=method,
-                llm_direction=analysis.llm_direction,
-                llm_magnitude=analysis.llm_magnitude,
-                model_probability=analysis.estimated_probability,
-                market_price=analysis.market_yes_price,
-                edge=analysis.edge,
-                min_edge_threshold=effective_min_edge,
-            )
+            skipped_kwargs = {
+                "reason": skip_reason,
+                "ticker": analysis.market.ticker,
+                "headline": analysis.news_item.headline[:80],
+                "source": analysis.news_item.source,
+                "method": method,
+                "llm_direction": analysis.llm_direction,
+                "llm_magnitude": analysis.llm_magnitude,
+                "model_probability": analysis.estimated_probability,
+                "market_price": analysis.market_yes_price,
+                "edge": analysis.edge,
+                "min_edge_threshold": effective_min_edge,
+            }
+            if signal_meta:
+                skipped_kwargs["signal_meta"] = signal_meta
+            trade_log.log_skipped(**skipped_kwargs)
             return None
 
         if self._is_paper:
@@ -176,7 +183,7 @@ class TradeExecutor:
     def _validate(self, analysis: SignalAnalysis) -> Optional[str]:
         """Return skip reason, or None if the trade should proceed."""
         # Use relaxed edge threshold during paper trading
-        effective_min_edge = PAPER_MIN_EDGE if self._is_paper else cfg.min_edge
+        effective_min_edge = self._min_edge_threshold(analysis)
 
         # Paper mode uses flat contracts -- skip the dollars gate entirely
         if not self._is_paper and analysis.capped_dollars <= 0:
@@ -295,6 +302,61 @@ class TradeExecutor:
 
         return None
 
+    def _analysis_from_candidate(self, candidate: Any) -> SignalAnalysis:
+        """Normalize legacy SignalAnalysis or S3.4 TradeCandidate inputs."""
+        # Shape-based detection: isinstance(candidate, TradeCandidate) would require
+        # importing tasks.blend_task into /trading, violating layer boundaries.
+        # If fast_lane_analysis is renamed in TradeCandidate, this check must be updated.
+        if "fast_lane_analysis" not in vars(candidate):
+            return candidate
+
+        signal_meta = self._candidate_signal_meta(candidate)
+        analysis = copy.copy(candidate.fast_lane_analysis)
+        analysis.market = candidate.market
+        analysis.estimated_probability = candidate.blended_probability
+        analysis.market_yes_price = candidate.market_yes_price
+        analysis.edge = candidate.blended_probability - (candidate.market_yes_price / 100.0)
+        analysis.side = candidate.side
+        analysis.signal_type = "blend"
+        analysis.signal_meta = signal_meta
+        return analysis
+
+    @staticmethod
+    def _candidate_signal_meta(candidate: Any) -> dict[str, Any]:
+        attrs = vars(candidate)
+        if "signal_meta" not in attrs:
+            return {}
+        signal_meta = attrs["signal_meta"]
+        if signal_meta is None:
+            return {}
+        if not isinstance(signal_meta, dict):
+            raise TypeError("signal_meta must be a dict when provided")
+        return dict(signal_meta)
+
+    @staticmethod
+    def _signal_meta(analysis: SignalAnalysis) -> dict[str, Any]:
+        attrs = vars(analysis)
+        if "signal_meta" not in attrs:
+            return {}
+        signal_meta = attrs["signal_meta"]
+        if signal_meta is None:
+            return {}
+        if not isinstance(signal_meta, dict):
+            raise TypeError("signal_meta must be a dict when provided")
+        return dict(signal_meta)
+
+    def _min_edge_threshold(self, analysis: SignalAnalysis) -> float:
+        base_threshold = PAPER_MIN_EDGE if self._is_paper else cfg.min_edge
+        signal_meta = self._signal_meta(analysis)
+        override = signal_meta.get("readiness_gate_min_edge_override")
+        if override is None:
+            return base_threshold
+        if isinstance(override, bool) or not isinstance(override, Real):
+            raise ValueError("readiness_gate_min_edge_override must be numeric")
+        if override < 0.0:
+            raise ValueError("readiness_gate_min_edge_override must be non-negative")
+        return float(override)
+
     async def _execute_paper(self, analysis: SignalAnalysis) -> Optional[str]:
         trade_id = self._paper.record_trade(analysis)
         log.info(
@@ -389,19 +451,23 @@ class TradeExecutor:
                 return None
 
             # Success
-            trade_log.log_live_order(
-                order_id=result.order_id,
-                ticker=analysis.market.ticker,
-                side=analysis.side,
-                contracts=contracts,
-                price_cents=price_cents,
-                cost_dollars=cost_dollars,
-                status=result.status,
-                model_probability=analysis.estimated_probability,
-                market_price=analysis.market_yes_price,
-                edge=analysis.edge,
-                min_edge_threshold=(PAPER_MIN_EDGE if self._is_paper else cfg.min_edge),
-            )
+            live_order_kwargs = {
+                "order_id": result.order_id,
+                "ticker": analysis.market.ticker,
+                "side": analysis.side,
+                "contracts": contracts,
+                "price_cents": price_cents,
+                "cost_dollars": cost_dollars,
+                "status": result.status,
+                "model_probability": analysis.estimated_probability,
+                "market_price": analysis.market_yes_price,
+                "edge": analysis.edge,
+                "min_edge_threshold": self._min_edge_threshold(analysis),
+            }
+            signal_meta = self._signal_meta(analysis)
+            if signal_meta:
+                live_order_kwargs["signal_meta"] = signal_meta
+            trade_log.log_live_order(**live_order_kwargs)
             if attempt > 0:
                 log.info(
                     "[LIVE] Order placed on attempt %d: %s | status=%s | filled=%d",
