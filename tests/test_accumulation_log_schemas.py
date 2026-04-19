@@ -128,3 +128,31 @@ def test_log_dossier_update_missing_required_field_fails_clearly(tmp_path: Path)
     kwargs.pop("evidence_ids_contributing")
     with pytest.raises(TypeError, match="evidence_ids_contributing"):
         logger.log_dossier_update(**kwargs)
+
+
+def test_log_budget_pressure_emits_structured_event(tmp_path: Path):
+    logger = TradeLogger(path=tmp_path / "trades.jsonl")
+    with patch.object(logger, "_write") as write_mock:
+        logger.log_budget_pressure(
+            market_ticker="KXTEST-26DEC31",
+            reason="queue_depth_reached",
+            queue_depth=180,
+            circuit_breaker_threshold=180,
+            per_market_limit=4,
+            global_limit=60,
+            per_market_calls_last_hour=4,
+            global_calls_last_hour=60,
+        )
+
+    write_mock.assert_called_once()
+    assert write_mock.call_args.args[0] == {
+        "type": "BUDGET_PRESSURE",
+        "market_ticker": "KXTEST-26DEC31",
+        "reason": "queue_depth_reached",
+        "queue_depth": 180,
+        "circuit_breaker_threshold": 180,
+        "per_market_limit": 4,
+        "global_limit": 60,
+        "per_market_calls_last_hour": 4,
+        "global_calls_last_hour": 60,
+    }

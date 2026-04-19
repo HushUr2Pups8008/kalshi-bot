@@ -1015,6 +1015,31 @@ class TradeLogger:
         }
         self._write(record)
 
+    def log_budget_pressure(
+        self,
+        *,
+        market_ticker: str,
+        reason: str,
+        queue_depth: int,
+        circuit_breaker_threshold: int,
+        per_market_limit: int,
+        global_limit: int,
+        per_market_calls_last_hour: int,
+        global_calls_last_hour: int,
+    ) -> None:
+        record = {
+            "type": "BUDGET_PRESSURE",
+            "market_ticker": market_ticker,
+            "reason": reason,
+            "queue_depth": queue_depth,
+            "circuit_breaker_threshold": circuit_breaker_threshold,
+            "per_market_limit": per_market_limit,
+            "global_limit": global_limit,
+            "per_market_calls_last_hour": per_market_calls_last_hour,
+            "global_calls_last_hour": global_calls_last_hour,
+        }
+        self._write(record)
+
     def log_match_suppressed(
         self,
         *,
