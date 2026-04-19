@@ -41,6 +41,51 @@ import colorlog
 
 from config import LOGS_DIR
 
+
+EVIDENCE_INGESTION_REQUIRED_FIELDS: tuple[str, ...] = (
+    "market_ticker",
+    "evidence_id",
+    "source_class",
+    "is_duplicate",
+    "correlation_discount_applied",
+    "update_type",
+    "dossier_version_before",
+    "dossier_version_after",
+)
+
+DOSSIER_UPDATE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "market_ticker",
+    "dossier_version",
+    "prior_estimate",
+    "new_estimate",
+    "update_delta",
+    "confidence_before",
+    "confidence_after",
+    "evidence_ids_contributing",
+    "llm_called",
+    "drift_suspect",
+    "in_recovery",
+)
+
+BLEND_DECISION_REQUIRED_FIELDS: tuple[str, ...] = (
+    "market_ticker",
+    "fast_lane_p",
+    "fast_lane_confidence",
+    "accumulation_p",
+    "accumulation_confidence",
+    "structural_p",
+    "structural_confidence",
+    "regime_weights",
+    "regime_confidence",
+    "blended_p",
+    "blended_confidence",
+    "disagreement_score",
+    "blend_mode",
+    "trade_considered",
+    "trade_blocked_reason",
+    "evidence_ids_contributing",
+)
+
 # ── Subdirectory layout ───────────────────────────────────────────────────────
 _LOG_APP_DIR     = LOGS_DIR / "app"
 _LOG_TRADES_DIR  = LOGS_DIR / "trades"
@@ -833,6 +878,103 @@ class TradeLogger:
             record["pre_llm_filtered_generic_count"] = pre_llm_filtered_generic_count
         if pre_llm_semantic_token_types is not None:
             record["pre_llm_semantic_token_types"] = pre_llm_semantic_token_types
+        self._write(record)
+
+    def log_blend_decision(
+        self,
+        *,
+        market_ticker: str,
+        fast_lane_p: float | None,
+        fast_lane_confidence: float | None,
+        accumulation_p: float | None,
+        accumulation_confidence: float | None,
+        structural_p: float | None,
+        structural_confidence: float | None,
+        regime_weights: dict[str, float],
+        regime_confidence: float,
+        blended_p: float,
+        blended_confidence: float,
+        disagreement_score: float,
+        blend_mode: str,
+        trade_considered: bool,
+        trade_blocked_reason: str | None,
+        evidence_ids_contributing: list[str],
+    ) -> None:
+        record = {
+            "type": "BLEND_DECISION",
+            "market_ticker": market_ticker,
+            "fast_lane_p": round(fast_lane_p, 4) if fast_lane_p is not None else None,
+            "fast_lane_confidence": round(fast_lane_confidence, 4) if fast_lane_confidence is not None else None,
+            "accumulation_p": round(accumulation_p, 4) if accumulation_p is not None else None,
+            "accumulation_confidence": round(accumulation_confidence, 4) if accumulation_confidence is not None else None,
+            "structural_p": round(structural_p, 4) if structural_p is not None else None,
+            "structural_confidence": round(structural_confidence, 4) if structural_confidence is not None else None,
+            "regime_weights": regime_weights,
+            "regime_confidence": round(regime_confidence, 4),
+            "blended_p": round(blended_p, 4),
+            "blended_confidence": round(blended_confidence, 4),
+            "disagreement_score": round(disagreement_score, 4),
+            "blend_mode": blend_mode,
+            "trade_considered": trade_considered,
+            "trade_blocked_reason": trade_blocked_reason,
+            "evidence_ids_contributing": evidence_ids_contributing,
+        }
+        self._write(record)
+
+    def log_evidence_ingestion(
+        self,
+        *,
+        market_ticker: str,
+        evidence_id: str,
+        source_class: str,
+        is_duplicate: bool,
+        correlation_discount_applied: bool,
+        update_type: str,
+        dossier_version_before: Any,
+        dossier_version_after: Any,
+    ) -> None:
+        record = {
+            "type": "EVIDENCE_INGESTION",
+            "market_ticker": market_ticker,
+            "evidence_id": evidence_id,
+            "source_class": source_class,
+            "is_duplicate": is_duplicate,
+            "correlation_discount_applied": correlation_discount_applied,
+            "update_type": update_type,
+            "dossier_version_before": dossier_version_before,
+            "dossier_version_after": dossier_version_after,
+        }
+        self._write(record)
+
+    def log_dossier_update(
+        self,
+        *,
+        market_ticker: str,
+        dossier_version: Any,
+        prior_estimate: float,
+        new_estimate: float,
+        update_delta: float,
+        confidence_before: float,
+        confidence_after: float,
+        evidence_ids_contributing: list[str],
+        llm_called: bool,
+        drift_suspect: bool,
+        in_recovery: bool,
+    ) -> None:
+        record = {
+            "type": "DOSSIER_UPDATE",
+            "market_ticker": market_ticker,
+            "dossier_version": dossier_version,
+            "prior_estimate": round(prior_estimate, 4),
+            "new_estimate": round(new_estimate, 4),
+            "update_delta": round(update_delta, 4),
+            "confidence_before": round(confidence_before, 4),
+            "confidence_after": round(confidence_after, 4),
+            "evidence_ids_contributing": evidence_ids_contributing,
+            "llm_called": llm_called,
+            "drift_suspect": drift_suspect,
+            "in_recovery": in_recovery,
+        }
         self._write(record)
 
     def log_match_suppressed(
