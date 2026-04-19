@@ -6,6 +6,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.18] - 2026-04-19
+
+### Added
+- `scripts/regime_weight_validation.py`: S4.4 backtesting script that loads
+  `windows_archive` trade events, classifies each of 169 markets by regime
+  (fast / structural / interpretation), and compares regime-weighted vs
+  unweighted blending on 5 resolved markets. Key findings: regime classifier
+  functions correctly by ticker prefix; fast-lane signals show lower mean
+  |edge| in structural markets (supports attenuation); only 5 resolved markets
+  in the archive (insufficient for statistical significance — recommend S4.5 to
+  accumulate CALIBRATION_CHECK events via S3.6). No architectural revision
+  indicated; proceed to S4.5.
+- `docs/ROADMAP.md`: S4.4 marked COMPLETE.
+
+---
+
 ## [0.29.17] - 2026-04-19
 
 ### Added
