@@ -317,6 +317,8 @@ When regime confidence < 0.40:
 - G1 threshold raises from 0.35 to 0.50.
 - G3 threshold lowers from 0.20 to 0.15 (zero tolerance for disagreement under regime uncertainty).
 
+**Evaluation model.** The gate evaluates all conditions without short-circuiting and collects all failure reasons. When `regime_confidence < 0.40`, G4 fails AND the tighter G1/G3 thresholds are applied. The tighter thresholds are not dead code — they appear in `failure_reasons` when they also fail, providing diagnostic distinction between "blocked only by regime uncertainty" versus "blocked by regime uncertainty AND weak signal." This distinction is used by the S4.2 observability review and S3.6 calibration monitoring.
+
 ### G6 Detail — Recency Score
 
 ```
@@ -616,3 +618,156 @@ The system is safe to run in paper mode when:
 - A component passes unit tests but has never been exercised in an integrated paper trading run.
 - The Trade Readiness Gate is implemented but `trade_blocked_reason` is not populated on blocked candidates.
 - The `BLEND_DECISION` event is emitted but `blend_mode` is missing or always `"weighted_blend"` (indicating the dominance and fail-safe branches are untested).
+
+---
+
+## 14. Phase 3 Implementation Clarifications
+
+This section resolves all ambiguities identified in the Phase Gate Review (2026-04-19) before Stage 3 implementation begins. These clarifications carry the same authority as the rest of the contract. They are binding on both Claude and Codex.
+
+---
+
+### CL-1: Lane Meeting Point — How blend_task is Triggered
+
+The fast lane is the trigger for blend evaluation. When `signal_analyzer` produces a `SignalAnalysis` for a market, the result is routed to `blend_task` instead of directly to the executor. `blend_task` reads the current dossier (from `evidence_store`) and the current structural prior (from the `structural_priors` table) for the same `market_ticker`, calls `decision_blender.blend()`, evaluates the readiness gate, and submits the resulting `TradeCandidate` to the executor.
+
+**Fast-lane candidates without slow-lane data:** If no dossier exists or no structural prior exists for a market, those lane inputs are passed as `None` to the blender. The blender excludes `None` lanes per DER-1. The readiness gate applies fast-lane exemptions (G2, G5, G6 not evaluated). This preserves the existing fast-lane behavior as the baseline.
+
+**Slow-lane-only candidates are not generated.** Neither the accumulation lane nor the structural lane generates trade candidates independently. All trade candidates originate from a fast-lane signal. The slow lanes provide context only.
+
+---
+
+### CL-2: Structural Prior Persistence Schema
+
+Structural priors are persisted in the `structural_priors` table in `evidence_store.db` (the same database used by the evidence store, not a new file). Schema:
+
+```sql
+CREATE TABLE IF NOT EXISTS structural_priors (
+    market_ticker       TEXT PRIMARY KEY,
+    prior_estimate      REAL,
+    confidence          REAL NOT NULL DEFAULT 0.0,
+    computed_ts         TEXT NOT NULL,
+    recompute_trigger   TEXT,
+    input_source_count  INTEGER NOT NULL DEFAULT 0,
+    llm_called          INTEGER NOT NULL DEFAULT 0
+);
+```
+
+One row per market. Upserted (`INSERT OR REPLACE`) on each recompute. `recompute_trigger` is a short string identifying why the recompute was triggered (`"dossier_update"` or `"scheduled"`). `llm_called` is 0 or 1 (SQLite boolean convention).
+
+`evidence_store.py` must expose `get_structural_prior(market_ticker)` and `update_structural_prior(prior)` operations using the same per-market async locking contract as dossier operations.
+
+---
+
+### CL-3: PriorEstimate Type
+
+`PriorEstimate` is defined in `analysis/evidence_types.py` alongside `Evidence`, `EvidenceScore`, and `Dossier`:
+
+```python
+@dataclass(frozen=True)
+class PriorEstimate:
+    market_ticker: str
+    estimate: float           # probability, 0–1
+    confidence: float         # 0–0.95
+    input_source_count: int   # evidence records consumed in synthesis
+    llm_called: bool
+    computed_ts: str          # ISO 8601 UTC
+```
+
+`compute_structural_prior(market, context) -> PriorEstimate` is the pure function in `structural_prior.py`. The `context` parameter is a `dict[str, Any]` containing evidence records and dossier state passed by `structural_task.py`. The exact keys are defined by `structural_task.py` at call time — `structural_prior.py` reads from it without mutating it.
+
+---
+
+### CL-4: `default_min_edge` Source
+
+`blend_task.py` determines `default_min_edge` at runtime:
+
+```python
+from config import cfg, PAPER_MIN_EDGE
+default_min_edge = PAPER_MIN_EDGE if is_paper_mode else cfg.min_edge
+```
+
+This value is included in the blend_result dict passed to `evaluate_readiness()` as `"default_min_edge"`. It is not a per-market value; it is the same system-level threshold used by the executor's EV gate.
+
+---
+
+### CL-5: `recency_score` Computation in blend_task
+
+`blend_task.py` computes `recency_score` as follows:
+
+1. Call `evidence_store.get_recent_evidence(market_ticker, limit=100)` to obtain recent evidence records.
+2. Extract `(record.original_weight, record.ingested_ts)` pairs.
+3. Determine `dominant_regime`: the key with the highest value in `market.regime_weights`, defaulting to `"interpretation"` if `regime_weights` is empty.
+4. Call `dossier_builder.half_life_for_regime(dominant_regime)` to get `half_life_days`.
+5. Call `dossier_builder.recency_score(pairs, datetime.now(UTC), half_life_days)`.
+
+The result is passed to `evaluate_readiness()` as `blend_result["recency_score"]`.
+
+---
+
+### CL-6: `evidence_source_classes` Derivation in blend_task
+
+`blend_task.py` derives `evidence_source_classes` from the same `get_recent_evidence()` result used for recency_score:
+
+```python
+evidence_source_classes = [record.source_class for record in recent_records]
+```
+
+This is passed to `evaluate_readiness()` as `blend_result["evidence_source_classes"]`. The readiness gate calls `set(evidence_source_classes)` internally for the G2 diversity check.
+
+---
+
+### CL-7: Structural Recompute Trigger Condition
+
+`structural_task.py` triggers a recompute for a given market when either:
+
+1. No structural prior exists for this market (`get_structural_prior()` returns `None`), OR
+2. The market's dossier has been updated since the last structural recompute: `dossier.updated_ts > structural_prior.computed_ts`.
+
+If neither condition holds, the existing prior is returned as-is and no `STRUCTURAL_PRIOR_RECOMPUTE` event is emitted.
+
+---
+
+### CL-8: `input_sources` and `token_count` Field Semantics
+
+**`input_sources`** in `STRUCTURAL_PRIOR_RECOMPUTE`: A `list[str]` of source identifiers consumed in the synthesis. Each entry is `"{source_class}:{source}"` from the evidence records used (e.g., `"official:kalshi_resolution_history"`, `"news:reuters"`). Derived from the evidence records passed in the `context` dict.
+
+**`token_count`** in `STRUCTURAL_PRIOR_RECOMPUTE`: The number of LLM prompt tokens consumed during synthesis, as returned by the LLM response. Zero if `llm_called = False`.
+
+---
+
+### CL-9: G3 `disagreement_score` Formula (Full Expansion)
+
+The contract states `confidence_weighted_std_dev(lane_p values)`. The full formula:
+
+```
+lanes = lanes with active estimates (lane_p is not None)
+weights = [effective_confidence[i] for i in lanes]   # from DER-1, post regime-weighting
+mean = sum(weights[i] * lane_p[i] for i in lanes) / sum(weights)
+variance = sum(weights[i] * (lane_p[i] - mean)^2 for i in lanes) / sum(weights)
+disagreement_score = sqrt(variance)
+```
+
+When only one lane has an active estimate, `disagreement_score = 0.0`. When all lanes agree exactly, `disagreement_score = 0.0`.
+
+---
+
+### CL-10: Phase Gate Review Resolution Summary
+
+The Phase Gate Review (2026-04-19) issued PROCEED WITH CONDITIONS. All conditions are resolved by this section:
+
+| Condition | Resolution |
+|-----------|-----------|
+| G4/failsafe interaction ambiguity | CL-1 clarification; Option A (hard block) confirmed; no code change |
+| `implied_probability` persistence gap | Deferred to S4.1 + S4.2; no runtime impact confirmed |
+| `prior_estimate: float` telemetry | Deferred to S4.2 observability review; no invariant violation |
+| Budget manager backlog semantics | Fire-and-forget confirmed as intended; no change |
+| Lane meeting point (S3.4) | Resolved: fast lane triggers blend; see CL-1 |
+| Structural prior schema (S3.2) | Resolved: see CL-2 |
+| `PriorEstimate` type (S3.1/S3.2) | Resolved: see CL-3 |
+| `default_min_edge` source (S3.4) | Resolved: see CL-4 |
+| `recency_score` pathway (S3.4) | Resolved: see CL-5 |
+| `evidence_source_classes` pathway (S3.4) | Resolved: see CL-6 |
+| Structural recompute trigger (S3.2) | Resolved: see CL-7 |
+| `input_sources` + `token_count` semantics (S3.2) | Resolved: see CL-8 |
+| `disagreement_score` full formula (S3.3) | Resolved: see CL-9 |
