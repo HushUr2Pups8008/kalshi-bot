@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.10] - 2026-04-19
+
+### Added
+- `analysis/dossier_builder.py`, `tests/test_dossier_forgetting.py`:
+  Forgetting mechanisms (S2.6): `decay_weight` (BSR-4 continuous decay), `recency_score`
+  (G6 formula), `half_life_for_regime` (market-type-specific TTLs: fast=1d, interpretation=4d,
+  structural=14d), `identify_superseded` (same-class high-overlap supersession), and
+  `clear_on_resolution` (belief reset on resolution). 35 new tests, 777 total passing.
+- `docs/ROADMAP.md`: S2.6 marked COMPLETE.
+
+---
+
 ## [0.29.9] - 2026-04-19
 
 ### Added

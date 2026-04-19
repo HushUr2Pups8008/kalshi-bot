@@ -14,10 +14,12 @@ Implements BSR-1 through BSR-7 from the implementation contract:
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
-from analysis.evidence_types import Dossier, EvidenceScore
+from analysis.evidence_scorer import NGRAM_OVERLAP_THRESHOLD, ngram_overlap
+from analysis.evidence_types import Dossier, Evidence, EvidenceScore
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -223,4 +225,89 @@ def update_dossier(
         recovery_until_ts=recovery_until_ts,
         last_cross_class_state_update_ts=last_cross_class_ts,
         updated_ts=now_iso,
+    )
+
+
+# ── Forgetting mechanisms (S2.6) ──────────────────────────────────────────────
+
+_HALF_LIFE_BY_REGIME: dict[str, float] = {
+    "fast":           1.0,   # sports / live events
+    "interpretation": 4.0,   # news / analysis
+    "structural":    14.0,   # policy / polling
+}
+_DEFAULT_HALF_LIFE: float = 7.0
+
+
+def half_life_for_regime(dominant_regime: str) -> float:
+    """Return half-life in days for fast / interpretation / structural regimes."""
+    return _HALF_LIFE_BY_REGIME.get(dominant_regime, _DEFAULT_HALF_LIFE)
+
+
+def decay_weight(original_weight: float, age_seconds: float, half_life_days: float) -> float:
+    """BSR-4: effective_weight = original_weight * exp(-ln(2) * age / half_life)."""
+    age_days = age_seconds / 86_400
+    return original_weight * math.exp(-math.log(2) * age_days / half_life_days)
+
+
+def recency_score(
+    items: list[tuple[float, str]],
+    now: datetime,
+    half_life_days: float,
+) -> float:
+    """G6 recency score: sum(effective_weight) / sum(original_weight).
+
+    ``items`` is a list of (original_weight, ingested_ts_iso) pairs.
+    Returns 0.0 for empty input (no evidence → fails G6 gate).
+    """
+    if not items:
+        return 0.0
+    total_original = sum(w for w, _ in items)
+    if total_original == 0.0:
+        return 0.0
+    total_effective = sum(
+        decay_weight(w, (now - _parse_ts(ts)).total_seconds(), half_life_days)
+        for w, ts in items
+    )
+    return total_effective / total_original
+
+
+def identify_superseded(evidence_list: list[Evidence]) -> frozenset[str]:
+    """Return evidence_ids superseded by a newer same-class item with high n-gram overlap.
+
+    Item A is superseded if a newer item B exists with the same source_class
+    and ngram_overlap(A.headline, B.headline) >= NGRAM_OVERLAP_THRESHOLD.
+    """
+    if len(evidence_list) < 2:
+        return frozenset()
+    sorted_ev = sorted(evidence_list, key=lambda e: _parse_ts(e.ingested_ts))
+    superseded: set[str] = set()
+    for i, older in enumerate(sorted_ev):
+        for newer in sorted_ev[i + 1:]:
+            if (
+                newer.source_class == older.source_class
+                and ngram_overlap(older.headline, newer.headline) >= NGRAM_OVERLAP_THRESHOLD
+            ):
+                superseded.add(older.evidence_id)
+                break
+    return frozenset(superseded)
+
+
+def clear_on_resolution(dossier: Dossier, cleared_ts: str) -> Dossier:
+    """Reset belief state after market resolution.
+
+    Preserves market_ticker and created_ts; increments dossier_version.
+    """
+    return replace(
+        dossier,
+        dossier_version=dossier.dossier_version + 1,
+        current_estimate=None,
+        prior_estimate=None,
+        confidence=0.0,
+        drift_suspect=False,
+        in_recovery=False,
+        freeze_started_ts=None,
+        recovery_started_ts=None,
+        recovery_until_ts=None,
+        last_cross_class_state_update_ts=None,
+        updated_ts=cleared_ts,
     )
