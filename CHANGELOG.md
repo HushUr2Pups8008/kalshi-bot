@@ -6,6 +6,29 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.15] - 2026-04-19
+
+### Added
+- `analysis/calibration_monitor.py`, `tasks/calibration_task.py`,
+  `tests/test_calibration_monitor.py`, `tests/test_calibration_task.py`:
+  Added S3.6 cross-lane calibration monitoring. Consumes `CALIBRATION_CHECK` events to
+  maintain per-lane rolling Brier scores. Detects drift when a lane's MSE exceeds 1.5×
+  the fast-lane baseline (≥5 samples each). Emits `[CALIBRATION_DRIFT]` warning on first
+  detection. Auto-scales the drifting lane's effective confidence (floor 0.2).
+- `tasks/blend_task.py`: Added `CalibrationLike` protocol and `calibration` parameter to
+  `BlendTask`. When supplied, lane confidences are multiplied by the calibration scaling
+  factor before blending. Default (None) is no-op — no behavior change.
+- `analysis/__init__.py`: Declared `signal_meta: dict | None = None` as an explicit
+  dataclass field on `SignalAnalysis` (was previously a dynamic attribute).
+- `tasks/blend_task.py`: Fixed `_readiness_input()` source-lane classification — dossier
+  with `current_estimate=None` now correctly applies fast-lane gate conditions (G1/G3/G4
+  only), not accumulation gate conditions.
+- `trading/executor.py`: Added explanatory comment on shape-based candidate detection in
+  `_analysis_from_candidate()`.
+- `docs/ROADMAP.md`: S3.6 marked COMPLETE.
+
+---
+
 ## [0.29.14] - 2026-04-19
 
 ### Added

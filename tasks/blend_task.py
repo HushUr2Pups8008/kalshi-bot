@@ -42,6 +42,10 @@ class QueueInsertionError(BlendTaskError):
     """Raised when an approved candidate cannot be enqueued."""
 
 
+class CalibrationLike(Protocol):
+    def get_scaling_factor(self, lane: str) -> float: ...
+
+
 class EvidenceStoreLike(Protocol):
     async def get_dossier(self, market_ticker: str) -> DossierState | None: ...
 
@@ -128,6 +132,7 @@ class BlendTask:
         structural_stability_resolver: StructuralStabilityResolver | None = None,
         is_paper_mode: bool | None = None,
         now: Callable[[], datetime] | None = None,
+        calibration: CalibrationLike | None = None,
     ) -> None:
         self._trading_queue = trading_queue
         self._store = store if store is not None else evidence_store.default_store()
@@ -135,6 +140,7 @@ class BlendTask:
         self._blender = blender
         self._readiness_evaluator = readiness_evaluator
         self._structural_stability_resolver = structural_stability_resolver
+        self._calibration = calibration
         self._is_paper_mode = (
             cfg.is_paper_trading if is_paper_mode is None else is_paper_mode
         )
@@ -246,13 +252,13 @@ class BlendTask:
     ) -> BlendResult:
         fast = LaneInput(
             p=fast_lane_result.estimated_probability,
-            confidence=fast_lane_result.confidence,
+            confidence=fast_lane_result.confidence * self._calibration_scale("fast"),
             lane_id="fast",
         )
         accumulation = (
             LaneInput(
                 p=dossier.current_estimate,
-                confidence=dossier.confidence,
+                confidence=dossier.confidence * self._calibration_scale("accumulation"),
                 lane_id="accumulation",
             )
             if dossier is not None and dossier.current_estimate is not None
@@ -261,7 +267,7 @@ class BlendTask:
         structural = (
             LaneInput(
                 p=structural_prior.prior_estimate,
-                confidence=structural_prior.confidence,
+                confidence=structural_prior.confidence * self._calibration_scale("structural"),
                 lane_id="structural",
             )
             if structural_prior is not None and structural_prior.prior_estimate is not None
@@ -282,6 +288,11 @@ class BlendTask:
             raise BlendComputationError(
                 f"blend computation failed for {fast_lane_result.market.ticker}: {exc}"
             ) from exc
+
+    def _calibration_scale(self, lane: str) -> float:
+        if self._calibration is None:
+            return 1.0
+        return self._calibration.get_scaling_factor(lane)
 
     async def _structural_stable(self, market_ticker: str) -> bool:
         if self._structural_stability_resolver is None:
@@ -342,7 +353,7 @@ def _readiness_input(
     default_min_edge: float,
     now: datetime,
 ) -> dict[str, Any]:
-    source_lane = "accumulation" if dossier is not None else "fast"
+    source_lane = "accumulation" if (dossier is not None and dossier.current_estimate is not None) else "fast"
     return {
         "source_lane": source_lane,
         "blended_confidence": blend_result.blended_confidence,

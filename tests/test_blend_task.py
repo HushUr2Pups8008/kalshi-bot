@@ -344,7 +344,79 @@ def test_regime_confidence_uses_contract_entropy_formula():
     assert _regime_confidence({"fast": 1 / 3, "interpretation": 1 / 3, "structural": 1 / 3}) == pytest.approx(0.0)
 
 
+@pytest.mark.asyncio
+async def test_calibration_scaling_applied_to_lane_inputs():
+    """CalibrationLike.get_scaling_factor is called and reduces effective confidence."""
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    captured: dict = {}
+
+    def recording_blender(**kwargs) -> BlendResult:  # noqa: ANN003
+        captured["fast_conf"] = kwargs["fast"].confidence
+        from analysis.decision_blender import blend as real_blend
+        return real_blend(**kwargs)
+
+    class HalfScaleCalibration:
+        def get_scaling_factor(self, lane: str) -> float:
+            return 0.5  # halve all confidences
+
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        blender=recording_blender,
+        is_paper_mode=True,
+        calibration=HalfScaleCalibration(),
+    )
+
+    await task.process_fast_lane_result(_analysis(confidence=0.80))
+
+    assert captured.get("fast_conf") == pytest.approx(0.40)
+
+
+@pytest.mark.asyncio
+async def test_no_calibration_scaling_when_calibration_is_none():
+    """Default (no calibration) passes confidence unchanged."""
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    captured: dict = {}
+
+    def recording_blender(**kwargs) -> BlendResult:  # noqa: ANN003
+        captured["fast_conf"] = kwargs["fast"].confidence
+        from analysis.decision_blender import blend as real_blend
+        return real_blend(**kwargs)
+
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        blender=recording_blender,
+        is_paper_mode=True,
+    )
+
+    await task.process_fast_lane_result(_analysis(confidence=0.80))
+
+    assert captured.get("fast_conf") == pytest.approx(0.80)
+
+
 def test_blend_task_does_not_import_trading_layer():
     import tasks.blend_task as blend_task
 
     assert "trading" not in blend_task.__dict__
+
+
+@pytest.mark.asyncio
+async def test_dossier_with_no_estimate_uses_fast_lane_exemptions():
+    """Dossier exists but current_estimate=None → accumulation absent → fast-lane gate (G1/G3/G4 only)."""
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(dossier=_dossier(current_estimate=None)),
+        logger=logger,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(_analysis())
+
+    assert result.readiness_decision.applied_conditions == ("G1", "G3", "G4")

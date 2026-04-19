@@ -25,3 +25,4 @@ class SignalAnalysis:
     llm_direction:          Optional[str]   = None  # raw LLM direction field
     llm_magnitude:          Optional[str]   = None  # raw LLM magnitude field
     llm_confidence:         Optional[float] = None  # raw LLM confidence field
+    signal_meta:            Optional[dict]  = None  # blend metadata (set by executor for blended candidates)
