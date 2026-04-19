@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.9] - 2026-04-19
+
+### Added
+- `analysis/evidence_types.py`: Shared frozen dataclasses `Evidence`, `EvidenceScore`, and
+  `Dossier` used across S2.3, S2.4, and Codex's S2.2/S2.5.
+- `analysis/evidence_scorer.py`, `tests/test_evidence_scorer.py`:
+  Evidence quality scorer implementing BSR-5 (same-class diminishing returns) and BSR-7
+  (source class + bigram overlap independence approximation). `score_evidence()` returns an
+  `EvidenceScore` with quality, original weight, duplicate flag, and independence result. (S2.3)
+- `analysis/dossier_builder.py`, `tests/test_dossier_builder.py`:
+  Dossier belief update engine implementing BSR-1 through BSR-7. `classify_update()` returns
+  `'state'` or `'confidence'`; `update_dossier()` applies displacement cap (BSR-2), drift
+  detection and freeze (BSR-3), confidence evolution with contradiction penalty (BSR-6), and
+  recovery mode with half-life expiry. All 38 tests including full synthetic drift cycle pass. (S2.4)
+- `docs/ROADMAP.md`: S2.3 and S2.4 marked COMPLETE.
+
+---
+
 ## [0.29.8] - 2026-04-18
 
 ### Added
