@@ -19,6 +19,7 @@ from typing import Any, Optional
 from config import cfg, MARKET_CACHE_TTL_SECONDS, MAX_MARKET_DAYS_TO_EXPIRY
 from config import PAPER_MIN_MATCH_SCORE, PAPER_MAX_CANDIDATES, MARKET_SERIES_BLOCKLIST_PREFIXES
 from config import ENABLE_LOW_QUALITY_MATCH_SUPPRESSION, ENABLE_MATCH_SUPPRESSION_DEBUG
+from analysis.regime_classifier import compute_regime_weights
 from feeds import NewsItem
 from kalshi import KalshiMarket
 from kalshi.rest_client import KalshiRestClient
@@ -360,6 +361,11 @@ def _is_excluded_test_market(market: KalshiMarket) -> bool:
     return market.ticker.upper().startswith(_TEST_MARKET_TICKER_PREFIX)
 
 
+def _attach_regime_weights(market: KalshiMarket) -> KalshiMarket:
+    market.regime_weights = compute_regime_weights(market)
+    return market
+
+
 class MarketCache:
     def __init__(self, rest_client: KalshiRestClient):
         self._client          = rest_client
@@ -437,7 +443,7 @@ class MarketCache:
                         continue
                     days = _days_to_close(m.close_time)
                     if days is None or 0 < days <= MAX_MARKET_DAYS_TO_EXPIRY:
-                        filtered.append(m)
+                        filtered.append(_attach_regime_weights(m))
             except Exception as exc:
                 log.debug("Skipping series %s: %s", series_ticker, exc)
 
@@ -485,7 +491,7 @@ class MarketCache:
                     continue
                 days = _days_to_close(m.close_time)
                 if days is None or 0 < days <= MAX_MARKET_DAYS_TO_EXPIRY:
-                    markets.append(m)
+                    markets.append(_attach_regime_weights(m))
             if not cursor:
                 break
         return markets

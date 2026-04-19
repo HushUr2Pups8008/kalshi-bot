@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.8] - 2026-04-18
+
+### Added
+- `kalshi/__init__.py`, `analysis/market_matcher.py`, `tests/test_market_matcher.py`:
+  Added `regime_weights` to discovered `KalshiMarket` objects and populated it during market
+  cache discovery using the existing regime classifier, without changing routing, matching,
+  prioritization, or trading logic. (S1.4)
+- `utils/logger.py`, `tests/test_structural_prior_log_schema.py`:
+  Added `STRUCTURAL_PRIOR_RECOMPUTE_REQUIRED_FIELDS` tuple and `log_structural_prior_recompute`
+  method — telemetry schema for the structural prior layer. (S1.5)
+- `utils/logger.py`, `tests/test_calibration_check_schema.py`:
+  Added `CALIBRATION_CHECK_REQUIRED_FIELDS` tuple and `log_calibration_check` method —
+  per-lane prediction error telemetry for cross-lane drift detection. (S1.6)
+- `docs/ROADMAP.md`: S1.4, S1.5, S1.6 marked COMPLETE.
+
+---
+
 ## [0.29.7] - 2026-04-18
 
 ### Added

@@ -16,6 +16,7 @@ class KalshiMarket:
     series_ticker:    str = ""
     subtitle:         str = ""
     result:           str = ""    # "yes", "no", or "" if not yet settled
+    regime_weights:   dict[str, float] = field(default_factory=dict)
 
     @property
     def yes_prob(self) -> float:

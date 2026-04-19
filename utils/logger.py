@@ -67,6 +67,15 @@ DOSSIER_UPDATE_REQUIRED_FIELDS: tuple[str, ...] = (
     "in_recovery",
 )
 
+STRUCTURAL_PRIOR_RECOMPUTE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "market_ticker",
+    "prior_estimate",
+    "new_estimate",
+    "input_sources",
+    "llm_called",
+    "token_count",
+)
+
 BLEND_DECISION_REQUIRED_FIELDS: tuple[str, ...] = (
     "market_ticker",
     "fast_lane_p",
@@ -84,6 +93,14 @@ BLEND_DECISION_REQUIRED_FIELDS: tuple[str, ...] = (
     "trade_considered",
     "trade_blocked_reason",
     "evidence_ids_contributing",
+)
+
+CALIBRATION_CHECK_REQUIRED_FIELDS: tuple[str, ...] = (
+    "market_ticker",
+    "lane",
+    "lane_estimate",
+    "final_resolution",
+    "error",
 )
 
 # ── Subdirectory layout ───────────────────────────────────────────────────────
@@ -977,6 +994,27 @@ class TradeLogger:
         }
         self._write(record)
 
+    def log_structural_prior_recompute(
+        self,
+        *,
+        market_ticker: str,
+        prior_estimate: float,
+        new_estimate: float,
+        input_sources: Any,
+        llm_called: bool,
+        token_count: int,
+    ) -> None:
+        record = {
+            "type": "STRUCTURAL_PRIOR_RECOMPUTE",
+            "market_ticker": market_ticker,
+            "prior_estimate": round(prior_estimate, 4),
+            "new_estimate": round(new_estimate, 4),
+            "input_sources": input_sources,
+            "llm_called": llm_called,
+            "token_count": token_count,
+        }
+        self._write(record)
+
     def log_match_suppressed(
         self,
         *,
@@ -1061,6 +1099,24 @@ class TradeLogger:
             "ticker": ticker,
             "title": title,
             "series_ticker": series_ticker,
+        })
+
+    def log_calibration_check(
+        self,
+        *,
+        market_ticker: str,
+        lane: str,
+        lane_estimate: float,
+        final_resolution: float,
+        error: float,
+    ) -> None:
+        self._write({
+            "type": "CALIBRATION_CHECK",
+            "market_ticker": market_ticker,
+            "lane": lane,
+            "lane_estimate": round(lane_estimate, 4),
+            "final_resolution": round(final_resolution, 4),
+            "error": round(error, 4),
         })
 
 

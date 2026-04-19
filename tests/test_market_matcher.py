@@ -4,6 +4,7 @@ Tests for analysis/market_matcher.py
 Covers: tokenization, similarity scoring, and candidate matching behaviour.
 """
 
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -124,6 +125,30 @@ def _make_news(headline: str, body: str = ""):
         body=body,
         item_id="news-1",
     )
+
+
+class TestMarketShape:
+    def test_kalshi_market_has_backward_compatible_regime_weights_default(self):
+        market_a = _make_market("KXIRAN-1", "Will Iran close the Strait of Hormuz?")
+        market_b = _make_market("KXUKR-1", "Will Russia invade Ukraine?")
+
+        assert market_a.regime_weights == {}
+        assert market_b.regime_weights == {}
+        assert market_a.regime_weights is not market_b.regime_weights
+
+    def test_kalshi_market_serialization_includes_regime_weights(self):
+        market = _make_market("KXIRAN-1", "Will Iran close the Strait of Hormuz?")
+        market.regime_weights = {
+            "fast": 0.2,
+            "interpretation": 0.5,
+            "structural": 0.3,
+        }
+
+        assert asdict(market)["regime_weights"] == {
+            "fast": 0.2,
+            "interpretation": 0.5,
+            "structural": 0.3,
+        }
 
 
 @pytest.fixture
@@ -349,6 +374,28 @@ class TestMarketCacheTestTickerExclusion:
         assert series_count == 1
         assert [m.ticker for m in markets] == ["KXIRAN-1"]
 
+    def test_fetch_geo_markets_attaches_regime_weights(self):
+        rest = MagicMock()
+        rest.get_all_series.return_value = [
+            {"ticker": "KXIRAN", "title": "Iran"},
+        ]
+        rest.get_markets.return_value = ([
+            _make_market(
+                "KXIRAN-1",
+                "Will Iran close the Strait of Hormuz in 2026?",
+                series_ticker="KXIRAN",
+            ),
+        ], None)
+
+        matcher = MarketMatcher(rest)
+
+        markets, series_count = matcher._cache._fetch_geo_markets()
+
+        assert series_count == 1
+        assert len(markets) == 1
+        assert set(markets[0].regime_weights) == {"fast", "interpretation", "structural"}
+        assert sum(markets[0].regime_weights.values()) == pytest.approx(1.0)
+
     def test_fetch_all_markets_excludes_kxtest_tickers(self):
         rest = MagicMock()
         rest.get_markets.side_effect = [
@@ -363,6 +410,22 @@ class TestMarketCacheTestTickerExclusion:
         markets = matcher._cache._fetch_all_markets()
 
         assert [m.ticker for m in markets] == ["KXNBA-1"]
+
+    def test_fetch_all_markets_attaches_regime_weights(self):
+        rest = MagicMock()
+        rest.get_markets.side_effect = [
+            ([
+                _make_market("KXNBA-1", "Will the Nuggets win tonight?", series_ticker="KXNBA"),
+            ], None),
+        ]
+
+        matcher = MarketMatcher(rest)
+
+        markets = matcher._cache._fetch_all_markets()
+
+        assert len(markets) == 1
+        assert set(markets[0].regime_weights) == {"fast", "interpretation", "structural"}
+        assert sum(markets[0].regime_weights.values()) == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
