@@ -6,6 +6,37 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.17] - 2026-04-19
+
+### Added
+- `scripts/observability_completeness_review.py`,
+  `tests/test_observability_completeness_review.py`:
+  Added S4.2 read-only observability completeness review for `BLEND_DECISION`
+  required-field population and evidence → dossier → structural → blend → outcome
+  traceability checks. Current paper log review found no blend/accumulation/structural
+  events, so the 90% target is not met/evaluable for the available data window.
+- `scripts/budget_manager_stress.py`, `tests/test_budget_manager_stress.py`:
+  Added S4.3 synthetic budget-manager stress harness. The default profile drives
+  265 requests against production limits, admits exactly 60, opens the circuit breaker
+  at queue depth 180 (3× global budget), emits one `BUDGET_PRESSURE` event, and proves
+  no runaway admission.
+- `docs/ROADMAP.md`: S4.2 and S4.3 marked COMPLETE.
+
+---
+
+## [0.29.16] - 2026-04-19
+
+### Added
+- `scripts/replay_dossier.py`, `tests/test_replay_dossier.py`:
+  Added S4.1 read-only dossier replay utility. The CLI replays persisted evidence rows
+  by market using deterministic `(ingested_ts, evidence_id)` ordering, feeds each event
+  through the existing dossier builder, prints the belief trajectory, and compares the
+  final replayed dossier to stored current state. Replay fails loudly when persisted
+  evidence is missing replay-critical `raw_payload_json.implied_probability`.
+- `docs/ROADMAP.md`: S4.1 marked COMPLETE.
+
+---
+
 ## [0.29.15] - 2026-04-19
 
 ### Added
