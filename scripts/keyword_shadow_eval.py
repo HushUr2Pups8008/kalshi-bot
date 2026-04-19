@@ -40,6 +40,7 @@ from utils.keyword_diagnostics_helpers import (
     BUCKET_PROMOTE,
     BUCKET_REJECT,
     BUCKET_SHADOW,
+    CONCENTRATION_FLAG_THRESHOLD,
     DEFAULT_SHADOW_PHRASES,
     PROMOTE_MIN_HITS,
     PROMOTE_MIN_SCORE,
