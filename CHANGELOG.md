@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.11] - 2026-04-19
+
+### Added
+- `analysis/evidence_types.py`: `PriorEstimate` frozen dataclass — structural lane output type
+  used across S3.1, S3.2, and S3.3/S3.4.
+- `analysis/structural_prior.py`, `tests/test_structural_prior.py`:
+  Structural prior synthesis implementing S3.1. Pure function `compute_structural_prior(market,
+  context) -> PriorEstimate`. Estimate authority: LLM synthesis > market midprice. Confidence
+  from three additive components: structural regime weight (max 0.25), evidence depth (max 0.25,
+  saturates at 8 records), LLM synthesis bonus (0.45). Maximum confidence without LLM is 0.50,
+  ensuring structural fail-safe tiers (DER-3/DER-4, threshold 0.70) require LLM synthesis.
+  33 new tests, 846 total passing.
+- `docs/ROADMAP.md`: S3.1 marked COMPLETE.
+- `docs/IMPLEMENTATION_CONTRACT.md`: Section 14 (Phase 3 Implementation Clarifications, CL-1
+  through CL-10) resolving all Phase Gate conditions; G4 Detail clarification on evaluation model.
+
+---
+
 ## [0.29.10] - 2026-04-19
 
 ### Added

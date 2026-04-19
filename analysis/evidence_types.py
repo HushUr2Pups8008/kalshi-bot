@@ -1,10 +1,11 @@
 """Shared domain types for the evidence scoring and dossier belief system.
 
 These types are consumed by:
-- analysis/evidence_scorer.py  (S2.3)
-- analysis/dossier_builder.py  (S2.4)
-- tasks/evidence_store.py      (S2.2, Codex)
-- tasks/accumulation_task.py   (S2.5, Codex)
+- analysis/evidence_scorer.py    (S2.3)
+- analysis/dossier_builder.py    (S2.4)
+- analysis/structural_prior.py   (S3.1)
+- tasks/evidence_store.py        (S2.2, Codex)
+- tasks/accumulation_task.py     (S2.5, Codex)
 """
 
 from __future__ import annotations
@@ -67,3 +68,25 @@ class Dossier:
     recovery_started_ts: str | None = None  # UTC ISO when recovery began (BSR-3)
     recovery_until_ts: str | None = None    # UTC ISO expected recovery end (BSR-3)
     last_cross_class_state_update_ts: str | None = None  # BSR-3 anchor tracking
+
+
+@dataclass(frozen=True)
+class PriorEstimate:
+    """Structural prior estimate for a market — output of structural_prior.py (S3.1).
+
+    Represents a stable, slow-moving belief derived from market structure, base
+    rates, and optional LLM synthesis. Distinct from the accumulation lane Dossier.
+    Confidence drives the structural lane's contribution weight in the blender (DER-1)
+    and determines whether structural fail-safe tiers (DER-3/DER-4) can activate.
+
+    DER-3/DER-4 require confidence >= 0.70. Without LLM synthesis the maximum
+    reachable confidence is 0.50, so the structural fail-safe is never triggered
+    by evidence alone.
+    """
+
+    market_ticker: str
+    estimate: float           # probability, 0.01..0.99
+    confidence: float         # 0.0..0.95; drives blend weight and fail-safe activation
+    input_source_count: int   # number of evidence records consumed in synthesis
+    llm_called: bool          # whether LLM synthesis was performed
+    computed_ts: str          # ISO 8601 UTC
