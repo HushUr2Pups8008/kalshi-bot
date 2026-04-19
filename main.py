@@ -50,12 +50,14 @@ _ensure_supported_python()
 import argparse
 import asyncio
 import dataclasses
+import hashlib
 import itertools
 import json
 import logging
 import os
 import signal
 import time
+import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from types import ModuleType, SimpleNamespace
@@ -83,6 +85,11 @@ from feeds.reddit_monitor import run_reddit_monitor
 from feeds.rss_monitor import run_rss_monitor
 from kalshi.rest_client import KalshiRestClient
 from kalshi.websocket_client import KalshiWebSocketClient
+from analysis.evidence_types import Evidence
+from tasks.accumulation_task import AccumulationTask
+from tasks.blend_task import BlendTask, TradeCandidate
+from tasks.calibration_task import CalibrationTask
+from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
 from utils.logger import get_logger, emit_startup_banner, rotate_logs
@@ -322,6 +329,25 @@ class _RuntimeInstanceGuard:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def _signal_to_evidence(analysis: SignalAnalysis) -> Evidence:
+    """Convert a fast-lane SignalAnalysis into an Evidence record for accumulation."""
+    content = f"{analysis.news_item.headline}|{analysis.market.ticker}"
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    published = getattr(analysis.news_item, "published", None)
+    return Evidence(
+        evidence_id=str(uuid.uuid4()),
+        market_ticker=analysis.market.ticker,
+        source=analysis.news_item.source,
+        source_class="news",
+        headline=analysis.news_item.headline,
+        ingested_ts=datetime.now(timezone.utc).isoformat(),
+        implied_probability=analysis.estimated_probability,
+        content_hash=content_hash,
+        url=getattr(analysis.news_item, "url", None),
+        published_ts=published.isoformat() if published is not None else None,
+    )
+
+
 class TradingBot:
     def __init__(self):
         self.rest          = KalshiRestClient()
@@ -337,6 +363,17 @@ class TradingBot:
         self.source_stats  = SourceStats(db_path=DATA_DIR / "paper_trades.db")
         self.keyword_stats = KeywordStats(DATA_DIR / "paper_trades.db")
         self.ws.on_price_update(self._on_price_update)
+        # Multi-lane queues and tasks.  BlendTask owns the trading queue; the
+        # evidence queue feeds AccumulationTask independently of the fast lane.
+        self._trading_queue: asyncio.Queue[TradeCandidate] = asyncio.Queue(maxsize=500)
+        self._evidence_queue: asyncio.Queue[Evidence | None] = asyncio.Queue(maxsize=2000)
+        self._calibration_task = CalibrationTask()
+        self._blend_task = BlendTask(
+            trading_queue=self._trading_queue,
+            calibration=self._calibration_task,
+        )
+        self._accumulation_task = AccumulationTask()
+        self._structural_task = StructuralTask()
         # Priority queue decouples feed pollers from slow LLM inference.
         # RSS/wire services (priority 1) are processed before Reddit (priority 2).
         # Tuple layout: (priority, seq, news) — seq prevents NewsItem comparison.
@@ -668,14 +705,27 @@ class TradingBot:
             analysis.match_score,
         )
 
-        trade_id = await self.executor.execute(analysis)
-        if trade_id:
-            self.source_stats.increment_trades(news.source)
-        else:
+        # Feed evidence to accumulation lane (non-blocking; fast lane is not gated on it).
+        evidence = _signal_to_evidence(analysis)
+        try:
+            self._evidence_queue.put_nowait(evidence)
+        except asyncio.QueueFull:
+            log.warning(
+                "[ACCUMULATION] evidence_queue_full ticker=%s — evidence dropped",
+                market.ticker,
+            )
+
+        # Route through blend task instead of directly to executor.
+        # BlendTask reads the dossier + structural prior, applies regime weights,
+        # runs the readiness gate, and enqueues approved TradeCandidate objects.
+        # The _trading_queue_consumer_task drains the queue and calls executor.execute().
+        blend_result = await self._blend_task.process_fast_lane_result(analysis)
+        if not blend_result.enqueued:
             log.debug(
-                "[ANALYSIS] no_execution ticker=%s source=%s",
+                "[ANALYSIS] no_execution ticker=%s source=%s blocked_reason=%s",
                 market.ticker,
                 news.source,
+                blend_result.trade_blocked_reason or "none",
             )
         self.ws.watch([market.ticker])
 
@@ -1455,6 +1505,31 @@ class TradingBot:
             record.get("source"),
         )
 
+    async def _trading_queue_consumer_task(self) -> None:
+        """Drain approved TradeCandidate objects and forward them to the executor."""
+        while True:
+            candidate = await self._trading_queue.get()
+            try:
+                trade_id = await self.executor.execute(candidate)
+                if trade_id:
+                    self.source_stats.increment_trades(
+                        candidate.fast_lane_analysis.news_item.source
+                    )
+                self.ws.watch([candidate.market.ticker])
+            except Exception:
+                log.exception(
+                    "[BLEND] consumer_error ticker=%s", candidate.market.ticker
+                )
+            finally:
+                self._trading_queue.task_done()
+
+    async def _structural_recompute_task(self) -> None:
+        """Periodically recompute structural priors for all active markets."""
+        await self._structural_task.run_periodic(
+            market_provider=lambda: self.matcher._cache._markets,
+            interval_seconds=3600,
+        )
+
     async def run(self) -> None:
         notional = self.paper.get_notional_bankroll()
         max_bet  = cfg.dynamic_max_bet(notional)
@@ -1514,6 +1589,11 @@ class TradingBot:
             asyncio.create_task(self._auto_resolve_task(),              name="auto_resolve"),
             asyncio.create_task(self._subreddit_discovery_task(),       name="sub_discovery"),
             asyncio.create_task(self._log_maintenance_task(),           name="log_maint"),
+            asyncio.create_task(
+                self._accumulation_task.run(self._evidence_queue),      name="accumulation",
+            ),
+            asyncio.create_task(self._trading_queue_consumer_task(),    name="blend_consumer"),
+            asyncio.create_task(self._structural_recompute_task(),      name="structural"),
             *([asyncio.create_task(
                 run_rss_monitor(self._on_fade_tweet, feeds=FADE_TWEET_FEED_URLS),
                 name="fade_tweets",

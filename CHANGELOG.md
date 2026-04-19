@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.19] - 2026-04-19
+
+### Changed
+- `main.py`: Wire multi-lane runtime integration (S4.5 root-cause fix).
+  `_process_candidate` now routes fast-lane `SignalAnalysis` through
+  `BlendTask.process_fast_lane_result()` instead of directly calling
+  `executor.execute()`. Evidence is also submitted to `AccumulationTask`
+  via `_evidence_queue`. Three new background tasks launched at startup:
+  `accumulation` (evidence ingestion), `blend_consumer` (trading queue
+  drain → executor), and `structural` (hourly structural prior recompute).
+  Adds `_signal_to_evidence()` helper to convert `SignalAnalysis` to
+  `Evidence`. `source_stats.increment_trades` moved to consumer task.
+- `tests/test_main_pipeline.py`: Update stub and assertions to match
+  new routing: `executor.execute` assertions replaced with
+  `_blend_task.process_fast_lane_result` assertions.
+
+---
+
 ## [0.29.18] - 2026-04-19
 
 ### Added

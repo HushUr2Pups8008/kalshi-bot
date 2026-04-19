@@ -48,6 +48,14 @@ def _make_bot_stub():
     bot._last_drift_logged = {}
     bot._market_refresh_lock = asyncio.Lock()
     bot._known_market_tickers = set()
+    # Multi-lane stubs: _process_candidate now routes through blend_task.
+    bot._evidence_queue = asyncio.Queue(maxsize=2000)
+    bot._trading_queue = asyncio.Queue(maxsize=500)
+    _blend_result = MagicMock()
+    _blend_result.enqueued = True
+    _blend_result.trade_blocked_reason = None
+    bot._blend_task = MagicMock()
+    bot._blend_task.process_fast_lane_result = AsyncMock(return_value=_blend_result)
     return bot
 
 
@@ -105,14 +113,14 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
          patch("utils.logger.trade_log.log_opportunity") as opportunity_mock:
         await bot._process_candidate(news, market, 0.42, match_meta)
 
-    bot.executor.execute.assert_awaited_once()
+    bot._blend_task.process_fast_lane_result.assert_awaited_once()
     estimate_mock.assert_awaited_once_with(
         news,
         market,
         keyword_stats=bot.keyword_stats,
         match_meta=match_meta,
     )
-    analysis = bot.executor.execute.await_args.args[0]
+    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
     assert analysis.news_item is news
     assert analysis.market.ticker == "KXTEST-25DEC31"
     assert analysis.estimated_probability == pytest.approx(0.65)
@@ -132,7 +140,8 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     assert analysis.llm_confidence == pytest.approx(0.8)
     bot.source_stats.increment_signals.assert_called_with("Reuters")
     bot.source_stats.increment_opportunities.assert_called_with("Reuters")
-    bot.source_stats.increment_trades.assert_called_with("Reuters")
+    # increment_trades is now called by _trading_queue_consumer_task, not _process_candidate
+    bot.source_stats.increment_trades.assert_not_called()
     bot.ws.watch.assert_called_with(["KXTEST-25DEC31"])
     opportunity_mock.assert_called_once_with(
         ticker=market.ticker,
@@ -226,7 +235,7 @@ async def test_process_candidate_uses_websocket_price_in_handoff(monkeypatch):
          patch("utils.logger.trade_log.log_opportunity"):
         await bot._process_candidate(news, market, 0.33)
 
-    analysis = bot.executor.execute.await_args.args[0]
+    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
     assert analysis.market_yes_price == pytest.approx(62.0)
     assert analysis.market.yes_price == pytest.approx(62.0)
     assert analysis.market.yes_bid == pytest.approx(61.0)
@@ -254,7 +263,7 @@ async def test_process_candidate_uses_paper_placeholder_when_kelly_returns_zero(
          patch("utils.logger.trade_log.log_opportunity"):
         await bot._process_candidate(news, market, 0.25)
 
-    analysis = bot.executor.execute.await_args.args[0]
+    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
     assert analysis.capped_dollars == pytest.approx(2.5)
 
 

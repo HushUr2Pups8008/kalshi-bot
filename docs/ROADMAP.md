@@ -77,7 +77,7 @@ Status must be updated as work progresses. See contract Section 10 for rules.
 | S4.2 | Observability completeness review | COMPLETE | Shared | Confirm all `BLEND_DECISION` fields populated; traceability chain intact | Run against paper trading; compare event completeness | All required fields non-null for ≥ 90% of events |
 | S4.3 | Budget manager stress test | COMPLETE | Codex | Verify circuit breaker fires under synthetic load | Inject synthetic high-volume queue; confirm `BUDGET_PRESSURE` emitted | Circuit breaker fires at 3× depth; no runaway LLM calls |
 | S4.4 | Regime weight validation against historical outcomes | COMPLETE | Claude | Check that regime weights improve blended calibration vs unweighted blend | Use `windows_archive` data for backtesting | Calibration improvement documented |
-| S4.5 | End-to-end paper trading test: multi-lane | NOT_STARTED | Shared | Run system in paper mode with all three lanes active | All existing paper-trade safety gates must pass; trade frequency must not exceed 2× fast-lane-only baseline | Bot operates in paper mode; all three lanes emit events; no execution errors; Definition of Done criteria from contract Section 13 satisfied |
+| S4.5 | End-to-end paper trading test: multi-lane | IN_PROGRESS | Shared | Run system in paper mode with all three lanes active | All existing paper-trade safety gates must pass; trade frequency must not exceed 2× fast-lane-only baseline | Bot operates in paper mode; all three lanes emit events; no execution errors; Definition of Done criteria from contract Section 13 satisfied |
 
 **Dependencies:** All Stage 3 tasks COMPLETE before Stage 4 begins. S4.5 is the final integration gate before any live trading consideration.
 
