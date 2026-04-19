@@ -16,6 +16,7 @@ from tasks.evidence_store import (
     EvidenceStore,
     EvidenceStoreIntegrityError,
 )
+from analysis.evidence_types import PriorEstimate
 
 
 TS0 = "2026-04-19T00:00:00+00:00"
@@ -82,6 +83,25 @@ def _update_record() -> DossierUpdateRecord:
     )
 
 
+def _structural_prior(
+    *,
+    market_ticker: str = "KXTEST-26DEC31",
+    estimate: float = 0.55,
+    confidence: float = 0.25,
+    computed_ts: str = TS1,
+    input_source_count: int = 1,
+    llm_called: bool = False,
+) -> PriorEstimate:
+    return PriorEstimate(
+        market_ticker=market_ticker,
+        estimate=estimate,
+        confidence=confidence,
+        input_source_count=input_source_count,
+        llm_called=llm_called,
+        computed_ts=computed_ts,
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_dossier_returns_none_for_missing_market(tmp_path: Path):
     store = _store(tmp_path)
@@ -136,6 +156,18 @@ async def test_get_recent_evidence_returns_newest_first(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_list_dossier_market_tickers_returns_sorted_tickers(tmp_path: Path):
+    store = _store(tmp_path)
+    await store.update_dossier(_dossier(market_ticker="KXTWO-26DEC31"))
+    await store.update_dossier(_dossier(market_ticker="KXONE-26DEC31"))
+
+    assert await store.list_dossier_market_tickers() == [
+        "KXONE-26DEC31",
+        "KXTWO-26DEC31",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_add_evidence_duplicate_event_id_fails_clearly(tmp_path: Path):
     store = _store(tmp_path)
     await store.update_dossier(_dossier())
@@ -180,6 +212,36 @@ async def test_update_dossier_appends_update_history_and_contributing_links(tmp_
 
     assert update_row["trigger_evidence_id"] == "ev-1"
     assert link_row["evidence_id"] == "ev-1"
+
+
+@pytest.mark.asyncio
+async def test_structural_prior_upsert_and_get(tmp_path: Path):
+    store = _store(tmp_path)
+    await store.update_dossier(_dossier())
+
+    await store.update_structural_prior(
+        _structural_prior(),
+        recompute_trigger="scheduled",
+    )
+    await store.update_structural_prior(
+        _structural_prior(estimate=0.62, confidence=0.40, computed_ts=TS2, input_source_count=3, llm_called=True),
+        recompute_trigger="dossier_update",
+    )
+
+    prior = await store.get_structural_prior("KXTEST-26DEC31")
+
+    assert prior is not None
+    assert prior.market_ticker == "KXTEST-26DEC31"
+    assert prior.prior_estimate == pytest.approx(0.62)
+    assert prior.confidence == pytest.approx(0.40)
+    assert prior.computed_ts == TS2
+    assert prior.recompute_trigger == "dossier_update"
+    assert prior.input_source_count == 3
+    assert prior.llm_called is True
+
+    with sqlite3.connect(store.db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM structural_priors").fetchone()[0]
+    assert count == 1
 
 
 @pytest.mark.asyncio

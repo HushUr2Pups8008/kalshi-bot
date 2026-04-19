@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.13] - 2026-04-19
+
+### Added
+- `tasks/structural_task.py`, `tasks/evidence_store.py`, `docs/evidence_store_schema.*`,
+  `tests/test_structural_task.py`, `tests/test_evidence_store*.py`:
+  Added S3.2 structural-prior orchestration and persistence support. Structural priors are
+  stored in `evidence_store.db` via the `structural_priors` table, recomputed only when no
+  prior exists or dossier evidence is newer, and logged through `STRUCTURAL_PRIOR_RECOMPUTE`.
+- `tasks/blend_task.py`, `tests/test_blend_task.py`:
+  Added S3.4 blend-lane orchestration. Fast-lane results trigger lane context reads,
+  `decision_blender.blend(...)`, readiness-gate evaluation, `BLEND_DECISION` emission for
+  both ready and blocked candidates, and queue insertion only for approved `TradeCandidate`s.
+  No trading or executor behavior is changed in this step.
+- `docs/ROADMAP.md`: S3.2 and S3.4 marked COMPLETE.
+
+---
+
 ## [0.29.12] - 2026-04-19
 
 ### Added

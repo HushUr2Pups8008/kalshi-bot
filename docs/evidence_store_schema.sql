@@ -78,6 +78,16 @@ CREATE TABLE IF NOT EXISTS dossier_update_evidence (
         ON UPDATE RESTRICT ON DELETE RESTRICT
 );
 
+CREATE TABLE IF NOT EXISTS structural_priors (
+    market_ticker TEXT PRIMARY KEY,
+    prior_estimate REAL CHECK (prior_estimate IS NULL OR (prior_estimate >= 0.0 AND prior_estimate <= 1.0)),
+    confidence REAL NOT NULL DEFAULT 0.0 CHECK (confidence >= 0.0 AND confidence <= 0.95),
+    computed_ts TEXT NOT NULL,
+    recompute_trigger TEXT,
+    input_source_count INTEGER NOT NULL DEFAULT 0 CHECK (input_source_count >= 0),
+    llm_called INTEGER NOT NULL DEFAULT 0 CHECK (llm_called IN (0, 1))
+);
+
 CREATE INDEX IF NOT EXISTS idx_evidence_market_ingested
     ON evidence(market_ticker, ingested_ts);
 

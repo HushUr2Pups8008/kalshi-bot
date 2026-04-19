@@ -115,7 +115,13 @@ def test_evidence_store_schema_creates_required_tables_and_indexes():
         )
     }
 
-    assert {"dossiers", "evidence", "dossier_updates", "dossier_update_evidence"} <= tables
+    assert {
+        "dossiers",
+        "evidence",
+        "dossier_updates",
+        "dossier_update_evidence",
+        "structural_priors",
+    } <= tables
     assert {
         "idx_evidence_market_ingested",
         "idx_evidence_market_source_class_ingested",
@@ -215,6 +221,33 @@ def test_contributing_evidence_cannot_cross_market_boundaries():
             VALUES (?, ?, ?)
             """,
             ("KXOTHER-26DEC31", 1, "ev-1"),
+        )
+
+
+def test_structural_prior_is_one_row_per_market():
+    conn = _connect_with_schema()
+
+    conn.execute(
+        """
+        INSERT INTO structural_priors (
+            market_ticker, prior_estimate, confidence, computed_ts,
+            recompute_trigger, input_source_count, llm_called
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("KXTEST-26DEC31", 0.55, 0.30, "2026-04-18T00:02:00+00:00", "scheduled", 0, 0),
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+        conn.execute(
+            """
+            INSERT INTO structural_priors (
+                market_ticker, prior_estimate, confidence, computed_ts,
+                recompute_trigger, input_source_count, llm_called
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("KXTEST-26DEC31", 0.60, 0.40, "2026-04-18T00:03:00+00:00", "dossier_update", 1, 0),
         )
 
 

@@ -114,6 +114,21 @@ Append-only join table representing the `evidence_ids_contributing` list for a
 | `evidence_id` | `TEXT` | no | Part of composite primary key and evidence FK. |
 | `contribution_role` | `TEXT` | no | Defaults to `current_belief_state`; reserved for audit labeling. |
 
+### `structural_priors`
+
+Current structural prior state. There is one structural prior row per market,
+upserted after each scheduled or dossier-update-triggered recompute.
+
+| Column | Type | Null | Notes |
+|---|---:|---:|---|
+| `market_ticker` | `TEXT` | no | Primary key; stable Kalshi market identifier. |
+| `prior_estimate` | `REAL` | yes | Current structural probability estimate, `0.0..1.0`. |
+| `confidence` | `REAL` | no | Structural prior confidence, `0.0..0.95`. |
+| `computed_ts` | `TEXT` | no | UTC ISO timestamp from `PriorEstimate.computed_ts`. |
+| `recompute_trigger` | `TEXT` | yes | Short reason, e.g. `scheduled` or `dossier_update`. |
+| `input_source_count` | `INTEGER` | no | Number of evidence records consumed in synthesis. |
+| `llm_called` | `INTEGER` | no | Boolean `0/1`. |
+
 ## Keys, Constraints, And Indexes
 
 Primary keys:
@@ -122,6 +137,7 @@ Primary keys:
 - `evidence.evidence_id`
 - `dossier_updates (market_ticker, dossier_version)`
 - `dossier_update_evidence (market_ticker, dossier_version, evidence_id)`
+- `structural_priors.market_ticker`
 
 Foreign keys:
 

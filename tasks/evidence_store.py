@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence, TypeVar
 
+from analysis.evidence_types import PriorEstimate
 from config import BASE_DIR, DATA_DIR
 
 DEFAULT_EVIDENCE_DB_PATH = DATA_DIR / "evidence_store.db"
@@ -91,6 +92,17 @@ class DossierUpdateRecord:
     in_recovery: bool = False
 
 
+@dataclass(frozen=True)
+class StructuralPriorRecord:
+    market_ticker: str
+    prior_estimate: float | None
+    confidence: float
+    computed_ts: str
+    recompute_trigger: str | None
+    input_source_count: int
+    llm_called: bool
+
+
 class EvidenceStore:
     """SQLite-backed evidence store with per-market async write serialization."""
 
@@ -136,6 +148,17 @@ class EvidenceStore:
             limit,
         )
 
+    async def list_dossier_market_tickers(self) -> list[str]:
+        """Return dossier market tickers for scheduler-style task iteration."""
+        return await asyncio.to_thread(self._list_dossier_market_tickers_sync)
+
+    async def get_structural_prior(
+        self,
+        market_ticker: str,
+    ) -> StructuralPriorRecord | None:
+        """Return current structural prior for ``market_ticker``, or None."""
+        return await asyncio.to_thread(self._get_structural_prior_sync, market_ticker)
+
     async def add_evidence(self, evidence: EvidenceRecord) -> None:
         """Insert one immutable evidence event for an existing market dossier."""
 
@@ -168,6 +191,19 @@ class EvidenceStore:
             self._update_dossier_sync(state, update, evidence_ids_contributing)
 
         await self._run_market_write(state.market_ticker, _write)
+
+    async def update_structural_prior(
+        self,
+        prior: PriorEstimate,
+        *,
+        recompute_trigger: str,
+    ) -> None:
+        """Upsert the current structural prior row for a market."""
+
+        def _write() -> None:
+            self._update_structural_prior_sync(prior, recompute_trigger)
+
+        await self._run_market_write(prior.market_ticker, _write)
 
     async def _run_market_write(self, market_ticker: str, operation: Callable[[], _T]) -> _T:
         lock = await self._lock_for_market(market_ticker)
@@ -213,6 +249,24 @@ class EvidenceStore:
                 (market_ticker, limit),
             ).fetchall()
         return [_evidence_from_row(row) for row in rows]
+
+    def _list_dossier_market_tickers_sync(self) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT market_ticker FROM dossiers ORDER BY market_ticker"
+            ).fetchall()
+        return [row["market_ticker"] for row in rows]
+
+    def _get_structural_prior_sync(
+        self,
+        market_ticker: str,
+    ) -> StructuralPriorRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM structural_priors WHERE market_ticker = ?",
+                (market_ticker,),
+            ).fetchone()
+        return _structural_prior_from_row(row) if row is not None else None
 
     def _add_evidence_sync(self, evidence: EvidenceRecord) -> None:
         try:
@@ -344,6 +398,41 @@ class EvidenceStore:
         except sqlite3.IntegrityError as exc:
             raise EvidenceStoreIntegrityError(str(exc)) from exc
 
+    def _update_structural_prior_sync(
+        self,
+        prior: PriorEstimate,
+        recompute_trigger: str,
+    ) -> None:
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO structural_priors (
+                        market_ticker, prior_estimate, confidence, computed_ts,
+                        recompute_trigger, input_source_count, llm_called
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(market_ticker) DO UPDATE SET
+                        prior_estimate = excluded.prior_estimate,
+                        confidence = excluded.confidence,
+                        computed_ts = excluded.computed_ts,
+                        recompute_trigger = excluded.recompute_trigger,
+                        input_source_count = excluded.input_source_count,
+                        llm_called = excluded.llm_called
+                    """,
+                    (
+                        prior.market_ticker,
+                        prior.estimate,
+                        prior.confidence,
+                        prior.computed_ts,
+                        recompute_trigger,
+                        prior.input_source_count,
+                        int(prior.llm_called),
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise EvidenceStoreIntegrityError(str(exc)) from exc
+
 
 def _dossier_from_row(row: sqlite3.Row) -> DossierState:
     return DossierState(
@@ -387,6 +476,18 @@ def _evidence_from_row(row: sqlite3.Row) -> EvidenceRecord:
     )
 
 
+def _structural_prior_from_row(row: sqlite3.Row) -> StructuralPriorRecord:
+    return StructuralPriorRecord(
+        market_ticker=row["market_ticker"],
+        prior_estimate=row["prior_estimate"],
+        confidence=float(row["confidence"]),
+        computed_ts=row["computed_ts"],
+        recompute_trigger=row["recompute_trigger"],
+        input_source_count=int(row["input_source_count"]),
+        llm_called=bool(row["llm_called"]),
+    )
+
+
 def _raise_write_integrity_error(exc: sqlite3.IntegrityError, evidence_id: str) -> None:
     message = str(exc)
     if "UNIQUE constraint failed" in message and "evidence" in message:
@@ -416,6 +517,14 @@ async def get_recent_evidence(
     return await default_store().get_recent_evidence(market_ticker, limit=limit)
 
 
+async def list_dossier_market_tickers() -> list[str]:
+    return await default_store().list_dossier_market_tickers()
+
+
+async def get_structural_prior(market_ticker: str) -> StructuralPriorRecord | None:
+    return await default_store().get_structural_prior(market_ticker)
+
+
 async def add_evidence(evidence: EvidenceRecord) -> None:
     await default_store().add_evidence(evidence)
 
@@ -430,4 +539,15 @@ async def update_dossier(
         state,
         update=update,
         evidence_ids_contributing=evidence_ids_contributing,
+    )
+
+
+async def update_structural_prior(
+    prior: PriorEstimate,
+    *,
+    recompute_trigger: str,
+) -> None:
+    await default_store().update_structural_prior(
+        prior,
+        recompute_trigger=recompute_trigger,
     )
