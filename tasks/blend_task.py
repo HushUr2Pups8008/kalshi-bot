@@ -187,7 +187,11 @@ class BlendTask:
             blend_result.trade_blocked_reason
             or readiness.trade_blocked_reason
         )
-        evidence_ids = [record.evidence_id for record in recent_records] if dossier else []
+        evidence_ids = _evidence_ids_for_blend(
+            recent_records=recent_records,
+            trigger_evidence_id=(fast_lane_result.signal_meta or {}).get("trigger_evidence_id"),
+            include_recent=dossier is not None,
+        )
         self._emit_blend_decision(
             ticker=ticker,
             blend_result=blend_result,
@@ -366,6 +370,27 @@ def _readiness_input(
         "in_recovery": dossier.in_recovery if dossier is not None else False,
         "recency_score": _recency_score(market, recent_records, now),
     }
+
+
+def _evidence_ids_for_blend(
+    *,
+    recent_records: list[EvidenceRecord],
+    trigger_evidence_id: Any,
+    include_recent: bool,
+) -> list[str]:
+    ids: list[str] = []
+    if isinstance(trigger_evidence_id, str) and trigger_evidence_id:
+        ids.append(trigger_evidence_id)
+    if include_recent:
+        ids.extend(record.evidence_id for record in recent_records)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for evidence_id in ids:
+        if evidence_id in seen:
+            continue
+        deduped.append(evidence_id)
+        seen.add(evidence_id)
+    return deduped
 
 
 def _recency_score(

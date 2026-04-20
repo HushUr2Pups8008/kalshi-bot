@@ -58,7 +58,6 @@ import os
 import signal
 import sqlite3
 import time
-import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from types import ModuleType, SimpleNamespace
@@ -330,16 +329,76 @@ class _RuntimeInstanceGuard:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def _normalized_evidence_identity(value: str | None) -> str:
+    return " ".join((value or "").strip().lower().split())
+
+
+def _evidence_id_for_signal(analysis: SignalAnalysis) -> str:
+    """Build a deterministic event ID for idempotent evidence ingestion."""
+    published = getattr(analysis.news_item, "published", None)
+    published_ts = published.isoformat() if published is not None else ""
+    parts = [
+        analysis.market.ticker,
+        _normalized_evidence_identity(analysis.news_item.source),
+        _normalized_evidence_identity(getattr(analysis.news_item, "url", None)),
+        _normalized_evidence_identity(analysis.news_item.headline),
+        published_ts,
+    ]
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    return f"ev-{digest[:32]}"
+
+
+def _source_class_for_evidence(source: str) -> str:
+    """Map runtime source labels into the evidence source-class contract."""
+    source_text = (source or "").strip()
+    lower = source_text.lower()
+    if source_text.startswith("r/"):
+        return "social"
+    if any(token in lower for token in (
+        ".gov",
+        "white house",
+        "state department",
+        "defense department",
+        "federal reserve",
+        "supreme court",
+        "congress",
+        "parliament",
+        "ministry",
+        "official",
+    )):
+        return "official"
+    if source_text.endswith(" - Google News") or source_text.endswith(" - BingNews"):
+        return "news"
+    if any(token in lower for token in (
+        "reuters",
+        "associated press",
+        "ap news",
+        "bbc",
+        "nyt",
+        "guardian",
+        "al jazeera",
+        "france 24",
+        "deutsche welle",
+        "defense one",
+        "foreign policy",
+        "politico",
+        "politics",
+        "just in news",
+    )):
+        return "news"
+    return "other"
+
+
 def _signal_to_evidence(analysis: SignalAnalysis) -> Evidence:
     """Convert a fast-lane SignalAnalysis into an Evidence record for accumulation."""
     content = f"{analysis.news_item.headline}|{analysis.market.ticker}"
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
     published = getattr(analysis.news_item, "published", None)
     return Evidence(
-        evidence_id=str(uuid.uuid4()),
+        evidence_id=_evidence_id_for_signal(analysis),
         market_ticker=analysis.market.ticker,
         source=analysis.news_item.source,
-        source_class="news",
+        source_class=_source_class_for_evidence(analysis.news_item.source),
         headline=analysis.news_item.headline,
         ingested_ts=datetime.now(timezone.utc).isoformat(),
         implied_probability=analysis.estimated_probability,
@@ -708,6 +767,10 @@ class TradingBot:
 
         # Feed evidence to accumulation lane (non-blocking; fast lane is not gated on it).
         evidence = _signal_to_evidence(analysis)
+        analysis.signal_meta = {
+            **(analysis.signal_meta or {}),
+            "trigger_evidence_id": evidence.evidence_id,
+        }
         try:
             self._evidence_queue.put_nowait(evidence)
         except asyncio.QueueFull:

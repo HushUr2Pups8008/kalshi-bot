@@ -13,12 +13,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import config as _cfg_module
+from analysis import SignalAnalysis
 from feeds.subreddit_selector import filter_disabled_subreddits, select_subreddits
 from feeds.search_news_monitor import run_search_news_monitor
 from feeds.gdelt_monitor import run_gdelt_monitor
 from feeds import NewsItem
 from kalshi import KalshiMarket
-from main import TradingBot
+from main import TradingBot, _signal_to_evidence, _source_class_for_evidence
 
 
 def _make_bot_stub():
@@ -87,6 +88,45 @@ def _make_news():
     )
 
 
+def _analysis_for_evidence(news: NewsItem | None = None) -> SignalAnalysis:
+    news = news or _make_news()
+    market = _make_market()
+    return SignalAnalysis(
+        news_item=news,
+        market=market,
+        estimated_probability=0.67,
+        market_yes_price=market.yes_price,
+        edge=0.17,
+        side="yes",
+        kelly_fraction=0.0,
+        kelly_dollars=0.0,
+        capped_dollars=0.0,
+    )
+
+
+def test_signal_to_evidence_uses_deterministic_id():
+    news = _make_news()
+    news.published = datetime(2026, 4, 20, 1, 2, 3, tzinfo=timezone.utc)
+
+    first = _signal_to_evidence(_analysis_for_evidence(news))
+    second = _signal_to_evidence(_analysis_for_evidence(news))
+
+    assert first.evidence_id == second.evidence_id
+    assert first.evidence_id.startswith("ev-")
+    assert first.implied_probability == pytest.approx(0.67)
+
+
+def test_signal_to_evidence_preserves_source_class_diversity():
+    news = _make_news()
+    news.source = "r/worldnews"
+
+    evidence = _signal_to_evidence(_analysis_for_evidence(news))
+
+    assert evidence.source_class == "social"
+    assert _source_class_for_evidence("White House official statement") == "official"
+    assert _source_class_for_evidence("Reuters") == "news"
+
+
 @pytest.mark.asyncio
 async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
@@ -121,6 +161,8 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
         match_meta=match_meta,
     )
     analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
+    evidence = bot._evidence_queue.get_nowait()
+    assert analysis.signal_meta["trigger_evidence_id"] == evidence.evidence_id
     assert analysis.news_item is news
     assert analysis.market.ticker == "KXTEST-25DEC31"
     assert analysis.estimated_probability == pytest.approx(0.65)

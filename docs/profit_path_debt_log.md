@@ -15,10 +15,10 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 32 |
-| Open — HIGH | 8 |
+| Open — HIGH | 5 |
 | Open — MEDIUM | 5 |
 | Open — LOW | 0 |
-| Items COMPLETE | 19 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004) |
+| Items COMPLETE | 22 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002) |
 
 ### High-Risk Areas
 
@@ -30,11 +30,11 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 
 ### Recommended Execution Order
 
-1. `PROFIT-RUNTIME-001` (sustained S4.5 validation; blocks confidence in the whole architecture)
-2. `PROFIT-TRACE-001` + `PROFIT-REPLAY-001` (trade explainability and replay guarantees)
-3. `PROFIT-EXEC-001` (remove or explicitly classify direct executor bypass paths)
-4. `PROFIT-EVID-001` + `PROFIT-EVID-002` (accumulation input quality and source-class fidelity)
-5. `PROFIT-VALID-001` + `PROFIT-OBS-001` + `PROFIT-OBS-002` (validation and observability hardening)
+1. `PROFIT-RUNTIME-001` (blocked on structural participation evidence; blocks confidence in the whole architecture)
+2. `PROFIT-EXEC-001` (remove or explicitly classify direct executor bypass paths)
+3. `PROFIT-OBS-002` (long-run app-log rollover confidence)
+4. `PROFIT-EVID-001` (accumulation input coverage)
+5. `PROFIT-VALID-001` + `PROFIT-OBS-001` (validation and observability hardening)
 6. Remaining MEDIUM items in dependency order
 
 ---
@@ -57,7 +57,7 @@ These items were added during the 2026-04-20 expanded audit. They do not replace
 | **Title** | S4.5 multi-lane paper validation remains unproven over a meaningful window |
 | **Category** | System Validation / Profit-Path Integrity |
 | **Severity** | HIGH |
-| **Status** | OPEN |
+| **Status** | BLOCKED |
 | **Priority** | NOW |
 | **Owner** | Shared |
 | **Depends On** | S3.x runtime wiring, S4.4 calibration work |
@@ -86,6 +86,9 @@ Run paper mode under production-intended intake for a meaningful window, capture
 **Notes**  
 Do not modify intake settings to force activity; this is a validation debt item, not a tuning item.
 
+**Validation Notes** (2026-04-20)  
+Runtime evidence exists for accumulation and blend participation, but the gate cannot close yet. `logs/trades/live/trades.jsonl` shows `BLEND_DECISION`, `EVIDENCE_INGESTION`, and `DOSSIER_UPDATE` events from 2026-04-20T03:43Z through 2026-04-20T12:50Z for `KXTRUMPIRAN-26MAY01`; `data/evidence_store.db` shows one dossier at version 7 with seven evidence rows. No `STRUCTURAL_PRIOR_RECOMPUTE` events were found, and `structural_priors` is empty. This is now blocked on resolving structural lane participation (see `PROFIT-STRUCT-001`) before S4.5 can be honestly marked complete.
+
 ---
 
 ### PROFIT-TRACE-001
@@ -96,7 +99,7 @@ Do not modify intake settings to force activity; this is a validation debt item,
 | **Title** | Evidence identity and blend traceability are fragile in live runtime |
 | **Category** | Auditability / Traceability |
 | **Severity** | HIGH |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | NOW |
 | **Owner** | Shared |
 | **Depends On** | S2.5, S3.4 |
@@ -124,6 +127,9 @@ Define deterministic evidence identity for feed-derived evidence and ensure the 
 **Notes**  
 This is not a request to redesign evidence semantics; it is a traceability contract repair.
 
+**Implementation Notes** (2026-04-20)  
+Fixed by replacing random runtime evidence IDs with deterministic `ev-<sha256>` IDs derived from ticker, source, URL, headline, and published timestamp. The fast-lane `SignalAnalysis.signal_meta` now carries `trigger_evidence_id`, and `BlendTask` includes that ID in `BLEND_DECISION.evidence_ids_contributing` even before the asynchronous accumulation task has caught up. Recent evidence IDs are de-duplicated against the trigger ID. Validation: `.venv/bin/pytest tests/test_main_pipeline.py tests/test_blend_task.py tests/test_accumulation_task.py tests/test_replay_dossier.py` (80 passed).
+
 ---
 
 ### PROFIT-REPLAY-001
@@ -134,7 +140,7 @@ This is not a request to redesign evidence semantics; it is a traceability contr
 | **Title** | Live accumulation path does not persist replay-critical `implied_probability` |
 | **Category** | Replay / Auditability |
 | **Severity** | HIGH |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | NOW |
 | **Owner** | Codex |
 | **Depends On** | S4.1 |
@@ -162,6 +168,9 @@ Persist the minimal replay payload required by S4.1 when converting scored evide
 **Notes**  
 Do not patch replay to guess missing probabilities; missing data should stay visible for old records.
 
+**Implementation Notes** (2026-04-20)  
+`AccumulationTask` now persists a minimal `raw_payload_json` payload containing `implied_probability`, `evidence_id`, and `content_hash` when converting live `Evidence` into `EvidenceRecord`. This preserves backward compatibility for old rows while making new rows replayable by `scripts/replay_dossier.py`. Validation: `.venv/bin/pytest tests/test_main_pipeline.py tests/test_blend_task.py tests/test_accumulation_task.py tests/test_replay_dossier.py` (80 passed).
+
 ---
 
 ### PROFIT-EVID-001
@@ -172,7 +181,7 @@ Do not patch replay to guess missing probabilities; missing data should stay vis
 | **Title** | Accumulation lane only learns from keyword-positive fast-lane survivors |
 | **Category** | Signal Quality / Evidence Coverage |
 | **Severity** | HIGH |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | HIGH |
 | **Owner** | Shared |
 | **Depends On** | S2.5 |
@@ -236,6 +245,9 @@ Add a narrow source-family-to-source-class mapper for evidence metadata, reusing
 
 **Notes**  
 Keep mapping conservative; unknown sources should remain `other` or a documented fallback.
+
+**Implementation Notes** (2026-04-20)  
+Added conservative runtime source-class mapping in `main.py`: Reddit-style sources map to `social`, official/government-style labels map to `official`, known publisher/search/direct news sources map to `news`, and unknown sources fall back to `other`. Evidence conversion now uses this mapper instead of hardcoding `news`. Validation: `.venv/bin/pytest tests/test_main_pipeline.py tests/test_blend_task.py tests/test_accumulation_task.py tests/test_replay_dossier.py` (80 passed).
 
 ---
 
@@ -1339,10 +1351,10 @@ Items with `Priority = NOW`, ordered for safe sequential execution:
 
 | Order | ID | Title | Why First |
 |-------|----|-------|-----------|
-| 1 | PROFIT-RUNTIME-001 | S4.5 multi-lane paper validation remains unproven | Establishes whether the integrated system behaves correctly under real flow |
-| 2 | PROFIT-TRACE-001 | Evidence identity and blend traceability are fragile | Without traceability, trades and non-trades cannot be explained reliably |
-| 3 | PROFIT-REPLAY-001 | Live accumulation path drops replay-critical probability | Blocks deterministic dossier reconstruction from persisted evidence |
-| 4 | PROFIT-EXEC-001 | Fade paths still call executor directly | Potential readiness / `BLEND_DECISION` bypass at the execution boundary |
+| 1 | PROFIT-RUNTIME-001 | S4.5 multi-lane paper validation remains unproven | Blocked until structural participation is observed or repaired |
+| 2 | PROFIT-EXEC-001 | Fade paths still call executor directly | Potential readiness / `BLEND_DECISION` bypass at the execution boundary |
+| 3 | PROFIT-OBS-002 | App-log rollover policy/documentation mismatch | Long-running validation needs trustworthy logs |
+| 4 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Dossier memory may be biased toward positive signals |
 
 **Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence.
 

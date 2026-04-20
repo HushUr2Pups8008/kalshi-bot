@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 from pathlib import Path
 
@@ -178,9 +179,17 @@ async def test_process_evidence_wires_scorer_builder_store_and_telemetry(tmp_pat
     with sqlite3.connect(task.store.db_path) as conn:
         evidence_count = conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
         update_count = conn.execute("SELECT COUNT(*) FROM dossier_updates").fetchone()[0]
+        payload_json = conn.execute(
+            "SELECT raw_payload_json FROM evidence WHERE evidence_id = ?",
+            ("ev-1",),
+        ).fetchone()[0]
 
     assert evidence_count == 1
     assert update_count == 1
+    payload = json.loads(payload_json)
+    assert payload["implied_probability"] == pytest.approx(0.70)
+    assert payload["evidence_id"] == "ev-1"
+    assert payload["content_hash"] == "hash-ev-1"
 
 
 @pytest.mark.asyncio

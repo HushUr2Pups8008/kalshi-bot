@@ -9,6 +9,7 @@ signals, or interact with trading.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import Callable, Protocol, Sequence
 
@@ -326,6 +327,14 @@ def _evidence_record_from_score(
         dossier_version_after=dossier_version_after,
         url=evidence.url,
         published_ts=evidence.published_ts,
+        raw_payload_json=json.dumps(
+            {
+                "implied_probability": score.implied_probability,
+                "evidence_id": evidence.evidence_id,
+                "content_hash": evidence.content_hash,
+            },
+            sort_keys=True,
+        ),
         is_duplicate=score.is_duplicate,
         correlation_discount_applied=score.correlation_discount_applied,
         quality_score=score.quality_score,

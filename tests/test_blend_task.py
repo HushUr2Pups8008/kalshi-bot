@@ -243,6 +243,53 @@ async def test_missing_slow_lane_context_uses_fast_lane_exemptions():
 
 
 @pytest.mark.asyncio
+async def test_trigger_evidence_id_is_logged_even_before_dossier_catches_up():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        is_paper_mode=True,
+    )
+    analysis = _analysis()
+    analysis.signal_meta = {"trigger_evidence_id": "ev-trigger"}
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.ready is True
+    assert logger.records[0]["evidence_ids_contributing"] == ["ev-trigger"]
+
+
+@pytest.mark.asyncio
+async def test_trigger_evidence_id_is_deduplicated_with_recent_evidence():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    store = FakeStore(
+        dossier=_dossier(),
+        structural_prior=_structural_prior(),
+        evidence=[
+            _evidence("ev-trigger", source_class="news"),
+            _evidence("ev-2", source_class="official", source="White House"),
+        ],
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=store,
+        logger=logger,
+        is_paper_mode=True,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
+    )
+    analysis = _analysis()
+    analysis.signal_meta = {"trigger_evidence_id": "ev-trigger"}
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.ready is True
+    assert logger.records[0]["evidence_ids_contributing"] == ["ev-trigger", "ev-2"]
+
+
+@pytest.mark.asyncio
 async def test_blocked_candidate_logs_reason_and_does_not_enqueue():
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     logger = SpyLogger()
