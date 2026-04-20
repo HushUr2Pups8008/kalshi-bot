@@ -12,9 +12,9 @@
 | Audit Source | Comprehensive migration audit — commit 2315a1d |
 | Total Items | 19 |
 | Open — HIGH | 0 |
-| Open — MEDIUM | 4 |
+| Open — MEDIUM | 2 |
 | Open — LOW | 10 |
-| Items COMPLETE | 5 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-TEST-001) |
+| Items COMPLETE | 6 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-TEST-001, MAC-TEST-002) |
 
 ### High-Risk Areas
 
@@ -568,7 +568,7 @@ Alternatively: assert via mock that `asyncio.to_thread` was called with `paper.r
 | **Title** | No integration test for `evidence_store` concurrent multi-market writes |
 | **Category** | Tests |
 | **Severity** | MEDIUM |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | BEFORE_GO_LIVE |
 | **Owner** | UNASSIGNED |
 | **Depends On** | MAC-DB-001 |
@@ -593,6 +593,12 @@ Add `tests/test_evidence_store_concurrency.py`:
 **Acceptance Criteria**  
 - 20 concurrent writes complete without `OperationalError`
 - Test fails if WAL mode is removed (verify by temporarily removing the PRAGMA and confirming failure)
+
+**Implementation Notes** (2026-04-20)  
+Added `tests/test_evidence_store_concurrency.py` with three tests:
+- `test_concurrent_writes_to_20_markets_no_operational_error`: 20 concurrent `asyncio.gather()` writes to distinct tickers; asserts all 20 dossiers are readable and each has 1 evidence record.
+- `test_concurrent_writes_same_market_are_serialised`: 10 concurrent writes to the same ticker; asserts per-market lock serialises them correctly (all 10 persist).
+- `test_wal_mode_is_active_after_first_write`: reads `PRAGMA journal_mode` directly and asserts `wal`; fails if MAC-DB-001 PRAGMA is removed.
 
 ---
 

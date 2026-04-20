@@ -6,6 +6,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.24] - 2026-04-20
+
+### Added
+- `tests/test_evidence_store_concurrency.py`: MAC-TEST-002 — three regression
+  guard tests for `EvidenceStore` concurrent writes:
+  `test_concurrent_writes_to_20_markets_no_operational_error` (20 concurrent
+  `asyncio.gather()` writes to 20 distinct tickers; all must succeed and be
+  readable), `test_concurrent_writes_same_market_are_serialised` (10 concurrent
+  writes to one ticker validate per-market lock), and
+  `test_wal_mode_is_active_after_first_write` (reads `PRAGMA journal_mode`
+  and asserts `wal`; fails if MAC-DB-001 PRAGMA is removed). Closes the final
+  Pre-Go-Live gate test item.
+
+---
+
 ## [0.29.23] - 2026-04-19
 
 ### Fixed
