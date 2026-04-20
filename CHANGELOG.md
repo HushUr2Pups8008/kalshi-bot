@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.31] - 2026-04-19
+
+### Docs
+- `PLATFORMS.md` (new, MAC-DOC-003): platform support matrix for Windows /
+  macOS / Linux covering runtime, automation, scripts, and persistence. All
+  Windows-only scripts listed with macOS equivalents. Linked from README.md.
+- `README.md`: added link to PLATFORMS.md.
+
+---
+
 ## [0.29.30] - 2026-04-19
 
 ### Tests

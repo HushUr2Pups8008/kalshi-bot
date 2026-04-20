@@ -13,8 +13,8 @@
 | Total Items | 19 |
 | Open — HIGH | 0 |
 | Open — MEDIUM | 0 |
-| Open — LOW | 2 |
-| Items COMPLETE | 18 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004) |
+| Open — LOW | 0 |
+| Items COMPLETE | 19 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004) |
 
 ### High-Risk Areas
 
@@ -794,7 +794,7 @@ Resolved as part of MAC-CLI-001/MAC-CLI-002. Both PS1 headers now read "PLATFORM
 | **Title** | No platform support matrix documenting Windows-only vs cross-platform items |
 | **Category** | Documentation / Prompt Drift |
 | **Severity** | LOW |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | DEFER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002 |
@@ -819,6 +819,9 @@ Add a `PLATFORMS.md` at the repo root (or a section to `README.md`) with a table
 **Acceptance Criteria**  
 - A platform matrix exists and is linked from README or CLAUDE.md
 - All Windows-only scripts are listed with their macOS equivalents or "N/A"
+
+**Implementation Notes** (2026-04-19)  
+Created `PLATFORMS.md` at repo root with four sections: Runtime/Process Management, Automation/Scheduling, Scripts, and Data/Persistence. All Windows-only scripts listed with macOS equivalents. Added a link to `PLATFORMS.md` from `README.md`.
 
 ---
 
