@@ -23,7 +23,7 @@ from analysis.regime_classifier import compute_regime_weights
 from feeds import NewsItem
 from kalshi import KalshiMarket
 from kalshi.rest_client import KalshiRestClient
-from utils.logger import get_logger, trade_log
+from utils.logger import get_logger, trade_log, write_trade_log_async
 
 log = get_logger("market_matcher")
 
@@ -588,7 +588,8 @@ class MarketMatcher:
                 market.title,
                 sorted(overlap),
             )
-            trade_log.log_match_diagnostic(
+            await write_trade_log_async(
+                trade_log.log_match_diagnostic,
                 source=news.source,
                 headline=news.headline,
                 ticker=market.ticker,
@@ -639,7 +640,8 @@ class MarketMatcher:
             )
 
             if ENABLE_MATCH_SUPPRESSION_DEBUG and _meets_suppression_criteria:
-                trade_log.log_match_suppression_candidate(
+                await write_trade_log_async(
+                    trade_log.log_match_suppression_candidate,
                     source=news.source,
                     headline=news.headline,
                     ticker=market.ticker,
@@ -652,7 +654,8 @@ class MarketMatcher:
 
             if ENABLE_LOW_QUALITY_MATCH_SUPPRESSION and _meets_suppression_criteria:
                 reason = "+".join(sorted(flag_set))
-                trade_log.log_match_suppressed(
+                await write_trade_log_async(
+                    trade_log.log_match_suppressed,
                     source=news.source,
                     headline=news.headline,
                     ticker=market.ticker,

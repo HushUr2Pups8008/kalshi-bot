@@ -23,7 +23,7 @@ from kalshi import KalshiMarket
 from tasks import evidence_store
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
 from tasks.trade_readiness_gate import ReadinessDecision, evaluate_readiness
-from utils.logger import trade_log
+from utils.logger import trade_log, write_trade_log_async
 
 
 class BlendTaskError(Exception):
@@ -192,7 +192,7 @@ class BlendTask:
             trigger_evidence_id=(fast_lane_result.signal_meta or {}).get("trigger_evidence_id"),
             include_recent=dossier is not None,
         )
-        self._emit_blend_decision(
+        await self._emit_blend_decision(
             ticker=ticker,
             blend_result=blend_result,
             regime_weights=regime_weights,
@@ -306,7 +306,7 @@ class BlendTask:
             return bool(await result)
         return bool(result)
 
-    def _emit_blend_decision(
+    async def _emit_blend_decision(
         self,
         *,
         ticker: str,
@@ -316,7 +316,8 @@ class BlendTask:
         trade_blocked_reason: str | None,
         evidence_ids: list[str],
     ) -> None:
-        self._logger.log_blend_decision(
+        await write_trade_log_async(
+            self._logger.log_blend_decision,
             market_ticker=ticker,
             fast_lane_p=blend_result.fast_lane_p,
             fast_lane_confidence=blend_result.fast_lane_confidence,

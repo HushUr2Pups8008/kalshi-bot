@@ -16,9 +16,9 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 32 |
 | Open — HIGH | 3 |
-| Open — MEDIUM | 3 |
+| Open — MEDIUM | 2 |
 | Open — LOW | 0 |
-| Items COMPLETE | 26 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-STRUCT-001) |
+| Items COMPLETE | 27 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STRUCT-001) |
 
 ### High-Risk Areas
 
@@ -125,7 +125,7 @@ Define deterministic evidence identity for feed-derived evidence and ensure the 
 **Notes**  
 This is not a request to redesign evidence semantics; it is a traceability contract repair.
 
-**Implementation Notes** (2026-04-20)  
+**Implementation Notes** (2026-04-20)
 Fixed by replacing random runtime evidence IDs with deterministic `ev-<sha256>` IDs derived from ticker, source, URL, headline, and published timestamp. The fast-lane `SignalAnalysis.signal_meta` now carries `trigger_evidence_id`, and `BlendTask` includes that ID in `BLEND_DECISION.evidence_ids_contributing` even before the asynchronous accumulation task has caught up. Recent evidence IDs are de-duplicated against the trigger ID. Validation: `.venv/bin/pytest tests/test_main_pipeline.py tests/test_blend_task.py tests/test_accumulation_task.py tests/test_replay_dossier.py` (80 passed).
 
 ---
@@ -166,7 +166,7 @@ Persist the minimal replay payload required by S4.1 when converting scored evide
 **Notes**  
 Do not patch replay to guess missing probabilities; missing data should stay visible for old records.
 
-**Implementation Notes** (2026-04-20)  
+**Implementation Notes** (2026-04-20)
 `AccumulationTask` now persists a minimal `raw_payload_json` payload containing `implied_probability`, `evidence_id`, and `content_hash` when converting live `Evidence` into `EvidenceRecord`. This preserves backward compatibility for old rows while making new rows replayable by `scripts/replay_dossier.py`. Validation: `.venv/bin/pytest tests/test_main_pipeline.py tests/test_blend_task.py tests/test_accumulation_task.py tests/test_replay_dossier.py` (80 passed).
 
 ---
@@ -342,7 +342,7 @@ Validated and completed the macOS stale-rollover repair. `utils.logger._maybe_ro
 | **Title** | Synchronous structured-log fsyncs can stall async hot paths |
 | **Category** | Performance / Timeliness |
 | **Severity** | MEDIUM |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | MEDIUM |
 | **Owner** | Shared |
 | **Depends On** | — |
@@ -368,6 +368,9 @@ Measure structured-log write latency under load, then decide whether to batch, q
 
 **Notes**  
 Do not remove fsync without an explicit audit-durability decision.
+
+**Implementation Notes** (2026-04-20)
+Preserved per-record flush/fsync durability but moved async hot-path structured-log writes through `utils.logger.write_trade_log_async(...)`, which awaits a thread offload so the event loop is not blocked by durable JSONL appends. Updated fast-lane intake, signal-analysis detail, matcher diagnostics, accumulation, blend, structural, and executor structured writes that run inside async workflows. Added `scripts/structured_log_latency_benchmark.py` to quantify the exact `TradeLogStore` fsync path; local macOS run with 100 synthetic records measured mean `0.0812 ms`, p99 `0.1570 ms`, max `0.2249 ms`. Added regression coverage that a deliberately slow structured writer runs off the event-loop thread. Validation: `.venv/bin/pytest tests/test_trade_log_store.py::test_write_trade_log_async_offloads_blocking_writer_from_event_loop tests/test_structured_log_latency_benchmark.py tests/test_main_pipeline.py tests/test_signal_analyzer.py tests/test_market_matcher.py tests/test_accumulation_task.py tests/test_blend_task.py tests/test_structural_task.py tests/test_executor.py` (229 passed).
 
 ---
 
@@ -1367,8 +1370,8 @@ Open or blocked items, ordered for safe sequential execution:
 | 1 | PROFIT-RUNTIME-001 | S4.5 multi-lane paper validation remains unproven | Re-run after structural participation fix and sufficient wall-clock runtime |
 | 2 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Blocked on contract decision for rejected-evidence intake semantics |
 | 3 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible |
-| 4 | PROFIT-PERF-001 | Structured-log fsyncs may stall async hot paths | Quantify before changing durability behavior |
-| 5 | PROFIT-STARTUP-001 | Startup warmup/cache-empty periods reduce effective uptime | Improves interpretation of long-run validation windows |
+| 4 | PROFIT-STARTUP-001 | Startup warmup/cache-empty periods reduce effective uptime | Improves interpretation of long-run validation windows |
+| 5 | PROFIT-CAL-001 | Calibration outcome feedback is not proven end-to-end | Depends on S4.5/resolved outcomes but remains visible |
 
 **Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence.
 

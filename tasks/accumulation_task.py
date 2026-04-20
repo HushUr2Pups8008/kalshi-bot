@@ -23,7 +23,7 @@ from tasks.evidence_store import (
     EvidenceStore,
     default_store,
 )
-from utils.logger import trade_log
+from utils.logger import trade_log, write_trade_log_async
 
 
 class AccumulationTaskError(Exception):
@@ -150,7 +150,8 @@ class AccumulationTask:
                 evidence_ids_contributing=contributing_ids,
             )
 
-            self.logger.log_evidence_ingestion(
+            await write_trade_log_async(
+                self.logger.log_evidence_ingestion,
                 market_ticker=evidence.market_ticker,
                 evidence_id=evidence.evidence_id,
                 source_class=score.source_class,
@@ -160,7 +161,8 @@ class AccumulationTask:
                 dossier_version_before=current_dossier.dossier_version,
                 dossier_version_after=next_dossier.dossier_version,
             )
-            self.logger.log_dossier_update(
+            await write_trade_log_async(
+                self.logger.log_dossier_update,
                 market_ticker=next_dossier.market_ticker,
                 dossier_version=next_dossier.dossier_version,
                 prior_estimate=current_dossier.current_estimate or 0.0,

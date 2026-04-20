@@ -1,14 +1,17 @@
+import asyncio
 import gzip
 import json
 import shutil
 import sys
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from utils.logger import TradeLogStore
+from utils.logger import TradeLogStore, write_trade_log_async
 from utils import trade_log_reader
 from utils.trade_log_reader import iter_trade_records
 
@@ -43,6 +46,33 @@ def _tmp_root() -> Path:
     root = Path(__file__).resolve().parent / "_tmp_trade_log_store" / uuid.uuid4().hex
     root.mkdir(parents=True, exist_ok=False)
     return root
+
+
+@pytest.mark.asyncio
+async def test_write_trade_log_async_offloads_blocking_writer_from_event_loop():
+    loop_thread = threading.get_ident()
+    writer_thread: list[int] = []
+    marker_times: list[float] = []
+    start = time.perf_counter()
+
+    def slow_writer() -> str:
+        writer_thread.append(threading.get_ident())
+        time.sleep(0.05)
+        return "written"
+
+    async def marker() -> None:
+        await asyncio.sleep(0.01)
+        marker_times.append(time.perf_counter())
+
+    result, _ = await asyncio.gather(
+        write_trade_log_async(slow_writer),
+        marker(),
+    )
+
+    assert result == "written"
+    assert writer_thread and writer_thread[0] != loop_thread
+    assert marker_times
+    assert marker_times[0] - start < 0.04
 
 
 def test_trade_log_store_rotates_across_day_boundary():

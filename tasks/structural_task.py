@@ -22,7 +22,7 @@ from tasks.evidence_store import (
     StructuralPriorRecord,
     default_store,
 )
-from utils.logger import trade_log
+from utils.logger import trade_log, write_trade_log_async
 
 
 class StructuralTaskError(Exception):
@@ -96,7 +96,8 @@ class StructuralTask:
                 new_prior,
                 recompute_trigger=recompute_trigger,
             )
-            self.logger.log_structural_prior_recompute(
+            await write_trade_log_async(
+                self.logger.log_structural_prior_recompute,
                 market_ticker=ticker,
                 prior_estimate=(
                     existing_prior.prior_estimate

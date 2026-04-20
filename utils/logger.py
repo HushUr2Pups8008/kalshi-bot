@@ -27,6 +27,7 @@ Architecture:
   active, and exactly one rotation attempt at midnight.
 """
 
+import asyncio
 import json
 import logging
 import logging.handlers
@@ -36,7 +37,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional, TypeVar
 
 import colorlog
 
@@ -365,6 +366,24 @@ def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:
 
 
 # ── Structured trade logger ───────────────────────────────────────────────────
+
+_T = TypeVar("_T")
+
+
+async def write_trade_log_async(
+    writer: Callable[..., _T],
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> _T:
+    """Run a durable structured-log write without blocking the event loop.
+
+    TradeLogStore intentionally fsyncs each JSONL event for audit durability.
+    Async hot paths should await this helper instead of calling trade_log
+    methods directly so the fsync happens in a worker thread while preserving
+    caller-visible completion and exception semantics.
+    """
+    return await asyncio.to_thread(writer, *args, **kwargs)
 
 def _parse_trade_ts(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():

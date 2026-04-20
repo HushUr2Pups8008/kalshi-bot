@@ -22,7 +22,7 @@ from config import cfg, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, PAPER_BLOCK_SAME_S
 from kalshi import OrderResult
 from kalshi.rest_client import KalshiRestClient
 from trading.paper_trader import PaperTrader
-from utils.logger import get_logger, trade_log
+from utils.logger import get_logger, trade_log, write_trade_log_async
 
 log = get_logger("executor")
 
@@ -149,7 +149,7 @@ class TradeExecutor:
             }
             if signal_meta:
                 skipped_kwargs["signal_meta"] = signal_meta
-            trade_log.log_skipped(**skipped_kwargs)
+            await write_trade_log_async(trade_log.log_skipped, **skipped_kwargs)
             return None
 
         if self._is_paper:
@@ -474,7 +474,7 @@ class TradeExecutor:
             signal_meta = self._signal_meta(analysis)
             if signal_meta:
                 live_order_kwargs["signal_meta"] = signal_meta
-            trade_log.log_live_order(**live_order_kwargs)
+            await write_trade_log_async(trade_log.log_live_order, **live_order_kwargs)
             if attempt > 0:
                 log.info(
                     "[LIVE] Order placed on attempt %d: %s | status=%s | filled=%d",

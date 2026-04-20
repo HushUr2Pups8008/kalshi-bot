@@ -19,7 +19,7 @@ from typing import Any, Optional
 from config import cfg, GEOPOLITICAL_SIGNALS
 from feeds import NewsItem
 from kalshi import KalshiMarket
-from utils.logger import get_logger, trade_log
+from utils.logger import get_logger, trade_log, write_trade_log_async
 
 log = get_logger("signal_analyzer")
 
@@ -930,7 +930,8 @@ async def estimate_probability(
             reason=routing_reason,
             market_price=market.yes_prob,
         )
-        trade_log.log_llm_skipped_routing(
+        await write_trade_log_async(
+            trade_log.log_llm_skipped_routing,
             ticker=market.ticker,
             source=news.source,
             headline=news.headline,
@@ -957,7 +958,8 @@ async def estimate_probability(
             f"[LLM] {llm_reasoning} "
             f"(LLM: {llm_prob:.3f}, Keywords(ref): {kw_prob:.3f})"
         )
-        trade_log.log_signal_analysis_detail(
+        await write_trade_log_async(
+            trade_log.log_signal_analysis_detail,
             ticker=market.ticker,
             source=news.source,
             headline=news.headline,
@@ -993,7 +995,8 @@ async def estimate_probability(
 
     if not keywords:
         # No keyword support and no LLM estimate available: stop here.
-        trade_log.log_signal_analysis_detail(
+        await write_trade_log_async(
+            trade_log.log_signal_analysis_detail,
             ticker=market.ticker,
             source=news.source,
             headline=news.headline,
@@ -1024,7 +1027,8 @@ async def estimate_probability(
 
     # Keyword only
     confidence = min(0.7, 0.3 + 0.05 * len(keywords))   # more keywords -> more confident
-    trade_log.log_signal_analysis_detail(
+    await write_trade_log_async(
+        trade_log.log_signal_analysis_detail,
         ticker=market.ticker,
         source=news.source,
         headline=news.headline,

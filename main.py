@@ -92,7 +92,7 @@ from tasks.calibration_task import CalibrationTask
 from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
-from utils.logger import get_logger, emit_startup_banner, rotate_logs
+from utils.logger import get_logger, emit_startup_banner, rotate_logs, write_trade_log_async
 
 log = get_logger("main")
 
@@ -495,14 +495,16 @@ class TradingBot:
         source = news.source
         headline = news.headline
         if self._is_disabled_source_family(source):
-            trade_log.log_early_stale_drop(
+            await write_trade_log_async(
+                trade_log.log_early_stale_drop,
                 reason="disabled_source_family",
                 source=source,
                 headline=headline,
             )
             return
         if _is_disabled_news_source(source):
-            trade_log.log_early_stale_drop(
+            await write_trade_log_async(
+                trade_log.log_early_stale_drop,
                 reason="disabled_source",
                 source=source,
                 headline=headline,
@@ -512,7 +514,8 @@ class TradingBot:
         published = getattr(news, "published", None)
         if not isinstance(published, datetime) or published.tzinfo is None:
             if EARLY_DROP_IF_NO_TIMESTAMP:
-                trade_log.log_early_stale_drop(
+                await write_trade_log_async(
+                    trade_log.log_early_stale_drop,
                     reason="missing_timestamp",
                     source=source,
                     headline=headline,
@@ -523,7 +526,8 @@ class TradingBot:
             age_secs = (datetime.now(timezone.utc) - published).total_seconds()
             threshold_secs = _early_max_news_age_seconds_for_source(source)
             if age_secs > threshold_secs:
-                trade_log.log_early_stale_drop(
+                await write_trade_log_async(
+                    trade_log.log_early_stale_drop,
                     reason="stale_by_source_policy",
                     source=source,
                     headline=headline,
@@ -538,7 +542,8 @@ class TradingBot:
         if self._dedup.is_duplicate(headline, source=source):
             return
         if isinstance(published, datetime) and published.tzinfo is not None:
-            trade_log.log_early_fresh_pass(
+            await write_trade_log_async(
+                trade_log.log_early_fresh_pass,
                 source=source,
                 headline=headline,
                 age_seconds=age_secs,
@@ -590,7 +595,8 @@ class TradingBot:
         age_secs = (datetime.now(timezone.utc) - news.published).total_seconds()
         market_yes_price = market.yes_price
         if age_secs > MAX_NEWS_AGE_SECONDS:
-            trade_log.log_analysis_rejected(
+            await write_trade_log_async(
+                trade_log.log_analysis_rejected,
                 reason="stale_news",
                 ticker=market.ticker,
                 source=news.source,
@@ -631,7 +637,8 @@ class TradingBot:
         estimated_prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
             await estimate_probability(news, market, keyword_stats=self.keyword_stats, match_meta=match_meta)
         if not keywords:
-            trade_log.log_analysis_rejected(
+            await write_trade_log_async(
+                trade_log.log_analysis_rejected,
                 reason="no_keywords",
                 ticker=market.ticker,
                 source=news.source,
@@ -697,14 +704,16 @@ class TradingBot:
             llm_mag or "-",
         )
 
-        trade_log.log_signal(
+        await write_trade_log_async(
+            trade_log.log_signal,
             source=news.source,
             headline=news.headline,
             url=news.url,
             signal_strength=abs(edge),
             keywords_matched=keywords,
         )
-        trade_log.log_opportunity(
+        await write_trade_log_async(
+            trade_log.log_opportunity,
             ticker=market.ticker,
             market_title=market.title,
             market_yes_price=market.yes_price,
