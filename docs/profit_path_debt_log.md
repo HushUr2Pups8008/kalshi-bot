@@ -97,7 +97,7 @@ Runtime evidence exists for accumulation and blend participation, but the gate c
 | **Title** | Evidence identity and blend traceability are fragile in live runtime |
 | **Category** | Auditability / Traceability |
 | **Severity** | HIGH |
-| **Status** | BLOCKED |
+| **Status** | COMPLETE |
 | **Priority** | NOW |
 | **Owner** | Shared |
 | **Depends On** | S2.5, S3.4 |
@@ -179,7 +179,7 @@ Do not patch replay to guess missing probabilities; missing data should stay vis
 | **Title** | Accumulation lane only learns from keyword-positive fast-lane survivors |
 | **Category** | Signal Quality / Evidence Coverage |
 | **Severity** | HIGH |
-| **Status** | COMPLETE |
+| **Status** | BLOCKED |
 | **Priority** | HIGH |
 | **Owner** | Shared |
 | **Depends On** | S2.5 |
@@ -301,7 +301,7 @@ Updated `scripts/observability_completeness_review.py` to distinguish required-v
 | **Title** | App-log rollover policy and documentation are misaligned for long macOS runs |
 | **Category** | Observability / Runtime Operations |
 | **Severity** | HIGH |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | HIGH |
 | **Owner** | Codex |
 | **Depends On** | — |
@@ -495,7 +495,7 @@ Do not tune scaling factors as part of this debt item.
 | **Title** | Fade tweet and price-fade paths still call executor directly |
 | **Category** | Execution Boundary / Safety |
 | **Severity** | HIGH |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | NOW |
 | **Owner** | Shared |
 | **Depends On** | S3.4, S3.5 |
@@ -1360,14 +1360,15 @@ Created `PLATFORMS.md` at repo root with four sections: Runtime/Process Manageme
 
 ### A. Current Profit-Path Fix Queue
 
-Items with `Priority = NOW`, ordered for safe sequential execution:
+Open or blocked items, ordered for safe sequential execution:
 
 | Order | ID | Title | Why First |
 |-------|----|-------|-----------|
-| 1 | PROFIT-RUNTIME-001 | S4.5 multi-lane paper validation remains unproven | Blocked until structural participation is observed or repaired |
-| 2 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible |
-| 3 | PROFIT-OBS-001 | Blend completeness semantics are too blunt | Avoid false observability failures that hide real gaps |
+| 1 | PROFIT-RUNTIME-001 | S4.5 multi-lane paper validation remains unproven | Re-run after structural participation fix and sufficient wall-clock runtime |
+| 2 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Blocked on contract decision for rejected-evidence intake semantics |
+| 3 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible |
 | 4 | PROFIT-PERF-001 | Structured-log fsyncs may stall async hot paths | Quantify before changing durability behavior |
+| 5 | PROFIT-STARTUP-001 | Startup warmup/cache-empty periods reduce effective uptime | Improves interpretation of long-run validation windows |
 
 **Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence.
 
