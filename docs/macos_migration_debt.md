@@ -13,8 +13,8 @@
 | Total Items | 19 |
 | Open — HIGH | 0 |
 | Open — MEDIUM | 0 |
-| Open — LOW | 3 |
-| Items COMPLETE | 17 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003) |
+| Open — LOW | 2 |
+| Items COMPLETE | 18 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004) |
 
 ### High-Risk Areas
 
@@ -683,7 +683,7 @@ All 3 pass on macOS.
 | **Title** | `_maybe_rotate_stale()` period-boundary edge case untested |
 | **Category** | Tests |
 | **Severity** | LOW |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | DEFER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
@@ -707,6 +707,12 @@ Add two cases to `tests/test_logger_rotation.py`:
 **Acceptance Criteria**  
 - Both edge cases pass
 - Behavior at boundary is documented in the test
+
+**Implementation Notes** (2026-04-19)  
+Added two tests to `tests/test_logger_rotation.py`:
+- `test_maybe_rotate_stale_does_not_rotate_at_exact_period_boundary`: sets mtime == period_start, asserts no archive is created (strict `<` keeps the file).
+- `test_maybe_rotate_stale_rotates_when_mtime_is_one_second_before_period_boundary`: sets mtime == period_start - 1, asserts archive is created and content preserved.
+Both pass on macOS.
 
 ---
 

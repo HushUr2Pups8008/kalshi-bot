@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.30] - 2026-04-19
+
+### Tests
+- `tests/test_logger_rotation.py` (MAC-TEST-004): added two boundary edge-case
+  tests for `_maybe_rotate_stale()` — `mtime == period_start` must NOT rotate
+  (file belongs to current period); `mtime == period_start - 1` MUST rotate
+  (file belongs to previous period). Pins the strict `<` comparison and guards
+  against macOS APFS nanosecond-boundary regressions.
+
+---
+
 ## [0.29.29] - 2026-04-19
 
 ### Tests

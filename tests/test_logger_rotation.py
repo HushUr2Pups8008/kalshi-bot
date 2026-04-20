@@ -245,3 +245,89 @@ def test_forced_rollover_cycle_no_hotloop():
             logger.handlers = []
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_maybe_rotate_stale_does_not_rotate_at_exact_period_boundary():
+    """MAC-TEST-004: mtime == period_start must NOT trigger rotation.
+
+    The implementation uses strict `<` so a file written exactly at the
+    period boundary belongs to the current period and must be kept as-is.
+    On macOS APFS with nanosecond precision, a file written during a near-
+    midnight startup could land exactly on the boundary epoch second.
+    """
+    root = _tmp_root()
+    bot_path = root / "bot.log"
+    try:
+        handler = _DailyRotatingFileHandler(
+            bot_path,
+            when="midnight",
+            backupCount=7,
+            encoding="utf-8",
+            utc=True,
+        )
+        handler.setFormatter(_utc_formatter("%(asctime)s UTC %(levelname)-8s %(name)-20s %(message)s"))
+        logger = _make_logger("test.boundary.exact", handler)
+        try:
+            logger.info("content at exact boundary")
+            handler.flush()
+
+            period_start = handler.rolloverAt - handler.interval
+            # mtime exactly at period_start — belongs to current period, must not rotate
+            os.utime(bot_path, (period_start, period_start))
+
+            _maybe_rotate_stale(handler)
+        finally:
+            handler.close()
+            logger.handlers = []
+
+        archives = list(root.glob("bot.log.*"))
+        assert not archives, (
+            "mtime == period_start must NOT trigger rotation; "
+            "file belongs to the current period"
+        )
+        assert bot_path.exists() and bot_path.stat().st_size > 0
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_maybe_rotate_stale_rotates_when_mtime_is_one_second_before_period_boundary():
+    """MAC-TEST-004: mtime == period_start - 1 MUST trigger rotation.
+
+    A file written one second before the period boundary belongs to the
+    previous period and must be archived.  This is the complement of the
+    exact-boundary test above and pins the strict `<` comparison.
+    """
+    root = _tmp_root()
+    bot_path = root / "bot.log"
+    try:
+        handler = _DailyRotatingFileHandler(
+            bot_path,
+            when="midnight",
+            backupCount=7,
+            encoding="utf-8",
+            utc=True,
+        )
+        handler.setFormatter(_utc_formatter("%(asctime)s UTC %(levelname)-8s %(name)-20s %(message)s"))
+        logger = _make_logger("test.boundary.minus1", handler)
+        try:
+            logger.info("content one second before boundary")
+            handler.flush()
+
+            period_start = handler.rolloverAt - handler.interval
+            # mtime one second before period_start — belongs to previous period, must rotate
+            os.utime(bot_path, (period_start - 1, period_start - 1))
+
+            _maybe_rotate_stale(handler)
+        finally:
+            handler.close()
+            logger.handlers = []
+
+        archives = list(root.glob("bot.log.*"))
+        assert archives, (
+            "mtime == period_start - 1 MUST trigger rotation; "
+            "file belongs to the previous period"
+        )
+        archived_text = archives[0].read_text(encoding="utf-8")
+        assert "content one second before boundary" in archived_text
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
