@@ -16,9 +16,9 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 32 |
 | Open — HIGH | 3 |
-| Open — MEDIUM | 4 |
+| Open — MEDIUM | 3 |
 | Open — LOW | 0 |
-| Items COMPLETE | 25 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002) |
+| Items COMPLETE | 26 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-STRUCT-001) |
 
 ### High-Risk Areas
 
@@ -416,7 +416,7 @@ This should be validation tooling, not a production bypass.
 | **Title** | Structural prior recompute may lag initial market-cache availability |
 | **Category** | Structural Lane / Timeliness |
 | **Severity** | MEDIUM |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | MEDIUM |
 | **Owner** | Shared |
 | **Depends On** | S3.2 |
@@ -443,6 +443,9 @@ Measure first-run timing and, if confirmed, trigger an additional recompute afte
 
 **Notes**  
 Keep this in orchestration; do not move structural logic into `main.py`.
+
+**Implementation Notes** (2026-04-20)  
+Fixed the initial empty-cache lag by making `_structural_recompute_task()` wait until the market cache is non-empty before starting the hourly `StructuralTask.run_periodic()` loop. This prevents an empty startup pass from delaying the first useful structural recompute by a full interval. The provider now returns a defensive list copy of the live cache. Validation: `.venv/bin/pytest tests/test_main_pipeline.py::test_structural_recompute_waits_for_non_empty_market_cache` (passed).
 
 ---
 
@@ -1364,7 +1367,7 @@ Items with `Priority = NOW`, ordered for safe sequential execution:
 | 1 | PROFIT-RUNTIME-001 | S4.5 multi-lane paper validation remains unproven | Blocked until structural participation is observed or repaired |
 | 2 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible |
 | 3 | PROFIT-OBS-001 | Blend completeness semantics are too blunt | Avoid false observability failures that hide real gaps |
-| 4 | PROFIT-STRUCT-001 | Structural prior recompute may lag or remain inactive | Blocks `PROFIT-RUNTIME-001` completion |
+| 4 | PROFIT-PERF-001 | Structured-log fsyncs may stall async hot paths | Quantify before changing durability behavior |
 
 **Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence.
 

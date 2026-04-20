@@ -752,6 +752,31 @@ async def test_refresh_market_cache_once_logs_startup_warmup_duration(caplog):
 
 
 @pytest.mark.asyncio
+async def test_structural_recompute_waits_for_non_empty_market_cache():
+    bot = _make_bot_stub()
+    bot.matcher._cache._markets = []
+    market = _make_market()
+    bot._structural_task = MagicMock()
+    bot._structural_task.run_periodic = AsyncMock()
+
+    async def _populate_cache():
+        await asyncio.sleep(0.01)
+        bot.matcher._cache._markets = [market]
+
+    structural = asyncio.create_task(bot._structural_recompute_task())
+    populate_task = asyncio.create_task(_populate_cache())
+    try:
+        await asyncio.wait_for(structural, timeout=0.5)
+    finally:
+        await populate_task
+
+    bot._structural_task.run_periodic.assert_awaited_once()
+    kwargs = bot._structural_task.run_periodic.await_args.kwargs
+    assert kwargs["interval_seconds"] == 3600
+    assert kwargs["market_provider"]() == [market]
+
+
+@pytest.mark.asyncio
 async def test_process_fade_tweet_builds_geo_fade_handoff_with_ws_price(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
     bot = _make_bot_stub()

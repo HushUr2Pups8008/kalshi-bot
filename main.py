@@ -1624,8 +1624,14 @@ class TradingBot:
 
     async def _structural_recompute_task(self) -> None:
         """Periodically recompute structural priors for all active markets."""
+        while not self.matcher._cache._markets:
+            await asyncio.sleep(0.25)
+        log.info(
+            "[STRUCTURAL] Market cache ready: starting recompute loop with %d markets",
+            len(self.matcher._cache._markets),
+        )
         await self._structural_task.run_periodic(
-            market_provider=lambda: self.matcher._cache._markets,
+            market_provider=lambda: list(self.matcher._cache._markets),
             interval_seconds=3600,
         )
 
