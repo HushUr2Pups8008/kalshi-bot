@@ -1,6 +1,8 @@
-# macOS Migration Technical Debt Log
+# Profit Path Technical Debt Log
 
-**System of record for all cross-platform migration issues identified during the Windows → macOS transition.**
+**Single system of record for technical debt that could materially reduce the bot's ability to make money through disciplined, well-educated trades.**
+
+This log supersedes the former `docs/macos_migration_debt.md` tracker. The original Windows -> macOS migration findings are preserved with their `MAC-*` IDs and completion history; the scope is now broader so platform, signal-quality, belief-system, execution-boundary, observability, validation, and documentation risks stay in one durable queue instead of fragmenting across parallel logs. Claude and Codex should continue using this renamed file as the sole technical-debt tracking mechanism going forward.
 
 ---
 
@@ -8,32 +10,534 @@
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-04-19 |
-| Audit Source | Comprehensive migration audit — commit 2315a1d |
-| Total Items | 19 |
-| Open — HIGH | 0 |
-| Open — MEDIUM | 0 |
+| Last Updated | 2026-04-20 |
+| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d |
+| Previous Tracker Name | `docs/macos_migration_debt.md` |
+| Current Tracker Name | `docs/profit_path_debt_log.md` |
+| Total Items | 32 |
+| Open — HIGH | 8 |
+| Open — MEDIUM | 5 |
 | Open — LOW | 0 |
 | Items COMPLETE | 19 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004) |
 
 ### High-Risk Areas
 
-1. **Async / Event-Loop Blocking** — `paper_trader.py` synchronous SQLite methods are called directly from async task functions, blocking the event loop on every paper trade, nightly report, and market resolution.
-2. **SQLite Concurrency** — `evidence_store` opens connections without WAL mode; concurrent multi-market writes contend on SQLite's global write lock.
-3. **macOS Automation Gap** — No launchd/cron equivalent exists for the Windows Scheduled Task that drove daily review.
+1. **Multi-lane validation is incomplete** — S4.5 still needs a sustained paper-mode run that proves accumulation, structural priors, blending, readiness, and execution all participate under production-intended intake.
+2. **Traceability and replay gaps** — runtime evidence IDs are random, current-signal evidence can miss the matching `BLEND_DECISION`, and replay-critical `implied_probability` is not persisted by the live accumulation path.
+3. **Execution-boundary bypass risk** — fade tweet and price-fade paths still call the executor directly rather than the blend/readiness lane meeting point.
+4. **Source-class and evidence-quality loss** — live evidence conversion collapses all news into `source_class="news"`, weakening source diversity, scorer quality, readiness G2, and structural context.
+5. **Observability under long runs** — app-log rollover policy is time-only and documentation disagrees with code behavior on macOS, making S4.5 and go-live audit trails fragile.
 
 ### Recommended Execution Order
 
-1. `MAC-ASYNC-001` → `MAC-ASYNC-002` (async blocking — highest runtime impact)
-2. `MAC-DB-001` (WAL mode — prerequisite for safe concurrent writes)
-3. `MAC-DB-002` (timeout consistency — simple one-liner)
-4. `MAC-CLI-001` (scheduling — blocks operational completeness)
-5. `MAC-TEST-001` → `MAC-TEST-002` (test coverage for the above fixes)
-6. Everything else in dependency order
+1. `PROFIT-RUNTIME-001` (sustained S4.5 validation; blocks confidence in the whole architecture)
+2. `PROFIT-TRACE-001` + `PROFIT-REPLAY-001` (trade explainability and replay guarantees)
+3. `PROFIT-EXEC-001` (remove or explicitly classify direct executor bypass paths)
+4. `PROFIT-EVID-001` + `PROFIT-EVID-002` (accumulation input quality and source-class fidelity)
+5. `PROFIT-VALID-001` + `PROFIT-OBS-001` + `PROFIT-OBS-002` (validation and observability hardening)
+6. Remaining MEDIUM items in dependency order
 
 ---
 
 ## Full Technical Debt Log
+
+---
+
+## Current Open Profit-Path Items
+
+These items were added during the 2026-04-20 expanded audit. They do not replace the completed `MAC-*` migration work below; they extend the same single tracking mechanism to all issues that could impair profitable, safe, auditable trading.
+
+---
+
+### PROFIT-RUNTIME-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-RUNTIME-001 |
+| **Title** | S4.5 multi-lane paper validation remains unproven over a meaningful window |
+| **Category** | System Validation / Profit-Path Integrity |
+| **Severity** | HIGH |
+| **Status** | OPEN |
+| **Priority** | NOW |
+| **Owner** | Shared |
+| **Depends On** | S3.x runtime wiring, S4.4 calibration work |
+| **Blocks** | Go-live confidence, S4.5 completion |
+
+**Description**  
+The system now wires fast-lane output through `BlendTask`, evidence through `AccumulationTask`, and structural recomputes through `StructuralTask`, but the corrected S4.5 validation still requires a sustained 6-12 hour paper-mode run. Earlier attempts only proved wiring readiness or insufficient runtime, not real multi-lane behavior under production-intended intake.
+
+**Why it matters to profitability / safety / reliability**  
+Without this run, the bot can appear architecturally complete while still failing to accumulate useful evidence, recompute priors, emit complete blend telemetry, or preserve the trade-frequency constraint in real flow.
+
+**Evidence / Source**  
+- `main.py:709-723` routes keyword-positive fast-lane signals into evidence + blend.
+- `main.py:1616-1620` starts accumulation, blend consumer, and structural tasks.
+- S4.5 notes in chat: prior runs lacked sufficient post-wiring observation time.
+
+**Proposed Fix**  
+Run paper mode under production-intended intake for a meaningful window, capture lane activation timeline, compare fast-lane baseline to multi-lane frequency, and record Section 13 pass/fail evidence.
+
+**Acceptance Criteria**  
+- Runtime duration is recorded.
+- `EVIDENCE_INGESTION`, `DOSSIER_UPDATE`, `STRUCTURAL_PRIOR_RECOMPUTE`, and `BLEND_DECISION` are observed or a defect is filed.
+- Trade-frequency comparison is computed or handled with the zero-baseline rule.
+- Section 13 checklist is explicitly PASS / FAIL / N/A.
+
+**Notes**  
+Do not modify intake settings to force activity; this is a validation debt item, not a tuning item.
+
+---
+
+### PROFIT-TRACE-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-TRACE-001 |
+| **Title** | Evidence identity and blend traceability are fragile in live runtime |
+| **Category** | Auditability / Traceability |
+| **Severity** | HIGH |
+| **Status** | OPEN |
+| **Priority** | NOW |
+| **Owner** | Shared |
+| **Depends On** | S2.5, S3.4 |
+| **Blocks** | Reliable trade explanation, replay confidence |
+
+**Description**  
+`_signal_to_evidence()` creates `evidence_id=str(uuid.uuid4())`, so the same feed item reprocessed after restart receives a new immutable ID. `BlendTask` then emits `evidence_ids_contributing` from already-persisted recent evidence only; because `main.py` enqueues evidence and immediately calls `BlendTask`, the triggering signal's evidence may not yet be persisted and may be missing from the related `BLEND_DECISION`.
+
+**Why it matters to profitability / safety / reliability**  
+The contract relies on evidence -> dossier -> blend -> trade traceability. If IDs are nondeterministic or the current signal is absent from blend telemetry, later review cannot reliably explain why a profitable or losing trade happened.
+
+**Evidence / Source**  
+- `main.py:333-348` generates random UUID evidence IDs.
+- `main.py:709-723` enqueues evidence non-blocking, then immediately blends.
+- `tasks/blend_task.py:191` emits `evidence_ids = [record.evidence_id for record in recent_records] if dossier else []`.
+
+**Proposed Fix**  
+Define deterministic evidence identity for feed-derived evidence and ensure the triggering evidence ID is included in the blend trace when available, without blocking the fast lane on accumulation policy.
+
+**Acceptance Criteria**  
+- Reprocessing the same source/headline/market/time identity produces the same evidence ID or a documented idempotency key.
+- `BLEND_DECISION.evidence_ids_contributing` can be joined to the specific evidence chain behind the decision.
+- Tests cover same-signal traceability and restart/replay idempotency.
+
+**Notes**  
+This is not a request to redesign evidence semantics; it is a traceability contract repair.
+
+---
+
+### PROFIT-REPLAY-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-REPLAY-001 |
+| **Title** | Live accumulation path does not persist replay-critical `implied_probability` |
+| **Category** | Replay / Auditability |
+| **Severity** | HIGH |
+| **Status** | OPEN |
+| **Priority** | NOW |
+| **Owner** | Codex |
+| **Depends On** | S4.1 |
+| **Blocks** | Deterministic dossier reconstruction |
+
+**Description**  
+The replay utility intentionally fails if persisted evidence lacks `raw_payload_json.implied_probability`, but `_evidence_record_from_score()` does not populate `raw_payload_json`. The live `Evidence` object carries `implied_probability`, then storage drops it from replay payload.
+
+**Why it matters to profitability / safety / reliability**  
+If belief state cannot be reconstructed solely from persisted evidence events, losing trades cannot be audited and profitable patterns cannot be calibrated from a trustworthy history.
+
+**Evidence / Source**  
+- `scripts/replay_dossier.py:299-344` requires `raw_payload_json.implied_probability`.
+- `tasks/accumulation_task.py:320-333` builds `EvidenceRecord` without `raw_payload_json`.
+- `analysis/evidence_types.py:26` defines `implied_probability` as part of `Evidence`.
+
+**Proposed Fix**  
+Persist the minimal replay payload required by S4.1 when converting scored evidence to `EvidenceRecord`, preserving schema compatibility.
+
+**Acceptance Criteria**  
+- Live-ingested evidence rows contain replay-critical probability data.
+- `scripts.replay_dossier` can replay a paper-run market without synthetic test-only payloads.
+- Existing raw payload fields remain backward compatible for old rows.
+
+**Notes**  
+Do not patch replay to guess missing probabilities; missing data should stay visible for old records.
+
+---
+
+### PROFIT-EVID-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EVID-001 |
+| **Title** | Accumulation lane only learns from keyword-positive fast-lane survivors |
+| **Category** | Signal Quality / Evidence Coverage |
+| **Severity** | HIGH |
+| **Status** | OPEN |
+| **Priority** | HIGH |
+| **Owner** | Shared |
+| **Depends On** | S2.5 |
+| **Blocks** | Dossier completeness, structural prior quality |
+
+**Description**  
+`_process_candidate()` returns immediately on `if not keywords`, before creating `SignalAnalysis` or evidence. That means weak/no-keyword but potentially informative LLM outcomes and rejected candidates do not enter the accumulation lane.
+
+**Why it matters to profitability / safety / reliability**  
+The dossier can become a biased memory of only signal-positive events, weakening calibration around non-events, false positives, and contextual evidence that should reduce confidence.
+
+**Evidence / Source**  
+- `main.py:553-568` logs `no_keywords` and returns.
+- Evidence creation begins only at `main.py:709`.
+
+**Proposed Fix**  
+Decide, at the contract level, which rejected or low-signal observations should become non-trading evidence, then route only those approved classes into accumulation with explicit update types.
+
+**Acceptance Criteria**  
+- Evidence intake policy documents which fast-lane outcomes become dossier evidence.
+- Tests verify no unintended trade path is opened by ingesting non-trading evidence.
+- Dossier updates can represent confidence/state-neutral evidence where intended.
+
+**Notes**  
+This is not permission to loosen trading thresholds.
+
+---
+
+### PROFIT-EVID-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EVID-002 |
+| **Title** | Runtime evidence conversion collapses all sources into `source_class="news"` |
+| **Category** | Signal Quality / Source Classification |
+| **Severity** | HIGH |
+| **Status** | OPEN |
+| **Priority** | HIGH |
+| **Owner** | Codex |
+| **Depends On** | S2.5, S3.4 |
+| **Blocks** | Readiness G2 fidelity, source-quality scoring |
+
+**Description**  
+`_signal_to_evidence()` hardcodes every feed-derived item to `source_class="news"`, even when source families include publisher RSS, Reddit/social, direct feeds, search-derived items, or official-style sources.
+
+**Why it matters to profitability / safety / reliability**  
+The evidence scorer, dossier builder, structural task, and readiness gate use source class for quality, correlation, diversity, and source-class requirements. Collapsing classes hides evidence concentration and can over-block or over-trust trades.
+
+**Evidence / Source**  
+- `main.py:342` sets `source_class="news"`.
+- `analysis/evidence_scorer.py:58-118` uses `source_class` for quality and independence.
+- `tasks/trade_readiness_gate.py:95-97` enforces source-class diversity for dossier candidates.
+
+**Proposed Fix**  
+Add a narrow source-family-to-source-class mapper for evidence metadata, reusing existing source-family classification where possible.
+
+**Acceptance Criteria**  
+- RSS, Reddit/social, search, direct, official/market-like sources map deterministically to documented classes.
+- Existing trading behavior remains unchanged except for evidence metadata.
+- Tests cover readiness G2 and scorer effects with real runtime source examples.
+
+**Notes**  
+Keep mapping conservative; unknown sources should remain `other` or a documented fallback.
+
+---
+
+### PROFIT-OBS-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-OBS-001 |
+| **Title** | `BLEND_DECISION` completeness rules conflict with nullable lane semantics |
+| **Category** | Observability / Contract Clarity |
+| **Severity** | MEDIUM |
+| **Status** | OPEN |
+| **Priority** | HIGH |
+| **Owner** | Shared |
+| **Depends On** | S4.2 |
+| **Blocks** | Reliable observability pass/fail interpretation |
+
+**Description**  
+The contract requires all `BLEND_DECISION` fields to be non-null for at least 90% of paper events, but early/fast-only cases naturally have absent accumulation or structural lane values, and approved trades use `trade_blocked_reason=None`.
+
+**Why it matters to profitability / safety / reliability**  
+If observability validation treats semantically optional fields as failed instrumentation, operators may chase false defects or miss real telemetry gaps.
+
+**Evidence / Source**  
+- `docs/IMPLEMENTATION_CONTRACT.md:597` defines the 90% non-null criterion.
+- `tasks/blend_task.py:316-331` emits accumulation/structural fields directly from lane availability.
+- `tests/test_blend_decision_schema.py:79` expects `trade_blocked_reason is None` for non-blocked cases.
+
+**Proposed Fix**  
+Clarify completeness validation into required-presence versus semantically nullable fields, while preserving exact schema keys.
+
+**Acceptance Criteria**  
+- S4.2 tooling distinguishes absent keys, malformed values, and allowed nulls.
+- Contract wording documents which fields may be null and when.
+- Tests cover both approved and blocked candidate telemetry.
+
+**Notes**  
+Do not remove fields from the schema.
+
+---
+
+### PROFIT-OBS-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-OBS-002 |
+| **Title** | App-log rollover policy and documentation are misaligned for long macOS runs |
+| **Category** | Observability / Runtime Operations |
+| **Severity** | HIGH |
+| **Status** | OPEN |
+| **Priority** | HIGH |
+| **Owner** | Codex |
+| **Depends On** | — |
+| **Blocks** | S4.5 long-run audit confidence |
+
+**Description**  
+`utils/logger.py` uses a time-based `_DailyRotatingFileHandler` with copy+truncate rotation for app logs, while `PLATFORMS.md` claims macOS/Linux use atomic rename. App logs have no size cap, so a high-volume same-day S4.5 run can produce large active files until midnight or manual rotation.
+
+**Why it matters to profitability / safety / reliability**  
+Long-run paper validation depends on trustworthy, bounded logs. Misunderstood rollover behavior can lose audit context, create operator confusion, or cause disk pressure during the exact runs meant to prove safety.
+
+**Evidence / Source**  
+- `utils/logger.py:146-231` implements copy+truncate daily rotation.
+- `PLATFORMS.md:14` documents atomic rename for macOS/Linux.
+- `tasks/completed.md:23-25` says copy+truncate works cross-platform and singleton handlers fixed duplicate rotation.
+
+**Proposed Fix**  
+Audit and either correct the documentation to match intentional daily copy+truncate behavior or implement the intended platform-specific rotation policy with tests for forced rollover and sustained logging.
+
+**Acceptance Criteria**  
+- `bot.log` and `errors.log` rollover behavior is explicitly documented and tested on macOS.
+- Active app logs have an intentional size or time policy.
+- No duplicate file handlers write to the same app log.
+
+**Notes**  
+This item captures the logging rollover concern inside the unified debt log instead of creating a separate logging tracker.
+
+---
+
+### PROFIT-PERF-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-PERF-001 |
+| **Title** | Synchronous structured-log fsyncs can stall async hot paths |
+| **Category** | Performance / Timeliness |
+| **Severity** | MEDIUM |
+| **Status** | OPEN |
+| **Priority** | MEDIUM |
+| **Owner** | Shared |
+| **Depends On** | — |
+| **Blocks** | High-volume intake reliability |
+
+**Description**  
+`TradeLogStore._append_line()` writes and fsyncs every structured JSONL event synchronously. Many trade-log calls happen inside async feed, analysis, accumulation, and blend paths.
+
+**Why it matters to profitability / safety / reliability**  
+During news bursts, synchronous fsyncs can delay candidate processing, evidence ingestion, and decision telemetry, causing stale decisions or missed opportunities.
+
+**Evidence / Source**  
+- `utils/logger.py:401-409` writes, flushes, and `os.fsync()`s every structured record.
+- `main.py`, `tasks/accumulation_task.py`, and `tasks/blend_task.py` call `trade_log` from async workflows.
+
+**Proposed Fix**  
+Measure structured-log write latency under load, then decide whether to batch, queue, or thread off fsyncs without weakening audit durability.
+
+**Acceptance Criteria**  
+- Benchmark or stress test quantifies worst-case logging latency.
+- Any changed logging path preserves event ordering and durability guarantees.
+- Async hot-path tests guard against blocking regression.
+
+**Notes**  
+Do not remove fsync without an explicit audit-durability decision.
+
+---
+
+### PROFIT-VALID-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-VALID-001 |
+| **Title** | No first-class harness for fast-lane baseline versus multi-lane S4.5 comparison |
+| **Category** | Validation / Testing |
+| **Severity** | HIGH |
+| **Status** | OPEN |
+| **Priority** | HIGH |
+| **Owner** | Codex |
+| **Depends On** | PROFIT-RUNTIME-001 |
+| **Blocks** | Reproducible trade-frequency constraint proof |
+
+**Description**  
+S4.5 requires comparing fast-lane-only baseline metrics against multi-lane metrics, but there is no dedicated run mode or measurement harness that cleanly disables blend routing while preserving comparable intake.
+
+**Why it matters to profitability / safety / reliability**  
+The 2x trade-frequency constraint is a core anti-overtrading guard. If baseline measurement is ad hoc, future validations may be inconsistent or impossible to reproduce.
+
+**Evidence / Source**  
+- `main.py:719-723` always routes normal news candidates through `BlendTask`.
+- No config or script was found that captures both baseline and multi-lane metrics under identical intake windows.
+
+**Proposed Fix**  
+Add an explicit offline/paper validation harness or documented run flag for baseline measurement that cannot be confused with production trading behavior.
+
+**Acceptance Criteria**  
+- Baseline and multi-lane metrics can be generated reproducibly.
+- Validation artifacts include evaluated candidates, paper trades, frequency, acceptance rate, and blend pass/block counts.
+- The harness is paper/offline only and cannot enable live bypass behavior.
+
+**Notes**  
+This should be validation tooling, not a production bypass.
+
+---
+
+### PROFIT-STRUCT-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-STRUCT-001 |
+| **Title** | Structural prior recompute may lag initial market-cache availability |
+| **Category** | Structural Lane / Timeliness |
+| **Severity** | MEDIUM |
+| **Status** | OPEN |
+| **Priority** | MEDIUM |
+| **Owner** | Shared |
+| **Depends On** | S3.2 |
+| **Blocks** | Early-session structural participation confidence |
+
+**Description**  
+`_structural_recompute_task()` runs `StructuralTask.run_periodic()` against `self.matcher._cache._markets`. If the first run occurs before cache warmup has populated active markets, structural participation may be delayed until the next hourly interval.
+
+**Why it matters to profitability / safety / reliability**  
+Early-session decisions could be evaluated without structural context even when dossiers become available soon after startup, weakening the multi-lane architecture during the first hour.
+
+**Evidence / Source**  
+- `main.py:1555-1560` passes the current market cache directly.
+- `tasks/structural_task.py:139-147` sleeps for `interval_seconds` after each run.
+- Runtime logs have shown market cache warmup taking minutes under some sessions.
+
+**Proposed Fix**  
+Measure first-run timing and, if confirmed, trigger an additional recompute after market-cache warmup or after first dossier activity without creating slow-lane-only trades.
+
+**Acceptance Criteria**  
+- Test or runtime trace shows structural task handles empty initial market cache without waiting a full interval after cache population.
+- No structural recompute changes trading decisions directly.
+- Telemetry documents recompute trigger timing.
+
+**Notes**  
+Keep this in orchestration; do not move structural logic into `main.py`.
+
+---
+
+### PROFIT-CAL-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-CAL-001 |
+| **Title** | Calibration outcome feedback is not proven end-to-end |
+| **Category** | Calibration / Belief Quality |
+| **Severity** | MEDIUM |
+| **Status** | OPEN |
+| **Priority** | MEDIUM |
+| **Owner** | Shared |
+| **Depends On** | S4.5 |
+| **Blocks** | Section 13 calibration confidence |
+
+**Description**  
+`CalibrationTask` is constructed and passed to `BlendTask` for scaling, but the expanded audit did not confirm a complete feedback loop from resolved outcomes into calibration updates and `CALIBRATION_CHECK`-style validation events.
+
+**Why it matters to profitability / safety / reliability**  
+Without verified calibration feedback, confidence values can drift, causing the bot to over-trust weak lanes or under-trade genuinely profitable signals.
+
+**Evidence / Source**  
+- `main.py:371-376` constructs `CalibrationTask` and injects it into `BlendTask`.
+- Contract Section 13 includes calibration and readiness validation criteria.
+- No live S4.5 evidence has yet proven calibration participation over resolved outcomes.
+
+**Proposed Fix**  
+Trace resolved paper outcomes through calibration and add validation output if the feedback loop is incomplete.
+
+**Acceptance Criteria**  
+- Resolved paper trades or blocked outcomes can be associated with lane predictions for calibration review.
+- Calibration events/metrics are observable during validation windows.
+- Tests cover at least one calibration update path or explicitly document why no update is expected yet.
+
+**Notes**  
+Do not tune scaling factors as part of this debt item.
+
+---
+
+### PROFIT-EXEC-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EXEC-001 |
+| **Title** | Fade tweet and price-fade paths still call executor directly |
+| **Category** | Execution Boundary / Safety |
+| **Severity** | HIGH |
+| **Status** | OPEN |
+| **Priority** | NOW |
+| **Owner** | Shared |
+| **Depends On** | S3.4, S3.5 |
+| **Blocks** | No-bypass assurance |
+
+**Description**  
+Normal news candidates route through `BlendTask`, but `_on_fade_tweet()` and `_process_price_fade()` still call `self.executor.execute(analysis)` directly. If these are trade-producing paths, they bypass `BLEND_DECISION` and readiness enforcement.
+
+**Why it matters to profitability / safety / reliability**  
+The architecture says fast lane triggers blend evaluation and candidates must pass readiness before executor submission. Direct trade-like paths risk unobservable, unblended paper/live behavior.
+
+**Evidence / Source**  
+- `main.py:802` executes fade-tweet analysis directly.
+- `main.py:991` executes price-fade analysis directly.
+- `docs/IMPLEMENTATION_CONTRACT.md:280` requires readiness-gate validity before executor submission.
+
+**Proposed Fix**  
+Classify fade paths as disabled diagnostics, non-trading signals, or route them through the same blend/readiness meeting point with explicit contract approval.
+
+**Acceptance Criteria**  
+- No trade-producing runtime path reaches executor without either a `BLEND_DECISION` or documented contract exemption.
+- Tests assert normal, fade-tweet, and price-fade paths cannot silently bypass readiness if enabled.
+- Existing executor safety gates remain intact.
+
+**Notes**  
+This is a boundary integrity issue, not a request to remove useful fade diagnostics.
+
+---
+
+### PROFIT-STARTUP-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-STARTUP-001 |
+| **Title** | Startup warmup and cache-empty periods reduce validation and trading uptime |
+| **Category** | Runtime Reliability / Timeliness |
+| **Severity** | MEDIUM |
+| **Status** | OPEN |
+| **Priority** | MEDIUM |
+| **Owner** | Shared |
+| **Depends On** | — |
+| **Blocks** | Reliable long-run validation windows |
+
+**Description**  
+Runtime logs show discovery and structural workflows can encounter empty market caches during startup. Long cache warmups reduce the effective observation window and can make early feed events ineligible for full multi-lane processing.
+
+**Why it matters to profitability / safety / reliability**  
+If the bot spends a meaningful fraction of a validation or trading session without active market context, it may miss opportunities or understate lane participation.
+
+**Evidence / Source**  
+- `main.py:1138-1144` market refresh sleeps after each cycle.
+- `main.py:1339` subreddit discovery waits for market cache warmup.
+- Recent logs included `[DISCOVERY] Market cache empty, skipping discovery pass` during startup.
+
+**Proposed Fix**  
+Measure startup warmup duration and cache-empty rates, then add observability or startup gating if the delay materially affects trade windows.
+
+**Acceptance Criteria**  
+- Startup report includes market-cache warmup duration and first non-empty cache timestamp.
+- S4.5 metrics distinguish wall-clock runtime from effective multi-lane runtime.
+- No decision logic changes are made without separate approval.
+
+**Notes**  
+This is especially relevant to short paper-validation windows.
 
 ---
 
@@ -829,39 +1333,73 @@ Created `PLATFORMS.md` at repo root with four sections: Runtime/Process Manageme
 
 ---
 
-### A. Fix Now Queue
+### A. Current Profit-Path Fix Queue
 
 Items with `Priority = NOW`, ordered for safe sequential execution:
 
 | Order | ID | Title | Why First |
 |-------|----|-------|-----------|
-| 1 | MAC-ASYNC-001 | `record_trade()` blocks event loop | Affects every paper trade; hot path |
-| 2 | MAC-ASYNC-002 | Nightly report/resolve blocks event loop | Affects daily operations; lower frequency but longer stall |
-| 3 | MAC-TEST-001 | Test that paper trader calls are non-blocking | Regression guard for items 1–2; do immediately after |
+| 1 | PROFIT-RUNTIME-001 | S4.5 multi-lane paper validation remains unproven | Establishes whether the integrated system behaves correctly under real flow |
+| 2 | PROFIT-TRACE-001 | Evidence identity and blend traceability are fragile | Without traceability, trades and non-trades cannot be explained reliably |
+| 3 | PROFIT-REPLAY-001 | Live accumulation path drops replay-critical probability | Blocks deterministic dossier reconstruction from persisted evidence |
+| 4 | PROFIT-EXEC-001 | Fade paths still call executor directly | Potential readiness / `BLEND_DECISION` bypass at the execution boundary |
 
-**Execution note:** Do MAC-ASYNC-001 and MAC-ASYNC-002 in the same commit (same root cause, same fix pattern). Write MAC-TEST-001 before closing that commit.
+**Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence.
 
 ---
 
-### B. Pre-Go-Live Gate
+### B. Expanded Pre-Go-Live Gate
 
 Items that must be COMPLETE before live trading:
 
 | ID | Title | Rationale |
 |----|-------|-----------|
-| MAC-ASYNC-001 | `record_trade()` blocks event loop | Live trading sends real orders; stall during trade execution is unacceptable |
-| MAC-ASYNC-002 | Nightly report/resolve blocks event loop | Market resolution correctness is a trading integrity requirement |
-| MAC-DB-001 | `evidence_store` WAL mode | Concurrent evidence writes drive trading decisions; lock contention distorts dossier state |
-| MAC-DB-002 | `paper_trader` timeout consistency | Prevents silent failures during pre-live validation runs |
-| MAC-CLI-001 | macOS automation setup | Daily review must run on schedule during go-live validation period |
-| MAC-TEST-001 | Non-blocking test for paper trader | No regression gate = no confidence in async fixes |
-| MAC-TEST-002 | Concurrent write test for evidence_store | No regression gate = no confidence in WAL fix |
+| All `MAC-*` items | Migration reliability set | Already COMPLETE; preserve as historical live-readiness foundation |
+| PROFIT-RUNTIME-001 | S4.5 validation | Multi-lane architecture must be proven in paper mode before live exposure |
+| PROFIT-TRACE-001 | Evidence/blend traceability | Every trade must remain explainable |
+| PROFIT-REPLAY-001 | Replay-critical probability persistence | Dossiers must be reconstructable from persisted evidence |
+| PROFIT-EVID-002 | Source-class fidelity | Source diversity and quality gates need accurate metadata |
+| PROFIT-OBS-002 | Log rollover clarity | Long validation and live runs need reliable audit logs |
+| PROFIT-EXEC-001 | Direct executor bypass risk | No trade-producing path should bypass readiness without explicit contract exemption |
+| PROFIT-VALID-001 | Baseline vs multi-lane harness | The 2x trade-frequency constraint must be reproducible |
 
-**Gate rule:** All seven items must be STATUS = COMPLETE before live mode is enabled.
+**Gate rule:** All open HIGH items in this table must be STATUS = COMPLETE before live mode is enabled. `OPEN` HIGH items outside this table require an explicit risk review before live mode.
 
 ---
 
-### C. Parallelizable Work Streams
+### C. Current Parallelizable Work Streams
+
+Items are grouped into independent streams with no inter-stream dependencies. Work within each stream is sequential; streams can proceed simultaneously.
+
+#### Stream 1 — End-to-End Validation
+Items: `PROFIT-RUNTIME-001`, `PROFIT-VALID-001`, `PROFIT-STARTUP-001`
+Files likely touched: validation scripts, reporting docs, possibly paper-only instrumentation.
+
+#### Stream 2 — Traceability / Replay
+Items: `PROFIT-TRACE-001`, `PROFIT-REPLAY-001`, `PROFIT-OBS-001`
+Files likely touched: `main.py`, `tasks/accumulation_task.py`, `tasks/blend_task.py`, `scripts/replay_dossier.py`, contract/docs.
+
+#### Stream 3 — Evidence Quality
+Items: `PROFIT-EVID-001`, `PROFIT-EVID-002`
+Files likely touched: `main.py`, evidence metadata helpers, tests.
+
+#### Stream 4 — Execution Boundary
+Items: `PROFIT-EXEC-001`
+Files likely touched: `main.py`, `tasks/blend_task.py`, tests. Contract review required before changing behavior.
+
+#### Stream 5 — Observability / Performance
+Items: `PROFIT-OBS-002`, `PROFIT-PERF-001`
+Files likely touched: `utils/logger.py`, `PLATFORMS.md`, logging tests.
+
+#### Stream 6 — Structural / Calibration
+Items: `PROFIT-STRUCT-001`, `PROFIT-CAL-001`
+Files likely touched: `tasks/structural_task.py`, `tasks/calibration_task.py`, validation scripts.
+
+---
+
+### D. Legacy Migration Work Streams
+
+The following migration-specific stream plan is retained for historical continuity. These items are currently COMPLETE.
 
 Items are grouped into independent streams with no inter-stream dependencies. Work within each stream is sequential; streams can proceed simultaneously.
 
@@ -895,6 +1433,25 @@ MAC-DB-003 depends on MAC-ASYNC-001/002 (re-evaluate after async pattern is set)
 
 ## Dependency Map
 
+### Current Profit-Path Dependencies
+
+```
+PROFIT-RUNTIME-001 ─────────────────────────► PROFIT-VALID-001
+PROFIT-RUNTIME-001 ─────────────────────────► PROFIT-CAL-001
+
+PROFIT-TRACE-001 ─┐
+PROFIT-REPLAY-001 ├────────────────────────► S4.5 observability confidence
+PROFIT-OBS-001 ───┘
+
+PROFIT-EVID-002 ────────────────────────────► Readiness G2 fidelity
+PROFIT-EVID-001 ────────────────────────────► Dossier completeness review
+
+PROFIT-EXEC-001 ────────────────────────────► No-bypass live readiness
+PROFIT-OBS-002 ─────────────────────────────► Long-run validation safety
+```
+
+### Legacy Migration Dependencies
+
 ```
 MAC-ASYNC-001 ──────────────────────────────► MAC-TEST-001
 MAC-ASYNC-002 ──────────────────────────────► MAC-TEST-001
@@ -922,19 +1479,19 @@ MAC-CLI-001 ─┘──► MAC-DOC-003
 These rules govern how this log is used during remediation work.
 
 ### R-1 — Status Updates Are Mandatory
-No item may remain at `TODO` after work begins. Change to `IN_PROGRESS` on first edit to any file in scope.
+No item may remain at `OPEN` after work begins. Change to `IN_PROGRESS` on first edit to any file in scope.
 
 ### R-2 — COMPLETE Requires Acceptance Criteria
 An item may not be set to `COMPLETE` unless every acceptance criterion listed for it is satisfied. Partial fixes stay `IN_PROGRESS`.
 
 ### R-3 — New Discoveries Must Be Logged
-If a fix uncovers a new issue not in this log, that issue must be added as a new item before the fix commit is closed. Do not silently absorb discoveries.
+If a fix or audit uncovers a new issue that could impair trading quality, safety, selectivity, auditability, calibration, timeliness, or operational reliability, that issue must be added here before the fix commit is closed. Do not silently absorb discoveries into code or create a parallel tracker.
 
 ### R-4 — No Silent Fixes
 Every fix that closes an item in this log must be traceable to a commit. The commit message should reference the item ID (e.g., `fix(async): wrap paper trader calls in to_thread (MAC-ASYNC-001, MAC-ASYNC-002)`).
 
 ### R-5 — Pre-Go-Live Gate Is a Hard Block
-The seven items in the Pre-Go-Live Gate must all be COMPLETE before live mode (`ENABLE_LIVE_TRADING=true`) is set. This gate cannot be waived.
+The Expanded Pre-Go-Live Gate items must all be COMPLETE before live mode (`ENABLE_LIVE_TRADING=true`) is set. This gate cannot be waived without an explicit contract/risk-review update.
 
 ### R-6 — Dependencies Must Be Respected
 No item may move to `IN_PROGRESS` if its `Depends On` items are not yet COMPLETE, unless the dependency is explicitly re-evaluated and documented under Notes.
@@ -944,3 +1501,6 @@ Update the `Last Updated` timestamp in the metadata header whenever any item cha
 
 ### R-8 — False Positives Are Documented, Not Deleted
 The audit identified several items that turned out to be false positives after code inspection (mtime timezone concern, PEM key handling, signal handler lambda). These are not in this log. If any item is later determined to be a false positive, mark it `COMPLETE` with Notes explaining the determination — do not delete it.
+
+### R-9 — Single Tracker Rule
+This file is the only technical-debt tracking mechanism for profit-path, reliability, safety, observability, and platform debt. Do not create a second debt log for macOS, S4.5, logging, calibration, or execution-boundary findings; add them here with a new ID or update an existing item.

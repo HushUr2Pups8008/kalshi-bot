@@ -17,6 +17,7 @@
 ## Continuous Improvement
 
 - After repeated correction on the same pattern, capture the lesson in the project's preferred tracking system if one exists.
+- This project's unified tracking system is `docs/profit_path_debt_log.md`; do not create parallel macOS, logging, S4.5, or architecture debt logs.
 
 See `~/.claude/rules/planning.md` for planning rules.
 See `~/.claude/rules/validation.md` for validation rules.
