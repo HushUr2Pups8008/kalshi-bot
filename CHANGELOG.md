@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.22] - 2026-04-19
+
+### Fixed
+- `main.py`: MAC-ASYNC-002 — five blocking PaperTrader / SQLite calls on the
+  event loop thread are now dispatched via `asyncio.to_thread()`:
+  - `_daily_report_task()`: `self.paper.daily_summary()`,
+    `self.paper.generate_report()`, and `report_path.write_text()` (file I/O)
+    each wrapped with `await asyncio.to_thread(...)`.
+  - `_check_and_resolve()`: direct `self.paper._conn.execute(...).fetchall()`
+    query wrapped in a lambda and dispatched via `to_thread`; loop-body
+    `self.paper.resolve_market()` and post-loop `self.paper.get_notional_bankroll()`
+    both wrapped with `await asyncio.to_thread(...)`.
+- `tests/test_main_pipeline.py`: `TestMainAsyncBlocking` — five new MAC-ASYNC-002
+  regression guard tests verifying each of the above calls is dispatched off the
+  event loop thread.
+
+---
+
 ## [0.29.21] - 2026-04-19
 
 ### Fixed

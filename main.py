@@ -995,10 +995,10 @@ class TradingBot:
         from utils.logger import LOG_REPORTS_DIR
         while True:
             await asyncio.sleep(86_400)
-            self.paper.daily_summary()
-            report      = self.paper.generate_report()
+            await asyncio.to_thread(self.paper.daily_summary)
+            report      = await asyncio.to_thread(self.paper.generate_report)
             report_path = LOG_REPORTS_DIR / f"report_{datetime.now(timezone.utc).strftime('%Y%m%d')}.txt"
-            report_path.write_text(report, encoding="utf-8")
+            await asyncio.to_thread(report_path.write_text, report, encoding="utf-8")
             log.info("Daily report written to %s", report_path)
 
     async def _warm_ws_subscriptions(self) -> None:
@@ -1045,9 +1045,11 @@ class TradingBot:
     async def _check_and_resolve(self) -> None:
         """Single pass: check all open paper trade tickers for settlement."""
         self.source_stats.flush()
-        open_trades = self.paper._conn.execute(
-            "SELECT DISTINCT ticker FROM paper_trades WHERE resolved = 0"
-        ).fetchall()
+        open_trades = await asyncio.to_thread(
+            lambda: self.paper._conn.execute(
+                "SELECT DISTINCT ticker FROM paper_trades WHERE resolved = 0"
+            ).fetchall()
+        )
         if not open_trades:
             return
 
@@ -1073,7 +1075,7 @@ class TradingBot:
                     )
                     continue
                 resolved_yes = result_str == "yes"
-                self.paper.resolve_market(ticker, resolved_yes)
+                await asyncio.to_thread(self.paper.resolve_market, ticker, resolved_yes)
                 resolved_count += 1
                 log.info(
                     "Auto-resolve: %s -> %s",
@@ -1083,10 +1085,11 @@ class TradingBot:
                 log.warning("Auto-resolve: failed to check %s: %s", ticker, exc)
 
         if resolved_count:
+            bankroll = await asyncio.to_thread(self.paper.get_notional_bankroll)
             log.info(
                 "Auto-resolve: resolved %d/%d tickers | bankroll=$%.2f",
                 resolved_count, len(tickers),
-                self.paper.get_notional_bankroll(),
+                bankroll,
             )
 
     async def _refresh_market_cache_once(self, *, initial: bool = False) -> None:

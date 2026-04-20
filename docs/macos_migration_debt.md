@@ -11,10 +11,10 @@
 | Last Updated | 2026-04-19 |
 | Audit Source | Comprehensive migration audit — commit 2315a1d |
 | Total Items | 19 |
-| Open — HIGH | 1 |
+| Open — HIGH | 0 |
 | Open — MEDIUM | 6 |
 | Open — LOW | 10 |
-| Items COMPLETE | 2 (MAC-ASYNC-001, MAC-TEST-001) |
+| Items COMPLETE | 3 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-TEST-001) |
 
 ### High-Risk Areas
 
@@ -90,7 +90,7 @@ trade_id = await asyncio.to_thread(self._paper.record_trade, analysis)
 | **Title** | `paper_trader` nightly/resolve calls block event loop from async task functions |
 | **Category** | Async / Queue / Scheduling |
 | **Severity** | HIGH |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | NOW |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
@@ -126,6 +126,13 @@ await asyncio.to_thread(self.paper.resolve_market, ticker, resolved_yes)
 - All three call sites wrapped in `asyncio.to_thread()`
 - No synchronous paper trader method called from any async context without `to_thread()`
 - `_daily_report_task` and `_check_and_resolve` tests pass
+
+**Implementation Notes** (2026-04-19)  
+Fixed in v0.29.22. Five blocking calls wrapped in `asyncio.to_thread()` in `main.py`:
+- `_daily_report_task()`: `daily_summary()`, `generate_report()`, `report_path.write_text()` (file I/O)
+- `_check_and_resolve()`: `_conn.execute(...).fetchall()` (direct DB query in lambda), `resolve_market()`, post-loop `get_notional_bankroll()`
+
+`TestMainAsyncBlocking` in `tests/test_main_pipeline.py` adds 5 regression guard tests verifying each call is dispatched off the event loop thread.
 
 **Notes**  
 Assess whether `generate_report()` at scale (>1000 trades) creates a thread-pool saturation risk. If so, a dedicated thread executor should be considered — but that is a future item, not part of this fix.
@@ -522,7 +529,7 @@ Replace `os.name == "nt"` with `sys.platform == "win32"` at both call sites.
 | **Blocks** | — |
 
 **Implementation Notes** (2026-04-19)
-Written as part of MAC-ASYNC-001 fix. `TestPaperExecutionAsync` in `tests/test_executor.py` contains two tests: `test_record_trade_called_off_event_loop_thread` (thread-name check that fails if `record_trade` reverts to a direct call) and `test_execute_paper_returns_correct_trade_id_and_logs` (end-to-end functional check). MAC-ASYNC-002 is not yet fixed so the thread check covers only `_execute_paper`; extend when MAC-ASYNC-002 is addressed.
+Written as part of MAC-ASYNC-001 fix. `TestPaperExecutionAsync` in `tests/test_executor.py` contains two tests: `test_record_trade_called_off_event_loop_thread` (thread-name check that fails if `record_trade` reverts to a direct call) and `test_execute_paper_returns_correct_trade_id_and_logs` (end-to-end functional check). MAC-ASYNC-002 is now also COMPLETE (v0.29.22); `TestMainAsyncBlocking` in `tests/test_main_pipeline.py` provides the MAC-ASYNC-002 regression guard (5 tests).
 
 **Description**  
 After MAC-ASYNC-001/002 are fixed, there is no regression guard to prevent a future developer from accidentally reverting to a direct synchronous call. Without a test, the fix is invisible to CI. The event-loop blocking bug would be reintroduced silently.

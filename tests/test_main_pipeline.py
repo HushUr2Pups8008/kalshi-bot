@@ -1073,3 +1073,171 @@ async def test_trigger_targeted_search_skips_when_search_families_disabled(monke
         await bot._trigger_targeted_search(market.ticker)
 
     poll_feed_mock.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# MAC-ASYNC-002 regression guard
+# ---------------------------------------------------------------------------
+
+class TestMainAsyncBlocking:
+    """MAC-ASYNC-002 regression guard.
+
+    Verifies that PaperTrader methods called from main.py async methods
+    are dispatched via asyncio.to_thread() rather than called directly
+    on the event loop thread.
+    """
+
+    def _make_bot(self):
+        import threading
+        bot = _make_bot_stub()
+        bot.paper._conn = MagicMock()
+        bot.paper._conn.execute.return_value.fetchall.return_value = []
+        bot.paper.daily_summary.return_value = None
+        bot.paper.generate_report.return_value = "report text"
+        bot.paper.resolve_market.return_value = None
+        bot.paper.get_notional_bankroll.return_value = 490.0
+        return bot
+
+    @pytest.mark.asyncio
+    async def test_daily_summary_called_off_event_loop_thread(self):
+        import threading
+        bot = self._make_bot()
+
+        event_loop_thread = threading.current_thread().name
+        call_threads: list[str] = []
+
+        original = bot.paper.daily_summary.side_effect
+
+        def tracking_daily_summary():
+            call_threads.append(threading.current_thread().name)
+
+        bot.paper.daily_summary.side_effect = tracking_daily_summary
+
+        report_path = MagicMock()
+        with patch("main.asyncio.sleep", new=AsyncMock(side_effect=Exception("stop"))), \
+             patch("utils.logger.LOG_REPORTS_DIR", MagicMock()):
+            try:
+                await bot._daily_report_task()
+            except Exception:
+                pass
+
+        if call_threads:
+            assert all(t != event_loop_thread for t in call_threads), (
+                f"daily_summary called on event loop thread ({event_loop_thread!r}). "
+                "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
+            )
+
+    @pytest.mark.asyncio
+    async def test_generate_report_called_off_event_loop_thread(self):
+        import threading
+        bot = self._make_bot()
+
+        event_loop_thread = threading.current_thread().name
+        call_threads: list[str] = []
+
+        def tracking_generate_report():
+            call_threads.append(threading.current_thread().name)
+            return "report text"
+
+        bot.paper.generate_report.side_effect = tracking_generate_report
+
+        with patch("main.asyncio.sleep", new=AsyncMock(side_effect=Exception("stop"))), \
+             patch("utils.logger.LOG_REPORTS_DIR", MagicMock()):
+            try:
+                await bot._daily_report_task()
+            except Exception:
+                pass
+
+        if call_threads:
+            assert all(t != event_loop_thread for t in call_threads), (
+                f"generate_report called on event loop thread ({event_loop_thread!r}). "
+                "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
+            )
+
+    @pytest.mark.asyncio
+    async def test_resolve_market_called_off_event_loop_thread(self):
+        import threading
+        bot = self._make_bot()
+
+        finalized_market = MagicMock()
+        finalized_market.status = "finalized"
+        finalized_market.result = "yes"
+        bot.rest = MagicMock()
+        bot.rest.get_market = MagicMock(return_value=finalized_market)
+
+        cursor_mock = MagicMock()
+        cursor_mock.fetchall.return_value = [("KXTEST-25DEC31",)]
+        bot.paper._conn.execute.return_value = cursor_mock
+
+        event_loop_thread = threading.current_thread().name
+        call_threads: list[str] = []
+
+        def tracking_resolve_market(ticker, resolved_yes):
+            call_threads.append(threading.current_thread().name)
+
+        bot.paper.resolve_market.side_effect = tracking_resolve_market
+
+        await bot._check_and_resolve()
+
+        assert call_threads, "resolve_market was never called"
+        assert all(t != event_loop_thread for t in call_threads), (
+            f"resolve_market called on event loop thread ({event_loop_thread!r}). "
+            "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
+        )
+
+    @pytest.mark.asyncio
+    async def test_open_trades_query_called_off_event_loop_thread(self):
+        import threading
+        bot = self._make_bot()
+        bot.rest = MagicMock()
+
+        event_loop_thread = threading.current_thread().name
+        call_threads: list[str] = []
+
+        original_execute = bot.paper._conn.execute
+
+        def tracking_execute(sql):
+            call_threads.append(threading.current_thread().name)
+            return original_execute(sql)
+
+        bot.paper._conn.execute = tracking_execute
+
+        await bot._check_and_resolve()
+
+        assert call_threads, "_conn.execute was never called"
+        assert all(t != event_loop_thread for t in call_threads), (
+            f"_conn.execute called on event loop thread ({event_loop_thread!r}). "
+            "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_notional_bankroll_in_resolve_called_off_event_loop_thread(self):
+        import threading
+        bot = self._make_bot()
+
+        finalized_market = MagicMock()
+        finalized_market.status = "finalized"
+        finalized_market.result = "yes"
+        bot.rest = MagicMock()
+        bot.rest.get_market = MagicMock(return_value=finalized_market)
+
+        cursor_mock = MagicMock()
+        cursor_mock.fetchall.return_value = [("KXTEST-25DEC31",)]
+        bot.paper._conn.execute.return_value = cursor_mock
+
+        event_loop_thread = threading.current_thread().name
+        call_threads: list[str] = []
+
+        def tracking_bankroll():
+            call_threads.append(threading.current_thread().name)
+            return 490.0
+
+        bot.paper.get_notional_bankroll.side_effect = tracking_bankroll
+
+        await bot._check_and_resolve()
+
+        assert call_threads, "get_notional_bankroll was never called in resolve path"
+        assert all(t != event_loop_thread for t in call_threads), (
+            f"get_notional_bankroll called on event loop thread ({event_loop_thread!r}). "
+            "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
+        )
