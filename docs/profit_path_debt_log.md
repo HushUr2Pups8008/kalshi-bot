@@ -31,8 +31,8 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 ### Recommended Execution Order
 
 1. `PROFIT-RUNTIME-001` (blocked on structural participation evidence; blocks confidence in the whole architecture)
-2. `PROFIT-EVID-001` (accumulation input coverage)
-3. `PROFIT-VALID-001` + `PROFIT-OBS-001` (validation and observability hardening)
+2. `PROFIT-VALID-001` + `PROFIT-OBS-001` (validation and observability hardening)
+3. `PROFIT-EVID-001` (blocked pending contract decision on non-trading evidence intake)
 4. Remaining MEDIUM items in dependency order
 
 ---
@@ -97,7 +97,7 @@ Runtime evidence exists for accumulation and blend participation, but the gate c
 | **Title** | Evidence identity and blend traceability are fragile in live runtime |
 | **Category** | Auditability / Traceability |
 | **Severity** | HIGH |
-| **Status** | COMPLETE |
+| **Status** | BLOCKED |
 | **Priority** | NOW |
 | **Owner** | Shared |
 | **Depends On** | S2.5, S3.4 |
@@ -205,6 +205,9 @@ Decide, at the contract level, which rejected or low-signal observations should 
 
 **Notes**  
 This is not permission to loosen trading thresholds.
+
+**Blocker Notes** (2026-04-20)  
+Implementation intentionally paused. Ingesting no-keyword or low-signal rejected candidates would alter dossier state and future blend/readiness inputs, which is a decision-policy change. The proposed fix requires a contract-level decision on which rejected observations should become non-trading evidence and how those observations should update state versus confidence. Do not implement until `IMPLEMENTATION_CONTRACT.md` defines the allowed rejected-evidence classes and update semantics.
 
 ---
 
@@ -1356,9 +1359,9 @@ Items with `Priority = NOW`, ordered for safe sequential execution:
 | Order | ID | Title | Why First |
 |-------|----|-------|-----------|
 | 1 | PROFIT-RUNTIME-001 | S4.5 multi-lane paper validation remains unproven | Blocked until structural participation is observed or repaired |
-| 2 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Dossier memory may be biased toward positive signals |
-| 3 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible |
-| 4 | PROFIT-OBS-001 | Blend completeness semantics are too blunt | Avoid false observability failures that hide real gaps |
+| 2 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible |
+| 3 | PROFIT-OBS-001 | Blend completeness semantics are too blunt | Avoid false observability failures that hide real gaps |
+| 4 | PROFIT-STRUCT-001 | Structural prior recompute may lag or remain inactive | Blocks `PROFIT-RUNTIME-001` completion |
 
 **Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence.
 
