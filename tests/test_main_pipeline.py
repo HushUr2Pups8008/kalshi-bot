@@ -124,6 +124,7 @@ def test_signal_to_evidence_preserves_source_class_diversity():
 
     assert evidence.source_class == "social"
     assert _source_class_for_evidence("White House official statement") == "official"
+    assert _source_class_for_evidence("price_fade") == "market"
     assert _source_class_for_evidence("Reuters") == "news"
 
 
@@ -763,7 +764,9 @@ async def test_process_fade_tweet_builds_geo_fade_handoff_with_ws_price(monkeypa
     with patch("analysis.fade_signal.detect_fade_pattern", return_value="bullish"):
         await bot._process_fade_tweet(tweet, "Kalshi")
 
-    analysis = bot.executor.execute.await_args.args[0]
+    bot.executor.execute.assert_not_called()
+    bot._blend_task.process_fast_lane_result.assert_awaited_once()
+    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
     assert analysis.signal_type == "fade_tweet"
     assert analysis.side == "no"
     assert analysis.market_yes_price == pytest.approx(72.0)
@@ -772,6 +775,7 @@ async def test_process_fade_tweet_builds_geo_fade_handoff_with_ws_price(monkeypa
     assert analysis.match_score == pytest.approx(0.61)
     assert analysis.confidence == pytest.approx(0.3)
     assert analysis.reasoning.startswith("[FADE/GEO/@Kalshi] bullish:")
+    assert analysis.signal_meta["trigger_evidence_id"]
     bot.ws.watch.assert_called_with(["KXTEST-25DEC31"])
 
 
@@ -790,7 +794,8 @@ async def test_process_fade_tweet_tags_sports_markets():
     with patch("analysis.fade_signal.detect_fade_pattern", return_value="bearish"):
         await bot._process_fade_tweet(tweet, "Sharps")
 
-    analysis = bot.executor.execute.await_args.args[0]
+    bot.executor.execute.assert_not_called()
+    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
     assert analysis.side == "yes"
     assert analysis.reasoning.startswith("[FADE/SPORTS/@Sharps] bearish:")
 
@@ -814,7 +819,9 @@ async def test_process_price_fade_builds_representative_handoff(crossing, expect
         yes_ask=87.0 if crossing == "high_cross" else 15.0,
     )
 
-    analysis = bot.executor.execute.await_args.args[0]
+    bot.executor.execute.assert_not_called()
+    bot._blend_task.process_fast_lane_result.assert_awaited_once()
+    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
     assert analysis.signal_type == "price_fade"
     assert analysis.side == expected_side
     assert analysis.market.ticker == market.ticker
@@ -822,6 +829,8 @@ async def test_process_price_fade_builds_representative_handoff(crossing, expect
     assert analysis.news_item.source == "price_fade"
     assert analysis.news_item.url == f"kalshi://price_fade/{market.ticker}"
     assert crossing in analysis.reasoning
+    evidence = bot._evidence_queue.get_nowait()
+    assert evidence.source_class == "market"
 
 
 @pytest.mark.asyncio

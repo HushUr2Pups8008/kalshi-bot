@@ -15,10 +15,10 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 32 |
-| Open — HIGH | 5 |
+| Open — HIGH | 4 |
 | Open — MEDIUM | 5 |
 | Open — LOW | 0 |
-| Items COMPLETE | 22 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002) |
+| Items COMPLETE | 23 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001) |
 
 ### High-Risk Areas
 
@@ -31,11 +31,10 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 ### Recommended Execution Order
 
 1. `PROFIT-RUNTIME-001` (blocked on structural participation evidence; blocks confidence in the whole architecture)
-2. `PROFIT-EXEC-001` (remove or explicitly classify direct executor bypass paths)
-3. `PROFIT-OBS-002` (long-run app-log rollover confidence)
-4. `PROFIT-EVID-001` (accumulation input coverage)
-5. `PROFIT-VALID-001` + `PROFIT-OBS-001` (validation and observability hardening)
-6. Remaining MEDIUM items in dependency order
+2. `PROFIT-OBS-002` (long-run app-log rollover confidence)
+3. `PROFIT-EVID-001` (accumulation input coverage)
+4. `PROFIT-VALID-001` + `PROFIT-OBS-001` (validation and observability hardening)
+5. Remaining MEDIUM items in dependency order
 
 ---
 
@@ -218,7 +217,7 @@ This is not permission to loosen trading thresholds.
 | **Title** | Runtime evidence conversion collapses all sources into `source_class="news"` |
 | **Category** | Signal Quality / Source Classification |
 | **Severity** | HIGH |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | HIGH |
 | **Owner** | Codex |
 | **Depends On** | S2.5, S3.4 |
@@ -512,6 +511,9 @@ Classify fade paths as disabled diagnostics, non-trading signals, or route them 
 
 **Notes**  
 This is a boundary integrity issue, not a request to remove useful fade diagnostics.
+
+**Implementation Notes** (2026-04-20)  
+Resolved direct executor bypasses by routing fade-tweet and price-fade `SignalAnalysis` objects through the same `BlendTask`/readiness path used by normal news candidates. The shared routing helper attaches trigger evidence metadata, emits `BLEND_DECISION` through `BlendTask`, and only lets the existing trading-queue consumer call the executor for approved candidates. Price-fade evidence now uses the `market` source class. Validation: `.venv/bin/pytest tests/test_main_pipeline.py tests/test_executor.py tests/test_blend_task.py` (125 passed).
 
 ---
 
@@ -1352,9 +1354,9 @@ Items with `Priority = NOW`, ordered for safe sequential execution:
 | Order | ID | Title | Why First |
 |-------|----|-------|-----------|
 | 1 | PROFIT-RUNTIME-001 | S4.5 multi-lane paper validation remains unproven | Blocked until structural participation is observed or repaired |
-| 2 | PROFIT-EXEC-001 | Fade paths still call executor directly | Potential readiness / `BLEND_DECISION` bypass at the execution boundary |
-| 3 | PROFIT-OBS-002 | App-log rollover policy/documentation mismatch | Long-running validation needs trustworthy logs |
-| 4 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Dossier memory may be biased toward positive signals |
+| 2 | PROFIT-OBS-002 | App-log rollover policy/documentation mismatch | Long-running validation needs trustworthy logs |
+| 3 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Dossier memory may be biased toward positive signals |
+| 4 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible |
 
 **Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence.
 

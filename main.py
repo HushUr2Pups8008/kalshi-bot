@@ -354,6 +354,8 @@ def _source_class_for_evidence(source: str) -> str:
     lower = source_text.lower()
     if source_text.startswith("r/"):
         return "social"
+    if lower == "price_fade" or lower.startswith("kalshi://"):
+        return "market"
     if any(token in lower for token in (
         ".gov",
         "white house",
@@ -765,25 +767,11 @@ class TradingBot:
             analysis.match_score,
         )
 
-        # Feed evidence to accumulation lane (non-blocking; fast lane is not gated on it).
-        evidence = _signal_to_evidence(analysis)
-        analysis.signal_meta = {
-            **(analysis.signal_meta or {}),
-            "trigger_evidence_id": evidence.evidence_id,
-        }
-        try:
-            self._evidence_queue.put_nowait(evidence)
-        except asyncio.QueueFull:
-            log.warning(
-                "[ACCUMULATION] evidence_queue_full ticker=%s — evidence dropped",
-                market.ticker,
-            )
-
         # Route through blend task instead of directly to executor.
         # BlendTask reads the dossier + structural prior, applies regime weights,
         # runs the readiness gate, and enqueues approved TradeCandidate objects.
         # The _trading_queue_consumer_task drains the queue and calls executor.execute().
-        blend_result = await self._blend_task.process_fast_lane_result(analysis)
+        blend_result = await self._route_analysis_through_blend(analysis)
         if not blend_result.enqueued:
             log.debug(
                 "[ANALYSIS] no_execution ticker=%s source=%s blocked_reason=%s",
@@ -791,7 +779,32 @@ class TradingBot:
                 news.source,
                 blend_result.trade_blocked_reason or "none",
             )
-        self.ws.watch([market.ticker])
+
+    async def _route_analysis_through_blend(
+        self,
+        analysis: SignalAnalysis,
+        *,
+        accumulate: bool = True,
+        watch: bool = True,
+    ):
+        """Submit a prepared signal through the canonical blend/readiness path."""
+        evidence = _signal_to_evidence(analysis)
+        if accumulate:
+            analysis.signal_meta = {
+                **(analysis.signal_meta or {}),
+                "trigger_evidence_id": evidence.evidence_id,
+            }
+            try:
+                self._evidence_queue.put_nowait(evidence)
+            except asyncio.QueueFull:
+                log.warning(
+                    "[ACCUMULATION] evidence_queue_full ticker=%s — evidence dropped",
+                    analysis.market.ticker,
+                )
+        blend_result = await self._blend_task.process_fast_lane_result(analysis)
+        if watch:
+            self.ws.watch([analysis.market.ticker])
+        return blend_result
 
     # ── Fade tweet pipeline ────────────────────────────────────────────────────
 
@@ -862,8 +875,7 @@ class TradingBot:
         )
         log.info("[FADE/%s/@%s] %s | %s | pattern=%s | match_score=%.3f",
                  category, account, market.ticker, fade_side.upper(), pattern, score)
-        await self.executor.execute(analysis)
-        self.ws.watch([market.ticker])
+        await self._route_analysis_through_blend(analysis)
 
     async def _on_price_update(self, ticker: str, yes_bid: float, yes_ask: float) -> None:
         now_mid  = (yes_bid + yes_ask) / 2.0
@@ -1051,7 +1063,7 @@ class TradingBot:
 
         log.info("[PRICE_FADE] %s | %s | mid=%.1fc | threshold=%dc | side=%s",
                  ticker, crossing, now_mid, threshold_val, fade_side.upper())
-        await self.executor.execute(analysis)
+        await self._route_analysis_through_blend(analysis, watch=False)
 
     # ── Scheduled tasks ───────────────────────────────────────────────────────
 
