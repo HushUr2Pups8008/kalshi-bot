@@ -12,9 +12,9 @@
 | Audit Source | Comprehensive migration audit — commit 2315a1d |
 | Total Items | 19 |
 | Open — HIGH | 0 |
-| Open — MEDIUM | 2 |
-| Open — LOW | 10 |
-| Items COMPLETE | 6 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-TEST-001, MAC-TEST-002) |
+| Open — MEDIUM | 1 |
+| Open — LOW | 9 |
+| Items COMPLETE | 9 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-CLI-001, MAC-CLI-002, MAC-TEST-001, MAC-TEST-002, MAC-DOC-002) |
 
 ### High-Risk Areas
 
@@ -339,7 +339,7 @@ Run at most once per day, after the nightly report cycle.
 | **Title** | No macOS automation equivalent for `setup_daily_task.ps1` |
 | **Category** | Shell / CLI / Environment |
 | **Severity** | HIGH |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | BEFORE_GO_LIVE |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
@@ -368,6 +368,15 @@ Alternatively, document the manual `crontab -e` one-liner in `README.md` as the 
 - `launchctl list | grep kalshibot` confirms the agent is registered
 - OR: README documents an explicit manual scheduling step for macOS users
 
+**Implementation Notes** (2026-04-20)  
+Created `scripts/setup_launchd.sh`. Script:
+- Accepts `--time HH:MM` (default 09:00) and `--uninstall` flags
+- Generates `~/Library/LaunchAgents/com.kalshibot.dailyreview.plist` using `StartCalendarInterval` with the specified hour/minute
+- Uses `.venv/bin/python` from the repo root
+- Calls `launchctl load` to activate immediately
+- Logs stdout/stderr to `logs/launchd_daily_review*.log`
+- Verified: `launchctl list | grep kalshibot` returns the agent.
+
 ---
 
 ### MAC-CLI-002
@@ -378,7 +387,7 @@ Alternatively, document the manual `crontab -e` one-liner in `README.md` as the 
 | **Title** | `daily_review.ps1` hardcodes Windows `.venv\Scripts\python.exe` path |
 | **Category** | Shell / CLI / Environment |
 | **Severity** | LOW |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | DEFER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | MAC-CLI-001 |
@@ -400,6 +409,9 @@ After MAC-CLI-001 is done, add a note to `daily_review.ps1` header: "Windows onl
 **Acceptance Criteria**  
 - `daily_review.ps1` has a clear Windows-only header comment
 - macOS users can find the correct invocation without reading the PS1 body
+
+**Implementation Notes** (2026-04-20)  
+Added `# PLATFORM: Windows only.` header with macOS reference to both `scripts/daily_review.ps1` and `scripts/setup_daily_task.ps1`. MAC-DOC-002 also resolved by this change.
 
 ---
 
@@ -714,7 +726,7 @@ Or remove the comment entirely if the code block is deleted.
 | **Title** | `setup_daily_task.ps1` and `daily_review.ps1` lack Windows-only headers |
 | **Category** | Documentation / Prompt Drift |
 | **Severity** | LOW |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | DEFER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | MAC-CLI-001 |
@@ -737,6 +749,9 @@ Add to the top of both PS1 scripts:
 **Acceptance Criteria**  
 - Both PS1 files have a Windows-only platform notice
 - macOS alternative is referenced
+
+**Implementation Notes** (2026-04-20)  
+Resolved as part of MAC-CLI-001/MAC-CLI-002. Both PS1 headers now read "PLATFORM: Windows only. macOS / Linux: use scripts/setup_launchd.sh or daily_review.py directly."
 
 ---
 

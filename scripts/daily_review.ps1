@@ -1,4 +1,7 @@
 <#
+PLATFORM: Windows only.
+macOS / Linux: run scripts/daily_review.py directly, or use scripts/setup_launchd.sh to schedule it.
+
 Usage:
   From the scripts/ directory on systems with PowerShell execution policy restrictions:
     powershell -ExecutionPolicy Bypass -File .\daily_review.ps1

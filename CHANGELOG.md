@@ -6,6 +6,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.25] - 2026-04-20
+
+### Added
+- `scripts/setup_launchd.sh`: MAC-CLI-001 — macOS launchd agent installer for
+  `daily_review.py`. Accepts `--time HH:MM` (default 09:00) and `--uninstall`.
+  Generates `~/Library/LaunchAgents/com.kalshibot.dailyreview.plist`, loads the
+  agent via `launchctl load`, and logs to `logs/launchd_daily_review*.log`.
+
+### Fixed
+- `scripts/setup_daily_task.ps1`: MAC-DOC-002 — added Windows-only platform
+  notice with reference to `scripts/setup_launchd.sh`.
+- `scripts/daily_review.ps1`: MAC-CLI-002 / MAC-DOC-002 — added Windows-only
+  platform notice with reference to `daily_review.py` direct invocation.
+
+---
+
 ## [0.29.24] - 2026-04-20
 
 ### Added

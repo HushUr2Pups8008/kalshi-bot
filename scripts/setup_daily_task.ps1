@@ -1,4 +1,7 @@
 <#
+PLATFORM: Windows only.
+macOS / Linux: use scripts/setup_launchd.sh (MAC-CLI-001) or add a crontab entry manually.
+
 Registers a Windows Scheduled Task that runs scripts/daily_review.ps1 once per day.
 
 Examples:
