@@ -56,6 +56,7 @@ import json
 import logging
 import os
 import signal
+import sqlite3
 import time
 import uuid
 from collections import defaultdict, deque
@@ -1298,6 +1299,23 @@ class TradingBot:
                         old_trades.unlink()
                         moved_count += 1
                         log.info("[LOG_MAINT] Merged root trades.jsonl -> trades/ and removed original")
+
+                # ── WAL checkpoint (MAC-DB-005) ───────────────────────────────
+                # Prevents unbounded WAL file growth on long-running macOS sessions.
+                # Windows NSSM would restart daily; macOS dev machines may run for weeks.
+                try:
+                    db_conn = sqlite3.connect(
+                        str(DATA_DIR / "paper_trades.db"), check_same_thread=False
+                    )
+                    try:
+                        db_conn.execute("PRAGMA wal_checkpoint(RESTART)")
+                        db_conn.close()
+                        log.debug("[LOG_MAINT] WAL checkpoint complete")
+                    except Exception:
+                        db_conn.close()
+                        raise
+                except Exception as wal_exc:
+                    log.warning("[LOG_MAINT] WAL checkpoint failed: %s", wal_exc)
 
                 if deleted_count or moved_count:
                     log.info(

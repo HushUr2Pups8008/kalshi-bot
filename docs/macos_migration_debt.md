@@ -13,8 +13,8 @@
 | Total Items | 19 |
 | Open — HIGH | 0 |
 | Open — MEDIUM | 0 |
-| Open — LOW | 5 |
-| Items COMPLETE | 15 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002) |
+| Open — LOW | 4 |
+| Items COMPLETE | 16 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002) |
 
 ### High-Risk Areas
 
@@ -309,7 +309,7 @@ Replaced `self._conn.executescript(_DDL)` / `self._conn.commit()` in `initialize
 | **Title** | No WAL checkpoint task — WAL files grow unbounded |
 | **Category** | Persistence / DB |
 | **Severity** | LOW |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | DEFER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | MAC-DB-001 |
@@ -334,6 +334,9 @@ Run at most once per day, after the nightly report cycle.
 **Acceptance Criteria**  
 - WAL checkpoint runs at least once per 24-hour period
 - `-wal` file size remains bounded during continuous operation
+
+**Implementation Notes** (2026-04-19)  
+Added `PRAGMA wal_checkpoint(RESTART)` block to `_log_maintenance_task()` in [main.py](../main.py), just before the summary log. Opens a short-lived connection to `data/paper_trades.db`, runs the checkpoint, then closes it. Failures are caught and logged at WARNING so they never abort the broader maintenance sweep. Runs once per 24-hour maintenance cycle. Added `import sqlite3` to top-level imports.
 
 ---
 

@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.28] - 2026-04-19
+
+### Fixed
+- `main.py`: MAC-DB-005 — added `PRAGMA wal_checkpoint(RESTART)` to
+  `_log_maintenance_task()` so the WAL file is checkpointed once per 24-hour
+  maintenance cycle. Prevents unbounded WAL growth on long-running macOS
+  sessions where NSSM daily restarts don't occur. Added `import sqlite3` to
+  top-level imports.
+
+---
+
 ## [0.29.27] - 2026-04-19
 
 ### Fixed
