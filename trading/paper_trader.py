@@ -186,7 +186,7 @@ class PaperTrader:
         self._initialized = False
         self._validate_startup_context()
         self._enforce_runtime_guards()
-        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        self._conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=30.0)
         self._conn.row_factory = sqlite3.Row
         self.credibility: SourceCredibility
         self.portfolio: Portfolio

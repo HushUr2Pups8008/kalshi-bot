@@ -12,9 +12,9 @@
 | Audit Source | Comprehensive migration audit — commit 2315a1d |
 | Total Items | 19 |
 | Open — HIGH | 0 |
-| Open — MEDIUM | 6 |
+| Open — MEDIUM | 4 |
 | Open — LOW | 10 |
-| Items COMPLETE | 3 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-TEST-001) |
+| Items COMPLETE | 5 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-TEST-001) |
 
 ### High-Risk Areas
 
@@ -147,7 +147,7 @@ Assess whether `generate_report()` at scale (>1000 trades) creates a thread-pool
 | **Title** | `evidence_store._connect()` missing WAL journal mode |
 | **Category** | Persistence / DB |
 | **Severity** | MEDIUM |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | BEFORE_GO_LIVE |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
@@ -181,6 +181,9 @@ def _connect(self) -> sqlite3.Connection:
 - Concurrent write test (`MAC-TEST-002`) passes without `OperationalError`
 - No existing DB schema or migration is broken
 
+**Implementation Notes** (2026-04-19)  
+Fixed in v0.29.23. Added `PRAGMA journal_mode=WAL` and `PRAGMA synchronous=NORMAL` to `tasks/evidence_store.py:_connect()`. All 958 tests pass.
+
 **Notes**  
 WAL mode persists in the DB file after first write; subsequent connections inherit it. `synchronous=NORMAL` is safe with WAL (crash-safe with slightly relaxed fsync), and meaningfully faster than the default FULL.
 
@@ -194,7 +197,7 @@ WAL mode persists in the DB file after first write; subsequent connections inher
 | **Title** | `paper_trader` SQLite connection missing explicit timeout |
 | **Category** | Persistence / DB |
 | **Severity** | MEDIUM |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | BEFORE_GO_LIVE |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
@@ -218,6 +221,9 @@ self._conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=30.0
 **Acceptance Criteria**  
 - `paper_trader` connection uses `timeout=30.0`
 - Timeout is consistent with `evidence_store._connect()` timeout
+
+**Implementation Notes** (2026-04-19)  
+Fixed in v0.29.23. Added `timeout=30.0` to `sqlite3.connect()` call in `trading/paper_trader.py:189`. All 958 tests pass.
 
 ---
 

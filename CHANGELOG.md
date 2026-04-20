@@ -6,6 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.23] - 2026-04-19
+
+### Fixed
+- `tasks/evidence_store.py`: MAC-DB-001 — `_connect()` now sets
+  `PRAGMA journal_mode=WAL` and `PRAGMA synchronous=NORMAL`. WAL mode allows
+  concurrent readers during writes and eliminates the global write-lock
+  contention that serializes concurrent `asyncio.to_thread()` evidence writes
+  during multi-market news events.
+- `trading/paper_trader.py`: MAC-DB-002 — SQLite connection now uses
+  `timeout=30.0`, matching `evidence_store._connect()` and preventing a silent
+  5-second failure if the DB is held open by an interactive session.
+
+---
+
 ## [0.29.22] - 2026-04-19
 
 ### Fixed
