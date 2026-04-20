@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.27] - 2026-04-19
+
+### Fixed
+- `trading/paper_trader.py`: MAC-DB-004 — replaced `executescript(_DDL)` /
+  `commit()` in `initialize()` with a `with self._conn:` block that splits the
+  DDL on `;` and executes each statement individually. A single `BEGIN`/`COMMIT`
+  now wraps all CREATE TABLE statements; a mid-DDL failure rolls back cleanly
+  instead of leaving the DB partially migrated.
+
+---
+
 ## [0.29.26] - 2026-04-20
 
 ### Fixed

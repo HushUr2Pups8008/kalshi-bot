@@ -13,8 +13,8 @@
 | Total Items | 19 |
 | Open — HIGH | 0 |
 | Open — MEDIUM | 0 |
-| Open — LOW | 6 |
-| Items COMPLETE | 13 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002) |
+| Open — LOW | 5 |
+| Items COMPLETE | 15 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002) |
 
 ### High-Risk Areas
 
@@ -235,7 +235,7 @@ Fixed in v0.29.23. Added `timeout=30.0` to `sqlite3.connect()` call in `trading/
 | **Title** | `paper_trader` connection has unnecessary `check_same_thread=False` |
 | **Category** | Persistence / DB |
 | **Severity** | LOW |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | DEFER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | MAC-ASYNC-001, MAC-ASYNC-002 |
@@ -260,6 +260,9 @@ After MAC-ASYNC-001/002: audit whether `_conn` is ever accessed from multiple th
 - Decision documented (flag needed or not) with rationale
 - If removed: no `ProgrammingError` in any test
 
+**Implementation Notes** (2026-04-20)  
+Decision: `check_same_thread=False` is **required and correct**. After MAC-ASYNC-001/002, all paper trader method calls go through `asyncio.to_thread()`, which dispatches to arbitrary thread-pool worker threads. The single shared `_conn` is therefore legitimately accessed from different threads across calls. Removing the flag would cause `ProgrammingError` on the first `to_thread`-dispatched call. No code change needed. Closed as documented decision.
+
 ---
 
 ### MAC-DB-004
@@ -270,7 +273,7 @@ After MAC-ASYNC-001/002: audit whether `_conn` is ever accessed from multiple th
 | **Title** | `paper_trader._migrate_db()` uses `executescript()` without explicit transaction guard |
 | **Category** | Persistence / DB |
 | **Severity** | LOW |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | DEFER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
@@ -292,6 +295,9 @@ Replace `executescript()` with individual `execute()` calls inside an explicit `
 **Acceptance Criteria**  
 - DDL is wrapped in an explicit transaction
 - A simulated mid-migration failure leaves the DB in a recoverable state
+
+**Implementation Notes** (2026-04-19)  
+Replaced `self._conn.executescript(_DDL)` / `self._conn.commit()` in `initialize()` with a `with self._conn:` block that splits `_DDL` on `;` and calls `self._conn.execute()` for each non-empty statement. The context-manager form issues a single `BEGIN`/`COMMIT` around all CREATE TABLE statements, so a mid-DDL failure rolls back cleanly. 961 tests passed.
 
 ---
 

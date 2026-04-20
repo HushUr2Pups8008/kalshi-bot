@@ -203,8 +203,11 @@ class PaperTrader:
         """
         if self._initialized:
             return
-        self._conn.executescript(_DDL)
-        self._conn.commit()
+        with self._conn:
+            for _stmt in _DDL.split(";"):
+                _stmt = _stmt.strip()
+                if _stmt:
+                    self._conn.execute(_stmt)
         self._migrate_db()
         self.credibility = SourceCredibility(self._db_path)
         self.portfolio = Portfolio()
