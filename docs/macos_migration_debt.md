@@ -11,10 +11,10 @@
 | Last Updated | 2026-04-19 |
 | Audit Source | Comprehensive migration audit — commit 2315a1d |
 | Total Items | 19 |
-| Open — HIGH | 2 |
-| Open — MEDIUM | 7 |
+| Open — HIGH | 1 |
+| Open — MEDIUM | 6 |
 | Open — LOW | 10 |
-| Items COMPLETE | 0 |
+| Items COMPLETE | 2 (MAC-ASYNC-001, MAC-TEST-001) |
 
 ### High-Risk Areas
 
@@ -45,11 +45,14 @@
 | **Title** | `paper_trader.record_trade()` blocks event loop from async executor |
 | **Category** | Async / Queue / Scheduling |
 | **Severity** | HIGH |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | NOW |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
 | **Blocks** | MAC-TEST-001 |
+
+**Implementation Notes** (2026-04-19)
+`get_notional_bankroll()` (SQLite SELECT) was also called synchronously in the same `log.info()` line. Both calls were batched in a single `asyncio.to_thread(_record)` closure to avoid two separate thread dispatches and eliminate any race window between the write and the bankroll read. Fixed in `executor.py`. MAC-TEST-001 regression guard added in `test_executor.py:TestPaperExecutionAsync` — verifies `record_trade` is called from a non-event-loop thread. Committed as v0.29.21.
 
 **Description**  
 `executor.py:361` calls `self._paper.record_trade(analysis)` directly inside `async def _execute_paper()` without `asyncio.to_thread()`. `PaperTrader.record_trade()` is a synchronous method that executes an SQLite `INSERT`. This blocks the asyncio event loop for the duration of the DB write on every paper trade.
@@ -512,11 +515,14 @@ Replace `os.name == "nt"` with `sys.platform == "win32"` at both call sites.
 | **Title** | No test verifies paper trader calls are non-blocking from async context |
 | **Category** | Tests |
 | **Severity** | MEDIUM |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | BEFORE_GO_LIVE |
 | **Owner** | UNASSIGNED |
 | **Depends On** | MAC-ASYNC-001, MAC-ASYNC-002 |
 | **Blocks** | — |
+
+**Implementation Notes** (2026-04-19)
+Written as part of MAC-ASYNC-001 fix. `TestPaperExecutionAsync` in `tests/test_executor.py` contains two tests: `test_record_trade_called_off_event_loop_thread` (thread-name check that fails if `record_trade` reverts to a direct call) and `test_execute_paper_returns_correct_trade_id_and_logs` (end-to-end functional check). MAC-ASYNC-002 is not yet fixed so the thread check covers only `_execute_paper`; extend when MAC-ASYNC-002 is addressed.
 
 **Description**  
 After MAC-ASYNC-001/002 are fixed, there is no regression guard to prevent a future developer from accidentally reverting to a direct synchronous call. Without a test, the fix is invisible to CI. The event-loop blocking bug would be reintroduced silently.

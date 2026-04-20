@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.21] - 2026-04-19
+
+### Fixed
+- `trading/executor.py`: MAC-ASYNC-001 — `_execute_paper()` now dispatches
+  `record_trade()` and `get_notional_bankroll()` via `asyncio.to_thread()`
+  instead of calling them directly on the event loop thread. Both SQLite
+  operations are batched in a single `to_thread` closure to eliminate two
+  separate thread dispatches and close the race window between the write and
+  the post-trade bankroll read.
+- `tests/test_executor.py`: `TestPaperExecutionAsync` — two new tests:
+  `test_record_trade_called_off_event_loop_thread` (MAC-TEST-001 regression
+  guard; fails if `record_trade` reverts to a direct blocking call) and
+  `test_execute_paper_returns_correct_trade_id_and_logs` (functional
+  end-to-end check).
+
+---
+
 ## [0.29.20] - 2026-04-19
 
 ### Fixed

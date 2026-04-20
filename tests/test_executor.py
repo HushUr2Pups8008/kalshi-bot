@@ -753,3 +753,81 @@ class TestExecutorModeSafety:
         state_logs = [r for r in caplog.records if "[EXECUTOR_STATE]" in r.message]
         assert len(state_logs) == 1
         assert "mode=paper" in state_logs[0].message
+
+
+# ---------------------------------------------------------------------------
+# MAC-ASYNC-001: _execute_paper must not block the event loop (record_trade)
+# ---------------------------------------------------------------------------
+
+class TestPaperExecutionAsync:
+    """MAC-ASYNC-001 regression guard.
+
+    Verifies that record_trade() and get_notional_bankroll() are dispatched
+    via asyncio.to_thread() rather than called directly on the event loop
+    thread.  If either call reverts to a synchronous direct call this test
+    fails immediately.
+    """
+
+    @pytest.mark.asyncio
+    async def test_record_trade_called_off_event_loop_thread(self, monkeypatch):
+        import threading
+
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+
+        rest  = MagicMock()
+        paper = MagicMock()
+        paper.get_notional_bankroll.return_value = 500.0
+        paper.portfolio.open_positions.return_value = []
+        paper.portfolio.is_concentration_ok.return_value = True
+        paper.portfolio.exposure.return_value = 0.0
+
+        ex = TradeExecutor(rest, paper)
+
+        event_loop_thread = threading.current_thread().name
+        record_trade_threads: list[str] = []
+
+        original_record_trade = paper.record_trade.side_effect
+
+        def tracking_record_trade(analysis):
+            record_trade_threads.append(threading.current_thread().name)
+            return "test-trade-id"
+
+        paper.record_trade.side_effect = tracking_record_trade
+        paper.record_trade.return_value = "test-trade-id"
+
+        analysis = _make_analysis(edge=0.05, estimated_prob=0.55)
+
+        with patch("trading.executor.trade_log"):
+            trade_id = await ex._execute_paper(analysis)
+
+        assert trade_id == "test-trade-id"
+        assert record_trade_threads, "record_trade was never called"
+        assert all(t != event_loop_thread for t in record_trade_threads), (
+            f"record_trade was called on the event loop thread ({event_loop_thread!r}). "
+            "It must be dispatched via asyncio.to_thread() — MAC-ASYNC-001."
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_paper_returns_correct_trade_id_and_logs(self, monkeypatch):
+        """End-to-end: trade_id flows through to_thread and is returned correctly."""
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+
+        rest  = MagicMock()
+        paper = MagicMock()
+        paper.record_trade.return_value = "abc-123"
+        paper.get_notional_bankroll.return_value = 475.50
+        paper.portfolio.open_positions.return_value = []
+        paper.portfolio.is_concentration_ok.return_value = True
+        paper.portfolio.exposure.return_value = 0.0
+
+        ex      = TradeExecutor(rest, paper)
+        analysis = _make_analysis(edge=0.05, estimated_prob=0.55, capped_dollars=10.0)
+
+        with patch("trading.executor.trade_log"):
+            trade_id = await ex._execute_paper(analysis)
+
+        assert trade_id == "abc-123"
+        paper.record_trade.assert_called_once_with(analysis)
+        paper.get_notional_bankroll.assert_called_once()

@@ -358,7 +358,14 @@ class TradeExecutor:
         return float(override)
 
     async def _execute_paper(self, analysis: SignalAnalysis) -> Optional[str]:
-        trade_id = self._paper.record_trade(analysis)
+        # record_trade() and the bankroll read both hit SQLite synchronously.
+        # Batch them in one to_thread call so neither blocks the event loop.
+        def _record() -> tuple[str, float]:
+            trade_id = self._paper.record_trade(analysis)
+            bankroll = self._paper.get_notional_bankroll()
+            return trade_id, bankroll
+
+        trade_id, bankroll = await asyncio.to_thread(_record)
         log.info(
             "[PAPER] %s | %s %s | edge=%+.3f | $%.2f | notional=$%.2f",
             trade_id,
@@ -366,7 +373,7 @@ class TradeExecutor:
             analysis.side.upper(),
             analysis.edge,
             analysis.capped_dollars,
-            self._paper.get_notional_bankroll(),
+            bankroll,
         )
         return trade_id
 
