@@ -16,9 +16,9 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 32 |
 | Open — HIGH | 3 |
-| Open — MEDIUM | 5 |
+| Open — MEDIUM | 4 |
 | Open — LOW | 0 |
-| Items COMPLETE | 24 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-002) |
+| Items COMPLETE | 25 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002) |
 
 ### High-Risk Areas
 
@@ -287,6 +287,9 @@ Clarify completeness validation into required-presence versus semantically nulla
 
 **Notes**  
 Do not remove fields from the schema.
+
+**Implementation Notes** (2026-04-20)  
+Updated `scripts/observability_completeness_review.py` to distinguish required-valid completeness from strict non-null completeness. Semantically nullable `BLEND_DECISION` fields (`accumulation_*`, `structural_*`, and approved-candidate `trade_blocked_reason=None`) now count as valid when the schema key is present, while absent or malformed fields still fail. Blocked-reason gaps now flag explicit empty strings rather than approved candidates. Validation: `.venv/bin/pytest tests/test_observability_completeness_review.py` (5 passed).
 
 ---
 

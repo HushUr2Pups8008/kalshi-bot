@@ -21,6 +21,13 @@ from utils.logger import BLEND_DECISION_REQUIRED_FIELDS
 
 DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
 COMPLETENESS_TARGET = 0.90
+SEMANTICALLY_NULLABLE_BLEND_FIELDS = {
+    "accumulation_p",
+    "accumulation_confidence",
+    "structural_p",
+    "structural_confidence",
+    "trade_blocked_reason",
+}
 
 
 @dataclass(frozen=True)
@@ -28,6 +35,7 @@ class FieldCompleteness:
     field: str
     present_count: int
     non_null_count: int
+    required_valid_count: int
     malformed_count: int
     total: int
 
@@ -36,6 +44,12 @@ class FieldCompleteness:
         if self.total == 0:
             return None
         return self.non_null_count / self.total
+
+    @property
+    def required_valid_rate(self) -> float | None:
+        if self.total == 0:
+            return None
+        return self.required_valid_count / self.total
 
 
 def load_records(
@@ -73,7 +87,8 @@ def summarize(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     below_threshold = [
         result.field
         for result in field_results
-        if result.non_null_rate is None or result.non_null_rate < COMPLETENESS_TARGET
+        if result.required_valid_rate is None
+        or result.required_valid_rate < COMPLETENESS_TARGET
     ]
 
     traceability = _traceability(rows, blend_rows)
@@ -103,15 +118,20 @@ def render_report(summary: dict[str, Any]) -> str:
             "",
             "BLEND_DECISION REQUIRED FIELD COMPLETENESS",
             f"  Total BLEND_DECISION events: {summary['blend_decision_total']}",
-            f"  Target: {COMPLETENESS_TARGET:.0%} non-null per required field",
+            f"  Target: {COMPLETENESS_TARGET:.0%} required-valid per field",
         ]
     )
     for result in summary["field_results"]:
         rate = "n/a" if result.non_null_rate is None else f"{result.non_null_rate:.1%}"
+        required_rate = (
+            "n/a"
+            if result.required_valid_rate is None
+            else f"{result.required_valid_rate:.1%}"
+        )
         lines.append(
             f"  {result.field:<32} present={result.present_count:>4} "
             f"non_null={result.non_null_count:>4} malformed={result.malformed_count:>4} "
-            f"rate={rate}"
+            f"rate={rate} required_rate={required_rate}"
         )
     below = summary["below_threshold"]
     lines.append(f"  Fields below threshold: {', '.join(below) if below else 'none'}")
@@ -165,6 +185,7 @@ def _field_completeness(
 ) -> FieldCompleteness:
     present = 0
     non_null = 0
+    required_valid = 0
     malformed = 0
     for row in rows:
         if field in row:
@@ -172,15 +193,28 @@ def _field_completeness(
         value = row.get(field)
         if value is not None:
             non_null += 1
+        if field in row and (
+            value is not None or _allows_semantic_null(field, row)
+        ):
+            required_valid += 1
         if value is not None and _is_malformed(field, value):
             malformed += 1
     return FieldCompleteness(
         field=field,
         present_count=present,
         non_null_count=non_null,
+        required_valid_count=required_valid,
         malformed_count=malformed,
         total=len(rows),
     )
+
+
+def _allows_semantic_null(field: str, row: dict[str, Any]) -> bool:
+    if field not in SEMANTICALLY_NULLABLE_BLEND_FIELDS:
+        return False
+    if field == "trade_blocked_reason":
+        return row.get(field) is None
+    return row.get(field) is None
 
 
 def _is_malformed(field: str, value: Any) -> bool:
@@ -245,7 +279,7 @@ def _traceability(
                     blend_missing_dossier_links += 1
         if row.get("structural_p") is not None and market not in structural_markets:
             blend_missing_structural_links += 1
-        if row.get("trade_considered") is True and row.get("trade_blocked_reason") in ("", None):
+        if row.get("trade_considered") is True and row.get("trade_blocked_reason") == "":
             blocked_reason_gaps += 1
 
     outcome_rows = [
@@ -297,9 +331,11 @@ def _json_ready(summary: dict[str, Any]) -> str:
                 "field": result.field,
                 "present_count": result.present_count,
                 "non_null_count": result.non_null_count,
+                "required_valid_count": result.required_valid_count,
                 "malformed_count": result.malformed_count,
                 "total": result.total,
                 "non_null_rate": result.non_null_rate,
+                "required_valid_rate": result.required_valid_rate,
             }
             for result in summary["field_results"]
         ],

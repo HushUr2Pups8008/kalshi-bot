@@ -37,9 +37,39 @@ def test_blend_completeness_rates_and_threshold_failures_are_measured():
 
     assert summary["blend_decision_total"] == 2
     rates = {result.field: result.non_null_rate for result in summary["field_results"]}
+    required_rates = {
+        result.field: result.required_valid_rate
+        for result in summary["field_results"]
+    }
     assert rates["fast_lane_p"] == 0.5
+    assert required_rates["fast_lane_p"] == 0.5
     assert "fast_lane_p" in summary["below_threshold"]
     assert summary["target_met"] is False
+
+
+def test_semantically_nullable_lane_fields_do_not_fail_completeness():
+    summary = summarize(
+        [
+            _blend(
+                accumulation_p=None,
+                accumulation_confidence=None,
+                structural_p=None,
+                structural_confidence=None,
+                trade_blocked_reason=None,
+            )
+        ]
+    )
+
+    required_rates = {
+        result.field: result.required_valid_rate
+        for result in summary["field_results"]
+    }
+
+    assert required_rates["accumulation_p"] == 1.0
+    assert required_rates["structural_p"] == 1.0
+    assert required_rates["trade_blocked_reason"] == 1.0
+    assert summary["below_threshold"] == []
+    assert summary["target_met"] is True
 
 
 def test_all_contract_required_blend_fields_are_reported():
@@ -85,7 +115,7 @@ def test_traceability_join_counts_surface_gaps_and_render_warning_text():
             "market_ticker": "KXOBS-26DEC31",
             "evidence_ids_contributing": ["missing-ev"],
         },
-        _blend(trade_considered=True, trade_blocked_reason=None),
+        _blend(trade_considered=True, trade_blocked_reason=""),
         {"type": "SKIPPED", "ticker": "KXOTHER-26DEC31"},
     ]
 
@@ -98,4 +128,5 @@ def test_traceability_join_counts_surface_gaps_and_render_warning_text():
     assert trace["blend_missing_structural_links"] == 1
     assert trace["outcome_missing_blend_links"] == 1
     assert trace["blocked_reason_gaps"] == 1
-    assert "Target met: False" in report
+    assert "Target met: True" in report
+    assert "Blocked blend reason gaps:       1" in report
