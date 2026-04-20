@@ -153,7 +153,7 @@ class _DailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
     another process holds the file open. On Mac/Linux it is harmless: slightly
     less efficient than an atomic rename but functionally identical.
 
-    Rotated backups: bot.log.YYYY-MM-DD, 90-day retention.
+    Rotated backups: bot.log.YYYY-MM-DD (UTC date), 90-day retention.
 
     Banner: a one-line context string (version/env/model) written at the top
     of every new file so any rotated archive is self-describing without
@@ -163,6 +163,12 @@ class _DailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
     rotated whenever this handler rotates. This ensures handlers with high
     log-level filters (e.g. WARNING-only) still rotate at midnight even if
     no qualifying messages arrive around that time.
+
+    Python 3.14 compatibility: doRollover() in Python 3.14+ returns early
+    without updating rolloverAt when the destination archive already exists
+    (e.g. after a manual --rotate-logs call). _rollover_self() advances
+    rolloverAt after every super().doRollover() call to prevent shouldRollover()
+    from returning True forever and creating a hot loop on every emit().
     """
 
     def __init__(self, *args, **kwargs) -> None:
@@ -180,18 +186,34 @@ class _DailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
 
     def _rollover_self(self) -> None:
         super().doRollover()
+        # Python 3.14+: doRollover() returns early without updating rolloverAt
+        # when the destination archive already exists (e.g. after a prior
+        # force_rollover() call). Advance rolloverAt here so shouldRollover()
+        # does not return True forever, which would create a hot loop on every
+        # emit() call.
+        now = int(time.time())
+        if self.rolloverAt <= now:
+            self.rolloverAt = self.computeRollover(now)
         self._write_banner()
 
     def rotate(self, source: str, dest: str) -> None:
+        import sys as _sys
         try:
             shutil.copy2(source, dest)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(
+                f"[logger] WARN: log rotation copy failed {source!r} -> {dest!r}: {exc}",
+                file=_sys.stderr,
+            )
+            return
         try:
             with open(source, "w", encoding="utf-8"):
                 pass  # truncate in place -- path and inode unchanged
-        except Exception:
-            pass
+        except Exception as exc:
+            print(
+                f"[logger] WARN: log rotation truncate failed {source!r}: {exc}",
+                file=_sys.stderr,
+            )
 
     def doRollover(self) -> None:
         self._rollover_self()
@@ -217,23 +239,44 @@ _app_fh: Optional[_DailyRotatingFileHandler] = None
 _err_fh: Optional[_DailyRotatingFileHandler] = None
 
 
+def _maybe_rotate_stale(handler: _DailyRotatingFileHandler) -> None:
+    """Rotate the active log file on startup if it contains content from a prior period.
+
+    Handles the macOS/developer pattern where the bot is started and stopped
+    within business hours and never crosses midnight, so the scheduled midnight
+    rotation never fires and the file accumulates content across days.
+
+    The check uses the file's mtime against the start of the current UTC midnight
+    period (rolloverAt - interval).  If the last write was before that boundary
+    the file belongs to a previous day and is archived before new content is added.
+    """
+    path = Path(handler.baseFilename)
+    if not path.exists() or path.stat().st_size == 0:
+        return
+    period_start = handler.rolloverAt - handler.interval
+    if path.stat().st_mtime < period_start:
+        handler.doRollover()
+
+
 def _ensure_file_handlers() -> tuple[_DailyRotatingFileHandler, _DailyRotatingFileHandler]:
     global _app_fh, _err_fh
     if _app_fh is None:
         _app_fh = _DailyRotatingFileHandler(
-            APP_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8"
+            APP_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8", utc=True
         )
         _app_fh.setLevel(logging.DEBUG)
         _app_fh.setFormatter(_utc_formatter(_FILE_FORMAT))
+        _maybe_rotate_stale(_app_fh)
     if _err_fh is None:
         _err_fh = _DailyRotatingFileHandler(
-            ERROR_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8"
+            ERROR_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8", utc=True
         )
         _err_fh.setLevel(logging.WARNING)
         _err_fh.setFormatter(_utc_formatter(_FILE_FORMAT))
         # bot.log rotates on every DEBUG+ message at midnight; nudge errors.log
         # along with it so it rotates even during quiet (no-WARNING) periods.
         _app_fh._peers.append(_err_fh)
+        _maybe_rotate_stale(_err_fh)
     return _app_fh, _err_fh
 
 

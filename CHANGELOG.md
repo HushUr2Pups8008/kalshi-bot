@@ -6,6 +6,34 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.20] - 2026-04-19
+
+### Fixed
+- `utils/logger.py`: Four macOS rollover correctness fixes.
+  1. **Python 3.14 `rolloverAt` hotloop** — `_rollover_self()` now advances
+     `rolloverAt` via `computeRollover()` after `super().doRollover()` returns
+     early when the destination archive already exists (e.g. after a prior
+     `--rotate-logs` run). Without this fix `shouldRollover()` returns `True`
+     forever, causing every `emit()` to trigger a no-op `doRollover()` cycle.
+  2. **Startup stale-content rotation** — new `_maybe_rotate_stale()` helper
+     compares the active log file's `mtime` to the current UTC-period start
+     (`rolloverAt - interval`). If the file was last written before that
+     boundary it is archived via `doRollover()` before new content is appended.
+     Called in `_ensure_file_handlers()` for both `bot.log` and `errors.log`.
+     Handles the macOS dev-machine pattern where the bot stops before midnight
+     and the scheduled rotation never fires.
+  3. **`rotate()` error visibility** — copy and truncate failures now print to
+     `stderr` with source/dest paths and the exception message instead of being
+     silently discarded.
+  4. **`utc=True` alignment** — `_app_fh` and `_err_fh` now created with
+     `utc=True` so rotation fires at UTC midnight, consistent with UTC-formatted
+     log content and the existing test configuration.
+- `tests/test_logger_rotation.py`: Three new tests — `test_startup_rotation_archives_stale_log_content`,
+  `test_rollover_at_advances_after_archive_already_exists`,
+  `test_forced_rollover_cycle_no_hotloop`.
+
+---
+
 ## [0.29.19] - 2026-04-19
 
 ### Changed
