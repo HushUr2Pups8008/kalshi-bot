@@ -13,8 +13,8 @@
 | Total Items | 19 |
 | Open — HIGH | 0 |
 | Open — MEDIUM | 0 |
-| Open — LOW | 4 |
-| Items COMPLETE | 16 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002) |
+| Open — LOW | 3 |
+| Items COMPLETE | 17 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003) |
 
 ### High-Risk Areas
 
@@ -640,7 +640,7 @@ Added `tests/test_evidence_store_concurrency.py` with three tests:
 | **Title** | No test for non-clean shutdown followed by restart with stale lock file |
 | **Category** | Tests |
 | **Severity** | LOW |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | DEFER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
@@ -665,6 +665,13 @@ Add `tests/test_instance_guard.py`:
 **Acceptance Criteria**  
 - Guard correctly detects and clears a stale lock file (dead PID)
 - Test passes on macOS
+
+**Implementation Notes** (2026-04-19)  
+Added `tests/test_instance_guard.py` with 3 tests:
+- `test_guard_acquires_when_lock_file_absent`: baseline — no prior lock file.
+- `test_guard_acquires_over_stale_pid_content`: writes a lock file with PID 999999999 (guaranteed dead), asserts `acquire()` returns `True` and overwrites the file with the current PID. This is the core MAC-TEST-003 scenario.
+- `test_guard_describe_owner_returns_stale_info_before_acquire`: asserts `describe_owner()` surfaces the stale PID before any acquire.
+All 3 pass on macOS.
 
 ---
 

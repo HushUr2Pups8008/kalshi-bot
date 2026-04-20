@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.29] - 2026-04-19
+
+### Tests
+- `tests/test_instance_guard.py` (new, MAC-TEST-003): 3 tests verifying
+  `_RuntimeInstanceGuard` correctly acquires the lock over a stale lock file
+  (dead PID content) and overwrites it with the current PID. Simulates macOS
+  SIGKILL / OOM-kill scenario where the lock file is not cleaned up.
+
+---
+
 ## [0.29.28] - 2026-04-19
 
 ### Fixed
