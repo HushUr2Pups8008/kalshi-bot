@@ -15,10 +15,10 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 32 |
-| Open — HIGH | 4 |
+| Open — HIGH | 3 |
 | Open — MEDIUM | 5 |
 | Open — LOW | 0 |
-| Items COMPLETE | 23 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001) |
+| Items COMPLETE | 24 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-002) |
 
 ### High-Risk Areas
 
@@ -31,10 +31,9 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 ### Recommended Execution Order
 
 1. `PROFIT-RUNTIME-001` (blocked on structural participation evidence; blocks confidence in the whole architecture)
-2. `PROFIT-OBS-002` (long-run app-log rollover confidence)
-3. `PROFIT-EVID-001` (accumulation input coverage)
-4. `PROFIT-VALID-001` + `PROFIT-OBS-001` (validation and observability hardening)
-5. Remaining MEDIUM items in dependency order
+2. `PROFIT-EVID-001` (accumulation input coverage)
+3. `PROFIT-VALID-001` + `PROFIT-OBS-001` (validation and observability hardening)
+4. Remaining MEDIUM items in dependency order
 
 ---
 
@@ -258,7 +257,7 @@ Added conservative runtime source-class mapping in `main.py`: Reddit-style sourc
 | **Title** | `BLEND_DECISION` completeness rules conflict with nullable lane semantics |
 | **Category** | Observability / Contract Clarity |
 | **Severity** | MEDIUM |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | HIGH |
 | **Owner** | Shared |
 | **Depends On** | S4.2 |
@@ -323,6 +322,9 @@ Audit and either correct the documentation to match intentional daily copy+trunc
 
 **Notes**  
 This item captures the logging rollover concern inside the unified debt log instead of creating a separate logging tracker.
+
+**Implementation Notes** (2026-04-20)  
+Validated and completed the macOS stale-rollover repair. `utils.logger._maybe_rotate_stale()` now checks the first non-comment log timestamp when mtime alone makes a prior-period active log look current; this catches the long-run/restart case without changing the intended daily copy+truncate policy. `PLATFORMS.md` already documents copy+truncate for macOS/Linux. Added a regression test for current mtime plus prior-period first log timestamp. Validation: `.venv/bin/pytest tests/test_logger_rotation.py tests/test_app_log_reader.py tests/test_log_isolation.py tests/test_trade_log_store.py` (29 passed, 1 skipped).
 
 ---
 
@@ -1354,9 +1356,9 @@ Items with `Priority = NOW`, ordered for safe sequential execution:
 | Order | ID | Title | Why First |
 |-------|----|-------|-----------|
 | 1 | PROFIT-RUNTIME-001 | S4.5 multi-lane paper validation remains unproven | Blocked until structural participation is observed or repaired |
-| 2 | PROFIT-OBS-002 | App-log rollover policy/documentation mismatch | Long-running validation needs trustworthy logs |
-| 3 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Dossier memory may be biased toward positive signals |
-| 4 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible |
+| 2 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Dossier memory may be biased toward positive signals |
+| 3 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible |
+| 4 | PROFIT-OBS-001 | Blend completeness semantics are too blunt | Avoid false observability failures that hide real gaps |
 
 **Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence.
 

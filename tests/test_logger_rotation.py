@@ -331,3 +331,44 @@ def test_maybe_rotate_stale_rotates_when_mtime_is_one_second_before_period_bound
         assert "content one second before boundary" in archived_text
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_startup_rotation_uses_first_log_timestamp_when_mtime_is_current():
+    """Rotate prior-period content even if the active file's mtime is current.
+
+    This covers the macOS long-run/restart pattern where a log contains content
+    from the previous UTC day, but later writes made the file mtime look fresh.
+    """
+    root = _tmp_root()
+    bot_path = root / "bot.log"
+    try:
+        handler = _DailyRotatingFileHandler(
+            bot_path,
+            when="midnight",
+            backupCount=7,
+            encoding="utf-8",
+            utc=True,
+        )
+        try:
+            period_start = handler.rolloverAt - handler.interval
+            stale = time.strftime(
+                "%Y-%m-%d %H:%M:%S,000",
+                time.gmtime(period_start - 60),
+            )
+            bot_path.write_text(
+                "# banner line is ignored\n"
+                f"{stale} UTC INFO     main                 prior-period content\n",
+                encoding="utf-8",
+            )
+            os.utime(bot_path, (period_start + 60, period_start + 60))
+
+            _maybe_rotate_stale(handler)
+        finally:
+            handler.close()
+
+        archives = list(root.glob("bot.log.*"))
+        assert archives, "first log timestamp from prior period must trigger rotation"
+        assert "prior-period content" in archives[0].read_text(encoding="utf-8")
+        assert not bot_path.exists() or bot_path.stat().st_size == 0
+    finally:
+        shutil.rmtree(root, ignore_errors=True)

@@ -240,22 +240,49 @@ _app_fh: Optional[_DailyRotatingFileHandler] = None
 _err_fh: Optional[_DailyRotatingFileHandler] = None
 
 
+def _first_log_timestamp(path: Path) -> Optional[float]:
+    """Return the UTC timestamp of the first non-comment log line in path, or None.
+
+    Used as a fallback when mtime alone cannot determine whether the file belongs
+    to a prior period (e.g. the bot ran continuously through midnight and the file
+    was written after midnight, making its mtime appear current-period).
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                # Expected prefix: "YYYY-MM-DD HH:MM:SS,mmm UTC ..."
+                try:
+                    dt = datetime.strptime(line[:23], "%Y-%m-%d %H:%M:%S,%f")
+                    return dt.replace(tzinfo=timezone.utc).timestamp()
+                except ValueError:
+                    return None  # unrecognised format; stop here
+    except OSError:
+        pass
+    return None
+
+
 def _maybe_rotate_stale(handler: _DailyRotatingFileHandler) -> None:
     """Rotate the active log file on startup if it contains content from a prior period.
 
-    Handles the macOS/developer pattern where the bot is started and stopped
-    within business hours and never crosses midnight, so the scheduled midnight
-    rotation never fires and the file accumulates content across days.
-
-    The check uses the file's mtime against the start of the current UTC midnight
-    period (rolloverAt - interval).  If the last write was before that boundary
-    the file belongs to a previous day and is archived before new content is added.
+    Two-pass check:
+      1. mtime — fast; catches the common start/stop-within-business-hours pattern.
+      2. first-line timestamp — catches the run-through-midnight failure pattern,
+         where mtime appears current-period because the bot wrote after midnight
+         but emit-triggered rotation never fired.
     """
     path = Path(handler.baseFilename)
     if not path.exists() or path.stat().st_size == 0:
         return
     period_start = handler.rolloverAt - handler.interval
     if path.stat().st_mtime < period_start:
+        handler.doRollover()
+        return
+    # Content-based fallback: check the timestamp on the first log line.
+    first_ts = _first_log_timestamp(path)
+    if first_ts is not None and first_ts < period_start:
         handler.doRollover()
 
 
