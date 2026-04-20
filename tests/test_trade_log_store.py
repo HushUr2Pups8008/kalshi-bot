@@ -1,6 +1,7 @@
 import gzip
 import json
 import shutil
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -243,6 +244,7 @@ def test_iter_trade_records_skips_malformed_lines_and_filters_event_type():
         shutil.rmtree(root, ignore_errors=True)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only copy+truncate fallback")
 def test_trade_log_store_permission_error_fallback_preserves_records(monkeypatch):
     root = _tmp_root()
     try:
@@ -262,6 +264,33 @@ def test_trade_log_store_permission_error_fallback_preserves_records(monkeypatch
         archive_path = root / "archive" / "2026" / "04" / "2026-04-15.jsonl"
         assert [row["ticker"] for row in _read_jsonl(archive_path)] == ["DAY1"]
         assert [row["ticker"] for row in _read_jsonl(root / "live" / "trades.jsonl")] == ["DAY2"]
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS/Linux: PermissionError must re-raise")
+def test_trade_log_store_permission_error_raises_on_non_windows(monkeypatch):
+    """MAC-LOG-001: on non-Windows, PermissionError during rotation must propagate.
+
+    The Windows copy+truncate fallback masks real permission problems on macOS.
+    On macOS/Linux the exception must re-raise so the caller is aware of the failure.
+    """
+    root = _tmp_root()
+    try:
+        store = TradeLogStore(
+            root=root,
+            live_path=root / "live" / "trades.jsonl",
+            legacy_path=root / "trades.jsonl",
+        )
+        store.append({"type": "SIGNAL", "ts": "2026-04-15T23:59:00+00:00", "ticker": "DAY1"})
+
+        def _raise_permission_error(src: Path, dst: Path) -> None:
+            raise PermissionError("simulated permission denied")
+
+        monkeypatch.setattr("utils.logger.os.replace", _raise_permission_error)
+
+        with pytest.raises(PermissionError, match="simulated permission denied"):
+            store.append({"type": "SIGNAL", "ts": "2026-04-16T00:01:00+00:00", "ticker": "DAY2"})
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

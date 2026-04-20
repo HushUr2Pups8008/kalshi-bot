@@ -6,6 +6,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.26] - 2026-04-20
+
+### Fixed
+- `main.py`: MAC-PLAT-001 — replaced both `os.name == "nt"` guards in
+  `_RuntimeInstanceGuard._lock_handle()` / `_unlock_handle()` with the
+  idiomatic `sys.platform == "win32"`.
+- `utils/logger.py`: MAC-LOG-001 — `_rotate_live_to_archive()` now re-raises
+  `PermissionError` on non-Windows platforms instead of silently falling back
+  to copy+truncate; added `import sys`. Windows copy+truncate fallback is
+  preserved.
+- `main.py`: MAC-FS-001 / MAC-DOC-001 — NSSM service log archive cleanup block
+  wrapped in `if sys.platform == "win32":` with inline comment; docstring
+  entries annotated as Windows-only. Dead globs no longer run on macOS.
+- `tests/test_trade_log_store.py`: updated `PermissionError` test:
+  `test_trade_log_store_permission_error_fallback_preserves_records` is now
+  skipped on non-Windows; new
+  `test_trade_log_store_permission_error_raises_on_non_windows` asserts
+  re-raise behavior on macOS/Linux.
+
+---
+
 ## [0.29.25] - 2026-04-20
 
 ### Added

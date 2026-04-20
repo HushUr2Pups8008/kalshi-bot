@@ -12,9 +12,9 @@
 | Audit Source | Comprehensive migration audit — commit 2315a1d |
 | Total Items | 19 |
 | Open — HIGH | 0 |
-| Open — MEDIUM | 1 |
-| Open — LOW | 9 |
-| Items COMPLETE | 9 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-CLI-001, MAC-CLI-002, MAC-TEST-001, MAC-TEST-002, MAC-DOC-002) |
+| Open — MEDIUM | 0 |
+| Open — LOW | 6 |
+| Items COMPLETE | 13 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002) |
 
 ### High-Risk Areas
 
@@ -423,7 +423,7 @@ Added `# PLATFORM: Windows only.` header with macOS reference to both `scripts/d
 | **Title** | NSSM service log cleanup code in `_log_maintenance_task()` is dead on macOS |
 | **Category** | Filesystem / Paths |
 | **Severity** | MEDIUM |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | DEFER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
@@ -453,6 +453,9 @@ Or delete the block entirely with a comment in the commit message noting it was 
 - macOS maintenance task logs do not reference `service_*` paths
 - If kept under `sys.platform == "win32"`, code is covered by a comment explaining NSSM context
 
+**Implementation Notes** (2026-04-20)  
+Wrapped the NSSM service log archive block in `if sys.platform == "win32":` with an inline comment explaining the Windows-only context. Also updated the docstring retention table to annotate all three NSSM entries as `(Windows only)`. MAC-DOC-001 is also resolved by this change.
+
 ---
 
 ### MAC-LOG-001
@@ -463,7 +466,7 @@ Or delete the block entirely with a comment in the commit message noting it was 
 | **Title** | `TradeLogStore._rotate_live_to_archive()` silently falls back on `PermissionError` on macOS |
 | **Category** | Logging / Runtime Lifecycle |
 | **Severity** | LOW |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | DEFER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
@@ -497,6 +500,9 @@ except PermissionError:
 - On Windows, the copy+truncate fallback is preserved
 - Trade log is never silently left in a partial state
 
+**Implementation Notes** (2026-04-20)  
+Added `sys` import to `utils/logger.py`. `_rotate_live_to_archive()` now checks `sys.platform != "win32"` before taking the copy+truncate fallback path: on macOS/Linux the `PermissionError` is re-raised; on Windows the fallback is preserved.
+
 ---
 
 ### MAC-PLAT-001
@@ -507,7 +513,7 @@ except PermissionError:
 | **Title** | `_RuntimeInstanceGuard` uses `os.name == "nt"` instead of `sys.platform == "win32"` |
 | **Category** | Python / Platform Interaction |
 | **Severity** | LOW |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | DEFER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
@@ -529,6 +535,9 @@ Replace `os.name == "nt"` with `sys.platform == "win32"` at both call sites.
 **Acceptance Criteria**  
 - Both `os.name == "nt"` guards replaced with `sys.platform == "win32"`
 - Instance guard tests pass on macOS
+
+**Implementation Notes** (2026-04-20)  
+Both `os.name == "nt"` guards in `_lock_handle()` and `_unlock_handle()` replaced with `sys.platform == "win32"` using `replace_all`. `sys` was already imported in main.py.
 
 ---
 
@@ -693,7 +702,7 @@ Add two cases to `tests/test_logger_rotation.py`:
 | **Title** | NSSM references in `main.py` comments lack Windows-only annotation |
 | **Category** | Documentation / Prompt Drift |
 | **Severity** | LOW |
-| **Status** | TODO |
+| **Status** | COMPLETE |
 | **Priority** | DEFER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | MAC-FS-001 |

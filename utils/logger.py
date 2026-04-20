@@ -32,6 +32,7 @@ import logging
 import logging.handlers
 import os
 import shutil
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -421,8 +422,12 @@ class TradeLogStore:
         try:
             os.replace(self._live_path, archive_path)
         except PermissionError:
-            # Windows can transiently reject a replace even after the write
-            # handle is closed. Copy durably first, then truncate the source.
+            if sys.platform != "win32":
+                # On macOS/Linux PermissionError is a real access-control problem,
+                # not a transient file-lock; raise so the caller sees it clearly.
+                raise
+            # Windows: file may be transiently locked even after the write handle
+            # is closed; copy+truncate is the safe fallback.
             self._append_file(self._live_path, archive_path)
             self._truncate_live()
 
