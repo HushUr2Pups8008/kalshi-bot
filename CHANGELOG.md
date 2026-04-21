@@ -6,6 +6,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.33] - 2026-04-21
+
+### Fixed
+- **Structural recompute crash loop** (`tasks/structural_task.py`, `main.py`):
+  the bot was restarting every ~13 minutes because `StructuralComputationError`
+  (wrapping `sqlite3.OperationalError: unable to open database file`) propagated
+  uncaught from `run_once` → `run_periodic` → `_structural_recompute_task` →
+  `asyncio.gather(*tasks)` in `run()`, killing the entire process. launchd
+  immediately restarted it; no shutdown marker was written, making botcheck
+  report all sessions as "unpaired".
+  Two-layer fix:
+  1. `run_once` (`structural_task.py`): uses `asyncio.gather(..., return_exceptions=True)`
+     so per-market failures log a warning and are excluded from the return value
+     instead of aborting the entire 855-market gather.
+  2. `_structural_recompute_task` (`main.py`): wraps `run_periodic` in a retry
+     loop so an unexpected exception from the task body logs and retries after
+     60 s rather than crashing the process.
+  - Test: `test_run_once_market_failure_does_not_propagate` added to
+    `tests/test_structural_task.py`.
+
 ## [0.29.32] - 2026-04-20
 
 ### Fixed

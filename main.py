@@ -1697,10 +1697,17 @@ class TradingBot:
             "[STRUCTURAL] Market cache ready: starting recompute loop with %d markets",
             len(self.matcher._cache._markets),
         )
-        await self._structural_task.run_periodic(
-            market_provider=lambda: list(self.matcher._cache._markets),
-            interval_seconds=3600,
-        )
+        while True:
+            try:
+                await self._structural_task.run_periodic(
+                    market_provider=lambda: list(self.matcher._cache._markets),
+                    interval_seconds=3600,
+                )
+            except Exception as exc:
+                log.warning(
+                    "[STRUCTURAL] run_periodic raised unexpectedly; retrying in 60s: %s", exc
+                )
+                await asyncio.sleep(60)
 
     async def run(self) -> None:
         notional = self.paper.get_notional_bankroll()

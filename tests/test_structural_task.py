@@ -298,3 +298,20 @@ async def test_run_periodic_honors_stop_event(tmp_path: Path):
     )
 
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_run_once_market_failure_does_not_propagate(tmp_path: Path):
+    """run_once must not raise when individual markets fail.
+
+    With SpyComputer(fail=True) every process_market raises
+    StructuralComputationError.  run_once must absorb those exceptions,
+    log warnings, and return an empty list — never re-raise.
+    """
+    task, _, _ = _task(tmp_path, computer=SpyComputer(fail=True))
+    await task.store.update_dossier(_dossier("KXSTRUCT-A"))
+    await task.store.update_dossier(_dossier("KXSTRUCT-B"))
+
+    results = await task.run_once([_market("KXSTRUCT-A"), _market("KXSTRUCT-B")])
+
+    assert results == [], "all failures → empty result list, no exception raised"

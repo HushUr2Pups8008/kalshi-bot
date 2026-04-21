@@ -8,9 +8,12 @@ and emit telemetry. It does not blend, gate trades, or execute anything.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Protocol
+
+_log = logging.getLogger(__name__)
 
 from analysis.evidence_types import PriorEstimate
 from analysis.structural_prior import compute_structural_prior
@@ -124,10 +127,30 @@ class StructuralTask:
         self,
         markets: Iterable[KalshiMarket],
     ) -> list[StructuralTaskResult]:
-        """Process a provided market snapshot once."""
-        return await asyncio.gather(
-            *(self.process_market(market) for market in markets)
+        """Process a provided market snapshot once.
+
+        Per-market failures are logged and excluded from the return value so
+        that one bad market cannot abort the entire recompute cycle.
+        """
+        raw = await asyncio.gather(
+            *(self.process_market(market) for market in markets),
+            return_exceptions=True,
         )
+        ok: list[StructuralTaskResult] = []
+        failed = 0
+        for r in raw:
+            if isinstance(r, BaseException):
+                failed += 1
+                _log.warning("[STRUCTURAL] per-market recompute failed: %s", r)
+            else:
+                ok.append(r)
+        if failed:
+            _log.warning(
+                "[STRUCTURAL] %d/%d markets failed recompute this cycle",
+                failed,
+                len(raw),
+            )
+        return ok
 
     async def run_periodic(
         self,
