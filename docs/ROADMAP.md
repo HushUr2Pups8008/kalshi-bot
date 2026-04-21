@@ -121,9 +121,9 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 
 | ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
 |----|------|--------|-------|---------|-------------|-----------------|
-| P0.1 | Tag startup probe in `SIGNAL_ANALYSIS_DETAIL` events | NOT_STARTED | Codex | Startup probe uses hardcoded synthetic `(0.38, 0.82)` output; it must be excluded from signal-quality statistics | No behavior change; tagging only | `is_synthetic_probe=true` on probe events; all reports and metrics filter it |
+| P0.1 | Tag startup probe in `SIGNAL_ANALYSIS_DETAIL` events | IN_PROGRESS | Codex | Startup probe uses hardcoded synthetic `(0.38, 0.82)` output; it must be excluded from signal-quality statistics | No behavior change; tagging only | `is_synthetic_probe=true` on probe events; all reports and metrics filter it |
 | P0.2 | Log full prompt and raw LLM response for non-probe calls | NOT_STARTED | Codex | Enable manual inspection of why production LLM returns `0.5000` | DEBUG level only; no prompt change; no behavioral change | Prompt + raw LLM response visible in logs for each real analysis call |
-| P0.3 | Manual diagnosis: est vs market_price distribution | NOT_STARTED | Codex | Review P0.2 output; determine if `est == market_price` is tautological (anchoring) or coincidental | No code change; manual inspection | Written verdict recorded; one of the four root-cause categories confirmed |
+| P0.3 | Manual diagnosis: est vs market_price distribution | NOT_STARTED | Claude | Review P0.2 output; determine if `est == market_price` is tautological (anchoring) or coincidental | No code change; manual inspection | Written verdict recorded; one of the four root-cause categories confirmed |
 
 **P0-GATE outcome:**
 - PASS → Phase 1 proceeds (may start in parallel with P0); Phase 2 gate changes authorized after verdict
