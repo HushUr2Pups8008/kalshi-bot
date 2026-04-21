@@ -498,6 +498,7 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             "skipped_routing": 0,
             "skipped_routing_reasons": Counter(),
             "status_counts": Counter(),
+            "probe_count": 0,
             "latency_ms_samples": [],
             "total_stage_ms_samples": [],
             "queue_wait_ms_samples": [],
@@ -707,39 +708,42 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
     )
 
     for row in rows:
-        if row.get("llm_attempted") is True:
+        is_probe = row.get("is_startup_probe") is True
+        if is_probe:
+            stats["llm_observability"]["probe_count"] += 1
+        if not is_probe and row.get("llm_attempted") is True:
             stats["llm_observability"]["attempted"] += 1
-        if row.get("llm_result_used") is True:
+        if not is_probe and row.get("llm_result_used") is True:
             stats["llm_observability"]["result_used"] += 1
-        if row.get("llm_attempted") is True and not row.get("llm_result_used"):
+        if not is_probe and row.get("llm_attempted") is True and not row.get("llm_result_used"):
             stats["llm_observability"]["fallback"] += 1
         if row.get("llm_result_status"):
             stats["llm_observability"]["status_counts"][row["llm_result_status"]] += 1
-            if str(row["llm_result_status"]).startswith("llm_skipped_routing_"):
+            if not is_probe and str(row["llm_result_status"]).startswith("llm_skipped_routing_"):
                 stats["llm_observability"]["skipped_routing"] += 1
                 stats["llm_observability"]["skipped_routing_reasons"][
                     str(row["llm_result_status"]).removeprefix("llm_skipped_routing_")
                 ] += 1
-        if row.get("llm_latency_ms") is not None:
+        if not is_probe and row.get("llm_latency_ms") is not None:
             stats["llm_observability"]["latency_ms_samples"].append(row["llm_latency_ms"])
-        if row.get("llm_total_stage_ms") is not None:
+        if not is_probe and row.get("llm_total_stage_ms") is not None:
             stats["llm_observability"]["total_stage_ms_samples"].append(row["llm_total_stage_ms"])
-        elif row.get("llm_latency_ms") is not None:
+        elif not is_probe and row.get("llm_latency_ms") is not None:
             stats["llm_observability"]["total_stage_ms_samples"].append(row["llm_latency_ms"])
-        if row.get("llm_queue_wait_ms") is not None:
+        if not is_probe and row.get("llm_queue_wait_ms") is not None:
             stats["llm_observability"]["queue_wait_ms_samples"].append(row["llm_queue_wait_ms"])
-        if row.get("llm_http_round_trip_ms") is not None:
+        if not is_probe and row.get("llm_http_round_trip_ms") is not None:
             stats["llm_observability"]["http_round_trip_ms_samples"].append(row["llm_http_round_trip_ms"])
-        if row.get("llm_parse_ms") is not None:
+        if not is_probe and row.get("llm_parse_ms") is not None:
             stats["llm_observability"]["parse_ms_samples"].append(row["llm_parse_ms"])
-        if row.get("llm_contention_observed") is True:
+        if not is_probe and row.get("llm_contention_observed") is True:
             stats["llm_observability"]["contention_observed"] += 1
-        if row.get("llm_in_flight_at_entry") is not None:
+        if not is_probe and row.get("llm_in_flight_at_entry") is not None:
             stats["llm_observability"]["max_in_flight_at_entry"] = max(
                 stats["llm_observability"]["max_in_flight_at_entry"],
                 int(row["llm_in_flight_at_entry"]),
             )
-        if row.get("method") == "llm" and row.get("estimated_probability") is not None and row.get("market_price") is not None:
+        if not is_probe and row.get("method") == "llm" and row.get("estimated_probability") is not None and row.get("market_price") is not None:
             est_prob = float(row["estimated_probability"])
             market_price = float(row["market_price"])
             abs_move = abs(est_prob - 0.5)
@@ -984,10 +988,11 @@ def print_summary(
 
     print()
     print("LLM Path Observability")
-    print(f"  LLM attempted             : {stats['llm_observability']['attempted']}")
+    print(f"  LLM attempted             : {stats['llm_observability']['attempted']} (excludes startup probes)")
     print(f"  LLM result used           : {stats['llm_observability']['result_used']}")
     print(f"  LLM fallback              : {stats['llm_observability']['fallback']}")
     print(f"  LLM skipped (routing)     : {stats['llm_observability']['skipped_routing']}")
+    print(f"  Startup probes (excluded) : {stats['llm_observability']['probe_count']}")
     for status, count in stats["llm_observability"]["status_counts"].most_common(5):
         print(f"  status[{status}]          : {count}")
     if stats["llm_observability"]["skipped_routing_reasons"]:

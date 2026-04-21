@@ -88,3 +88,166 @@ Status must be updated as work progresses. See contract Section 10 for rules.
 - **S3.5** requires explicit confirmation before starting. It is the only task that touches `/trading`.
 - **S2.NEW** (`trade_readiness_gate.py`) was added during the final precision refinement pass. It is a prerequisite for S3.4 and S3.5.
 - The contract in `IMPLEMENTATION_CONTRACT.md` governs all tasks. Any apparent conflict between a task description here and the contract must be raised before implementation proceeds.
+
+---
+
+## Stage 5 — Pipeline Quality and Signal Recovery
+
+**Version:** 1.1 (appended 2026-04-21)
+**Status:** IN_PROGRESS (Phase 0 active)
+**Contract:** [IMPLEMENTATION_CONTRACT.md](IMPLEMENTATION_CONTRACT.md) — all invariants and boundary rules remain binding
+**Depends on:** Architecture stages 0–4 COMPLETE (S4.5 IN_PROGRESS; Phases 0–2 below may run in parallel since they are diagnostics-only)
+
+### Context
+
+A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane architecture is wired correctly, but the pipeline produces zero real edge. Every non-probe LLM call across 40+ samples returned exactly `est = 0.5000` (market price). Match quality flags (`single_named_entity_only`, `minimal_overlap`, `near_threshold_score`) appear on 75%+ of matches. The pre-LLM gate is double-disabled. One ingestion source ("Politics") is 100% stale. Startup probe synthetic output contaminates all signal-quality metrics.
+
+**Governing constraints for this stage:**
+- Phases 0–2 are diagnostics and observability only. No changes to execution criteria, safety gates, or trading logic.
+- Phase 3 changes match and source quality, not execution thresholds.
+- Phase 4 (trading readiness) requires explicit written authorization from Jake and a measurable non-zero edge in paper mode before beginning.
+- Step ordering within Phase 2 is mandatory; do not collapse or reorder.
+
+---
+
+### Phase 0 — LLM Signal Diagnosis
+
+**Purpose:** Determine whether the LLM is structurally unable to form a directional view from current inputs, or whether the prompt or input is anchoring it to market price. This verdict governs Phase 2 scope.
+
+**Go/no-go checkpoint (P0-GATE):** Before Phase 2 gate enforcement (P2.3+) may proceed, P0.3 must deliver a documented root-cause verdict: (a) prompt anchoring to market price, (b) insufficient input context, (c) market-scope ceiling, or (d) structural LLM limitation. Gate changes without this verdict are premature.
+
+| ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
+|----|------|--------|-------|---------|-------------|-----------------|
+| P0.1 | Tag startup probe in `SIGNAL_ANALYSIS_DETAIL` events | NOT_STARTED | Claude | Startup probe uses hardcoded synthetic `(0.38, 0.82)` output; it must be excluded from signal-quality statistics | No behavior change; tagging only | `is_synthetic_probe=true` on probe events; all reports and metrics filter it |
+| P0.2 | Log full prompt and raw LLM response for non-probe calls | NOT_STARTED | Claude | Enable manual inspection of why production LLM returns `0.5000` | DEBUG level only; no prompt change; no behavioral change | Prompt + raw LLM response visible in logs for each real analysis call |
+| P0.3 | Manual diagnosis: est vs market_price distribution | NOT_STARTED | Jake | Review P0.2 output; determine if `est == market_price` is tautological (anchoring) or coincidental | No code change; manual inspection | Written verdict recorded; one of the four root-cause categories confirmed |
+
+**P0-GATE outcome:**
+- PASS → Phase 1 proceeds (may start in parallel with P0); Phase 2 gate changes authorized after verdict
+- ESCALATE → LLM returns 0.5000 for inputs with clearly sufficient directional context → prompt engineering or model change required before Phase 2
+
+---
+
+### Phase 1 — Observability Fixes
+
+**Purpose:** Separate synthetic from real metrics so all subsequent reporting is trustworthy. Without this, Phase 2 gate impact is unmeasurable.
+
+**Dependencies:** P0.1 COMPLETE before P1 observability is meaningful.
+
+**Go/no-go checkpoint (P1-GATE):** All three P1 tasks COMPLETE before Phase 2 enforcement steps (P2.3+) begin. Unauditable metrics make gate enforcement unverifiable.
+
+| ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
+|----|------|--------|-------|---------|-------------|-----------------|
+| P1.1 | Add `publish_ts` and `age_at_match_seconds` to `MATCH_DIAGNOSTIC` | NOT_STARTED | Claude | Distinguish article publication age from staleness at match time | Diagnostic field only; no behavior change | `publish_ts` and `age_at_match_seconds` present in match events |
+| P1.2 | Add per-source freshness waterfall to daily reports | NOT_STARTED | Claude | Identify which sources are chronically stale vs genuinely fresh | Report generation only; no pipeline change | Daily reports show fresh/stale/drop counts by source |
+| P1.3 | Surface pre-LLM gate diagnostic breakdown in reports | NOT_STARTED | Claude | `pre_llm_would_block` counts are currently global aggregates; need per-source and per-market breakdown | Report generation only | Reports show gate decision distribution by source and market |
+
+**P1-GATE outcome:**
+- PASS → Phase 2 may proceed
+- FAIL if `publish_ts` unavailable in feed payloads → document gap; Phase 2 proceeds with noted blind spot
+
+---
+
+### Phase 1.5 — Source Hygiene
+
+**Purpose:** Remove or quarantine dead sources consuming queue cycles and inflating ingestion volume metrics.
+
+**Dependencies:** P1.2 COMPLETE (per-source freshness waterfall required to confirm which sources are dead).
+
+| ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
+|----|------|--------|-------|---------|-------------|-----------------|
+| P1.5.1 | Investigate "Politics" source (100% stale, 0 fresh across audit period) | NOT_STARTED | Jake | Confirm dead/misconfigured before disabling | Disable only; do not delete config | Verdict documented; source disabled if confirmed dead |
+| P1.5.2 | Audit Reddit sources: freshness rate and match-to-analysis conversion | NOT_STARTED | Jake | High volume but unclear signal value; confirm worth keeping | Diagnostic only; no changes until findings reviewed | Per-Reddit-source freshness rate and match rate documented |
+| P1.5.3 | Disable confirmed-dead sources | NOT_STARTED | Jake | Eliminate noise from ingestion metrics | Only sources confirmed dead in P1.5.1 / P1.5.2 | Config change committed; dead sources disabled |
+
+*No hard gate; Phase 1.5 findings feed into Phase 3 source-market alignment work.*
+
+---
+
+### Phase 2 — Gate and Override Enforcement
+
+**Purpose:** Bring the pre-LLM match gate into meaningful operation. Current state: `enable_pre_llm_match_gate=false` AND `pre_llm_match_gate_diagnostics_only=true`; keyword override mode is `any_hit` (any single keyword match bypasses the gate entirely). All current production matches involve Trump/Iran/Tehran named entities and bypass via `any_hit`.
+
+**Dependencies:** P0-GATE PASS (verdict documented); P1-GATE PASS (clean metrics).
+
+**WARNING — step ordering within this phase is mandatory. P2.1 before P2.2 before P2.3 before P2.4 before P2.5. Do not collapse.**
+
+**Go/no-go checkpoint (P2-GATE):** Before P2.3, confirm from P2.2 diagnostics that the tightened gate would block ≥ 20% of real matches in the trailing 7 days. If < 20%, the gate adds no filtering value at current match volumes — stop at P2.2 and reassess keyword config.
+
+| ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
+|----|------|--------|-------|---------|-------------|-----------------|
+| P2.1 | Tighten keyword override from `any_hit` to `all_required` | NOT_STARTED | Claude | `any_hit` makes the gate a near-no-op; this is a prerequisite to gate being meaningful | Config change only; gate still `diagnostics_only=true`; no behavioral enforcement | Keyword override requires all configured keywords to match before bypassing gate |
+| P2.2 | Run gate in diagnostics mode with tightened override for 3 days | NOT_STARTED | Shared | Observe `pre_llm_would_block` rate before any enforcement | No enforcement; `diagnostics_only=true` throughout | Gate block rate documented; confirm ≥ 20% before P2.3 |
+| P2.3 | Enable `ENABLE_LOW_QUALITY_MATCH_SUPPRESSION` | NOT_STARTED | Claude | Suppression criteria (`low_match_quality AND near_threshold_score`) are already correct; flag just disabled | Requires P2.2 COMPLETE and block rate ≥ 20% | Suppression fires; low-quality matches suppressed before LLM call |
+| P2.4 | Enable pre-LLM gate in diagnostics mode | NOT_STARTED | Claude | Final observation pass before live enforcement | `diagnostics_only=true`; watch for false-positive rate on confirmed-valid matches; run 3 days | Gate active; no matches blocked; false-positive rate measured |
+| P2.5 | Enable pre-LLM gate enforcement | NOT_STARTED | Jake | Live enforcement | Requires P2.4 clean for 3 days with < 5% false-positive rate on confirmed-valid matches | Gate enforced in production; low-quality matches blocked before LLM |
+
+**P2-GATE outcome:**
+- PASS → Phase 3 authorized
+- ROLLBACK trigger: if P2.1 (`all_required` override) blocks > 50% of Trump/Iran matches that have historically been valid → roll back P2.1; reassess keyword config before continuing
+
+---
+
+### Phase 3 — Candidate Quality and Market Specificity
+
+**Purpose:** Improve the quality of matches reaching the LLM so they carry real directional content. Informed by Phase 0 verdict and Phase 2 gate metrics.
+
+**Dependencies:** P2 COMPLETE; P0.3 verdict documented.
+
+**Go/no-go checkpoint (P3-GATE):** After P3 improvements are deployed, paper mode must show ≥ 1 non-zero edge event in the trailing 14 days before Phase 4 is authorized. If zero non-zero edge after P3 — the LLM cannot form directional views from available input, and no further operational change will fix that. Stop and escalate.
+
+| ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
+|----|------|--------|-------|---------|-------------|-----------------|
+| P3.1 | Measure flag-outcome correlation | NOT_STARTED | Claude | Determine whether `single_named_entity_only`, `minimal_overlap`, `low_token_overlap` flags predict `est == market_price` | Diagnostic only; pure analysis | Correlation table: flag presence vs `est == market_price` rate; confirms or refutes match-quality hypothesis |
+| P3.2 | Add `market_specificity_score` to match events | NOT_STARTED | Claude | Broad-scope markets (general Iran/US tension) yield near-zero directional signal; specificity scoring enables prioritization | Pure function in `/analysis`; no behavior change | `market_specificity_score` field on match events; high-specificity markets surface first |
+| P3.3 | Source-market alignment audit | NOT_STARTED | Shared | Measure which sources produce matches on which markets; identify high- and low-signal source-market pairings | Diagnostic only; no filtering yet | Source-market alignment matrix documented; low-value pairings flagged |
+| P3.4 | Implement source-market alignment filter | NOT_STARTED | Claude | Filter confirmed low-value source-market pairings at match time | Implement only if P3.3 shows ≥ 30% of matches from consistently low-value pairings | Source-market pairs below alignment threshold suppressed; LLM call budget preserved for high-value pairings |
+
+**P3-GATE outcome:**
+- PASS (≥ 1 non-zero edge in paper mode, trailing 14 days) → Phase 4 authorized
+- FAIL (zero non-zero edge) → escalation required; do not proceed to Phase 4
+
+---
+
+### Phase 4 — Trading Readiness
+
+**Purpose:** Validate that edge is real, stable, and sufficient for live consideration. Requires explicit written authorization from Jake before beginning.
+
+**Dependencies:** P3-GATE PASS; explicit written authorization from Jake; S4.5 COMPLETE.
+
+| ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
+|----|------|--------|-------|---------|-------------|-----------------|
+| P4.1 | 14-day paper mode monitoring with all pipeline improvements active | NOT_STARTED | Shared | Confirm edge is stable, not a one-off artifact | All existing paper-trade safety gates active; no live trading; INV-6 and INV-7 enforced | Edge > 0 on ≥ 3 distinct trade candidates over 14 days |
+| P4.2 | Calibration review: est distribution vs resolved outcomes | NOT_STARTED | Claude | Verify LLM estimates are calibrated, not coincidentally correct | Requires ≥ 10 resolved paper trades | Calibration curve documented; over/underconfidence measured |
+| P4.3 | Live trading authorization | NOT_STARTED | Jake | Explicit written sign-off | Requires P4.1 + P4.2 COMPLETE; INV-6 and INV-7 compliance verified in writing | Authorization recorded; live mode enabled |
+
+**P4-GATE outcome:**
+- PASS → Live trading authorized
+- FAIL (edge unstable or calibration poor) → return to Phase 3 diagnosis
+
+---
+
+**Stage 5 Phase Dependencies:**
+```
+P0.1 → P0.2 → P0.3 (P0-GATE)
+P0.1 → P1.1 → P1.2 → P1.3 (P1-GATE)
+P1.2 → P1.5.1 → P1.5.3
+         P1.5.2 → P1.5.3
+[P0-GATE + P1-GATE] → P2.1 → P2.2 (P2-GATE) → P2.3 → P2.4 → P2.5
+P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
+[P3-GATE + S4.5 COMPLETE + Jake authorization] → P4.1 → P4.2 → P4.3
+```
+
+---
+
+### What Changed From Prior Assumptions
+
+1. **LLM diagnosis is Phase 0, not Phase 3.** The prior plan treated match quality as the root cause. 40+ real production LLM calls returning exactly `0.5000` across 4+ days is a first-class finding. Gate changes are premature without a root-cause verdict.
+
+2. **Startup probe must be separated immediately.** The synthetic `(0.38, 0.82)` probe output contaminates all "meaningful signal" and "LLM useful" percentages. Current reporting is misleading. P0.1 is the first task.
+
+3. **Gate enforcement step ordering is mandatory.** The prior plan conflated keyword override tightening, suppression enablement, diagnostics mode, and live enforcement into a single step. They are now explicit sequential tasks (P2.1 → P2.5) with a 3-day observation window before live enforcement.
+
+4. **"Politics" source is confirmed dead** across the full audit period (0 fresh passes, 100% stale drop). P1.5.1 is a diagnosis task, but the expected outcome is disable.
+
+5. **Phase 4 (live trading) is explicitly gated on measurable non-zero edge in paper mode.** No timeline. If edge does not form after P3 improvements, escalation is required — not more operational changes.

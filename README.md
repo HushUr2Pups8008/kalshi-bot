@@ -103,6 +103,28 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
+For long-running regression runs, prefer the safe wrapper so output and run
+metadata survive terminal or VS Code crashes:
+
+```bash
+scripts/run_tests.sh                  # attached, timestamped log
+scripts/run_tests.sh --detach         # keeps running if the editor exits
+scripts/run_tests.sh tests -q         # pass pytest args
+scripts/run_tests.sh -- python -m pytest tests -q  # run an exact command
+tail -n 80 -f logs/tests/pytest_*.log
+```
+
+Each run writes `logs/tests/pytest_YYYYMMDD_HHMMSS.log` plus a matching JSON
+metadata file containing start/end time, exit status, git commit, and command.
+
+Manual SQLite WAL inspection is available for post-crash diagnostics. Run it
+only while the bot is stopped:
+
+```bash
+scripts/check_sqlite_wal.sh
+scripts/check_sqlite_wal.sh --checkpoint
+```
+
 ### 2. Configure `.env`
 
 ```bash

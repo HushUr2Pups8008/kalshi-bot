@@ -23,6 +23,7 @@ logs/app/
 logs/reports/
 logs/trades/
 logs/service/
+logs/tests/
 
 # Test temp directories
 tests/_tmp_*/
