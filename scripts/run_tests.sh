@@ -12,6 +12,14 @@ META_FILE=""
 NO_TEE="${SAFE_TEST_NO_TEE:-0}"
 DETACHED_CHILD="${SAFE_TEST_DETACHED:-0}"
 
+if [[ -x ".venv/bin/python" ]]; then
+  PYTHON_BIN=".venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+else
+  PYTHON_BIN="python"
+fi
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -66,9 +74,9 @@ done
 if [[ "$EXACT_COMMAND" -eq 1 ]]; then
   CMD=("$@")
 elif [[ "$#" -gt 0 ]]; then
-  CMD=(python -m pytest "$@")
+  CMD=("$PYTHON_BIN" -m pytest "$@")
 else
-  CMD=(python -m pytest)
+  CMD=("$PYTHON_BIN" -m pytest)
 fi
 
 if [[ "${#CMD[@]}" -eq 0 ]]; then
@@ -113,7 +121,7 @@ write_metadata() {
   local end_time="$1"
   local exit_status="$2"
   local interrupted="$3"
-  python - "$META_FILE" "$RUN_ID" "$START_TIME" "$end_time" "$exit_status" "$interrupted" "$GIT_COMMIT" "$LOG_FILE" "${CMD[@]}" <<'PY'
+  "$PYTHON_BIN" - "$META_FILE" "$RUN_ID" "$START_TIME" "$end_time" "$exit_status" "$interrupted" "$GIT_COMMIT" "$LOG_FILE" "${CMD[@]}" <<'PY'
 import json
 import sys
 
@@ -151,12 +159,6 @@ timestamp_stream='
 }
 '
 
-if [[ "$NO_TEE" == "1" ]]; then
-  exec > >(TZ=UTC awk "$timestamp_stream" >> "$LOG_FILE") 2>&1
-else
-  exec > >(TZ=UTC awk "$timestamp_stream" | tee -a "$LOG_FILE") 2>&1
-fi
-
 on_interrupt() {
   local signal="$1"
   if [[ "$finished" -eq 1 ]]; then
@@ -173,31 +175,41 @@ on_interrupt() {
   exit 130
 }
 
-trap 'on_interrupt INT' INT
-trap 'on_interrupt TERM' TERM
-if [[ "$DETACHED_CHILD" == "1" ]]; then
-  trap '' HUP
+run_body() {
+  trap 'on_interrupt INT' INT
+  trap 'on_interrupt TERM' TERM
+  if [[ "$DETACHED_CHILD" == "1" ]]; then
+    trap '' HUP
+  else
+    trap 'on_interrupt HUP' HUP
+  fi
+
+  write_metadata "" "" false
+
+  echo "===== RUN START id=${RUN_ID} utc=${START_TIME} ====="
+  echo "git_commit=${GIT_COMMIT}"
+  echo "command=${CMD[*]}"
+  echo "log_file=${LOG_FILE}"
+  echo "metadata_file=${META_FILE}"
+
+  "${CMD[@]}" &
+  child_pid="$!"
+  wait "$child_pid"
+  status="$?"
+  child_pid=""
+  finished=1
+
+  END_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "===== RUN END status=${status} utc=${END_TIME} ====="
+  write_metadata "$END_TIME" "$status" false
+
+  return "$status"
+}
+
+if [[ "$NO_TEE" == "1" ]]; then
+  run_body 2>&1 | TZ=UTC awk "$timestamp_stream" >> "$LOG_FILE"
+  exit "${PIPESTATUS[0]}"
 else
-  trap 'on_interrupt HUP' HUP
+  run_body 2>&1 | TZ=UTC awk "$timestamp_stream" | tee -a "$LOG_FILE"
+  exit "${PIPESTATUS[0]}"
 fi
-
-write_metadata "" "" false
-
-echo "===== RUN START id=${RUN_ID} utc=${START_TIME} ====="
-echo "git_commit=${GIT_COMMIT}"
-echo "command=${CMD[*]}"
-echo "log_file=${LOG_FILE}"
-echo "metadata_file=${META_FILE}"
-
-"${CMD[@]}" &
-child_pid="$!"
-wait "$child_pid"
-status="$?"
-child_pid=""
-finished=1
-
-END_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-echo "===== RUN END status=${status} utc=${END_TIME} ====="
-write_metadata "$END_TIME" "$status" false
-
-exit "$status"
