@@ -78,8 +78,8 @@ Status must be updated as work progresses. See contract Section 10 for rules.
 | S4.3 | Budget manager stress test | COMPLETE | Codex | Verify circuit breaker fires under synthetic load | Inject synthetic high-volume queue; confirm `BUDGET_PRESSURE` emitted | Circuit breaker fires at 3× depth; no runaway LLM calls |
 | S4.4 | Regime weight validation against historical outcomes | COMPLETE | Claude | Check that regime weights improve blended calibration vs unweighted blend | Use `windows_archive` data for backtesting | Calibration improvement documented |
 | S4.5a | Section 13 implementation gate | COMPLETE | Shared | Verify all code-correctness criteria in Section 13 by test and static inspection — no runtime required | pytest must pass without weakening assertions; covers criteria 1, 2, 5, 6, 7, 8 | All verifiable Section 13 criteria confirmed; results recorded. Note: most recent comprehensive run was 229 passed (2026-04-20, PROFIT-PERF-001 validation). |
-| S4.5b | Runtime wiring verification | IN_PROGRESS | Shared | Confirm all three lanes produce expected event types under real intake in a 2-hour minimum window | No intake modification; production-intended feed config; no code changes to force events; startup probe events excluded | ≥1 each of `EVIDENCE_INGESTION`, `DOSSIER_UPDATE`, `STRUCTURAL_PRIOR_RECOMPUTE`, `BLEND_DECISION` (with `fast_lane_p` non-null); zero unhandled exceptions; Jake records pass/fail verdict in Notes. Note: accumulation and blend lanes confirmed active 2026-04-20; structural participation unresolved until commit 2731d9a. |
-| S4.5c | Extended validation window | NOT_STARTED | Shared | Provide statistical basis for Section 13 completeness and calibration criteria; final gate before Phase 4 | 72-hour minimum window; production-intended intake; startup probe events excluded; no config changes during window | Section 13 criteria 3, 4, 5, 6 pass against window output; observability completeness review PASS; ≥3 distinct dossier markets observed; Jake records signed Section 13 checklist in Notes. |
+| S4.5b | Runtime wiring verification | IN_PROGRESS | Shared | Confirm all three lanes produce expected event types under real intake in a 2-hour minimum window | No intake modification; production-intended feed config; no code changes to force events; startup probe events excluded | ≥1 each of `EVIDENCE_INGESTION`, `DOSSIER_UPDATE`, `STRUCTURAL_PRIOR_RECOMPUTE`, `BLEND_DECISION` (with `fast_lane_p` non-null); zero unhandled exceptions; pass/fail verdict recorded in Notes. Note: accumulation and blend lanes confirmed active 2026-04-20; structural participation unresolved until commit 2731d9a. |
+| S4.5c | Extended validation window | NOT_STARTED | Shared | Provide statistical basis for Section 13 completeness and calibration criteria; final gate before Phase 4 | 72-hour minimum window; production-intended intake; startup probe events excluded; no config changes during window | Section 13 criteria 3, 4, 5, 6 pass against window output; observability completeness review PASS; ≥3 distinct dossier markets observed; signed Section 13 checklist recorded in Notes. |
 
 **Dependencies:** All Stage 3 tasks COMPLETE before Stage 4 begins. **S4.5a** is complete on test evidence. **S4.5b** requires structural recompute participation fix (commit 2731d9a); IN_PROGRESS. **S4.5c** requires S4.5b COMPLETE and is the final integration gate before any Phase 4 (live trading) consideration. Stage 5 Phases 0–3 may proceed in parallel with S4.5b/S4.5c since they are diagnostics-only.
 
@@ -121,8 +121,8 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 
 | ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
 |----|------|--------|-------|---------|-------------|-----------------|
-| P0.1 | Tag startup probe in `SIGNAL_ANALYSIS_DETAIL` events | NOT_STARTED | Claude | Startup probe uses hardcoded synthetic `(0.38, 0.82)` output; it must be excluded from signal-quality statistics | No behavior change; tagging only | `is_synthetic_probe=true` on probe events; all reports and metrics filter it |
-| P0.2 | Log full prompt and raw LLM response for non-probe calls | NOT_STARTED | Claude | Enable manual inspection of why production LLM returns `0.5000` | DEBUG level only; no prompt change; no behavioral change | Prompt + raw LLM response visible in logs for each real analysis call |
+| P0.1 | Tag startup probe in `SIGNAL_ANALYSIS_DETAIL` events | NOT_STARTED | Codex | Startup probe uses hardcoded synthetic `(0.38, 0.82)` output; it must be excluded from signal-quality statistics | No behavior change; tagging only | `is_synthetic_probe=true` on probe events; all reports and metrics filter it |
+| P0.2 | Log full prompt and raw LLM response for non-probe calls | NOT_STARTED | Codex | Enable manual inspection of why production LLM returns `0.5000` | DEBUG level only; no prompt change; no behavioral change | Prompt + raw LLM response visible in logs for each real analysis call |
 | P0.3 | Manual diagnosis: est vs market_price distribution | NOT_STARTED | Codex | Review P0.2 output; determine if `est == market_price` is tautological (anchoring) or coincidental | No code change; manual inspection | Written verdict recorded; one of the four root-cause categories confirmed |
 
 **P0-GATE outcome:**
@@ -238,7 +238,7 @@ P1.2 → P1.5.1 → P1.5.3
          P1.5.2 → P1.5.3
 [P0-GATE + P1-GATE] → P2.1 → P2.2 (P2-GATE) → P2.3 → P2.4 → P2.5
 P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
-[P3-GATE + S4.5c COMPLETE + Jake authorization] → P4.1 → P4.2 → P4.3
+[P3-GATE + S4.5c COMPLETE + Shared authorization] → P4.1 → P4.2 → P4.3
 ```
 
 ---
