@@ -4,7 +4,7 @@
 **Status:** ACTIVE
 **Contract:** [IMPLEMENTATION_CONTRACT.md](IMPLEMENTATION_CONTRACT.md)
 
-This is the shared, authoritative task tracker for Claude, Codex, and Jake.
+This is the shared, authoritative task tracker for Claude, Codex, and Codex.
 Status must be updated as work progresses. See contract Section 10 for rules.
 
 **Allowed statuses:** `NOT_STARTED` | `IN_PROGRESS` | `COMPLETE` | `BLOCKED`
@@ -77,9 +77,11 @@ Status must be updated as work progresses. See contract Section 10 for rules.
 | S4.2 | Observability completeness review | COMPLETE | Shared | Confirm all `BLEND_DECISION` fields populated; traceability chain intact | Run against paper trading; compare event completeness | All required fields non-null for ≥ 90% of events |
 | S4.3 | Budget manager stress test | COMPLETE | Codex | Verify circuit breaker fires under synthetic load | Inject synthetic high-volume queue; confirm `BUDGET_PRESSURE` emitted | Circuit breaker fires at 3× depth; no runaway LLM calls |
 | S4.4 | Regime weight validation against historical outcomes | COMPLETE | Claude | Check that regime weights improve blended calibration vs unweighted blend | Use `windows_archive` data for backtesting | Calibration improvement documented |
-| S4.5 | End-to-end paper trading test: multi-lane | IN_PROGRESS | Shared | Run system in paper mode with all three lanes active | All existing paper-trade safety gates must pass; trade frequency must not exceed 2× fast-lane-only baseline | Bot operates in paper mode; all three lanes emit events; no execution errors; Definition of Done criteria from contract Section 13 satisfied |
+| S4.5a | Section 13 implementation gate | COMPLETE | Shared | Verify all code-correctness criteria in Section 13 by test and static inspection — no runtime required | pytest must pass without weakening assertions; covers criteria 1, 2, 5, 6, 7, 8 | All verifiable Section 13 criteria confirmed; results recorded. Note: most recent comprehensive run was 229 passed (2026-04-20, PROFIT-PERF-001 validation). |
+| S4.5b | Runtime wiring verification | IN_PROGRESS | Shared | Confirm all three lanes produce expected event types under real intake in a 2-hour minimum window | No intake modification; production-intended feed config; no code changes to force events; startup probe events excluded | ≥1 each of `EVIDENCE_INGESTION`, `DOSSIER_UPDATE`, `STRUCTURAL_PRIOR_RECOMPUTE`, `BLEND_DECISION` (with `fast_lane_p` non-null); zero unhandled exceptions; Jake records pass/fail verdict in Notes. Note: accumulation and blend lanes confirmed active 2026-04-20; structural participation unresolved until commit 2731d9a. |
+| S4.5c | Extended validation window | NOT_STARTED | Shared | Provide statistical basis for Section 13 completeness and calibration criteria; final gate before Phase 4 | 72-hour minimum window; production-intended intake; startup probe events excluded; no config changes during window | Section 13 criteria 3, 4, 5, 6 pass against window output; observability completeness review PASS; ≥3 distinct dossier markets observed; Jake records signed Section 13 checklist in Notes. |
 
-**Dependencies:** All Stage 3 tasks COMPLETE before Stage 4 begins. S4.5 is the final integration gate before any live trading consideration.
+**Dependencies:** All Stage 3 tasks COMPLETE before Stage 4 begins. **S4.5a** is complete on test evidence. **S4.5b** requires structural recompute participation fix (commit 2731d9a); IN_PROGRESS. **S4.5c** requires S4.5b COMPLETE and is the final integration gate before any Phase 4 (live trading) consideration. Stage 5 Phases 0–3 may proceed in parallel with S4.5b/S4.5c since they are diagnostics-only.
 
 ---
 
@@ -88,6 +90,7 @@ Status must be updated as work progresses. See contract Section 10 for rules.
 - **S3.5** requires explicit confirmation before starting. It is the only task that touches `/trading`.
 - **S2.NEW** (`trade_readiness_gate.py`) was added during the final precision refinement pass. It is a prerequisite for S3.4 and S3.5.
 - The contract in `IMPLEMENTATION_CONTRACT.md` governs all tasks. Any apparent conflict between a task description here and the contract must be raised before implementation proceeds.
+- **S4.5 split rationale:** The original S4.5 was a one-shot binary milestone that could not honestly be satisfied by a single run. It is replaced by S4.5a (implementation gate, code-verifiable), S4.5b (wiring verification, 2-hour window), and S4.5c (extended validation, 72-hour window). Phase 4 authorization requires S4.5c COMPLETE. The Notes column on S4.5b and S4.5c is the authoritative record of observation state and pass/fail verdicts — this is Option A per the S4.5 reevaluation (2026-04-21).
 
 ---
 
@@ -105,7 +108,7 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 **Governing constraints for this stage:**
 - Phases 0–2 are diagnostics and observability only. No changes to execution criteria, safety gates, or trading logic.
 - Phase 3 changes match and source quality, not execution thresholds.
-- Phase 4 (trading readiness) requires explicit written authorization from Jake and a measurable non-zero edge in paper mode before beginning.
+- Phase 4 (trading readiness) requires explicit written authorization from Codex and a measurable non-zero edge in paper mode before beginning.
 - Step ordering within Phase 2 is mandatory; do not collapse or reorder.
 
 ---
@@ -120,7 +123,7 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 |----|------|--------|-------|---------|-------------|-----------------|
 | P0.1 | Tag startup probe in `SIGNAL_ANALYSIS_DETAIL` events | NOT_STARTED | Claude | Startup probe uses hardcoded synthetic `(0.38, 0.82)` output; it must be excluded from signal-quality statistics | No behavior change; tagging only | `is_synthetic_probe=true` on probe events; all reports and metrics filter it |
 | P0.2 | Log full prompt and raw LLM response for non-probe calls | NOT_STARTED | Claude | Enable manual inspection of why production LLM returns `0.5000` | DEBUG level only; no prompt change; no behavioral change | Prompt + raw LLM response visible in logs for each real analysis call |
-| P0.3 | Manual diagnosis: est vs market_price distribution | NOT_STARTED | Jake | Review P0.2 output; determine if `est == market_price` is tautological (anchoring) or coincidental | No code change; manual inspection | Written verdict recorded; one of the four root-cause categories confirmed |
+| P0.3 | Manual diagnosis: est vs market_price distribution | NOT_STARTED | Codex | Review P0.2 output; determine if `est == market_price` is tautological (anchoring) or coincidental | No code change; manual inspection | Written verdict recorded; one of the four root-cause categories confirmed |
 
 **P0-GATE outcome:**
 - PASS → Phase 1 proceeds (may start in parallel with P0); Phase 2 gate changes authorized after verdict
@@ -156,9 +159,9 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 
 | ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
 |----|------|--------|-------|---------|-------------|-----------------|
-| P1.5.1 | Investigate "Politics" source (100% stale, 0 fresh across audit period) | NOT_STARTED | Jake | Confirm dead/misconfigured before disabling | Disable only; do not delete config | Verdict documented; source disabled if confirmed dead |
-| P1.5.2 | Audit Reddit sources: freshness rate and match-to-analysis conversion | NOT_STARTED | Jake | High volume but unclear signal value; confirm worth keeping | Diagnostic only; no changes until findings reviewed | Per-Reddit-source freshness rate and match rate documented |
-| P1.5.3 | Disable confirmed-dead sources | NOT_STARTED | Jake | Eliminate noise from ingestion metrics | Only sources confirmed dead in P1.5.1 / P1.5.2 | Config change committed; dead sources disabled |
+| P1.5.1 | Investigate "Politics" source (100% stale, 0 fresh across audit period) | NOT_STARTED | Codex | Confirm dead/misconfigured before disabling | Disable only; do not delete config | Verdict documented; source disabled if confirmed dead |
+| P1.5.2 | Audit Reddit sources: freshness rate and match-to-analysis conversion | NOT_STARTED | Codex | High volume but unclear signal value; confirm worth keeping | Diagnostic only; no changes until findings reviewed | Per-Reddit-source freshness rate and match rate documented |
+| P1.5.3 | Disable confirmed-dead sources | NOT_STARTED | Codex | Eliminate noise from ingestion metrics | Only sources confirmed dead in P1.5.1 / P1.5.2 | Config change committed; dead sources disabled |
 
 *No hard gate; Phase 1.5 findings feed into Phase 3 source-market alignment work.*
 
@@ -180,7 +183,7 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 | P2.2 | Run gate in diagnostics mode with tightened override for 3 days | NOT_STARTED | Shared | Observe `pre_llm_would_block` rate before any enforcement | No enforcement; `diagnostics_only=true` throughout | Gate block rate documented; confirm ≥ 20% before P2.3 |
 | P2.3 | Enable `ENABLE_LOW_QUALITY_MATCH_SUPPRESSION` | NOT_STARTED | Claude | Suppression criteria (`low_match_quality AND near_threshold_score`) are already correct; flag just disabled | Requires P2.2 COMPLETE and block rate ≥ 20% | Suppression fires; low-quality matches suppressed before LLM call |
 | P2.4 | Enable pre-LLM gate in diagnostics mode | NOT_STARTED | Claude | Final observation pass before live enforcement | `diagnostics_only=true`; watch for false-positive rate on confirmed-valid matches; run 3 days | Gate active; no matches blocked; false-positive rate measured |
-| P2.5 | Enable pre-LLM gate enforcement | NOT_STARTED | Jake | Live enforcement | Requires P2.4 clean for 3 days with < 5% false-positive rate on confirmed-valid matches | Gate enforced in production; low-quality matches blocked before LLM |
+| P2.5 | Enable pre-LLM gate enforcement | NOT_STARTED | Codex | Live enforcement | Requires P2.4 clean for 3 days with < 5% false-positive rate on confirmed-valid matches | Gate enforced in production; low-quality matches blocked before LLM |
 
 **P2-GATE outcome:**
 - PASS → Phase 3 authorized
@@ -211,15 +214,15 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 
 ### Phase 4 — Trading Readiness
 
-**Purpose:** Validate that edge is real, stable, and sufficient for live consideration. Requires explicit written authorization from Jake before beginning.
+**Purpose:** Validate that edge is real, stable, and sufficient for live consideration. Requires explicit written authorization from Codex before beginning.
 
-**Dependencies:** P3-GATE PASS; explicit written authorization from Jake; S4.5 COMPLETE.
+**Dependencies:** P3-GATE PASS; explicit written authorization from Codex; S4.5 COMPLETE.
 
 | ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
 |----|------|--------|-------|---------|-------------|-----------------|
 | P4.1 | 14-day paper mode monitoring with all pipeline improvements active | NOT_STARTED | Shared | Confirm edge is stable, not a one-off artifact | All existing paper-trade safety gates active; no live trading; INV-6 and INV-7 enforced | Edge > 0 on ≥ 3 distinct trade candidates over 14 days |
 | P4.2 | Calibration review: est distribution vs resolved outcomes | NOT_STARTED | Claude | Verify LLM estimates are calibrated, not coincidentally correct | Requires ≥ 10 resolved paper trades | Calibration curve documented; over/underconfidence measured |
-| P4.3 | Live trading authorization | NOT_STARTED | Jake | Explicit written sign-off | Requires P4.1 + P4.2 COMPLETE; INV-6 and INV-7 compliance verified in writing | Authorization recorded; live mode enabled |
+| P4.3 | Live trading authorization | NOT_STARTED | Codex | Explicit written sign-off | Requires P4.1 + P4.2 COMPLETE; INV-6 and INV-7 compliance verified in writing | Authorization recorded; live mode enabled |
 
 **P4-GATE outcome:**
 - PASS → Live trading authorized
@@ -235,7 +238,7 @@ P1.2 → P1.5.1 → P1.5.3
          P1.5.2 → P1.5.3
 [P0-GATE + P1-GATE] → P2.1 → P2.2 (P2-GATE) → P2.3 → P2.4 → P2.5
 P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
-[P3-GATE + S4.5 COMPLETE + Jake authorization] → P4.1 → P4.2 → P4.3
+[P3-GATE + S4.5c COMPLETE + Jake authorization] → P4.1 → P4.2 → P4.3
 ```
 
 ---

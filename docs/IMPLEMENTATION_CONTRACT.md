@@ -492,6 +492,7 @@ If a candidate is blocked by the Trade Readiness Gate, `BLEND_DECISION` must be 
 3. All dependency constraints from the roadmap must be respected. A task whose dependencies are not `COMPLETE` may not move to `IN_PROGRESS`.
 4. `BLOCKED` tasks must document the specific blocker. A blocked task is not abandoned — it is held until the blocker is resolved.
 5. Roadmap tasks are the unit of work. Implementing more than one task in a single change set is permitted only when the tasks are explicitly marked as a group. Unannounced bundling is a violation.
+6. **Runtime-observation tasks** are tasks whose completion depends on accumulated evidence from live or paper-mode bot runs rather than on code or test artifacts. For these tasks, the roadmap Notes column is the authoritative record of observation state, window dates, and pass/fail verdicts. Status transitions for runtime-observation tasks follow the same four allowed values, but IN_PROGRESS may carry a sub-state in the Notes column (e.g., "window open since [date]", "window closed [date]; checklist under review"). A runtime-observation task may not move to COMPLETE until Jake has recorded a written pass/fail verdict in the Notes column. S4.5b and S4.5c are the current runtime-observation tasks.
 
 ---
 
