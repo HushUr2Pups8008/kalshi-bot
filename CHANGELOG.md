@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.34] - 2026-04-20
+
+### Fixed
+- **`scripts/botcheck.py` — shell alignment and macOS `etime` fix**:
+  - Process table was silently empty on macOS because `ps` was called with
+    `etimes=` (Linux-only, seconds); macOS `ps` rejects it, `run_command`
+    returned `""`, so all detection reported "not running". Fixed by switching
+    to `etime=` (macOS `[[dd-]hh:]mm:ss` format) and adding `_parse_etime()`
+    to convert to seconds.
+  - Bot and caffeinate detection now mirrors `~/.zshrc` shell helpers exactly:
+    `_bot_pids()` / `_caffeinate_pids()` / `print_bot_section()` /
+    `print_caffeinate_section()` replace the old relationship-inference code.
+    Caffeinate is detected independently by exact command match (no PPID gate),
+    matching `_kalshi_caffeinate_pids()`'s `pgrep -f` semantics.
+  - Tests (`tests/test_botcheck.py`) rewritten to cover: launchd PID priority,
+    caffeinate-as-child detection, Python.app deep-framework path, exact command
+    match rejection, independent caffeinate sections (20 tests total).
+
 ## [0.29.33] - 2026-04-21
 
 ### Fixed
