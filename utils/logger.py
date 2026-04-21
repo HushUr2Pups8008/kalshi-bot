@@ -833,6 +833,7 @@ class TradeLogger:
         llm_useful: bool | None = None,
         pre_llm_would_block_and_useful: bool | None = None,
         is_startup_probe: bool | None = None,
+        is_synthetic_probe: bool | None = None,
     ) -> None:
         record = {
             "type": "SIGNAL_ANALYSIS_DETAIL",
@@ -917,6 +918,8 @@ class TradeLogger:
             record["pre_llm_would_block_and_useful"] = pre_llm_would_block_and_useful
         if is_startup_probe is not None:
             record["is_startup_probe"] = is_startup_probe
+        if is_synthetic_probe is not None:
+            record["is_synthetic_probe"] = is_synthetic_probe
         self._write(record)
 
     def log_llm_skipped_routing(

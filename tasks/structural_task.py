@@ -163,7 +163,18 @@ class StructuralTask:
         if interval_seconds <= 0:
             raise ValueError("interval_seconds must be positive")
         while stop_event is None or not stop_event.is_set():
-            await self.run_once(market_provider())
+            markets = list(market_provider())
+            markets_to_process = await self._dossier_backed_markets(markets)
+            results = await self.run_once(markets_to_process)
+            status_counts: dict[str, int] = {}
+            for result in results:
+                status_counts[result.status] = status_counts.get(result.status, 0) + 1
+            _log.info(
+                "[STRUCTURAL] recompute cycle active_markets=%d dossier_markets=%d results=%s",
+                len(markets),
+                len(markets_to_process),
+                status_counts or {},
+            )
             if stop_event is None:
                 await asyncio.sleep(interval_seconds)
             else:
@@ -171,6 +182,21 @@ class StructuralTask:
                     await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
                 except asyncio.TimeoutError:
                     continue
+
+    async def _dossier_backed_markets(
+        self,
+        markets: list[KalshiMarket],
+    ) -> list[KalshiMarket]:
+        """Return active markets that have dossiers.
+
+        ``process_market`` already skips missing dossiers without side effects.
+        Filtering here keeps the scheduled loop from spending an entire cycle
+        opening SQLite connections for hundreds of no-op active markets.
+        """
+        dossier_tickers = set(await self.store.list_dossier_market_tickers())
+        if not dossier_tickers:
+            return []
+        return [market for market in markets if market.ticker in dossier_tickers]
 
 
 def _recompute_trigger(

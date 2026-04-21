@@ -78,7 +78,7 @@ def test_collect_window_metrics_uses_summary_modules(monkeypatch):
                     "pre_llm_would_block": False,
                     "pre_llm_keyword_override": True,
                     "pre_llm_gate_reason": "weak_semantic_overlap",
-                    "is_startup_probe": True,
+                    "is_synthetic_probe": True,
                 },
             ],
             "llm_observability": {

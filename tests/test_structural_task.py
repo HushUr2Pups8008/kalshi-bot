@@ -301,6 +301,18 @@ async def test_run_periodic_honors_stop_event(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_periodic_scheduler_filters_to_dossier_backed_markets(tmp_path: Path):
+    task, _, _ = _task(tmp_path)
+    await task.store.update_dossier(_dossier("KXSTRUCT-A"))
+
+    markets = [_market("KXSTRUCT-A"), _market("KXSTRUCT-B")]
+
+    filtered = await task._dossier_backed_markets(markets)
+
+    assert [market.ticker for market in filtered] == ["KXSTRUCT-A"]
+
+
+@pytest.mark.asyncio
 async def test_run_once_market_failure_does_not_propagate(tmp_path: Path):
     """run_once must not raise when individual markets fail.
 

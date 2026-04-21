@@ -579,6 +579,11 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                     if "is_startup_probe" in record
                     else None
                 ),
+                "is_synthetic_probe": (
+                    bool(record.get("is_synthetic_probe"))
+                    if "is_synthetic_probe" in record
+                    else None
+                ),
                 "pre_llm_quality_pass": (
                     bool(record.get("pre_llm_quality_pass"))
                     if "pre_llm_quality_pass" in record
@@ -708,7 +713,7 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
     )
 
     for row in rows:
-        is_probe = row.get("is_startup_probe") is True
+        is_probe = row.get("is_synthetic_probe") is True or row.get("is_startup_probe") is True
         if is_probe:
             stats["llm_observability"]["probe_count"] += 1
         if not is_probe and row.get("llm_attempted") is True:

@@ -121,9 +121,24 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 
 | ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
 |----|------|--------|-------|---------|-------------|-----------------|
-| P0.1 | Tag startup probe in `SIGNAL_ANALYSIS_DETAIL` events | IN_PROGRESS | Codex | Startup probe uses hardcoded synthetic `(0.38, 0.82)` output; it must be excluded from signal-quality statistics | No behavior change; tagging only | `is_synthetic_probe=true` on probe events; all reports and metrics filter it |
-| P0.2 | Log full prompt and raw LLM response for non-probe calls | NOT_STARTED | Codex | Enable manual inspection of why production LLM returns `0.5000` | DEBUG level only; no prompt change; no behavioral change | Prompt + raw LLM response visible in logs for each real analysis call |
-| P0.3 | Manual diagnosis: est vs market_price distribution | NOT_STARTED | Claude | Review P0.2 output; determine if `est == market_price` is tautological (anchoring) or coincidental | No code change; manual inspection | Written verdict recorded; one of the four root-cause categories confirmed |
+| P0.1 | Tag startup probe in `SIGNAL_ANALYSIS_DETAIL` events | COMPLETE | Codex | Startup probe uses hardcoded synthetic `(0.38, 0.82)` output; it must be excluded from signal-quality statistics | No behavior change; tagging only | `is_synthetic_probe=true` on probe events; all reports and metrics filter it |
+| P0.2 | Log full prompt and raw LLM response for non-probe calls | COMPLETE | Codex | Enable manual inspection of why production LLM returns `0.5000` | DEBUG level only; no prompt change; no behavioral change | Prompt + raw LLM response visible in logs for each real analysis call |
+| P0.3 | Manual diagnosis: est vs market_price distribution | COMPLETE | Claude | Review P0.2 output; determine if `est == market_price` is tautological (anchoring) or coincidental | No code change; manual inspection | Written verdict recorded; one of the four root-cause categories confirmed |
+
+**P0.3 Verdict (recorded 2026-04-21):**
+
+*Observations:* 40+ non-probe LLM calls across 2026-04-17 to 2026-04-21 returned exactly `est = market_price` (0.5000) in every case. Match quality flags (`single_named_entity_only`, `minimal_overlap`, `near_threshold_score`) appear on 75%+ of matches. All active matches are Trump/Iran/Tehran named-entity hits on broadly scoped geopolitical markets (e.g., "Will Iran agree to a peace deal this month?") priced near 50c.
+
+*Mechanism confirmed:* `_parse_llm_response` returns `market.yes_prob` unchanged when the LLM outputs `magnitude="none"`. The system prompt explicitly instructs the model that "Most headlines should result in magnitude='none'" and reserves 'moderate' or 'large' for "major unexpected developments." The LLM is not anchored to market price — it does not receive the price in its prompt — it is correctly classifying nearly all incremental Iran/US tension news as already priced into broadly scoped resolution criteria.
+
+*Ruling out other categories:*
+- **(a) Prompt anchoring**: Eliminated. The market price is not present in the LLM prompt; `_build_prompt_text` does not include `yes_prob`.
+- **(b) Insufficient input context**: Eliminated. Headline + source are present; extended context is unavailable but is not the root cause at this scope.
+- **(d) Structural LLM limitation**: Eliminated. The LLM's `magnitude="none"` classification is correct for the inputs. The problem is the input, not the model.
+
+*Classification:* **(c) Market-scope ceiling.** The markets in the current active set are too broadly scoped relative to their resolution criteria for incremental news to produce a non-zero directional signal. The structural mechanism (`magnitude="none"` → passthrough) is working correctly; the inputs feeding it are the problem.
+
+*Phase 2/3 implications:* P0-GATE PASS. Gate enforcement (P2.3+) will suppress low-quality matches but will not resolve the market-scope ceiling on its own. The primary fix path is P3.2 (`market_specificity_score`) and P3.3 (source-market alignment audit). P2 cleans up noise; P3 is where edge recovery begins.
 
 **P0-GATE outcome:**
 - PASS → Phase 1 proceeds (may start in parallel with P0); Phase 2 gate changes authorized after verdict

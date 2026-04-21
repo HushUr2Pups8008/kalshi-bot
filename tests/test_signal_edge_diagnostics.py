@@ -214,6 +214,55 @@ def test_summarize_builds_edge_audit_and_group_metrics():
         _cleanup_tmp_dir(tmp)
 
 
+def test_summarize_excludes_synthetic_probe_from_llm_metrics():
+    tmp = _make_tmp_dir()
+    try:
+        path = tmp / "trades.jsonl"
+        _write_jsonl(
+            path,
+            [
+                {
+                    "type": "SIGNAL_ANALYSIS_DETAIL",
+                    "ticker": "KXREAL",
+                    "source": "Reuters",
+                    "headline": "Real signal",
+                    "method": "llm",
+                    "llm_attempted": True,
+                    "llm_result_used": True,
+                    "llm_result_status": "ollama_success",
+                    "final_probability": 0.57,
+                    "market_price": 0.50,
+                    "ts": "2026-04-12T12:00:00+00:00",
+                },
+                {
+                    "type": "SIGNAL_ANALYSIS_DETAIL",
+                    "ticker": "KXPROBE",
+                    "source": "startup_probe",
+                    "headline": "Synthetic startup probe",
+                    "method": "llm",
+                    "llm_attempted": True,
+                    "llm_result_used": True,
+                    "llm_result_status": "startup_probe_success",
+                    "is_synthetic_probe": True,
+                    "final_probability": 0.38,
+                    "market_price": 0.50,
+                    "ts": "2026-04-12T12:01:00+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(path, since=None, until=None)
+
+        assert stats["counts"]["SIGNAL_ANALYSIS_DETAIL"] == 2
+        assert stats["llm_observability"]["probe_count"] == 1
+        assert stats["llm_observability"]["attempted"] == 1
+        assert stats["llm_observability"]["result_used"] == 1
+        assert stats["llm_observability"]["status_counts"]["startup_probe_success"] == 1
+        assert stats["llm_value_add"]["llm_rows"] == 1
+    finally:
+        _cleanup_tmp_dir(tmp)
+
+
 def test_summarize_reads_partitioned_trade_root():
     tmp = _make_tmp_dir()
     try:

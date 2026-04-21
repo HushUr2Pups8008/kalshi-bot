@@ -130,8 +130,16 @@ def collect_window_metrics(
         for row in detail_rows
         if row.get("llm_result_status")
     )
-    startup_probe_rows = [row for row in detail_rows if row.get("is_startup_probe") is True]
-    non_probe_rows = [row for row in detail_rows if row.get("is_startup_probe") is not True]
+    startup_probe_rows = [
+        row
+        for row in detail_rows
+        if row.get("is_synthetic_probe") is True or row.get("is_startup_probe") is True
+    ]
+    non_probe_rows = [
+        row
+        for row in detail_rows
+        if row.get("is_synthetic_probe") is not True and row.get("is_startup_probe") is not True
+    ]
     instrumented_rows = [row for row in non_probe_rows if row.get("pre_llm_quality_pass") is not None]
     block_rows = [row for row in instrumented_rows if row.get("pre_llm_would_block") is True]
     enforced_rows = [row for row in instrumented_rows if row.get("pre_llm_gate_enforced") is True]

@@ -107,6 +107,8 @@ def _validate_startup_observability_probe_record(record: dict, required_fields: 
     missing = [field for field in required_fields if field not in record]
     if record.get("type") != "SIGNAL_ANALYSIS_DETAIL":
         missing.append("type=SIGNAL_ANALYSIS_DETAIL")
+    if record.get("is_synthetic_probe") is not True:
+        missing.append("is_synthetic_probe")
     if record.get("is_startup_probe") is not True:
         missing.append("is_startup_probe")
     return missing
@@ -1608,7 +1610,7 @@ class TradingBot:
             )
 
         def _capture_probe_write(record: dict) -> None:
-            if record.get("type") == "SIGNAL_ANALYSIS_DETAIL" and record.get("is_startup_probe") is True:
+            if record.get("type") == "SIGNAL_ANALYSIS_DETAIL" and record.get("is_synthetic_probe") is True:
                 captured = dict(record)
                 emitted_records.append(captured)
                 missing = _validate_startup_observability_probe_record(

@@ -170,6 +170,7 @@ def test_validate_startup_observability_probe_record_reports_missing_fields():
     record = {
         "type": "SIGNAL_ANALYSIS_DETAIL",
         "is_startup_probe": True,
+        "is_synthetic_probe": True,
         "pre_llm_quality_pass": False,
     }
 
@@ -242,10 +243,15 @@ async def test_startup_observability_probe_emits_one_tagged_detail_and_no_trade_
          caplog.at_level("INFO", logger="main"):
         await main_module.TradingBot._run_startup_observability_probe(bot)
 
-    signal_detail = [r for r in records if r.get("type") == "SIGNAL_ANALYSIS_DETAIL" and r.get("is_startup_probe") is True]
+    signal_detail = [
+        r
+        for r in records
+        if r.get("type") == "SIGNAL_ANALYSIS_DETAIL" and r.get("is_synthetic_probe") is True
+    ]
     assert len(signal_detail) == 1
     record = signal_detail[0]
     assert record["is_startup_probe"] is True
+    assert record["is_synthetic_probe"] is True
     assert record["pre_llm_quality_pass"] is False
     assert record["pre_llm_semantic_overlap_count"] == 1
     assert record["pre_llm_keyword_override"] is True

@@ -71,8 +71,10 @@ def _llm_meta(
     http_status: int | None = None,
     contention_observed: bool | None = None,
     in_flight_at_entry: int | None = None,
+    prompt: str | None = None,
+    raw_response: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    meta = {
         "attempted": attempted,
         "status": status,
         "provider": provider,
@@ -86,6 +88,11 @@ def _llm_meta(
         "contention_observed": contention_observed,
         "in_flight_at_entry": in_flight_at_entry,
     }
+    if prompt is not None:
+        meta["prompt"] = prompt
+    if raw_response is not None:
+        meta["raw_response"] = raw_response
+    return meta
 
 
 def _status_log_marker(status: str) -> str:
@@ -479,6 +486,40 @@ def _build_user_msg(news, market) -> str:
     )
 
 
+def _build_prompt_text(news, market) -> str:
+    return f"SYSTEM:\n{_LLM_SYSTEM_PROMPT}\n\nUSER:\n{_build_user_msg(news, market)}"
+
+
+def _emit_llm_prompt_response_debug(
+    meta: dict[str, Any],
+    *,
+    news: NewsItem,
+    market: KalshiMarket,
+    is_synthetic_probe: bool,
+) -> None:
+    if is_synthetic_probe:
+        return
+    prompt = meta.get("prompt")
+    raw_response = meta.get("raw_response")
+    if not isinstance(prompt, str) or not isinstance(raw_response, str):
+        return
+    log.debug(
+        _json.dumps(
+            {
+                "type": "LLM_PROMPT_RESPONSE",
+                "market_ticker": market.ticker,
+                "source": news.source,
+                "headline": news.headline,
+                "provider": meta.get("provider"),
+                "status": meta.get("status"),
+                "prompt": prompt,
+                "raw_response": raw_response,
+            },
+            sort_keys=True,
+        )
+    )
+
+
 def _parse_llm_response(parsed: dict, market) -> tuple[float, float, str, str, str]:
     """
     Shared helper: extract (prob, confidence, reasoning, direction, magnitude)
@@ -559,11 +600,13 @@ async def _ollama_estimate_detailed(news, market):
 
     import aiohttp
 
+    user_msg = _build_user_msg(news, market)
+    prompt_text = _build_prompt_text(news, market)
     payload = {
         "model": cfg.ollama_model,
         "messages": [
             {"role": "system", "content": _LLM_SYSTEM_PROMPT},
-            {"role": "user",   "content": _build_user_msg(news, market)},
+            {"role": "user",   "content": user_msg},
         ],
         "max_tokens": 256,
         "temperature": 0,
@@ -599,6 +642,8 @@ async def _ollama_estimate_detailed(news, market):
                         latency_ms=latency_ms,
                         http_round_trip_ms=http_round_trip_ms,
                         http_status=resp.status,
+                        prompt=prompt_text,
+                        raw_response=raw,
                     )
                 if not raw.strip():
                     latency_ms = int((time.monotonic() - t0) * 1000)
@@ -610,6 +655,8 @@ async def _ollama_estimate_detailed(news, market):
                         latency_ms=latency_ms,
                         http_round_trip_ms=http_round_trip_ms,
                         http_status=resp.status,
+                        prompt=prompt_text,
+                        raw_response=raw,
                     )
                 try:
                     data = _json.loads(raw)
@@ -623,6 +670,8 @@ async def _ollama_estimate_detailed(news, market):
                         latency_ms=latency_ms,
                         http_round_trip_ms=http_round_trip_ms,
                         http_status=resp.status,
+                        prompt=prompt_text,
+                        raw_response=raw,
                     )
 
         try:
@@ -637,6 +686,8 @@ async def _ollama_estimate_detailed(news, market):
                 latency_ms=latency_ms,
                 http_round_trip_ms=http_round_trip_ms,
                 http_status=200,
+                prompt=prompt_text,
+                raw_response=raw,
             )
 
         if not isinstance(text, str) or not text.strip():
@@ -649,10 +700,27 @@ async def _ollama_estimate_detailed(news, market):
                 latency_ms=latency_ms,
                 http_round_trip_ms=http_round_trip_ms,
                 http_status=200,
+                prompt=prompt_text,
+                raw_response=text if isinstance(text, str) else raw,
             )
 
         parse_start = time.monotonic()
-        parsed = _extract_json(text.strip())
+        try:
+            parsed = _extract_json(text.strip())
+        except ValueError as exc:
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            log.warning("Ollama estimation failed: %s", exc)
+            return None, _llm_meta(
+                attempted=True,
+                status="ollama_parse_failure",
+                provider="ollama",
+                latency_ms=latency_ms,
+                http_round_trip_ms=http_round_trip_ms,
+                parse_ms=int((time.monotonic() - parse_start) * 1000),
+                http_status=200,
+                prompt=prompt_text,
+                raw_response=text,
+            )
         parse_ms = int((time.monotonic() - parse_start) * 1000)
         prob, confidence, reasoning, direction, magnitude = _parse_llm_response(parsed, market)
         latency_ms = int((time.monotonic() - t0) * 1000)
@@ -670,6 +738,8 @@ async def _ollama_estimate_detailed(news, market):
                 http_round_trip_ms=http_round_trip_ms,
                 parse_ms=parse_ms,
                 http_status=200,
+                prompt=prompt_text,
+                raw_response=text,
             )
         if _ollama_consecutive_failures > 0:
             log.info(
@@ -689,6 +759,8 @@ async def _ollama_estimate_detailed(news, market):
             http_round_trip_ms=http_round_trip_ms,
             parse_ms=parse_ms,
             http_status=200,
+            prompt=prompt_text,
+            raw_response=text,
         )
 
     except aiohttp.ClientConnectorError:
@@ -718,10 +790,6 @@ async def _ollama_estimate_detailed(news, market):
                 cfg.ollama_request_timeout_seconds,
             )
         return None, _llm_meta(attempted=True, status="ollama_timeout", provider="ollama", latency_ms=latency_ms)
-    except ValueError as exc:
-        latency_ms = int((time.monotonic() - t0) * 1000)
-        log.warning("Ollama estimation failed: %s", exc)
-        return None, _llm_meta(attempted=True, status="ollama_parse_failure", provider="ollama", latency_ms=latency_ms)
     except Exception as exc:
         latency_ms = int((time.monotonic() - t0) * 1000)
         log.warning("Ollama estimation failed: %s (%s)", exc, type(exc).__name__)
@@ -741,16 +809,29 @@ async def _anthropic_estimate_detailed(news, market):
         import anthropic
 
         client = anthropic.AsyncAnthropic(api_key=cfg.anthropic_api_key)
+        user_msg = _build_user_msg(news, market)
+        prompt_text = _build_prompt_text(news, market)
         response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=256,
             system=_LLM_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": _build_user_msg(news, market)}],
+            messages=[{"role": "user", "content": user_msg}],
         )
         latency_ms = int((time.monotonic() - t0) * 1000)
 
         text   = response.content[0].text.strip()
-        parsed = _extract_json(text)
+        try:
+            parsed = _extract_json(text)
+        except ValueError as exc:
+            log.warning("Anthropic estimation failed: %s", exc)
+            return None, _llm_meta(
+                attempted=True,
+                status="anthropic_parse_failure",
+                provider="anthropic",
+                latency_ms=latency_ms,
+                prompt=prompt_text,
+                raw_response=text,
+            )
         prob, confidence, reasoning, direction, magnitude = _parse_llm_response(parsed, market)
         log.debug("Anthropic: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
                   direction, magnitude, confidence, prob, market.ticker)
@@ -760,6 +841,8 @@ async def _anthropic_estimate_detailed(news, market):
             provider="anthropic",
             result_used=True,
             latency_ms=latency_ms,
+            prompt=prompt_text,
+            raw_response=text,
         )
 
     except ImportError:
@@ -882,7 +965,11 @@ async def estimate_probability(
         keyword_override_mode=keyword_override_mode,
         keyword_signal_strength=keyword_signal_strength,
     )
-    probe_fields = {"is_startup_probe": True} if is_startup_probe else {}
+    probe_fields = (
+        {"is_startup_probe": True, "is_synthetic_probe": True}
+        if is_startup_probe
+        else {}
+    )
     keyword_contribs = _keyword_contributions(
         combined_text, keyword_stats=keyword_stats, series_ticker=series_ticker
     )
@@ -942,6 +1029,12 @@ async def estimate_probability(
     else:
         # Try LLM if available
         llm_result, llm_meta = await llm_estimate_detailed(news, market)
+        _emit_llm_prompt_response_debug(
+            llm_meta,
+            news=news,
+            market=market,
+            is_synthetic_probe=is_startup_probe,
+        )
 
     if llm_result:
         llm_prob, llm_confidence, llm_reasoning, llm_direction, llm_magnitude = llm_result

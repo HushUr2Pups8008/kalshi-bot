@@ -6,6 +6,7 @@ Covers: JSON extraction edge cases, probability mapping, keyword scoring,
 """
 
 import asyncio
+import json
 import sys
 from types import SimpleNamespace
 from datetime import datetime, timezone
@@ -386,6 +387,68 @@ class TestEstimateProbability:
             llm_useful=True,
             pre_llm_would_block_and_useful=False,
         )
+
+    @pytest.mark.asyncio
+    async def test_non_probe_llm_call_logs_prompt_and_raw_response_at_debug(self, monkeypatch, caplog):
+        news = _make_news("Quarterly corporate earnings beat expectations")
+        market = _make_full_market()
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "LLM found relevant directional information", "yes", "moderate"),
+                {
+                    "attempted": True,
+                    "status": "ollama_success",
+                    "provider": "ollama",
+                    "result_used": True,
+                    "prompt": "SYSTEM:\nPrompt\n\nUSER:\nQuestion",
+                    "raw_response": '{"direction":"yes","magnitude":"moderate"}',
+                },
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail"), \
+             caplog.at_level("DEBUG", logger="signal_analyzer"):
+            await estimate_probability(news, market)
+
+        records = [
+            json.loads(record.getMessage())
+            for record in caplog.records
+            if record.getMessage().startswith("{")
+        ]
+        prompt_records = [record for record in records if record.get("type") == "LLM_PROMPT_RESPONSE"]
+
+        assert len(prompt_records) == 1
+        assert prompt_records[0]["market_ticker"] == market.ticker
+        assert prompt_records[0]["provider"] == "ollama"
+        assert prompt_records[0]["status"] == "ollama_success"
+        assert prompt_records[0]["prompt"] == "SYSTEM:\nPrompt\n\nUSER:\nQuestion"
+        assert prompt_records[0]["raw_response"] == '{"direction":"yes","magnitude":"moderate"}'
+
+    @pytest.mark.asyncio
+    async def test_startup_probe_does_not_log_prompt_or_raw_response(self, monkeypatch, caplog):
+        news = _make_news("Startup probe")
+        market = _make_full_market()
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "Synthetic startup probe result", "yes", "moderate"),
+                {
+                    "attempted": True,
+                    "status": "startup_probe_success",
+                    "provider": "startup_probe",
+                    "result_used": True,
+                    "prompt": "probe prompt",
+                    "raw_response": "probe response",
+                },
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail"), \
+             caplog.at_level("DEBUG", logger="signal_analyzer"):
+            await estimate_probability(news, market, is_startup_probe=True)
+
+        assert "LLM_PROMPT_RESPONSE" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_no_keyword_headline_uses_keyword_gate_when_llm_unavailable(self, monkeypatch):
@@ -942,6 +1005,28 @@ def _fake_aiohttp_module(response):
 
 
 class TestOllamaClassification:
+    @pytest.mark.asyncio
+    async def test_ollama_success_metadata_includes_prompt_and_raw_response(self, monkeypatch):
+        news = _make_news("Headline", body="Summary body")
+        market = _make_full_market()
+        raw_response = '{"relevant": true, "new_information": true, "direction": "yes", "magnitude": "small", "confidence": 0.5, "reasoning": "direct"}'
+        response = _FakeResponse(
+            status=200,
+            text=json.dumps({"choices": [{"message": {"content": raw_response}}]}),
+        )
+        monkeypatch.setitem(sys.modules, "aiohttp", _fake_aiohttp_module(response))
+        monkeypatch.setattr(signal_analyzer, "_ollama_consecutive_failures", 0)
+        monkeypatch.setattr(signal_analyzer, "_ollama_down_until", 0.0)
+
+        result, meta = await _ollama_estimate_detailed(news, market)
+
+        assert result is not None
+        assert meta["status"] == "ollama_success"
+        assert "SYSTEM:" in meta["prompt"]
+        assert "USER:" in meta["prompt"]
+        assert "NEWS HEADLINE: Headline" in meta["prompt"]
+        assert meta["raw_response"] == raw_response
+
     @pytest.mark.asyncio
     async def test_ollama_http_4xx_classified(self, monkeypatch):
         news = _make_news("Headline")
