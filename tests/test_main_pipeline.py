@@ -49,6 +49,11 @@ def _make_bot_stub():
     bot._last_drift_logged = {}
     bot._market_refresh_lock = asyncio.Lock()
     bot._known_market_tickers = set()
+    bot._startup_started_monotonic = 0.0
+    bot._startup_started_at = datetime.now(timezone.utc)
+    bot._market_cache_ready_at = None
+    bot._market_cache_ready_after_secs = None
+    bot._market_cache_empty_discovery_passes = 0
     # Multi-lane stubs: _process_candidate now routes through blend_task.
     bot._evidence_queue = asyncio.Queue(maxsize=2000)
     bot._trading_queue = asyncio.Queue(maxsize=500)
@@ -747,6 +752,10 @@ async def test_refresh_market_cache_once_logs_startup_warmup_duration(caplog):
 
     assert "[STARTUP] Market cache warmup started" in caplog.text
     assert "[STARTUP] Market cache ready: 1 markets (" in caplog.text
+    assert "Market cache first_non_empty_ts=" in caplog.text
+    assert "effective_multi_lane_runtime_start=true" in caplog.text
+    assert bot._market_cache_ready_at is not None
+    assert bot._market_cache_ready_after_secs is not None
     bot.matcher.refresh_cache.assert_awaited_once()
     bot.ws.watch.assert_called_once_with([market.ticker])
 

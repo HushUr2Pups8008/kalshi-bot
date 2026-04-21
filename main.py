@@ -455,6 +455,11 @@ class TradingBot:
         # Loop D: previous market ticker set for new-market detection
         self._known_market_tickers: set[str] = set()
         self._market_refresh_lock = asyncio.Lock()
+        self._startup_started_monotonic = time.monotonic()
+        self._startup_started_at = datetime.now(timezone.utc)
+        self._market_cache_ready_at: datetime | None = None
+        self._market_cache_ready_after_secs: float | None = None
+        self._market_cache_empty_discovery_passes = 0
 
     # ── News pipeline ─────────────────────────────────────────────────────────
 
@@ -1190,6 +1195,7 @@ class TradingBot:
             markets = await self.matcher._cache.get_markets()
             new_tickers = {m.ticker for m in markets}
             self.ws.watch(list(new_tickers))
+            first_non_empty = self._record_market_cache_ready(len(markets))
 
             if initial:
                 warmup_elapsed = time.monotonic() - warmup_started_at
@@ -1197,6 +1203,15 @@ class TradingBot:
                     "[STARTUP] Market cache ready: %d markets (%.1fs)",
                     len(markets),
                     warmup_elapsed,
+                )
+            if first_non_empty is not None:
+                ready_at, elapsed = first_non_empty
+                log.info(
+                    "[STARTUP] Market cache first_non_empty_ts=%s markets=%d "
+                    "wall_clock_since_boot=%.1fs effective_multi_lane_runtime_start=true",
+                    ready_at.isoformat(),
+                    len(markets),
+                    elapsed,
                 )
 
             # Loop D: detect newly listed markets and proactively search for news
@@ -1206,7 +1221,8 @@ class TradingBot:
                     if m.ticker not in added:
                         continue
                     from utils.logger import trade_log as _tl
-                    _tl.log_new_market(
+                    await write_trade_log_async(
+                        _tl.log_new_market,
                         ticker=m.ticker,
                         title=m.title,
                         series_ticker=m.series_ticker,
@@ -1429,11 +1445,29 @@ class TradingBot:
                     if count:
                         log.info("[DISCOVERY] Found %d new candidate subreddits", count)
                 else:
-                    log.debug("[DISCOVERY] Market cache empty, skipping discovery pass")
+                    self._market_cache_empty_discovery_passes += 1
+                    elapsed = time.monotonic() - self._startup_started_monotonic
+                    log.debug(
+                        "[DISCOVERY] Market cache empty, skipping discovery pass "
+                        "(count=%d since_startup=%.1fs effective_multi_lane_runtime_started=%s)",
+                        self._market_cache_empty_discovery_passes,
+                        elapsed,
+                        self._market_cache_ready_at is not None,
+                    )
             except Exception as exc:
                 log.warning("[DISCOVERY] Discovery pass failed: %s", exc)
             from config import SUBREDDIT_DISCOVERY_INTERVAL_SECS
             await asyncio.sleep(SUBREDDIT_DISCOVERY_INTERVAL_SECS)
+
+    def _record_market_cache_ready(self, market_count: int) -> tuple[datetime, float] | None:
+        """Record the first non-empty market cache for startup observability."""
+        if market_count <= 0 or self._market_cache_ready_at is not None:
+            return None
+        ready_at = datetime.now(timezone.utc)
+        elapsed = time.monotonic() - self._startup_started_monotonic
+        self._market_cache_ready_at = ready_at
+        self._market_cache_ready_after_secs = elapsed
+        return ready_at, elapsed
 
     # ── Run ───────────────────────────────────────────────────────────────────
 

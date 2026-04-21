@@ -16,9 +16,9 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 32 |
 | Open — HIGH | 3 |
-| Open — MEDIUM | 2 |
+| Open — MEDIUM | 1 |
 | Open — LOW | 0 |
-| Items COMPLETE | 27 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STRUCT-001) |
+| Items COMPLETE | 28 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001) |
 
 ### High-Risk Areas
 
@@ -539,7 +539,7 @@ Resolved direct executor bypasses by routing fade-tweet and price-fade `SignalAn
 | **Title** | Startup warmup and cache-empty periods reduce validation and trading uptime |
 | **Category** | Runtime Reliability / Timeliness |
 | **Severity** | MEDIUM |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | MEDIUM |
 | **Owner** | Shared |
 | **Depends On** | — |
@@ -566,6 +566,9 @@ Measure startup warmup duration and cache-empty rates, then add observability or
 
 **Notes**  
 This is especially relevant to short paper-validation windows.
+
+**Implementation Notes** (2026-04-20)
+Added startup observability that records the first non-empty market cache timestamp, wall-clock seconds since boot, and an explicit `effective_multi_lane_runtime_start=true` marker. Discovery passes that still see an empty cache now include a monotonically increasing empty-cache count, seconds since startup, and whether effective multi-lane runtime has started. This is instrumentation only; no routing, analysis, or trading logic changed. Validation: `.venv/bin/pytest tests/test_main_pipeline.py::test_refresh_market_cache_once_logs_startup_warmup_duration tests/test_main_pipeline.py::test_structural_recompute_waits_for_non_empty_market_cache` (2 passed).
 
 ---
 
@@ -1370,8 +1373,7 @@ Open or blocked items, ordered for safe sequential execution:
 | 1 | PROFIT-RUNTIME-001 | S4.5 multi-lane paper validation remains unproven | Re-run after structural participation fix and sufficient wall-clock runtime |
 | 2 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Blocked on contract decision for rejected-evidence intake semantics |
 | 3 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible |
-| 4 | PROFIT-STARTUP-001 | Startup warmup/cache-empty periods reduce effective uptime | Improves interpretation of long-run validation windows |
-| 5 | PROFIT-CAL-001 | Calibration outcome feedback is not proven end-to-end | Depends on S4.5/resolved outcomes but remains visible |
+| 4 | PROFIT-CAL-001 | Calibration outcome feedback is not proven end-to-end | Depends on S4.5/resolved outcomes but remains visible |
 
 **Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence.
 
