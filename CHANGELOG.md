@@ -6,6 +6,30 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.32] - 2026-04-20
+
+### Fixed
+- **Log rotation guarantee** (`utils/logger.py`, `main.py`): daily midnight UTC
+  rotation was silently skipped when the Python 3.14 `doRollover()` early-return
+  path fired (destination archive transiently exists → `os.path.exists(dfn)`
+  returns True → rotate() never called, no archive created, file not truncated).
+  Two-layer fix:
+  1. `_log_rotation_task()` (new background task, `main.py`): wakes 5 s after
+     each `rolloverAt` epoch and calls `rotate_logs()` if `shouldRollover()`
+     still returns True, guaranteeing rotation ≤ 10 s after UTC midnight
+     independent of emit timing.
+  2. `_maybe_rotate_stale()` content-based fallback (`utils/logger.py`): on bot
+     restart, reads the first non-comment log line timestamp; if it predates
+     `period_start`, forces rotation even when mtime appears current-period
+     (catches run-through-midnight failure discovered at Apr 19 → Apr 20 UTC).
+  - `_first_log_timestamp()` helper added to `utils/logger.py`.
+  - Tests: `test_first_log_timestamp_parses_correctly`,
+    `test_rotation_guard_scenario_force_rollover_resolves_missed_rotation`,
+    `test_startup_rotation_uses_first_log_timestamp_when_mtime_is_current`
+    added to `tests/test_logger_rotation.py` (10 rotation tests total).
+
+---
+
 ## [0.29.31] - 2026-04-19
 
 ### Docs

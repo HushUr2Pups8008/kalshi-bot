@@ -5,7 +5,7 @@ import time
 import uuid
 from pathlib import Path
 
-from utils.logger import _DailyRotatingFileHandler, _maybe_rotate_stale, _utc_formatter
+from utils.logger import _DailyRotatingFileHandler, _first_log_timestamp, _maybe_rotate_stale, _utc_formatter
 
 
 def _tmp_root() -> Path:
@@ -329,6 +329,73 @@ def test_maybe_rotate_stale_rotates_when_mtime_is_one_second_before_period_bound
         )
         archived_text = archives[0].read_text(encoding="utf-8")
         assert "content one second before boundary" in archived_text
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_first_log_timestamp_parses_correctly():
+    """_first_log_timestamp returns the UTC epoch of the first non-comment log line."""
+    root = _tmp_root()
+    p = root / "bot.log"
+    try:
+        # Banner + normal log line; function must skip banner and parse the log line
+        p.write_text(
+            "# ===== v1.0 | env=demo =====\n"
+            "2026-04-19 23:59:00,123 UTC INFO     main                 test message\n",
+            encoding="utf-8",
+        )
+        ts = _first_log_timestamp(p)
+        assert ts is not None
+        from datetime import datetime, timezone
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        assert dt.year == 2026 and dt.month == 4 and dt.day == 19
+        assert dt.hour == 23 and dt.minute == 59
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_rotation_guard_scenario_force_rollover_resolves_missed_rotation():
+    """Rotation guard scenario: shouldRollover() True → force_rollover() fixes it.
+
+    Simulates the state where emit-triggered rotation missed (rolloverAt is in the
+    past) and the midnight guard task fires.  Calling force_rollover() must:
+      - create the archive
+      - leave bot.log empty
+      - advance rolloverAt so shouldRollover() returns False afterward
+    """
+    root = _tmp_root()
+    bot_path = root / "bot.log"
+    try:
+        handler = _DailyRotatingFileHandler(
+            bot_path,
+            when="midnight",
+            backupCount=7,
+            encoding="utf-8",
+            utc=True,
+        )
+        logger = _make_logger("test.guard.scenario", handler)
+        try:
+            logger.info("content that should have been archived at midnight")
+            handler.flush()
+
+            # Wind rolloverAt to the past, simulating a missed midnight rotation
+            handler.rolloverAt = int(time.time()) - 1
+            assert handler.shouldRollover(None), "precondition: shouldRollover must be True before guard fires"
+
+            # Guard task fires and calls rotate_logs() equivalent
+            handler.force_rollover()
+
+            # After forced rotation, shouldRollover must be False
+            assert not handler.shouldRollover(None), (
+                "shouldRollover must return False after forced rotation; "
+                "rolloverAt was not advanced"
+            )
+            # Archive must exist
+            archives = list(root.glob("bot.log.*"))
+            assert archives, "force_rollover must create an archive"
+        finally:
+            handler.close()
+            logger.handlers = []
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

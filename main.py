@@ -1247,6 +1247,30 @@ class TradingBot:
             except Exception as exc:
                 log.warning("Market refresh task error: %s", exc)
 
+    async def _log_rotation_task(self) -> None:
+        """Guarantee midnight UTC log rotation independent of emit timing.
+
+        TimedRotatingFileHandler only rotates inside emit().  If emit-triggered
+        rotation silently exits early (Python 3.14: os.path.exists(dfn) guard),
+        this task fires 5 s after rolloverAt and forces rotation via
+        rotate_logs() if shouldRollover() still returns True.
+        """
+        from utils.logger import _ensure_file_handlers, rotate_logs
+
+        while True:
+            fh, _ = _ensure_file_handlers()
+            sleep_s = max(5.0, fh.rolloverAt - time.time() + 5)
+            await asyncio.sleep(sleep_s)
+            fh, _ = _ensure_file_handlers()
+            if fh.shouldRollover(None):
+                log.info("[LOG_ROT] Midnight rotation guard firing — emit rotation missed")
+                try:
+                    rotate_logs()
+                except Exception as exc:
+                    log.warning("[LOG_ROT] Forced rotation failed: %s", exc)
+            else:
+                log.debug("[LOG_ROT] Midnight rotation guard: rotation already complete")
+
     async def _log_maintenance_task(self) -> None:
         """
         Daily housekeeping for the logs/ directory.
@@ -1736,6 +1760,7 @@ class TradingBot:
             asyncio.create_task(self._market_refresh_task(),            name="market_refresh"),
             asyncio.create_task(self._auto_resolve_task(),              name="auto_resolve"),
             asyncio.create_task(self._subreddit_discovery_task(),       name="sub_discovery"),
+            asyncio.create_task(self._log_rotation_task(),              name="log_rotation"),
             asyncio.create_task(self._log_maintenance_task(),           name="log_maint"),
             asyncio.create_task(
                 self._accumulation_task.run(self._evidence_queue),      name="accumulation",
