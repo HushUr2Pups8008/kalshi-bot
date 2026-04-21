@@ -2,6 +2,7 @@
 set -u
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_PATH="$ROOT_DIR/scripts/run_tests.sh"
 cd "$ROOT_DIR"
 
 DETACH=0
@@ -9,8 +10,10 @@ EXACT_COMMAND=0
 RUN_ID=""
 LOG_FILE=""
 META_FILE=""
+REGISTRY_FILE="logs/tests/run_registry.jsonl"
 NO_TEE="${SAFE_TEST_NO_TEE:-0}"
 DETACHED_CHILD="${SAFE_TEST_DETACHED:-0}"
+REGISTRY_STARTED="${SAFE_TEST_REGISTRY_STARTED:-0}"
 
 if [[ -x ".venv/bin/python" ]]; then
   PYTHON_BIN=".venv/bin/python"
@@ -29,8 +32,8 @@ Usage:
 Examples:
   scripts/run_tests.sh
   scripts/run_tests.sh --detach
-  scripts/run_tests.sh -- tests/test_budget_manager.py -q
-  scripts/run_tests.sh --detach -- python -m pytest tests -q
+  scripts/run_tests.sh tests/test_budget_manager.py -q
+  scripts/run_tests.sh --detach -- python3 -m pytest tests -q
 
 Logs:
   logs/tests/pytest_YYYYMMDD_HHMMSS.log
@@ -91,31 +94,29 @@ if [[ -z "$RUN_ID" ]]; then
   RUN_ID="$(date -u +%Y%m%d_%H%M%S)"
 fi
 if [[ -z "$LOG_FILE" ]]; then
-  LOG_FILE="logs/tests/pytest_${RUN_ID}.log"
+  base_run_id="$RUN_ID"
+  suffix=0
+  while :; do
+    if [[ "$suffix" -eq 0 ]]; then
+      candidate_run_id="$base_run_id"
+    else
+      candidate_run_id="${base_run_id}_${suffix}"
+    fi
+    candidate_log_file="logs/tests/pytest_${candidate_run_id}.log"
+    if (set -C; : > "$candidate_log_file") 2>/dev/null; then
+      RUN_ID="$candidate_run_id"
+      LOG_FILE="$candidate_log_file"
+      break
+    fi
+    suffix=$((suffix + 1))
+  done
 fi
 if [[ -z "$META_FILE" ]]; then
   META_FILE="logs/tests/pytest_${RUN_ID}.json"
 fi
 
-if [[ "$DETACH" -eq 1 ]]; then
-  nohup env SAFE_TEST_NO_TEE=1 SAFE_TEST_DETACHED=1 "$0" \
-    --run-id "$RUN_ID" \
-    --log-file "$LOG_FILE" \
-    --meta-file "$META_FILE" \
-    -- "${CMD[@]}" </dev/null >/dev/null 2>&1 &
-  pid="$!"
-  echo "Detached test run started."
-  echo "PID: $pid"
-  echo "Log: $LOG_FILE"
-  echo "Metadata: $META_FILE"
-  echo "Tail: tail -n 80 -f $LOG_FILE"
-  exit 0
-fi
-
 START_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 GIT_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
-child_pid=""
-finished=0
 
 write_metadata() {
   local end_time="$1"
@@ -152,12 +153,102 @@ with open(meta_file, "w", encoding="utf-8") as fh:
 PY
 }
 
-timestamp_stream='
-{
-  print strftime("[%Y-%m-%dT%H:%M:%SZ]"), $0;
-  fflush();
+status_from_exit() {
+  local exit_status="$1"
+  local interrupted="$2"
+  if [[ "$interrupted" == "true" ]]; then
+    echo "interrupted"
+  elif [[ "$exit_status" == "0" ]]; then
+    echo "passed"
+  else
+    echo "failed"
+  fi
 }
-'
+
+append_registry() {
+  local event="$1"
+  local status="$2"
+  local end_time="$3"
+  local exit_status="$4"
+  local detached="$5"
+  "$PYTHON_BIN" - "$REGISTRY_FILE" "$event" "$RUN_ID" "pytest" "$START_TIME" "$end_time" "$status" "$exit_status" "$GIT_COMMIT" "$LOG_FILE" "$META_FILE" "$detached" "${CMD[@]}" <<'PY'
+import json
+import sys
+
+registry_file = sys.argv[1]
+event = sys.argv[2]
+run_id = sys.argv[3]
+kind = sys.argv[4]
+start_time = sys.argv[5]
+end_time = sys.argv[6] or None
+status = sys.argv[7]
+exit_status = None if sys.argv[8] == "" else int(sys.argv[8])
+git_commit = sys.argv[9]
+log_file = sys.argv[10]
+metadata_file = sys.argv[11]
+detached = sys.argv[12].lower() == "true"
+command = sys.argv[13:]
+
+row = {
+    "event": event,
+    "run_id": run_id,
+    "kind": kind,
+    "start_time_utc": start_time,
+    "end_time_utc": end_time,
+    "status": status,
+    "exit_status": exit_status,
+    "git_commit": git_commit,
+    "command": command,
+    "log_file": log_file,
+    "metadata_file": metadata_file,
+    "detached": detached,
+}
+
+with open(registry_file, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(row, sort_keys=True, separators=(",", ":")))
+    fh.write("\n")
+PY
+}
+
+if [[ "$DETACH" -eq 1 ]]; then
+  write_metadata "" "" false
+  append_registry "start" "running" "" "" true
+  printf '[%s] ===== DETACHED RUN REQUESTED id=%s utc=%s =====\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "$START_TIME" >> "$LOG_FILE"
+  printf '[%s] command=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${CMD[*]}" >> "$LOG_FILE"
+  nohup env SAFE_TEST_NO_TEE=1 SAFE_TEST_DETACHED=1 SAFE_TEST_REGISTRY_STARTED=1 "$SCRIPT_PATH" \
+    --run-id "$RUN_ID" \
+    --log-file "$LOG_FILE" \
+    --meta-file "$META_FILE" \
+    -- "${CMD[@]}" </dev/null >> "$LOG_FILE" 2>&1 &
+  pid="$!"
+  echo "Detached test run started."
+  echo "PID: $pid"
+  echo "Log: $LOG_FILE"
+  echo "Metadata: $META_FILE"
+  echo "Tail: tail -n 80 -f $LOG_FILE"
+  exit 0
+fi
+
+child_pid=""
+finished=0
+
+timestamp_lines() {
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$line"
+  done
+}
+
+LOG_FIFO="${TMPDIR:-/tmp}/kalshi_test_${RUN_ID}_$$.fifo"
+mkfifo "$LOG_FIFO"
+if [[ "$NO_TEE" == "1" ]]; then
+  timestamp_lines < "$LOG_FIFO" >> "$LOG_FILE" &
+  logger_pid="$!"
+else
+  timestamp_lines < "$LOG_FIFO" | tee -a "$LOG_FILE" &
+  logger_pid="$!"
+fi
+exec > "$LOG_FIFO" 2>&1
+rm -f "$LOG_FIFO"
 
 on_interrupt() {
   local signal="$1"
@@ -171,45 +262,44 @@ on_interrupt() {
     wait "$child_pid" 2>/dev/null || true
   fi
   write_metadata "$(date -u +%Y-%m-%dT%H:%M:%SZ)" 130 true
+  append_registry "finish" "interrupted" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" 130 "$([[ "$DETACHED_CHILD" == "1" ]] && echo true || echo false)"
   echo "===== RUN END status=130 utc=$(date -u +%Y-%m-%dT%H:%M:%SZ) ====="
+  exec >/dev/null 2>&1
+  wait "$logger_pid" 2>/dev/null || true
   exit 130
 }
 
-run_body() {
-  trap 'on_interrupt INT' INT
-  trap 'on_interrupt TERM' TERM
-  if [[ "$DETACHED_CHILD" == "1" ]]; then
-    trap '' HUP
-  else
-    trap 'on_interrupt HUP' HUP
-  fi
-
-  write_metadata "" "" false
-
-  echo "===== RUN START id=${RUN_ID} utc=${START_TIME} ====="
-  echo "git_commit=${GIT_COMMIT}"
-  echo "command=${CMD[*]}"
-  echo "log_file=${LOG_FILE}"
-  echo "metadata_file=${META_FILE}"
-
-  "${CMD[@]}" &
-  child_pid="$!"
-  wait "$child_pid"
-  status="$?"
-  child_pid=""
-  finished=1
-
-  END_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "===== RUN END status=${status} utc=${END_TIME} ====="
-  write_metadata "$END_TIME" "$status" false
-
-  return "$status"
-}
-
-if [[ "$NO_TEE" == "1" ]]; then
-  run_body 2>&1 | TZ=UTC awk "$timestamp_stream" >> "$LOG_FILE"
-  exit "${PIPESTATUS[0]}"
+trap 'on_interrupt INT' INT
+trap 'on_interrupt TERM' TERM
+if [[ "$DETACHED_CHILD" == "1" ]]; then
+  trap '' HUP
 else
-  run_body 2>&1 | TZ=UTC awk "$timestamp_stream" | tee -a "$LOG_FILE"
-  exit "${PIPESTATUS[0]}"
+  trap 'on_interrupt HUP' HUP
 fi
+
+write_metadata "" "" false
+if [[ "$REGISTRY_STARTED" != "1" ]]; then
+  append_registry "start" "running" "" "" "$([[ "$DETACHED_CHILD" == "1" ]] && echo true || echo false)"
+fi
+
+echo "===== RUN START id=${RUN_ID} utc=${START_TIME} ====="
+echo "git_commit=${GIT_COMMIT}"
+echo "command=${CMD[*]}"
+echo "log_file=${LOG_FILE}"
+echo "metadata_file=${META_FILE}"
+
+"${CMD[@]}" &
+child_pid="$!"
+wait "$child_pid"
+status="$?"
+child_pid=""
+finished=1
+
+END_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "===== RUN END status=${status} utc=${END_TIME} ====="
+write_metadata "$END_TIME" "$status" false
+append_registry "finish" "$(status_from_exit "$status" false)" "$END_TIME" "$status" "$([[ "$DETACHED_CHILD" == "1" ]] && echo true || echo false)"
+
+exec >/dev/null 2>&1
+wait "$logger_pid" 2>/dev/null || true
+exit "$status"

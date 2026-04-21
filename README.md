@@ -110,12 +110,16 @@ metadata survive terminal or VS Code crashes:
 scripts/run_tests.sh                  # attached, timestamped log
 scripts/run_tests.sh --detach         # keeps running if the editor exits
 scripts/run_tests.sh tests -q         # pass pytest args
-scripts/run_tests.sh -- python -m pytest tests -q  # run an exact command
+scripts/run_tests.sh -- python3 -m pytest tests -q # run an exact command
 tail -n 80 -f logs/tests/pytest_*.log
+scripts/show_run_registry.py --limit 10
+scripts/show_run_registry.py --failed
 ```
 
 Each run writes `logs/tests/pytest_YYYYMMDD_HHMMSS.log` plus a matching JSON
 metadata file containing start/end time, exit status, git commit, and command.
+Runs are also appended to `logs/tests/run_registry.jsonl` for quick history
+lookups via `scripts/show_run_registry.py` or `make run-history`.
 
 Manual SQLite WAL inspection is available for post-crash diagnostics. Run it
 only while the bot is stopped:
