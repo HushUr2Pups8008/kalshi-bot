@@ -47,6 +47,29 @@ def _parse_float_band_pairs(value: str, *, default: list[tuple[float, float]]) -
     return bands
 
 
+def _resolve_keyword_override_mode() -> str:
+    """Resolve the pre-LLM keyword override mode from env, defaulting to `all_required`.
+
+    Precedence:
+    1. `PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_MODE` if set (primary env var).
+    2. Legacy `PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_ANY_HIT` — explicit "false/0/off"
+       resolves to `disabled`; explicit "true/1/on" resolves to `any_hit`
+       (preserves prior behavior for operators who set that flag explicitly).
+    3. Default: `all_required` (ROADMAP P2.1, 2026-04-22).
+    """
+    mode = os.getenv("PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_MODE", "").strip().lower()
+    if mode:
+        return mode
+    legacy = os.getenv("PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_ANY_HIT")
+    if legacy is not None:
+        legacy_norm = legacy.strip().lower()
+        if legacy_norm in {"0", "false", "no", "off"}:
+            return "disabled"
+        if legacy_norm in {"1", "true", "yes", "on"}:
+            return "any_hit"
+    return "all_required"
+
+
 def _parse_string_tuple(value: str | None, *, default: tuple[str, ...]) -> tuple[str, ...]:
     text = str(value or "").strip()
     if not text:
@@ -1002,14 +1025,7 @@ class BotConfig:
         default_factory=lambda: os.getenv("PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_ANY_HIT", "true").strip().lower() in {"1", "true", "yes", "on"}
     )
     pre_llm_match_gate_keyword_override_mode: str = field(
-        default_factory=lambda: (
-            os.getenv("PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_MODE", "").strip().lower()
-            or (
-                "any_hit"
-                if os.getenv("PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_ANY_HIT", "true").strip().lower() in {"1", "true", "yes", "on"}
-                else "disabled"
-            )
-        )
+        default_factory=lambda: _resolve_keyword_override_mode()
     )
     pre_llm_match_gate_keyword_override_min_signal: float = field(
         default_factory=lambda: float(
@@ -1054,9 +1070,10 @@ class BotConfig:
             errors.append("KALSHI_API_KEY_ID is missing or empty")
         if not self.api_key_secret:
             errors.append("KALSHI_API_KEY_SECRET is missing or empty")
-        if self.pre_llm_match_gate_keyword_override_mode not in {"any_hit", "min_signal", "disabled"}:
+        if self.pre_llm_match_gate_keyword_override_mode not in {"any_hit", "all_required", "min_signal", "disabled"}:
             errors.append(
-                "PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_MODE must be one of any_hit|min_signal|disabled, "
+                "PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_MODE must be one of "
+                "any_hit|all_required|min_signal|disabled, "
                 f"got '{self.pre_llm_match_gate_keyword_override_mode}'"
             )
         if self.pre_llm_match_gate_keyword_override_min_signal < 0:

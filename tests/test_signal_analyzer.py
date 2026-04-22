@@ -893,6 +893,116 @@ class TestEstimateProbability:
         assert kwargs["pre_llm_gate_enforced"] is True
 
     @pytest.mark.asyncio
+    async def test_pre_llm_gate_all_required_blocks_when_not_every_group_hit(self, monkeypatch):
+        news = _make_news("Trump comments on Iran talks")
+        market = _make_full_market()
+        match_meta = {
+            "pre_llm_quality_pass": False,
+            "pre_llm_semantic_overlap_count": 1,
+            "pre_llm_semantic_overlap_ratio": 0.1,
+            "pre_llm_gate_reason": "insufficient_semantic_overlap",
+        }
+
+        # Two-group fixture: text hits only the first group, so all_required should block.
+        fake_signals = [
+            {"keywords": ["trump"], "direction": "yes", "strength": 0.1},
+            {"keywords": ["ceasefire"], "direction": "no", "strength": 0.1},
+        ]
+        monkeypatch.setattr(signal_analyzer, "GEOPOLITICAL_SIGNALS", fake_signals)
+        monkeypatch.setattr(signal_analyzer.cfg, "enable_pre_llm_match_gate", True)
+        monkeypatch.setattr(signal_analyzer.cfg, "pre_llm_match_gate_diagnostics_only", False)
+        monkeypatch.setattr(signal_analyzer.cfg, "pre_llm_match_gate_keyword_override_mode", "all_required")
+        monkeypatch.setattr(
+            "analysis.signal_analyzer.keyword_estimate",
+            lambda *args, **kwargs: (0.55, "yes", ["trump"], "keyword"),
+        )
+        monkeypatch.setattr(
+            "analysis.signal_analyzer._keyword_contributions",
+            lambda *args, **kwargs: [{"keyword": "trump", "direction": "yes", "weight": 0.05}],
+        )
+
+        async def _should_not_run(*args, **kwargs):
+            raise AssertionError("llm_estimate_detailed should not run when all_required is not satisfied")
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _should_not_run)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
+            result = await estimate_probability(news, market, match_meta=match_meta)
+
+        assert result[0] == pytest.approx(0.55)
+        kwargs = detail_mock.call_args.kwargs
+        assert kwargs["method"] == "keyword"
+        assert kwargs["pre_llm_keyword_override"] is False
+        assert kwargs["pre_llm_keyword_override_mode"] == "all_required"
+        assert kwargs["pre_llm_gate_enforced"] is True
+
+    @pytest.mark.asyncio
+    async def test_pre_llm_gate_all_required_allows_when_every_group_hit(self, monkeypatch):
+        news = _make_news("Trump ceasefire announced")
+        market = _make_full_market()
+        match_meta = {
+            "pre_llm_quality_pass": False,
+            "pre_llm_semantic_overlap_count": 1,
+            "pre_llm_semantic_overlap_ratio": 0.2,
+            "pre_llm_gate_reason": "insufficient_semantic_overlap",
+        }
+
+        # Two-group fixture: text hits both groups, so all_required should allow.
+        fake_signals = [
+            {"keywords": ["trump"], "direction": "yes", "strength": 0.1},
+            {"keywords": ["ceasefire"], "direction": "no", "strength": 0.1},
+        ]
+        monkeypatch.setattr(signal_analyzer, "GEOPOLITICAL_SIGNALS", fake_signals)
+        monkeypatch.setattr(signal_analyzer.cfg, "enable_pre_llm_match_gate", True)
+        monkeypatch.setattr(signal_analyzer.cfg, "pre_llm_match_gate_diagnostics_only", False)
+        monkeypatch.setattr(signal_analyzer.cfg, "pre_llm_match_gate_keyword_override_mode", "all_required")
+        monkeypatch.setattr(
+            "analysis.signal_analyzer.keyword_estimate",
+            lambda *args, **kwargs: (0.60, "yes", ["trump", "ceasefire"], "keyword"),
+        )
+        monkeypatch.setattr(
+            "analysis.signal_analyzer._keyword_contributions",
+            lambda *args, **kwargs: [
+                {"keyword": "trump", "direction": "yes", "weight": 0.05},
+                {"keyword": "ceasefire", "direction": "no", "weight": 0.05},
+            ],
+        )
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "LLM ran because override fired", "yes", "moderate"),
+                {
+                    "attempted": True,
+                    "status": "ok",
+                    "provider": "ollama",
+                    "result_used": True,
+                },
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
+            result = await estimate_probability(news, market, match_meta=match_meta)
+
+        assert result[0] == pytest.approx(0.64)
+        kwargs = detail_mock.call_args.kwargs
+        assert kwargs["pre_llm_keyword_override"] is True
+        assert kwargs["pre_llm_keyword_override_mode"] == "all_required"
+
+    def test_count_matched_signal_groups_returns_zero_when_no_keyword_present(self):
+        assert signal_analyzer._count_matched_signal_groups("nothing interesting here") == 0
+
+    def test_count_matched_signal_groups_counts_distinct_groups(self, monkeypatch):
+        fake_signals = [
+            {"keywords": ["alpha", "alpha-plus"], "direction": "yes", "strength": 0.1},
+            {"keywords": ["beta"], "direction": "no", "strength": 0.1},
+            {"keywords": ["gamma"], "direction": "yes", "strength": 0.1},
+        ]
+        monkeypatch.setattr(signal_analyzer, "GEOPOLITICAL_SIGNALS", fake_signals)
+        # text hits the first group twice (should count group only once) and the second group once
+        assert signal_analyzer._count_matched_signal_groups("alpha alpha-plus and beta") == 2
+        # text hits every group
+        assert signal_analyzer._count_matched_signal_groups("alpha beta gamma") == 3
+
+    @pytest.mark.asyncio
     async def test_pre_llm_gate_disabled_does_not_suppress(self, monkeypatch):
         news = _make_news("Quarterly corporate earnings beat expectations")
         market = _make_full_market()

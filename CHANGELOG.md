@@ -6,6 +6,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.37] - 2026-04-22
+
+### Added
+- **Stage 5 Phase 2 — P2.1: `all_required` keyword override mode**
+  (`analysis/signal_analyzer.py`, `config.py`): tightens the pre-LLM match
+  gate's keyword override from `any_hit` (a single keyword bypasses the
+  gate) to `all_required` (every `GEOPOLITICAL_SIGNALS` group must
+  contribute at least one keyword hit before the override fires). The
+  override is still only consulted when the gate is enforced; the gate
+  itself remains off (`enable_pre_llm_match_gate=false`) and in
+  diagnostics-only mode (`pre_llm_match_gate_diagnostics_only=true`), so
+  the effective change is log fields only (`pre_llm_keyword_override_mode`
+  on `SIGNAL_ANALYSIS_DETAIL` events).
+
+### Changed
+- **Default keyword override mode** is now `all_required` (was `any_hit`).
+  The legacy `PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_ANY_HIT` env var still
+  resolves to `any_hit` when set explicitly to truthy; otherwise the new
+  default applies. See `docs/ROADMAP.md` P2.1 semantic clarification for
+  the rationale and rollback criteria (P2-GATE).
+
 ## [0.29.36] - 2026-04-22
 
 ### Fixed

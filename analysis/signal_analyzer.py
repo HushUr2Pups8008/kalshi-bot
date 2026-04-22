@@ -204,11 +204,28 @@ def _pre_llm_keyword_override_mode() -> str:
     return "any_hit" if getattr(cfg, "pre_llm_match_gate_keyword_override_any_hit", True) else "disabled"
 
 
+def _count_matched_signal_groups(text: str) -> int:
+    """Count `GEOPOLITICAL_SIGNALS` groups that have at least one keyword hit.
+
+    Used by the `all_required` keyword override mode, which fires only when every
+    configured signal group contributes at least one keyword — see ROADMAP P2.1.
+    """
+    text_lower = text.lower()
+    count = 0
+    for sig_def in GEOPOLITICAL_SIGNALS:
+        for kw in sig_def["keywords"]:
+            if kw.lower() in text_lower:
+                count += 1
+                break
+    return count
+
+
 def _should_keyword_override_pre_llm_gate(
     *,
     match_meta: dict[str, Any] | None,
     keywords_present: bool,
     keyword_signal_strength: float,
+    matched_signal_groups: int = 0,
 ) -> tuple[bool, str]:
     mode = _pre_llm_keyword_override_mode()
     if match_meta is None or match_meta["pre_llm_quality_pass"] or not keywords_present:
@@ -217,6 +234,9 @@ def _should_keyword_override_pre_llm_gate(
         return False, mode
     if mode == "min_signal":
         return keyword_signal_strength >= cfg.pre_llm_match_gate_keyword_override_min_signal, mode
+    if mode == "all_required":
+        total = len(GEOPOLITICAL_SIGNALS)
+        return total > 0 and matched_signal_groups >= total, mode
     return True, mode
 
 
@@ -953,10 +973,12 @@ async def estimate_probability(
     )
     keywords_present = bool(keywords)
     keyword_signal_strength = abs(kw_prob - base_probability)
+    matched_signal_groups = _count_matched_signal_groups(combined_text) if keywords_present else 0
     keyword_override, keyword_override_mode = _should_keyword_override_pre_llm_gate(
         match_meta=match_meta,
         keywords_present=keywords_present,
         keyword_signal_strength=keyword_signal_strength,
+        matched_signal_groups=matched_signal_groups,
     )
     pre_llm_fields = _pre_llm_log_fields(
         match_meta=match_meta,

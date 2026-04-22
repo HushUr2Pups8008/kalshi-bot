@@ -194,7 +194,7 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 
 | ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
 |----|------|--------|-------|---------|-------------|-----------------|
-| P2.1 | Tighten keyword override from `any_hit` to `all_required` | NOT_STARTED | Claude | `any_hit` makes the gate a near-no-op; this is a prerequisite to gate being meaningful | Config change only; gate still `diagnostics_only=true`; no behavioral enforcement | Keyword override requires all configured keywords to match before bypassing gate |
+| P2.1 | Tighten keyword override from `any_hit` to `all_required` | COMPLETE | Claude | `any_hit` makes the gate a near-no-op; this is a prerequisite to gate being meaningful | Adds `all_required` mode to `_should_keyword_override_pre_llm_gate`; gate still `diagnostics_only=true`; no behavioral enforcement | Keyword override requires the article to hit at least one keyword in every `GEOPOLITICAL_SIGNALS` group before bypassing the gate |
 | P2.2 | Run gate in diagnostics mode with tightened override for 3 days | NOT_STARTED | Shared | Observe `pre_llm_would_block` rate before any enforcement | No enforcement; `diagnostics_only=true` throughout | Gate block rate documented; confirm ≥ 20% before P2.3 |
 | P2.3 | Enable `ENABLE_LOW_QUALITY_MATCH_SUPPRESSION` | NOT_STARTED | Claude | Suppression criteria (`low_match_quality AND near_threshold_score`) are already correct; flag just disabled | Requires P2.2 COMPLETE and block rate ≥ 20% | Suppression fires; low-quality matches suppressed before LLM call |
 | P2.4 | Enable pre-LLM gate in diagnostics mode | NOT_STARTED | Claude | Final observation pass before live enforcement | `diagnostics_only=true`; watch for false-positive rate on confirmed-valid matches; run 3 days | Gate active; no matches blocked; false-positive rate measured |
@@ -203,6 +203,16 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 **P2-GATE outcome:**
 - PASS → Phase 3 authorized
 - ROLLBACK trigger: if P2.1 (`all_required` override) blocks > 50% of Trump/Iran matches that have historically been valid → roll back P2.1; reassess keyword config before continuing
+
+**P2.1 semantic clarification (authored 2026-04-22, Claude, per Contract §9 Claude Rule 1 and §11):**
+
+`all_required` is defined as follows: the keyword override fires only when the article's text contains at least one keyword from *every* group in `config.GEOPOLITICAL_SIGNALS`. This is the literal reading of "all configured keywords" under the current configuration model — there is no separate override keyword list, so "configured keywords" refers to the only configured set (`GEOPOLITICAL_SIGNALS`).
+
+Alternatives considered and rejected:
+- *All keywords in any one group must match* — impossibly strict for multi-phrase groups (e.g., the war group has 15 phrases); no real article hits all of them.
+- *Count-based threshold (≥N distinct keywords)* — semantically `min_count`, not `all_required`. Cleanest fit for the ROLLBACK trigger's expected partial block rate but does not match the task name.
+
+The literal interpretation will likely block a high fraction of current Trump/Iran-dominated traffic because those articles hit named-entity phrasing only, not conflict/peace/sanctions groups. This is intentional: P2.2 runs the mode in `diagnostics_only=true` precisely so the ROLLBACK trigger can fire on evidence. If it fires, a follow-up task introduces a softer mode (likely count-based); the follow-up is *not* part of P2.1.
 
 ---
 
