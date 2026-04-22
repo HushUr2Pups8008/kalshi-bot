@@ -220,6 +220,45 @@ Run 3 evaluations per signal, take majority vote on direction, median magnitude,
 
 ---
 
+## Phase 6: Feedback Loop Upgrades (post-Mac-Studio)
+
+The four market feedback loops (A: price→news search, B: resolution→keyword outcomes, C: price-drift logging, D: new-market detection) are all live and implemented. Each has a documented post-Mac-Studio upgrade path that needs GPU-class inference latency to be worthwhile.
+
+### Dynamic keyword weighting (Loop B upgrade)
+Signal analyzer reads `paper_trades.db:keyword_outcomes` at startup and adjusts each keyword's `strength` multiplier based on historical accuracy. Sketch:
+
+```python
+# analysis/keyword_weights.py (new file)
+def load_keyword_weights(db_path: Path, min_samples: int = 10) -> dict[str, float]:
+    """{keyword: accuracy_ratio} for keywords with >= min_samples outcomes."""
+    rows = conn.execute(
+        "SELECT keyword, SUM(correct), COUNT(*) FROM keyword_outcomes "
+        "GROUP BY keyword HAVING COUNT(*) >= ?",
+        (min_samples,),
+    ).fetchall()
+    return {kw: wins / total for kw, wins, total in rows}
+
+# At signal analyzer startup:
+_keyword_weights = load_keyword_weights(DB_PATH)
+
+# When applying GEOPOLITICAL_SIGNALS strength:
+accuracy = _keyword_weights.get(keyword)
+if accuracy is not None:
+    # 50% accuracy (random) -> 0.5×; 80% accuracy -> 1.3×
+    adjusted = base_strength * (accuracy / 0.5)
+    strength = max(0.01, min(base_strength * 2, adjusted))
+```
+
+### Drift-triggered LLM re-analysis (Loop C upgrade)
+A `POSITION_DRIFT` event today is log-only. With fast inference: fetch recent news for that ticker, re-run the signal analyzer, and if `estimated_prob` has flipped direction by > 0.15, emit `POSITION_REASSESSMENT` and optionally close + reverse. Requires sub-5s inference budget to keep the drift→decision loop under human-supervision cadence.
+
+### Loop A threshold tuning (Loop A upgrade)
+Current thresholds are conservative for CPU inference latency: `PRICE_MOVE_THRESHOLD_CENTS = 10`, `PRICE_SEARCH_COOLDOWN_SECS = 1800`. With GPU-class inference, lower to ~5 cents / ~600s cooldown so volatile markets hunt news more aggressively.
+
+All three items have the same precondition as Phase 5: consistent sub-5s inference. Should be sequenced after Phase 5 has proven stable.
+
+---
+
 ## Guiding Principles
 
 1. **Paper trade everything first.** No real money until documented positive edge.
