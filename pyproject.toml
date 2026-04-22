@@ -30,3 +30,17 @@ ignore = [
 "scripts/trade_log_summary.py"   = ["F401"]
 # Tests commonly import fixtures conditionally or for module side-effects.
 "tests/conftest.py" = ["F401"]
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+    ".venv/*",
+    "windows_archive/*",
+    "logs/*",
+    "data/*",
+    "tests/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
