@@ -10,14 +10,14 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-04-20 |
-| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d |
+| Last Updated | 2026-04-22 |
+| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 32 |
+| Total Items | 33 |
 | Open — HIGH | 3 |
 | Open — MEDIUM | 1 |
-| Open — LOW | 0 |
+| Open — LOW | 1 |
 | Items COMPLETE | 28 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001) |
 
 ### High-Risk Areas
@@ -569,6 +569,48 @@ This is especially relevant to short paper-validation windows.
 
 **Implementation Notes** (2026-04-20)
 Added startup observability that records the first non-empty market cache timestamp, wall-clock seconds since boot, and an explicit `effective_multi_lane_runtime_start=true` marker. Discovery passes that still see an empty cache now include a monotonically increasing empty-cache count, seconds since startup, and whether effective multi-lane runtime has started. This is instrumentation only; no routing, analysis, or trading logic changed. Validation: `.venv/bin/pytest tests/test_main_pipeline.py::test_refresh_market_cache_once_logs_startup_warmup_duration tests/test_main_pipeline.py::test_structural_recompute_waits_for_non_empty_market_cache` (2 passed).
+
+---
+
+### PROFIT-CFG-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-CFG-001 |
+| **Title** | Remove deprecated `KALSHI_GEOPOLITICAL_SERIES` dead-code allowlist from `config.py` |
+| **Category** | Code Hygiene / Config Cleanup |
+| **Severity** | LOW |
+| **Status** | OPEN |
+| **Priority** | LATER |
+| **Owner** | Claude |
+| **Depends On** | Stage 5 Phase 2 (P2.2) 72-hour paper-mode observation window closing |
+| **Blocks** | — |
+
+**Description**  
+`config.py:475-489` defines `KALSHI_GEOPOLITICAL_SERIES`, a Kalshi series-ticker allowlist (`KXUKR`, `KXINTL`, `KXMIDEAST`, etc.). The list was deprecated in commit `60cb30c5` (2026-03-11) when the market cache switched to series-title keyword discovery via `_GEO_SERIES_KEYWORDS` in `analysis/market_matcher.py`. The list has been dead code for ~42 days but remains defined with a self-documenting `NOTE` comment block (`config.py:475-478`).
+
+**Why it matters to profitability / safety / reliability**  
+Low direct impact. Pure dead code; no runtime path reads the symbol. The residual risk is that a future contributor mistakes the list for a live filter and resurrects it, silently narrowing market discovery. The `CLAUDE.md:52` gotcha entry exists specifically to prevent that. Deleting the dead definition removes the source of the confusion at its origin.
+
+**Evidence / Source**  
+- `config.py:475-489` — `NOTE` comment block + dead list definition.
+- Git history:
+  - `60cb30c5` (2026-03-11) — deprecated consumer, added the `NOTE` comment.
+  - `e3da7962` (2026-04-11) — dead-write: added `KXPRESGELECT`, `KXNK`, `KXNATO` to the list 31 days *after* the consumer was removed.
+- Repo-wide scan (2026-04-22): zero imports, zero attribute access on `cfg` / `config`, zero `from config import *` wildcards, zero `.env` references, zero dynamic `getattr` / `hasattr` lookups. Only self-reference in `config.py` + a warning in `CLAUDE.md`.
+- Replacement: `_GEO_SERIES_KEYWORDS` in `analysis/market_matcher.py`; the separate `MARKET_SERIES_BLOCKLIST_PREFIXES` list in `config.py` is actively used (imported by `feeds/search_news_monitor.py:26`) and must be preserved.
+
+**Proposed Fix**  
+Delete `config.py:475-489` (the `NOTE` comment block and the `KALSHI_GEOPOLITICAL_SERIES = [...]` list). Preserve the `CLAUDE.md:52` warning entry — it remains useful guidance for future agents even with the symbol gone.
+
+**Acceptance Criteria**  
+- `config.py` no longer defines `KALSHI_GEOPOLITICAL_SERIES`.
+- `make lint` (ruff) passes.
+- `pytest tests/` passes with no new failures vs. pre-removal baseline.
+- `CLAUDE.md:52` warning text is preserved verbatim.
+
+**Notes**  
+Deferred until the Stage 5 Phase 2 (P2.2) 72-hour paper-mode observation window closes (opened 2026-04-22 per commit `b86c624`). Rationale: the change is provably safe (no runtime path reads the symbol), but editing `config.py` during an active observation window is avoided as a general rule even when the specific diff is inert. Execute after the window closes.
 
 ---
 
