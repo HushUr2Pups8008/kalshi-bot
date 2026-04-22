@@ -15,9 +15,8 @@ Usage:
 import asyncio
 import base64
 import json
-import logging
 import time
-from typing import Callable, Awaitable, Any
+from typing import Callable, Awaitable
 
 try:
     import websockets

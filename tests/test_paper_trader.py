@@ -7,7 +7,6 @@ Covers: bankroll atomicity, resolve_market P&L accounting, win/loss tracking,
 Uses :memory: SQLite so no disk I/O or shared state between tests.
 """
 
-import json
 import logging
 import sqlite3
 import uuid

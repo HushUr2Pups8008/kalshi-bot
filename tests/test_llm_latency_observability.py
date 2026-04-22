@@ -16,7 +16,6 @@ import shutil
 import uuid
 from pathlib import Path
 
-import pytest
 
 from analysis.signal_analyzer import _llm_meta
 from scripts.signal_edge_diagnostics import (

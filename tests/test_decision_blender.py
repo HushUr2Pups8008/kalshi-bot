@@ -20,9 +20,6 @@ import pytest
 from analysis.decision_blender import (
     BlendResult,
     LaneInput,
-    _DOMINANCE_RATIO,
-    _STRUCTURAL_FAILSAFE_CONFIDENCE_THRESHOLD,
-    _STRUCTURAL_FAILSAFE_DIVERGENCE_THRESHOLD,
     blend,
 )
 

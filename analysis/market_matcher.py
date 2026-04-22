@@ -13,7 +13,7 @@ The market list is cached and refreshed every MARKET_CACHE_TTL_SECONDS.
 import asyncio
 import re
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from config import cfg, MARKET_CACHE_TTL_SECONDS, MAX_MARKET_DAYS_TO_EXPIRY

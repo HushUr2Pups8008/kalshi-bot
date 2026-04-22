@@ -1,7 +1,6 @@
 """Tests for the CALIBRATION_CHECK log schema (S1.6)."""
 
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 

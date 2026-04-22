@@ -10,7 +10,6 @@ import shutil
 import uuid
 from pathlib import Path
 
-import pytest
 
 from scripts.ollama_error_audit import (
     BUCKET_BAD_REQUEST,

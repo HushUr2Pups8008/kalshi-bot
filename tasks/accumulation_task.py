@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import Callable, Protocol, Sequence
+from typing import Protocol, Sequence
 
 from analysis.evidence_scorer import score_evidence
 from analysis.evidence_types import Dossier, Evidence, EvidenceScore

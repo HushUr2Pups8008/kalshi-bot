@@ -8,7 +8,6 @@ NewsItem objects onto an asyncio.Queue for downstream processing.
 
 import asyncio
 import hashlib
-import logging
 from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Callable, Awaitable

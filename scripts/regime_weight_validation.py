@@ -76,7 +76,7 @@ def _infer_close_time(ticker: str, signal_ts: str) -> str:
         return f"20{yr}-{_MONTH_ABBR[mon]}-{day}T23:59:00Z"
     # Fall back: 30 days after signal
     try:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         dt = datetime.fromisoformat(signal_ts.replace("Z", "+00:00"))
         future = dt + timedelta(days=30)

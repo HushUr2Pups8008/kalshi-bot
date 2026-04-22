@@ -1244,7 +1244,6 @@ class TestMainAsyncBlocking:
     """
 
     def _make_bot(self):
-        import threading
         bot = _make_bot_stub()
         bot.paper._conn = MagicMock()
         bot.paper._conn.execute.return_value.fetchall.return_value = []

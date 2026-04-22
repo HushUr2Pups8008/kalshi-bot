@@ -9,11 +9,8 @@ Kalshi API docs: https://trading-api.kalshi.com/trade-api/v2/openapi.json
 
 import base64
 import json
-import logging
 import time
-from datetime import datetime, timezone
 from typing import Any, Optional
-from urllib.parse import urljoin
 
 import requests
 from cryptography.hazmat.primitives import hashes, serialization

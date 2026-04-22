@@ -10,7 +10,6 @@ from utils.keyword_diagnostics_helpers import (
     CONCENTRATION_FLAG_THRESHOLD,
     PROMOTE_MIN_HITS,
     PROMOTE_MIN_SCORE,
-    PROMOTE_MIN_SOURCES,
     evaluate_shadow_phrases,
     load_no_keyword_miss_corpus,
     phrase_matches,

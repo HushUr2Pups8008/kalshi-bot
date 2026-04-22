@@ -30,11 +30,9 @@ from utils.diagnostics_script_helpers import (
     add_path_arg,
     add_since_arg,
     add_until_arg,
-    in_window,
     is_test_record_source_only as is_test_record,
     parse_date_end,
     parse_date_start,
-    parse_iso_ts,
 )
 from utils.keyword_diagnostics_helpers import (
     BUCKET_PROMOTE,
@@ -49,9 +47,27 @@ from utils.keyword_diagnostics_helpers import (
     load_no_keyword_miss_corpus as load_miss_corpus,
     phrase_matches as _phrase_matches,
     score_shadow_phrases as score_phrases,
-    tokenize_keyword_text as _tokenize,
+    tokenize_keyword_text,
 )
 from utils.reporting_helpers import warn_if_full_trade_root_scan
+
+# Re-exports for tests/test_keyword_shadow_eval.py. Ruff F401 flags these as
+# unused within this script, but they are part of its public re-export surface.
+__all__ = [
+    "BUCKET_PROMOTE",
+    "BUCKET_REJECT",
+    "BUCKET_SHADOW",
+    "CONCENTRATION_FLAG_THRESHOLD",
+    "DEFAULT_SHADOW_PHRASES",
+    "PROMOTE_MIN_HITS",
+    "PROMOTE_MIN_SCORE",
+    "PROMOTE_MIN_SOURCES",
+    "_phrase_matches",
+    "evaluate_phrases",
+    "load_miss_corpus",
+    "score_phrases",
+    "tokenize_keyword_text",
+]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"

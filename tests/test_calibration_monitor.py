@@ -2,7 +2,6 @@ import pytest
 
 from analysis.calibration_monitor import (
     CalibrationMonitorState,
-    _DRIFT_THRESHOLD,
     _MIN_BASELINE_SAMPLES,
     _MIN_LANE_SAMPLES,
     _SCALING_FLOOR,

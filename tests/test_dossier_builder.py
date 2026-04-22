@@ -6,15 +6,13 @@ required by Definition of Done criterion 7.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pytest
 
 from analysis.dossier_builder import (
     _CONFIDENCE_CAP,
     _CONFIDENCE_FLOOR,
-    _CONTRADICTION_DROP,
-    _DRIFT_THRESHOLD,
     _NORMAL_CAP,
     _RECOVERY_CAP,
     classify_update,

@@ -8,7 +8,6 @@ import shutil
 import uuid
 from pathlib import Path
 
-import pytest
 
 from main import _RuntimeInstanceGuard
 

@@ -61,6 +61,7 @@ import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from types import ModuleType, SimpleNamespace
+from typing import Awaitable, Callable  # noqa: F401 — referenced in string annotations
 
 from analysis import SignalAnalysis
 from analysis.kelly import kelly_bet

@@ -255,7 +255,7 @@ def print_report(stats: dict[str, Any], top: int, max_examples: int) -> None:
         f"score >= {PROMOTE_MIN_SCORE}, no concentration flag)"
     )
     print(
-        f"  Watch  : at least one shadow hit, but missing one or more promote conditions"
+        "  Watch  : at least one shadow hit, but missing one or more promote conditions"
     )
     print(
         f"  Reject : zero hits, or very weak evidence (score < {REJECT_MIN_SCORE})"

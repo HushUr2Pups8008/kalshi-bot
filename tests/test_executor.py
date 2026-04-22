@@ -5,10 +5,9 @@ Covers: live loss limit breach triggers halt, halt persists across subsequent ca
         session start balance seeded on first balance check, retry logic on transient errors.
 """
 
-import asyncio
 import pytest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import config as _cfg_module
 from trading.executor import TradeExecutor
