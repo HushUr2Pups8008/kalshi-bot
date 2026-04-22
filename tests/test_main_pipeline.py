@@ -766,7 +766,11 @@ async def test_structural_recompute_waits_for_non_empty_market_cache():
     bot.matcher._cache._markets = []
     market = _make_market()
     bot._structural_task = MagicMock()
-    bot._structural_task.run_periodic = AsyncMock()
+
+    async def _run_periodic(**kwargs):
+        await asyncio.sleep(1)
+
+    bot._structural_task.run_periodic = AsyncMock(side_effect=_run_periodic)
 
     async def _populate_cache():
         await asyncio.sleep(0.01)
@@ -776,6 +780,8 @@ async def test_structural_recompute_waits_for_non_empty_market_cache():
     populate_task = asyncio.create_task(_populate_cache())
     try:
         await asyncio.wait_for(structural, timeout=0.5)
+    except asyncio.TimeoutError:
+        pass
     finally:
         await populate_task
 
