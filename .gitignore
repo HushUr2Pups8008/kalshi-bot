@@ -29,6 +29,12 @@ logs/tests/
 tests/_tmp_*/
 tests/_tmp_*.jsonl
 
+# Coverage artifacts (regenerate via `pytest --cov`)
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
 # Keep the placeholder files
 !data/.gitkeep
 !logs/.gitkeep

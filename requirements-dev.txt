@@ -3,3 +3,8 @@
 
 pytest>=8,<9
 pytest-asyncio>=0.23,<1
+pytest-cov>=5,<8
+
+# Static analysis — run `ruff check .` locally before committing.
+# Config lives in pyproject.toml.
+ruff>=0.6,<1

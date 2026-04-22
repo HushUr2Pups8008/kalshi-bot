@@ -1,0 +1,32 @@
+# Tool configuration only. This project does not use PEP 621 packaging
+# (the repo is run as scripts + tests, not an installable package).
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = [
+    ".venv",
+    "windows_archive",
+    "logs",
+    "data",
+]
+
+[tool.ruff.lint]
+# Start narrow: pyflakes only (unused imports, undefined names, basic
+# correctness). Expand later — especially `I` (import sort) — as the
+# codebase is cleaned up. Keeping scope small avoids large-diff churn.
+select = ["F", "E9"]
+ignore = [
+    # F841 (unused local variable) often flags `_` unpacking or test
+    # helpers that deliberately capture for debuggability. Revisit later.
+    "F841",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Re-export surfaces: these modules intentionally re-export symbols for
+# downstream consumers (other scripts / tests). F401 flags them as unused
+# inside the module even when they are referenced externally.
+"scripts/keyword_shadow_eval.py" = ["F401"]
+"scripts/trade_log_summary.py"   = ["F401"]
+# Tests commonly import fixtures conditionally or for module side-effects.
+"tests/conftest.py" = ["F401"]
