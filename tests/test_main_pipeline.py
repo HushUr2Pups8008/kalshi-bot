@@ -792,6 +792,71 @@ async def test_structural_recompute_waits_for_non_empty_market_cache():
 
 
 @pytest.mark.asyncio
+async def test_structural_recompute_yields_even_if_run_periodic_returns_instantly():
+    """Regression guard: an instantly-completing run_periodic must not hot-spin.
+
+    Previously the inner while True loop had no guaranteed yield point, so a
+    mock (or a real run_periodic implementation that ever returned without
+    awaiting) caused the task to spin at full CPU, accumulate mock call history
+    unboundedly, and block event-loop delivery of CancelledError. Pytest runs
+    were SIGKILL'd at ~3 GB RSS before finishing. main._structural_recompute_task
+    now prefixes each iteration with `await asyncio.sleep(0)` so cancellation
+    is always deliverable regardless of what run_periodic does.
+
+    The test asserts on wall-clock elapsed time: a hot-spin loop exceeds the
+    wait_for timeout (cancellation can't be delivered without yields), so if
+    the defensive yield is removed, this test fails in seconds with a clear
+    diagnostic message instead of hanging indefinitely. A large iteration
+    safety bound is kept only to prevent OOM in the regression case.
+    """
+    import time as _time
+
+    bot = _make_bot_stub()
+    market = _make_market()
+    bot.matcher._cache._markets = [market]
+    bot._structural_task = MagicMock()
+
+    call_count = 0
+    # Iteration bound chosen to (a) stay well above what the defensive-yield
+    # case reaches inside a 0.1s wait_for, (b) finish within ~1s in the
+    # regression case so the failure surfaces promptly, and (c) cap memory so
+    # a regressed run can never reach the ~3 GB OOM that first exposed this.
+    SAFETY_BOUND = 50_000
+
+    async def _instant_run_periodic(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count > SAFETY_BOUND:
+            raise RuntimeError(
+                f"safety bound hit ({SAFETY_BOUND} iterations); defensive yield missing"
+            )
+
+    bot._structural_task.run_periodic = AsyncMock(side_effect=_instant_run_periodic)
+
+    start = _time.monotonic()
+    structural = asyncio.create_task(bot._structural_recompute_task())
+    try:
+        await asyncio.wait_for(structural, timeout=0.1)
+    except asyncio.TimeoutError:
+        pass
+    elapsed = _time.monotonic() - start
+
+    assert structural.done()
+    # With the defensive yield, wait_for's 0.1s timer fires, cancellation is
+    # delivered at the next `await asyncio.sleep(0)`, and the task exits
+    # shortly after the timeout (~0.1-0.15s). Without it, the task hot-spins
+    # for ~7us/iteration (~340ms for 50k iters on this machine) before the
+    # safety bound fires and the except-path's sleep(60) finally yields for
+    # cancellation. The 0.25s threshold sits above the positive case and
+    # well below the regression case.
+    assert elapsed < 0.25, (
+        f"structural recompute took {elapsed:.2f}s to exit after {call_count} "
+        f"iterations; defensive `await asyncio.sleep(0)` yield is likely "
+        f"missing from main._structural_recompute_task"
+    )
+
+
+@pytest.mark.asyncio
 async def test_process_fade_tweet_builds_geo_fade_handoff_with_ws_price(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
     bot = _make_bot_stub()

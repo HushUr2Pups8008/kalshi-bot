@@ -1700,6 +1700,9 @@ class TradingBot:
             len(self.matcher._cache._markets),
         )
         while True:
+            # Guaranteed yield point: prevents a hot spin if run_periodic ever
+            # returns synchronously (e.g. under a mock). Zero-delay in production.
+            await asyncio.sleep(0)
             try:
                 await self._structural_task.run_periodic(
                     market_provider=lambda: list(self.matcher._cache._markets),

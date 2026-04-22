@@ -6,6 +6,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.36] - 2026-04-22
+
+### Fixed
+- **`main._structural_recompute_task` — guaranteed yield point**: the inner
+  `while True` recompute loop now starts every iteration with
+  `await asyncio.sleep(0)`. Zero-delay in production (real `run_periodic`
+  already awaits work), but prevents a hot-spin if `run_periodic` ever
+  returns synchronously — which is how a bare `AsyncMock()` in a test
+  caused pytest to accumulate unbounded mock call history (~3 GB RSS) and
+  get SIGKILL'd mid-run. Paired regression test
+  (`test_structural_recompute_yields_even_if_run_periodic_returns_instantly`
+  in `tests/test_main_pipeline.py`) uses wall-clock elapsed time as the
+  signal: a regressed defensive yield causes the test to fail within ~0.6s
+  with a clear diagnostic, rather than hanging until OOM.
+
 ## [0.29.35] - 2026-04-22
 
 ### Added
