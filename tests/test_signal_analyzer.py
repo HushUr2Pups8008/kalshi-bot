@@ -9,7 +9,6 @@ import asyncio
 import json
 import sys
 from types import SimpleNamespace
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,7 +22,6 @@ from analysis.signal_analyzer import (
     estimate_probability,
     keyword_estimate,
 )
-from feeds import NewsItem
 
 
 # ---------------------------------------------------------------------------
@@ -262,15 +260,7 @@ class TestKeywordScore:
         assert s_stats_no_series == pytest.approx(s_base, abs=1e-9)
 
 
-def _make_news(headline: str, body: str = ""):
-    return NewsItem(
-        headline=headline,
-        url="https://example.com/story",
-        source="Reuters",
-        published=datetime.now(timezone.utc),
-        body=body,
-        item_id="news-1",
-    )
+from tests._helpers import make_news as _make_news  # noqa: E402
 
 
 def _make_full_market(

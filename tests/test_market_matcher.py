@@ -17,7 +17,6 @@ from analysis.market_matcher import (
     _tokenize,
     _similarity,
 )
-from feeds import NewsItem
 from kalshi import KalshiMarket
 
 
@@ -116,15 +115,7 @@ def _make_market(
     )
 
 
-def _make_news(headline: str, body: str = ""):
-    return NewsItem(
-        headline=headline,
-        url="https://example.com/story",
-        source="Reuters",
-        published=datetime.now(timezone.utc),
-        body=body,
-        item_id="news-1",
-    )
+from tests._helpers import make_news as _make_news  # noqa: E402
 
 
 class TestMarketShape:
