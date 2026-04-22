@@ -94,6 +94,48 @@ def test_summarize_collects_low_quality_rates_and_examples():
         _cleanup_tmp_dir(tmp)
 
 
+def test_summarize_tracks_pre_llm_would_block_by_source_and_ticker():
+    tmp = _make_tmp_dir()
+    try:
+        path = tmp / "trades.jsonl"
+        _write_jsonl(
+            path,
+            [
+                {
+                    "type": "MATCH_DIAGNOSTIC",
+                    "source": "Reuters",
+                    "headline": "Trump says Iran talks collapsed",
+                    "ticker": "KXTRUMP-25A",
+                    "market_title": "Will Trump invoke the 25th Amendment?",
+                    "low_match_quality": True,
+                    "would_fail_pre_llm_gate": True,
+                    "heuristic_flags": ["single_named_entity_only"],
+                    "ts": "2026-04-12T10:00:00+00:00",
+                },
+                {
+                    "type": "MATCH_DIAGNOSTIC",
+                    "source": "AP",
+                    "headline": "Iran threatens Hormuz closure",
+                    "ticker": "KXIRAN-1",
+                    "market_title": "Will Iran close Strait of Hormuz?",
+                    "low_match_quality": False,
+                    "would_fail_pre_llm_gate": False,
+                    "heuristic_flags": [],
+                    "ts": "2026-04-12T10:01:00+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(path, since=None, until=None)
+
+        assert stats["pre_llm_would_block"] == 1
+        assert stats["pre_llm_would_block_by_source"]["Reuters"] == 1
+        assert stats["pre_llm_would_block_by_ticker"]["KXTRUMP-25A"] == 1
+        assert "AP" not in stats["pre_llm_would_block_by_source"]
+    finally:
+        _cleanup_tmp_dir(tmp)
+
+
 def test_summarize_respects_date_filter_and_missing_score_note():
     tmp = _make_tmp_dir()
     try:

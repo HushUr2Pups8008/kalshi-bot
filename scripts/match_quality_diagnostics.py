@@ -176,6 +176,9 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
         "examples_bad": [],
         "examples_good": [],
         "match_score_available": True,
+        "pre_llm_would_block": 0,
+        "pre_llm_would_block_by_source": Counter(),
+        "pre_llm_would_block_by_ticker": Counter(),
     }
     all_rows: list[dict[str, Any]] = []
 
@@ -224,6 +227,12 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                 stats["by_ticker"][ticker] += 1
         for flag in row["heuristic_flags"]:
             stats["heuristic_flags"][flag] += 1
+        if safe_bool(record.get("would_fail_pre_llm_gate")):
+            stats["pre_llm_would_block"] += 1
+            if source:
+                stats["pre_llm_would_block_by_source"][source] += 1
+            if ticker:
+                stats["pre_llm_would_block_by_ticker"][ticker] += 1
 
     stats["lines_total"] = read_stats.lines_total
     stats["lines_malformed"] = read_stats.lines_malformed

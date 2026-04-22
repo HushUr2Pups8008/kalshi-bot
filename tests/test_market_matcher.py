@@ -267,6 +267,10 @@ class TestFindCandidates:
         assert payload["pre_llm_semantic_overlap_count"] == 3
         assert payload["pre_llm_semantic_overlap_ratio"] == pytest.approx(0.75)
         assert payload["would_fail_pre_llm_gate"] is False
+        assert "publish_ts" in payload
+        assert isinstance(payload["publish_ts"], str)
+        assert "age_at_match_seconds" in payload
+        assert payload["age_at_match_seconds"] >= 0.0
 
     @pytest.mark.asyncio
     async def test_match_diagnostics_flags_single_named_entity_overlap_as_low_quality(self, matcher):

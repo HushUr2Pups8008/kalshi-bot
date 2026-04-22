@@ -335,18 +335,47 @@ def build_daily_review(
                 f"    {row['source']}: early_stale={row['early_stale_drops']} "
                 f"fresh_pass={row['fresh_passes']} observed={row['observed_records']}"
             )
+    eligible_freshness_rows = [
+        row for row in freshness_stats.get("sources", {}).values()
+        if row.get("observed_records", 0) >= 1
+    ]
+    if eligible_freshness_rows:
+        buckets = freshness_diagnostics.bucket_sources(eligible_freshness_rows, show_all=True)
+        waterfall_rows = (
+            buckets.get("fast_operational", [])
+            + buckets.get("near_threshold", [])
+            + buckets.get("chronically_late", [])
+            + buckets.get("dead", [])
+            + buckets.get("insufficient", [])
+        )
+        if waterfall_rows:
+            lines.append("  Drilldown: per-source freshness waterfall")
+            for line in freshness_diagnostics.format_compact_rows(waterfall_rows, top=len(waterfall_rows)):
+                lines.append("  " + line)
     lines.append("")
 
     lines.append("2. MATCHING")
     match_records = match_stats.get("match_records", 0)
     low_quality = match_stats.get("low_quality_matches", 0)
+    pre_llm_would_block = match_stats.get("pre_llm_would_block", 0)
     lines.append(f"  Match diagnostics emitted        : {match_records}")
     lines.append(f"  Low-quality flagged              : {low_quality} ({fmt_pct(low_quality, match_records)})")
+    lines.append(f"  Pre-LLM gate would-block         : {pre_llm_would_block} ({fmt_pct(pre_llm_would_block, match_records)})")
     lines.append(f"  Suppression candidates           : {suppression_candidates}")
     lines.append(f"  Suppressed                       : {suppressed}")
     if match_flags:
         lines.append("  Drilldown: top heuristic flags")
         for label, count in match_flags.most_common(top):
+            lines.append(f"    {label}: {count}")
+    pre_llm_by_source = match_stats.get("pre_llm_would_block_by_source", Counter())
+    if pre_llm_by_source:
+        lines.append("  Drilldown: pre-LLM would-block by source (top)")
+        for label, count in pre_llm_by_source.most_common(top):
+            lines.append(f"    {label}: {count}")
+    pre_llm_by_ticker = match_stats.get("pre_llm_would_block_by_ticker", Counter())
+    if pre_llm_by_ticker:
+        lines.append("  Drilldown: pre-LLM would-block by market (top)")
+        for label, count in pre_llm_by_ticker.most_common(top):
             lines.append(f"    {label}: {count}")
     examples_bad = match_stats.get("examples_bad", [])[: min(top, RECENT_MATCH_EXAMPLES)]
     if examples_bad:

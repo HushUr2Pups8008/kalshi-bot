@@ -967,6 +967,8 @@ class TradeLogger:
         pre_llm_filtered_stopword_count: int | None = None,
         pre_llm_filtered_generic_count: int | None = None,
         pre_llm_semantic_token_types: dict[str, int] | None = None,
+        publish_ts: str | None = None,
+        age_at_match_seconds: float | None = None,
     ) -> None:
         record = {
             "type": "MATCH_DIAGNOSTIC",
@@ -1002,6 +1004,10 @@ class TradeLogger:
             record["pre_llm_filtered_generic_count"] = pre_llm_filtered_generic_count
         if pre_llm_semantic_token_types is not None:
             record["pre_llm_semantic_token_types"] = pre_llm_semantic_token_types
+        if publish_ts is not None:
+            record["publish_ts"] = publish_ts
+        if age_at_match_seconds is not None:
+            record["age_at_match_seconds"] = round(age_at_match_seconds, 1)
         self._write(record)
 
     def log_blend_decision(

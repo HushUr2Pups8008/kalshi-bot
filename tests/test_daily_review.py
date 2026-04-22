@@ -19,6 +19,13 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                     "observed_records": 12,
                     "fresh_passes": 9,
                     "early_stale_drops": 3,
+                    "within_300s": 5,
+                    "stale_rate": 0.25,
+                    "median_age_seconds": 120.0,
+                    "freshest_age_seconds": 45.0,
+                    "p90_age_seconds": 200.0,
+                    "age_samples_count": 9,
+                    "interpretation": "near-threshold",
                 }
             }
         },
@@ -29,6 +36,9 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
             "match_records": 8,
             "low_quality_matches": 2,
             "heuristic_flags": Counter({"single_named_entity_only": 2}),
+            "pre_llm_would_block": 3,
+            "pre_llm_would_block_by_source": Counter({"Reuters": 2, "AP": 1}),
+            "pre_llm_would_block_by_ticker": Counter({"KXTRUMP-1": 3}),
             "examples_bad": [
                 {
                     "ticker": "KXTRUMP-1",
@@ -203,6 +213,10 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "7. LLM VALUE-ADD SEGMENTATION" in rendered
     assert "Appendix" in rendered
     assert "Low-quality flagged              : 2 (25.0%)" in rendered
+    assert "Pre-LLM gate would-block         : 3 (37.5%)" in rendered
+    assert "Drilldown: pre-LLM would-block by source (top)" in rendered
+    assert "Drilldown: pre-LLM would-block by market (top)" in rendered
+    assert "Drilldown: per-source freshness waterfall" in rendered
     assert "LLM rows                         : 1" in rendered
     assert "LLM attempted (post-filter)       : 1" in rendered
     assert "LLM skipped (routing)             : 2" in rendered

@@ -527,6 +527,9 @@ class MarketMatcher:
         markets     = await self._cache.get_markets()
 
         headline_tokens = _tokenize(news.headline)
+        match_time = datetime.now(timezone.utc)
+        news_publish_ts = news.published.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        news_age_seconds = (match_time - news.published.astimezone(timezone.utc)).total_seconds()
 
         scored: list[tuple[KalshiMarket, float, dict[str, Any]]] = []
         for market in markets:
@@ -612,6 +615,8 @@ class MarketMatcher:
                 pre_llm_filtered_stopword_count=match_meta["pre_llm_filtered_stopword_count"],
                 pre_llm_filtered_generic_count=match_meta["pre_llm_filtered_generic_count"],
                 pre_llm_semantic_token_types=match_meta["pre_llm_semantic_token_types"],
+                publish_ts=news_publish_ts,
+                age_at_match_seconds=news_age_seconds,
             )
 
             flag_set = set(heuristic_flags)

@@ -156,9 +156,9 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 
 | ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
 |----|------|--------|-------|---------|-------------|-----------------|
-| P1.1 | Add `publish_ts` and `age_at_match_seconds` to `MATCH_DIAGNOSTIC` | NOT_STARTED | Claude | Distinguish article publication age from staleness at match time | Diagnostic field only; no behavior change | `publish_ts` and `age_at_match_seconds` present in match events |
-| P1.2 | Add per-source freshness waterfall to daily reports | NOT_STARTED | Claude | Identify which sources are chronically stale vs genuinely fresh | Report generation only; no pipeline change | Daily reports show fresh/stale/drop counts by source |
-| P1.3 | Surface pre-LLM gate diagnostic breakdown in reports | NOT_STARTED | Claude | `pre_llm_would_block` counts are currently global aggregates; need per-source and per-market breakdown | Report generation only | Reports show gate decision distribution by source and market |
+| P1.1 | Add `publish_ts` and `age_at_match_seconds` to `MATCH_DIAGNOSTIC` | COMPLETE | Claude | Distinguish article publication age from staleness at match time | Diagnostic field only; no behavior change | `publish_ts` and `age_at_match_seconds` present in match events |
+| P1.2 | Add per-source freshness waterfall to daily reports | COMPLETE | Claude | Identify which sources are chronically stale vs genuinely fresh | Report generation only; no pipeline change | Daily reports show fresh/stale/drop counts by source |
+| P1.3 | Surface pre-LLM gate diagnostic breakdown in reports | COMPLETE | Claude | `pre_llm_would_block` counts are currently global aggregates; need per-source and per-market breakdown | Report generation only | Reports show gate decision distribution by source and market |
 
 **P1-GATE outcome:**
 - PASS → Phase 2 may proceed

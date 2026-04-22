@@ -6,6 +6,30 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.35] - 2026-04-22
+
+### Added
+- **Stage 5 Phase 1 observability fixes (P1.1 / P1.2 / P1.3)** — diagnostic
+  and reporting additions only; no trading behavior change.
+  - P1.1 — `MATCH_DIAGNOSTIC` events now include `publish_ts` (ISO 8601 UTC
+    from `news.published`) and `age_at_match_seconds` (delta from publication
+    to match evaluation), enabling staleness-at-match analysis distinct from
+    freshness-at-ingestion. `utils/logger.log_match_diagnostic` accepts the
+    new fields; `analysis/market_matcher.find_candidates` computes and passes
+    them for every emitted diagnostic.
+  - P1.2 — daily report INGESTION section now appends a per-source freshness
+    waterfall (fast_operational / near_threshold / chronically_late / dead /
+    insufficient) by reusing `scripts/freshness_diagnostics.bucket_sources()`
+    and `format_compact_rows()`, ensuring label consistency with the
+    standalone script.
+  - P1.3 — daily report MATCHING section now shows `pre_llm_would_block`
+    as a global count, plus per-source and per-market drilldowns, surfacing
+    which sources and markets are filtered before the LLM gate.
+    `scripts/match_quality_diagnostics.summarize()` tracks the new counters
+    so the standalone script benefits from the same data.
+  - Tests added/updated in `tests/test_market_matcher.py`,
+    `tests/test_match_quality_diagnostics.py`, and `tests/test_daily_review.py`.
+
 ## [0.29.34] - 2026-04-20
 
 ### Fixed
