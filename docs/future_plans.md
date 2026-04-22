@@ -203,6 +203,23 @@ Jarvis-style: "AI that actually does things" — email, calendar, reminders, tas
 
 ---
 
+## Phase 5: LLM Pipeline Upgrades (post-Mac-Studio GPU)
+
+These are deferred until inference latency is consistently < 5 s/call. Not worth attempting on CPU-bound `qwen2.5:7b`.
+
+### 3-stage pipeline
+Replace the single combined LLM prompt with three smaller stages, each with early-exit:
+1. **Relevance filter** (binary: does this news item concern this market at all?)
+2. **Novelty detector** (binary: does it add information vs. already-priced-in?)
+3. **Impact estimator** (direction + magnitude only)
+
+Rationale: each stage is a cheaper, more focused prompt; early exits cut total inference time for the ~75% of items that correctly resolve to `magnitude="none"` on stage 1 or 2. Only practical once per-call latency is low enough that three serial calls still fit the ingestion budget.
+
+### Consensus voting
+Run 3 evaluations per signal, take majority vote on direction, median magnitude, mean confidence. Stabilizes borderline outputs and makes calibration more honest. Same latency constraint as above (3× inference per evaluation).
+
+---
+
 ## Guiding Principles
 
 1. **Paper trade everything first.** No real money until documented positive edge.

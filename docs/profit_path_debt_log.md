@@ -316,7 +316,7 @@ Long-run paper validation depends on trustworthy, bounded logs. Misunderstood ro
 **Evidence / Source**  
 - `utils/logger.py:146-231` implements copy+truncate daily rotation.
 - `PLATFORMS.md:14` documents atomic rename for macOS/Linux.
-- `tasks/completed.md:23-25` says copy+truncate works cross-platform and singleton handlers fixed duplicate rotation.
+- git history (v0.6.6–v0.6.7 commits) documents the switch to copy+truncate daily rotation and the singleton-handler fix for duplicate rotation.
 
 **Proposed Fix**  
 Audit and either correct the documentation to match intentional daily copy+truncate behavior or implement the intended platform-specific rotation policy with tests for forced rollover and sustained logging.

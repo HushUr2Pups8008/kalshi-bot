@@ -174,7 +174,7 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 
 | ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
 |----|------|--------|-------|---------|-------------|-----------------|
-| P1.5.1 | Investigate "Politics" source (100% stale, 0 fresh across audit period) | NOT_STARTED | Codex | Confirm dead/misconfigured before disabling | Disable only; do not delete config | Verdict documented; source disabled if confirmed dead |
+| P1.5.1 | Investigate "Politics" source (100% stale, 0 fresh across audit period) | COMPLETE | Codex | Confirm dead/misconfigured before disabling | Disable only; do not delete config | Verdict: confirmed dead/low-value. Daily reviews show repeated 0-fresh windows (2026-04-17, 2026-04-19, 2026-04-20); archived scorecard shows `Politics` disabled_by=source with 1,276 obs, 0 signals, 0 paper trades; current logs confirm exact-label disabled-source drops. Source was already present in `DISABLED_NEWS_SOURCES`, so no config change was needed. |
 | P1.5.2 | Audit Reddit sources: freshness rate and match-to-analysis conversion | NOT_STARTED | Codex | High volume but unclear signal value; confirm worth keeping | Diagnostic only; no changes until findings reviewed | Per-Reddit-source freshness rate and match rate documented |
 | P1.5.3 | Disable confirmed-dead sources | NOT_STARTED | Codex | Eliminate noise from ingestion metrics | Only sources confirmed dead in P1.5.1 / P1.5.2 | Config change committed; dead sources disabled |
 
@@ -279,3 +279,61 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 4. **"Politics" source is confirmed dead** across the full audit period (0 fresh passes, 100% stale drop). P1.5.1 is a diagnosis task, but the expected outcome is disable.
 
 5. **Phase 4 (live trading) is explicitly gated on measurable non-zero edge in paper mode.** No timeline. If edge does not form after P3 improvements, escalation is required — not more operational changes.
+
+---
+
+## Appendix A — Post-OT&E News Source Options (investigated 2026-04-22)
+
+**Status:** investigation only. No integration until S4.5c COMPLETE and P4-GATE outcome known. Order below is recommended *post-OT&E* integration sequence, smallest-risk-first, each A/B-testable against the paper-mode baseline individually rather than bundled.
+
+**Constraints considered:** zero/low cost, architecturally reliable, low latency, geopolitical-market relevance, fits existing `feeds/` async-generator pattern (INV-4 preserved).
+
+### Tier 1 — Zero cost, production-reliable, drop-in `rss_monitor.py` additions
+
+| Source | Access | Latency | Signal notes |
+|---|---|---|---|
+| US State Dept / White House / Treasury OFAC / DoD press feeds | RSS | minutes | Primary sovereign-level signal; sanctions designations move Russia/Iran markets directly |
+| UN News / IAEA / IMF / WTO | RSS | minutes | Resolutions, nuclear status, sanctions context |
+| Foreign MFA press offices (Iran, Russia, China, Israel) | RSS | minutes | Often *first* signal on reciprocal actions |
+| Al Jazeera English, France 24, DW, BBC World, Xinhua/TASS English | RSS | minutes | Regional + multilingual coverage complementing existing Reuters/AP |
+| Google Alerts → RSS (per market) | RSS | minutes | Per-market keyword-targeted; pairs naturally with P3.2 (`market_specificity_score`) once narrow markets are prioritized |
+| GDELT extended endpoints (GKG themes, 2.0 Translingual, GDELT Cloud 2026 streaming) | API | 15min–realtime | Extension of existing `feeds/gdelt_monitor.py`; theme monitoring + push alerts add incremental signal without new infra |
+
+### Tier 2 — Good fits, slightly more integration work
+
+| Source | Access | Latency | Signal notes |
+|---|---|---|---|
+| Institute for the Study of War (ISW) | RSS | daily | Russia/Ukraine analysis; slow cadence, high quality |
+| CSIS, CFR, Brookings, RAND | RSS | days | Analytical depth; treat as context/enrichment, not fast lane |
+| Bellingcat, Liveuamap | RSS / JSON | hours | OSINT investigations; crowd-sourced conflict mapping |
+| Polymarket cross-reference | Public GraphQL | sub-second poll | Parallel prediction market; price moves can precede news — highest novel-signal leverage of any item in this appendix |
+| Metaculus | REST | minutes | Probabilistic forecasts with rationale |
+| Bluesky (AT Protocol) | Public API | near-realtime streaming | Open protocol; growing journalist/newswire user base; covers the "social news" gap without X/ToS issues |
+| Mastodon (ActivityPub) | Public API + WebSocket stream | near-realtime | Journalist community on journa.host and mstdn.social |
+
+### Tier 3 — Consider carefully
+
+| Source | Access | Latency | Signal notes |
+|---|---|---|---|
+| Telegram channels | Bot API (free) | near-realtime | Conflict-zone reporters often post first on Telegram, especially Ukraine. Russian-language dominant. Per-channel setup cost. |
+| ACLED (Armed Conflict Location & Event Data) | Free academic tier | daily | Structured event data; non-commercial license |
+| USGS earthquakes / NOAA / GDACS | Public APIs | minutes | Only relevant if disaster-related Kalshi markets are being traded |
+| Wikipedia Current Events portal | RSS | daily | Human-curated validation/context layer |
+
+### Explicitly skipped / deferred
+
+- **X/Twitter via twikit or Playwright/browser automation** — investigated separately. Diagnosis: account-ban risk + compliance ambiguity + unstable internal API + latency during breaking-news captcha spikes. Adding X won't fix the P0.3 "market-scope ceiling" — more news of the same shape gives more magnitude="none" passthroughs. Defer indefinitely; revisit only if P3 leaves a concrete signal-volume gap.
+- **NewsAPI.org, GNews, Currents, MediaStack, NewsAPI.ai** — all free tiers are 100–2000 req/day and ToS-restricted to "development." Paid tiers land at $50–$500/mo. Not zero-cost for production polling.
+- **Paid aggregators (Benzinga, Bloomberg, Feedly Pro, Inoreader)** — outside the zero-cost criterion.
+
+### Suggested post-OT&E integration order (smallest risk / highest leverage first)
+
+1. Government RSS expansion (Tier 1, group 1–3) — weekend-scale work, zero risk, direct primary-source signal.
+2. Google Alerts → RSS per high-specificity market — natural pairing with P3.2.
+3. Polymarket cross-reference — highest novel signal type in the whole list; well-defined API.
+4. Wire service regional expansion (Al Jazeera, France 24, DW, BBC) — breadth.
+5. Bluesky journalist-timeline feed — covers the "social news" gap cleanly.
+6. ISW / CSIS / CFR RSS — context layer.
+7. GDELT extended endpoints — incremental extension to existing monitor.
+
+Each addition should be evaluated against a stable paper-mode baseline individually, not bundled, so edge attribution stays clean.
