@@ -10,7 +10,10 @@ KalshiMarket factory, and a fixed KalshiMarket — that are not interchangeable.
 """
 from __future__ import annotations
 
+import shutil
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from feeds import NewsItem
 
@@ -26,3 +29,17 @@ def make_news(headline: str, body: str = "") -> NewsItem:
         body=body,
         item_id="news-1",
     )
+
+
+def make_tmp_dir(prefix: str) -> Path:
+    """Create a unique directory under tests/_tmp_<prefix>/<uuid>. Caller is
+    responsible for cleanup via cleanup_tmp_dir()."""
+    root = Path(__file__).resolve().parent / f"_tmp_{prefix}"
+    path = root / uuid.uuid4().hex
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def cleanup_tmp_dir(path: Path) -> None:
+    """Remove a directory tree created by make_tmp_dir(); missing is ignored."""
+    shutil.rmtree(path, ignore_errors=True)

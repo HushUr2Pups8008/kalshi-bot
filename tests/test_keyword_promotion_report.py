@@ -1,6 +1,4 @@
 import json
-import shutil
-import uuid
 from pathlib import Path
 
 from scripts.keyword_promotion_report import (
@@ -10,17 +8,7 @@ from scripts.keyword_promotion_report import (
     print_report,
     summarize,
 )
-
-
-def _make_tmp_dir() -> Path:
-    root = Path(__file__).resolve().parent / "_tmp_keyword_promotion_report"
-    path = root / uuid.uuid4().hex
-    path.mkdir(parents=True, exist_ok=False)
-    return path
-
-
-def _cleanup_tmp_dir(path: Path) -> None:
-    shutil.rmtree(path, ignore_errors=True)
+from tests._helpers import cleanup_tmp_dir, make_tmp_dir
 
 
 def _write_jsonl(path: Path, records) -> None:
@@ -46,7 +34,7 @@ def _miss(headline: str, ticker: str, source: str) -> dict:
 
 
 def test_summarize_groups_promote_watch_and_reject():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("keyword_promotion_report")
     try:
         path = tmp / "trades.jsonl"
         records = [
@@ -75,11 +63,11 @@ def test_summarize_groups_promote_watch_and_reject():
         assert any(row["phrase"] == "blockade iran" for row in grouped[RECOMMEND_WATCH])
         assert any(row["phrase"] == "donald trump" for row in grouped[RECOMMEND_REJECT])
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_rejects_zero_hit_phrase():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("keyword_promotion_report")
     try:
         path = tmp / "trades.jsonl"
         _write_jsonl(path, [_miss("NATO summit in Brussels", "KX1", "Reuters")])
@@ -97,11 +85,11 @@ def test_rejects_zero_hit_phrase():
         assert row["recommendation"] == RECOMMEND_REJECT
         assert "zero shadow hits" in row["rationale"]
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_print_report_includes_expected_sections(capsys):
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("keyword_promotion_report")
     try:
         path = tmp / "trades.jsonl"
         _write_jsonl(
@@ -131,4 +119,4 @@ def test_print_report_includes_expected_sections(capsys):
         assert "Reject" in output
         assert "Attribution Notes" in output
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)

@@ -6,11 +6,6 @@ and no runtime bot infrastructure.
 
 from __future__ import annotations
 
-import shutil
-import uuid
-from pathlib import Path
-
-
 from scripts.ollama_error_audit import (
     BUCKET_BAD_REQUEST,
     BUCKET_MODEL_NOT_FOUND,
@@ -25,6 +20,7 @@ from scripts.ollama_error_audit import (
     parse_log_file,
     parse_log_line,
 )
+from tests._helpers import cleanup_tmp_dir, make_tmp_dir
 
 
 # ---------------------------------------------------------------------------
@@ -68,15 +64,6 @@ _OTHER_LINE = (
 )
 
 
-def _make_tmp(suffix: str = "") -> Path:
-    root = Path(__file__).resolve().parent / "_tmp_ollama_error_audit"
-    path = root / (uuid.uuid4().hex + suffix)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _cleanup(path: Path) -> None:
-    shutil.rmtree(path.parent if path.is_file() else path, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +155,7 @@ class TestClassify:
 
 class TestParseLogFile:
     def test_reads_synthetic_log(self):
-        tmp_path = _make_tmp()
+        tmp_path = make_tmp_dir("ollama_error_audit")
         log = tmp_path / "bot.log"
         log.write_text(
             "\n".join([_NEW_FORMAT_404, _OLD_FORMAT_404, _500_LINE, "unrelated line"]),
@@ -176,21 +163,21 @@ class TestParseLogFile:
         )
         events = parse_log_file(log)
         assert len(events) == 3
-        _cleanup(tmp_path)
+        cleanup_tmp_dir(tmp_path)
 
     def test_missing_file_returns_empty(self):
-        tmp_path = _make_tmp()
+        tmp_path = make_tmp_dir("ollama_error_audit")
         events = parse_log_file(tmp_path / "nonexistent.log")
         assert events == []
-        _cleanup(tmp_path)
+        cleanup_tmp_dir(tmp_path)
 
     def test_returns_events_in_order(self):
-        tmp_path = _make_tmp()
+        tmp_path = make_tmp_dir("ollama_error_audit")
         log = tmp_path / "bot.log"
         log.write_text("\n".join([_500_LINE, _400_LINE, _NEW_FORMAT_404]), encoding="utf-8")
         events = parse_log_file(log)
         assert [e.status for e in events] == [500, 400, 404]
-        _cleanup(tmp_path)
+        cleanup_tmp_dir(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +343,7 @@ class TestGapAnalysis:
 
 class TestCollect:
     def test_collects_from_multiple_files(self):
-        tmp_path = _make_tmp()
+        tmp_path = make_tmp_dir("ollama_error_audit")
         f1 = tmp_path / "bot.log.1"
         f2 = tmp_path / "bot.log"
         f1.write_text(_NEW_FORMAT_404 + "\n", encoding="utf-8")
@@ -366,20 +353,20 @@ class TestCollect:
         # f1 first, f2 second (given path order)
         assert events[0].status == 404
         assert events[1].status == 500
-        _cleanup(tmp_path)
+        cleanup_tmp_dir(tmp_path)
 
     def test_skips_missing_file(self):
-        tmp_path = _make_tmp()
+        tmp_path = make_tmp_dir("ollama_error_audit")
         f1 = tmp_path / "missing.log"
         f2 = tmp_path / "bot.log"
         f2.write_text(_400_LINE + "\n", encoding="utf-8")
         events = collect([f1, f2])
         assert len(events) == 1
         assert events[0].status == 400
-        _cleanup(tmp_path)
+        cleanup_tmp_dir(tmp_path)
 
     def test_glob_pattern_reads_archives_then_active(self):
-        tmp_path = _make_tmp()
+        tmp_path = make_tmp_dir("ollama_error_audit")
         f1 = tmp_path / "bot.log.2026-04-15"
         f2 = tmp_path / "bot.log"
         f1.write_text(_NEW_FORMAT_404 + "\n", encoding="utf-8")
@@ -387,4 +374,4 @@ class TestCollect:
 
         events = collect([tmp_path / "bot.log*"])
         assert [event.status for event in events] == [404, 500]
-        _cleanup(tmp_path)
+        cleanup_tmp_dir(tmp_path)
