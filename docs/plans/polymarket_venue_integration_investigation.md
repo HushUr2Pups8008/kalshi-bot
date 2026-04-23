@@ -158,16 +158,21 @@ Phase 0 executed on 2026-04-22 via documentation review only (no sign-up, no cod
 
 > Does the Polymarket US (CFTC-regulated) pathway expose a programmatic API suitable for algorithmic trading from a retail residence, or is it broker-GUI-mediated only?
 
-**ANSWER: YES — programmatic access exists and launched publicly on 2026-02-16.**
+**ANSWER: The API exists and is live, but retail onboarding is WAITLIST-GATED as of 2026-04-22.**
 
+Technical surface (confirmed available):
 - Base URL: `https://api.polymarket.us`
 - Architecture: unified REST + WebSocket; 23 REST endpoints across 5 resource groups (Markets, Orders, Events, Portfolio, Account); 2 WebSocket endpoints (`/v1/ws/markets` public market-data, `/v1/ws/private` authenticated order updates)
 - Official SDKs: `polymarket-us` for Python 3.10+ and for TypeScript (Node 18+). Not the same package as the Global `py-clob-client`.
 - Rate limits: 60 req/min REST (shared across public and authenticated endpoints for a given key); WebSocket supports up to 10 instruments per connection. Institutional higher-throughput path exists via Exchange Gateway with FIX 4.4 protocol (separate application).
-- Access path for retail: KYC through the Polymarket US iOS app (government ID + SSN + proof of address; typically approved in minutes to hours) → web portal at `polymarket.us/developer` → self-service generation of an Ed25519 keypair. The private key is displayed **exactly once**; lose it and you must regenerate.
-- **Caveat:** the official developer page at `polymarketexchange.com/developers.html` describes a separate "application + sandbox + approval" flow for "participants and technology partners" — that appears to be the Exchange Gateway (FIX) institutional path, not the self-service retail path. Both tiers exist in parallel; retail can self-serve, institutions apply for higher throughput. Confirm during actual onboarding that the self-service retail tier is still operating as described.
 
-**Phase 0 exit gate: PASS.** Q1 answers "yes." Proceed toward phase 1 after Q2 and Q3 are closed.
+Access path (gated):
+- Nominal retail flow: KYC through the Polymarket US iOS app (government ID + SSN + proof of address) → web portal at `polymarket.us/developer` → self-service Ed25519 keypair generation.
+- **Actual state on 2026-04-22 (operator observation):** attempting to onboard lands on a waitlist with position numbers in the low millions (operator confirmed position #1,302,257 on 2026-04-22). The platform publicly launched in December 2025 but KYC capacity is being released gradually; the "minutes-to-hours KYC approval" described by third-party guides reflects *post-waitlist* behavior, not immediate availability.
+- Share-to-move-up link is offered in the waitlist flow — Polymarket's own viral mechanic. Position advancement rate is not publicly documented.
+- **Caveat on the institutional path:** the official developer page at `polymarketexchange.com/developers.html` describes a separate "application + sandbox + approval" flow for "participants and technology partners" — Exchange Gateway (FIX 4.4), likely not waitlist-gated but requires business-entity onboarding and is not appropriate for retail algorithmic use.
+
+**Phase 0 exit gate: PASS on the question itself** — the answer is conclusive: a technically viable API exists for US retail in principle. **Phase 1 entry is BLOCKED** in practice until the operator gets off the waitlist and completes KYC. This is a waiting condition, not a scope change — when the waitlist clears, the Phase 1 plan resumes as written in §9 (with the KYC + keypair step as its entry gate).
 
 ### Q2 — Is the US API the same surface as the Global CLOB?
 
@@ -236,22 +241,24 @@ Broader-US state landscape as of April 2026 (for context and for re-verification
 
 > Is there a free-to-use market-data WebSocket that works without authenticated L1/L2 credentials?
 
-**ANSWER: NO, not for Polymarket US.** Per the official US API guide, "there is no sandbox, demo, or unauthenticated access mode." Even the public `/v1/ws/markets` endpoint requires an Ed25519 API key — the "public" in its name refers to the data being non-private (market-level quotes, not private order state), not to the endpoint being unauthenticated. Polymarket **Global** does expose a no-auth Gamma REST surface, but US IPs are geoblocked from Global.
+**ANSWER: NO, not for Polymarket US.** Per the official US API guide, "there is no sandbox, demo, or unauthenticated access mode." Even the public `/v1/ws/markets` endpoint requires an Ed25519 API key — the "public" in its name refers to the data being non-private (market-level quotes, not private order state), not to the endpoint being unauthenticated. Polymarket **Global** does expose a no-auth Gamma REST surface, but US IPs are geoblocked from Global at the country level per the [official Polymarket geoblock doc](https://docs.polymarket.com/api-reference/geoblock) — the Blocked Countries table lists `US | United States | Blocked`, and the runtime geoblock check at `https://polymarket.com/api/geoblock` returns `{blocked: true, country: "US", region: "<state>"}` for any US IP. Colorado residence does not change that — Global blocks at country level, so the state field is moot.
 
 **Material impact on §9 Phase 1:** the plan called for Phase 1 to be a "no auth, no orders" read-only observer. That is not achievable on Polymarket US. Phase 1 must begin with the KYC + Ed25519 onboarding step, then run a read-only observer against the authenticated `/v1/ws/markets` WebSocket (still no orders). The scope adjustment is additive, not structural — no orders still means no trading risk — but the entry gate for Phase 1 now includes completing KYC.
 
+**Implementation note (Phase 1):** Polymarket's geoblock data model exposes state-level granularity (the response schema returns `country` + `region`, not just a boolean). If `api.polymarket.us` exposes an analogous endpoint — likely, given shared infrastructure patterns — Phase 1 code should call it at startup and at each trading session-open as an automated eligibility pre-check, rather than relying on the human "re-verify Colorado on the day" step in §9 Phase 1. This upgrade should land as part of the Phase 1 read-only observer module, not as a post-hoc addition. Confirm the exact endpoint path during Phase 1 kickoff.
+
 ### Phase 0 summary
 
-**Phase 0 is CLOSED as of 2026-04-22. All gating questions answered; Phase 1 is unblocked.**
+**Phase 0 research is CLOSED as of 2026-04-22. All gating questions have conclusive answers. Phase 1 is BLOCKED on an external waitlist, not on research or scope.**
 
-- Q1 = YES (programmatic API exists; `api.polymarket.us` launched 2026-02-16).
+- Q1 = API exists and is live; retail onboarding is waitlist-gated; operator is at position #1,302,257 as of 2026-04-22.
 - Q2 = different API entirely (Ed25519 single-level; different SDK; plan for a new `polymarket/` package).
 - Q3 = operator is in Colorado, which is clear of geoblock and enforcement; sports contracts carry residual state risk, geopolitical contracts do not.
-- Q4, Q5 = partial; sufficient to proceed to Phase 1; remaining specifics get confirmed during onboarding (Phase 1) and CFTC Part 38 rulebook review (Phase 3).
+- Q4, Q5 = partial; sufficient to proceed to Phase 1 once waitlist clears; remaining specifics get confirmed during onboarding (Phase 1) and CFTC Part 38 rulebook review (Phase 3).
 - Q6 = stable human-readable slugs.
-- Q7 = no unauthenticated read-only surface on Polymarket US; Phase 1 entry gate grew by one step (KYC + Ed25519 keypair before read-only observer can run).
+- Q7 = no unauthenticated read-only surface on Polymarket US; Phase 1 entry gate includes KYC + Ed25519 keypair, which are themselves gated on waitlist clearance.
 
-**Phase 1 is now ready to open** once the operator completes KYC via the Polymarket US iOS app and generates an Ed25519 keypair at `polymarket.us/developer`. No code branch opens before those two user-mediated steps are complete.
+**Holding-pattern posture:** the initiative does not consume attention until the waitlist clears. Do not promote Phase 2 (Kalshi refactor) to start prophylactically — its value depends on Phase 1 divergence data, and refactoring without that evidence risks wasted work if Phase 1 later shows dual-venue is not worth pursuing. Continue the existing Kalshi pre-live stages (PROFIT-CAL-001, Stage 5 Phase 2, etc.) in the meantime. Revisit this doc at Phase 1 entry.
 
 ---
 
@@ -273,7 +280,7 @@ Bot is at v0.29.37 as of 2026-04-22, paper-mode, working Stage 5 Phase 2 and the
 ### Phase 1 — Read-only market-data observer  (branch: `feature/polymarket-market-data-observer`)
 
 - **Predecessor:** phase 0 merged AND exit gate passed AND operator's state confirmed not on geoblock / high-risk list per §8 Q3.
-- **Entry gate:** §8 Q1 answered "yes," §8 Q3 state eligibility recorded, **KYC completed on Polymarket US iOS app** and Ed25519 API keypair generated at `polymarket.us/developer`. Credentials stored in `.env` as `POLYMARKET_US_KEY_ID` and `POLYMARKET_US_SECRET` (not committed).
+- **Entry gate:** §8 Q1 answered "yes," §8 Q3 state eligibility recorded, **operator off the Polymarket US waitlist** (tracked per §8 Q1 — operator is at position #1,302,257 as of 2026-04-22), **KYC completed on Polymarket US iOS app** and Ed25519 API keypair generated at `polymarket.us/developer`. Credentials stored in `.env` as `POLYMARKET_US_KEY_ID` and `POLYMARKET_US_SECRET` (not committed).
 - **Scope:** Wire `api.polymarket.us` via the authenticated `/v1/ws/markets` WebSocket (plus REST for market catalog) as a market-data observer. Emit Polymarket quotes into the evidence store alongside Kalshi quotes. **No orders. No executor changes. No writes to user state beyond read-only market data.** One new file: `feeds/polymarket_market_data.py`. Small schema additions to the evidence store for cross-venue quote storage. No changes to [`trading/`](../../trading/), [`kalshi/`](../../kalshi/), or [`data/paper_trades.db`](../../data/paper_trades.db). Respect the 60 req/min REST cap and 10-instruments-per-WS-connection limit per §8 Q1.
 - **Note on auth:** unlike Kalshi's public-markets REST, Polymarket US requires Ed25519 auth even for market-data reads (per §8 Q7). The Ed25519 signing implementation lands in this phase as a minimal read-only signer; the full `polymarket/` client package does not ship until Phase 3.
 - **Post-merge runtime:** after the branch merges, let the observer run for **≥2 weeks** on `main` to collect divergence data before evaluating the exit gate.
@@ -348,22 +355,19 @@ Bot is at v0.29.37 as of 2026-04-22, paper-mode, working Stage 5 Phase 2 and the
 
 ## 10. Recommendation
 
-**Phase 0 CLOSED 2026-04-22. All exit conditions met. Phase 1 is unblocked.**
+**Phase 0 research CLOSED 2026-04-22. Phase 1 is BLOCKED on the Polymarket US retail waitlist. Initiative is on hold, not abandoned.**
 
-All §8 questions have actionable answers. The initiative is technically viable (§8 Q1 = yes, dedicated US API exists), architecturally straightforward (§8 Q2 / Q6 — new client package, stable slugs), and regulatorily available for the operator (§8 Q3 — Colorado is clear of enforcement and benefits from CFTC federal preemption). The Phase 1 entry gate carries one scope adjustment (§8 Q7 — Ed25519 auth is required even for read-only market data, so Phase 1 starts with KYC onboarding and keypair generation) but no structural change.
+All §8 questions have conclusive answers. The initiative is technically viable (§8 Q1 = API exists), architecturally straightforward (§8 Q2 / Q6 — new client package, stable slugs), and regulatorily available for the operator (§8 Q3 — Colorado is clear of enforcement and benefits from CFTC federal preemption). However, §8 Q1 surfaces a practical blocker that was not visible in the initial research: retail KYC onboarding is waitlist-gated, and the operator sits at position #1,302,257 as of 2026-04-22. Phase 1 cannot start until the operator has a working account with Ed25519 credentials.
 
-**Next action (user-gated, not research work):**
+**Holding-pattern posture:**
 
-1. Download the Polymarket US iOS app.
-2. Complete KYC (government ID + SSN + proof of address; typically minutes to hours).
-3. At `polymarket.us/developer`, generate an Ed25519 keypair. **Store the private key immediately** — it is shown exactly once and cannot be recovered.
-4. Place the credentials in `.env` as `POLYMARKET_US_KEY_ID` and `POLYMARKET_US_SECRET`, and add them to `.gitignore` treatment if not already covered.
+- Do not open any Polymarket code branch.
+- Do not start Phase 2 (Kalshi refactor) prophylactically — its value is gated on Phase 1 divergence data. Refactoring now risks wasted work if Phase 1 later shows dual-venue is not worth pursuing.
+- Continue Kalshi pre-live work (`PROFIT-CAL-001`, Stage 5 Phase 2, etc.). That work has independent value whether or not Polymarket integration ever happens, and it's the right place for focus while the waitlist clears.
+- Optionally: share the waitlist referral link through whatever channels make sense for you; it's the only publicly documented mechanism to advance the position.
+- Track waitlist clearance. When the operator has an active Polymarket US account + KYC complete + Ed25519 keypair generated, return to this doc and open the Phase 1 branch per §9.
 
-Once those four steps complete, open the Phase 1 branch `feature/polymarket-market-data-observer` and begin §9 Phase 1 work. Do not trade sports-category contracts from Colorado until federal/state preemption is resolved by the courts; the bot's edge is geopolitical, so this restriction is mostly N/A.
-
-Phases 2 through 5 follow §9 strictly sequentially. The real-money gate (`PROFIT-CAL-001` resolved + Phase 3 paper evidence + same-day Colorado re-verification) applies only at Phase 4.
-
-**Value-proposition note.** The most valuable single angle in the earlier draft — zero-fee geopolitics on the Global CLOB — is *not* available to US residents (Global is geoblocked). Polymarket US has its own fee schedule (flat 0.30% taker per §3). The US integration's value is therefore correctly framed as *second-venue resilience + cross-venue arbitrage on overlapping political/geopolitical events + Polymarket-exclusive market coverage*, per §5. Phase 1 empirical divergence data will quantify the arbitrage angle.
+**Value-proposition note.** The most valuable single angle in the earlier draft — zero-fee geopolitics on the Global CLOB — is *not* available to US residents (Global is geoblocked at country level per the [official Polymarket geoblock doc](https://docs.polymarket.com/api-reference/geoblock)). Polymarket US has its own fee schedule (flat 0.30% taker per §3). The US integration's value is therefore correctly framed as *second-venue resilience + cross-venue arbitrage on overlapping political/geopolitical events + Polymarket-exclusive market coverage*, per §5. Phase 1 empirical divergence data will quantify the arbitrage angle once it can run.
 
 ---
 
@@ -373,6 +377,7 @@ Phases 2 through 5 follow §9 strictly sequentially. The real-money gate (`PROFI
 - [docs/plans/news_sources_evaluation.md](news_sources_evaluation.md) §3.2, §7 — original news-source-lane framing
 - [CLAUDE.md](../../CLAUDE.md) — Kalshi signing, WebSocket auth, signal analysis, and bet-sizing gotchas; all remain in force and apply per-venue
 - [Polymarket CLOB authentication docs](https://docs.polymarket.com/developers/CLOB/authentication) — Global CLOB auth surface (not applicable for US retail)
+- [Polymarket Global geoblock doc](https://docs.polymarket.com/api-reference/geoblock) — primary-source proof that `US | United States | Blocked` at country level on Global; documents the live geoblock-check endpoint and response schema (`{blocked, country, region}`)
 - [py-clob-client](https://github.com/Polymarket/py-clob-client) — official Python client for Global CLOB (not applicable for US retail)
 - [Polymarket fees](https://docs.polymarket.com/trading/fees) — dynamic fee structure for Global CLOB; Polymarket US is a flat 0.30% taker
 - CFTC Amended Order of Designation (2025-11) — source of US regulatory pathway
