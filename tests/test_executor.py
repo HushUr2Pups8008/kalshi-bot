@@ -830,3 +830,173 @@ class TestPaperExecutionAsync:
         assert trade_id == "abc-123"
         paper.record_trade.assert_called_once_with(analysis)
         paper.get_notional_bankroll.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Coverage-focused tests — fill gaps identified in the 2026-04-23 baseline
+# (cooldown seeding, input-validation branches, live-mode error paths, status)
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timedelta, timezone
+
+from kalshi import OrderResult
+
+
+class TestCooldownSeeding:
+    """`_seed_cooldowns_from_db` — populates `_last_traded` from portfolio."""
+
+    def _make_executor_with_portfolio(self, monkeypatch, *, tickers, latest_ts_map):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_ticker_cooldown", 14400)  # 4h
+        monkeypatch.setattr(_cfg_module.cfg, "live_ticker_cooldown", 0)
+
+        paper = MagicMock()
+        paper.portfolio.tickers.return_value = tickers
+        paper.portfolio.latest_ts.side_effect = lambda t: latest_ts_map.get(t)
+        paper.portfolio.is_concentration_ok.return_value = True
+        paper.portfolio.exposure.return_value = 0.0
+        rest = MagicMock()
+        return TradeExecutor(rest, paper)
+
+    def test_seeds_cooldown_for_recent_ticker(self, monkeypatch):
+        recent = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+        ex = self._make_executor_with_portfolio(
+            monkeypatch,
+            tickers={"KXRECENT-25DEC31"},
+            latest_ts_map={"KXRECENT-25DEC31": recent},
+        )
+        assert "KXRECENT-25DEC31" in ex._last_traded
+
+    def test_skips_ticker_with_no_latest_ts(self, monkeypatch):
+        ex = self._make_executor_with_portfolio(
+            monkeypatch,
+            tickers={"KXNOTS-25DEC31"},
+            latest_ts_map={"KXNOTS-25DEC31": None},
+        )
+        assert "KXNOTS-25DEC31" not in ex._last_traded
+
+    def test_skips_ticker_outside_cooldown_window(self, monkeypatch):
+        old = (datetime.now(timezone.utc) - timedelta(hours=10)).isoformat()
+        ex = self._make_executor_with_portfolio(
+            monkeypatch,
+            tickers={"KXOLD-25DEC31"},
+            latest_ts_map={"KXOLD-25DEC31": old},
+        )
+        assert "KXOLD-25DEC31" not in ex._last_traded
+
+    def test_handles_naive_timestamp_as_utc(self, monkeypatch):
+        """Timestamps missing tzinfo are treated as UTC (not raising)."""
+        naive = (datetime.now(timezone.utc) - timedelta(minutes=15)).replace(tzinfo=None).isoformat()
+        ex = self._make_executor_with_portfolio(
+            monkeypatch,
+            tickers={"KXNAIVE-25DEC31"},
+            latest_ts_map={"KXNAIVE-25DEC31": naive},
+        )
+        assert "KXNAIVE-25DEC31" in ex._last_traded
+
+
+class TestSignalMetaValidation:
+    """`_candidate_signal_meta` + `_signal_meta` — defensive branches."""
+
+    def test_candidate_without_signal_meta_attr_returns_empty(self, monkeypatch):
+        ex, _, _ = _make_executor(monkeypatch)
+        candidate = SimpleNamespace(fast_lane_analysis=object(), market=object())
+        assert ex._candidate_signal_meta(candidate) == {}
+
+    def test_candidate_signal_meta_none_returns_empty(self, monkeypatch):
+        ex, _, _ = _make_executor(monkeypatch)
+        candidate = SimpleNamespace(signal_meta=None)
+        assert ex._candidate_signal_meta(candidate) == {}
+
+    def test_candidate_signal_meta_non_dict_raises(self, monkeypatch):
+        ex, _, _ = _make_executor(monkeypatch)
+        candidate = SimpleNamespace(signal_meta=["not", "a", "dict"])
+        with pytest.raises(TypeError, match="signal_meta must be a dict"):
+            ex._candidate_signal_meta(candidate)
+
+    def test_analysis_without_signal_meta_attr_returns_empty(self, monkeypatch):
+        ex, _, _ = _make_executor(monkeypatch)
+        analysis = SimpleNamespace()
+        assert ex._signal_meta(analysis) == {}
+
+    def test_analysis_signal_meta_none_returns_empty(self, monkeypatch):
+        ex, _, _ = _make_executor(monkeypatch)
+        analysis = SimpleNamespace(signal_meta=None)
+        assert ex._signal_meta(analysis) == {}
+
+    def test_analysis_signal_meta_non_dict_raises(self, monkeypatch):
+        ex, _, _ = _make_executor(monkeypatch)
+        analysis = SimpleNamespace(signal_meta="oops")
+        with pytest.raises(TypeError, match="signal_meta must be a dict"):
+            ex._signal_meta(analysis)
+
+
+class TestMinEdgeThreshold:
+    def test_negative_override_raises_value_error(self, monkeypatch):
+        ex, _, _ = _make_executor(monkeypatch)
+        analysis = _make_analysis()
+        analysis.signal_meta = {"readiness_gate_min_edge_override": -0.01}
+        with pytest.raises(ValueError, match="must be non-negative"):
+            ex._min_edge_threshold(analysis)
+
+
+class TestExecutorStatus:
+    def test_status_returns_expected_fields(self, monkeypatch):
+        ex, _, paper = _make_executor(monkeypatch, bankroll=500.0)
+        paper.portfolio.summary.return_value = {"open_positions": 0}
+        out = ex.status()
+        assert out["mode"] == "live"  # _make_executor sets is_paper_trading=False
+        assert out["notional_bankroll"] == 500.0
+        assert out["ticker_cooldowns"] == 0
+        assert out["portfolio"] == {"open_positions": 0}
+
+
+class TestLiveExecuteErrorPaths:
+    """`_execute_live` error-path coverage (contracts=0, exception retries, fallthrough)."""
+
+    @pytest.mark.asyncio
+    async def test_zero_contracts_aborts_order(self, monkeypatch):
+        """Defensive branch: if Kelly ever returns 0 contracts, live order
+        must abort with a warning. `contracts_from_dollars` currently clamps
+        to >=1 when price_cents>=1, so this path is unreachable by natural
+        input — we patch the helper to exercise the defensive branch."""
+        ex, _, _ = _make_executor(monkeypatch, bankroll=500.0)
+        monkeypatch.setattr("trading.executor.contracts_from_dollars", lambda *a, **kw: 0)
+        analysis = _make_analysis(yes_price=50.0, capped_dollars=10.0)
+        result = await ex._execute_live(analysis)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_order_exception_retries_then_fails(self, monkeypatch):
+        ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0)
+        rest.place_limit_order.side_effect = RuntimeError("boom")
+
+        # Skip real backoff delays
+        async def _no_sleep(_):
+            return None
+        monkeypatch.setattr("trading.executor.asyncio.sleep", _no_sleep)
+
+        analysis = _make_analysis(yes_price=50.0, capped_dollars=10.0)
+        with patch("trading.executor.trade_log"):
+            result = await ex._execute_live(analysis)
+
+        assert result is None
+        assert rest.place_limit_order.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_order_non_retryable_error_fails_immediately(self, monkeypatch):
+        ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0)
+        # Non-retryable error (no transient markers) — should fail on first attempt
+        rest.place_limit_order.return_value = OrderResult(
+            order_id="", ticker="KXTEST-25DEC31", side="yes",
+            contracts=0, price_cents=50, status="rejected", filled=0,
+            error="invalid market",
+        )
+
+        analysis = _make_analysis(yes_price=50.0, capped_dollars=10.0)
+        with patch("trading.executor.trade_log"):
+            result = await ex._execute_live(analysis)
+
+        assert result is None
+        assert rest.place_limit_order.call_count == 1

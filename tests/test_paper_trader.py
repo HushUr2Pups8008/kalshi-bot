@@ -494,3 +494,368 @@ class TestStartupInitialization:
         finally:
             monkeypatch.setattr(PaperTrader, "_runtime_owner_pid", None)
             keeper.close()
+
+
+# ---------------------------------------------------------------------------
+# Coverage-focused tests — fill gaps identified in the 2026-04-23 baseline
+# (generate_report, daily_summary, _match_quality_report_section, migrations,
+# resolve_market keyword-outcome exception path, startup-context validation)
+# ---------------------------------------------------------------------------
+
+
+class TestReportGeneration:
+    """Smoke tests for `generate_report` and `daily_summary`.
+
+    These functions are ~155 lines of pure formatting code. We verify they
+    run without error on empty and populated DBs and that the output
+    contains expected section headers — not line-by-line formatting.
+    """
+
+    def test_generate_report_empty_db(self, trader):
+        trader.credibility.format_table.return_value = "  (credibility table)"
+        report = trader.generate_report()
+        assert isinstance(report, str)
+        assert "PAPER TRADING PERFORMANCE REPORT" in report
+        assert "TRADE SUMMARY" in report
+        assert "NOTIONAL BANKROLL" in report
+        assert "GO-LIVE ASSESSMENT" in report
+        # Empty DB -> insufficient data verdict
+        assert "INSUFFICIENT DATA" in report
+
+    def test_generate_report_with_open_trade(self, trader):
+        trader.credibility.format_table.return_value = "  (credibility table)"
+        analysis = _make_mock_analysis(yes_price=40.0, side="yes")
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trader.record_trade(analysis)
+
+        report = trader.generate_report()
+        assert "OPEN PAPER TRADES" in report
+        assert "KXTEST" in report
+
+    def test_generate_report_with_resolved_trades_shows_best_worst(self, trader):
+        trader.credibility.format_table.return_value = "  (credibility table)"
+        # Two trades: one winning, one losing
+        win_analysis = _make_mock_analysis(
+            ticker="KXWIN-25DEC31", yes_price=40.0, side="yes",
+        )
+        loss_analysis = _make_mock_analysis(
+            ticker="KXLOSS-25DEC31", yes_price=40.0, side="yes",
+        )
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trader.record_trade(win_analysis)
+            trader.record_trade(loss_analysis)
+        trader.resolve_market("KXWIN-25DEC31", resolved_yes=True)
+        trader.resolve_market("KXLOSS-25DEC31", resolved_yes=False)
+
+        report = trader.generate_report()
+        assert "RESOLVED TRADES" in report
+        assert "BEST TRADE" in report
+        assert "WORST TRADE" in report
+        assert "KXWIN" in report
+
+    def test_daily_summary_logs_without_error(self, trader, caplog):
+        with caplog.at_level(logging.INFO, logger="paper_trader"):
+            trader.daily_summary()
+        assert "[DAILY SUMMARY]" in caplog.text
+        assert "[WEEKLY REMINDER]" in caplog.text
+
+    def test_daily_summary_with_trades(self, trader, caplog):
+        analysis = _make_mock_analysis(yes_price=50.0, side="yes")
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trader.record_trade(analysis)
+
+        with caplog.at_level(logging.INFO, logger="paper_trader"):
+            trader.daily_summary()
+        # trades=1 appears in the summary line
+        assert "trades=1" in caplog.text
+
+
+class TestMatchQualityReportSection:
+    """`_match_quality_report_section` — reads trades.jsonl, tolerates missing/malformed."""
+
+    def test_returns_placeholder_when_trades_jsonl_missing(self, monkeypatch, tmp_path):
+        from trading import paper_trader as pt_module
+        missing = tmp_path / "no-such-file.jsonl"
+        monkeypatch.setattr(pt_module, "TRADE_LOG_FILE", missing)
+        lines = pt_module._match_quality_report_section()
+        assert lines[0] == "MATCH QUALITY"
+        assert "No trades.jsonl found" in lines[1]
+
+    def test_returns_placeholder_when_no_diagnostic_records(self, monkeypatch, tmp_path):
+        from trading import paper_trader as pt_module
+        empty = tmp_path / "empty.jsonl"
+        empty.write_text("", encoding="utf-8")
+        monkeypatch.setattr(pt_module, "TRADE_LOG_FILE", empty)
+        lines = pt_module._match_quality_report_section()
+        assert "No MATCH_DIAGNOSTIC records yet" in lines[1]
+
+    def test_counts_low_match_quality_and_flags(self, monkeypatch, tmp_path):
+        import json as _json
+        from trading import paper_trader as pt_module
+
+        records = [
+            {"type": "MATCH_DIAGNOSTIC", "ticker": "KX1", "low_match_quality": True,
+             "heuristic_flags": ["single_named_entity_only"]},
+            {"type": "MATCH_DIAGNOSTIC", "ticker": "KX1", "low_match_quality": True,
+             "heuristic_flags": ["minimal_overlap"]},
+            {"type": "MATCH_DIAGNOSTIC", "ticker": "KX2", "low_match_quality": False,
+             "heuristic_flags": []},
+            {"type": "OTHER", "ticker": "ignored"},  # not a diagnostic, skipped
+            "not-json",                              # malformed, skipped
+        ]
+        path = tmp_path / "trades.jsonl"
+        body = "\n".join(
+            (r if isinstance(r, str) else _json.dumps(r)) for r in records
+        )
+        path.write_text(body + "\n", encoding="utf-8")
+        monkeypatch.setattr(pt_module, "TRADE_LOG_FILE", path)
+
+        lines = pt_module._match_quality_report_section()
+        text = "\n".join(lines)
+        assert "Matched candidates:       3" in text
+        assert "Low-quality flagged:      2" in text
+        assert "single_named_entity_only" in text
+        assert "KX1" in text
+
+    def test_returns_placeholder_on_read_error(self, monkeypatch, tmp_path):
+        """OSError while reading the file returns a placeholder, not an exception."""
+        from trading import paper_trader as pt_module
+        path = tmp_path / "trades.jsonl"
+        path.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(pt_module, "TRADE_LOG_FILE", path)
+
+        real_open = path.open
+        def _raising_open(*args, **kwargs):
+            raise OSError("simulated read failure")
+        monkeypatch.setattr(type(path), "open", lambda self, *a, **kw: _raising_open(*a, **kw))
+
+        lines = pt_module._match_quality_report_section()
+        assert "Could not read trades.jsonl" in lines[1]
+        # Restore not strictly necessary (monkeypatch auto-reverts), but keep reference
+        _ = real_open
+
+
+class TestValidateStartupContext:
+    """`_validate_startup_context` — rejects unsupported values."""
+
+    def test_unsupported_context_raises(self, monkeypatch):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 50.0)
+
+        from trading.paper_trader import PaperTrader
+
+        keeper, connect = _shared_memory_connect("startup-ctx-bad")
+        try:
+            with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+                 patch("trading.paper_trader.SourceCredibility") as MockCred:
+                MockCred.return_value.get_multiplier.return_value = 1.0
+                with pytest.raises(ValueError, match="Unsupported startup_context"):
+                    PaperTrader(db_path=":memory:", startup_context="bogus")
+        finally:
+            keeper.close()
+
+
+class TestMigrations:
+    """Schema migration branches — `_migrate_db`, `_ensure_paper_trades_column`."""
+
+    def test_migrate_adds_new_columns_to_legacy_schema(self, monkeypatch):
+        """A DB with only the original paper_trades columns gets migrated columns added."""
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 50.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+
+        keeper, connect = _shared_memory_connect("migrate-legacy")
+        try:
+            # Pre-create a legacy-schema paper_trades table (no new columns) and
+            # seed a historical row that should survive migration.
+            legacy_conn = connect()
+            legacy_conn.execute(
+                """
+                CREATE TABLE paper_trades (
+                    trade_id       TEXT PRIMARY KEY,
+                    ts             TEXT NOT NULL,
+                    ticker         TEXT NOT NULL,
+                    market_title   TEXT NOT NULL,
+                    side           TEXT NOT NULL,
+                    contracts      INTEGER NOT NULL,
+                    price_cents    INTEGER NOT NULL,
+                    cost_dollars   REAL NOT NULL,
+                    estimated_prob REAL NOT NULL,
+                    market_yes_price REAL NOT NULL,
+                    edge           REAL NOT NULL,
+                    kelly_dollars  REAL NOT NULL,
+                    capped_dollars REAL NOT NULL,
+                    signal_headline TEXT NOT NULL,
+                    signal_source  TEXT NOT NULL,
+                    keywords_matched TEXT NOT NULL,
+                    reasoning      TEXT NOT NULL,
+                    source_multiplier REAL DEFAULT 1.0,
+                    notional_bankroll_before REAL,
+                    notional_bankroll_after  REAL,
+                    resolved       INTEGER DEFAULT 0,
+                    resolved_yes   INTEGER,
+                    pnl_dollars    REAL,
+                    market_snapshot TEXT
+                )
+                """
+            )
+            legacy_conn.execute(
+                "INSERT INTO paper_trades (trade_id, ts, ticker, market_title, side, "
+                "contracts, price_cents, cost_dollars, estimated_prob, market_yes_price, "
+                "edge, kelly_dollars, capped_dollars, signal_headline, signal_source, "
+                "keywords_matched, reasoning, market_snapshot) VALUES "
+                "('legacy-1', '2024-01-01T00:00:00', 'KXLEG-24JAN01', 't', 'yes', "
+                "5, 50, 2.5, 0.6, 50.0, 0.1, 2.5, 2.5, 'h', 's', '[]', 'r', "
+                "'{\"series_ticker\": \"KXLEG\"}')"
+            )
+            legacy_conn.commit()
+
+            from trading.paper_trader import PaperTrader
+            with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+                 patch("trading.paper_trader.SourceCredibility") as MockCred:
+                MockCred.return_value.get_multiplier.return_value = 1.0
+                pt = PaperTrader(db_path=":memory:", startup_context="test")
+
+            cols = pt._paper_trades_columns()
+            # Columns added by _migrate_db
+            for expected in ("series_ticker", "resolved_ts", "signal_type", "match_score",
+                             "llm_direction", "llm_magnitude", "llm_confidence",
+                             "kelly_contracts"):
+                assert expected in cols, f"{expected} should be added by migration"
+
+            # series_ticker backfilled from market_snapshot JSON for historical row
+            row = pt._conn.execute(
+                "SELECT series_ticker FROM paper_trades WHERE trade_id='legacy-1'"
+            ).fetchone()
+            assert row["series_ticker"] == "KXLEG"
+        finally:
+            keeper.close()
+
+    def test_ensure_column_handles_duplicate_column_name(self, trader):
+        """Calling _ensure_paper_trades_column on an already-present column returns False."""
+        # series_ticker is added by the initial migration; re-requesting it should
+        # hit the 'duplicate column name' branch and return False.
+        cols = trader._paper_trades_columns()
+        assert "series_ticker" in cols
+        result = trader._ensure_paper_trades_column("series_ticker", "TEXT", cols)
+        assert result is False
+
+    def test_ensure_column_logs_warning_on_other_sqlite_error(self, trader, caplog):
+        """Non-duplicate-column errors are logged and return False (don't raise)."""
+        # sqlite3.Connection.execute is a read-only C-level attribute, so we
+        # swap _conn for a small stub that raises a non-duplicate OperationalError.
+        class _RaisingConn:
+            def execute(self, *args, **kwargs):
+                raise sqlite3.OperationalError("simulated disk I/O error")
+            def commit(self):
+                pass
+
+        original = trader._conn
+        trader._conn = _RaisingConn()
+        try:
+            with caplog.at_level(logging.WARNING, logger="paper_trader"):
+                result = trader._ensure_paper_trades_column("any_col", "TEXT", set())
+        finally:
+            trader._conn = original
+        assert result is False
+        assert "DB migration failed" in caplog.text
+
+
+class TestResolveMarketExceptions:
+    """Keyword-outcome recording failures are logged, not raised."""
+
+    def test_keyword_outcomes_exception_does_not_break_resolution(self, trader, caplog):
+        """If the per-keyword JSON is malformed, resolve_market logs a warning
+        and still completes the bankroll credit + trade resolution."""
+        analysis = _make_mock_analysis(yes_price=40.0, side="yes", keywords=["ceasefire"])
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trader.record_trade(analysis)
+
+        # Corrupt the keywords_matched JSON so json.loads raises inside the loop
+        trader._conn.execute(
+            "UPDATE paper_trades SET keywords_matched = 'not json' WHERE ticker = ?",
+            (analysis.market.ticker,),
+        )
+        trader._conn.commit()
+
+        with caplog.at_level(logging.WARNING, logger="paper_trader"):
+            trader.resolve_market(analysis.market.ticker, resolved_yes=True)
+
+        assert "Failed to record keyword outcomes" in caplog.text
+        # And the trade is still marked resolved + bankroll credited
+        row = trader._conn.execute(
+            "SELECT resolved, pnl_dollars FROM paper_trades LIMIT 1"
+        ).fetchone()
+        assert row["resolved"] == 1
+
+
+class TestConfirmGoLive:
+    """`confirm_go_live` — sets DB flag and flips cfg.is_paper_trading off."""
+
+    def test_confirm_go_live_sets_flag_and_mode(self, trader, monkeypatch, caplog):
+        # Ensure we can observe the mode flip
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        with caplog.at_level(logging.WARNING, logger="paper_trader"):
+            trader.confirm_go_live()
+
+        row = trader._conn.execute(
+            "SELECT value FROM bot_state WHERE key = 'go_live_confirmed'"
+        ).fetchone()
+        assert row["value"] == "true"
+        assert _cfg_module.cfg.is_paper_trading is False
+        assert "GO-LIVE CONFIRMED" in caplog.text
+
+
+class TestGoLiveAssessmentBranches:
+    """`generate_report` GO-LIVE ASSESSMENT verdicts for ≥10 resolved trades.
+
+    The three branches (POSITIVE / NEGATIVE / NEUTRAL) are selected by
+    win_rate, total_pnl, and avg_edge after the INSUFFICIENT DATA threshold.
+    """
+
+    def _seed_resolved(self, trader, n, *, side="yes", win, pnl_per_trade, edge):
+        """Insert n pre-resolved trades directly via SQL so the aggregate math
+        produces the desired (win_rate, total_pnl, avg_edge) in generate_report.
+        Each insert uses a uuid trade_id so repeated calls don't collide."""
+        trader.credibility.format_table.return_value = "  (credibility table)"
+        for i in range(n):
+            tid = uuid.uuid4().hex[:12]
+            trader._conn.execute(
+                "INSERT INTO paper_trades (trade_id, ts, ticker, market_title, side, "
+                "contracts, price_cents, cost_dollars, estimated_prob, market_yes_price, "
+                "edge, kelly_dollars, capped_dollars, signal_headline, signal_source, "
+                "keywords_matched, reasoning, resolved, resolved_yes, pnl_dollars) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    tid,
+                    "2026-04-01T00:00:00+00:00",
+                    f"KXTST-25DEC{i:02d}",
+                    "t", side, 5, 50, 2.5, 0.6, 50.0,
+                    edge, 2.5, 2.5, "h", "s", "[]", "r",
+                    1, int(win), pnl_per_trade,
+                ),
+            )
+        trader._conn.commit()
+
+    def test_positive_verdict_when_edge_confirmed(self, trader):
+        # 10 resolved, 7W/3L -> 70% win rate; strong positive P&L; high edge
+        self._seed_resolved(trader, n=7, win=True,  pnl_per_trade=5.0, edge=0.10)
+        self._seed_resolved(trader, n=3, win=False, pnl_per_trade=-2.5, edge=0.10)
+        report = trader.generate_report()
+        assert "POSITIVE" in report
+        assert "Strategy shows edge" in report
+
+    def test_negative_verdict_on_large_losses(self, trader):
+        # 10 resolved, all losers with -$10 P&L each -> total_pnl = -$100 (< -50)
+        self._seed_resolved(trader, n=10, win=False, pnl_per_trade=-10.0, edge=0.05)
+        report = trader.generate_report()
+        assert "NEGATIVE" in report
+        assert "Significant losses" in report
+
+    def test_neutral_verdict_on_mixed_results(self, trader):
+        # 10 resolved, mixed P&L that doesn't meet either positive or negative threshold
+        # 5W at $0.50 + 5L at -$0.50 = net $0, win_rate=50% (below 55% positive threshold)
+        self._seed_resolved(trader, n=5, win=True,  pnl_per_trade=0.50, edge=0.02)
+        self._seed_resolved(trader, n=5, win=False, pnl_per_trade=-0.50, edge=0.02)
+        report = trader.generate_report()
+        assert "NEUTRAL" in report

@@ -1,0 +1,2135 @@
+pytest --cov --cov-report=term-missing --cov-report=html
+============================= test session starts ==============================
+platform darwin -- Python 3.14.3, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/Jake/vscode/kalshi_bot
+configfile: pytest.ini
+testpaths: tests
+plugins: cov-7.1.0, asyncio-0.26.0
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 1044 items
+
+tests/test_accumulation_log_schemas.py .......                           [  0%]
+tests/test_accumulation_task.py ........                                 [  1%]
+tests/test_app_log_reader.py .......                                     [  2%]
+tests/test_blend_decision_schema.py ....                                 [  2%]
+tests/test_blend_task.py .............                                   [  3%]
+tests/test_botcheck.py ....................                              [  5%]
+tests/test_budget_manager.py ..............                              [  6%]
+tests/test_budget_manager_stress.py ....                                 [  7%]
+tests/test_calibration_check_schema.py .............                     [  8%]
+tests/test_calibration_monitor.py .....................                  [ 10%]
+tests/test_calibration_task.py .......                                   [ 11%]
+tests/test_daily_review.py .                                             [ 11%]
+tests/test_decision_blender.py ..................................        [ 14%]
+tests/test_decision_funnel_summary.py .............................      [ 17%]
+tests/test_dedup.py ............                                         [ 18%]
+tests/test_diagnostic_reporting_helpers.py ......                        [ 19%]
+tests/test_diagnostics_script_helpers.py ............                    [ 20%]
+tests/test_dossier_builder.py ......................................     [ 23%]
+tests/test_dossier_forgetting.py ...................................     [ 27%]
+tests/test_evidence_scorer.py ...............................            [ 30%]
+tests/test_evidence_store.py ..............                              [ 31%]
+tests/test_evidence_store_concurrency.py ...                             [ 31%]
+tests/test_evidence_store_schema.py .......                              [ 32%]
+tests/test_executor.py ................................................. [ 37%]
+........................                                                 [ 39%]
+tests/test_fade_signal.py ..............                                 [ 40%]
+tests/test_freshness_diagnostics.py ...........                          [ 41%]
+tests/test_instance_guard.py ...                                         [ 42%]
+tests/test_kelly.py ..................                                   [ 43%]
+tests/test_keyword_diagnostics_helpers.py .........                      [ 44%]
+tests/test_keyword_feedback.py ......                                    [ 45%]
+tests/test_keyword_promotion_report.py ...                               [ 45%]
+tests/test_keyword_shadow_eval.py ....................................   [ 49%]
+tests/test_llm_latency_observability.py .....................            [ 51%]
+tests/test_log_isolation.py ....                                         [ 51%]
+tests/test_logger_rotation.py ..........                                 [ 52%]
+tests/test_main_pipeline.py ............................................ [ 56%]
+............                                                             [ 57%]
+tests/test_main_startup.py ................                              [ 59%]
+tests/test_market_matcher.py .....................................       [ 62%]
+tests/test_match_quality_diagnostics.py ........                         [ 63%]
+tests/test_match_suppression_audit.py .....                              [ 64%]
+tests/test_migrate_trade_logs.py .....                                   [ 64%]
+tests/test_observability_completeness_review.py .....                    [ 65%]
+tests/test_ollama_error_audit.py .....................................   [ 68%]
+tests/test_paper_performance_drilldown.py ............                   [ 69%]
+tests/test_paper_trader.py .......................................       [ 73%]
+tests/test_pipeline_impact_audit.py .....                                [ 74%]
+tests/test_portfolio.py ..........                                       [ 75%]
+tests/test_regime_classifier.py .......................................  [ 78%]
+tests/test_replay_dossier.py .....                                       [ 79%]
+tests/test_report_default_paths.py ........                              [ 79%]
+tests/test_report_snapshots.py ....                                      [ 80%]
+tests/test_reporting_window_hardening.py ......                          [ 80%]
+tests/test_signal_analyzer.py .......................................... [ 84%]
+............                                                             [ 86%]
+tests/test_signal_edge_diagnostics.py ......                             [ 86%]
+tests/test_source_credibility.py ......                                  [ 87%]
+tests/test_source_scorecard.py ..................                        [ 88%]
+tests/test_structural_prior.py .................................         [ 92%]
+tests/test_structural_prior_log_schema.py ...                            [ 92%]
+tests/test_structural_task.py ..........                                 [ 93%]
+tests/test_structured_log_latency_benchmark.py ..                        [ 93%]
+tests/test_trade_log_store.py .........s..                               [ 94%]
+tests/test_trade_log_summary.py ...............................          [ 97%]
+tests/test_trade_readiness_gate.py .....................                 [ 99%]
+tests/test_validate_trade_log_cutover.py .../opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e491120>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5088b0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e50a200>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4918a0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43a980>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43ab60>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43a7a0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43a3e0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43a200>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43a110>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43a2f0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43a020>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e439e40>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e439b70>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e439f30>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43aa70>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43a5c0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e439990>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e439a80>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4398a0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4396c0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4395d0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4397b0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43a6b0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4393f0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e439210>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e439300>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e439120>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43ba60>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e438f40>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e438e50>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43a890>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3db5b0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3db4c0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3da890>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3da7a0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3da4d0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3db3d0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d98a0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d95d0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d96c0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d8e50>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d97b0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3da6b0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4394e0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3db2e0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d8d60>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d8c70>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d8a90>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d89a0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e439030>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d8b80>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d87c0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d88b0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d84f0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d85e0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d9990>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d8220>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e373f10>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d8040>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e373e20>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e373c40>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e373b50>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d8400>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e373d30>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e373970>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3d8130>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e373790>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e3735b0>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e373100>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e373010>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e372f20>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e372e30>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e372c50>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ast.py:46: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e372a70>
+  return compile(source, filename, mode, flags,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+                             [100%]
+
+=============================== warnings summary ===============================
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e705a80>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e7064d0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e7067a0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e7065c0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e706890>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e706980>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e706b60>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e7062f0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e706200>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e706d40>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e706f20>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e707100>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e7071f0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e706e30>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e707010>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e7073d0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e7074c0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e7075b0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e7056c0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e707790>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e707880>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e707a60>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e707b50>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e707c40>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e707d30>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e707f10>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e707e20>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78c040>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e7058a0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e707970>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78c310>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78c130>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78c400>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e7063e0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78c4f0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78c7c0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78c6d0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78c9a0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e7072e0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78cb80>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78ce50>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78cf40>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78cd60>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78d030>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78d120>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78d300>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78d3f0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78d4e0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78d5d0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78c5e0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78ca90>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78da80>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78dc60>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78dd50>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78de40>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78df30>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78db70>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78e110>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78e200>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78e2f0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_blend_decision_schema.py::test_log_blend_decision_fast_lane_only_uses_empty_evidence_list
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e78e3e0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e690b80>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6918a0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6908b0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e691a80>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e691b70>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6905e0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e691e40>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e692020>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e691c60>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6916c0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e692200>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6926b0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6927a0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e692980>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e691030>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e690400>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e691f30>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6924d0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e691d50>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e693c40>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e693a60>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e692c50>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e692110>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6932e0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e693d30>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e690f40>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e692b60>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e692890>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e692a70>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e691990>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e693e20>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e693010>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e692f20>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6933d0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6934c0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e693f10>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e693880>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e692e30>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62b010>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62b2e0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62b3d0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62b6a0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62ba60>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62ac50>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62a890>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62a5c0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62a2f0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62a020>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e629d50>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e629a80>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e628130>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6294e0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e629210>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e628f40>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6289a0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6288b0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e693790>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62a200>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62b4c0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6931f0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62ad40>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6295d0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62a110>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62a6b0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62b1f0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62b5b0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62af20>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62a3e0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e629030>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e629300>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62a980>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6298a0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e628b80>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e628a90>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e628d60>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e628c70>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e628e50>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62a4d0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e629120>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6296c0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6293f0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62ab60>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d23e0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d22f0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d1f30>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d1b70>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d17b0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d1210>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d0e50>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d0a90>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d06d0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d0310>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e577f10>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e577b50>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e577790>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5773d0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5757b0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e574400>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d26b0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d2980>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d1e40>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d1120>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62b970>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e629990>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62ae30>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e629c60>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e629f30>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62a7a0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e62b100>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6286d0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e6287c0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d1a80>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d31f0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d3100>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d3010>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d2f20>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d2e30>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d27a0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d2d40>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d2c50>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d2b60>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d2a70>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d2200>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d0220>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d05e0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d09a0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d15d0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d0d60>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d1030>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d2890>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5776a0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e575a80>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e577a60>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e577e20>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5747c0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e575210>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5745e0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e575030>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5756c0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e574310>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e574130>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e50bf10>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e577880>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5774c0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d24d0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e629e40>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e574040>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d1300>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d18a0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d0400>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d0b80>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d0040>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d0f40>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5d1c60>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5758a0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5775b0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e577d30>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e575990>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e693100>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e692d40>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e693b50>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e577c40>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5746d0>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_executor.py::TestValidateSkipReasons::test_concentration_limit_skips
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2601: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e575120>
+    return tuple.__new__(cls, (name, args, kwargs))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e50a5c0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e509990>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e50a890>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5096c0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e50a3e0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e509c60>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5095d0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e509e40>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5087c0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e509a80>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e508e50>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e50a4d0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5084f0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e508d60>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5097b0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e508040>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e509120>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e508c70>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e508a90>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e491990>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e491300>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e492020>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4914e0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e491c60>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e491030>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e509030>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e491b70>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4925c0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4913f0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4923e0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e492b60>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4926b0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4933d0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e492980>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4936a0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e493e20>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e493880>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e492890>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e493790>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e5098a0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e491d50>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e490d60>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e490c70>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e490b80>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e490a90>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4917b0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e493b50>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4908b0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4907c0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43be20>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e4915d0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43bd30>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e490e50>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43b970>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43b880>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43b790>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43b6a0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43bb50>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e493d30>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43b4c0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43b3d0>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43b100>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43bc40>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e493f10>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43ae30>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43ad40>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_signal_analyzer.py::TestKeywordScore::test_keyword_stats_multiplier_applied
+  /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2252: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x10e43b010>
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================================ tests coverage ================================
+_______________ coverage: platform darwin, python 3.14.3-final-0 _______________
+
+Name                                           Stmts   Miss  Cover   Missing
+----------------------------------------------------------------------------
+analysis/__init__.py                              15      0   100%
+analysis/calibration_monitor.py                   50      0   100%
+analysis/decision_blender.py                      81      0   100%
+analysis/dossier_builder.py                      123      4    97%   38, 75, 113, 266
+analysis/evidence_scorer.py                       38      0   100%
+analysis/evidence_types.py                        48      0   100%
+analysis/fade_signal.py                           16      0   100%
+analysis/kelly.py                                 44      5    89%   119, 125, 174-176
+analysis/keyword_stats.py                         70     55    21%   49-56, 60-91, 97-98, 110-125, 129, 136-146
+analysis/market_matcher.py                       290     82    72%   144, 173, 205, 221-226, 229, 272, 287, 289-290, 380-384, 387-402, 447-448, 458-462, 465-475, 541, 561, 564-565, 706-741, 744
+analysis/regime_classifier.py                     75      1    99%   127
+analysis/signal_analyzer.py                      414    115    72%   52, 57, 99-103, 107-111, 151-156, 172, 204, 246-248, 414, 416, 579-591, 602-619, 699-702, 714-716, 748-753, 765-770, 790-791, 802-803, 813-816, 824-874, 888-936, 940-941
+analysis/source_credibility.py                    72     13    82%   84-87, 123, 133, 209-228
+analysis/source_stats.py                          99     71    28%   66-68, 82-95, 100-101, 105-109, 120-121, 125-126, 130-131, 135-136, 147-150, 159-164, 171-174, 184-185, 197-239, 248-267
+analysis/structural_prior.py                      35      0   100%
+config.py                                        216     41    81%   40, 42, 62, 65-69, 77, 980, 1070, 1072, 1074, 1080, 1085, 1089, 1091, 1095, 1097, 1102, 1107, 1111, 1116, 1123, 1135, 1142-1143, 1147-1155, 1163, 1167, 1171-1174, 1184-1185, 1191
+feeds/__init__.py                                  7      0   100%
+feeds/dedup.py                                    39      0   100%
+feeds/gdelt_monitor.py                           123     88    28%   62-69, 74-77, 82, 91-116, 141-244
+feeds/google_news_monitor.py                      58     58     0%   18-162
+feeds/reddit_monitor.py                          241    197    18%   56-61, 66, 70-74, 78-115, 119-120, 128, 141-214, 225-273, 283-299, 318-403
+feeds/rss_monitor.py                              70     51    27%   46-47, 51-58, 63-68, 77-121, 134-144
+feeds/search_news_monitor.py                     100     62    38%   117, 119, 125-131, 136-137, 142-144, 162-197, 228-298
+feeds/subreddit_discovery.py                      84     84     0%   13-193
+feeds/subreddit_selector.py                      116     47    59%   99-119, 124-140, 145-156, 182-187, 201, 214-215, 221, 227-247
+kalshi/__init__.py                                18      1    94%   28
+kalshi/rest_client.py                            171    143    16%   36-41, 58-71, 84-102, 109-115, 127-161, 180-219, 223-245, 249-257, 267-284, 290-296, 300-305, 322-348, 360-365
+kalshi/websocket_client.py                       151    113    25%   28-30, 36-37, 59-64, 77-99, 115-120, 124, 128-129, 132-133, 137, 141-144, 149-150, 153-166, 169-182, 186-208, 212-249, 252-254, 259-265
+main.py                                         1007    445    56%   110, 112, 114, 129-133, 142, 155-160, 164-175, 241-242, 249-250, 252, 255-256, 265, 275-276, 283-284, 292-294, 307-309, 376, 394, 418-465, 471, 490-493, 582, 588-597, 793, 816-817, 830-832, 852-853, 918, 937-956, 1038-1039, 1091-1095, 1120-1121, 1130-1136, 1160, 1162, 1165-1169, 1177-1178, 1194, 1222-1237, 1241-1251, 1261-1275, 1299-1458, 1465-1487, 1492, 1509-1529, 1533-1535, 1539-1564, 1569, 1652-1663, 1667, 1679-1693, 1713-1716, 1719-1796, 1799, 1818-1830, 1848-1849, 1866-1891, 1905-1953, 1957-1966, 1970-1973
+scripts/botcheck.py                              235     99    58%   62, 79, 90, 126, 133-136, 140-143, 147, 151, 155-156, 160-161, 170-180, 185-203, 275, 288-295, 356-367, 376-402, 409-435, 439
+scripts/budget_manager_stress.py                  83     18    78%   14, 78, 124-144, 148-158, 176
+scripts/daily_review.py                          367     60    84%   85-86, 92-93, 98, 104, 110, 116, 123, 129, 141, 164-171, 187-206, 210-213, 217-231, 273, 407, 437-439, 554-556, 604, 612, 647-648, 653, 676
+scripts/decision_funnel_summary.py               167      6    96%   131, 133, 262-263, 268, 276
+scripts/freshness_diagnostics.py                 261     45    83%   52-84, 90, 149, 154-157, 175, 177, 183, 349-352, 387, 397, 404, 414-417, 427-430, 531-558, 562
+scripts/keyword_feedback.py                      200     25    88%   105-130, 144, 185, 259, 277, 350, 386, 388, 400-414, 418
+scripts/keyword_promotion_report.py              167      6    96%   26, 95, 300, 342-343, 348
+scripts/keyword_shadow_eval.py                   147     12    92%   124, 139, 145, 165, 264, 325-330, 336
+scripts/match_quality_diagnostics.py             347     61    82%   19, 47-80, 95, 107, 113, 123, 125, 127, 129, 187, 189, 193, 267-271, 304, 435-436, 466-468, 474-477, 487, 546, 573-575, 589-591, 633-663, 667
+scripts/match_suppression_audit.py               129     29    78%   40-54, 68, 90, 94, 136, 186-188, 253-266, 270
+scripts/migrate_trade_logs.py                    214     64    70%   27-50, 58-59, 61, 70, 83-84, 91-92, 106, 112-114, 128, 140, 169, 171, 190, 205-212, 277, 286-287, 291-292, 298-320, 324-334, 338
+scripts/observability_completeness_review.py     174     39    78%   16, 45, 51, 61-75, 161-179, 201, 317-322, 326-343, 347
+scripts/ollama_error_audit.py                    197     40    80%   98, 125, 155, 159, 183, 187-188, 256, 301, 322-344, 356-357, 366-399, 403
+scripts/paper_performance_drilldown.py           208     85    59%   32-49, 57-58, 60, 66, 69-70, 75, 78-79, 84, 89-92, 96-100, 104-107, 111-128, 140, 148-150, 187, 267, 292-334, 338-341, 345
+scripts/pipeline_impact_audit.py                 280     39    86%   20, 34-63, 75, 81-88, 363, 365, 368, 868-902, 906
+scripts/replay_dossier.py                        195     46    76%   74, 76, 115-117, 124, 145, 174-203, 208, 227-228, 236-237, 251, 296, 298, 325-326, 331, 333, 335, 338-339, 343, 353, 392, 394, 443-444, 452
+scripts/signal_edge_diagnostics.py               552    105    81%   58-85, 111, 118, 124, 129-131, 135-137, 175, 180, 187, 190, 196, 200, 249, 251, 256, 268, 276, 309, 315, 342-353, 375, 380, 383-392, 395-410, 444-445, 448, 455-471, 529, 531, 773, 788, 822, 832, 893, 915, 940-953, 967-969, 979, 1001, 1003, 1068-1070, 1072-1074, 1150-1175, 1179
+scripts/source_scorecard.py                      299     39    87%   33, 76-99, 104, 107-108, 113, 116-117, 157, 192, 227, 241, 314, 317, 333, 439-441, 504-524, 528
+scripts/structured_log_latency_benchmark.py       55     21    62%   24, 68, 77-99, 103
+scripts/trade_log_summary.py                     145      5    97%   124, 236-237, 240, 250
+scripts/validate_trade_log_cutover.py            118     28    76%   24-42, 54, 247-249, 263, 269-289, 293
+tasks/accumulation_task.py                       112     13    88%   219-221, 227-234, 238-245
+tasks/blend_task.py                              149     11    93%   181-182, 291-292, 304-307, 455, 465, 471
+tasks/budget_manager.py                          107      9    92%   57, 59, 61, 63, 163, 188-190, 194
+tasks/calibration_task.py                         21      0   100%
+tasks/evidence_store.py                          197     15    92%   188, 400-401, 435-436, 505-507, 511, 519, 523, 527, 531, 540, 552
+tasks/structural_task.py                         100      5    95%   164, 179, 183-184, 198
+tasks/trade_readiness_gate.py                    103      4    96%   152, 159, 162, 186
+trading/__init__.py                                0      0   100%
+trading/executor.py                              234      4    98%   163-168, 173, 490
+trading/paper_trader.py                          343      8    98%   139, 250, 282-283, 397, 402, 479, 683
+trading/portfolio.py                              43      1    98%   150
+utils/__init__.py                                  0      0   100%
+utils/app_log_reader.py                          104      7    93%   15, 37, 84-85, 105, 135, 144
+utils/diagnostic_reporting_helpers.py             28      0   100%
+utils/diagnostics_script_helpers.py               50      0   100%
+utils/keyword_diagnostics_helpers.py             130      1    99%   57
+utils/logger.py                                  451     87    81%   183-187, 198, 205-210, 214-215, 225-228, 261-265, 323-331, 341-343, 390, 393-394, 396, 429-430, 477-478, 503, 506-507, 509, 513-514, 539, 567-590, 629, 664-684, 713, 715, 729, 742-752, 763-773, 876, 884, 902, 934, 1168, 1217, 1235
+utils/reporting_helpers.py                        59     15    75%   24-27, 30-34, 38, 46, 52-53, 89, 107
+utils/trade_log_reader.py                        135      7    95%   23-24, 26, 79, 112, 141, 153
+----------------------------------------------------------------------------
+TOTAL                                          10777   2735    75%
+Coverage HTML written to dir htmlcov
+================ 1043 passed, 1 skipped, 292 warnings in 3.99s =================
