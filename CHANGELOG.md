@@ -6,6 +6,48 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.38] - 2026-04-22
+
+### Added
+- **`scripts/daily_review.py` — true single-command pipeline trace**:
+  the daily review now sources from eight read-only summarizers instead
+  of five, and every section header carries a `[source: scripts/<script>.py]`
+  attribution tag so each metric traces back to the script that produced
+  it. Three new summarizers integrated:
+  - `match_suppression_audit.summarize()` — folded into section 2
+    (MATCHING) as a sub-block reporting total suppression candidates,
+    safe-vs-risky classification with percentages, and top risky-
+    suppression sources.
+  - `keyword_feedback.summarize()` — folded into section 3 (ANALYSIS)
+    as a sub-block reporting `no_keywords` miss count, corroborating
+    keyword-gate rows, unique candidate phrases, and the strongest
+    specific miss candidates with count / source / ticker / category.
+  - `source_scorecard.summarize()` — new section 8 (SOURCE SCORECARD)
+    reporting tier counts (top performers / keep / watch / prune /
+    remove immediately) with per-tier top-N rows showing observed
+    records, signals, paper trades, resolved count, win rate, and P&L.
+- **Restructured appendix** in the daily review splits scripts into
+  two groups: *integrated* (maps each script to the section it feeds)
+  and *deep-dive only* (run separately when investigating), so the
+  reader knows at a glance which tools remain available outside the
+  daily command.
+
+### Changed
+- **Stage count** reported by `--profile` in `scripts/daily_review.py`
+  is now 8 (was 5).
+
+### Notes
+- No trading behavior change. No production code modified. This release
+  is diagnostic / reporting tooling only.
+- Scripts explicitly *not* integrated (with rationale documented in the
+  appendix): `trade_log_summary.py` (overlaps ~95% with
+  `decision_funnel_summary.py`), `performance_analysis.py`,
+  `pipeline_impact_audit.py`, `replay_dossier.py`,
+  `regime_weight_validation.py`, `observability_completeness_review.py`,
+  `ollama_error_audit.py`, `keyword_shadow_eval.py`,
+  `keyword_promotion_report.py`, `botcheck.py` — these remain as
+  deep-dive tools and are referenced in the restructured appendix.
+
 ## [0.29.37] - 2026-04-22
 
 ### Added

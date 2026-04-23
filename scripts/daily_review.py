@@ -22,9 +22,12 @@ from typing import Any
 
 from scripts import decision_funnel_summary
 from scripts import freshness_diagnostics
+from scripts import keyword_feedback
 from scripts import match_quality_diagnostics
+from scripts import match_suppression_audit
 from scripts import paper_performance_drilldown
 from scripts import signal_edge_diagnostics
+from scripts import source_scorecard
 from utils.reporting_helpers import (
     DEFAULT_CURRENT_STATE_WINDOW_HOURS,
     ProgressTracker,
@@ -268,9 +271,21 @@ def build_daily_review(
         paper_stats = paper_performance_drilldown.summarize(
             paper_db_path, exclude_test=exclude_test
         )
+    with stage_timer("match suppression audit", enabled=show_profile):
+        suppression_stats = match_suppression_audit.summarize(
+            trades_path, since, until, exclude_test=exclude_test,
+        )
+    with stage_timer("keyword feedback", enabled=show_profile):
+        keyword_stats = keyword_feedback.summarize(
+            trades_path, since, until, exclude_test=exclude_test,
+        )
+    with stage_timer("source scorecard", enabled=show_profile):
+        scorecard_stats = source_scorecard.summarize(
+            trades_path, paper_db_path, since, until, exclude_test=exclude_test,
+        )
 
     if show_profile:
-        _eprint(f"[total] 5 stages completed in {time.perf_counter() - _t0:.1f}s")
+        _eprint(f"[total] 8 stages completed in {time.perf_counter() - _t0:.1f}s")
 
     event_counts = funnel_stats.get("event_counts", {})
     analysis_rejections = Counter(funnel_stats.get("analysis_rejected_reasons", {}))
@@ -308,7 +323,7 @@ def build_daily_review(
     lines.append(f"Records included: {fmt_int(funnel_stats.get('records_kept'))}")
     lines.append("")
 
-    lines.append("1. INGESTION")
+    lines.append("1. INGESTION  [source: scripts/freshness_diagnostics.py + scripts/decision_funnel_summary.py]")
     observed_records = sum(
         row.get("observed_records", 0)
         for row in freshness_stats.get("sources", {}).values()
@@ -354,7 +369,7 @@ def build_daily_review(
                 lines.append("  " + line)
     lines.append("")
 
-    lines.append("2. MATCHING")
+    lines.append("2. MATCHING  [source: scripts/match_quality_diagnostics.py + scripts/match_suppression_audit.py]")
     match_records = match_stats.get("match_records", 0)
     low_quality = match_stats.get("low_quality_matches", 0)
     pre_llm_would_block = match_stats.get("pre_llm_would_block", 0)
@@ -386,9 +401,34 @@ def build_daily_review(
                 f"flags={','.join(row.get('heuristic_flags') or []) or 'n/a'} "
                 f"headline={row.get('headline', '')[:70]}"
             )
+    suppression_total = suppression_stats.get("total_candidates", 0)
+    suppression_safe = suppression_stats.get("safe_count", 0)
+    suppression_risky = suppression_stats.get("risky_count", 0)
+    lines.append(f"  Suppression candidates (audited) : {suppression_total}")
+    lines.append(
+        f"    Likely safe to suppress        : {suppression_safe} "
+        f"({fmt_pct(suppression_safe, suppression_total)})"
+    )
+    lines.append(
+        f"    Likely risky to suppress       : {suppression_risky} "
+        f"({fmt_pct(suppression_risky, suppression_total)})"
+    )
+    if suppression_total:
+        risky_by_source = sorted(
+            (
+                {"source": src, "risky": counts.get("risky", 0)}
+                for src, counts in suppression_stats.get("by_source", {}).items()
+                if counts.get("risky", 0) > 0
+            ),
+            key=lambda row: -row["risky"],
+        )[:top]
+        if risky_by_source:
+            lines.append("  Drilldown: top risky-suppression sources")
+            for row in risky_by_source:
+                lines.append(f"    {row['source'] or 'n/a'}: risky={row['risky']}")
     lines.append("")
 
-    lines.append("3. ANALYSIS")
+    lines.append("3. ANALYSIS  [source: scripts/decision_funnel_summary.py + scripts/signal_edge_diagnostics.py + scripts/keyword_feedback.py]")
     detail_rows = edge_stats.get("counts", {}).get("SIGNAL_ANALYSIS_DETAIL", 0)
     total_rejections = sum(analysis_rejections.values())
     lines.append(f"  Signal analysis detail rows      : {detail_rows}")
@@ -440,9 +480,25 @@ def build_daily_review(
     lines.append(f"  Analysis rejections total        : {total_rejections}")
     for reason, count in analysis_rejections.most_common(top):
         lines.append(f"    rejected[{reason}] = {count}")
+    no_keyword_misses = keyword_stats.get("no_keyword_misses", 0)
+    corroborating_rows = keyword_stats.get("corroborating_keyword_gate_records", 0)
+    unique_phrases = keyword_stats.get("unique_candidate_phrases", 0)
+    lines.append(f"  Keyword-gate no_keywords misses  : {no_keyword_misses}")
+    lines.append(f"  Keyword-gate corroborating rows  : {corroborating_rows}")
+    lines.append(f"  Unique candidate phrases         : {unique_phrases}")
+    strongest = keyword_stats.get("grouped_phrases", {}).get("strongest specific candidates", [])
+    if strongest:
+        lines.append("  Drilldown: strongest keyword-gate miss candidates")
+        for row in strongest[:top]:
+            lines.append(
+                f"    {row.get('phrase')}: count={row.get('count', 0)} "
+                f"sources={len(row.get('sources') or [])} "
+                f"tickers={len(row.get('tickers') or [])} "
+                f"category={row.get('category') or 'n/a'}"
+            )
     lines.append("")
 
-    lines.append("4. EDGE FORMATION")
+    lines.append("4. EDGE FORMATION  [source: scripts/signal_edge_diagnostics.py]")
     lines.append(f"  Opportunities created            : {opportunities}")
     lines.append(f"  Below min edge                   : {below_threshold}")
     lines.append(f"  Zero edge                        : {zero_edge}")
@@ -459,7 +515,7 @@ def build_daily_review(
             )
     lines.append("")
 
-    lines.append("5. EXECUTION")
+    lines.append("5. EXECUTION  [source: scripts/decision_funnel_summary.py + scripts/paper_performance_drilldown.py]")
     paper_trades = event_counts.get("PAPER_TRADE", 0)
     live_orders = event_counts.get("LIVE_ORDER", 0)
     lines.append(f"  Paper trades                     : {paper_trades}")
@@ -479,7 +535,7 @@ def build_daily_review(
     llm_value = edge_stats.get("llm_value_add", {})
     llm_observability = edge_stats.get("llm_observability", {})
     llm_rows = llm_value.get("llm_rows", 0)
-    lines.append("6. LLM VALUE-ADD ANALYSIS")
+    lines.append("6. LLM VALUE-ADD ANALYSIS  [source: scripts/signal_edge_diagnostics.py]")
     lines.append(f"  Total LLM rows                    : {llm_rows}")
     lines.append(f"  LLM attempted (post-filter)       : {llm_observability.get('attempted', 0)}")
     lines.append(f"  LLM skipped (routing)             : {llm_observability.get('skipped_routing', 0)}")
@@ -562,7 +618,7 @@ def build_daily_review(
     lines.append("")
 
     llm_segmentation = llm_value.get("segmentation", {})
-    lines.append("7. LLM VALUE-ADD SEGMENTATION")
+    lines.append("7. LLM VALUE-ADD SEGMENTATION  [source: scripts/signal_edge_diagnostics.py]")
     lines.append("  Top sources by meaningful signal rate")
     lines.extend(
         _format_segment_rate_lines(
@@ -629,13 +685,66 @@ def build_daily_review(
             )
     lines.append("")
 
+    lines.append("8. SOURCE SCORECARD  [source: scripts/source_scorecard.py]")
+    grouped = scorecard_stats.get("grouped", {}) or {}
+    log_meta = scorecard_stats.get("log_meta", {}) or {}
+    scored_rows = scorecard_stats.get("rows", []) or []
+    lines.append(f"  Sources scored (window)          : {len(scored_rows)}")
+    lines.append(f"  Log records attributed           : {log_meta.get('records_kept', 0)}")
+    lines.append(f"  Paper DB available               : {'yes' if scorecard_stats.get('db_exists') else 'no'}")
+    for tier_label, tier_key in (
+        ("Top performers", "top performers"),
+        ("Keep", "keep"),
+        ("Watch / investigate", "watch / investigate"),
+        ("Prune", "prune"),
+        ("Remove immediately", "remove immediately"),
+    ):
+        rows = grouped.get(tier_key, []) or []
+        lines.append(f"  {tier_label:<32} : {len(rows)}")
+        if rows:
+            for row in rows[:top]:
+                resolved = row.get("resolved_paper_trades") or 0
+                pnl_display = fmt_money(row.get("total_pnl")) if resolved else "n/a"
+                lines.append(
+                    f"    {row.get('source') or 'n/a'}: "
+                    f"obs={row.get('observed_records', 0)} "
+                    f"signals={row.get('signals', 0)} "
+                    f"paper={row.get('paper_trades', 0)} "
+                    f"resolved={resolved} "
+                    f"win_rate={paper_performance_drilldown.fmt_pct(row.get('win_rate'))} "
+                    f"pnl={pnl_display}"
+                )
+    disabled_source = grouped.get("disabled by source", []) or []
+    disabled_family = grouped.get("disabled by family", []) or []
+    lines.append(f"  Disabled by config               : "
+                 f"source={len(disabled_source)} family={len(disabled_family)}")
+    lines.append("")
+
     lines.append("Appendix")
-    lines.append("  Detailed drilldowns remain available via:")
-    lines.append("  scripts/freshness_diagnostics.py")
-    lines.append("  scripts/match_quality_diagnostics.py")
-    lines.append("  scripts/decision_funnel_summary.py")
-    lines.append("  scripts/signal_edge_diagnostics.py")
-    lines.append("  scripts/paper_performance_drilldown.py")
+    lines.append("  Sections above are sourced directly from the listed scripts; run any of them")
+    lines.append("  standalone for the full, unfiltered output.")
+    lines.append("")
+    lines.append("  Integrated into this report (see [source: ...] tags above):")
+    lines.append("    scripts/freshness_diagnostics.py           -- section 1")
+    lines.append("    scripts/match_quality_diagnostics.py       -- section 2")
+    lines.append("    scripts/match_suppression_audit.py         -- section 2")
+    lines.append("    scripts/decision_funnel_summary.py         -- sections 1, 3, 5")
+    lines.append("    scripts/signal_edge_diagnostics.py         -- sections 3, 4, 6, 7")
+    lines.append("    scripts/keyword_feedback.py                -- section 3")
+    lines.append("    scripts/paper_performance_drilldown.py     -- section 5")
+    lines.append("    scripts/source_scorecard.py                -- section 8")
+    lines.append("")
+    lines.append("  Deep-dive scripts (run separately when investigating):")
+    lines.append("    scripts/trade_log_summary.py               -- raw event/skip/rejection counts")
+    lines.append("    scripts/performance_analysis.py            -- full trade-history P&L + calibration")
+    lines.append("    scripts/pipeline_impact_audit.py           -- before/after pipeline change audit")
+    lines.append("    scripts/replay_dossier.py                  -- dossier trajectory replay")
+    lines.append("    scripts/regime_weight_validation.py        -- S4.4 regime weight back-check")
+    lines.append("    scripts/observability_completeness_review.py -- observability gap audit")
+    lines.append("    scripts/ollama_error_audit.py              -- Ollama HTTP error classification")
+    lines.append("    scripts/keyword_shadow_eval.py             -- shadow-eval of candidate keywords")
+    lines.append("    scripts/keyword_promotion_report.py        -- keyword promotion governance")
+    lines.append("    scripts/botcheck.py                        -- macOS LaunchAgent status report")
     return lines
 
 
