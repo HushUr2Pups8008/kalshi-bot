@@ -150,15 +150,108 @@ The current market matcher (see [analysis/market_matcher.py](../../analysis/mark
 
 ---
 
-## 8. Open questions — must be resolved before any code
+## 8. Open questions — Phase 0 answers recorded 2026-04-22
 
-1. **Does the Polymarket US (CFTC-regulated) pathway expose a programmatic API suitable for algorithmic trading from a retail residence, or is it broker-GUI-mediated only?** This is the gating question. If no programmatic access, the entire initiative stops here for a US operator.
-2. **If programmatic US access exists, is the auth / endpoint / WebSocket surface identical to the Global CLOB, or is it a different API entirely?** Determines whether py-clob-client is reusable or a new client is needed.
-3. **Which states is the operator's residence currently cleared for under Polymarket US's state list?** (Memory indicates the operator is US-based; specific state must be confirmed and re-confirmed before any live order.)
-4. **Does the Polymarket US platform require per-order funded escrow via the broker, and what is the funding latency?** Affects bankroll-sizing assumptions and the "single-pool" decision in §6.
-5. **Does Polymarket's resolution model (UMA for Global, broker-mediated for US) guarantee atomic credit to a predictable wallet/account within a bounded window?** Affects `resolve_market()` design.
-6. **Are Polymarket ticker/market IDs stable across the contract lifetime, or can they change on market edits?** Kalshi tickers are stable; if Polymarket's aren't, the matcher and paper-trade records need a lookup-by-canonical-id layer.
-7. **Is there a free-to-use market-data WebSocket that works without authenticated L1/L2 credentials?** The Gamma API is REST-only; a no-auth WebSocket would allow a read-only prototype phase (§9 Phase 0).
+Phase 0 executed on 2026-04-22 via documentation review only (no sign-up, no code). Primary sources: [polymarketexchange.com/developers.html](https://www.polymarketexchange.com/developers.html) (official), [docs.polymarket.us/getting-started/welcome](https://docs.polymarket.us/getting-started/welcome) (official Exchange Gateway docs), [agentbets.ai Polymarket US API guide](https://agentbets.ai/guides/polymarket-us-api-guide/) (third-party, March 2026 pub), [tradetheoutcome.com FCM intermediated-model writeup](https://www.tradetheoutcome.com/polymarket-returns-to-the-us-the-intermediated-model-explained/), [turtelli.com state-by-state legality (April 2026)](https://www.turtelli.com/insider-knowledge/polymarket-prediction-markets-for-trading/is-polymarket-legal).
+
+### Q1 — Programmatic API access for US retail?
+
+> Does the Polymarket US (CFTC-regulated) pathway expose a programmatic API suitable for algorithmic trading from a retail residence, or is it broker-GUI-mediated only?
+
+**ANSWER: YES — programmatic access exists and launched publicly on 2026-02-16.**
+
+- Base URL: `https://api.polymarket.us`
+- Architecture: unified REST + WebSocket; 23 REST endpoints across 5 resource groups (Markets, Orders, Events, Portfolio, Account); 2 WebSocket endpoints (`/v1/ws/markets` public market-data, `/v1/ws/private` authenticated order updates)
+- Official SDKs: `polymarket-us` for Python 3.10+ and for TypeScript (Node 18+). Not the same package as the Global `py-clob-client`.
+- Rate limits: 60 req/min REST (shared across public and authenticated endpoints for a given key); WebSocket supports up to 10 instruments per connection. Institutional higher-throughput path exists via Exchange Gateway with FIX 4.4 protocol (separate application).
+- Access path for retail: KYC through the Polymarket US iOS app (government ID + SSN + proof of address; typically approved in minutes to hours) → web portal at `polymarket.us/developer` → self-service generation of an Ed25519 keypair. The private key is displayed **exactly once**; lose it and you must regenerate.
+- **Caveat:** the official developer page at `polymarketexchange.com/developers.html` describes a separate "application + sandbox + approval" flow for "participants and technology partners" — that appears to be the Exchange Gateway (FIX) institutional path, not the self-service retail path. Both tiers exist in parallel; retail can self-serve, institutions apply for higher throughput. Confirm during actual onboarding that the self-service retail tier is still operating as described.
+
+**Phase 0 exit gate: PASS.** Q1 answers "yes." Proceed toward phase 1 after Q2 and Q3 are closed.
+
+### Q2 — Is the US API the same surface as the Global CLOB?
+
+> If programmatic US access exists, is the auth / endpoint / WebSocket surface identical to the Global CLOB, or is it a different API entirely?
+
+**ANSWER: Entirely different API. Do not plan to reuse Global CLOB code.**
+
+| Aspect | Global CLOB | Polymarket US |
+|---|---|---|
+| Base URL | `clob.polymarket.com` + separate Gamma and Data services (3 hosts) | `api.polymarket.us` (1 unified host) |
+| Auth | Two-level: EIP-712 L1 + HMAC-SHA256 L2 | Single-level: Ed25519 keypair, SDK signs every request with timestamp |
+| Official SDK | `py-clob-client` | `polymarket-us` |
+| Market ID format | Token IDs (long hashes) | Human-readable slugs (e.g., `btc-100k-2025`) |
+| Order signing | Explicit `create_order()` step | SDK handles internally |
+| Price format | Float (e.g., `0.55`) | JSON object: `{"value": "0.55", "currency": "USD"}` |
+| Collateral | USDC on Polygon | USDC.e |
+| KYC | Optional (non-US only) | Required |
+| Liquidity | Global pool | Separate US pool; positions cannot be migrated |
+| Market set | Full catalog | More conservative — fewer markets, especially in politically sensitive categories |
+
+**Implication for the bot:** the `polymarket/` client package (per §9 Phase 3) must be built against the US API, not the Global CLOB. The `polymarket-us` SDK exists and handles signing; evaluate during Phase 3 whether to vendor the SDK or implement the Ed25519 signing path directly to match this repo's hand-rolled client style in [`kalshi/`](../../kalshi/).
+
+### Q3 — State eligibility for the operator's residence?
+
+> Which states is the operator's residence currently cleared for under Polymarket US's state list?
+
+**ANSWER: Operator is in Colorado — CLEAR as of 2026-04-22. Phase 0 Q3 passes.**
+
+Colorado-specific findings (per [9news, 2026-04-09](https://www.9news.com/article/news/politics/colorado-betting-war-prediction-markets/73-84fd9cce-161c-41a7-9e27-3c573c2758f9)):
+- Colorado has **not** issued cease-and-desist letters to Kalshi or Polymarket.
+- The Colorado Department of Revenue (regulator of state sportsbooks) is "monitoring ongoing national litigation" but has declined to comment on specific platforms or take enforcement action.
+- Colorado state Sen. Matt Ball (D), sponsor of current-session sports-betting legislation, confirmed on record that "platforms registered with the CFTC benefit from federal preemption of state law." Colorado's attorney general's office declined to confirm or comment on any potential investigations.
+- Colorado's Governor and a Colorado US Senator have *called for legislation* against prediction markets, but 9news reports "states may have little authority to act." Colorado is taking a monitoring-only posture, not enforcement.
+- **Category caveat (Ball, same source):** "states can still sue prediction market providers that offer contracts resembling sports gambling" (citing the Massachusetts precedent against Kalshi sports contracts). Political and geopolitical markets "remain largely beyond state reach." This is directly favorable for this bot, whose edge is LLM-driven geopolitical analysis, not sports. Do not plan to trade sports-category contracts on Polymarket from Colorado until the state-preemption question is resolved by the courts.
+
+Broader-US state landscape as of April 2026 (for context and for re-verification before each enable action):
+- **Confirmed geoblocked:** Massachusetts.
+- **Active state-level restriction / litigation (high risk of geoblock or trading-category restriction):** Nevada (Gaming Control Board lawsuit filed January 2026), Tennessee (Sports Wagering Council cease-and-desist), Ohio, Connecticut, New Jersey, Pennsylvania, Maryland, New York (pending legislation on sports-style contracts).
+- **Aggregate:** 11+ states have issued cease-and-desist orders against prediction-market platforms as of March 2026; active litigation in 8+ states. The landscape is moving; re-verify the operator's Colorado status on the day each branch opens (Phase 1 kickoff, Phase 4 live-enable).
+
+**Ongoing watch-items for Colorado:**
+- Track whether the Governor/Senator push succeeds in passing legislation — the 9news article frames this as low-probability in the current session, but monitor before each enable action.
+- Track the Third Circuit decision on the NJ/Kalshi preemption case (and the Kalshi Supreme Court petition per [Fortune, 2026-04-20](https://fortune.com/2026/04/20/kalshi-supreme-court-sports-betting-prediction-markets/)); an adverse preemption ruling could shift state posture nationwide.
+
+### Q4 — FCM intermediation / per-order escrow / funding latency?
+
+> Does the Polymarket US platform require per-order funded escrow via the broker, and what is the funding latency?
+
+**ANSWER (partial):** Polymarket US is structured under an "intermediated" model where Futures Commission Merchants (FCMs) serve as CFTC-registered broker intermediaries for customer funds. However, Polymarket acquired QCEX (the exchange + clearinghouse now operating as "QCX LLC d/b/a Polymarket US"), so the exchange and clearinghouse are vertically integrated. The retail self-service path (iOS KYC → developer portal → Ed25519 API keys) routes orders directly to `api.polymarket.us` — the FCM layer is present for funds custody and compliance (segregated accounts, KYC, tax reporting), not as an order-routing gate. Per-order funded escrow is the clearing model (standard for CFTC-regulated DCMs); specific funding latency figures for the retail self-service path are not documented in fetched public sources.
+
+**Confirm during Phase 1 onboarding:** (a) whether retail orders flow directly to `api.polymarket.us` without per-order FCM round-trip, (b) funding-settlement latency (same-day, T+1, etc.), (c) whether a specific FCM must be selected at account creation.
+
+### Q5 — Resolution and settlement mechanism?
+
+> Does Polymarket's resolution model guarantee atomic credit to a predictable wallet/account within a bounded window?
+
+**ANSWER (partial):** Polymarket US resolution goes through QC Clearing (the CFTC-registered clearinghouse acquired with QCEX), not UMA optimistic oracle (which remains the Global-CLOB mechanism). Clearinghouse-mediated settlement means standard CFTC Part 39 clearing rules apply. Public documentation in fetched sources does not specify the resolution latency window, dispute/appeal process, or whether credit is atomic-on-resolution-event. This must be pulled from the exchange's own rulebook (CFTC Part 38 filings; see [`cftc.gov/IndustryOversight/IndustryFilings/TradingOrganizations/49571`](https://www.cftc.gov/IndustryOversight/IndustryFilings/TradingOrganizations/49571)) during Phase 3 before the bot's `resolve_market()` flow is adapted for Polymarket markets.
+
+### Q6 — Market-ID stability?
+
+> Are Polymarket ticker/market IDs stable across the contract lifetime, or can they change on market edits?
+
+**ANSWER: Stable. Human-readable slugs (e.g., `btc-100k-2025`), not mutable hashes.** Per the US API rate-limit guidance, "market slugs and event structure change infrequently" — i.e., clients are expected to cache slugs locally. Namespacing as `polymarket:slug` alongside Kalshi's `kalshi:TICKER` in the venue-namespaced ticker tuple (per §4 / §9 Phase 2) is straightforward.
+
+### Q7 — Read-only market-data WebSocket without auth?
+
+> Is there a free-to-use market-data WebSocket that works without authenticated L1/L2 credentials?
+
+**ANSWER: NO, not for Polymarket US.** Per the official US API guide, "there is no sandbox, demo, or unauthenticated access mode." Even the public `/v1/ws/markets` endpoint requires an Ed25519 API key — the "public" in its name refers to the data being non-private (market-level quotes, not private order state), not to the endpoint being unauthenticated. Polymarket **Global** does expose a no-auth Gamma REST surface, but US IPs are geoblocked from Global.
+
+**Material impact on §9 Phase 1:** the plan called for Phase 1 to be a "no auth, no orders" read-only observer. That is not achievable on Polymarket US. Phase 1 must begin with the KYC + Ed25519 onboarding step, then run a read-only observer against the authenticated `/v1/ws/markets` WebSocket (still no orders). The scope adjustment is additive, not structural — no orders still means no trading risk — but the entry gate for Phase 1 now includes completing KYC.
+
+### Phase 0 summary
+
+**Phase 0 is CLOSED as of 2026-04-22. All gating questions answered; Phase 1 is unblocked.**
+
+- Q1 = YES (programmatic API exists; `api.polymarket.us` launched 2026-02-16).
+- Q2 = different API entirely (Ed25519 single-level; different SDK; plan for a new `polymarket/` package).
+- Q3 = operator is in Colorado, which is clear of geoblock and enforcement; sports contracts carry residual state risk, geopolitical contracts do not.
+- Q4, Q5 = partial; sufficient to proceed to Phase 1; remaining specifics get confirmed during onboarding (Phase 1) and CFTC Part 38 rulebook review (Phase 3).
+- Q6 = stable human-readable slugs.
+- Q7 = no unauthenticated read-only surface on Polymarket US; Phase 1 entry gate grew by one step (KYC + Ed25519 keypair before read-only observer can run).
+
+**Phase 1 is now ready to open** once the operator completes KYC via the Polymarket US iOS app and generates an Ed25519 keypair at `polymarket.us/developer`. No code branch opens before those two user-mediated steps are complete.
 
 ---
 
@@ -179,9 +272,10 @@ Bot is at v0.29.37 as of 2026-04-22, paper-mode, working Stage 5 Phase 2 and the
 
 ### Phase 1 — Read-only market-data observer  (branch: `feature/polymarket-market-data-observer`)
 
-- **Predecessor:** phase 0 merged AND exit gate passed.
-- **Entry gate:** §8 Q1 answered "yes" and recorded in §8.
-- **Scope:** Wire the public Gamma REST API as a market-data observer. Emit Polymarket quotes into the evidence store alongside Kalshi quotes. **No auth. No orders. No executor changes.** One new file: `feeds/polymarket_market_data.py`. Small schema additions to the evidence store for cross-venue quote storage. No changes to [`trading/`](../../trading/), [`kalshi/`](../../kalshi/), or [`data/paper_trades.db`](../../data/paper_trades.db).
+- **Predecessor:** phase 0 merged AND exit gate passed AND operator's state confirmed not on geoblock / high-risk list per §8 Q3.
+- **Entry gate:** §8 Q1 answered "yes," §8 Q3 state eligibility recorded, **KYC completed on Polymarket US iOS app** and Ed25519 API keypair generated at `polymarket.us/developer`. Credentials stored in `.env` as `POLYMARKET_US_KEY_ID` and `POLYMARKET_US_SECRET` (not committed).
+- **Scope:** Wire `api.polymarket.us` via the authenticated `/v1/ws/markets` WebSocket (plus REST for market catalog) as a market-data observer. Emit Polymarket quotes into the evidence store alongside Kalshi quotes. **No orders. No executor changes. No writes to user state beyond read-only market data.** One new file: `feeds/polymarket_market_data.py`. Small schema additions to the evidence store for cross-venue quote storage. No changes to [`trading/`](../../trading/), [`kalshi/`](../../kalshi/), or [`data/paper_trades.db`](../../data/paper_trades.db). Respect the 60 req/min REST cap and 10-instruments-per-WS-connection limit per §8 Q1.
+- **Note on auth:** unlike Kalshi's public-markets REST, Polymarket US requires Ed25519 auth even for market-data reads (per §8 Q7). The Ed25519 signing implementation lands in this phase as a minimal read-only signer; the full `polymarket/` client package does not ship until Phase 3.
 - **Post-merge runtime:** after the branch merges, let the observer run for **≥2 weeks** on `main` to collect divergence data before evaluating the exit gate.
 - **Exit gate:** After the ≥2-week window, data shows ≥5% of overlapping market-hours register ≥3¢ edge-relevant cross-venue divergence. If yes, proceed to phase 2. If no, **STOP** — downgrade scope per the abort triggers below.
 - **Deliverable:** one PR. Post-merge the observer runs and a summary note gets appended to §8 of this doc recording the measured divergence.
@@ -254,11 +348,22 @@ Bot is at v0.29.37 as of 2026-04-22, paper-mode, working Stage 5 Phase 2 and the
 
 ## 10. Recommendation
 
-**Start phase 0 now.** It is documentation-only and has no entry gate. The answers to §8 Q1–Q3 determine whether the entire initiative proceeds.
+**Phase 0 CLOSED 2026-04-22. All exit conditions met. Phase 1 is unblocked.**
 
-Do not open any code branch until phase 0 is complete and §8 Q1 is answered "yes." After that, execute phases 1 through 5 strictly in order per §9, one branch at a time, never parallel. The real-money gate (`PROFIT-CAL-001` + phase 3 paper evidence + state eligibility) applies only at phase 4; it does not gate phases 0–3.
+All §8 questions have actionable answers. The initiative is technically viable (§8 Q1 = yes, dedicated US API exists), architecturally straightforward (§8 Q2 / Q6 — new client package, stable slugs), and regulatorily available for the operator (§8 Q3 — Colorado is clear of enforcement and benefits from CFTC federal preemption). The Phase 1 entry gate carries one scope adjustment (§8 Q7 — Ed25519 auth is required even for read-only market data, so Phase 1 starts with KYC onboarding and keypair generation) but no structural change.
 
-The regulatory unlock (Nov 2025 CFTC approval) makes Polymarket a legitimate second venue for the first time in the bot's lifetime. The most valuable single angle is **zero-fee geopolitics** on the Global CLOB, which aligns with the bot's demonstrated edge — but that surface is not lawfully accessible from the US. The **US-regulated pathway is the lawful option**; whether it exposes programmatic access suitable for algorithmic trading is exactly the question phase 0 must answer.
+**Next action (user-gated, not research work):**
+
+1. Download the Polymarket US iOS app.
+2. Complete KYC (government ID + SSN + proof of address; typically minutes to hours).
+3. At `polymarket.us/developer`, generate an Ed25519 keypair. **Store the private key immediately** — it is shown exactly once and cannot be recovered.
+4. Place the credentials in `.env` as `POLYMARKET_US_KEY_ID` and `POLYMARKET_US_SECRET`, and add them to `.gitignore` treatment if not already covered.
+
+Once those four steps complete, open the Phase 1 branch `feature/polymarket-market-data-observer` and begin §9 Phase 1 work. Do not trade sports-category contracts from Colorado until federal/state preemption is resolved by the courts; the bot's edge is geopolitical, so this restriction is mostly N/A.
+
+Phases 2 through 5 follow §9 strictly sequentially. The real-money gate (`PROFIT-CAL-001` resolved + Phase 3 paper evidence + same-day Colorado re-verification) applies only at Phase 4.
+
+**Value-proposition note.** The most valuable single angle in the earlier draft — zero-fee geopolitics on the Global CLOB — is *not* available to US residents (Global is geoblocked). Polymarket US has its own fee schedule (flat 0.30% taker per §3). The US integration's value is therefore correctly framed as *second-venue resilience + cross-venue arbitrage on overlapping political/geopolitical events + Polymarket-exclusive market coverage*, per §5. Phase 1 empirical divergence data will quantify the arbitrage angle.
 
 ---
 
@@ -267,7 +372,13 @@ The regulatory unlock (Nov 2025 CFTC approval) makes Polymarket a legitimate sec
 - [docs/ROADMAP.md](../ROADMAP.md) Appendix A — existing news-source entry, now partially superseded by this doc for the venue scope
 - [docs/plans/news_sources_evaluation.md](news_sources_evaluation.md) §3.2, §7 — original news-source-lane framing
 - [CLAUDE.md](../../CLAUDE.md) — Kalshi signing, WebSocket auth, signal analysis, and bet-sizing gotchas; all remain in force and apply per-venue
-- [Polymarket CLOB authentication docs](https://docs.polymarket.com/developers/CLOB/authentication) — Global CLOB auth surface
-- [py-clob-client](https://github.com/Polymarket/py-clob-client) — official Python client for Global CLOB
-- [Polymarket fees](https://docs.polymarket.com/trading/fees) — dynamic fee structure and geopolitics zero-fee policy
+- [Polymarket CLOB authentication docs](https://docs.polymarket.com/developers/CLOB/authentication) — Global CLOB auth surface (not applicable for US retail)
+- [py-clob-client](https://github.com/Polymarket/py-clob-client) — official Python client for Global CLOB (not applicable for US retail)
+- [Polymarket fees](https://docs.polymarket.com/trading/fees) — dynamic fee structure for Global CLOB; Polymarket US is a flat 0.30% taker
 - CFTC Amended Order of Designation (2025-11) — source of US regulatory pathway
+- [Polymarket US developer resources](https://www.polymarketexchange.com/developers.html) — official onboarding, Exchange Gateway, sandbox application path
+- [Polymarket US Exchange Gateway docs](https://docs.polymarket.us/getting-started/welcome) — official API documentation (replaces deprecated Trading Gateway)
+- [Polymarket US API guide (agentbets.ai, March 2026)](https://agentbets.ai/guides/polymarket-us-api-guide/) — third-party reference for retail self-service flow, Ed25519 auth, rate limits, slugs
+- [QCX LLC d/b/a Polymarket US CFTC filings portal](https://www.cftc.gov/IndustryOversight/IndustryFilings/TradingOrganizations/49571) — exchange rulebook filings (resolution/settlement specifics live here)
+- [TradeTheOutcome — intermediated-model explainer](https://www.tradetheoutcome.com/polymarket-returns-to-the-us-the-intermediated-model-explained/) — FCM flow and KYC requirements
+- [Turtelli — state-by-state legality April 2026](https://www.turtelli.com/insider-knowledge/polymarket-prediction-markets-for-trading/is-polymarket-legal) — state restriction landscape
