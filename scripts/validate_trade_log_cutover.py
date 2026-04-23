@@ -1,3 +1,17 @@
+"""Validate analytics parity between the legacy monolithic trade log and
+the date-partitioned trade-log layout (``archive/YYYY/MM/YYYY-MM-DD.jsonl``).
+
+Runs ``decision_funnel_summary``, ``freshness_diagnostics``,
+``source_scorecard``, and ``trade_log_summary`` against both layouts and
+reports any divergences. Read-only on both inputs.
+
+Usage::
+
+    python scripts/validate_trade_log_cutover.py [--since YYYY-MM-DD]
+                                                 [--until YYYY-MM-DD]
+                                                 [--exclude-test]
+"""
+
 from __future__ import annotations
 
 import argparse

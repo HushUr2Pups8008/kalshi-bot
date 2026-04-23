@@ -34,6 +34,11 @@ tests/_tmp_*.jsonl
 .coverage.*
 htmlcov/
 coverage.xml
+# Coverage run logs are untracked by default; commit specific dated
+# snapshots explicitly with `git add -f logs/coverage/<name>.log` to
+# preserve a point-in-time baseline. Already-committed snapshots stay
+# tracked; only new files created by `make coverage` are ignored.
+logs/coverage/
 
 # Keep the placeholder files
 !data/.gitkeep

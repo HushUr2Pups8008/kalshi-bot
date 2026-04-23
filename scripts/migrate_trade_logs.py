@@ -1,3 +1,15 @@
+"""Split the legacy monolithic trade log (``logs/trades/trades.jsonl``) into
+date-partitioned archives under ``logs/trades/archive/YYYY/MM/YYYY-MM-DD.jsonl``.
+
+Writes a migration manifest and a holding file for undated or malformed
+records. The source log is treated as read-only until the finalize step;
+see :func:`parse_args` for the full option set.
+
+Usage::
+
+    python scripts/migrate_trade_logs.py --src PATH --dest-root PATH
+"""
+
 from __future__ import annotations
 
 import argparse

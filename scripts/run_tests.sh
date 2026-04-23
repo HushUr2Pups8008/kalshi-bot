@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+#
+# Canonical pytest entry point for kalshi-bot. Picks .venv/bin/python when
+# present, writes run logs and metadata under logs/tests/, and registers
+# each run in logs/tests/run_registry.jsonl. Use --detach to run in the
+# background. See usage() below for argument forms.
+#
 set -u
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

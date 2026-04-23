@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+#
+# Check for SQLite WAL/SHM sidecar files under data/ and optionally run
+# PRAGMA wal_checkpoint(TRUNCATE) to consolidate them into the main DB.
+# Manual maintenance utility -- do not run while the bot is active.
+# See usage() below for flags and accepted paths.
+#
 set -u
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
