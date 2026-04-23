@@ -1,9 +1,9 @@
-import json
 import shutil
 import uuid
 from pathlib import Path
 
 from scripts.validate_trade_log_cutover import render_report, validate_cutover
+from tests._helpers import write_jsonl
 
 
 def _make_tmp_dir() -> Path:
@@ -17,14 +17,6 @@ def _cleanup_tmp_dir(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
-def _write_jsonl(path: Path, records: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "".join(json.dumps(record) + "\n" for record in records),
-        encoding="utf-8",
-    )
-
-
 def test_validate_cutover_passes_for_matching_legacy_and_partitioned_layouts():
     tmp = _make_tmp_dir()
     try:
@@ -35,8 +27,8 @@ def test_validate_cutover_passes_for_matching_legacy_and_partitioned_layouts():
             {"type": "SIGNAL", "source": "Reuters", "ticker": "KX1", "ts": "2026-04-11T00:00:00+00:00"},
             {"type": "EARLY_STALE_DROP", "source": "Reuters", "reason": "stale_by_source_policy", "ticker": "KX1", "ts": "2026-04-11T00:01:00+00:00"},
         ]
-        _write_jsonl(legacy, records)
-        _write_jsonl(new_root / "archive" / "2026" / "04" / "2026-04-11.jsonl", records)
+        write_jsonl(legacy, records)
+        write_jsonl(new_root / "archive" / "2026" / "04" / "2026-04-11.jsonl", records)
 
         result = validate_cutover(legacy, new_root, db_path, since=None, until=None)
 
@@ -52,13 +44,13 @@ def test_validate_cutover_reports_mismatch_for_different_datasets():
         legacy = tmp / "trades.jsonl"
         new_root = tmp / "trades"
         db_path = tmp / "missing.db"
-        _write_jsonl(
+        write_jsonl(
             legacy,
             [
                 {"type": "SIGNAL", "source": "Reuters", "ticker": "KX1", "ts": "2026-04-11T00:00:00+00:00"},
             ],
         )
-        _write_jsonl(
+        write_jsonl(
             new_root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
             [
                 {"type": "SKIPPED", "reason": "cooldown", "source": "Reuters", "ticker": "KX1", "ts": "2026-04-11T00:00:00+00:00"},
@@ -83,8 +75,8 @@ def test_render_report_is_readable_and_includes_pass_fail_summary():
         records = [
             {"type": "SIGNAL", "source": "Reuters", "ticker": "KX1", "ts": "2026-04-11T00:00:00+00:00"},
         ]
-        _write_jsonl(legacy, records)
-        _write_jsonl(new_root / "archive" / "2026" / "04" / "2026-04-11.jsonl", records)
+        write_jsonl(legacy, records)
+        write_jsonl(new_root / "archive" / "2026" / "04" / "2026-04-11.jsonl", records)
 
         report = render_report(validate_cutover(legacy, new_root, db_path, since=None, until=None))
 

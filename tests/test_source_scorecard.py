@@ -1,4 +1,3 @@
-import json
 import shutil
 import sqlite3
 import uuid
@@ -19,19 +18,9 @@ from scripts.source_scorecard import (
     top_performer,
     watchlist_candidate,
 )
+from tests._helpers import write_jsonl
 
 _REAL_SQLITE_CONNECT = sqlite3.connect
-
-
-def _write_jsonl(path: Path, records) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = []
-    for record in records:
-        if isinstance(record, str):
-            lines.append(record)
-        else:
-            lines.append(json.dumps(record))
-    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def _make_tmp_dir() -> Path:
@@ -88,7 +77,7 @@ def test_summarize_reads_partitioned_trade_root():
     tmp = _make_tmp_dir()
     try:
         logs_root = tmp / "trades"
-        _write_jsonl(
+        write_jsonl(
             logs_root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
             [
                 {
@@ -99,7 +88,7 @@ def test_summarize_reads_partitioned_trade_root():
                 },
             ],
         )
-        _write_jsonl(
+        write_jsonl(
             logs_root / "live" / "trades.jsonl",
             [
                 {
@@ -130,7 +119,7 @@ def test_summarize_combines_log_and_db_metrics():
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
         db_uri = f"file:source_scorecard_{uuid.uuid4().hex}?mode=memory&cache=shared"
-        _write_jsonl(
+        write_jsonl(
             log_path,
             [
                 {"type": "EARLY_STALE_DROP", "reason": "stale_by_source_policy", "source": "Reuters", "headline": "old", "ts": "2026-04-11T00:00:00+00:00"},
@@ -177,7 +166,7 @@ def test_summarize_respects_date_filter():
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
         db_uri = f"file:source_scorecard_{uuid.uuid4().hex}?mode=memory&cache=shared"
-        _write_jsonl(
+        write_jsonl(
             log_path,
             [
                 {"type": "SIGNAL", "source": "Reuters", "headline": "old", "ts": "2026-04-09T00:00:00+00:00"},
@@ -216,7 +205,7 @@ def test_summarize_excludes_test_records():
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
         db_uri = f"file:source_scorecard_{uuid.uuid4().hex}?mode=memory&cache=shared"
-        _write_jsonl(
+        write_jsonl(
             log_path,
             [
                 {"type": "SIGNAL", "source": "r/test", "headline": "x", "ticker": "KXTEST-1", "ts": "2026-04-11T00:00:00+00:00"},
@@ -316,7 +305,7 @@ def test_summarize_separates_disabled_sources_from_active_groups():
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
         db_uri = f"file:source_scorecard_{uuid.uuid4().hex}?mode=memory&cache=shared"
-        _write_jsonl(
+        write_jsonl(
             log_path,
             [
                 {"type": "SIGNAL", "source": "BBC News", "headline": "disabled", "ts": "2026-04-11T00:00:00+00:00"},
@@ -355,7 +344,7 @@ def test_summarize_separates_family_disabled_sources_from_active_groups():
     try:
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
-        _write_jsonl(
+        write_jsonl(
             log_path,
             [
                 {"type": "SIGNAL", "source": "query one - BingNews", "headline": "disabled by family", "ts": "2026-04-11T00:00:00+00:00"},
@@ -385,7 +374,7 @@ def test_summarize_assigns_each_active_source_to_one_recommendation_tier():
     try:
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
-        _write_jsonl(
+        write_jsonl(
             log_path,
             [
                 {
@@ -474,7 +463,7 @@ def test_print_summary_mentions_non_attributable_metrics(capsys):
     try:
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
-        _write_jsonl(log_path, [])
+        write_jsonl(log_path, [])
         stats = summarize(log_path, db_path, since=None, until=None, exclude_test=False)
 
         print_summary(stats, top=5)

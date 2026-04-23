@@ -1,4 +1,3 @@
-import json
 import shutil
 import uuid
 from pathlib import Path
@@ -11,6 +10,7 @@ from scripts.match_quality_diagnostics import (
     summarize,
     summarize_backfill,
 )
+from tests._helpers import write_jsonl
 
 
 def _make_tmp_dir() -> Path:
@@ -24,22 +24,11 @@ def _cleanup_tmp_dir(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
-def _write_jsonl(path: Path, records) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = []
-    for record in records:
-        if isinstance(record, str):
-            lines.append(record)
-        else:
-            lines.append(json.dumps(record))
-    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-
-
 def test_summarize_collects_low_quality_rates_and_examples():
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {
@@ -98,7 +87,7 @@ def test_summarize_tracks_pre_llm_would_block_by_source_and_ticker():
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {
@@ -140,7 +129,7 @@ def test_summarize_respects_date_filter_and_missing_score_note():
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {
@@ -181,7 +170,7 @@ def test_summarize_reads_partitioned_trade_root():
     tmp = _make_tmp_dir()
     try:
         root = tmp / "trades"
-        _write_jsonl(
+        write_jsonl(
             root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
             [
                 {
@@ -195,7 +184,7 @@ def test_summarize_reads_partitioned_trade_root():
                 },
             ],
         )
-        _write_jsonl(
+        write_jsonl(
             root / "live" / "trades.jsonl",
             [
                 {
@@ -224,7 +213,7 @@ def test_print_summary_includes_sections(capsys):
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {
@@ -265,7 +254,7 @@ def test_summarize_backfill_reconstructs_titles_and_rates():
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {
@@ -323,7 +312,7 @@ def test_summarize_backfill_honestly_excludes_missing_titles():
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {
@@ -349,7 +338,7 @@ def test_print_backfill_summary_includes_sections(capsys):
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {

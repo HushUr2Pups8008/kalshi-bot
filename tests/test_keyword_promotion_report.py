@@ -1,6 +1,3 @@
-import json
-from pathlib import Path
-
 from scripts.keyword_promotion_report import (
     RECOMMEND_PROMOTE,
     RECOMMEND_REJECT,
@@ -8,17 +5,7 @@ from scripts.keyword_promotion_report import (
     print_report,
     summarize,
 )
-from tests._helpers import cleanup_tmp_dir, make_tmp_dir
-
-
-def _write_jsonl(path: Path, records) -> None:
-    lines = []
-    for record in records:
-        if isinstance(record, str):
-            lines.append(record)
-        else:
-            lines.append(json.dumps(record))
-    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+from tests._helpers import cleanup_tmp_dir, make_tmp_dir, write_jsonl
 
 
 def _miss(headline: str, ticker: str, source: str) -> dict:
@@ -47,7 +34,7 @@ def test_summarize_groups_promote_watch_and_reject():
             _miss("Lawmakers debate blockade Iran strategy", "KX7", "Reuters"),
             _miss("Donald Trump attends rally", "KX8", "Reuters"),
         ]
-        _write_jsonl(path, records)
+        write_jsonl(path, records)
 
         stats = summarize(
             path=path,
@@ -70,7 +57,7 @@ def test_rejects_zero_hit_phrase():
     tmp = make_tmp_dir("keyword_promotion_report")
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(path, [_miss("NATO summit in Brussels", "KX1", "Reuters")])
+        write_jsonl(path, [_miss("NATO summit in Brussels", "KX1", "Reuters")])
 
         stats = summarize(
             path=path,
@@ -92,7 +79,7 @@ def test_print_report_includes_expected_sections(capsys):
     tmp = make_tmp_dir("keyword_promotion_report")
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 _miss("Deadline passes for Strait of Hormuz blockade", "KX1", "Reuters"),

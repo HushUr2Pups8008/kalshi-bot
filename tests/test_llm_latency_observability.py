@@ -23,6 +23,7 @@ from scripts.signal_edge_diagnostics import (
     fmt_latency_stats,
     summarize,
 )
+from tests._helpers import write_jsonl
 
 
 # ---------------------------------------------------------------------------
@@ -38,11 +39,6 @@ def _make_tmp_dir() -> Path:
 
 def _cleanup(path: Path) -> None:
     shutil.rmtree(path.parent if path.is_file() else path, ignore_errors=True)
-
-
-def _write_jsonl(path: Path, records: list) -> None:
-    lines = [json.dumps(r) for r in records]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _base_detail(
@@ -247,7 +243,7 @@ class TestSummarizeLatency:
     def test_latency_samples_collected(self):
         tmp = _make_tmp_dir()
         path = tmp / "trades.jsonl"
-        _write_jsonl(path, [
+        write_jsonl(path, [
             _base_detail(llm_latency_ms=1000, llm_total_stage_ms=1200),
             _base_detail(llm_latency_ms=2000, llm_total_stage_ms=2200, ts="2026-04-15T10:01:00+00:00"),
             _base_detail(llm_latency_ms=3000, llm_total_stage_ms=3200, ts="2026-04-15T10:02:00+00:00"),
@@ -263,7 +259,7 @@ class TestSummarizeLatency:
     def test_rows_without_latency_excluded_from_samples(self):
         tmp = _make_tmp_dir()
         path = tmp / "trades.jsonl"
-        _write_jsonl(path, [
+        write_jsonl(path, [
             _base_detail(llm_latency_ms=500),
             _base_detail(ts="2026-04-15T10:01:00+00:00"),  # no latency field
         ])
@@ -278,7 +274,7 @@ class TestSummarizeLatency:
         # keyword-only fallback still attempted Ollama (and got a latency)
         tmp = _make_tmp_dir()
         path = tmp / "trades.jsonl"
-        _write_jsonl(path, [
+        write_jsonl(path, [
             _base_detail(
                 method="keyword",
                 llm_attempted=True,
@@ -297,7 +293,7 @@ class TestSummarizeLatency:
     def test_timing_breakdown_samples_collected(self):
         tmp = _make_tmp_dir()
         path = tmp / "trades.jsonl"
-        _write_jsonl(path, [
+        write_jsonl(path, [
             _base_detail(
                 llm_latency_ms=2000,
                 llm_total_stage_ms=2400,

@@ -27,6 +27,7 @@ from scripts.keyword_shadow_eval import (
     parse_date_start,
     score_phrases,
 )
+from tests._helpers import write_jsonl
 
 
 # ---------------------------------------------------------------------------
@@ -43,17 +44,6 @@ def _make_tmp_dir() -> Path:
 
 def _cleanup_tmp_dir(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
-
-
-def _write_jsonl(path: Path, records: list) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = []
-    for record in records:
-        if isinstance(record, str):
-            lines.append(record)
-        else:
-            lines.append(json.dumps(record))
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _miss(headline: str, ticker: str = "KXTEST-1", source: str = "Reuters") -> dict:
@@ -82,11 +72,11 @@ def test_load_miss_corpus_reads_partitioned_trade_root():
     tmp = _make_tmp_dir()
     try:
         root = tmp / "trades"
-        _write_jsonl(
+        write_jsonl(
             root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
             [_miss("Strait of Hormuz blockade threatens shipping", ticker="KX1")],
         )
-        _write_jsonl(
+        write_jsonl(
             root / "live" / "trades.jsonl",
             [_other("Ignore me")],
         )
@@ -276,7 +266,7 @@ class TestLoadMissCorpus:
         tmp = _make_tmp_dir()
         try:
             path = tmp / "trades.jsonl"
-            _write_jsonl(
+            write_jsonl(
                 path,
                 [
                     _miss("Iran War Live Updates: Strait of Hormuz Blockade"),
@@ -304,7 +294,7 @@ class TestLoadMissCorpus:
         tmp = _make_tmp_dir()
         try:
             path = tmp / "trades.jsonl"
-            _write_jsonl(
+            write_jsonl(
                 path,
                 [
                     {**_miss("Early headline"), "ts": "2026-04-10T12:00:00+00:00"},
@@ -324,7 +314,7 @@ class TestLoadMissCorpus:
         tmp = _make_tmp_dir()
         try:
             path = tmp / "trades.jsonl"
-            _write_jsonl(
+            write_jsonl(
                 path,
                 [
                     _miss("Real headline", ticker="KXIRAN-1"),

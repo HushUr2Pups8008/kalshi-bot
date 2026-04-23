@@ -10,6 +10,7 @@ KalshiMarket factory, and a fixed KalshiMarket — that are not interchangeable.
 """
 from __future__ import annotations
 
+import json
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -43,3 +44,17 @@ def make_tmp_dir(prefix: str) -> Path:
 def cleanup_tmp_dir(path: Path) -> None:
     """Remove a directory tree created by make_tmp_dir(); missing is ignored."""
     shutil.rmtree(path, ignore_errors=True)
+
+
+def write_jsonl(path: Path, records, *, ensure_dir: bool = True) -> None:
+    """Write ``records`` as JSONL at ``path``.
+
+    Strings pass through verbatim (for pre-formatted lines / malformed-input
+    tests); other objects are ``json.dumps``'d. Parent directories are
+    created by default.
+    """
+    if ensure_dir:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [record if isinstance(record, str) else json.dumps(record)
+             for record in records]
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")

@@ -1,4 +1,3 @@
-import json
 import shutil
 import uuid
 from pathlib import Path
@@ -13,6 +12,7 @@ from scripts.decision_funnel_summary import (
     stale_age_bucket,
     summarize,
 )
+from tests._helpers import write_jsonl
 
 
 @pytest.fixture
@@ -24,17 +24,6 @@ def local_tmp_dir():
         yield path
     finally:
         shutil.rmtree(path, ignore_errors=True)
-
-
-def _write_jsonl(path: Path, records) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = []
-    for record in records:
-        if isinstance(record, str):
-            lines.append(record)
-        else:
-            lines.append(json.dumps(record))
-    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def test_summarize_empty_file(local_tmp_dir):
@@ -58,7 +47,7 @@ def test_summarize_empty_file(local_tmp_dir):
 
 def test_summarize_skips_malformed_json_lines(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             '{"type": "SIGNAL", "ts": "2026-04-11T00:00:00+00:00"}',
@@ -78,13 +67,13 @@ def test_summarize_skips_malformed_json_lines(local_tmp_dir):
 
 def test_summarize_reads_partitioned_trade_root(local_tmp_dir):
     root = local_tmp_dir / "trades"
-    _write_jsonl(
+    write_jsonl(
         root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
         [
             {"type": "ANALYSIS_REJECTED", "reason": "stale_news", "source": "Reuters", "ticker": "KXOLD", "age_seconds": 600, "ts": "2026-04-11T00:00:00+00:00"},
         ],
     )
-    _write_jsonl(
+    write_jsonl(
         root / "live" / "trades.jsonl",
         [
             {"type": "PAPER_TRADE", "signal_source": "Reuters", "ticker": "KXNEW", "ts": "2026-04-12T00:00:00+00:00"},
@@ -101,7 +90,7 @@ def test_summarize_reads_partitioned_trade_root(local_tmp_dir):
 
 def test_summarize_handles_missing_optional_fields_gracefully(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             {"type": "SKIPPED", "ts": "2026-04-11T00:00:00+00:00"},
@@ -123,7 +112,7 @@ def test_summarize_handles_missing_optional_fields_gracefully(local_tmp_dir):
 
 def test_summarize_counts_funnel_stages(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             {"type": "ANALYSIS_REJECTED", "reason": "stale_news", "ts": "2026-04-11T00:00:00+00:00"},
@@ -150,7 +139,7 @@ def test_summarize_counts_funnel_stages(local_tmp_dir):
 
 def test_summarize_aggregates_skip_reasons(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             {"type": "SKIPPED", "reason": "cooldown", "ts": "2026-04-11T00:00:00+00:00"},
@@ -167,7 +156,7 @@ def test_summarize_aggregates_skip_reasons(local_tmp_dir):
 
 def test_summarize_aggregates_analysis_rejected_reasons(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             {"type": "ANALYSIS_REJECTED", "reason": "stale_news", "ts": "2026-04-11T00:00:00+00:00"},
@@ -186,7 +175,7 @@ def test_summarize_aggregates_analysis_rejected_reasons(local_tmp_dir):
 
 def test_summarize_tracks_stale_news_breakdowns(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             {
@@ -255,7 +244,7 @@ def test_stale_age_bucket_boundaries(age_seconds, expected):
 
 def test_summarize_infers_path_contribution(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             {"type": "SIGNAL", "source": "Reuters", "ts": "2026-04-11T00:00:00+00:00"},
@@ -275,7 +264,7 @@ def test_summarize_infers_path_contribution(local_tmp_dir):
 
 def test_summarize_tracks_execution_contribution(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             {
@@ -320,7 +309,7 @@ def test_infer_signal_type_classification(record, expected):
 
 def test_summarize_applies_date_filter(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             {"type": "SIGNAL", "ts": "2026-04-09T23:59:59+00:00"},
@@ -359,7 +348,7 @@ def test_print_summary_handles_empty_stats(capsys, local_tmp_dir):
 
 def test_print_summary_handles_no_observable_funnel_stages(capsys, local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             {"type": "NEW_MARKET", "ts": "2026-04-11T00:00:00+00:00"},
@@ -382,7 +371,7 @@ def test_print_summary_handles_no_observable_funnel_stages(capsys, local_tmp_dir
 
 def test_print_summary_includes_pre_signal_rejections_when_present(capsys, local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             {"type": "ANALYSIS_REJECTED", "reason": "stale_news", "ts": "2026-04-11T00:00:00+00:00"},
@@ -404,7 +393,7 @@ def test_print_summary_includes_pre_signal_rejections_when_present(capsys, local
 
 def test_print_summary_includes_stale_news_sections(capsys, local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             {
@@ -441,7 +430,7 @@ def test_print_summary_includes_stale_news_sections(capsys, local_tmp_dir):
 
 def test_print_summary_handles_absent_analysis_rejected_events_gracefully(capsys, local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             {"type": "SIGNAL", "ts": "2026-04-11T00:00:00+00:00"},

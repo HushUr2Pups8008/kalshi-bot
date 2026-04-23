@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from utils.keyword_diagnostics_helpers import (
@@ -16,17 +15,7 @@ from utils.keyword_diagnostics_helpers import (
     score_shadow_phrases,
     tokenize_keyword_text,
 )
-
-
-def _write_jsonl(path: Path, records: list[object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = []
-    for record in records:
-        if isinstance(record, str):
-            lines.append(record)
-        else:
-            lines.append(json.dumps(record))
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+from tests._helpers import write_jsonl
 
 
 def _miss(
@@ -60,7 +49,7 @@ def test_phrase_matches_uses_token_subsequence_not_raw_substring():
 
 def test_load_no_keyword_miss_corpus_filters_event_type_reason_and_test_records(tmp_path: Path):
     root = tmp_path / "trades"
-    _write_jsonl(
+    write_jsonl(
         root / "archive" / "2026" / "04" / "2026-04-18.jsonl",
         [
             _miss("Strait of Hormuz blockade", ticker="KXREAL-1"),
@@ -85,7 +74,7 @@ def test_load_no_keyword_miss_corpus_filters_event_type_reason_and_test_records(
 
 def test_load_no_keyword_miss_corpus_honors_custom_test_record_callback(tmp_path: Path):
     path = tmp_path / "trades.jsonl"
-    _write_jsonl(
+    write_jsonl(
         path,
         [
             _miss("Keep me", source="Reuters", ticker="KXREAL-1"),

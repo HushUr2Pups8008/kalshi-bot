@@ -14,17 +14,7 @@ import pytest
 from utils.logger import TradeLogStore, write_trade_log_async
 from utils import trade_log_reader
 from utils.trade_log_reader import iter_trade_records
-
-
-def _write_jsonl(path: Path, records: list[object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = []
-    for record in records:
-        if isinstance(record, str):
-            lines.append(record)
-        else:
-            lines.append(json.dumps(record))
-    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+from tests._helpers import write_jsonl
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -105,7 +95,7 @@ def test_trade_log_store_merges_into_existing_archive_file():
     root = _tmp_root()
     try:
         archive_path = root / "archive" / "2026" / "04" / "2026-04-15.jsonl"
-        _write_jsonl(
+        write_jsonl(
             archive_path,
             [
                 {"type": "SIGNAL", "ts": "2026-04-15T08:00:00+00:00", "ticker": "ARCHIVED"},
@@ -148,13 +138,13 @@ def test_trade_log_store_routes_older_out_of_order_record_to_archive():
 def test_iter_trade_records_reads_live_archive_and_filters_by_date():
     root = _tmp_root()
     try:
-        _write_jsonl(
+        write_jsonl(
             root / "live" / "trades.jsonl",
             [
                 {"type": "SIGNAL", "ts": "2026-04-16T12:00:00+00:00", "ticker": "LIVE"},
             ],
         )
-        _write_jsonl(
+        write_jsonl(
             root / "archive" / "2026" / "04" / "2026-04-15.jsonl",
             [
                 {"type": "PAPER_TRADE", "ts": "2026-04-15T10:00:00+00:00", "ticker": "ARCHIVE"},
@@ -185,13 +175,13 @@ def test_iter_trade_records_reads_directory_in_chronological_order():
                 {"type": "SIGNAL", "ts": "2026-04-14T09:00:00+00:00", "ticker": "GZ"},
             ],
         )
-        _write_jsonl(
+        write_jsonl(
             root / "archive" / "2026" / "04" / "2026-04-15.jsonl",
             [
                 {"type": "SIGNAL", "ts": "2026-04-15T09:00:00+00:00", "ticker": "ARCHIVE"},
             ],
         )
-        _write_jsonl(
+        write_jsonl(
             root / "live" / "trades.jsonl",
             [
                 {"type": "SIGNAL", "ts": "2026-04-16T09:00:00+00:00", "ticker": "LIVE"},
@@ -208,14 +198,14 @@ def test_iter_trade_records_reads_directory_in_chronological_order():
 def test_iter_trade_records_skips_legacy_overlap_when_live_exists():
     root = _tmp_root()
     try:
-        _write_jsonl(
+        write_jsonl(
             root / "trades.jsonl",
             [
                 {"type": "SIGNAL", "ts": "2026-04-15T09:00:00+00:00", "ticker": "LEGACY_OLD"},
                 {"type": "SIGNAL", "ts": "2026-04-16T09:00:00+00:00", "ticker": "LEGACY_OVERLAP"},
             ],
         )
-        _write_jsonl(
+        write_jsonl(
             root / "live" / "trades.jsonl",
             [
                 {"type": "SIGNAL", "ts": "2026-04-16T09:00:00+00:00", "ticker": "LIVE"},
@@ -232,14 +222,14 @@ def test_iter_trade_records_skips_legacy_overlap_when_live_exists():
 def test_iter_trade_records_handles_legacy_and_live_without_path_equality():
     root = _tmp_root()
     try:
-        _write_jsonl(
+        write_jsonl(
             root / "trades.jsonl",
             [
                 {"type": "SIGNAL", "ts": "2026-04-15T23:59:00+00:00", "ticker": "LEGACY_KEEP"},
                 {"type": "SIGNAL", "ts": "2026-04-16T00:05:00+00:00", "ticker": "LEGACY_SKIP"},
             ],
         )
-        _write_jsonl(
+        write_jsonl(
             root / "live" / "trades.jsonl",
             [
                 {"type": "SIGNAL", "ts": "2026-04-16T00:05:00+00:00", "ticker": "LIVE"},
@@ -256,7 +246,7 @@ def test_iter_trade_records_handles_legacy_and_live_without_path_equality():
 def test_iter_trade_records_skips_malformed_lines_and_filters_event_type():
     root = _tmp_root()
     try:
-        _write_jsonl(
+        write_jsonl(
             root / "trades.jsonl",
             [
                 {"type": "SIGNAL", "ts": "2026-04-16T12:00:00+00:00", "ticker": "KEEP"},
@@ -328,19 +318,19 @@ def test_trade_log_store_permission_error_raises_on_non_windows(monkeypatch):
 def test_iter_trade_records_skips_archive_partitions_outside_requested_window(monkeypatch):
     root = _tmp_root()
     try:
-        _write_jsonl(
+        write_jsonl(
             root / "archive" / "2026" / "04" / "2026-04-14.jsonl",
             [{"type": "SIGNAL", "ts": "2026-04-14T09:00:00+00:00", "ticker": "DAY14"}],
         )
-        _write_jsonl(
+        write_jsonl(
             root / "archive" / "2026" / "04" / "2026-04-15.jsonl",
             [{"type": "SIGNAL", "ts": "2026-04-15T09:00:00+00:00", "ticker": "DAY15"}],
         )
-        _write_jsonl(
+        write_jsonl(
             root / "archive" / "2026" / "04" / "2026-04-16.jsonl",
             [{"type": "SIGNAL", "ts": "2026-04-16T09:00:00+00:00", "ticker": "DAY16"}],
         )
-        _write_jsonl(
+        write_jsonl(
             root / "live" / "trades.jsonl",
             [{"type": "SIGNAL", "ts": "2026-04-17T09:00:00+00:00", "ticker": "LIVE"}],
         )

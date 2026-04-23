@@ -1,4 +1,3 @@
-import json
 import shutil
 import uuid
 from pathlib import Path
@@ -12,6 +11,7 @@ from scripts.signal_edge_diagnostics import (
     print_summary,
     summarize,
 )
+from tests._helpers import write_jsonl
 
 
 def _make_tmp_dir() -> Path:
@@ -25,17 +25,6 @@ def _cleanup_tmp_dir(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
-def _write_jsonl(path: Path, records) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = []
-    for record in records:
-        if isinstance(record, str):
-            lines.append(record)
-        else:
-            lines.append(json.dumps(record))
-    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-
-
 def test_classify_skip_reason_distinguishes_zero_edge_duplicate_and_other():
     assert classify_skip_reason({"reason": "edge +0.0000 below min_edge 0.02", "edge": 0.0}) == "zero_edge"
     assert classify_skip_reason({"reason": "paper duplicate skip: existing position"}) == "duplicate"
@@ -47,7 +36,7 @@ def test_summarize_builds_edge_audit_and_group_metrics():
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {
@@ -218,7 +207,7 @@ def test_summarize_excludes_synthetic_probe_from_llm_metrics():
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {
@@ -267,7 +256,7 @@ def test_summarize_reads_partitioned_trade_root():
     tmp = _make_tmp_dir()
     try:
         root = tmp / "trades"
-        _write_jsonl(
+        write_jsonl(
             root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
             [
                 {
@@ -281,7 +270,7 @@ def test_summarize_reads_partitioned_trade_root():
                 },
             ],
         )
-        _write_jsonl(
+        write_jsonl(
             root / "live" / "trades.jsonl",
             [
                 {
@@ -310,7 +299,7 @@ def test_summarize_applies_date_window_and_reports_live_attribution_limit():
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {
@@ -348,7 +337,7 @@ def test_print_summary_includes_edge_sections(capsys):
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {

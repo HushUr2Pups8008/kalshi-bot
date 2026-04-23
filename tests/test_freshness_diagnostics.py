@@ -1,4 +1,3 @@
-import json
 import shutil
 import uuid
 from pathlib import Path
@@ -14,6 +13,7 @@ from scripts.freshness_diagnostics import (
     strategy_misaligned_candidate,
     summarize,
 )
+from tests._helpers import write_jsonl
 
 
 def _make_tmp_dir() -> Path:
@@ -25,17 +25,6 @@ def _make_tmp_dir() -> Path:
 
 def _cleanup_tmp_dir(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
-
-
-def _write_jsonl(path: Path, records) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = []
-    for record in records:
-        if isinstance(record, str):
-            lines.append(record)
-        else:
-            lines.append(json.dumps(record))
-    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def test_summarize_empty_file():
@@ -59,7 +48,7 @@ def test_summarize_skips_malformed_lines():
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 '{"type": "EARLY_STALE_DROP", "source": "Reuters", "age_seconds": 400, "ts": "2026-04-11T00:00:00+00:00"}',
@@ -82,13 +71,13 @@ def test_summarize_reads_partitioned_trade_root():
     tmp = _make_tmp_dir()
     try:
         root = tmp / "trades"
-        _write_jsonl(
+        write_jsonl(
             root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
             [
                 {"type": "EARLY_FRESH_PASS", "source": "Reuters", "age_seconds": 50, "ts": "2026-04-11T00:00:00+00:00"},
             ],
         )
-        _write_jsonl(
+        write_jsonl(
             root / "live" / "trades.jsonl",
             [
                 {"type": "EARLY_STALE_DROP", "source": "Reuters", "age_seconds": 400, "ts": "2026-04-12T00:00:00+00:00"},
@@ -109,7 +98,7 @@ def test_summarize_source_freshness_metrics():
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {"type": "EARLY_FRESH_PASS", "source": "Reuters", "age_seconds": 50, "ts": "2026-04-11T00:00:00+00:00"},
@@ -157,7 +146,7 @@ def test_summarize_handles_missing_age_honestly():
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {"type": "EARLY_FRESH_PASS", "source": "Reuters", "ts": "2026-04-11T00:00:00+00:00"},
@@ -184,7 +173,7 @@ def test_summarize_applies_date_filter():
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {"type": "EARLY_STALE_DROP", "source": "Reuters", "age_seconds": 400, "ts": "2026-04-09T23:59:59+00:00"},
@@ -237,7 +226,7 @@ def test_print_summary_includes_ranked_sections(capsys):
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {"type": "EARLY_FRESH_PASS", "source": "Reuters", "age_seconds": 120, "ts": "2026-04-11T00:00:00+00:00"},
@@ -327,7 +316,7 @@ def test_print_summary_show_all_reveals_hidden_buckets(capsys):
     tmp = _make_tmp_dir()
     try:
         path = tmp / "trades.jsonl"
-        _write_jsonl(
+        write_jsonl(
             path,
             [
                 {"type": "EARLY_STALE_DROP", "source": "Dead Source", "ts": "2026-04-11T00:00:00+00:00"},
