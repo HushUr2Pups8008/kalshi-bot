@@ -1,22 +1,10 @@
 import json
-import shutil
-import uuid
 from pathlib import Path
 
 import pytest
 
 from scripts.migrate_trade_logs import HOLDING_FILE_NAME, MANIFEST_NAME, MigrationError, migrate_legacy_trade_log
-
-
-def _make_tmp_dir() -> Path:
-    root = Path(__file__).resolve().parent / "_tmp_migrate_trade_logs"
-    path = root / uuid.uuid4().hex
-    path.mkdir(parents=True, exist_ok=False)
-    return path
-
-
-def _cleanup_tmp_dir(path: Path) -> None:
-    shutil.rmtree(path, ignore_errors=True)
+from tests._helpers import cleanup_tmp_dir, make_tmp_dir
 
 
 def _write_lines(path: Path, lines: list[str]) -> None:
@@ -33,7 +21,7 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def test_migrate_partitions_records_by_day():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("migrate_trade_logs")
     try:
         src = tmp / "trades.jsonl"
         dest = tmp / "trades"
@@ -52,11 +40,11 @@ def test_migrate_partitions_records_by_day():
         assert _read_jsonl(dest / "archive" / "2026" / "04" / "2026-04-11.jsonl")[0]["ticker"] == "KX1"
         assert _read_jsonl(dest / "archive" / "2026" / "04" / "2026-04-12.jsonl")[0]["ticker"] == "KX2"
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_migrate_sends_malformed_and_missing_ts_to_holding_file():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("migrate_trade_logs")
     try:
         src = tmp / "trades.jsonl"
         dest = tmp / "trades"
@@ -77,11 +65,11 @@ def test_migrate_sends_malformed_and_missing_ts_to_holding_file():
         assert holding.exists()
         assert len(holding.read_text(encoding="utf-8").splitlines()) == 2
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_migrate_is_idempotent_with_overwrite_generated():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("migrate_trade_logs")
     try:
         src = tmp / "trades.jsonl"
         dest = tmp / "trades"
@@ -102,11 +90,11 @@ def test_migrate_is_idempotent_with_overwrite_generated():
         assert second["migrated_records_written"] == 1
         assert len(partition.read_text(encoding="utf-8").splitlines()) == 1
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_migrate_dry_run_writes_nothing():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("migrate_trade_logs")
     try:
         src = tmp / "trades.jsonl"
         dest = tmp / "trades"
@@ -123,11 +111,11 @@ def test_migrate_dry_run_writes_nothing():
         assert summary["migrated_records_written"] == 1
         assert not dest.exists()
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_migrate_summary_reconciles_and_writes_manifest():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("migrate_trade_logs")
     try:
         src = tmp / "trades.jsonl"
         dest = tmp / "trades"
@@ -149,4 +137,4 @@ def test_migrate_summary_reconciles_and_writes_manifest():
         assert manifest["migrated_records_written"] == 2
         assert manifest["undated_or_malformed_count"] == 1
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)

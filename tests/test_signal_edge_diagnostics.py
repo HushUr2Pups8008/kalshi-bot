@@ -1,6 +1,3 @@
-import shutil
-import uuid
-from pathlib import Path
 
 import pytest
 
@@ -11,18 +8,7 @@ from scripts.signal_edge_diagnostics import (
     print_summary,
     summarize,
 )
-from tests._helpers import write_jsonl
-
-
-def _make_tmp_dir() -> Path:
-    root = Path(__file__).resolve().parent / "_tmp_signal_edge_diagnostics"
-    path = root / uuid.uuid4().hex
-    path.mkdir(parents=True, exist_ok=False)
-    return path
-
-
-def _cleanup_tmp_dir(path: Path) -> None:
-    shutil.rmtree(path, ignore_errors=True)
+from tests._helpers import cleanup_tmp_dir, make_tmp_dir, write_jsonl
 
 
 def test_classify_skip_reason_distinguishes_zero_edge_duplicate_and_other():
@@ -33,7 +19,7 @@ def test_classify_skip_reason_distinguishes_zero_edge_duplicate_and_other():
 
 
 def test_summarize_builds_edge_audit_and_group_metrics():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("signal_edge_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -200,11 +186,11 @@ def test_summarize_builds_edge_audit_and_group_metrics():
         assert by_source["Reuters"]["avg_edge"] == pytest.approx(0.04)
         assert by_source["NYT > World News"]["zero_edge"] == 1
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_excludes_synthetic_probe_from_llm_metrics():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("signal_edge_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -249,11 +235,11 @@ def test_summarize_excludes_synthetic_probe_from_llm_metrics():
         assert stats["llm_observability"]["status_counts"]["startup_probe_success"] == 1
         assert stats["llm_value_add"]["llm_rows"] == 1
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_reads_partitioned_trade_root():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("signal_edge_diagnostics")
     try:
         root = tmp / "trades"
         write_jsonl(
@@ -292,11 +278,11 @@ def test_summarize_reads_partitioned_trade_root():
         assert stats["counts"]["SIGNAL_ANALYSIS_DETAIL"] == 1
         assert stats["counts"]["OPPORTUNITY"] == 1
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_applies_date_window_and_reports_live_attribution_limit():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("signal_edge_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -330,11 +316,11 @@ def test_summarize_applies_date_window_and_reports_live_attribution_limit():
         assert stats["counts"]["EXECUTED"] == 1
         assert stats["live_execution_attribution_limited"] is True
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_print_summary_includes_edge_sections(capsys):
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("signal_edge_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -388,4 +374,4 @@ def test_print_summary_includes_edge_sections(capsys):
         assert "LLM queue wait" in output
         assert "Live orders are counted in the cohort summary" in output
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)

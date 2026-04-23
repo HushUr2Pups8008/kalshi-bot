@@ -1,29 +1,14 @@
-import shutil
-import uuid
-from pathlib import Path
-
 from scripts.keyword_feedback import (
     parse_date_end,
     parse_date_start,
     print_summary,
     summarize,
 )
-from tests._helpers import write_jsonl
-
-
-def _make_tmp_dir() -> Path:
-    root = Path(__file__).resolve().parent / "_tmp_keyword_feedback"
-    path = root / uuid.uuid4().hex
-    path.mkdir(parents=True, exist_ok=False)
-    return path
-
-
-def _cleanup_tmp_dir(path: Path) -> None:
-    shutil.rmtree(path, ignore_errors=True)
+from tests._helpers import cleanup_tmp_dir, make_tmp_dir, write_jsonl
 
 
 def test_summarize_collects_no_keyword_misses_and_candidate_phrases():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("keyword_feedback")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -69,11 +54,11 @@ def test_summarize_collects_no_keyword_misses_and_candidate_phrases():
         assert phrases["talks collapse"]["review_bucket"] == "strongest specific candidates"
         assert phrases["talks collapse"]["candidate_score"] > phrases["iran war"]["candidate_score"]
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_reads_partitioned_trade_root():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("keyword_feedback")
     try:
         root = tmp / "trades"
         write_jsonl(
@@ -110,11 +95,11 @@ def test_summarize_reads_partitioned_trade_root():
         assert stats["no_keyword_misses"] == 1
         assert stats["corroborating_keyword_gate_records"] == 1
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_respects_date_filter_and_excludes_test_records():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("keyword_feedback")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -150,11 +135,11 @@ def test_summarize_respects_date_filter_and_excludes_test_records():
         phrases = {row["phrase"] for row in stats["phrases"]}
         assert "real phrase" in phrases
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_generic_phrase_gets_risk_flags():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("keyword_feedback")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -187,11 +172,11 @@ def test_generic_phrase_gets_risk_flags():
         assert phrases["watch peace"]["category"] == "generic / high false-positive risk"
         assert phrases["watch peace"]["review_bucket"] == "likely reject / too broad"
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_named_entity_phrase_lands_on_watchlist():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("keyword_feedback")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -222,11 +207,11 @@ def test_named_entity_phrase_lands_on_watchlist():
         assert "overly_broad_named_entity" in phrases["donald trump"]["risk_flags"]
         assert phrases["donald trump"]["review_bucket"] == "watchlist / ambiguous candidates"
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_print_summary_includes_expected_sections(capsys):
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("keyword_feedback")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -263,4 +248,4 @@ def test_print_summary_includes_expected_sections(capsys):
         assert "Risk Notes" in output
         assert "iran war" in output
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)

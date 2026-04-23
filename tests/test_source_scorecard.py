@@ -1,4 +1,3 @@
-import shutil
 import sqlite3
 import uuid
 from pathlib import Path
@@ -18,20 +17,9 @@ from scripts.source_scorecard import (
     top_performer,
     watchlist_candidate,
 )
-from tests._helpers import write_jsonl
+from tests._helpers import cleanup_tmp_dir, make_tmp_dir, write_jsonl
 
 _REAL_SQLITE_CONNECT = sqlite3.connect
-
-
-def _make_tmp_dir() -> Path:
-    root = Path(__file__).resolve().parent / "_tmp_source_scorecard"
-    path = root / uuid.uuid4().hex
-    path.mkdir(parents=True, exist_ok=False)
-    return path
-
-
-def _cleanup_tmp_dir(path: Path) -> None:
-    shutil.rmtree(path, ignore_errors=True)
 
 
 def _create_shared_memory_db(uri: str, rows: list[dict]) -> sqlite3.Connection:
@@ -74,7 +62,7 @@ def _create_shared_memory_db(uri: str, rows: list[dict]) -> sqlite3.Connection:
 
 
 def test_summarize_reads_partitioned_trade_root():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("source_scorecard")
     try:
         logs_root = tmp / "trades"
         write_jsonl(
@@ -110,11 +98,11 @@ def test_summarize_reads_partitioned_trade_root():
         assert reuters["signals"] == 1
         assert reuters["early_stale_drops"] == 1
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_combines_log_and_db_metrics():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("source_scorecard")
     try:
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
@@ -157,11 +145,11 @@ def test_summarize_combines_log_and_db_metrics():
         assert rows["AP"]["resolved_paper_trades"] == 0
         conn.close()
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_respects_date_filter():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("source_scorecard")
     try:
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
@@ -196,11 +184,11 @@ def test_summarize_respects_date_filter():
         assert row["total_pnl"] == 2.0
         conn.close()
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_excludes_test_records():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("source_scorecard")
     try:
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
@@ -227,7 +215,7 @@ def test_summarize_excludes_test_records():
         assert stats["rows"][0]["source"] == "Reuters"
         conn.close()
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_classify_source_heuristics():
@@ -300,7 +288,7 @@ def test_classify_source_family_rules():
 
 
 def test_summarize_separates_disabled_sources_from_active_groups():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("source_scorecard")
     try:
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
@@ -336,11 +324,11 @@ def test_summarize_separates_disabled_sources_from_active_groups():
         assert "Reuters" in active_sources
         conn.close()
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_separates_family_disabled_sources_from_active_groups():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("source_scorecard")
     try:
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
@@ -366,11 +354,11 @@ def test_summarize_separates_family_disabled_sources_from_active_groups():
         assert "query one - BingNews" not in active_sources
         assert "Reuters" in active_sources
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_assigns_each_active_source_to_one_recommendation_tier():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("source_scorecard")
     try:
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
@@ -455,11 +443,11 @@ def test_summarize_assigns_each_active_source_to_one_recommendation_tier():
         assert memberships["Active Top"] == ["top performers"]
         conn.close()
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_print_summary_mentions_non_attributable_metrics(capsys):
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("source_scorecard")
     try:
         log_path = tmp / "trades.jsonl"
         db_path = tmp / "paper_trades.db"
@@ -473,7 +461,7 @@ def test_print_summary_mentions_non_attributable_metrics(capsys):
         assert "Opportunities produced: not reliably attributable" in output
         assert "Executor skips: not reliably attributable" in output
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_recommendation_heuristics():

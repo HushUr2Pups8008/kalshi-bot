@@ -1,6 +1,3 @@
-import shutil
-import uuid
-from pathlib import Path
 
 import pytest
 
@@ -13,22 +10,11 @@ from scripts.freshness_diagnostics import (
     strategy_misaligned_candidate,
     summarize,
 )
-from tests._helpers import write_jsonl
-
-
-def _make_tmp_dir() -> Path:
-    root = Path(__file__).resolve().parent / "_tmp_freshness_diagnostics"
-    path = root / uuid.uuid4().hex
-    path.mkdir(parents=True, exist_ok=False)
-    return path
-
-
-def _cleanup_tmp_dir(path: Path) -> None:
-    shutil.rmtree(path, ignore_errors=True)
+from tests._helpers import cleanup_tmp_dir, make_tmp_dir, write_jsonl
 
 
 def test_summarize_empty_file():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("freshness_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         path.write_text("", encoding="utf-8")
@@ -41,11 +27,11 @@ def test_summarize_empty_file():
         assert stats["age_bearing_early_stale_records"] == 0
         assert stats["sources"] == {}
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_skips_malformed_lines():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("freshness_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -64,11 +50,11 @@ def test_summarize_skips_malformed_lines():
         assert stats["records_kept"] == 1
         assert stats["sources"]["Reuters"]["early_stale_drops"] == 1
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_reads_partitioned_trade_root():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("freshness_diagnostics")
     try:
         root = tmp / "trades"
         write_jsonl(
@@ -91,11 +77,11 @@ def test_summarize_reads_partitioned_trade_root():
         assert stats["sources"]["Reuters"]["fresh_passes"] == 1
         assert stats["sources"]["Reuters"]["early_stale_drops"] == 1
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_source_freshness_metrics():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("freshness_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -139,11 +125,11 @@ def test_summarize_source_freshness_metrics():
         assert ap["over_300s"] == 1
         assert ap["over_900s"] == 1
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_handles_missing_age_honestly():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("freshness_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -166,11 +152,11 @@ def test_summarize_handles_missing_age_honestly():
         assert row["p90_age_seconds"] is None
         assert row["freshest_age_seconds"] is None
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_applies_date_filter():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("freshness_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -194,7 +180,7 @@ def test_summarize_applies_date_filter():
         assert row["early_stale_drops"] == 1
         assert row["median_age_seconds"] == 500
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_age_bucket_boundaries():
@@ -207,7 +193,7 @@ def test_age_bucket_boundaries():
 
 
 def test_print_summary_handles_empty_stats(capsys):
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("freshness_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         path.write_text("", encoding="utf-8")
@@ -219,11 +205,11 @@ def test_print_summary_handles_empty_stats(capsys):
         assert "FRESHNESS DIAGNOSTICS" in output
         assert "No source-attributable freshness records found." in output
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_print_summary_includes_ranked_sections(capsys):
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("freshness_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -257,7 +243,7 @@ def test_print_summary_includes_ranked_sections(capsys):
         assert "fresh_pass=" in output
         assert "label=" in output
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_borderline_and_strategy_misaligned_candidates():
@@ -313,7 +299,7 @@ def test_borderline_and_strategy_misaligned_candidates():
 
 
 def test_print_summary_show_all_reveals_hidden_buckets(capsys):
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("freshness_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -340,4 +326,4 @@ def test_print_summary_show_all_reveals_hidden_buckets(capsys):
         assert "Dead Source" in output
         assert "Fast Source" in output
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)

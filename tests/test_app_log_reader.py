@@ -1,18 +1,11 @@
 from __future__ import annotations
 
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-import shutil
-import uuid
 
 from utils.app_log_reader import iter_app_log_records
-
-
-def _make_tmp_dir() -> Path:
-    root = Path(__file__).resolve().parent / "_tmp_app_log_reader"
-    path = root / uuid.uuid4().hex
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+from tests._helpers import make_tmp_dir
 
 
 def _write_lines(path: Path, lines: list[str]) -> None:
@@ -21,7 +14,7 @@ def _write_lines(path: Path, lines: list[str]) -> None:
 
 
 def test_reads_valid_logger_format_line():
-    tmp_path = _make_tmp_dir()
+    tmp_path = make_tmp_dir("app_log_reader")
     path = tmp_path / "bot.log"
     _write_lines(
         path,
@@ -37,7 +30,7 @@ def test_reads_valid_logger_format_line():
 
 
 def test_reads_bracket_task_format_line():
-    tmp_path = _make_tmp_dir()
+    tmp_path = make_tmp_dir("app_log_reader")
     path = tmp_path / "bot.log"
     _write_lines(
         path,
@@ -53,7 +46,7 @@ def test_reads_bracket_task_format_line():
 
 
 def test_malformed_line_is_safe():
-    tmp_path = _make_tmp_dir()
+    tmp_path = make_tmp_dir("app_log_reader")
     path = tmp_path / "bot.log"
     _write_lines(path, ["not a log line"])
 
@@ -67,7 +60,7 @@ def test_malformed_line_is_safe():
 
 
 def test_date_filter_keeps_undated_lines():
-    tmp_path = _make_tmp_dir()
+    tmp_path = make_tmp_dir("app_log_reader")
     path = tmp_path / "bot.log"
     _write_lines(
         path,
@@ -91,7 +84,7 @@ def test_date_filter_keeps_undated_lines():
 
 
 def test_level_filter_is_case_insensitive():
-    tmp_path = _make_tmp_dir()
+    tmp_path = make_tmp_dir("app_log_reader")
     path = tmp_path / "bot.log"
     _write_lines(
         path,
@@ -108,7 +101,7 @@ def test_level_filter_is_case_insensitive():
 
 
 def test_directory_reads_archives_oldest_to_newest_then_active():
-    tmp_path = _make_tmp_dir()
+    tmp_path = make_tmp_dir("app_log_reader")
     log_dir = tmp_path / "app"
     _write_lines(log_dir / "bot.log.2026-04-14", ["2026-04-14 09:00:00,000 UTC INFO     main                  oldest"])
     _write_lines(log_dir / "bot.log.2026-04-15", ["2026-04-15 09:00:00,000 UTC INFO     main                  newer"])
@@ -120,7 +113,7 @@ def test_directory_reads_archives_oldest_to_newest_then_active():
 
 
 def test_glob_pattern_reads_matching_files():
-    tmp_path = _make_tmp_dir()
+    tmp_path = make_tmp_dir("app_log_reader")
     log_dir = tmp_path / "app"
     _write_lines(log_dir / "bot.log.2026-04-15", ["2026-04-15 09:00:00,000 UTC INFO     main                  archive"])
     _write_lines(log_dir / "bot.log", ["2026-04-16 09:00:00,000 UTC INFO     main                  active"])

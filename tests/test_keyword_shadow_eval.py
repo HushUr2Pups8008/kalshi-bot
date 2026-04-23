@@ -7,8 +7,6 @@ No live config is touched by any test.
 from __future__ import annotations
 
 import json
-import shutil
-import uuid
 from pathlib import Path
 
 from scripts.keyword_shadow_eval import (
@@ -27,23 +25,7 @@ from scripts.keyword_shadow_eval import (
     parse_date_start,
     score_phrases,
 )
-from tests._helpers import write_jsonl
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-def _make_tmp_dir() -> Path:
-    root = Path(__file__).resolve().parent / "_tmp_keyword_shadow_eval"
-    path = root / uuid.uuid4().hex
-    path.mkdir(parents=True, exist_ok=False)
-    return path
-
-
-def _cleanup_tmp_dir(path: Path) -> None:
-    shutil.rmtree(path, ignore_errors=True)
+from tests._helpers import cleanup_tmp_dir, make_tmp_dir, write_jsonl
 
 
 def _miss(headline: str, ticker: str = "KXTEST-1", source: str = "Reuters") -> dict:
@@ -69,7 +51,7 @@ def _other(headline: str) -> dict:
 
 
 def test_load_miss_corpus_reads_partitioned_trade_root():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("keyword_shadow_eval")
     try:
         root = tmp / "trades"
         write_jsonl(
@@ -88,7 +70,7 @@ def test_load_miss_corpus_reads_partitioned_trade_root():
         assert len(records) == 1
         assert records[0]["ticker"] == "KX1"
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +245,7 @@ class TestLoadMissCorpus:
         assert malformed == 0
 
     def test_loads_no_keywords_events_only(self):
-        tmp = _make_tmp_dir()
+        tmp = make_tmp_dir("keyword_shadow_eval")
         try:
             path = tmp / "trades.jsonl"
             write_jsonl(
@@ -288,10 +270,10 @@ class TestLoadMissCorpus:
             assert malformed == 0
             assert all(r["reason"] == "no_keywords" for r in records)
         finally:
-            _cleanup_tmp_dir(tmp)
+            cleanup_tmp_dir(tmp)
 
     def test_date_window_filters_records(self):
-        tmp = _make_tmp_dir()
+        tmp = make_tmp_dir("keyword_shadow_eval")
         try:
             path = tmp / "trades.jsonl"
             write_jsonl(
@@ -308,10 +290,10 @@ class TestLoadMissCorpus:
             assert len(records) == 1
             assert records[0]["headline"] == "In-window headline"
         finally:
-            _cleanup_tmp_dir(tmp)
+            cleanup_tmp_dir(tmp)
 
     def test_exclude_test_filters_kxtest_ticker(self):
-        tmp = _make_tmp_dir()
+        tmp = make_tmp_dir("keyword_shadow_eval")
         try:
             path = tmp / "trades.jsonl"
             write_jsonl(
@@ -325,10 +307,10 @@ class TestLoadMissCorpus:
             assert len(records) == 1
             assert records[0]["headline"] == "Real headline"
         finally:
-            _cleanup_tmp_dir(tmp)
+            cleanup_tmp_dir(tmp)
 
     def test_malformed_lines_counted_not_crashed(self):
-        tmp = _make_tmp_dir()
+        tmp = make_tmp_dir("keyword_shadow_eval")
         try:
             path = tmp / "trades.jsonl"
             # Mix of valid and invalid JSON
@@ -343,7 +325,7 @@ class TestLoadMissCorpus:
             assert len(records) == 2
             assert total == 3
         finally:
-            _cleanup_tmp_dir(tmp)
+            cleanup_tmp_dir(tmp)
 
 
 # ---------------------------------------------------------------------------

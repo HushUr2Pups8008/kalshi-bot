@@ -1,7 +1,3 @@
-import shutil
-import uuid
-from pathlib import Path
-
 from scripts.match_suppression_audit import (
     classify_candidate,
     parse_date_end,
@@ -9,18 +5,7 @@ from scripts.match_suppression_audit import (
     print_summary,
     summarize,
 )
-from tests._helpers import write_jsonl
-
-
-def _make_tmp_dir() -> Path:
-    root = Path(__file__).resolve().parent / "_tmp_match_suppression_audit"
-    path = root / uuid.uuid4().hex
-    path.mkdir(parents=True, exist_ok=False)
-    return path
-
-
-def _cleanup_tmp_dir(path: Path) -> None:
-    shutil.rmtree(path, ignore_errors=True)
+from tests._helpers import cleanup_tmp_dir, make_tmp_dir, write_jsonl
 
 
 def test_classify_candidate_safe_vs_risky():
@@ -37,7 +22,7 @@ def test_classify_candidate_safe_vs_risky():
 
 
 def test_summarize_collects_safe_and_risky_counts():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("match_suppression_audit")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -79,11 +64,11 @@ def test_summarize_collects_safe_and_risky_counts():
         assert stats["safe_examples"][0]["ticker"] == "KXMOCTRUMP25-26-APR24"
         assert stats["risky_examples"][0]["ticker"] == "KXTRUMPIRAN-26MAY01"
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_reads_partitioned_trade_root():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("match_suppression_audit")
     try:
         root = tmp / "trades"
         write_jsonl(
@@ -118,11 +103,11 @@ def test_summarize_reads_partitioned_trade_root():
         assert stats["lines_total"] == 2
         assert stats["total_candidates"] == 2
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_applies_date_filter():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("match_suppression_audit")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -155,11 +140,11 @@ def test_summarize_applies_date_filter():
         assert stats["total_candidates"] == 1
         assert stats["safe_count"] == 1
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_print_summary_includes_sections(capsys):
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("match_suppression_audit")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -189,4 +174,4 @@ def test_print_summary_includes_sections(capsys):
         assert "Recent Risky Examples" in output
         assert "heuristic only" in output
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)

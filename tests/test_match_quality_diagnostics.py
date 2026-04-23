@@ -1,7 +1,3 @@
-import shutil
-import uuid
-from pathlib import Path
-
 from scripts.match_quality_diagnostics import (
     parse_date_end,
     parse_date_start,
@@ -10,22 +6,11 @@ from scripts.match_quality_diagnostics import (
     summarize,
     summarize_backfill,
 )
-from tests._helpers import write_jsonl
-
-
-def _make_tmp_dir() -> Path:
-    root = Path(__file__).resolve().parent / "_tmp_match_quality_diagnostics"
-    path = root / uuid.uuid4().hex
-    path.mkdir(parents=True, exist_ok=False)
-    return path
-
-
-def _cleanup_tmp_dir(path: Path) -> None:
-    shutil.rmtree(path, ignore_errors=True)
+from tests._helpers import cleanup_tmp_dir, make_tmp_dir, write_jsonl
 
 
 def test_summarize_collects_low_quality_rates_and_examples():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("match_quality_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -80,11 +65,11 @@ def test_summarize_collects_low_quality_rates_and_examples():
         assert stats["examples_bad"][0]["ticker"] == "KXTRUMP-25A"
         assert stats["examples_good"][0]["ticker"] == "KXIRAN-1"
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_tracks_pre_llm_would_block_by_source_and_ticker():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("match_quality_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -122,11 +107,11 @@ def test_summarize_tracks_pre_llm_would_block_by_source_and_ticker():
         assert stats["pre_llm_would_block_by_ticker"]["KXTRUMP-25A"] == 1
         assert "AP" not in stats["pre_llm_would_block_by_source"]
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_respects_date_filter_and_missing_score_note():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("match_quality_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -163,11 +148,11 @@ def test_summarize_respects_date_filter_and_missing_score_note():
         assert stats["low_quality_matches"] == 0
         assert stats["match_score_available"] is False
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_reads_partitioned_trade_root():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("match_quality_diagnostics")
     try:
         root = tmp / "trades"
         write_jsonl(
@@ -206,11 +191,11 @@ def test_summarize_reads_partitioned_trade_root():
         assert stats["match_records"] == 2
         assert stats["low_quality_matches"] == 1
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_print_summary_includes_sections(capsys):
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("match_quality_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -247,11 +232,11 @@ def test_print_summary_includes_sections(capsys):
         assert "Recent Higher-Quality Examples" in output
         assert "approximate and non-blocking" in output
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_backfill_reconstructs_titles_and_rates():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("match_quality_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -305,11 +290,11 @@ def test_summarize_backfill_reconstructs_titles_and_rates():
         assert high[0]["ticker"] == "KXIRAN-1"
         assert stats["by_source"][0]["source"] == "NYT > World News"
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_summarize_backfill_honestly_excludes_missing_titles():
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("match_quality_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -331,11 +316,11 @@ def test_summarize_backfill_honestly_excludes_missing_titles():
         assert stats["evaluated_events"] == 0
         assert stats["rows_missing_title"] == 1
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)
 
 
 def test_print_backfill_summary_includes_sections(capsys):
-    tmp = _make_tmp_dir()
+    tmp = make_tmp_dir("match_quality_diagnostics")
     try:
         path = tmp / "trades.jsonl"
         write_jsonl(
@@ -362,4 +347,4 @@ def test_print_backfill_summary_includes_sections(capsys):
         assert "Low-Quality Rate by Source" in output
         assert "approximate overlap heuristics" in output
     finally:
-        _cleanup_tmp_dir(tmp)
+        cleanup_tmp_dir(tmp)

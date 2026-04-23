@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import uuid
 from pathlib import Path
 
 
@@ -23,21 +22,16 @@ from scripts.signal_edge_diagnostics import (
     fmt_latency_stats,
     summarize,
 )
-from tests._helpers import write_jsonl
+from tests._helpers import make_tmp_dir, write_jsonl
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_tmp_dir() -> Path:
-    root = Path(__file__).resolve().parent / "_tmp_llm_latency_observability"
-    path = root / uuid.uuid4().hex
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
 def _cleanup(path: Path) -> None:
+    """Module-specific cleanup: supports path-or-file arg (differs from
+    the generic cleanup_tmp_dir in tests/_helpers.py)."""
     shutil.rmtree(path.parent if path.is_file() else path, ignore_errors=True)
 
 
@@ -142,7 +136,7 @@ class TestLlmMeta:
 class TestLogSignalAnalysisDetail:
     def test_latency_ms_written_to_record(self):
         from utils.logger import TradeLogger
-        tmp = _make_tmp_dir()
+        tmp = make_tmp_dir("llm_latency_observability")
         log_file = tmp / "trades.jsonl"
         logger = TradeLogger(log_file)
         try:
@@ -181,7 +175,7 @@ class TestLogSignalAnalysisDetail:
 
     def test_latency_ms_absent_when_none(self):
         from utils.logger import TradeLogger
-        tmp = _make_tmp_dir()
+        tmp = make_tmp_dir("llm_latency_observability")
         log_file = tmp / "trades.jsonl"
         logger = TradeLogger(log_file)
         try:
@@ -203,7 +197,7 @@ class TestLogSignalAnalysisDetail:
 
     def test_pre_llm_fields_written_when_provided(self):
         from utils.logger import TradeLogger
-        tmp = _make_tmp_dir()
+        tmp = make_tmp_dir("llm_latency_observability")
         log_file = tmp / "trades.jsonl"
         logger = TradeLogger(log_file)
         try:
@@ -241,7 +235,7 @@ class TestLogSignalAnalysisDetail:
 
 class TestSummarizeLatency:
     def test_latency_samples_collected(self):
-        tmp = _make_tmp_dir()
+        tmp = make_tmp_dir("llm_latency_observability")
         path = tmp / "trades.jsonl"
         write_jsonl(path, [
             _base_detail(llm_latency_ms=1000, llm_total_stage_ms=1200),
@@ -257,7 +251,7 @@ class TestSummarizeLatency:
             _cleanup(tmp)
 
     def test_rows_without_latency_excluded_from_samples(self):
-        tmp = _make_tmp_dir()
+        tmp = make_tmp_dir("llm_latency_observability")
         path = tmp / "trades.jsonl"
         write_jsonl(path, [
             _base_detail(llm_latency_ms=500),
@@ -272,7 +266,7 @@ class TestSummarizeLatency:
 
     def test_keyword_only_rows_can_have_latency(self):
         # keyword-only fallback still attempted Ollama (and got a latency)
-        tmp = _make_tmp_dir()
+        tmp = make_tmp_dir("llm_latency_observability")
         path = tmp / "trades.jsonl"
         write_jsonl(path, [
             _base_detail(
@@ -291,7 +285,7 @@ class TestSummarizeLatency:
             _cleanup(tmp)
 
     def test_timing_breakdown_samples_collected(self):
-        tmp = _make_tmp_dir()
+        tmp = make_tmp_dir("llm_latency_observability")
         path = tmp / "trades.jsonl"
         write_jsonl(path, [
             _base_detail(
@@ -315,7 +309,7 @@ class TestSummarizeLatency:
             _cleanup(tmp)
 
     def test_empty_log_gives_empty_samples(self):
-        tmp = _make_tmp_dir()
+        tmp = make_tmp_dir("llm_latency_observability")
         path = tmp / "trades.jsonl"
         path.write_text("", encoding="utf-8")
         try:
