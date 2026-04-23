@@ -241,12 +241,12 @@ The literal interpretation will likely block a high fraction of current Trump/Ir
 
 **Purpose:** Validate that edge is real, stable, and sufficient for live consideration. Requires explicit written authorization from Codex before beginning.
 
-**Dependencies:** P3-GATE PASS; explicit written authorization from Codex; S4.5 COMPLETE.
+**Dependencies:** P3-GATE PASS; explicit written authorization from Codex; S4.5 COMPLETE; `PROFIT-CAL-001` calibration-emission wiring COMPLETE (see `docs/plans/profit_cal_001_calibration_wiring.md` — structural blocker on P4.2 and therefore on P4.3).
 
 | ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
 |----|------|--------|-------|---------|-------------|-----------------|
 | P4.1 | 14-day paper mode monitoring with all pipeline improvements active | NOT_STARTED | Shared | Confirm edge is stable, not a one-off artifact | All existing paper-trade safety gates active; no live trading; INV-6 and INV-7 enforced | Edge > 0 on ≥ 3 distinct trade candidates over 14 days |
-| P4.2 | Calibration review: est distribution vs resolved outcomes | NOT_STARTED | Claude | Verify LLM estimates are calibrated, not coincidentally correct | Requires ≥ 10 resolved paper trades | Calibration curve documented; over/underconfidence measured |
+| P4.2 | Calibration review: est distribution vs resolved outcomes | NOT_STARTED | Claude | Verify LLM estimates are calibrated, not coincidentally correct | Requires ≥ 10 resolved paper trades. **Hard blocker:** `PROFIT-CAL-001` — `CALIBRATION_CHECK` emission is not wired from `resolve_market`; P4.2 cannot produce its calibration-curve output until that fix lands. Design in `docs/plans/profit_cal_001_calibration_wiring.md`; execution scheduled as first post-S4.5c work item. | Calibration curve documented; over/underconfidence measured |
 | P4.3 | Live trading authorization | NOT_STARTED | Codex | Explicit written sign-off | Requires P4.1 + P4.2 COMPLETE; INV-6 and INV-7 compliance verified in writing | Authorization recorded; live mode enabled |
 
 **P4-GATE outcome:**
