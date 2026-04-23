@@ -314,7 +314,7 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 | Institute for the Study of War (ISW) | RSS | daily | Russia/Ukraine analysis; slow cadence, high quality |
 | CSIS, CFR, Brookings, RAND | RSS | days | Analytical depth; treat as context/enrichment, not fast lane |
 | Bellingcat, Liveuamap | RSS / JSON | hours | OSINT investigations; crowd-sourced conflict mapping |
-| Polymarket cross-reference | Public GraphQL | sub-second poll | Parallel prediction market; price moves can precede news — highest novel-signal leverage of any item in this appendix. **Architectural note:** not a generic `NewsItem` source — should emit a specialized `PredictionMarketQuote` type via a new monitor (`feeds/polymarket_monitor.py`). Requires a dedicated design note before integration; see `docs/plans/news_sources_evaluation.md` §3.2 |
+| Polymarket cross-reference | Public GraphQL / Gamma REST | sub-second poll | Parallel prediction market; price moves can precede news — highest novel-signal leverage of any item in this appendix. **Scope pivot (2026-04-22):** the user has redefined Polymarket as a candidate **second trading venue** (peer to Kalshi), not only a news-signal lane. The venue-integration investigation is the primary design document — see [`docs/plans/polymarket_venue_integration_investigation.md`](plans/polymarket_venue_integration_investigation.md). This appendix row remains valid as the *read-only market-data observer* sub-initiative (Phase 1 of that plan), which is still the right entry point whether or not live trading follows. |
 | Metaculus | REST | minutes | Probabilistic forecasts with rationale |
 | Bluesky (AT Protocol) | Public API | near-realtime streaming | Open protocol; growing journalist/newswire user base; covers the "social news" gap without X/ToS issues |
 | Mastodon (ActivityPub) | Public API + WebSocket stream | near-realtime | Journalist community on journa.host and mstdn.social |
@@ -338,7 +338,7 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 
 1. Government RSS expansion (Tier 1, group 1–3) — weekend-scale work, zero risk, direct primary-source signal.
 2. Google Alerts → RSS per high-specificity market — natural pairing with P3.2.
-3. Polymarket cross-reference — highest novel signal type in the whole list; well-defined API.
+3. Polymarket cross-reference — highest novel signal type in the whole list; well-defined API. **See the separate [venue-integration investigation](plans/polymarket_venue_integration_investigation.md) — this item is now Phase 1 of a larger dual-venue question, not just a news-source add.**
 4. Wire service regional expansion (Al Jazeera, France 24, DW, BBC) — breadth.
 5. Bluesky journalist-timeline feed — covers the "social news" gap cleanly; also the recommended replacement for Reddit's firsthand / ground-level content (see `PROFIT-SOURCE-001` and `docs/plans/news_sources_evaluation.md` §7).
 6. ISW / CSIS / CFR RSS — context layer.
