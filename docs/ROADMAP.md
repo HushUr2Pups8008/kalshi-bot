@@ -282,11 +282,13 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 
 ---
 
-## Appendix A — Post-OT&E News Source Options (investigated 2026-04-22)
+## Appendix A — Post-OT&E News Source Options (investigated 2026-04-22; expanded 2026-04-23)
 
 **Status:** investigation only. No integration until S4.5c COMPLETE and P4-GATE outcome known. Order below is recommended *post-OT&E* integration sequence, smallest-risk-first, each A/B-testable against the paper-mode baseline individually rather than bundled.
 
 **Constraints considered:** zero/low cost, architecturally reliable, low latency, geopolitical-market relevance, fits existing `feeds/` async-generator pattern (INV-4 preserved).
+
+**Comprehensive evaluation:** a fuller analysis of the current `feeds/` architecture, warts worth fixing pre-expansion, Reddit's degraded-permanent state (see `PROFIT-SOURCE-001`), and expanded source candidates lives in `docs/plans/news_sources_evaluation.md`. This appendix is the short-form reference; the evaluation doc is authoritative for architectural context and sequencing rationale.
 
 ### Tier 1 — Zero cost, production-reliable, drop-in `rss_monitor.py` additions
 
@@ -296,6 +298,12 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 | UN News / IAEA / IMF / WTO | RSS | minutes | Resolutions, nuclear status, sanctions context |
 | Foreign MFA press offices (Iran, Russia, China, Israel) | RSS | minutes | Often *first* signal on reciprocal actions |
 | Al Jazeera English, France 24, DW, BBC World, Xinhua/TASS English | RSS | minutes | Regional + multilingual coverage complementing existing Reuters/AP |
+| European Council / European Commission press feeds | RSS | minutes | EU-side sanctions and foreign-policy signal; complements US gov feeds for Russia/Ukraine markets |
+| Congress.gov daily digest | RSS | daily | Legislative action relevant to Trump-related markets (KXMOCTRUMP*, KXTRUMPENDORSE*, KXPARDONSTRUMP*); slow cadence but unambiguous |
+| Kyiv Independent / Ukrainska Pravda (English) | RSS | minutes | Fast Ukraine-specific reporting; directly supplements Guardian/AJ for KXUKR / KXRUSSIA markets |
+| Iran International (English) | RSS | minutes | Iran-specific coverage from diaspora press; supplements KXIRAN / KXTRUMPIRAN markets |
+| Times of Israel | RSS | minutes | Direct Israel/Gaza/Lebanon coverage for KXMIDEAST markets |
+| Defense News / Breaking Defense (replace Defense One) | RSS | minutes | Defense One is already in `DISABLED_NEWS_SOURCES`; these replacements have better signal-to-noise in prior spot checks |
 | Google Alerts → RSS (per market) | RSS | minutes | Per-market keyword-targeted; pairs naturally with P3.2 (`market_specificity_score`) once narrow markets are prioritized |
 | GDELT extended endpoints (GKG themes, 2.0 Translingual, GDELT Cloud 2026 streaming) | API | 15min–realtime | Extension of existing `feeds/gdelt_monitor.py`; theme monitoring + push alerts add incremental signal without new infra |
 
@@ -306,7 +314,7 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 | Institute for the Study of War (ISW) | RSS | daily | Russia/Ukraine analysis; slow cadence, high quality |
 | CSIS, CFR, Brookings, RAND | RSS | days | Analytical depth; treat as context/enrichment, not fast lane |
 | Bellingcat, Liveuamap | RSS / JSON | hours | OSINT investigations; crowd-sourced conflict mapping |
-| Polymarket cross-reference | Public GraphQL | sub-second poll | Parallel prediction market; price moves can precede news — highest novel-signal leverage of any item in this appendix |
+| Polymarket cross-reference | Public GraphQL | sub-second poll | Parallel prediction market; price moves can precede news — highest novel-signal leverage of any item in this appendix. **Architectural note:** not a generic `NewsItem` source — should emit a specialized `PredictionMarketQuote` type via a new monitor (`feeds/polymarket_monitor.py`). Requires a dedicated design note before integration; see `docs/plans/news_sources_evaluation.md` §3.2 |
 | Metaculus | REST | minutes | Probabilistic forecasts with rationale |
 | Bluesky (AT Protocol) | Public API | near-realtime streaming | Open protocol; growing journalist/newswire user base; covers the "social news" gap without X/ToS issues |
 | Mastodon (ActivityPub) | Public API + WebSocket stream | near-realtime | Journalist community on journa.host and mstdn.social |
@@ -322,7 +330,7 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 
 ### Explicitly skipped / deferred
 
-- **X/Twitter via twikit or Playwright/browser automation** — investigated separately. Diagnosis: account-ban risk + compliance ambiguity + unstable internal API + latency during breaking-news captcha spikes. Adding X won't fix the P0.3 "market-scope ceiling" — more news of the same shape gives more magnitude="none" passthroughs. Defer indefinitely; revisit only if P3 leaves a concrete signal-volume gap.
+- **X/Twitter via twikit or Playwright/browser automation** — investigated separately. Diagnosis: account-ban risk + compliance ambiguity + unstable internal API + latency during breaking-news captcha spikes. Adding X won't fix the P0.3 "market-scope ceiling" — more news of the same shape gives more magnitude="none" passthroughs. Defer indefinitely; revisit only if P3 leaves a concrete signal-volume gap. **Watch-list note (2026-04-23):** retained on deferred status, but track whether a post-CAL-001 latency gap appears that only X can close (wire services often post to X before updating their own RSS in breaking-news windows). Do not integrate; do monitor for the gap.
 - **NewsAPI.org, GNews, Currents, MediaStack, NewsAPI.ai** — all free tiers are 100–2000 req/day and ToS-restricted to "development." Paid tiers land at $50–$500/mo. Not zero-cost for production polling.
 - **Paid aggregators (Benzinga, Bloomberg, Feedly Pro, Inoreader)** — outside the zero-cost criterion.
 
@@ -332,7 +340,7 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 2. Google Alerts → RSS per high-specificity market — natural pairing with P3.2.
 3. Polymarket cross-reference — highest novel signal type in the whole list; well-defined API.
 4. Wire service regional expansion (Al Jazeera, France 24, DW, BBC) — breadth.
-5. Bluesky journalist-timeline feed — covers the "social news" gap cleanly.
+5. Bluesky journalist-timeline feed — covers the "social news" gap cleanly; also the recommended replacement for Reddit's firsthand / ground-level content (see `PROFIT-SOURCE-001` and `docs/plans/news_sources_evaluation.md` §7).
 6. ISW / CSIS / CFR RSS — context layer.
 7. GDELT extended endpoints — incremental extension to existing monitor.
 
