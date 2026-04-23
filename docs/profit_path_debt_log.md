@@ -10,8 +10,8 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-04-22 |
-| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep |
+| Last Updated | 2026-04-23 |
+| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 33 |
@@ -55,10 +55,10 @@ These items were added during the 2026-04-20 expanded audit. They do not replace
 | **Title** | S4.5 multi-lane paper validation remains unproven over a meaningful window |
 | **Category** | System Validation / Profit-Path Integrity |
 | **Severity** | HIGH |
-| **Status** | BLOCKED |
+| **Status** | OPEN |
 | **Priority** | NOW |
 | **Owner** | Shared |
-| **Depends On** | S3.x runtime wiring, S4.4 calibration work |
+| **Depends On** | S4.5c extended validation window |
 | **Blocks** | Go-live confidence, S4.5 completion |
 
 **Description**  
@@ -86,6 +86,9 @@ Do not modify intake settings to force activity; this is a validation debt item,
 
 **Validation Notes** (2026-04-20)  
 Runtime evidence exists for accumulation and blend participation, but the gate cannot close yet. `logs/trades/live/trades.jsonl` shows `BLEND_DECISION`, `EVIDENCE_INGESTION`, and `DOSSIER_UPDATE` events from 2026-04-20T03:43Z through 2026-04-20T12:50Z for `KXTRUMPIRAN-26MAY01`; `data/evidence_store.db` shows one dossier at version 7 with seven evidence rows. No `STRUCTURAL_PRIOR_RECOMPUTE` events were found, and `structural_priors` is empty. This is now blocked on resolving structural lane participation (see `PROFIT-STRUCT-001`) before S4.5 can be honestly marked complete.
+
+**Validation Notes** (2026-04-23)  
+Structural-lane block cleared. Over the 47-hour window 2026-04-21T00:09 → 2026-04-22T23:44 UTC (post-commit `2731d9a` structural crash-loop fix deployed 2026-04-21T01:38 UTC), `logs/trades/archive/2026/04/2026-04-{21,22}.jsonl` contain `EVIDENCE_INGESTION ×46`, `DOSSIER_UPDATE ×46`, `BLEND_DECISION ×49` (with `fast_lane_p` non-null on sampled events), and `STRUCTURAL_PRIOR_RECOMPUTE ×20` across 6 distinct dossier markets (`KXELECTIONEMERGENCY-26MAY01`, `KXMOCTRUMP25-26-APR24`, `KXMOCTRUMP25-26-MAY01`, `KXPARDONSTRUMP-26APR-1`, `KXTRUMPENDORSE-26SEP15-NMOR`, `KXTRUMPIRAN-26MAY01`). First structural event at 2026-04-21T16:52:38 UTC. Zero unhandled exceptions in `bot.log`. Trade-frequency observation: zero paper trades, consistent with Phase 0 verdict (LLM correctly declines directional views on broad-scope markets — not a runtime defect) — zero-baseline rule applies. **S4.5b closed PASS** (see `docs/ROADMAP.md` Stage 4 table). Status advanced `BLOCKED → OPEN`. The only remaining blocker is S4.5c — the 72-hour extended statistical-basis window — which is a soak-time requirement, not an architectural concern. No code or intake changes are required to reach S4.5c; depends only on elapsed observation time after any current configuration changes stabilize.
 
 ---
 
