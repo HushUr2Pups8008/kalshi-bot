@@ -107,6 +107,17 @@ RSS_FEEDS = [
     "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?max=10&ContentType=1&Site=945",  # "Department of War News Feed"
     "https://www.whitehouse.gov/news/feed",               # "News – The White House" (note en-dash)
     #
+    # ─── B2 institutional + industry additions (2026-04-23, URLs live-probed) ───
+    # Intergovernmental / institutional:
+    "https://news.un.org/feed/subscribe/en/news/all/rss.xml",                            # "UN News - Global perspective Human stories"
+    "https://ec.europa.eu/commission/presscorner/api/rss?language=en",                   # "Press releases - RSS"  (European Commission)
+    "https://www.iaea.org/feeds/news",                                                   # "Top Stories From the International Atomic Energy Agency"
+    # Foreign MFA (slow-cadence but authoritative):
+    "https://mid.ru/en/rss/",                                                            # "The Ministry of Foreign Affairs of the Russian Federation"
+    # Defense industry press (break stories ahead of mainstream wires):
+    "https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml",                 # "Defense News"
+    "https://breakingdefense.com/feed/",                                                 # "Breaking Defense"
+    #
     # Removed 2026-04-23 as pipeline-hygiene cleanup (direct HTTP probes confirmed dead):
     #   Reuters (feeds.reuters.com/reuters/{worldNews,topNews}) -- connection fails;
     #       Reuters discontinued public RSS in June 2020
@@ -160,6 +171,13 @@ EARLY_MAX_NEWS_AGE_BY_SOURCE: dict[str, int] = {
     "The Times of Israel": 1800,
     "Department of War News Feed": 1800,
     "News – The White House": 1800,  # en-dash (U+2013) in feed.title
+    # ─── B2 institutional + industry (2026-04-23) ───
+    "UN News - Global perspective Human stories": 1800,
+    "Press releases - RSS": 1800,  # generic title; from European Commission press corner
+    "Top Stories From the International Atomic Energy Agency": 1800,
+    "The Ministry of Foreign Affairs of the Russian Federation": 1800,
+    "Defense News": 1800,
+    "Breaking Defense": 1800,
 }
 
 # Per-source queue priority overrides. Lower number = processed first.

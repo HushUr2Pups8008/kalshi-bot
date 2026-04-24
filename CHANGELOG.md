@@ -6,6 +6,41 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.41] - 2026-04-23
+
+### Added
+- **Six institutional + industry RSS sources** (Tier 1, Batch 2 of 3).
+  All URLs were live-probed before commit (HTTP 200 + current items):
+  - **UN News (English)** (`news.un.org/feed/subscribe/en/news/all/rss.xml`,
+    `"UN News - Global perspective Human stories"`) — 30-item / 13.1h
+    feed; resolutions, ceasefires, conflict escalation coverage.
+  - **European Commission press corner**
+    (`ec.europa.eu/commission/presscorner/api/rss?language=en`,
+    `"Press releases - RSS"`) — 10-item / 9.6h feed; EU sanctions +
+    foreign-policy signal for Russia/Iran markets.
+  - **IAEA** (`iaea.org/feeds/news`,
+    `"Top Stories From the International Atomic Energy Agency"`) —
+    150-item / 35.6h feed; slow cadence but authoritative nuclear /
+    Iran signal.
+  - **Russia MFA (English)** (`mid.ru/en/rss/`,
+    `"The Ministry of Foreign Affairs of the Russian Federation"`) —
+    10-item / 34.4h feed; often first signal on reciprocal foreign-
+    policy actions.
+  - **Defense News** (`defensenews.com/arc/outboundfeeds/rss/?outputType=xml`,
+    `"Defense News"`) — 25-item / 6.1h feed; defense industry press.
+  - **Breaking Defense** (`breakingdefense.com/feed/`,
+    `"Breaking Defense"`) — 15-item / 4.8h feed; defense industry press.
+- Per-source `EARLY_MAX_NEWS_AGE_BY_SOURCE` overrides set to 1800s for
+  each (parity with other publisher-RSS overrides). Slow-cadence sources
+  (IAEA, Russia MFA) are included specifically to catch *fresh* items
+  when they're published; the pre-existing archive items will be
+  correctly dropped on first poll.
+
+### Notes
+- No runtime code changes; config-only. `tests/test_main_pipeline.py`
+  still passes 56/56.
+- P2.3 observation-period constraint preserved (same rationale as B1).
+
 ## [0.29.40] - 2026-04-23
 
 ### Added
