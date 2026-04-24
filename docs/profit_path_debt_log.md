@@ -15,7 +15,7 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 34 |
-| Open — HIGH | 4 |
+| Open — HIGH | 3 |
 | Open — MEDIUM | 1 |
 | Open — LOW | 1 |
 | Items COMPLETE | 28 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001) |
@@ -464,7 +464,7 @@ Fixed the initial empty-cache lag by making `_structural_recompute_task()` wait 
 | **Title** | Calibration outcome feedback is not proven end-to-end |
 | **Category** | Calibration / Belief Quality |
 | **Severity** | HIGH |
-| **Status** | OPEN |
+| **Status** | COMPLETE (2026-04-24, v0.29.47) |
 | **Priority** | NOW (post-window) |
 | **Owner** | Shared |
 | **Depends On** | S4.5c close (no runtime changes during active window) |
@@ -497,6 +497,17 @@ Severity raised MEDIUM → HIGH and Priority raised MEDIUM → NOW (post-window)
 
 **Validation Notes** (2026-04-23)  
 End-to-end trace confirms the feedback loop is **wired but incomplete**. Satisfies the acceptance criterion's "*explicitly document why no update is expected yet*" branch. Components that exist: `log_calibration_check` (`utils/logger.py:1242`), `CalibrationTask.record_calibration_check` (`tasks/calibration_task.py`), pure-function Brier/drift/scaling state machine (`analysis/calibration_monitor.py`), schema tests (`tests/test_calibration_check_schema.py`), `CalibrationTask` construction + injection into `BlendTask` (`main.py:435-438`), and `BlendTask` consuming `get_scaling_factor(lane)`. Missing glue: **zero runtime callers of `log_calibration_check` or `CalibrationTask.record_calibration_check`**. Repo-wide grep (2026-04-23) returns only definitions, schema tests, and a single script comment — no runtime call site from any resolution or trade path. Specifically, `trading/paper_trader.py:resolve_market` calls `log_paper_resolution` but never `log_calibration_check`. Consequence: `CalibrationTask._state` is permanently empty, `get_scaling_factor(lane)` always returns `1.0` (no-op scaling), and `BlendTask` consumes a neutral factor regardless of how many markets resolve. Contract Section 13 item 6 is therefore *silently* unverifiable — vacuously satisfied not because of "zero resolutions in window" (prior pre-assessment framing) but because the emission site does not exist. This is observation-unsafe to fix; the runtime wire-up (`resolve_market` → `log_calibration_check` → `CalibrationTask.record_calibration_check`) must wait until after S4.5c closes. Deferred action item: add emission at the resolution boundary, backfill one end-to-end test asserting `CALIBRATION_CHECK` is written and consumed, and cross-link to S4.5c criterion 6 once verified.
+
+**Resolution Notes** (2026-04-24, v0.29.47 — commits `186b495`, `74649c6`)
+Feedback loop now complete end-to-end per the Path A design in [`docs/plans/profit_cal_001_calibration_wiring.md`](plans/profit_cal_001_calibration_wiring.md). Implementation delivered across two commits:
+
+- **Zone 1 + 2** (`186b495`): six nullable columns added to the `paper_trades` table via the existing `_migrate_db` pattern (`fast_lane_p`, `fast_lane_confidence`, `accumulation_p`, `accumulation_confidence`, `structural_p`, `structural_confidence`). Per-lane estimates are already propagated through `analysis.signal_meta` from `BlendTask`'s `TradeCandidate` construction (`tasks/blend_task.py:425-440`) — no `/trading` adapter extension required; `record_trade` reads directly from `signal_meta`. This supersedes the design note's §3.2 Zone 2 sub-step and reduces the overall change footprint. INV-4 purity preserved (no `/analysis` changes). A `_lane_float` helper guards against non-dict `signal_meta` and non-numeric values so legacy or test-mock signal paths don't crash the INSERT.
+
+- **Zone 3 + 4 + 5** (`74649c6`): `PaperTrader.resolve_market` is now async and fans out one `CALIBRATION_CHECK` event per populated lane to both emission paths (`trade_log.log_calibration_check` + `CalibrationTask.record_calibration_check`). Blocking DB work is factored into `_resolve_market_sync`, dispatched via `asyncio.to_thread` so the MAC-ASYNC-002 off-loop invariant is preserved. `CalibrationTask` is now injected into `PaperTrader` via a constructor kwarg and the same instance is wired into `BlendTask`. `CalibrationTask` errors during emission are logged and swallowed — the DB resolution has already committed before the calibration path runs, so a calibration-side failure cannot corrupt resolved-trade state. Historical rows (pre-v0.29.47, null lane columns) emit zero `CALIBRATION_CHECK` events, preserving backward compatibility.
+
+- **Test coverage** (`tests/test_paper_trader.py::TestCalibrationEmission`, 7 new tests): column population from `signal_meta`; NULL handling for historical rows; three-lane fan-out; `CalibrationTask._state.lanes` update per lane; swallowed-error survival (resolution still committed); migration idempotence. 13 existing `resolve_market` test call sites updated for the async API. Full suite: 1059 passed, 1 skipped, 0 failures.
+
+Acceptance criteria from the design note §4: (1) status moved OPEN → COMPLETE with validation notes; (2) Zone 5 test added and passing; (3) full test suite clean; (4) ROADMAP P4.2 blocker-cross-reference can be struck; (5) `CalibrationTask.get_calibration_summary()` now returns non-empty per-lane stats once resolved paper trades with populated `signal_meta` land — this is already the case in the `TestCalibrationEmission` unit test; the live-traffic observation (≥1 `CALIBRATION_CHECK` in `logs/trades/live/trades.jsonl` after the first paper-trade resolution post-fix) remains a production-soak observation, tracked in the v0.29.47 `CHANGELOG` entry. Fix status: **closed against acceptance criteria**; production-soak observation pending natural paper-trade resolutions (blocked behind P0-GATE LLM market-anchoring, which is a separate debt item). Contract Section 13 item 6 is now substantively verifiable rather than vacuously satisfied.
 
 ---
 

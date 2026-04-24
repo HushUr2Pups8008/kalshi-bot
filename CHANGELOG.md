@@ -6,6 +6,87 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.47] - 2026-04-24
+
+### Added
+- **`CALIBRATION_CHECK` emission wired end-to-end (PROFIT-CAL-001 closed).**
+  The calibration feedback loop was architecturally complete since v0.19.x
+  but operationally inert — no runtime call site emitted `CALIBRATION_CHECK`
+  events, so `CalibrationTask._state` was permanently empty and
+  `BlendTask.get_scaling_factor()` always returned a neutral 1.0. This
+  release closes the gap. On every paper-trade resolution, for each
+  populated lane (fast / accumulation / structural),
+  `PaperTrader.resolve_market` now emits one `CALIBRATION_CHECK` to the
+  structured trade log and one `record_calibration_check` update to the
+  injected `CalibrationTask`.
+- Six nullable columns on `paper_trades` (`fast_lane_p`,
+  `fast_lane_confidence`, `accumulation_p`, `accumulation_confidence`,
+  `structural_p`, `structural_confidence`) capture per-lane estimates at
+  trade time so resolution doesn't need to join log history. Populated
+  from `analysis.signal_meta` which `BlendTask` already propagates via
+  `TradeCandidate`. Historical rows remain null and are skipped at
+  emission time — no backfill required.
+
+### Changed
+- **`PaperTrader.resolve_market` is now async.** The blocking DB work is
+  factored into `_resolve_market_sync` and dispatched via
+  `asyncio.to_thread` so the MAC-ASYNC-002 invariant (DB work off the
+  event loop) is preserved. Call sites updated:
+  - `main.py::_check_and_resolve` — plain `await` (internal dispatch
+    handles off-loop execution).
+  - `main.py` CLI `--resolve` path — wrapped with `asyncio.run(...)`.
+- **`PaperTrader.__init__` takes an optional `calibration_task` kwarg**
+  for constructor injection; defaults to `None` so existing test fixtures
+  and in-process CLI utilities continue to work unchanged. `main.py` now
+  constructs `CalibrationTask` before `PaperTrader` and injects the same
+  instance into both `PaperTrader` (resolve-time emission) and
+  `BlendTask` (scaling-factor consumer).
+- Calibration-emission errors during resolve are caught and logged rather
+  than propagated — the DB resolution has already committed by the time
+  the calibration path runs, so a calibration-side failure must not
+  corrupt resolved-trade state. Resolved rows remain resolved.
+
+### Project management
+- **ROADMAP P4.2** hard-blocker cross-reference to `PROFIT-CAL-001` struck.
+  P4.2 is now gated only on the ≥10 resolved paper trades threshold; that
+  threshold is itself downstream of P0-GATE (LLM market-anchoring), a
+  separate debt item. Phase 4 dependencies updated accordingly.
+- **`docs/profit_path_debt_log.md`** PROFIT-CAL-001 status OPEN → COMPLETE
+  with resolution notes citing the two delivery commits (`186b495`,
+  `74649c6`) and the Path A implementation summary. Open-count header
+  decremented HIGH 4 → 3.
+
+### Tests
+- New `tests/test_paper_trader.py::TestCalibrationEmission` (7 cases)
+  covers: column population from `signal_meta`, NULL handling for
+  historical rows, three-lane fan-out, `CalibrationTask._state` update,
+  swallowed-error survival (resolution still committed), and migration
+  idempotence. 13 existing `resolve_market` test call sites converted to
+  a sync `_run_resolve` helper that `asyncio.run()`s the async method.
+- `tests/test_main_pipeline.py::test_resolve_market_called_off_event_loop_thread`
+  rewritten to simulate the new architecture: the mock's `side_effect`
+  internally dispatches via `asyncio.to_thread`, so the
+  MAC-ASYNC-002 invariant is still asserted against the blocking sync
+  portion rather than the async wrapper.
+- Stale test fix (unrelated to PROFIT-CAL-001):
+  `tests/test_source_scorecard.py` expected `"BBC News"` to be disabled,
+  but BBC / France 24 / Deutsche Welle were re-enabled in the B3
+  source-integration batch (commit `722196e`). Switched references to
+  `"Foreign Policy"` which is currently in `DISABLED_NEWS_SOURCES`.
+- Full suite: **1059 passed, 1 skipped, 0 failures.**
+
+### Validation still pending
+- **Live-traffic observation** of at least one `CALIBRATION_CHECK` event
+  in `logs/trades/live/trades.jsonl` after the first paper-trade
+  resolution post-fix. This is a production-soak confirmation separate
+  from unit-test coverage and is blocked behind P0-GATE (the pipeline
+  currently produces zero trades → zero resolutions → zero natural
+  emission opportunities). Once P0-GATE is addressed and paper trades
+  start resolving, the first resolved ticker with populated lane data
+  will produce the observation.
+
+---
+
 ## [0.29.46] - 2026-04-24
 
 ### Changed

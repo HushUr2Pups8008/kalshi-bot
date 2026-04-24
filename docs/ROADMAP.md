@@ -241,12 +241,12 @@ The literal interpretation will likely block a high fraction of current Trump/Ir
 
 **Purpose:** Validate that edge is real, stable, and sufficient for live consideration. Requires explicit written authorization from Codex before beginning.
 
-**Dependencies:** P3-GATE PASS; explicit written authorization from Codex; S4.5 COMPLETE; `PROFIT-CAL-001` calibration-emission wiring COMPLETE (see `docs/plans/profit_cal_001_calibration_wiring.md` — structural blocker on P4.2 and therefore on P4.3).
+**Dependencies:** P3-GATE PASS; explicit written authorization from Codex; S4.5 COMPLETE; `PROFIT-CAL-001` calibration-emission wiring COMPLETE (done 2026-04-24, v0.29.47; see `docs/plans/profit_cal_001_calibration_wiring.md`).
 
 | ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
 |----|------|--------|-------|---------|-------------|-----------------|
 | P4.1 | 14-day paper mode monitoring with all pipeline improvements active | NOT_STARTED | Shared | Confirm edge is stable, not a one-off artifact | All existing paper-trade safety gates active; no live trading; INV-6 and INV-7 enforced | Edge > 0 on ≥ 3 distinct trade candidates over 14 days |
-| P4.2 | Calibration review: est distribution vs resolved outcomes | NOT_STARTED | Claude | Verify LLM estimates are calibrated, not coincidentally correct | Requires ≥ 10 resolved paper trades. **Hard blocker:** `PROFIT-CAL-001` — `CALIBRATION_CHECK` emission is not wired from `resolve_market`; P4.2 cannot produce its calibration-curve output until that fix lands. Design in `docs/plans/profit_cal_001_calibration_wiring.md`; execution scheduled as first post-S4.5c work item. | Calibration curve documented; over/underconfidence measured |
+| P4.2 | Calibration review: est distribution vs resolved outcomes | NOT_STARTED | Claude | Verify LLM estimates are calibrated, not coincidentally correct | Requires ≥ 10 resolved paper trades. **Previous hard blocker `PROFIT-CAL-001` cleared 2026-04-24 (v0.29.47, commits `186b495` + `74649c6`):** `CALIBRATION_CHECK` emission is now wired from `resolve_market` per-lane, `PaperTrader` has a `CalibrationTask` injected, and `paper_trades` persists per-lane estimates captured at trade time. Zone 5 test coverage in `tests/test_paper_trader.py::TestCalibrationEmission` verifies emission, null-row skip, three-lane fan-out, and injection-state updates. P4.2 is now gated only on the ≥10 resolved paper trades threshold, which is itself blocked by P0-GATE (LLM market-anchoring, separate debt item). | Calibration curve documented; over/underconfidence measured |
 | P4.3 | Live trading authorization | NOT_STARTED | Codex | Explicit written sign-off | Requires P4.1 + P4.2 COMPLETE; INV-6 and INV-7 compliance verified in writing | Authorization recorded; live mode enabled |
 
 **P4-GATE outcome:**
