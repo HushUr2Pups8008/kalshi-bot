@@ -471,7 +471,7 @@ Magnitude definitions (probability change):
   large:    >20 percentage points
 
 Important rules:
-- Most headlines should result in magnitude="none".
+- Classify magnitude based on the evidence in the headline and summary -- do not default to "none" absent evidence of movement.
 - If new_information=false, then direction="neutral" and magnitude="none".
 - Only major unexpected developments justify "moderate" or "large".
 - Actors must have official decision-making power over the market event. Statements

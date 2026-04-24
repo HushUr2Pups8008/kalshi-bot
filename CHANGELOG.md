@@ -6,6 +6,60 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.50] - 2026-04-24
+
+### Changed
+- **Soften the `magnitude="none"` default prior in the LLM system prompt
+  (P0.5 experiment).** In `_LLM_SYSTEM_PROMPT` at
+  [analysis/signal_analyzer.py:474](analysis/signal_analyzer.py#L474),
+  replace the leading rule:
+
+  > Most headlines should result in magnitude="none".
+
+  with:
+
+  > Classify magnitude based on the evidence in the headline and summary —
+  > do not default to "none" absent evidence of movement.
+
+  The other two rules (`new_information=false → direction="neutral" and
+  magnitude="none"`, `"Only major unexpected developments justify 'moderate'
+  or 'large'"`) are unchanged — both are logically necessary constraints
+  that prevent false positives.
+
+### Rationale (P0-GATE / P0.5 experiment)
+P0.4 (v0.29.48, 2026-04-24) tested whether the market price being visible
+to the LLM was driving universal anchoring. The half-checkpoint verdict
+at n=100 was **refuted at +0.01 pp** — no measurable shift from the
+98.99% baseline when the price line was removed from the prompt. P0.5
+tests the next-most-likely load-bearing prompt-side prime: the explicit
+"default to none" instruction. Full design and interpretation bands in
+`docs/ROADMAP.md` P0.3 Verdict AMENDMENT block (commit `0dfd0de`).
+
+### Measurement plan
+- Run ≥ 12h post-restart on current traffic (half-check at ~6h).
+- Re-run `scripts/flag_outcome_correlation.py` on a post-v0.29.50 filter
+  (same methodology as the P0.4 half-checkpoint).
+- Interpret vs. v0.29.48's 99.00% anchor rate:
+  - Drop to ≤ 70% → priming was a primary lever.
+  - Drop to 70–90% → priming is a contributor.
+  - Stays ≥ 95% → priming is not the cause; (c) market-scope ceiling is
+    the correct read and edge recovery runs through P3.2 + P3.3.
+
+### Rollback
+Single-line revert of `_LLM_SYSTEM_PROMPT`. No data or schema migration.
+
+### Sequencing
+Pure prompt-text change; touches no keyword-gate, pre-LLM match, or
+executor-selectivity code. Must land before P2.4's 3-day observation
+window opens, same as P0.4. Compatible with the in-flight P3.2
+diagnostic emission (no runtime path overlap).
+
+### Tests
+Full suite: 1100 passed, 1 skipped, 0 failures (no test asserts on
+specific prompt wording).
+
+---
+
 ## [0.29.49] - 2026-04-24
 
 ### Added
