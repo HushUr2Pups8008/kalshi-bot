@@ -85,30 +85,33 @@ KALSHI_DEMO_WS = "wss://demo-api.kalshi.co/trade-api/ws/v2"
 
 # ── RSS feeds to monitor ──────────────────────────────────────────────────────
 RSS_FEEDS = [
-    # Reuters
-    "https://feeds.reuters.com/reuters/worldNews",
-    "https://feeds.reuters.com/reuters/topNews",
-    # AP News
-    "https://feeds.apnews.com/rss/apf-topnews",
-    "https://feeds.apnews.com/rss/apf-intlnews",
     # Al Jazeera
     "https://www.aljazeera.com/xml/rss/all.xml",
     # The Guardian
     "https://www.theguardian.com/world/rss",
     "https://www.theguardian.com/world/ukraine/rss",
     "https://www.theguardian.com/world/middleeast/rss",
-    # Politico
+    # Politico (source string = "Politics"; per-source 1800s override below)
     "https://rss.politico.com/politics-news.xml",
     # NY Times World
     "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
-    # Radio Free Europe
-    "https://www.rferl.org/api/zyqopjmxel",
-    # Disabled (in DISABLED_NEWS_SOURCES -- re-enable one at a time with measurement):
-    # BBC         -- "BBC News"
-    # NPR         -- "NPR Topics: World"
+    #
+    # Removed 2026-04-23 as pipeline-hygiene cleanup (direct HTTP probes confirmed dead):
+    #   Reuters (feeds.reuters.com/reuters/{worldNews,topNews}) -- connection fails;
+    #       Reuters discontinued public RSS in June 2020
+    #   AP News (feeds.apnews.com/rss/apf-{topnews,intlnews})  -- connection fails;
+    #       AP has no official public RSS endpoint
+    #   Radio Free Europe (www.rferl.org/api/zyqopjmxel)       -- HTTP 404
+    # For Reuters/AP coverage, re-evaluate re-enabling feeds/search_news_monitor.py
+    # (google_news_query family, currently in DISABLED_SOURCE_FAMILIES) or routing
+    # via RSSHub / RSS.app. Do not resurrect the dead direct URLs.
+    #
+    # Disabled via DISABLED_NEWS_SOURCES (re-enable one at a time with measurement):
+    # BBC            -- "BBC News"
+    # NPR            -- "NPR Topics: World"
     # Foreign Policy -- "Foreign Policy"
-    # Defense One -- "Defense One - All Content"
-    # France 24   -- "France 24 - International breaking news, top stories and headlines"
+    # Defense One    -- "Defense One - All Content"
+    # France 24      -- "France 24 - International breaking news, top stories and headlines"
     # Deutsche Welle -- "World | Deutsche Welle"
 ]
 RSS_POLL_INTERVAL_SECONDS = 60
@@ -134,6 +137,11 @@ EARLY_MAX_NEWS_AGE_BY_SOURCE: dict[str, int] = {
     "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera": 1800,
     "Middle East and north Africa | The Guardian": 1800,
     "Ukraine | The Guardian": 1800,
+    # Politico RSS; feed.title = "Politics". Re-enabled 2026-04-23 from
+    # DISABLED_NEWS_SOURCES. Live probe showed newest items 3.5h old -- at the
+    # default 300s threshold virtually nothing would pass. Using 1800s for
+    # parity with other publisher-RSS overrides; measure-and-adjust post-soak.
+    "Politics": 1800,
 }
 
 # Per-source queue priority overrides. Lower number = processed first.
@@ -180,7 +188,9 @@ EARLY_DROP_IF_NO_TIMESTAMP: bool = os.getenv(
 # case-insensitive exact-match fallback.
 DISABLED_NEWS_SOURCES: set[str] = {
     "BBC News",
-    "Politics",
+    # "Politics" (Politico) re-enabled 2026-04-23 as part of the pipeline-hygiene
+    # audit; per-source EARLY_MAX_NEWS_AGE_BY_SOURCE override set to 1800s.
+    # Measurement pending.
     "Foreign Policy",
     "Defense One - All Content",
     "GDELT",

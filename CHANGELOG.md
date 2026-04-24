@@ -6,6 +6,47 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.39] - 2026-04-23
+
+### Fixed
+- **Pipeline hygiene — removed five dead RSS URLs from `config.RSS_FEEDS`**:
+  Reuters (`feeds.reuters.com/reuters/{worldNews,topNews}`), AP News
+  (`feeds.apnews.com/rss/apf-{topnews,intlnews}`), and Radio Free Europe
+  (`www.rferl.org/api/zyqopjmxel`). Direct HTTP probes confirmed the four
+  Reuters/AP URLs fail to connect (curl returns 000) and the RFE endpoint
+  returns HTTP 404. Reuters discontinued public RSS in June 2020; AP News
+  has no official public RSS endpoint. Prior to this cleanup, the scheduler
+  was polling these URLs every 60s for zero content, and the bot
+  misrepresented itself as a 9-source pipeline when only 4 sources were
+  actually producing matches (documented in the 2026-04-23 pipeline-hygiene
+  audit). For Reuters/AP-style wire coverage, re-evaluate
+  `feeds/search_news_monitor.py` (google_news_query family, currently in
+  `DISABLED_SOURCE_FAMILIES`) or an RSSHub-style aggregator; do not
+  resurrect the dead direct URLs.
+
+### Changed
+- **Politico (`"Politics"` source) re-enabled from `DISABLED_NEWS_SOURCES`**:
+  pipeline-hygiene audit confirmed the 127 `EARLY_STALE_DROP` events
+  emitted for this source over the 60h post-fix window all carried
+  `reason="disabled_source"` — not a parser bug as I initially suspected.
+  Politico's RSS feed is live (HTTP 200, 30 items, newest 3.5h old), so the
+  correct action is to let the source flow to analysis rather than short-
+  circuit-reject at ingestion. A per-source freshness override
+  (`EARLY_MAX_NEWS_AGE_BY_SOURCE["Politics"] = 1800`) lands alongside the
+  re-enable to give the feed parity with other publisher-RSS overrides —
+  at the default 300s threshold virtually nothing would pass (Politico
+  publishes items 30min+ old). Measurement pending.
+
+### Notes
+- No runtime code changes; config-only cleanup. `tests/test_main_pipeline.py`
+  still passes 56/56.
+- The pipeline-hygiene audit also flagged Guardian Ukraine for "Remove
+  Immediately" per `scripts/source_scorecard.py` — this recommendation was
+  explicitly rejected per the don't-cut-off-a-source-when-the-failure-is-ours
+  principle: Guardian Ukraine's 84% stale drops are because the feed itself
+  publishes 1–7 day old items, not because of a pipeline bug, and the
+  source does contribute 1 OPPORTUNITY in the 60h window. Left in place.
+
 ## [0.29.38] - 2026-04-22
 
 ### Added
