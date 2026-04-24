@@ -118,6 +118,14 @@ RSS_FEEDS = [
     "https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml",                 # "Defense News"
     "https://breakingdefense.com/feed/",                                                 # "Breaking Defense"
     #
+    # ─── B3 Tier 2 analytical + re-enables (2026-04-23, URLs live-probed) ───
+    # Tier 2: OSINT investigative (slow cadence, high quality):
+    "https://www.bellingcat.com/feed/",                                                  # "bellingcat" (lowercase in feed.title)
+    # Re-enables from DISABLED_NEWS_SOURCES (previously paused; feed URLs confirmed live):
+    "https://feeds.bbci.co.uk/news/world/rss.xml",                                       # "BBC News"
+    "https://www.france24.com/en/rss",                                                   # "France 24 - International breaking news, top stories and headlines"
+    "https://rss.dw.com/rdf/rss-en-world",                                               # "World | Deutsche Welle"
+    #
     # Removed 2026-04-23 as pipeline-hygiene cleanup (direct HTTP probes confirmed dead):
     #   Reuters (feeds.reuters.com/reuters/{worldNews,topNews}) -- connection fails;
     #       Reuters discontinued public RSS in June 2020
@@ -128,13 +136,9 @@ RSS_FEEDS = [
     # (google_news_query family, currently in DISABLED_SOURCE_FAMILIES) or routing
     # via RSSHub / RSS.app. Do not resurrect the dead direct URLs.
     #
-    # Disabled via DISABLED_NEWS_SOURCES (re-enable one at a time with measurement):
-    # BBC            -- "BBC News"
-    # NPR            -- "NPR Topics: World"
-    # Foreign Policy -- "Foreign Policy"
-    # Defense One    -- "Defense One - All Content"
-    # France 24      -- "France 24 - International breaking news, top stories and headlines"
-    # Deutsche Welle -- "World | Deutsche Welle"
+    # Still disabled via DISABLED_NEWS_SOURCES (NPR, Foreign Policy, Defense One).
+    # BBC / France 24 / Deutsche Welle were re-enabled in B3 (2026-04-23) after
+    # URL probe confirmed fresh content.
 ]
 RSS_POLL_INTERVAL_SECONDS = 60
 
@@ -178,6 +182,11 @@ EARLY_MAX_NEWS_AGE_BY_SOURCE: dict[str, int] = {
     "The Ministry of Foreign Affairs of the Russian Federation": 1800,
     "Defense News": 1800,
     "Breaking Defense": 1800,
+    # ─── B3 Tier 2 + re-enables (2026-04-23) ───
+    "bellingcat": 1800,  # lowercase in feed.title
+    "BBC News": 1800,
+    "France 24 - International breaking news, top stories and headlines": 1800,
+    "World | Deutsche Welle": 1800,
 }
 
 # Per-source queue priority overrides. Lower number = processed first.
@@ -191,7 +200,7 @@ EARLY_MAX_NEWS_AGE_BY_SOURCE: dict[str, int] = {
 # (never observed in trades.jsonl). Add when string is confirmed from live logs.
 SOURCE_PRIORITY_TIERS: dict[str, int] = {
     "Reuters": 1,  # confirmed source string
-    "BBC News": 1,  # confirmed source string (currently disabled -- pre-wired for re-enable)
+    "BBC News": 1,  # confirmed source string; re-enabled 2026-04-23 in B3
 }
 
 # When enabled, candidates that are almost certainly spurious matches are silently
@@ -223,10 +232,13 @@ EARLY_DROP_IF_NO_TIMESTAMP: bool = os.getenv(
 # behavior. Exact source strings are preferred; main.py also applies a simple
 # case-insensitive exact-match fallback.
 DISABLED_NEWS_SOURCES: set[str] = {
-    "BBC News",
-    # "Politics" (Politico) re-enabled 2026-04-23 as part of the pipeline-hygiene
-    # audit; per-source EARLY_MAX_NEWS_AGE_BY_SOURCE override set to 1800s.
-    # Measurement pending.
+    # Re-enabled 2026-04-23 in B3 source-integration batch (URLs probed live,
+    # added to RSS_FEEDS with 1800s EARLY_MAX_NEWS_AGE_BY_SOURCE overrides):
+    #   "BBC News"
+    #   "France 24 - International breaking news, top stories and headlines"
+    #   "World | Deutsche Welle"
+    # Politico ("Politics") re-enabled 2026-04-23 in the pipeline-hygiene fix.
+    # Remaining disabled:
     "Foreign Policy",
     "Defense One - All Content",
     "GDELT",
@@ -241,9 +253,7 @@ DISABLED_NEWS_SOURCES: set[str] = {
     "r/IRstudies",
     "r/PoliticalDiscussion",
     "r/WarCollege",
-    "France 24 - International breaking news, top stories and headlines",
     "r/geopolitics",
-    "World | Deutsche Welle",
     "r/CredibleDefense",
     "NPR Topics: World",
 }

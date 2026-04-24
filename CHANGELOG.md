@@ -6,6 +6,45 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.42] - 2026-04-23
+
+### Added
+- **Bellingcat** (`bellingcat.com/feed/`, feed.title `"bellingcat"` —
+  lowercase) — Tier 2 OSINT investigative feed. Slow cadence (10 items,
+  84.2h newest on probe) but high signal-to-noise for Russia/Ukraine
+  and geopolitical investigations. Tier 2, Batch 3 of 3 per the
+  2026-04-23 source-integration audit.
+
+### Changed
+- **Re-enabled three previously-disabled mainstream wires** after URL
+  probe confirmed they're publishing current content:
+  - **BBC News World** (`feeds.bbci.co.uk/news/world/rss.xml`,
+    feed.title `"BBC News"`) — 39 items, 7.5h newest on probe.
+  - **France 24 English** (`france24.com/en/rss`,
+    feed.title `"France 24 - International breaking news, top stories
+    and headlines"`) — 23 items, 0.9h newest on probe.
+  - **Deutsche Welle World** (`rss.dw.com/rdf/rss-en-world`,
+    feed.title `"World | Deutsche Welle"`) — 13 items, 5.2h newest on
+    probe.
+
+  These were in `DISABLED_NEWS_SOURCES` with the comment "re-enable
+  one at a time with measurement." The 2026-04-23 pipeline-hygiene
+  audit confirmed all three feeds are live and producing fresh items,
+  and the config comment block now reflects this. `BBC News` is
+  retained in `SOURCE_PRIORITY_TIERS` at tier 1 (wire service break-
+  first signal). Each of the three has an `EARLY_MAX_NEWS_AGE_BY_SOURCE`
+  override at 1800s for parity with other publisher-RSS feeds.
+
+### Notes
+- Three-batch source-integration work (B1 + B2 + B3) is now complete.
+  The bot polls 22 RSS sources (up from 6 after the 2026-04-23 hygiene
+  fix) with 22 matching per-source freshness overrides.
+- No runtime code changes; config-only. `tests/test_main_pipeline.py`
+  still passes 56/56.
+- P2.3 observation-period constraint preserved across all three
+  batches (same rationale as B1/B2 -- no keyword-gate / pre-LLM match /
+  executor-selectivity code changes).
+
 ## [0.29.41] - 2026-04-23
 
 ### Added
