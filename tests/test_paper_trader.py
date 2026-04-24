@@ -7,6 +7,7 @@ Covers: bankroll atomicity, resolve_market P&L accounting, win/loss tracking,
 Uses :memory: SQLite so no disk I/O or shared state between tests.
 """
 
+import asyncio
 import logging
 import sqlite3
 import uuid
@@ -17,6 +18,11 @@ import pytest
 
 # Patch cfg before importing PaperTrader to avoid needing a real .env
 import config as _cfg_module
+
+
+def _run_resolve(trader, ticker, resolved_yes):
+    """Sync adapter for PaperTrader.resolve_market (async since v0.29.47)."""
+    asyncio.run(trader.resolve_market(ticker, resolved_yes))
 
 _REAL_SQLITE_CONNECT = sqlite3.connect
 
@@ -136,7 +142,7 @@ class TestBankrollAtomicity:
             trade_id = trader.record_trade(analysis)
 
         before = trader.get_notional_bankroll()
-        trader.resolve_market(analysis.market.ticker, resolved_yes=True)
+        _run_resolve(trader, analysis.market.ticker, True)
         after = trader.get_notional_bankroll()
 
         # YES win at 40c: cost $0.40 * 5 contracts = $2.00 debited; payout = 5 contracts = $5
@@ -150,7 +156,7 @@ class TestBankrollAtomicity:
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
             trader.record_trade(analysis)
 
-        trader.resolve_market(analysis.market.ticker, resolved_yes=True)
+        _run_resolve(trader, analysis.market.ticker, True)
 
         row = trader._conn.execute(
             "SELECT resolved, pnl_dollars FROM paper_trades LIMIT 1"
@@ -169,7 +175,7 @@ class TestResolveMarketAccounting:
         analysis = _make_mock_analysis(yes_price=40.0, side="yes")
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
             trader.record_trade(analysis)
-        trader.resolve_market(analysis.market.ticker, resolved_yes=True)
+        _run_resolve(trader, analysis.market.ticker, True)
 
         row = trader._conn.execute(
             "SELECT pnl_dollars FROM paper_trades WHERE resolved=1"
@@ -181,7 +187,7 @@ class TestResolveMarketAccounting:
         analysis = _make_mock_analysis(yes_price=40.0, side="yes")
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
             trader.record_trade(analysis)
-        trader.resolve_market(analysis.market.ticker, resolved_yes=False)
+        _run_resolve(trader, analysis.market.ticker, False)
 
         row = trader._conn.execute(
             "SELECT pnl_dollars FROM paper_trades WHERE resolved=1"
@@ -193,7 +199,7 @@ class TestResolveMarketAccounting:
         analysis = _make_mock_analysis(yes_price=60.0, side="no")
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
             trader.record_trade(analysis)
-        trader.resolve_market(analysis.market.ticker, resolved_yes=False)
+        _run_resolve(trader, analysis.market.ticker, False)
 
         row = trader._conn.execute(
             "SELECT pnl_dollars FROM paper_trades WHERE resolved=1"
@@ -205,7 +211,7 @@ class TestResolveMarketAccounting:
     def test_no_open_trades_is_noop(self, trader):
         """resolve_market with no open trades should not raise and not change bankroll."""
         before = trader.get_notional_bankroll()
-        trader.resolve_market("KXNONEXISTENT-25DEC31", resolved_yes=True)
+        _run_resolve(trader, "KXNONEXISTENT-25DEC31", True)
         after = trader.get_notional_bankroll()
         assert before == after
 
@@ -215,7 +221,7 @@ class TestKeywordOutcomes:
         analysis = _make_mock_analysis(keywords=["ceasefire", "attack"])
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
             trader.record_trade(analysis)
-        trader.resolve_market(analysis.market.ticker, resolved_yes=True)
+        _run_resolve(trader, analysis.market.ticker, True)
 
         rows = trader._conn.execute("SELECT * FROM keyword_outcomes").fetchall()
         assert len(rows) == 2
@@ -230,7 +236,7 @@ class TestKeywordOutcomes:
         analysis = _make_mock_analysis(keywords=["ceasefire"])
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
             trader.record_trade(analysis)
-        trader.resolve_market(analysis.market.ticker, resolved_yes=True)
+        _run_resolve(trader, analysis.market.ticker, True)
 
         row = trader._conn.execute(
             "SELECT correct FROM keyword_outcomes WHERE keyword='ceasefire'"
@@ -544,8 +550,8 @@ class TestReportGeneration:
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
             trader.record_trade(win_analysis)
             trader.record_trade(loss_analysis)
-        trader.resolve_market("KXWIN-25DEC31", resolved_yes=True)
-        trader.resolve_market("KXLOSS-25DEC31", resolved_yes=False)
+        _run_resolve(trader, "KXWIN-25DEC31", True)
+        _run_resolve(trader, "KXLOSS-25DEC31", False)
 
         report = trader.generate_report()
         assert "RESOLVED TRADES" in report
@@ -779,7 +785,7 @@ class TestResolveMarketExceptions:
         trader._conn.commit()
 
         with caplog.at_level(logging.WARNING, logger="paper_trader"):
-            trader.resolve_market(analysis.market.ticker, resolved_yes=True)
+            _run_resolve(trader, analysis.market.ticker, True)
 
         assert "Failed to record keyword outcomes" in caplog.text
         # And the trade is still marked resolved + bankroll credited
@@ -787,6 +793,158 @@ class TestResolveMarketExceptions:
             "SELECT resolved, pnl_dollars FROM paper_trades LIMIT 1"
         ).fetchone()
         assert row["resolved"] == 1
+
+
+class TestCalibrationEmission:
+    """PROFIT-CAL-001 (v0.29.47): per-lane estimates persisted on paper_trades
+    and emitted as CALIBRATION_CHECK events at resolve time.
+    """
+
+    def _analysis_with_lanes(
+        self,
+        *,
+        fast_lane_p=0.62,
+        fast_lane_confidence=0.75,
+        accumulation_p=0.58,
+        accumulation_confidence=0.70,
+        structural_p=0.55,
+        structural_confidence=0.65,
+        ticker="KXTEST-25DEC31",
+    ):
+        analysis = _make_mock_analysis(ticker=ticker, yes_price=40.0, side="yes")
+        analysis.signal_meta = {
+            "fast_lane_p": fast_lane_p,
+            "fast_lane_confidence": fast_lane_confidence,
+            "accumulation_p": accumulation_p,
+            "accumulation_confidence": accumulation_confidence,
+            "structural_p": structural_p,
+            "structural_confidence": structural_confidence,
+        }
+        return analysis
+
+    def test_record_trade_persists_lane_columns_from_signal_meta(self, trader):
+        analysis = self._analysis_with_lanes()
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trader.record_trade(analysis)
+        row = trader._conn.execute(
+            "SELECT fast_lane_p, fast_lane_confidence, accumulation_p, "
+            "accumulation_confidence, structural_p, structural_confidence "
+            "FROM paper_trades LIMIT 1"
+        ).fetchone()
+        assert row["fast_lane_p"] == pytest.approx(0.62)
+        assert row["fast_lane_confidence"] == pytest.approx(0.75)
+        assert row["accumulation_p"] == pytest.approx(0.58)
+        assert row["accumulation_confidence"] == pytest.approx(0.70)
+        assert row["structural_p"] == pytest.approx(0.55)
+        assert row["structural_confidence"] == pytest.approx(0.65)
+
+    def test_record_trade_stores_nulls_when_signal_meta_missing(self, trader):
+        """Fast-lane-only candidates have no signal_meta; columns must be NULL."""
+        analysis = _make_mock_analysis(yes_price=40.0, side="yes")
+        # analysis.signal_meta is a MagicMock attribute (not a dict) — guarded by _lane_float
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trader.record_trade(analysis)
+        row = trader._conn.execute(
+            "SELECT fast_lane_p, accumulation_p, structural_p "
+            "FROM paper_trades LIMIT 1"
+        ).fetchone()
+        assert row["fast_lane_p"] is None
+        assert row["accumulation_p"] is None
+        assert row["structural_p"] is None
+
+    def test_resolve_market_emits_one_calibration_check_per_populated_lane(self, trader):
+        """All three lanes populated → three CALIBRATION_CHECK log emissions."""
+        analysis = self._analysis_with_lanes()
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trader.record_trade(analysis)
+
+        with patch("trading.paper_trader.trade_log") as mock_log:
+            _run_resolve(trader, analysis.market.ticker, True)
+
+        calls = mock_log.log_calibration_check.call_args_list
+        assert len(calls) == 3, f"expected 3 emissions, got {len(calls)}"
+        lanes_seen = sorted(c.kwargs["lane"] for c in calls)
+        assert lanes_seen == ["accumulation", "fast", "structural"]
+        # final_resolution must be 1.0 for a YES-resolved market; error = |est - 1.0|
+        for c in calls:
+            assert c.kwargs["market_ticker"] == analysis.market.ticker
+            assert c.kwargs["final_resolution"] == 1.0
+            assert c.kwargs["error"] == pytest.approx(
+                abs(c.kwargs["lane_estimate"] - 1.0)
+            )
+
+    def test_resolve_market_emits_zero_when_lane_columns_null(self, trader):
+        """Historical rows (pre-v0.29.47, no lane data) must emit zero events."""
+        analysis = _make_mock_analysis(yes_price=40.0, side="yes")
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trader.record_trade(analysis)
+
+        with patch("trading.paper_trader.trade_log") as mock_log:
+            _run_resolve(trader, analysis.market.ticker, True)
+
+        assert mock_log.log_calibration_check.call_count == 0
+
+    def test_resolve_market_updates_calibration_task_state(self, trader, monkeypatch):
+        """Injected CalibrationTask receives one state update per populated lane."""
+        from tasks.calibration_task import CalibrationTask
+
+        calibration_task = CalibrationTask()
+        # Rebind after construction since the fixture builds trader without it.
+        monkeypatch.setattr(trader, "_calibration_task", calibration_task)
+
+        analysis = self._analysis_with_lanes()
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trader.record_trade(analysis)
+        _run_resolve(trader, analysis.market.ticker, True)
+
+        assert set(calibration_task._state.lanes.keys()) == {
+            "fast", "accumulation", "structural",
+        }
+        for lane in ("fast", "accumulation", "structural"):
+            assert calibration_task._state.lanes[lane].sample_count == 1
+
+    def test_resolve_market_survives_calibration_task_error(
+        self, trader, monkeypatch, caplog
+    ):
+        """A failing record_calibration_check is logged but does not break
+        resolution — the DB commit has already landed by the time it's called."""
+        bad_task = MagicMock()
+        bad_task.record_calibration_check = MagicMock(
+            side_effect=RuntimeError("injected")
+        )
+
+        async def _async_raise(*args, **kwargs):
+            raise RuntimeError("injected")
+        bad_task.record_calibration_check = _async_raise
+
+        monkeypatch.setattr(trader, "_calibration_task", bad_task)
+
+        analysis = self._analysis_with_lanes()
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trader.record_trade(analysis)
+
+        with caplog.at_level(logging.WARNING, logger="paper_trader"):
+            _run_resolve(trader, analysis.market.ticker, True)
+
+        assert "CalibrationTask.record_calibration_check failed" in caplog.text
+        row = trader._conn.execute(
+            "SELECT resolved FROM paper_trades LIMIT 1"
+        ).fetchone()
+        assert row["resolved"] == 1  # resolution still committed
+
+    def test_migration_is_idempotent(self, trader):
+        """Running _migrate_db twice must be a no-op (no duplicate-column errors)."""
+        before_cols = trader._paper_trades_columns()
+        trader._migrate_db()
+        after_cols = trader._paper_trades_columns()
+        assert before_cols == after_cols
+        # Sanity: all six PROFIT-CAL-001 columns present
+        for col in (
+            "fast_lane_p", "fast_lane_confidence",
+            "accumulation_p", "accumulation_confidence",
+            "structural_p", "structural_confidence",
+        ):
+            assert col in after_cols
 
 
 class TestConfirmGoLive:

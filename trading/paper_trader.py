@@ -10,6 +10,7 @@ Key additions vs. original:
   - Weekly review reminder emitted in daily_summary()
 """
 
+import asyncio
 import dataclasses
 import json
 import logging
@@ -18,6 +19,10 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tasks.calibration_task import CalibrationTask
 
 from tabulate import tabulate
 
@@ -179,10 +184,17 @@ class PaperTrader:
 
     _runtime_owner_pid: int | None = None
 
-    def __init__(self, db_path: Path = DB_PATH, *, startup_context: str = "runtime"):
+    def __init__(
+        self,
+        db_path: Path = DB_PATH,
+        *,
+        startup_context: str = "runtime",
+        calibration_task: "CalibrationTask | None" = None,
+    ):
         self._db_path = db_path
         self._startup_context = startup_context
         self._initialized = False
+        self._calibration_task = calibration_task
         self._validate_startup_context()
         self._enforce_runtime_guards()
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=30.0)
@@ -615,10 +627,58 @@ class PaperTrader:
 
     # ── Market resolution ─────────────────────────────────────────────────────
 
-    def resolve_market(self, ticker: str, resolved_yes: bool) -> None:
+    # PROFIT-CAL-001 (v0.29.47): resolve_market is now async so it can await
+    # CalibrationTask.record_calibration_check. The blocking DB work is still
+    # synchronous internally; the async shell exists to emit one
+    # CALIBRATION_CHECK per populated lane per resolved trade, both to the
+    # structured trade log and to the in-process CalibrationTask state machine
+    # that BlendTask.get_scaling_factor() consumes.
+
+    async def resolve_market(self, ticker: str, resolved_yes: bool) -> None:
+        """Async wrapper: run the sync resolution, then emit calibration events."""
+        lane_events = await asyncio.to_thread(
+            self._resolve_market_sync, ticker, resolved_yes
+        )
+        if not lane_events:
+            return
+        final_resolution = 1.0 if resolved_yes else 0.0
+        for trade_id, lane_name, lane_estimate in lane_events:
+            error = abs(lane_estimate - final_resolution)
+            trade_log.log_calibration_check(
+                market_ticker=ticker,
+                lane=lane_name,
+                lane_estimate=lane_estimate,
+                final_resolution=final_resolution,
+                error=error,
+            )
+            if self._calibration_task is not None:
+                try:
+                    await self._calibration_task.record_calibration_check(
+                        market_ticker=ticker,
+                        lane=lane_name,
+                        lane_estimate=lane_estimate,
+                        final_resolution=final_resolution,
+                        error=error,
+                    )
+                except Exception as exc:
+                    # Calibration-task updates are non-critical relative to the
+                    # already-committed resolution. Log and continue.
+                    log.warning(
+                        "CalibrationTask.record_calibration_check failed for "
+                        "trade=%s lane=%s: %s",
+                        trade_id, lane_name, exc,
+                    )
+
+    def _resolve_market_sync(
+        self, ticker: str, resolved_yes: bool
+    ) -> list[tuple[str, str, float]]:
         """
         Mark all open paper trades for a ticker as resolved, compute P&L,
         update notional bankroll, and record source credibility outcomes.
+
+        Returns a list of (trade_id, lane_name, lane_estimate) tuples for the
+        async shell to emit as CALIBRATION_CHECK events. Returns an empty list
+        if no trades are resolved or no per-lane estimates are populated.
         """
         trades = self._conn.execute(
             "SELECT * FROM paper_trades WHERE ticker = ? AND resolved = 0", (ticker,)
@@ -626,7 +686,7 @@ class PaperTrader:
 
         if not trades:
             log.debug("No open paper trades for %s", ticker)
-            return
+            return []
 
         # Pre-calculate all outcomes before any DB writes
         outcomes: list[tuple] = []
@@ -714,6 +774,24 @@ class PaperTrader:
             "[RESOLVED] %s: %d trades | net P&L $%+.2f | notional bankroll $%.2f",
             ticker, len(trades), total_pnl, self.get_notional_bankroll(),
         )
+
+        # PROFIT-CAL-001: collect per-lane estimates for the async shell to
+        # emit as CALIBRATION_CHECK events. Rows without per-lane data (pre-
+        # v0.29.47 history, fast-lane-only paths) are skipped implicitly.
+        lane_events: list[tuple[str, str, float]] = []
+        _LANES = (
+            ("fast",         "fast_lane_p"),
+            ("accumulation", "accumulation_p"),
+            ("structural",   "structural_p"),
+        )
+        for t, _won, _payout, _pnl in outcomes:
+            trade_id = t["trade_id"]
+            for lane_name, lane_col in _LANES:
+                estimate = t[lane_col]
+                if estimate is None:
+                    continue
+                lane_events.append((trade_id, lane_name, float(estimate)))
+        return lane_events
 
     # ── Report ────────────────────────────────────────────────────────────────
 

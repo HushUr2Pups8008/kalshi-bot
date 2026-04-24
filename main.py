@@ -418,7 +418,14 @@ class TradingBot:
         self.rest          = KalshiRestClient()
         self.ws            = KalshiWebSocketClient()
         self.matcher       = MarketMatcher(self.rest)
-        self.paper         = PaperTrader(startup_context="runtime")
+        # PROFIT-CAL-001: CalibrationTask is constructed before PaperTrader so the
+        # same instance can be injected into PaperTrader (for resolve-time
+        # CALIBRATION_CHECK emission) and BlendTask (for get_scaling_factor).
+        self._calibration_task = CalibrationTask()
+        self.paper         = PaperTrader(
+            startup_context="runtime",
+            calibration_task=self._calibration_task,
+        )
         self.executor      = TradeExecutor(self.rest, self.paper)
         # Wire live loss limit shutdown: executor calls this when the session loss
         # threshold is breached. Uses asyncio.create_task so it's safe from any context.
@@ -432,7 +439,6 @@ class TradingBot:
         # evidence queue feeds AccumulationTask independently of the fast lane.
         self._trading_queue: asyncio.Queue[TradeCandidate] = asyncio.Queue(maxsize=500)
         self._evidence_queue: asyncio.Queue[Evidence | None] = asyncio.Queue(maxsize=2000)
-        self._calibration_task = CalibrationTask()
         self._blend_task = BlendTask(
             trading_queue=self._trading_queue,
             calibration=self._calibration_task,
@@ -1168,7 +1174,7 @@ class TradingBot:
                     )
                     continue
                 resolved_yes = result_str == "yes"
-                await asyncio.to_thread(self.paper.resolve_market, ticker, resolved_yes)
+                await self.paper.resolve_market(ticker, resolved_yes)
                 resolved_count += 1
                 log.info(
                     "Auto-resolve: %s -> %s",
@@ -1822,7 +1828,8 @@ async def async_main() -> None:
         if args.resolve:
             ticker, result_str = args.resolve
             resolved_yes = result_str.upper() == "YES"
-            paper.resolve_market(ticker, resolved_yes)
+            # resolve_market is async as of v0.29.47 (PROFIT-CAL-001).
+            asyncio.run(paper.resolve_market(ticker, resolved_yes))
             log.info("Resolved %s as %s", ticker, "YES" if resolved_yes else "NO")
             return
         if args.go_live:

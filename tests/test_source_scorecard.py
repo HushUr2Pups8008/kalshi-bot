@@ -267,13 +267,15 @@ def test_classify_source_heuristics():
 
 
 def test_is_disabled_source_matches_case_insensitively():
-    assert is_disabled_source("BBC News") is True
-    assert is_disabled_source("bbc news") is True
+    # Foreign Policy is in DISABLED_NEWS_SOURCES as of 2026-04-23 (BBC/France24/DW
+    # were re-enabled in the B3 source-integration batch).
+    assert is_disabled_source("Foreign Policy") is True
+    assert is_disabled_source("foreign policy") is True
     assert is_disabled_source("Reuters") is False
 
 
 def test_disabled_status_checks_source_and_family():
-    assert disabled_status("BBC News", "publisher_rss") == (True, "source")
+    assert disabled_status("Foreign Policy", "publisher_rss") == (True, "source")
     assert disabled_status("query one - BingNews", "bing_news_query") == (True, "family")
     assert disabled_status("Reuters", "publisher_rss") == (False, None)
 
@@ -296,14 +298,14 @@ def test_summarize_separates_disabled_sources_from_active_groups():
         write_jsonl(
             log_path,
             [
-                {"type": "SIGNAL", "source": "BBC News", "headline": "disabled", "ts": "2026-04-11T00:00:00+00:00"},
+                {"type": "SIGNAL", "source": "Foreign Policy", "headline": "disabled", "ts": "2026-04-11T00:00:00+00:00"},
                 {"type": "SIGNAL", "source": "Reuters", "headline": "active", "ts": "2026-04-11T00:01:00+00:00"},
             ],
         )
         conn = _create_shared_memory_db(
             db_uri,
             [
-                {"trade_id": "t1", "ts": "2026-04-11T00:05:00+00:00", "ticker": "KX1", "signal_source": "BBC News", "resolved": 1, "pnl_dollars": -1.0},
+                {"trade_id": "t1", "ts": "2026-04-11T00:05:00+00:00", "ticker": "KX1", "signal_source": "Foreign Policy", "resolved": 1, "pnl_dollars": -1.0},
                 {"trade_id": "t2", "ts": "2026-04-11T00:06:00+00:00", "ticker": "KX2", "signal_source": "Reuters", "resolved": 1, "pnl_dollars": 2.0},
             ],
         )
@@ -319,8 +321,8 @@ def test_summarize_separates_disabled_sources_from_active_groups():
             for row in stats["grouped"][bucket]
         }
 
-        assert "BBC News" in disabled_sources
-        assert "BBC News" not in active_sources
+        assert "Foreign Policy" in disabled_sources
+        assert "Foreign Policy" not in active_sources
         assert "Reuters" in active_sources
         conn.close()
     finally:

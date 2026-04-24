@@ -30,6 +30,9 @@ def _make_bot_stub():
     bot.paper = MagicMock()
     bot.paper.credibility.get_multiplier.return_value = 1.0
     bot.paper.get_notional_bankroll.return_value = 500.0
+    # PROFIT-CAL-001 (v0.29.47): resolve_market is async; auto-MagicMock would
+    # return a non-awaitable Mock and break `await self.paper.resolve_market(...)`.
+    bot.paper.resolve_market = AsyncMock(return_value=None)
     bot.paper.portfolio = MagicMock()
     bot.paper.portfolio.open_positions.return_value = []
     bot.executor = MagicMock()
@@ -1311,6 +1314,15 @@ class TestMainAsyncBlocking:
 
     @pytest.mark.asyncio
     async def test_resolve_market_called_off_event_loop_thread(self):
+        """
+        MAC-ASYNC-002 invariant still holds post-PROFIT-CAL-001 but has moved
+        inside resolve_market: the real implementation now dispatches its
+        blocking DB work via ``await asyncio.to_thread(self._resolve_market_sync, ...)``.
+        The caller (``_check_and_resolve``) plainly awaits ``resolve_market``.
+
+        We simulate that pattern in the mock so the test still guards the
+        off-loop invariant — the blocking work must land on a worker thread.
+        """
         import threading
         bot = self._make_bot()
 
@@ -1327,16 +1339,20 @@ class TestMainAsyncBlocking:
         event_loop_thread = threading.current_thread().name
         call_threads: list[str] = []
 
-        def tracking_resolve_market(ticker, resolved_yes):
+        def tracking_resolve_sync(ticker, resolved_yes):
             call_threads.append(threading.current_thread().name)
 
-        bot.paper.resolve_market.side_effect = tracking_resolve_market
+        async def fake_resolve_market(ticker, resolved_yes):
+            # Mirror real resolve_market's internal to_thread dispatch.
+            await asyncio.to_thread(tracking_resolve_sync, ticker, resolved_yes)
+
+        bot.paper.resolve_market = AsyncMock(side_effect=fake_resolve_market)
 
         await bot._check_and_resolve()
 
-        assert call_threads, "resolve_market was never called"
+        assert call_threads, "resolve_market sync body was never called"
         assert all(t != event_loop_thread for t in call_threads), (
-            f"resolve_market called on event loop thread ({event_loop_thread!r}). "
+            f"resolve_market sync body called on event loop thread ({event_loop_thread!r}). "
             "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
         )
 
