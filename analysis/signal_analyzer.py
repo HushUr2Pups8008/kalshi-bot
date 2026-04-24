@@ -443,7 +443,7 @@ Your task is to determine whether a news headline would cause traders to update
 the probability of a specific Kalshi binary market.
 
 You will be given:
-MARKET: title, resolution criteria, current YES price
+MARKET: title and resolution criteria
 NEWS: headline and summary
 
 Decision process:
@@ -494,11 +494,16 @@ Respond with ONLY a JSON object:
 
 
 def _build_user_msg(news, market) -> str:
+    # v0.29.48 (P0-GATE / P0.4 experiment): `CURRENT YES PRICE` removed from
+    # the LLM prompt to test the price-in-prompt anchoring hypothesis. See
+    # ROADMAP P0.3 Verdict AMENDMENT (2026-04-24). Original line was
+    #   f"CURRENT YES PRICE: {market.yes_price:.1f} cents ({market.yes_prob:.1%})\n"
+    # Revert if the 12h re-run of scripts/flag_outcome_correlation.py shows
+    # no drop from the 98.99% baseline anchor rate.
     resolution = market.subtitle if market.subtitle else market.title
     return (
         f"MARKET TITLE: {market.title}\n"
         f"RESOLUTION CRITERIA: {resolution}\n"
-        f"CURRENT YES PRICE: {market.yes_price:.1f} cents ({market.yes_prob:.1%})\n"
         f"MARKET CLOSES: {market.close_time}\n\n"
         f"NEWS HEADLINE: {news.headline}\n"
         f"SOURCE: {news.source}\n"

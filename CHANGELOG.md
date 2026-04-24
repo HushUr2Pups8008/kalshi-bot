@@ -6,6 +6,54 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.48] - 2026-04-24
+
+### Changed
+- **LLM prompt no longer includes the market's current YES price.** The
+  `CURRENT YES PRICE: {cents} ({probability})` line in `_build_user_msg`
+  has been removed, and the `_LLM_SYSTEM_PROMPT` "you will be given"
+  contract has been updated to match (`"MARKET: title, resolution
+  criteria, current YES price"` → `"MARKET: title and resolution
+  criteria"`). No other prompt content has changed.
+
+### Rationale (P0-GATE / P0.4 experiment)
+This is a falsifiable experiment to test the price-in-prompt anchoring
+hypothesis surfaced in the 2026-04-24 P0.3 verdict amendment
+(see [docs/ROADMAP.md](docs/ROADMAP.md) P0.3 Verdict AMENDMENT block):
+
+- P3.1 (commit `1518085`) measured 98.99% overall anchor rate on n=199
+  LLM-used rows across 2026-04-22 → 2026-04-24. Anchoring is
+  flag-independent (any_flag 100%, no_flag 95.45%, Wilson 95% CIs
+  overlap). This pattern is exactly what price-in-prompt priming
+  produces and is not uniquely explained by the original P0.3 verdict
+  (market-scope ceiling).
+- The original P0.3 verdict (2026-04-21) ruled out prompt anchoring on
+  the basis that "market price is not present in the LLM prompt" —
+  this claim was factually wrong in the code. The amendment re-opens
+  P0-GATE category (a).
+
+### Measurement plan
+- Run ≥ 12h on current traffic (first half-checkpoint at ~6h).
+- Re-run `scripts/flag_outcome_correlation.py` on the post-change window.
+- Interpret:
+  - Overall anchor rate drops meaningfully (e.g., below ~80%, or
+    CI-lower < current 96.41% baseline) → prompt anchoring is a
+    contributor; primary fix direction confirmed.
+  - Overall anchor rate stays ≥ 95% → prompt anchoring is not the
+    (sole) cause; the (c) market-scope ceiling diagnosis still applies
+    and P3.2 (`market_specificity_score`) is the correct next lever.
+
+### Rollback
+One-line revert of `_build_user_msg` restores the price line; the
+`_LLM_SYSTEM_PROMPT` "you will be given" line should be reverted in
+the same commit for consistency. No data migrations or schema changes.
+
+### Tests
+Full suite (1059 passed, 1 skipped) re-run to confirm no regression
+from the prompt text change. No test asserted on prompt content.
+
+---
+
 ## [0.29.47] - 2026-04-24
 
 ### Added
