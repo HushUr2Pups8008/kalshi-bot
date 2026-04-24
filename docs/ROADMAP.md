@@ -161,6 +161,48 @@ The original verdict author appears to have inspected `_build_prompt_text` in is
 
 This experiment is low-cost, reversible (single-commit revert), and has to happen *before* P2.4 opens its 3-day no-change-scope observation window — otherwise we'd burn the window to learn a different thing.
 
+**P0.4 interim result (2026-04-24 half-checkpoint, ~8h47m post-restart):**
+
+v0.29.48 bot boot: 2026-04-24T12:13:49 UTC (commit `efa4395`). Measurement run at ~21:01 UTC on a clean post-restart filter (via `/tmp/post_v0_29_48.jsonl` = all trade-log records with `ts >= 2026-04-24T12:13:49`). `scripts/flag_outcome_correlation.py` result:
+
+| Window | n | Anchor rate | Wilson 95% CI |
+|---|---|---|---|
+| Baseline (2026-04-22 → 2026-04-24, price IN prompt) | 199 | **98.99%** | [96.41%, 99.72%] |
+| Post-v0.29.48 (price REMOVED from prompt, ~8h47m) | 100 | **99.00%** | [94.55%, 99.82%] |
+| Delta | — | **+0.01 pp** | CIs overlap substantially |
+
+**Prompt-price hypothesis refuted at half-checkpoint.** Removing the market-price line did not move the anchor rate. If price-in-prompt were the load-bearing anchor source, we would expect a material shift by n=100 (≥10 pp). The observed +0.01 pp is noise. P3.2 validation shows the same null result (high-specificity 98.68% vs low 100% anchor, CIs overlap). P3.3 alignment shows 7 flagged pairs and 0 keepers in the same post-restart window — structure unchanged.
+
+**Call made to close P0.4 early** — the remaining ~3h of the planned 12h window is expected to tighten CIs without shifting the point estimate. Leaving v0.29.48's prompt change in place (it is not harmful, and rolling back would be wasted churn) and pressing forward with the follow-on experiment below.
+
+*Ruling-out update:* Category (a) "prompt anchoring" narrows to **(a2) other prompt-side priming** — not the price. The remaining load-bearing candidate in the system prompt is the explicit default-to-none instruction.
+
+**Falsifiable experiment (P0.5):** The system prompt at [analysis/signal_analyzer.py:474](../analysis/signal_analyzer.py#L474) tells the model:
+
+> Most headlines should result in magnitude="none".
+
+This is a *prior* — the model is told, before seeing any evidence, to default to `magnitude="none"`. Via `_parse_llm_response`, `magnitude="none"` produces `final_probability = market.yes_prob` exactly. If the LLM is taking this prior as a license to default whenever the evidence is ambiguous — which much geopolitical news is — then softening this instruction (keeping the *logical* rules intact but removing the *default*) should reduce the anchor rate.
+
+*Proposed change:* Replace
+
+> - Most headlines should result in magnitude="none".
+
+with
+
+> - Classify magnitude based on the evidence in the headline and summary — do not default to "none" absent evidence of movement.
+
+Keep the other two rules (`new_information=false → direction="neutral" and magnitude="none"`, and `"Only major unexpected developments justify 'moderate' or 'large'"`) — both are logically necessary constraints that prevent false positives.
+
+*Measurement plan:* Same cadence as P0.4. Deploy v0.29.50, run ≥ 12h (half-check at ~6h), re-run `scripts/flag_outcome_correlation.py` on a post-restart filter. New baseline for comparison is v0.29.48's 99.00% (n=100). Interpretation bands:
+
+- Anchor rate drops to **≤ 70%** → priming was a primary lever; strong evidence, pursue further prompt work (reasoning scaffolds, step-by-step eval) as the dominant edge-recovery path.
+- Anchor rate drops to **70–90%** → priming is a contributor but not the sole cause; combine with P3.2/P3.3 long-term work.
+- Anchor rate stays **≥ 95%** → priming is also not the cause; the (c) market-scope ceiling diagnosis is the correct read of the system, and edge recovery routes entirely through P3.2 + P3.3 + market-specificity-driven prioritization (P3.4+).
+
+*Rollback:* Single-line revert of `_LLM_SYSTEM_PROMPT`. No data or schema migration.
+
+*Sequencing safety:* Like P0.4, this is a pure prompt-text change — touches no keyword-gate, pre-LLM match, or executor-selectivity code. Safe to land before P2.4's 3-day observation window opens; will invalidate that window if we wait until inside it.
+
 **P0-GATE outcome:**
 - PASS → Phase 1 proceeds (may start in parallel with P0); Phase 2 gate changes authorized after verdict
 - ESCALATE → LLM returns 0.5000 for inputs with clearly sufficient directional context → prompt engineering or model change required before Phase 2
