@@ -19,6 +19,7 @@ from typing import Any, Optional
 from config import cfg, MARKET_CACHE_TTL_SECONDS, MAX_MARKET_DAYS_TO_EXPIRY
 from config import PAPER_MIN_MATCH_SCORE, PAPER_MAX_CANDIDATES, MARKET_SERIES_BLOCKLIST_PREFIXES
 from config import ENABLE_LOW_QUALITY_MATCH_SUPPRESSION, ENABLE_MATCH_SUPPRESSION_DEBUG
+from analysis.market_specificity import compute_specificity_score
 from analysis.regime_classifier import compute_regime_weights
 from feeds import NewsItem
 from kalshi import KalshiMarket
@@ -591,6 +592,8 @@ class MarketMatcher:
                 market.title,
                 sorted(overlap),
             )
+            # P3.2 diagnostic field -- pure function, no behavior change.
+            market_specificity = compute_specificity_score(market)
             await write_trade_log_async(
                 trade_log.log_match_diagnostic,
                 source=news.source,
@@ -617,6 +620,7 @@ class MarketMatcher:
                 pre_llm_semantic_token_types=match_meta["pre_llm_semantic_token_types"],
                 publish_ts=news_publish_ts,
                 age_at_match_seconds=news_age_seconds,
+                market_specificity_score=market_specificity,
             )
 
             flag_set = set(heuristic_flags)

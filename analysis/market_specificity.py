@@ -59,12 +59,64 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
-# Reuse the existing named-entity set and days-to-close helper from
-# market_matcher. Both are in /analysis so there is no layer violation,
-# and market_matcher does not import market_specificity, so no cycle.
-from analysis.market_matcher import _GEO_NAMED_ENTITIES, _days_to_close
+# Self-contained: market_matcher imports compute_specificity_score, so this
+# module must not import from market_matcher (would create a cycle at import
+# time). The two small helpers below are duplicated from market_matcher
+# deliberately -- they are simple and they encode a local concern specific
+# to specificity scoring. Keep them in sync if the matcher's definitions
+# evolve.
+
+# Snapshot of analysis/market_matcher._GEO_NAMED_ENTITIES at 2026-04-24.
+# Used for the "named-entity density" sub-score.
+_GEO_NAMED_ENTITIES = frozenset({
+    "ukraine", "russia", "china", "taiwan", "iran", "israel", "gaza",
+    "korea", "pakistan", "india", "japan", "turkey", "saudi", "syria",
+    "iraq", "afghanistan", "venezuela", "cuba", "mexico", "canada",
+    "france", "germany", "britain", "lebanon", "hamas", "hezbollah",
+    "brazil", "colombia", "philippines", "vietnam", "thailand",
+    "egypt", "libya", "yemen", "somalia", "sudan", "ethiopia",
+    "russian", "chinese", "iranian", "ukrainian", "korean", "israeli",
+    "european", "american", "british", "french", "german", "turkish",
+    "japanese", "lebanese", "iraqi", "syrian", "saudi", "canadian",
+    "mexican", "brazilian", "colombian", "egyptian",
+    "zelensky", "zelenskyy", "putin", "trump", "biden", "netanyahu",
+    "khamenei", "hegseth", "modi", "macron", "scholz", "starmer",
+    "vance", "rubio", "waltz",
+    "nato", "pentagon", "kremlin", "congress", "senate",
+    # Specificity-only additions -- institutional names whose mention
+    # narrows a resolution criterion. Kept local to this module because
+    # matcher's set is tuned for news-to-market matching and adding
+    # these there could affect gate behavior.
+    "iaea", "un", "scotus", "fbi", "cia", "opec", "who",
+})
+
+
+# Local copy of analysis/market_matcher._days_to_close so this module
+# is self-contained. Returns the number of days until close as a float,
+# or None if the string cannot be parsed.
+def _days_to_close(close_time_str: str) -> Optional[float]:
+    if not close_time_str:
+        return None
+    try:
+        from dateutil import parser as dp, tz as dtz
+        _TZ = {
+            "EST": dtz.tzoffset("EST", -5 * 3600),
+            "EDT": dtz.tzoffset("EDT", -4 * 3600),
+            "CST": dtz.tzoffset("CST", -6 * 3600),
+            "CDT": dtz.tzoffset("CDT", -5 * 3600),
+            "MST": dtz.tzoffset("MST", -7 * 3600),
+            "MDT": dtz.tzoffset("MDT", -6 * 3600),
+            "PST": dtz.tzoffset("PST", -8 * 3600),
+            "PDT": dtz.tzoffset("PDT", -7 * 3600),
+        }
+        dt = dp.parse(close_time_str, tzinfos=_TZ)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (dt - datetime.now(timezone.utc)).total_seconds() / 86_400
+    except Exception:
+        return None
 
 
 # Action verbs that signal a concrete, nameable event. Presence in the

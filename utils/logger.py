@@ -969,6 +969,7 @@ class TradeLogger:
         pre_llm_semantic_token_types: dict[str, int] | None = None,
         publish_ts: str | None = None,
         age_at_match_seconds: float | None = None,
+        market_specificity_score: float | None = None,
     ) -> None:
         record = {
             "type": "MATCH_DIAGNOSTIC",
@@ -1008,6 +1009,8 @@ class TradeLogger:
             record["publish_ts"] = publish_ts
         if age_at_match_seconds is not None:
             record["age_at_match_seconds"] = round(age_at_match_seconds, 1)
+        if market_specificity_score is not None:
+            record["market_specificity_score"] = round(market_specificity_score, 4)
         self._write(record)
 
     def log_blend_decision(

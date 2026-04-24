@@ -287,6 +287,29 @@ class TestFindCandidates:
         assert payload["pre_llm_semantic_overlap_ratio"] == pytest.approx(1 / 6)
         assert payload["would_fail_pre_llm_gate"] is True
 
+    @pytest.mark.asyncio
+    async def test_match_diagnostics_includes_market_specificity_score(self, matcher):
+        """P3.2 — every MATCH_DIAGNOSTIC event must carry the specificity
+        score as a float in [0.0, 1.0]."""
+        markets = [
+            _make_market("KXIRAN-26MAY01", "Will Iran close the Strait of Hormuz by May 1, 2026?"),
+        ]
+        matcher._cache.get_markets = AsyncMock(return_value=markets)
+        news = _make_news("Iran threatens Strait of Hormuz closure")
+
+        with pytest.MonkeyPatch.context() as mp:
+            from analysis import market_matcher as mm
+            calls = []
+            mp.setattr(mm.trade_log, "log_match_diagnostic", lambda **kwargs: calls.append(kwargs))
+            await matcher.find_candidates(news)
+
+        assert len(calls) == 1
+        payload = calls[0]
+        assert "market_specificity_score" in payload
+        score = payload["market_specificity_score"]
+        assert isinstance(score, float)
+        assert 0.0 <= score <= 1.0
+
     def test_compute_pre_llm_match_meta_filters_feature_stopwords(self):
         meta = _compute_pre_llm_match_meta(
             "Trump says latest Iran report after talks",
