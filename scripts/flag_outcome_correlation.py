@@ -1,22 +1,28 @@
 """
-ROADMAP P3.1 — Flag-outcome correlation diagnostic.
+ROADMAP P3.1 + P3.2 — Outcome correlation diagnostics.
 
-Hypothesis under test
----------------------
-If low-quality match heuristic flags (``single_named_entity_only``,
-``minimal_overlap``, ``low_token_overlap``, ``near_threshold_score``) are
-driving the LLM to emit ``final_probability == market_price``, then events
-carrying one or more flags should exhibit a *higher* ``est == market``
-rate than events without flags. If they do not, the market-anchoring
-pattern is not explained by match quality and the fix path is NOT P2.x
-suppression but something further upstream (LLM prompting, insufficient
-context, true ceiling on market specificity — covered by P3.2 and P3.3).
+Scope
+-----
+Two correlations of ``est == market_price`` (LLM anchoring) against
+per-match metadata:
+
+1. **P3.1 — flag correlation.** Does the presence of match-quality
+   heuristic flags (``single_named_entity_only``, ``minimal_overlap``,
+   ``low_token_overlap``, ``near_threshold_score``) predict a higher
+   anchor rate?
+2. **P3.2 — specificity-bucket correlation.** Does
+   ``market_specificity_score`` (a [0, 1] feature emitted on
+   ``MATCH_DIAGNOSTIC`` as of v0.29.49) predict a lower anchor rate in
+   high-specificity markets?
 
 Method
 ------
 1. Scan the trade-log root for ``MATCH_DIAGNOSTIC`` events and index them
    by ``(ticker, headline, source)``. Each event contributes a set of
-   ``heuristic_flags`` plus the ``low_match_quality`` boolean.
+   ``heuristic_flags``, the ``low_match_quality`` boolean, and the
+   ``market_specificity_score`` (when present — historical events
+   predating v0.29.49 will be missing it, in which case the specificity
+   correlation is simply skipped).
 2. Scan for ``SIGNAL_ANALYSIS_DETAIL`` events (``method='llm'``,
    ``llm_result_used=True``, excluding startup probes and synthetic
    probes). Each event contributes ``final_probability`` and
@@ -26,7 +32,11 @@ Method
 4. For each flag (plus ``any_flag`` and the baseline ``no_flag``),
    compute the fraction of joined rows where
    ``abs(final_probability - market_price) < 1e-3`` (== market anchoring).
-5. Print per-flag counts, rates, Wilson 95% CI, and a verdict.
+5. For each specificity-score bucket (fixed thresholds: [0, 0.25),
+   [0.25, 0.50), [0.50, 0.75), [0.75, 1.00], plus a high/low split at
+   0.50), compute the same anchor fraction.
+6. Print per-group counts, rates, Wilson 95% CI, and a verdict for each
+   section.
 
 PASSIVE ONLY -- read-only analysis. No runtime behavior is modified.
 """
@@ -83,6 +93,21 @@ class MatchKey:
 class MatchInfo:
     flags: set[str] = field(default_factory=set)
     low_match_quality: bool = False
+    # P3.2 — populated when the MATCH_DIAGNOSTIC event carries the field
+    # (introduced v0.29.49). None for pre-v0.29.49 historical events.
+    market_specificity_score: float | None = None
+
+
+# Fixed bucket thresholds for the P3.2 specificity correlation.
+# Half-open intervals [lo, hi) except the top bucket is closed on both ends
+# so score == 1.0 lands somewhere.
+_SPECIFICITY_BUCKETS: tuple[tuple[str, float, float], ...] = (
+    ("[0.00, 0.25)", 0.00, 0.25),
+    ("[0.25, 0.50)", 0.25, 0.50),
+    ("[0.50, 0.75)", 0.50, 0.75),
+    ("[0.75, 1.00]", 0.75, 1.0001),  # +eps so score==1.0 falls in top bucket
+)
+_SPECIFICITY_HIGH_LOW_SPLIT: float = 0.50
 
 
 @dataclass
@@ -187,6 +212,13 @@ def collect(
             info.flags.update(flags)
             if bool(record.get("low_match_quality")):
                 info.low_match_quality = True
+            # P3.2: capture market_specificity_score when emitted. Multiple
+            # MATCH_DIAGNOSTIC events can share a key (same headline matched
+            # to the same market twice); the score is deterministic per
+            # market, so last-write-wins is safe.
+            spec = record.get("market_specificity_score")
+            if isinstance(spec, (int, float)) and not isinstance(spec, bool):
+                info.market_specificity_score = float(spec)
             continue
 
         if _is_analysis_row(record):
@@ -366,6 +398,123 @@ def render(result: dict[str, Any]) -> None:
         )
 
 
+def correlate_specificity(
+    match_index: dict[MatchKey, MatchInfo],
+    analysis_rows: list[tuple[MatchKey, AnalysisRow]],
+) -> dict[str, Any]:
+    """P3.2 — bucket joined rows by ``market_specificity_score``.
+
+    Rows missing a score (pre-v0.29.49 MATCH_DIAGNOSTIC events) are
+    excluded from every bucket. The ``scored_n`` total reports how many
+    joined rows contributed to any specificity bucket.
+    """
+    buckets_n: dict[str, int] = {label: 0 for label, _, _ in _SPECIFICITY_BUCKETS}
+    buckets_anchor: dict[str, int] = {label: 0 for label, _, _ in _SPECIFICITY_BUCKETS}
+    high_n = high_anchor = 0
+    low_n = low_anchor = 0
+    scored_n = 0
+    missing_score_n = 0
+
+    for key, row in analysis_rows:
+        info = match_index.get(key)
+        if info is None:
+            continue
+        score = info.market_specificity_score
+        if score is None:
+            missing_score_n += 1
+            continue
+        scored_n += 1
+        anchored = abs(row.final_probability - row.market_price) < EST_EQ_MKT_TOL
+        for label, lo, hi in _SPECIFICITY_BUCKETS:
+            if lo <= score < hi:
+                buckets_n[label] += 1
+                buckets_anchor[label] += int(anchored)
+                break
+        if score >= _SPECIFICITY_HIGH_LOW_SPLIT:
+            high_n += 1
+            high_anchor += int(anchored)
+        else:
+            low_n += 1
+            low_anchor += int(anchored)
+
+    return {
+        "scored_n": scored_n,
+        "missing_score_n": missing_score_n,
+        "buckets": {
+            label: {"n": buckets_n[label], "anchor": buckets_anchor[label]}
+            for label, _, _ in _SPECIFICITY_BUCKETS
+        },
+        "high": {"n": high_n, "anchor": high_anchor},
+        "low": {"n": low_n, "anchor": low_anchor},
+    }
+
+
+def render_specificity(result: dict[str, Any]) -> None:
+    scored_n = result["scored_n"]
+    missing_n = result["missing_score_n"]
+
+    print()
+    print("=" * 72)
+    print("P3.2 — Specificity-Bucket Anchor Correlation")
+    print("=" * 72)
+    print(
+        f"Joined rows with market_specificity_score: {scored_n} "
+        f"(joined rows missing the score — pre-v0.29.49 events: {missing_n})"
+    )
+
+    if scored_n == 0:
+        print(
+            "\nNo joined rows carried market_specificity_score. Expected while "
+            "MATCH_DIAGNOSTIC events from before v0.29.49 dominate the window. "
+            "Re-run after fresh matches accumulate (bot restart on v0.29.49+)."
+        )
+        return
+
+    print("\nPer-bucket anchor rate  (|final_probability - market_price| < 1e-3):")
+    for label, _, _ in _SPECIFICITY_BUCKETS:
+        stats = result["buckets"][label]
+        print(_fmt_row(label, stats["n"], stats["anchor"]))
+
+    print("\nAggregate (split at 0.50):")
+    print(_fmt_row(f"high (>= {_SPECIFICITY_HIGH_LOW_SPLIT:.2f})", result["high"]["n"], result["high"]["anchor"]))
+    print(_fmt_row(f"low  (<  {_SPECIFICITY_HIGH_LOW_SPLIT:.2f})", result["low"]["n"], result["low"]["anchor"]))
+
+    # Verdict — the hypothesis is "high-specificity markets anchor LESS."
+    hi_bucket = result["high"]
+    lo_bucket = result["low"]
+    if hi_bucket["n"] == 0 or lo_bucket["n"] == 0:
+        print(
+            "\nVerdict: INSUFFICIENT DATA — need rows on both sides of the 0.50 "
+            "split to evaluate differential anchoring by specificity."
+        )
+        return
+    hi_rate = hi_bucket["anchor"] / hi_bucket["n"]
+    lo_rate = lo_bucket["anchor"] / lo_bucket["n"]
+    hi_lo_lo, hi_lo_hi = _wilson_ci(hi_bucket["anchor"], hi_bucket["n"])
+    lo_lo_lo, lo_lo_hi = _wilson_ci(lo_bucket["anchor"], lo_bucket["n"])
+    diff = hi_rate - lo_rate
+    ci_overlap = not (hi_lo_lo > lo_lo_hi or lo_lo_lo > hi_lo_hi)
+
+    print("\nVerdict:")
+    print(f"  high rate - low rate = {diff * 100:+.2f} pp")
+    if ci_overlap:
+        print(
+            "  Wilson 95% CIs OVERLAP → insufficient evidence that specificity "
+            "score predicts lower anchoring in this window."
+        )
+    elif diff < 0:
+        print(
+            "  high CI strictly BELOW low CI → high-specificity markets DO anchor "
+            "less than low-specificity (hypothesis supported; score earning its keep)."
+        )
+    else:
+        print(
+            "  high CI strictly ABOVE low CI → high-specificity markets anchor MORE "
+            "than low (hypothesis refuted in this direction; retune weights or "
+            "reconsider the feature set)."
+        )
+
+
 def main() -> int:
     args = parse_args()
     log_path = Path(args.path)
@@ -381,6 +530,9 @@ def main() -> int:
     )
     result = correlate(match_index, analysis_rows)
     render(result)
+
+    specificity_result = correlate_specificity(match_index, analysis_rows)
+    render_specificity(specificity_result)
 
     if args.verbose:
         print(
