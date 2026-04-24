@@ -68,6 +68,33 @@ def _source_name(feed_url: str, feed_title: str) -> str:
     return feed_url.split("/")[2]  # domain
 
 
+def _entry_source(entry, fallback: str) -> str:
+    """
+    Return the real publisher for a feed entry when the feed exposes one.
+
+    News aggregators (Google News RSS in particular) populate
+    ``<source url="...">Publisher</source>`` at the item level, which
+    feedparser parses as ``entry.source`` carrying the real publisher
+    name (e.g. "Reuters", "AP News"). Regular publisher RSS feeds don't
+    populate this; those items keep the feed-level label passed as
+    ``fallback``.
+
+    Accepts feedparser's FeedParserDict (attribute access + mapping
+    access), plain dicts, or None. Empty and whitespace-only titles are
+    treated as absent and fall through to ``fallback``.
+    """
+    src = getattr(entry, "source", None)
+    if src:
+        title = getattr(src, "title", None) if hasattr(src, "title") else None
+        if not title and hasattr(src, "get"):
+            title = src.get("title")
+        if title:
+            title = str(title).strip()
+            if title:
+                return title
+    return fallback
+
+
 async def poll_feed(
     url: str,
     callback: Callable[[NewsItem], Awaitable[None]],
@@ -107,7 +134,7 @@ async def poll_feed(
         item = NewsItem(
             headline=getattr(entry, "title", "(no title)"),
             url=getattr(entry, "link", url),
-            source=source,
+            source=_entry_source(entry, fallback=source),
             published=_parse_date(entry),
             body=getattr(entry, "summary", ""),
             item_id=item_id,

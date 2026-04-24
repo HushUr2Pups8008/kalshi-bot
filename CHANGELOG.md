@@ -6,6 +6,39 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.43] - 2026-04-23
+
+### Added
+- **Per-entry publisher attribution for aggregator RSS feeds**
+  (`feeds/rss_monitor.py::_entry_source`). News aggregators like Google
+  News RSS expose the real publisher at the item level via
+  `<source url="...">Publisher</source>`; feedparser surfaces this as
+  `entry.source.title`. `poll_feed` now prefers that value for
+  `NewsItem.source`, falling back to the feed-level title when an entry
+  doesn't declare one. The change is backward-compatible: regular
+  publisher RSS feeds (BBC, NYT, Guardian, Al Jazeera, …) don't populate
+  `entry.source`, so their items still carry the feed-level label
+  exactly as before.
+- **`tests/test_rss_monitor.py`** covering `_entry_source`: attribute
+  access, dict-style access, missing source, None source, empty string,
+  whitespace-only title, whitespace-stripped title, non-string title
+  (defensive coercion), and dict with missing `title` key.
+
+### Notes
+- Preparatory for re-enabling the Google News search lane
+  (`DISABLED_SOURCE_FAMILIES["google_news_query"]` — lands in the next
+  commit). Without this change, Google News items would all carry
+  query-level source strings like `'"trump iran peace deal" - Google
+  News'` with no per-publisher attribution, fragmenting
+  `source_scorecard` stats and missing `SOURCE_PRIORITY_TIERS` /
+  `EARLY_MAX_NEWS_AGE_BY_SOURCE` lookups that key on the real publisher
+  name.
+- No config changes in this commit. 65 tests pass (9 new + 56 existing
+  main-pipeline tests).
+- P2.3 observation-period constraint preserved: this is `feeds/`
+  parsing code, not keyword-gate / pre-LLM match / executor-selectivity.
+  P2.3 post-close soak timer (24h from commit 8e18b91) is not reset.
+
 ## [0.29.42] - 2026-04-23
 
 ### Added
