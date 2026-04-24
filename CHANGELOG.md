@@ -6,6 +6,38 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.44] - 2026-04-23
+
+### Changed
+- **`google_news_query` re-enabled from `DISABLED_SOURCE_FAMILIES`** in
+  `config.py`. Combined with v0.29.43's per-entry publisher attribution,
+  the Google News search lane now flows items into the pipeline with
+  real-publisher source strings (Reuters, AP News, BBC, Kyiv Independent,
+  Al Jazeera, …) rather than per-query fragments. This is the primary
+  path back to Reuters and AP News coverage after the dead direct-RSS
+  URLs were removed in v0.29.39. `bing_news_query` stays disabled: live
+  probe showed 9-12 items/query vs. Google's 100, no per-entry source
+  attribution, 279h-stale newest item on a hot topic — not worth the
+  polling cost.
+
+### Notes
+- `feeds/search_news_monitor.py` was already wired into `main.py`; it
+  has been no-op'ing since v0.25.2 because both families were in
+  `DISABLED_SOURCE_FAMILIES`. With this change the task starts polling
+  25 queries per 300s cycle, AIMD-capped at 3-15 articles per query
+  based on `news_queue` fill ratio. Queue-overflow protections from
+  v0.12.0 (query dedup via frozenset token-sets, sports/economic/ticker
+  content filters, shared dedup cache) remain in place.
+- Source fit: historical probe showed the 4 active market categories
+  (Trump approval, Trump/Iran, Ukraine/Russia, Israel/Gaza) all return
+  100 items with diverse real-publisher sources including wires we
+  can't otherwise access (Reuters, AP News).
+- P2.3 observation-period constraint preserved: this is
+  `DISABLED_SOURCE_FAMILIES` only, not keyword-gate / pre-LLM match /
+  executor-selectivity code paths. P2.3 post-close soak timer (24h from
+  commit 8e18b91) is not reset.
+- No test regressions: 65 pass (9 rss_monitor + 56 main_pipeline).
+
 ## [0.29.43] - 2026-04-23
 
 ### Added

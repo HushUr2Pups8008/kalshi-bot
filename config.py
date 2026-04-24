@@ -260,7 +260,17 @@ DISABLED_NEWS_SOURCES: set[str] = {
 
 DISABLED_SOURCE_FAMILIES: set[str] = {
     "bing_news_query",
-    "google_news_query",
+    # "google_news_query" re-enabled 2026-04-23 after:
+    #   (a) live-probe confirmed Google News RSS returns 100 items/query with
+    #       fresh content (0.19h newest on "ukraine russia ceasefire"; sources
+    #       include Reuters, AP News, BBC, NYT, Kyiv Independent, Al Jazeera);
+    #   (b) v0.29.43 added per-entry publisher attribution so items are
+    #       attributed to their real publisher rather than the query string;
+    #   (c) queue-overflow protections from v0.12.0 (25 queries/cycle cap,
+    #       per-query article cap, AIMD on queue depth) remain in place.
+    # Bing News stays disabled: probe showed 9-12 items/query, no per-entry
+    # source attribution, 279h-stale newest item on a hot topic. Not worth
+    # the polling cost. Re-evaluate if Bing News RSS improves.
 }
 
 # Optional RSSHub feed for @Kalshi tweets — enables "fade the Kalshi tweet" signal.
