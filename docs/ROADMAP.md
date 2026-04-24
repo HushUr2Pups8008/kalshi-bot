@@ -125,7 +125,7 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 | P0.2 | Log full prompt and raw LLM response for non-probe calls | COMPLETE | Codex | Enable manual inspection of why production LLM returns `0.5000` | DEBUG level only; no prompt change; no behavioral change | Prompt + raw LLM response visible in logs for each real analysis call |
 | P0.3 | Manual diagnosis: est vs market_price distribution | COMPLETE | Claude | Review P0.2 output; determine if `est == market_price` is tautological (anchoring) or coincidental | No code change; manual inspection | Written verdict recorded; one of the four root-cause categories confirmed |
 
-**P0.3 Verdict (recorded 2026-04-21):**
+**P0.3 Verdict (recorded 2026-04-21; AMENDED 2026-04-24 — see amendment block below):**
 
 *Observations:* 40+ non-probe LLM calls across 2026-04-17 to 2026-04-21 returned exactly `est = market_price` (0.5000) in every case. Match quality flags (`single_named_entity_only`, `minimal_overlap`, `near_threshold_score`) appear on 75%+ of matches. All active matches are Trump/Iran/Tehran named-entity hits on broadly scoped geopolitical markets (e.g., "Will Iran agree to a peace deal this month?") priced near 50c.
 
@@ -139,6 +139,27 @@ A production audit covering 2026-04-17 to 2026-04-21 found: the multi-lane archi
 *Classification:* **(c) Market-scope ceiling.** The markets in the current active set are too broadly scoped relative to their resolution criteria for incremental news to produce a non-zero directional signal. The structural mechanism (`magnitude="none"` → passthrough) is working correctly; the inputs feeding it are the problem.
 
 *Phase 2/3 implications:* P0-GATE PASS. Gate enforcement (P2.3+) will suppress low-quality matches but will not resolve the market-scope ceiling on its own. The primary fix path is P3.2 (`market_specificity_score`) and P3.3 (source-market alignment audit). P2 cleans up noise; P3 is where edge recovery begins.
+
+**P0.3 Verdict AMENDMENT (recorded 2026-04-24, Claude):**
+
+*Factual-error finding.* The original "(a) Prompt anchoring: Eliminated" ruling-out is **based on an incorrect reading of the code**. The market price *is* in the LLM prompt, and was already so at the verdict commit `c82e21f` (2026-04-21):
+
+- [analysis/signal_analyzer.py:501](../analysis/signal_analyzer.py#L501) `_build_user_msg` emits `"CURRENT YES PRICE: {market.yes_price:.1f} cents ({market.yes_prob:.1%})\n"` directly into the user-role message.
+- [analysis/signal_analyzer.py:446](../analysis/signal_analyzer.py#L446) `_LLM_SYSTEM_PROMPT` even advertises it: `"You will be given: MARKET: title, resolution criteria, current YES price"`.
+- [analysis/signal_analyzer.py:474](../analysis/signal_analyzer.py#L474) `_LLM_SYSTEM_PROMPT` primes the model toward neutrality: `"Most headlines should result in magnitude='none'"`.
+
+The original verdict author appears to have inspected `_build_prompt_text` in isolation and missed the `_build_prompt_text → _build_user_msg → price-bearing string` call chain. The "eliminated" claim therefore does not hold.
+
+*Corroborating evidence from P3.1* (commit `1518085`, closed 2026-04-24 — see [scripts/flag_outcome_correlation.py](../scripts/flag_outcome_correlation.py)): universal anchoring across the 2026-04-22 → 2026-04-24 window — 98.99% (197/199) of LLM-used SIGNAL_ANALYSIS_DETAIL rows have `|final_probability - market_price| < 1e-3`. `any_flag` rate 100.00% (n=155) vs `no_flag` rate 95.45% (n=44); Wilson 95% CIs overlap. This flag-independent universality is exactly the pattern price-in-prompt priming produces and is *not* uniquely explained by the market-scope ceiling hypothesis.
+
+*Revised classification:* **P0-GATE RE-OPENED.** Category (a) is back on the table. The original (c) market-scope ceiling diagnosis may still be partially true (broad markets do muddy the LLM's judgment) but it is no longer demonstrated to be the sole cause. A decisive experiment exists (see below), which pre-empts committing to either fix path prematurely.
+
+*Falsifiable experiment (P0.4):* Remove the `CURRENT YES PRICE` line from `_build_user_msg` and the corresponding mention in `_LLM_SYSTEM_PROMPT`. Run ≥ 12h (first half-checkpoint at ~6h) on current traffic. Re-run `scripts/flag_outcome_correlation.py`:
+
+- If overall anchor rate drops meaningfully (e.g., below ~80% or CI-lower below the current 96.41%) → prompt anchoring is a contributor; primary fix direction confirmed. Consider also softening the "Most headlines should result in magnitude='none'" priming.
+- If overall anchor rate stays ≥ 95% → prompt anchoring is not the (sole) cause; the (c) market-scope ceiling diagnosis still applies and P3.2 (`market_specificity_score`) is the correct next lever.
+
+This experiment is low-cost, reversible (single-commit revert), and has to happen *before* P2.4 opens its 3-day no-change-scope observation window — otherwise we'd burn the window to learn a different thing.
 
 **P0-GATE outcome:**
 - PASS → Phase 1 proceeds (may start in parallel with P0); Phase 2 gate changes authorized after verdict
