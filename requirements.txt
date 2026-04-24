@@ -13,6 +13,9 @@ cryptography>=41.0
 # Data / storage
 python-dotenv==1.0.1
 
+# YAML config (governance runtime overrides, see docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md)
+pyyaml>=6.0
+
 # Fuzzy string matching (cross-source headline dedup)
 rapidfuzz>=3.0
 
