@@ -6,6 +6,42 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.40] - 2026-04-23
+
+### Added
+- **Six new RSS sources targeting the bot's active market set** (Tier 1,
+  Batch 1 of 3 per the 2026-04-23 source-integration audit in
+  `docs/plans/news_sources_evaluation.md` + ROADMAP Appendix A). All URLs
+  were live-probed before commit (HTTP 200 + current items):
+  - **Kyiv Independent** (`kyivindependent.com/news-archive/rss/`,
+    feed.title `"The Kyiv Independent"`) — Ukraine coverage; URL discovered
+    via HTML `<link rel="alternate">` scan (non-obvious path; `/rss/` and
+    `/feed/` both 404).
+  - **Kyiv Post** (`kyivpost.com/feed`, `"Kyiv Post"`) — Ukraine wire-style,
+    100-item / 1.0h fresh feed.
+  - **Iran International** (`iranintl.com/en/feed`, `"Iran International"`)
+    — 100-item / 4.1h fresh Iran diaspora coverage; direct fit for
+    KXTRUMPIRAN / KXIRAN markets.
+  - **Times of Israel** (`timesofisrael.com/feed/`, `"The Times of Israel"`)
+    — 15-item / 0.3h fresh Middle East coverage; direct fit for KXMIDEAST.
+  - **Department of War** (`defense.gov/.../RSS.ashx?...Site=945`,
+    `"Department of War News Feed"`) — US military action signal; feed
+    title reflects the 2025 DoD rename.
+  - **White House** (`whitehouse.gov/news/feed`,
+    `"News – The White House"`, en-dash U+2013 in title) — executive-branch
+    announcements for Trump markets.
+- Per-source `EARLY_MAX_NEWS_AGE_BY_SOURCE` overrides set to 1800s for each
+  new source (parity with other publisher-RSS feeds; default 300s would
+  drop virtually everything given observed publication latencies).
+
+### Notes
+- No runtime code changes; config-only. `tests/test_main_pipeline.py`
+  still passes 56/56.
+- P2.3 observation-period constraint preserved: these additions are
+  `RSS_FEEDS` / `EARLY_MAX_NEWS_AGE_BY_SOURCE` only, not keyword-gate /
+  pre-LLM match / executor-selectivity code paths. The P2.3 post-close
+  soak timer (24h) is not reset by this change.
+
 ## [0.29.39] - 2026-04-23
 
 ### Fixed

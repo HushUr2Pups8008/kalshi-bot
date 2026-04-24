@@ -96,6 +96,17 @@ RSS_FEEDS = [
     # NY Times World
     "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
     #
+    # ─── B1 direct-to-market-set additions (2026-04-23, URLs live-probed) ───
+    # Ukraine coverage (KXUKR, KXRUSSIA):
+    "https://kyivindependent.com/news-archive/rss/",      # feed.title = "The Kyiv Independent"
+    "https://www.kyivpost.com/feed",                      # feed.title = "Kyiv Post"
+    # Middle East / Iran coverage (KXTRUMPIRAN, KXMIDEAST, KXIRAN):
+    "https://www.iranintl.com/en/feed",                   # feed.title = "Iran International"
+    "https://www.timesofisrael.com/feed/",                # feed.title = "The Times of Israel"
+    # US Government direct (Trump markets, executive / military actions):
+    "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?max=10&ContentType=1&Site=945",  # "Department of War News Feed"
+    "https://www.whitehouse.gov/news/feed",               # "News – The White House" (note en-dash)
+    #
     # Removed 2026-04-23 as pipeline-hygiene cleanup (direct HTTP probes confirmed dead):
     #   Reuters (feeds.reuters.com/reuters/{worldNews,topNews}) -- connection fails;
     #       Reuters discontinued public RSS in June 2020
@@ -142,6 +153,13 @@ EARLY_MAX_NEWS_AGE_BY_SOURCE: dict[str, int] = {
     # default 300s threshold virtually nothing would pass. Using 1800s for
     # parity with other publisher-RSS overrides; measure-and-adjust post-soak.
     "Politics": 1800,
+    # ─── B1 direct-to-market-set (2026-04-23) ───
+    "The Kyiv Independent": 1800,
+    "Kyiv Post": 1800,
+    "Iran International": 1800,
+    "The Times of Israel": 1800,
+    "Department of War News Feed": 1800,
+    "News – The White House": 1800,  # en-dash (U+2013) in feed.title
 }
 
 # Per-source queue priority overrides. Lower number = processed first.
