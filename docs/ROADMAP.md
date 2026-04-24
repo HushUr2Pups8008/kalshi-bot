@@ -11,6 +11,15 @@ Status must be updated as work progresses. See contract Section 10 for rules.
 
 ---
 
+## Versioning milestones
+
+No repo-level semver policy was documented through the v0.29.x stream (patch versions absorbed significant feature work). The criteria below are adopted 2026-04-24 as the minor/major boundaries going forward. Patch-level bumps remain the right choice for behaviour-neutral changes, small corrections, doc-only releases, and incremental feature additions within a milestone.
+
+- **v0.30.0** — *First non-neutral LLM output producing non-zero edge.* The 0.29.x stream has been diagnostic-and-plumbing-heavy against a system with an empirically universal anchor rate (`est == market_price` on 100% of LLM calls in the current window). v0.30 marks the moment that changes: the first `SIGNAL_ANALYSIS_DETAIL` event in the live trade log with a non-neutral LLM output and a resulting non-zero edge. This is the operational phase change from "architecturally complete but provably inert" to "producing signal."
+- **v1.0.0** — *P4.3 live trading authorization.* Live money changes stable-API semantics; v1.0 is reserved for that boundary.
+
+---
+
 ## Stage 0 — Diagnostics Foundation
 
 | ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
