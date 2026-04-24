@@ -261,6 +261,16 @@ class PaperTrader:
             # v0.23.0: Kelly shadow sizing -- what Kelly would have done in paper mode
             # Lets analytics compare flat-5 vs Kelly trajectory before going live
             ("kelly_contracts", "INTEGER"),
+            # v0.29.47 (PROFIT-CAL-001): per-lane estimates captured at trade time.
+            # Populated from analysis.signal_meta (propagated via TradeCandidate).
+            # Nullable so historical rows do not require backfill; null lanes are
+            # skipped at resolve_market emission time.
+            ("fast_lane_p",             "REAL"),
+            ("fast_lane_confidence",    "REAL"),
+            ("accumulation_p",          "REAL"),
+            ("accumulation_confidence", "REAL"),
+            ("structural_p",            "REAL"),
+            ("structural_confidence",   "REAL"),
         ]
         for col, col_type in new_cols:
             if col not in cols and self._ensure_paper_trades_column(col, col_type, cols):
@@ -485,6 +495,27 @@ class PaperTrader:
         source_mult = self.credibility.get_multiplier(analysis.news_item.source)
         market_snapshot = json.dumps(dataclasses.asdict(analysis.market))
 
+        # PROFIT-CAL-001: per-lane estimates arrive via signal_meta, populated by
+        # BlendTask when the candidate is built. Fast-lane-only paths leave these
+        # as None; resolve_market skips CALIBRATION_CHECK emission for null lanes.
+        # Guard against non-dict signal_meta (test mocks, older adapters).
+        signal_meta = getattr(analysis, "signal_meta", None)
+        if not isinstance(signal_meta, dict):
+            signal_meta = {}
+
+        def _lane_float(key: str) -> float | None:
+            value = signal_meta.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return float(value)
+            return None
+
+        lane_fast_p      = _lane_float("fast_lane_p")
+        lane_fast_conf   = _lane_float("fast_lane_confidence")
+        lane_acc_p       = _lane_float("accumulation_p")
+        lane_acc_conf    = _lane_float("accumulation_confidence")
+        lane_struct_p    = _lane_float("structural_p")
+        lane_struct_conf = _lane_float("structural_confidence")
+
         self._conn.execute(
             """INSERT INTO paper_trades
                (trade_id, ts, ticker, market_title, side, contracts, price_cents,
@@ -492,8 +523,10 @@ class PaperTrader:
                 capped_dollars, signal_headline, signal_source, keywords_matched,
                 reasoning, source_multiplier, notional_bankroll_before, notional_bankroll_after,
                 market_snapshot, series_ticker, signal_type, match_score,
-                llm_direction, llm_magnitude, llm_confidence, kelly_contracts)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                llm_direction, llm_magnitude, llm_confidence, kelly_contracts,
+                fast_lane_p, fast_lane_confidence, accumulation_p, accumulation_confidence,
+                structural_p, structural_confidence)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 trade_id,
                 datetime.now(timezone.utc).isoformat(),
@@ -523,6 +556,12 @@ class PaperTrader:
                 getattr(analysis, "llm_magnitude", None),
                 getattr(analysis, "llm_confidence", None),
                 kelly_contracts,
+                lane_fast_p,
+                lane_fast_conf,
+                lane_acc_p,
+                lane_acc_conf,
+                lane_struct_p,
+                lane_struct_conf,
             ),
         )
         self._conn.commit()
