@@ -258,6 +258,25 @@ DISABLED_NEWS_SOURCES: set[str] = {
     "r/WarCollege",
     "r/geopolitics",
     "r/CredibleDefense",
+    # Added 2026-04-24 (P1.5.3) after P1.5.2 audit showed these 10 subs
+    # have produced zero analysis rows across the full trade-log archive
+    # (commit 7117620, scripts/reddit_source_audit.py). Ingestion volume
+    # is entirely in the `all_stale` or `no_matches` bands -- either the
+    # 5-min EARLY_MAX_NEWS_AGE gate kills every post, or the handful of
+    # fresh posts don't overlap any active market. Disable to reclaim
+    # network and Reddit rate-limit budget for the remaining subs until
+    # a separate fix (threshold retune / keyword coverage) justifies
+    # re-enabling.
+    "r/Africa",
+    "r/China",
+    "r/EasternEurope",
+    "r/GlobalTalk",
+    "r/Israel",
+    "r/NorthKorea",
+    "r/Syria",
+    "r/Turkey",
+    "r/pakistan",
+    "r/taiwan",
     "NPR Topics: World",
 }
 

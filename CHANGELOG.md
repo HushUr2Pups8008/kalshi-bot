@@ -6,6 +6,41 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.51] - 2026-04-24
+
+### Changed
+- **P1.5.3 — disable 10 zero-signal Reddit subreddits.** Added to
+  `DISABLED_NEWS_SOURCES`: `r/Africa`, `r/China`, `r/EasternEurope`,
+  `r/GlobalTalk`, `r/Israel`, `r/NorthKorea`, `r/Syria`, `r/Turkey`,
+  `r/pakistan`, `r/taiwan`. Evidence: P1.5.2 audit (commit `7117620`,
+  `scripts/reddit_source_audit.py`) showed these subs produced **zero
+  MATCH_DIAGNOSTIC or SIGNAL_ANALYSIS_DETAIL events across the full
+  trade-log archive** — ingestion is entirely in the `all_stale` band
+  (posts too old to survive the 5-min `EARLY_MAX_NEWS_AGE_SECONDS`
+  gate) or the `no_matches` band (fresh posts don't overlap any active
+  market).
+
+### Rationale
+- Reclaims network and Reddit-rate-limit budget (Reddit has a
+  documented concurrent-IP 403 constraint; every polled-but-dropped
+  post still counts against that limit).
+- Reversible via config revert if a later pipeline change (freshness
+  threshold retune, keyword coverage expansion, market catalog shift)
+  justifies re-enabling.
+- **Not a blanket Reddit shutdown** — the remaining ~10 configured
+  Reddit subs stay active for optionality. The broader
+  "Reddit-architecturally-misaligned-with-5min-freshness-gate" finding
+  documented in the P1.5.2 ROADMAP row is a known pipeline-shape issue
+  that will be revisited after P0.5 resolves whether LLM anchoring is
+  driven by prompt priming or market-scope ceiling.
+
+### Tests
+Full suite: 1100 passed, 1 skipped, 0 failures. Behaviour change is
+limited to which subreddits the Reddit poller hits; no test covers
+that directly (polling is network-gated).
+
+---
+
 ## [0.29.50] - 2026-04-24
 
 ### Changed
