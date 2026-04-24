@@ -113,7 +113,11 @@ RSS_FEEDS = [
     "https://ec.europa.eu/commission/presscorner/api/rss?language=en",                   # "Press releases - RSS"  (European Commission)
     "https://www.iaea.org/feeds/news",                                                   # "Top Stories From the International Atomic Energy Agency"
     # Foreign MFA (slow-cadence but authoritative):
-    "https://mid.ru/en/rss/",                                                            # "The Ministry of Foreign Affairs of the Russian Federation"
+    #   https://mid.ru/en/rss/  -- removed 2026-04-24: F5/Shape TSPD bot-protection
+    #       shield. Default curl/feedparser/python-urllib UAs get TCP reset at the
+    #       proxy; browser-typed UAs get a JS-challenge HTML page (bobcmn/TSPD_101_DID)
+    #       instead of RSS content. Unreachable without executing the challenge in a
+    #       real browser engine — out of scope for an RSS client.
     # Defense industry press (break stories ahead of mainstream wires):
     "https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml",                 # "Defense News"
     "https://breakingdefense.com/feed/",                                                 # "Breaking Defense"
@@ -179,7 +183,6 @@ EARLY_MAX_NEWS_AGE_BY_SOURCE: dict[str, int] = {
     "UN News - Global perspective Human stories": 1800,
     "Press releases - RSS": 1800,  # generic title; from European Commission press corner
     "Top Stories From the International Atomic Energy Agency": 1800,
-    "The Ministry of Foreign Affairs of the Russian Federation": 1800,
     "Defense News": 1800,
     "Breaking Defense": 1800,
     # ─── B3 Tier 2 + re-enables (2026-04-23) ───

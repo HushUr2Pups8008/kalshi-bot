@@ -6,6 +6,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.45] - 2026-04-24
+
+### Removed
+- **`https://mid.ru/en/rss/` (Russia MFA)** removed from `RSS_FEEDS` and its
+  entry removed from `EARLY_MAX_NEWS_AGE_BY_SOURCE`. Investigation during the
+  pre-P2.3-open smoke test found the domain is behind F5/Shape TSPD bot
+  protection: default curl/feedparser/python-urllib user-agents get an
+  immediate TCP reset at the proxy; browser-typed user-agents receive a
+  JavaScript challenge HTML page (`bobcmn` / `TSPD_101_DID` payload) instead
+  of RSS content. Reachable only by executing the JS challenge in a real
+  browser engine — out of scope for a feedparser-based RSS client. Not a UA
+  or header fix. Removed 17/17 polls of wasted `Failed to fetch ... Connection
+  reset by peer` warnings per hour.
+
+---
+
 ## [0.29.44] - 2026-04-23
 
 ### Changed
