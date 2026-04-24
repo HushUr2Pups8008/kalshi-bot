@@ -6,6 +6,41 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.46] - 2026-04-24
+
+### Changed
+- **P2.3 closed — `ENABLE_LOW_QUALITY_MATCH_SUPPRESSION` default flipped from
+  `"false"` to `"true"`** in `config.py`, and `.env.example` updated to reflect
+  the new recommended baseline. Low-quality match suppression is now the project
+  default; set the env var to `false` only to temporarily revert.
+
+### Project management
+- **P2.3 ROADMAP row marked COMPLETE** with retroactive open timestamp of
+  2026-04-24T02:00:00 UTC (post-v0.29.44 / v0.29.45 boot state — the point at
+  which source-config churn settled and continuous stable operation began).
+- **Early-open override of the 24h post-P2.2-closure soak gate**, same
+  bounded-exception pattern used to early-close P2.2 at 25.5h: (i) the 24h
+  time gate (expiry 2026-04-24T13:45:13 UTC) was a proxy for post-closure
+  stability; direct stability evidence from the 2026-04-24 daily review
+  supersedes the proxy, (ii) no-change-scope clause of the 24h gate fully
+  satisfied — zero keyword-gate / pre-LLM match / executor-selectivity code
+  paths modified between the P2.2 closure commit (`8e18b91`, 2026-04-23T07:45:13
+  -06:00) and this closure, (iii) four-check stability gate added in commit
+  `941af75` (crash-free, feed reachability, Google News attribution
+  end-to-end, analysis pipeline nominal) all observably passing per the daily
+  review (14,790 records / 67/67 LLM success / 0 tracebacks / 0 failed
+  fetches post-v0.29.45), (iv) suppression behavior directly validated —
+  `scripts/match_suppression_audit.py` audited 12/12 in-window suppression
+  candidates as "likely safe to suppress" (0/12 risky), confirming P2.3's
+  enforcement decisions are observably correct.
+- **Runtime reality check during close-out:** the user's `.env` already had
+  `ENABLE_LOW_QUALITY_MATCH_SUPPRESSION=true` set, so the flag had in fact been
+  live in runtime — this release is documentation reconciliation (aligning
+  the `NOT_STARTED` ROADMAP state with the `true` runtime state) plus
+  project-default alignment rather than a behavior-change moment.
+
+---
+
 ## [0.29.45] - 2026-04-24
 
 ### Removed
