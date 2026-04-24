@@ -6,6 +6,72 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.49] - 2026-04-24
+
+### Added
+- **`market_specificity_score` now emitted on every `MATCH_DIAGNOSTIC`
+  record (ROADMAP P3.2).** The score is a float in `[0.0, 1.0]` where
+  1.0 = most specific, computed purely from `KalshiMarket.title`,
+  `subtitle`, `ticker`, and `close_time`. Feeds later phases that will
+  prioritize high-specificity matches (P3.3+); this release ships the
+  measurement only — **no behavior change**.
+- New module `analysis/market_specificity.py` with
+  `compute_specificity_score(market)` and `specificity_components(market)`
+  (the latter returns the per-feature breakdown for debugging). Weighted
+  sum of six features: resolution-criteria token count, specific-verb
+  presence, numeric-threshold presence, named-entity density,
+  days-to-close proximity, and date-encoded ticker heuristic. Weights
+  sum to 1.0 and are a starting point — retune from data once post-hoc
+  validation (specificity vs anchor-rate correlation) is in hand.
+
+### Context
+P3.2 is the first substantive step on the "fix-path-for-universal-LLM-
+anchoring" track. P0.3 (2026-04-21) diagnosed market-scope ceiling as
+a root cause; P3.1 (2026-04-24, commit `1518085`) corroborated with a
+98.99% flag-independent anchor rate. P3.2 produces the per-market
+signal needed to *measure* scope objectively rather than argue about
+it qualitatively.
+
+### Validation plan
+Once `MATCH_DIAGNOSTIC` records carrying the score accumulate in the
+trade log, extend `scripts/flag_outcome_correlation.py` (or write a
+sibling script) to bucket joined SIGNAL_ANALYSIS_DETAIL rows by
+specificity-score quantile and compute per-bucket anchor rates with
+Wilson 95% CIs. If high-specificity buckets show a lower anchor rate
+than low-specificity buckets with non-overlapping CIs on meaningful n,
+the score is earning its keep and becomes an input to future
+prioritization work. If not, retune the weights or revisit the feature
+set.
+
+### Tests
+- `tests/test_market_specificity.py` (40 cases): per-component units,
+  narrow-vs-broad ordering assertions on realistic Kalshi-style
+  title/subtitle pairs, edge-case handling.
+- `tests/test_market_matcher.py::test_match_diagnostics_includes_market_specificity_score`:
+  confirms the field is present on every emitted MATCH_DIAGNOSTIC
+  record and is a float in `[0.0, 1.0]`.
+- Full suite: 1100 passed, 1 skipped, 0 failures.
+
+### Note on the circular-import refactor
+`analysis/market_specificity.py` deliberately does *not* import from
+`analysis/market_matcher` — the matcher now imports the scorer, which
+would create a cycle. Instead, a frozen snapshot of the matcher's
+`_GEO_NAMED_ENTITIES` plus a small local `_days_to_close` live in the
+scorer module. The named-entity set has a few specificity-only
+additions (`iaea`, `un`, `scotus`, `fbi`, `cia`, `opec`, `who`) that
+are intentionally scoped to this module rather than pushed back into
+the matcher, because the matcher's set is tuned for the news-to-market
+keyword gate and additions there have behavioral consequences that
+P3.2 must not introduce.
+
+### Compatibility with in-flight P0.4 experiment
+P3.2 landing mid-P0.4 is safe: it touches only diagnostic emission,
+not the keyword-gate, pre-LLM match, executor-selectivity, or LLM
+prompt paths. The P0.4 anchor-rate measurement already-running on
+v0.29.48 is not invalidated.
+
+---
+
 ## [0.29.48] - 2026-04-24
 
 ### Changed
