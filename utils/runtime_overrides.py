@@ -17,8 +17,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone as _timezone
+from pathlib import Path
 from typing import Any, Literal
+
+import yaml as _yaml
 
 # Schema versions this module knows how to read. Forward-incompatible
 # bumps (rare) require a code update before reading the new file.
@@ -285,6 +288,48 @@ def parse_yaml_to_state(data: dict) -> OverridesState:
         ],
         last_applied_batch=data.get("last_applied_batch"),
     )
+
+
+def _default_empty_state() -> OverridesState:
+    """Return a baseline OverridesState used when no overrides file exists.
+
+    Mode defaults to 'shadow' -- the safest default. Even if the agent
+    later writes to this state, shadow mode means the bot ignores `applied`
+    until a human flips mode by hand.
+    """
+    return OverridesState(
+        version=1,
+        updated_at=datetime.now(_timezone.utc),
+        updated_by="default-empty",
+        mode="shadow",
+    )
+
+
+def load_from_disk(path: Path) -> OverridesState:
+    """Read a YAML overrides file and return a parsed OverridesState.
+
+    Behavior contract:
+      - Missing file: return _default_empty_state(). NOT an error.
+      - Empty file: raise ValueError. The agent should never write empty.
+      - Malformed YAML: raise ValueError wrapping the underlying YAMLError.
+      - Schema violation: raise ValueError with the field path that failed.
+    """
+    if not path.exists():
+        return _default_empty_state()
+
+    text = path.read_text(encoding="utf-8")
+    if not text.strip():
+        raise ValueError(f"overrides file at {path} is empty")
+
+    try:
+        data = _yaml.safe_load(text)
+    except _yaml.YAMLError as exc:
+        raise ValueError(f"malformed YAML in {path}: {exc}") from exc
+
+    if data is None:
+        raise ValueError(f"overrides file at {path} parsed to None (empty document)")
+
+    return parse_yaml_to_state(data)
 
 
 def _not_expired(override: _OverrideBase, now: datetime) -> bool:
