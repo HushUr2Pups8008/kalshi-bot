@@ -26,7 +26,19 @@ VALID_CADENCES: frozenset[str] = frozenset({"fast", "deep", "weekly_review"})
 class PredictedEffect:
     """Per-decision prediction for outcome tracking. Mandatory per spec §10
     and §4 decision 10. The agent's quality is measured against these
-    predictions over time."""
+    predictions over time.
+
+    Note: this is the agent-internal representation. A structurally-identical
+    `PredictedEffect` exists in `utils.runtime_overrides` for the persisted
+    runtime-overrides YAML schema. The two classes are intentionally distinct
+    types: this one is what the LLM emits and what the agent reasons over;
+    the runtime-overrides one is locked into the YAML schema with its own
+    validators. The bridge between them lives in the `Decision.to_disabled_*`
+    / `Decision.to_threshold_override` converters added in Task 4, which
+    explicitly reconstruct a `utils.runtime_overrides.PredictedEffect` from
+    this one's fields. Do not collapse the two classes — the decoupling is
+    deliberate so each can evolve independently.
+    """
     metric: str
     baseline: float
     predicted_post_change: float

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from governance.decision import Decision, PredictedEffect, VALID_ACTIONS
+from governance.decision import Decision, PredictedEffect, VALID_ACTIONS, VALID_CADENCES
 
 
 _NOW = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
@@ -63,6 +63,14 @@ def test_valid_actions_set_is_immutable_export():
     assert "disable_keyword" in VALID_ACTIONS
     assert "tune_threshold" in VALID_ACTIONS
     assert "no_action" in VALID_ACTIONS
+
+
+def test_valid_cadences_set_is_immutable_export():
+    assert "fast" in VALID_CADENCES
+    assert "deep" in VALID_CADENCES
+    assert "weekly_review" in VALID_CADENCES
+    # Sanity: no rogue cadences sneaked in.
+    assert VALID_CADENCES == frozenset({"fast", "deep", "weekly_review"})
 
 
 def test_predicted_effect_holds_all_required_fields():
