@@ -170,8 +170,8 @@ def _parse_predicted_effect(data: dict, ctx: str) -> PredictedEffect:
         raise ValueError(f"{ctx}.predicted_effect: missing required field {exc.args[0]!r}") from exc
 
 
-def _parse_disabled_source(data: dict, idx: int) -> DisabledSource:
-    ctx = f"applied.disabled_sources[{idx}]"
+def _parse_disabled_source(data: dict, idx: int, section: str) -> DisabledSource:
+    ctx = f"{section}.disabled_sources[{idx}]"
     if not isinstance(data, dict):
         raise ValueError(f"{ctx} must be a mapping")
     try:
@@ -189,8 +189,8 @@ def _parse_disabled_source(data: dict, idx: int) -> DisabledSource:
         raise ValueError(f"{ctx}: missing required field {exc.args[0]!r}") from exc
 
 
-def _parse_disabled_keyword(data: dict, idx: int) -> DisabledKeyword:
-    ctx = f"applied.disabled_keywords[{idx}]"
+def _parse_disabled_keyword(data: dict, idx: int, section: str) -> DisabledKeyword:
+    ctx = f"{section}.disabled_keywords[{idx}]"
     if not isinstance(data, dict):
         raise ValueError(f"{ctx} must be a mapping")
     try:
@@ -208,8 +208,8 @@ def _parse_disabled_keyword(data: dict, idx: int) -> DisabledKeyword:
         raise ValueError(f"{ctx}: missing required field {exc.args[0]!r}") from exc
 
 
-def _parse_threshold_override(data: dict, idx: int) -> ThresholdOverride:
-    ctx = f"applied.threshold_overrides[{idx}]"
+def _parse_threshold_override(data: dict, idx: int, section: str) -> ThresholdOverride:
+    ctx = f"{section}.threshold_overrides[{idx}]"
     if not isinstance(data, dict):
         raise ValueError(f"{ctx} must be a mapping")
     try:
@@ -260,27 +260,27 @@ def parse_yaml_to_state(data: dict) -> OverridesState:
         updated_by=updated_by,
         mode=mode,  # type: ignore[arg-type]  # validated in OverridesState.__post_init__
         applied_disabled_sources=[
-            _parse_disabled_source(d, i)
+            _parse_disabled_source(d, i, "applied")
             for i, d in enumerate(applied.get("disabled_sources") or [])
         ],
         applied_disabled_keywords=[
-            _parse_disabled_keyword(d, i)
+            _parse_disabled_keyword(d, i, "applied")
             for i, d in enumerate(applied.get("disabled_keywords") or [])
         ],
         applied_threshold_overrides=[
-            _parse_threshold_override(d, i)
+            _parse_threshold_override(d, i, "applied")
             for i, d in enumerate(applied.get("threshold_overrides") or [])
         ],
         proposed_disabled_sources=[
-            _parse_disabled_source(d, i)
+            _parse_disabled_source(d, i, "proposed")
             for i, d in enumerate(proposed.get("disabled_sources") or [])
         ],
         proposed_disabled_keywords=[
-            _parse_disabled_keyword(d, i)
+            _parse_disabled_keyword(d, i, "proposed")
             for i, d in enumerate(proposed.get("disabled_keywords") or [])
         ],
         proposed_threshold_overrides=[
-            _parse_threshold_override(d, i)
+            _parse_threshold_override(d, i, "proposed")
             for i, d in enumerate(proposed.get("threshold_overrides") or [])
         ],
         last_applied_batch=data.get("last_applied_batch"),

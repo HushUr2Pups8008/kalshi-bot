@@ -88,6 +88,22 @@ class TestParseYamlToState:
         with pytest.raises(ValueError, match="decision_id"):
             parse_yaml_to_state(data)
 
+    def test_proposed_validation_error_uses_proposed_prefix(self):
+        """Regression: parse helpers used to hardcode 'applied.*' prefix even
+        when called from the proposed-list path. The error context must
+        accurately reflect where the bad data lives.
+        """
+        data = _valid_yaml()
+        bad_entry = dict(data["applied"]["disabled_sources"][0])
+        # Trigger an error inside the parse helper itself (not inside
+        # DisabledSource.__post_init__): omit a required key so KeyError
+        # is caught + re-raised with the section-prefixed ctx.
+        del bad_entry["confidence"]
+        data["applied"]["disabled_sources"] = []
+        data["proposed"]["disabled_sources"] = [bad_entry]
+        with pytest.raises(ValueError, match=r"proposed\.disabled_sources\[0\]"):
+            parse_yaml_to_state(data)
+
     def test_iso8601_with_z_suffix_accepted(self):
         # Some YAML emitters use 'Z' instead of '+00:00' for UTC.
         # We accept both.
