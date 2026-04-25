@@ -650,4 +650,61 @@ def get_threshold_override(path: str):
     for o in _global_reader.snapshot().applied_threshold_overrides:
         if o.path == path:
             return o.value
-    return None
+
+
+def _cli_main() -> int:
+    """python -m utils.runtime_overrides — emergency intervention CLI.
+
+    Subcommands:
+      --status              print current loaded state
+      --validate <path>     validate a YAML file without applying
+      --revert-batch <id>   drop all overrides applied by a given batch_id
+
+    Path can be overridden via env var OVERRIDES_PATH (used in tests).
+    """
+    import argparse
+    parser = argparse.ArgumentParser(prog="python -m utils.runtime_overrides")
+    sub = parser.add_mutually_exclusive_group(required=True)
+    sub.add_argument("--status", action="store_true", help="print current loaded state")
+    sub.add_argument("--validate", metavar="PATH", help="validate a YAML file, no live effect")
+    sub.add_argument("--revert-batch", metavar="BATCH_ID", help="drop all overrides applied by a given batch_id")
+    args = parser.parse_args()
+
+    import os
+    target = Path(os.environ.get("OVERRIDES_PATH", "data/runtime_overrides.yaml"))
+
+    if args.status:
+        if not target.exists():
+            print(f"no overrides file at {target} -- bot uses static config defaults")
+            return 0
+        try:
+            state = load_from_disk(target)
+        except ValueError as exc:
+            print(f"INVALID overrides file at {target}: {exc}")
+            return 2
+        print(f"path: {target}")
+        print(f"version: {state.version}")
+        print(f"mode: {state.mode}")
+        print(f"updated_at: {state.updated_at.isoformat()}")
+        print(f"updated_by: {state.updated_by}")
+        print(f"applied disabled_sources ({len(state.applied_disabled_sources)}):")
+        for o in state.applied_disabled_sources:
+            ttl = "indefinite" if o.expires_at is None else f"expires {o.expires_at.isoformat()}"
+            print(f"  - {o.source} ({ttl}) [{o.decision_id}]")
+        print(f"applied disabled_keywords ({len(state.applied_disabled_keywords)}):")
+        for o in state.applied_disabled_keywords:
+            ttl = "indefinite" if o.expires_at is None else f"expires {o.expires_at.isoformat()}"
+            print(f"  - {o.keyword!r} ({ttl}) [{o.decision_id}]")
+        print(f"applied threshold_overrides ({len(state.applied_threshold_overrides)}):")
+        for o in state.applied_threshold_overrides:
+            print(f"  - {o.path} = {o.value} [{o.decision_id}]")
+        return 0
+
+    # Other subcommands implemented in subsequent tasks
+    import sys as _sys
+    print("subcommand not yet implemented", file=_sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli_main())
