@@ -40,12 +40,37 @@ from utils.reporting_helpers import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REPORTS_DIR = REPO_ROOT / "logs" / "reports"
 DEFAULT_REPORT_PATH = REPORTS_DIR / f"daily_review_{datetime.now().strftime('%Y%m%d')}.txt"
+# Persisted day-over-day tier baseline used by section 1 status-change diff.
+# Two-deep history (current + previous) so same-day reruns don't blow away
+# yesterday's reference.
+SOURCE_TIER_STATE_PATH = REPORTS_DIR / "source_tier_state.json"
 # Default to the active live file -- daily review is a current-state report.
 # Pass --path logs/trades to include archive data for historical analysis.
 DEFAULT_TRADES_LOG_PATH = REPO_ROOT / "logs" / "trades" / "live" / "trades.jsonl"
 DEFAULT_PAPER_DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
 RECENT_MATCH_EXAMPLES = 5
 RECENT_EDGE_AUDIT = 5
+
+# Source-scorecard tiers we keep visible in section 1's per-source waterfall.
+# Sources in any other tier (prune / remove immediately / disabled) are folded
+# into a one-line summary referencing section 8.
+_VISIBLE_TIERS: tuple[str, ...] = ("top performers", "keep", "watch / investigate")
+_HIDDEN_TIERS: tuple[str, ...] = (
+    "prune",
+    "remove immediately",
+    "disabled by source",
+    "disabled by family",
+)
+# Ordinal severity used to detect day-over-day tier degradation. Lower is better.
+_TIER_ORDER: dict[str, int] = {
+    "top performers": 0,
+    "keep": 1,
+    "watch / investigate": 2,
+    "prune": 3,
+    "remove immediately": 4,
+    "disabled by source": 5,
+    "disabled by family": 5,
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -234,6 +259,114 @@ def _ollama_runtime_summary() -> str:
         return f"configured={configured} health=unreachable detail={exc.__class__.__name__}"
 
 
+def _build_tier_by_source(scorecard_stats: dict[str, Any]) -> dict[str, str]:
+    """Flatten scorecard_stats['grouped'] into a {source: tier_key} map."""
+    grouped = scorecard_stats.get("grouped") or {}
+    tier_by_source: dict[str, str] = {}
+    for tier_key, rows in grouped.items():
+        if not rows:
+            continue
+        for row in rows:
+            source = row.get("source") if isinstance(row, dict) else None
+            if source:
+                tier_by_source[source] = tier_key
+    return tier_by_source
+
+
+def _load_previous_tier_state(path: Path) -> dict[str, Any] | None:
+    """Load the persisted tier-state JSON; return None if absent or corrupt."""
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _save_current_tier_state(
+    path: Path,
+    tier_by_source: dict[str, str],
+    now_utc: datetime,
+) -> None:
+    """Persist today's tier map with two-deep history (current + previous).
+
+    Same-day reruns refresh `current` but preserve `previous` so the next
+    distinct day still has yesterday's reference for the change diff.
+    """
+    today_str = now_utc.date().isoformat()
+    current_block = {
+        "date": today_str,
+        "saved_at_utc": now_utc.isoformat(),
+        "tiers": tier_by_source,
+    }
+    prior = _load_previous_tier_state(path)
+    if prior is None or not isinstance(prior.get("current"), dict):
+        new_state: dict[str, Any] = {"current": current_block, "previous": None}
+    elif prior["current"].get("date") == today_str:
+        new_state = {"current": current_block, "previous": prior.get("previous")}
+    else:
+        new_state = {"current": current_block, "previous": prior["current"]}
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        json.dump(new_state, handle, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _format_tier_change_lines(
+    prior_tiers: dict[str, str] | None,
+    current_tiers: dict[str, str],
+    prior_date: str | None,
+) -> list[str]:
+    """Render the 'Status changes since previous report' sub-section.
+
+    Reports two kinds of regressions on previously operationally-relevant sources:
+      - Tier degraded (e.g., keep -> watch / investigate)
+      - Source went silent (was tiered, today not in scorecard at all)
+
+    Improvements and newly-active sources are intentionally not reported -- the
+    section's purpose is operator triage of regressions.
+    """
+    if not prior_tiers:
+        return ["  Status changes since previous report : (no prior baseline; first run or state reset)"]
+
+    degraded: list[tuple[str, str, str]] = []
+    silent: list[tuple[str, str]] = []
+    for source, prior_tier in prior_tiers.items():
+        if prior_tier not in _VISIBLE_TIERS:
+            continue
+        current_tier = current_tiers.get(source)
+        if current_tier is None:
+            silent.append((source, prior_tier))
+            continue
+        if _TIER_ORDER.get(current_tier, 99) > _TIER_ORDER.get(prior_tier, 99):
+            degraded.append((source, prior_tier, current_tier))
+
+    header = f"  Status changes since previous report (vs {prior_date or 'unknown'}):"
+    if not degraded and not silent:
+        return [header, "    (no tier regressions or new silences since previous report)"]
+
+    degraded.sort(
+        key=lambda triple: (
+            -(_TIER_ORDER.get(triple[2], 99) - _TIER_ORDER.get(triple[1], 99)),
+            triple[0].lower(),
+        )
+    )
+    silent.sort(key=lambda pair: pair[0].lower())
+
+    lines = [header]
+    for source, prior_tier, current_tier in degraded:
+        lines.append(f"    {source}: {prior_tier} -> {current_tier}")
+    for source, prior_tier in silent:
+        lines.append(f"    {source}: SILENT (was {prior_tier} in previous report, no records this window)")
+    return lines
+
+
 def build_daily_review(
     *,
     trades_path: Path,
@@ -244,6 +377,7 @@ def build_daily_review(
     exclude_test: bool,
     show_progress: bool = False,
     show_profile: bool = False,
+    tier_state_path: Path | None = None,
 ) -> list[str]:
     _t0 = time.perf_counter()
 
@@ -350,23 +484,64 @@ def build_daily_review(
                 f"    {row['source']}: early_stale={row['early_stale_drops']} "
                 f"fresh_pass={row['fresh_passes']} observed={row['observed_records']}"
             )
+    tier_by_source = _build_tier_by_source(scorecard_stats)
+
+    if tier_state_path is not None:
+        prior_state = _load_previous_tier_state(tier_state_path) or {}
+        prior_previous = prior_state.get("previous") or {}
+        prior_tiers = prior_previous.get("tiers") if isinstance(prior_previous, dict) else None
+        prior_date = prior_previous.get("date") if isinstance(prior_previous, dict) else None
+        lines.extend(_format_tier_change_lines(prior_tiers, tier_by_source, prior_date))
+
     eligible_freshness_rows = [
         row for row in freshness_stats.get("sources", {}).values()
         if row.get("observed_records", 0) >= 1
     ]
     if eligible_freshness_rows:
         buckets = freshness_diagnostics.bucket_sources(eligible_freshness_rows, show_all=True)
+        # Exclude `dead` and `insufficient` buckets from the waterfall up-front
+        # -- a source with stale_rate >= 99.9% AND no fresh passes (or fewer
+        # samples than the strong-ranking threshold) is operational noise.
+        # The regression section + scorecard tiers cover the cases where a
+        # previously-active source drops into one of these buckets.
         waterfall_rows = (
             buckets.get("fast_operational", [])
             + buckets.get("near_threshold", [])
             + buckets.get("chronically_late", [])
-            + buckets.get("dead", [])
-            + buckets.get("insufficient", [])
         )
-        if waterfall_rows:
-            lines.append("  Drilldown: per-source freshness waterfall")
-            for line in freshness_diagnostics.format_compact_rows(waterfall_rows, top=len(waterfall_rows)):
-                lines.append("  " + line)
+
+        # Filter to operationally-relevant tiers; sources in {prune, remove
+        # immediately, disabled} are folded into a one-line summary referencing
+        # section 8. Sources not present in the scorecard at all are shown
+        # (defensive: we'd rather over-report than silently drop unclassified
+        # sources during edge-case data gaps).
+        visible_rows: list[dict[str, Any]] = []
+        hidden_counts: dict[str, int] = {tier: 0 for tier in _HIDDEN_TIERS}
+        hidden_counts["dead"] = len(buckets.get("dead", []))
+        hidden_counts["insufficient data"] = len(buckets.get("insufficient", []))
+        for row in waterfall_rows:
+            tier = tier_by_source.get(row.get("source", ""))
+            if tier in _HIDDEN_TIERS:
+                hidden_counts[tier] += 1
+            else:
+                visible_rows.append(row)
+
+        if visible_rows or any(hidden_counts.values()):
+            lines.append("  Drilldown: per-source freshness waterfall (operationally-relevant tiers only)")
+            if visible_rows:
+                for line in freshness_diagnostics.format_compact_rows(visible_rows, top=len(visible_rows)):
+                    lines.append("  " + line)
+            else:
+                lines.append("    (no operationally-relevant sources in window)")
+            total_hidden = sum(hidden_counts.values())
+            if total_hidden > 0:
+                breakdown = ", ".join(
+                    f"{tier}={count}" for tier, count in hidden_counts.items() if count > 0
+                )
+                lines.append(
+                    f"    {total_hidden} lower-relevance sources hidden ({breakdown}; "
+                    "see Section 8 Source Scorecard or run scripts/freshness_diagnostics.py for the full list)"
+                )
     lines.append("")
 
     lines.append("2. MATCHING  [source: scripts/match_quality_diagnostics.py + scripts/match_suppression_audit.py]")
@@ -745,6 +920,20 @@ def build_daily_review(
     lines.append("    scripts/keyword_shadow_eval.py             -- shadow-eval of candidate keywords")
     lines.append("    scripts/keyword_promotion_report.py        -- keyword promotion governance")
     lines.append("    scripts/botcheck.py                        -- macOS LaunchAgent status report")
+
+    # Persist today's tier baseline so tomorrow's report can compute the diff.
+    # Reporting-only feature: log to stderr on IO failure, never raise.
+    if tier_state_path is not None:
+        try:
+            _save_current_tier_state(
+                tier_state_path, tier_by_source, datetime.now(timezone.utc)
+            )
+        except OSError as exc:
+            _eprint(
+                f"warning: failed to persist source tier state to {tier_state_path}: "
+                f"{exc.__class__.__name__}: {exc}"
+            )
+
     return lines
 
 
@@ -772,6 +961,7 @@ def main() -> int:
         exclude_test=args.exclude_test,
         show_progress=args.progress,
         show_profile=args.profile,
+        tier_state_path=SOURCE_TIER_STATE_PATH,
     )
 
     for line in lines:
