@@ -438,3 +438,95 @@ def filter_expired(state: OverridesState, now: datetime) -> OverridesState:
         ],
         last_applied_batch=state.last_applied_batch,
     )
+
+
+@dataclass
+class StateDiff:
+    """Difference between two OverridesStates -- used for change logging.
+
+    `sources_added` / `sources_removed` are the source-name string sets.
+    Same convention for keywords. Threshold overrides reported as
+    (path, value) tuples since the value is the meaningful change.
+    """
+
+    sources_added: set[str] = field(default_factory=set)
+    sources_removed: set[str] = field(default_factory=set)
+    keywords_added: set[str] = field(default_factory=set)
+    keywords_removed: set[str] = field(default_factory=set)
+    thresholds_added: set[tuple[str, Any]] = field(default_factory=set)
+    thresholds_removed: set[tuple[str, Any]] = field(default_factory=set)
+
+    def is_empty(self) -> bool:
+        return not (
+            self.sources_added or self.sources_removed
+            or self.keywords_added or self.keywords_removed
+            or self.thresholds_added or self.thresholds_removed
+        )
+
+
+def _hashable(value: Any) -> Any:
+    """Best-effort hashable form of an arbitrary YAML value."""
+    if isinstance(value, (list, tuple)):
+        return tuple(_hashable(v) for v in value)
+    if isinstance(value, dict):
+        return tuple(sorted((k, _hashable(v)) for k, v in value.items()))
+    try:
+        hash(value)
+        return value
+    except TypeError:
+        return str(value)
+
+
+def _diff_states(prev: OverridesState, new: OverridesState) -> StateDiff:
+    prev_sources = {o.source for o in prev.applied_disabled_sources}
+    new_sources = {o.source for o in new.applied_disabled_sources}
+    prev_keywords = {o.keyword for o in prev.applied_disabled_keywords}
+    new_keywords = {o.keyword for o in new.applied_disabled_keywords}
+    # Thresholds aren't hashable as full dataclasses, so use (path, value).
+    # value may be an unhashable type in principle; convert to str defensively.
+    prev_thresholds = {(o.path, _hashable(o.value)) for o in prev.applied_threshold_overrides}
+    new_thresholds = {(o.path, _hashable(o.value)) for o in new.applied_threshold_overrides}
+
+    return StateDiff(
+        sources_added=new_sources - prev_sources,
+        sources_removed=prev_sources - new_sources,
+        keywords_added=new_keywords - prev_keywords,
+        keywords_removed=prev_keywords - new_keywords,
+        thresholds_added=new_thresholds - prev_thresholds,
+        thresholds_removed=prev_thresholds - new_thresholds,
+    )
+
+
+class RuntimeOverridesReader:
+    """In-process singleton holding the current effective overrides state.
+
+    Phase 1: bot creates one of these at startup. The asyncio poll task
+    calls reload() every N minutes. Existing pipeline modules query
+    is_source_disabled / is_keyword_disabled / get_threshold_override
+    instead of indexing into static config sets directly.
+
+    Reload contract: returns a StateDiff describing what changed.
+    Reload failure (malformed YAML, schema violation) raises and leaves
+    the previous valid state in place -- the bot never operates on a
+    half-loaded state.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._state: OverridesState = _default_empty_state()
+
+    def snapshot(self) -> OverridesState:
+        """Return the current loaded state. Useful for diagnostics."""
+        return self._state
+
+    def reload(self) -> StateDiff:
+        """Read the file fresh, compute the diff vs current state, swap.
+
+        On failure: previous state preserved; exception raised. Caller
+        is responsible for catching and logging (see tasks/runtime_overrides_task.py).
+        """
+        new_state_raw = load_from_disk(self._path)
+        new_state = filter_expired(new_state_raw, now=datetime.now(_timezone.utc))
+        diff = _diff_states(self._state, new_state)
+        self._state = new_state
+        return diff
