@@ -6,6 +6,54 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.52] - 2026-04-24
+
+### Added
+- **Governance Phase 1: runtime overrides plumbing.** New module
+  `utils/runtime_overrides.py` reads `data/runtime_overrides.yaml`
+  every 10 minutes and exposes `is_source_disabled`,
+  `is_keyword_disabled`, `get_threshold_override` query helpers.
+  Existing static-config call sites in `main.py`,
+  `feeds/subreddit_selector.py`, `feeds/gdelt_monitor.py`, and
+  `analysis/signal_analyzer.py` refactored to consult the runtime
+  reader. New asyncio task `tasks/runtime_overrides_task.py` performs
+  the periodic poll and hot-reload with failure isolation.
+- New `governance/` package skeleton with `safety.py` (`SafetyConfig`
+  + `KillSwitch` env-var emergency stop) and `audit.py` (`AuditLogger`
+  JSONL writer with daily rotation matching `bot.log`). These are
+  scaffolding for the agent itself which lands in Phase 2.
+- New CLI shim: `python -m utils.runtime_overrides --status |
+  --validate <path> | --revert-batch <batch_id>` for emergency
+  operator intervention.
+- New operator manual: `docs/governance/README.md`.
+
+### Changed
+- Bot processes that previously consulted `config.DISABLED_NEWS_SOURCES`
+  directly now go through `utils.runtime_overrides.is_source_disabled`.
+  Behavior is unchanged when no `data/runtime_overrides.yaml` file
+  exists (graceful backward-compat — bot operates exactly as
+  pre-Phase-1).
+- `EARLY_MAX_NEWS_AGE_BY_SOURCE` lookups in `main.py` now respect
+  runtime threshold overrides; static-config fallback preserved.
+
+### New dependencies
+- Runtime: `pyyaml>=6.0`
+- Dev: `hypothesis>=6,<7`
+
+### Tests
+Phase 1 adds 104 new tests across schema validation, parsing, TTL
+filtering, atomic-write race tests, reader query helpers, async poll
+task, Hypothesis property test for the effective-config invariant,
+backward-compat with no overrides file, source-disable and keyword-disable
+refactor coverage, threshold-override consumer, module-level helpers,
+CLI subprocess tests. Total project test count: 1204 (was 1100).
+
+### Reference
+Spec: `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md`
+Phase 1 plan: `docs/superpowers/plans/2026-04-24-governance-agent-phase-1-plan.md`
+
+---
+
 ## [0.29.51] - 2026-04-24
 
 ### Changed
