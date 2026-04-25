@@ -47,3 +47,33 @@ class TestSafetyConfig:
             SafetyConfig(max_changes_per_run=0)
         with pytest.raises(ValueError, match="max_changes_per_run"):
             SafetyConfig(max_changes_per_run=-5)
+
+    def test_all_integer_caps_reject_zero_and_negative(self):
+        """All four integer caps must reject 0 and negative values, not just max_changes_per_run."""
+        for field_name in (
+            "max_changes_per_run",
+            "blast_radius_max_source_disables_per_batch",
+            "blast_radius_max_keyword_changes_per_batch",
+            "blast_radius_max_threshold_tunings_per_batch",
+        ):
+            with pytest.raises(ValueError, match=field_name):
+                SafetyConfig(**{field_name: 0})
+            with pytest.raises(ValueError, match=field_name):
+                SafetyConfig(**{field_name: -1})
+
+    def test_blast_radius_pct_rejects_negative(self):
+        """Symmetric coverage: lower bound, not just upper bound (1.5)."""
+        with pytest.raises(ValueError, match="blast_radius_max_source_disable_pct"):
+            SafetyConfig(blast_radius_max_source_disable_pct=-0.1)
+
+    def test_unit_interval_boundary_values_accepted(self):
+        """0.0 and 1.0 are valid operator settings:
+        - confidence_threshold=0.0 → 'agent never auto-applies'
+        - confidence_threshold=1.0 → 'only perfectly confident decisions apply'
+        - blast_radius_max_source_disable_pct=0.0 → 'never auto-disable via percentage'
+        - blast_radius_max_source_disable_pct=1.0 → 'no percentage cap, only absolute'
+        """
+        SafetyConfig(confidence_threshold=0.0)
+        SafetyConfig(confidence_threshold=1.0)
+        SafetyConfig(blast_radius_max_source_disable_pct=0.0)
+        SafetyConfig(blast_radius_max_source_disable_pct=1.0)
