@@ -6,6 +6,53 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.53] - 2026-04-25
+
+### Changed
+- **Daily review section 1 — operationally-relevant filter.** The
+  per-source freshness waterfall in `scripts/daily_review.py` is now
+  cross-referenced with section 8's `source_scorecard` tier
+  classification. Sources in `prune` / `remove immediately` /
+  `disabled` tiers, plus those in the freshness `dead` and
+  `insufficient data` buckets, are folded into a one-line summary
+  pointing at section 8 instead of bloating the waterfall. On real
+  current-window data this reduces section 1 from ~1840 lines to
+  ~20 lines (1824 sources hidden, breakdown by tier/bucket
+  preserved).
+
+### Added
+- **Status-changes block in section 1.** Day-over-day diff against a
+  persisted tier baseline (`logs/reports/source_tier_state.json`,
+  two-deep history). Reports tier regressions (`top performers ->
+  watch / investigate`, etc.) and new silences (sources that were in
+  `top performers` / `keep` / `watch / investigate` previously and
+  produced no records this window). Improvements are intentionally
+  not surfaced — the section is for operator triage of regressions.
+- 16 new tests in `tests/test_daily_review.py` covering tier-map
+  flattening, state-file load/save edge cases (corrupt JSON,
+  same-day rerun, day-rollover), change-diff logic (degraded /
+  silent / no-change / no-baseline / improvement-suppressed), and
+  two end-to-end integration tests verifying the new section 1
+  output shape.
+
+### Reasoning
+- Pre-change, section 1 was a ~1840-line wall of text dominated by
+  long-tail sources with no operational relevance to current
+  trading. Operators were skipping the section entirely.
+- The cross-reference uses section 8's existing tier classifier
+  (which already folds in observed_records, signals, paper_trades,
+  win_rate, and P&L) rather than introducing a parallel notion of
+  "source value." Single source of truth.
+- The status-changes block addresses the inverse problem: sources
+  that were operationally relevant yesterday and have degraded or
+  gone silent today, which the unfiltered waterfall buried in noise.
+
+### Notes
+- Version skips 0.29.52, which is reserved for the governance Phase 1
+  plumbing MR (separate branch, slated to merge first).
+
+---
+
 ## [0.29.51] - 2026-04-24
 
 ### Changed
