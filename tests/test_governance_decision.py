@@ -81,9 +81,6 @@ def test_predicted_effect_holds_all_required_fields():
     assert pe.evaluate_at.tzinfo is not None
 
 
-import re
-
-
 def test_decision_rejects_confidence_above_one():
     with pytest.raises(ValueError, match="confidence"):
         _ok_decision(confidence=1.01)
@@ -139,7 +136,23 @@ def test_decision_rejects_evaluate_at_at_or_before_decided_at():
             metric="m",
             baseline=0.0,
             predicted_post_change=0.0,
-            evaluate_at=_NOW,  # not strictly after decided_at
+            evaluate_at=_NOW,  # equal to decided_at; not strictly after
+        )
+        _ok_decision(predicted_effect=bad_pe)
+
+
+def test_decision_rejects_evaluate_at_strictly_before_decided_at():
+    """The check is `<=`; equal case is covered above. This test pins the
+    strictly-less-than branch so a future refactor to `<` would fail loudly
+    instead of silently relaxing the invariant."""
+    from datetime import timedelta
+    earlier = _NOW - timedelta(seconds=1)
+    with pytest.raises(ValueError, match="evaluate_at"):
+        bad_pe = PredictedEffect(
+            metric="m",
+            baseline=0.0,
+            predicted_post_change=0.0,
+            evaluate_at=earlier,
         )
         _ok_decision(predicted_effect=bad_pe)
 
