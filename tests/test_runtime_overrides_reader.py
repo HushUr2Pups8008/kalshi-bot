@@ -116,3 +116,133 @@ class TestRuntimeOverridesReader:
 
         diff = r.reload()  # reload same content
         assert diff.is_empty() is True
+
+
+class TestReaderQueries:
+    def test_is_source_disabled_runtime_only(self, tmp_path: Path):
+        p = tmp_path / "overrides.yaml"
+        p.write_text(_yaml_with_disabled_source("r/Turkey", "gd_2026-05-02_0042"))
+        r = RuntimeOverridesReader(path=p)
+        r.reload()
+        assert r.is_source_disabled("r/Turkey") is True
+        assert r.is_source_disabled("r/SomeOtherSub") is False
+
+    def test_is_source_disabled_unioned_with_static_config(self, tmp_path: Path, monkeypatch):
+        # Reader unions runtime overrides with static config for a single
+        # source-of-truth answer. We patch the static set in config so we
+        # don't accidentally exercise the real list.
+        monkeypatch.setattr(
+            "utils.runtime_overrides._static_disabled_sources",
+            lambda: frozenset({"static_only_source"}),
+        )
+        p = tmp_path / "overrides.yaml"
+        p.write_text(_yaml_with_disabled_source("runtime_only_source", "gd_2026-05-02_0042"))
+        r = RuntimeOverridesReader(path=p)
+        r.reload()
+        assert r.is_source_disabled("static_only_source") is True
+        assert r.is_source_disabled("runtime_only_source") is True
+        assert r.is_source_disabled("not_disabled_anywhere") is False
+
+    def test_is_keyword_disabled(self, tmp_path: Path):
+        yaml_with_kw = textwrap.dedent("""
+            version: 1
+            updated_at: "2026-05-02T14:30:00+00:00"
+            updated_by: "test"
+            mode: real
+            applied:
+              disabled_sources: []
+              disabled_keywords:
+                - keyword: "trump may deadline"
+                  reason: "time-bounded"
+                  confidence: 0.8
+                  decided_at: "2026-05-02T14:30:00+00:00"
+                  decided_by: "test"
+                  decision_id: "gd_2026-05-02_0043"
+                  expires_at: null
+                  predicted_effect:
+                    metric: "m"
+                    baseline: 0
+                    predicted_post_change: 0
+                    evaluate_at: "2026-05-09T14:30:00+00:00"
+              threshold_overrides: []
+            proposed:
+              disabled_sources: []
+              disabled_keywords: []
+              threshold_overrides: []
+        """).lstrip()
+        p = tmp_path / "overrides.yaml"
+        p.write_text(yaml_with_kw)
+        r = RuntimeOverridesReader(path=p)
+        r.reload()
+        assert r.is_keyword_disabled("trump may deadline") is True
+        assert r.is_keyword_disabled("other keyword") is False
+
+    def test_get_threshold_override_returns_value_when_set(self, tmp_path: Path):
+        yaml_with_threshold = textwrap.dedent("""
+            version: 1
+            updated_at: "2026-05-02T14:30:00+00:00"
+            updated_by: "test"
+            mode: real
+            applied:
+              disabled_sources: []
+              disabled_keywords: []
+              threshold_overrides:
+                - path: "EARLY_MAX_NEWS_AGE_BY_SOURCE.IAEA"
+                  value: 21600
+                  reason: "slow"
+                  confidence: 0.7
+                  decided_at: "2026-05-02T14:30:00+00:00"
+                  decided_by: "test"
+                  decision_id: "gd_2026-05-02_0044"
+                  expires_at: null
+                  predicted_effect:
+                    metric: "m"
+                    baseline: 0
+                    predicted_post_change: 0
+                    evaluate_at: "2026-05-09T14:30:00+00:00"
+            proposed:
+              disabled_sources: []
+              disabled_keywords: []
+              threshold_overrides: []
+        """).lstrip()
+        p = tmp_path / "overrides.yaml"
+        p.write_text(yaml_with_threshold)
+        r = RuntimeOverridesReader(path=p)
+        r.reload()
+        assert r.get_threshold_override("EARLY_MAX_NEWS_AGE_BY_SOURCE.IAEA") == 21600
+        assert r.get_threshold_override("EARLY_MAX_NEWS_AGE_BY_SOURCE.OtherSrc") is None
+
+    def test_proposed_section_not_visible_to_queries(self, tmp_path: Path):
+        # Bot must IGNORE proposed entirely. Querying a source that's
+        # only in proposed must return False.
+        yaml_proposed_only = textwrap.dedent("""
+            version: 1
+            updated_at: "2026-05-02T14:30:00+00:00"
+            updated_by: "test"
+            mode: shadow
+            applied:
+              disabled_sources: []
+              disabled_keywords: []
+              threshold_overrides: []
+            proposed:
+              disabled_sources:
+                - source: "r/proposed_only"
+                  reason: "shadow"
+                  confidence: 0.9
+                  decided_at: "2026-05-02T14:30:00+00:00"
+                  decided_by: "test"
+                  decision_id: "gd_2026-05-02_0099"
+                  expires_at: null
+                  predicted_effect:
+                    metric: "m"
+                    baseline: 0
+                    predicted_post_change: 0
+                    evaluate_at: "2026-05-09T14:30:00+00:00"
+              disabled_keywords: []
+              threshold_overrides: []
+        """).lstrip()
+        p = tmp_path / "overrides.yaml"
+        p.write_text(yaml_proposed_only)
+        r = RuntimeOverridesReader(path=p)
+        r.reload()
+        assert r.is_source_disabled("r/proposed_only") is False

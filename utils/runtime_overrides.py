@@ -530,3 +530,46 @@ class RuntimeOverridesReader:
         diff = _diff_states(self._state, new_state)
         self._state = new_state
         return diff
+
+
+def _static_disabled_sources() -> frozenset[str]:
+    """Indirection for test monkey-patching. Returns the static disabled
+    set from config. Wrapped in a function so tests can replace it
+    without monkey-patching the entire config module."""
+    from config import DISABLED_NEWS_SOURCES
+    return frozenset(DISABLED_NEWS_SOURCES)
+
+
+# Methods for RuntimeOverridesReader -- attach by extending class above.
+def _reader_is_source_disabled(self: RuntimeOverridesReader, source: str) -> bool:
+    """True iff source is in static config OR in runtime-applied disabled set."""
+    if source in _static_disabled_sources():
+        return True
+    return any(o.source == source for o in self._state.applied_disabled_sources)
+
+
+def _reader_is_keyword_disabled(self: RuntimeOverridesReader, keyword: str) -> bool:
+    """True iff keyword is in runtime-applied disabled set.
+
+    Phase 1 has no static counterpart for keywords; the bot's
+    GEOPOLITICAL_SIGNALS list is unchanged. Disabling here means
+    market_matcher's keyword iteration skips this keyword.
+    """
+    return any(o.keyword == keyword for o in self._state.applied_disabled_keywords)
+
+
+def _reader_get_threshold_override(self: RuntimeOverridesReader, path: str) -> Any:
+    """Return the override value for a dotted path, or None if not overridden.
+
+    Caller MUST treat None as 'no override' and fall back to the static
+    config value -- never confuse None-as-override with no-override.
+    """
+    for o in self._state.applied_threshold_overrides:
+        if o.path == path:
+            return o.value
+    return None
+
+
+RuntimeOverridesReader.is_source_disabled = _reader_is_source_disabled  # type: ignore[attr-defined]
+RuntimeOverridesReader.is_keyword_disabled = _reader_is_keyword_disabled  # type: ignore[attr-defined]
+RuntimeOverridesReader.get_threshold_override = _reader_get_threshold_override  # type: ignore[attr-defined]
