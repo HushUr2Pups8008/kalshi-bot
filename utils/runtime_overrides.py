@@ -15,6 +15,8 @@ Phase 1 boundaries:
 
 from __future__ import annotations
 
+import dataclasses as _dataclasses
+import os as _os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone as _timezone
@@ -330,6 +332,73 @@ def load_from_disk(path: Path) -> OverridesState:
         raise ValueError(f"overrides file at {path} parsed to None (empty document)")
 
     return parse_yaml_to_state(data)
+
+
+def _state_to_yaml_dict(state: OverridesState) -> dict:
+    """Serialize an OverridesState to a dict suitable for yaml.safe_dump."""
+
+    def _override_to_dict(o: _OverrideBase) -> dict:
+        d = _dataclasses.asdict(o)
+        # asdict converts nested dataclasses too -- predicted_effect becomes
+        # a dict already. Re-format datetimes to ISO 8601 with explicit UTC.
+        d["decided_at"] = o.decided_at.isoformat()
+        d["expires_at"] = (
+            o.expires_at.isoformat() if o.expires_at is not None else None
+        )
+        d["predicted_effect"]["evaluate_at"] = o.predicted_effect.evaluate_at.isoformat()
+        return d
+
+    out: dict = {
+        "version": state.version,
+        "updated_at": state.updated_at.isoformat(),
+        "updated_by": state.updated_by,
+        "mode": state.mode,
+        "applied": {
+            "disabled_sources": [_override_to_dict(o) for o in state.applied_disabled_sources],
+            "disabled_keywords": [_override_to_dict(o) for o in state.applied_disabled_keywords],
+            "threshold_overrides": [_override_to_dict(o) for o in state.applied_threshold_overrides],
+        },
+        "proposed": {
+            "disabled_sources": [_override_to_dict(o) for o in state.proposed_disabled_sources],
+            "disabled_keywords": [_override_to_dict(o) for o in state.proposed_disabled_keywords],
+            "threshold_overrides": [_override_to_dict(o) for o in state.proposed_threshold_overrides],
+        },
+    }
+    if state.last_applied_batch is not None:
+        out["last_applied_batch"] = state.last_applied_batch
+    return out
+
+
+def atomic_write_state(state: OverridesState, target: Path) -> None:
+    """Write state to target via temp-file-and-rename.
+
+    The bot reader doing a concurrent read at any point during this
+    function will always see either the previous valid file or the new
+    valid file -- never a half-written file. Achieved via os.replace
+    (cross-platform atomic on Windows too).
+
+    The temp file is created in the same directory as `target` so the
+    rename is on the same filesystem (rename across filesystems is NOT
+    atomic on POSIX).
+
+    On rename failure the temp file is removed so it doesn't accumulate
+    or confuse the next writer. The original target (if any) is left
+    untouched; previous-content guarantee holds.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    payload = _state_to_yaml_dict(state)
+    text = _yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+    tmp.write_text(text, encoding="utf-8")
+    try:
+        _os.replace(tmp, target)
+    except OSError:
+        # Best-effort cleanup; never mask the original error.
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def _not_expired(override: _OverrideBase, now: datetime) -> bool:
