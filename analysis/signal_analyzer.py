@@ -310,7 +310,7 @@ def _keyword_score(
 
         hits = [
             kw for kw in keywords
-            if not is_keyword_disabled(kw) and kw.lower() in text_lower
+            if kw.lower() in text_lower and not is_keyword_disabled(kw)
         ]
         if hits:
             matched.extend(hits)
@@ -344,7 +344,7 @@ def _keyword_contributions(
 
         hits = [
             kw for kw in keywords
-            if not is_keyword_disabled(kw) and kw.lower() in text_lower
+            if kw.lower() in text_lower and not is_keyword_disabled(kw)
         ]
         if not hits:
             continue
