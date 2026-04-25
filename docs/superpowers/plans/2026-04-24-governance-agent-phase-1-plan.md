@@ -2901,51 +2901,102 @@ git commit -m "test(runtime-overrides): backward-compat with no overrides file (
 
 ---
 
-### Task 15: Refactor `analysis/market_matcher.py` source-disable check
+### Task 15: Refactor source-disable check sites in main.py + feeds/
+
+**Plan amendment (2026-04-24):** Original plan targeted `analysis/market_matcher.py`, but `grep` showed that file has zero `DISABLED_NEWS_SOURCES` references. The actual runtime-path call sites are in `main.py` (the source filter at ingestion) and two feed modules. Static-set entries also have mixed casing (e.g., `r/Turkey` vs. `r/pakistan`, `GDELT` vs. `Foreign Policy`), so case-insensitive matching is load-bearing — the refactor preserves it in the new module-level helper.
 
 **Files:**
-- Modify: `analysis/market_matcher.py`
-- Modify: `tests/test_market_matcher.py`
+- Modify: `utils/runtime_overrides.py` (add module-level helpers + `set_global_reader`)
+- Modify: `main.py` (refactor `_is_disabled_news_source`)
+- Modify: `feeds/subreddit_selector.py` (refactor `_is_disabled_reddit_source`)
+- Modify: `feeds/gdelt_monitor.py` (refactor inline GDELT check)
+- Modify: `tests/test_runtime_overrides_reader.py` (extend with module-level helper tests, OR create `tests/test_runtime_overrides_module_helpers.py`)
 
-- [ ] **Step 1: Find the source-disable check sites**
+- [ ] **Step 1: Confirm the call sites**
 
-Run: `grep -n "DISABLED_NEWS_SOURCES" /Users/Jake/vscode/kalshi_bot/analysis/market_matcher.py`
+Run: `grep -rn "DISABLED_NEWS_SOURCES" --include="*.py" main.py feeds/`
 
-Note the line numbers reported. Each one is a refactor target.
+Expect to see (line numbers may drift):
+- `main.py:76` — import
+- `main.py:147` — `if source in DISABLED_NEWS_SOURCES:`
+- `main.py:150` — `return any(key.strip().lower() == source_lower for key in DISABLED_NEWS_SOURCES)`
+- `feeds/subreddit_selector.py:20` — import
+- `feeds/subreddit_selector.py:43` and `:46` — same case-insensitive pattern
+- `feeds/gdelt_monitor.py:30` — import
+- `feeds/gdelt_monitor.py:135-136` — inline `"GDELT" in DISABLED_NEWS_SOURCES or any(...)`
 
-- [ ] **Step 2: Plan the refactor**
+The check at each site is case-insensitive: exact-match first, then lowercase iteration. The refactor replaces both branches with a single call to a new module-level helper.
 
-The reader is created in `main.py` (Task 19). For now, expose a module-level function in `utils.runtime_overrides` that the matcher can call without knowing about reader instances:
+- [ ] **Step 2: Add the module-level helpers + global reader registration**
+
+Append to `utils/runtime_overrides.py`:
 
 ```python
-# In utils/runtime_overrides.py, append:
 _global_reader: RuntimeOverridesReader | None = None
 
 
-def set_global_reader(reader: RuntimeOverridesReader) -> None:
-    """Register the singleton reader for module-level query helpers.
-    Called once at bot startup. Tests may set/unset their own."""
+def set_global_reader(reader: RuntimeOverridesReader | None) -> None:
+    """Register (or clear) the singleton reader for module-level query helpers.
+
+    Called once at bot startup. Tests may set/unset their own (always restore
+    the previous value in `finally`). Pass None to clear.
+    """
     global _global_reader
     _global_reader = reader
 
 
+def _matches_case_insensitive(needle: str, haystack) -> bool:
+    """True iff `needle` matches any element of `haystack` case-insensitively.
+
+    Mirrors the existing main.py / feeds/ check pattern: exact-match first
+    (a fast common case), then lowercase iteration as a fallback for
+    inconsistent-casing entries in the static set.
+    """
+    if needle in haystack:
+        return True
+    needle_lower = needle.strip().lower()
+    return any(item.strip().lower() == needle_lower for item in haystack)
+
+
 def is_source_disabled(source: str) -> bool:
     """Module-level helper combining static config + runtime overrides.
-    Falls back to static-only when no global reader is registered."""
-    if source in _static_disabled_sources():
+
+    Returns True iff `source` is in static `DISABLED_NEWS_SOURCES` OR in the
+    runtime-applied disabled set. Comparison is case-insensitive against
+    both sets to preserve the existing main.py / feeds/ semantics.
+
+    Falls back to static-only when no global reader is registered (Phase 1
+    backward-compat: bot operates exactly as pre-Phase-1 if main.py has not
+    yet wired the reader at startup).
+    """
+    if _matches_case_insensitive(source, _static_disabled_sources()):
         return True
     if _global_reader is None:
         return False
-    return any(o.source == source for o in _global_reader.snapshot().applied_disabled_sources)
+    runtime_sources = [o.source for o in _global_reader.snapshot().applied_disabled_sources]
+    return _matches_case_insensitive(source, runtime_sources)
 
 
 def is_keyword_disabled(keyword: str) -> bool:
+    """Module-level helper for keyword disabling.
+
+    Phase 1 has no static counterpart; returns True only if the runtime
+    reader has the keyword in `applied_disabled_keywords`. Case-sensitive
+    by design (keywords are matched against text body where casing matters).
+    """
     if _global_reader is None:
         return False
     return any(o.keyword == keyword for o in _global_reader.snapshot().applied_disabled_keywords)
 
 
 def get_threshold_override(path: str):
+    """Module-level threshold-override lookup.
+
+    Returns the override value if any applied threshold matches `path`
+    exactly, else None. Caller MUST treat None as 'no override' and fall
+    back to the static config value -- never confuse None-as-override with
+    no-override.
+    """
     if _global_reader is None:
         return None
     for o in _global_reader.snapshot().applied_threshold_overrides:
@@ -2954,93 +3005,297 @@ def get_threshold_override(path: str):
     return None
 ```
 
-- [ ] **Step 3: Write a failing test for the refactor**
+Note on case-sensitivity asymmetry: source matching is case-insensitive (mirrors the existing helpers in main.py/feeds/, where the static set has `r/Turkey` vs `r/pakistan` casing variation). Keyword matching is case-sensitive (keywords match against text body where capitalization is preserved). Threshold-override paths are case-sensitive (exact dotted-path match per the spec).
 
-Append to `tests/test_market_matcher.py`:
+- [ ] **Step 3: Write tests for the new module-level helpers**
 
-```python
-class TestRuntimeOverridesIntegration:
-    """Verify market_matcher consults runtime overrides reader, not just
-    the static DISABLED_NEWS_SOURCES set."""
-
-    @pytest.mark.asyncio
-    async def test_runtime_disabled_source_filtered_from_matches(self, matcher, monkeypatch):
-        from utils import runtime_overrides as ro
-
-        # Set up a fake reader that has "Faked Source" disabled
-        from utils.runtime_overrides import (
-            DisabledSource, OverridesState, PredictedEffect, RuntimeOverridesReader,
-        )
-        from datetime import datetime, timezone
-        now = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
-        fake_state = OverridesState(
-            version=1, updated_at=now, updated_by="test", mode="real",
-            applied_disabled_sources=[
-                DisabledSource(
-                    source="Faked Source", reason="x", confidence=0.9,
-                    decided_at=now, decided_by="test",
-                    decision_id="gd_2026-05-02_0099",
-                    expires_at=None,
-                    predicted_effect=PredictedEffect(
-                        metric="m", baseline=0, predicted_post_change=0, evaluate_at=now,
-                    ),
-                )
-            ],
-        )
-
-        class FakeReader:
-            def snapshot(self):
-                return fake_state
-
-        monkeypatch.setattr(ro, "_global_reader", FakeReader())
-
-        markets = [
-            _make_market("KXIRAN-1", "Will Iran close the Strait of Hormuz?"),
-        ]
-        matcher._cache.get_markets = AsyncMock(return_value=markets)
-        # News from the runtime-disabled source
-        news = _make_news("Iran threatens Strait", source="Faked Source")
-        results = await matcher.find_candidates(news)
-        # Either no results (filtered upstream by news ingestion) OR
-        # matcher recognizes the source as disabled. The exact semantics
-        # depend on which call site is being refactored; the assertion
-        # below is the invariant: nothing from a runtime-disabled source
-        # produces a match candidate.
-        assert results == [] or all(r.source != "Faked Source" for r in results)
-```
-
-(The test asserts the *invariant* rather than a specific call path; whichever site uses `DISABLED_NEWS_SOURCES` should now consult the reader.)
-
-- [ ] **Step 4: Refactor each `DISABLED_NEWS_SOURCES` lookup**
-
-For each occurrence in `analysis/market_matcher.py`, replace:
+Create `tests/test_runtime_overrides_module_helpers.py`:
 
 ```python
-if source in DISABLED_NEWS_SOURCES:
-    # ... drop or skip ...
+"""Tests for the module-level helpers used by main.py / feeds/ to
+consult the runtime overrides reader without holding a reader reference.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+
+from utils.runtime_overrides import (
+    DisabledKeyword,
+    DisabledSource,
+    OverridesState,
+    PredictedEffect,
+    RuntimeOverridesReader,
+    ThresholdOverride,
+    get_threshold_override,
+    is_keyword_disabled,
+    is_source_disabled,
+    set_global_reader,
+)
+from utils import runtime_overrides as ro
+
+
+_NOW = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
+
+
+def _pe() -> PredictedEffect:
+    return PredictedEffect(metric="m", baseline=0, predicted_post_change=0, evaluate_at=_NOW)
+
+
+@pytest.fixture(autouse=True)
+def _reset_global_reader():
+    """Always restore the global reader to whatever it was (likely None)
+    before/after each test, so tests do not leak state."""
+    original = ro._global_reader
+    yield
+    ro._global_reader = original
+
+
+class FakeReader:
+    """Stub reader with a fixed snapshot for tests that don't need disk."""
+
+    def __init__(self, state: OverridesState):
+        self._state = state
+
+    def snapshot(self) -> OverridesState:
+        return self._state
+
+
+def _make_state_with_source(source_name: str) -> OverridesState:
+    return OverridesState(
+        version=1, updated_at=_NOW, updated_by="test", mode="real",
+        applied_disabled_sources=[
+            DisabledSource(
+                source=source_name, reason="test", confidence=0.9,
+                decided_at=_NOW, decided_by="test",
+                decision_id="gd_2026-05-02_0001",
+                expires_at=None, predicted_effect=_pe(),
+            )
+        ],
+    )
+
+
+def _make_state_with_keyword(keyword: str) -> OverridesState:
+    return OverridesState(
+        version=1, updated_at=_NOW, updated_by="test", mode="real",
+        applied_disabled_keywords=[
+            DisabledKeyword(
+                keyword=keyword, reason="test", confidence=0.8,
+                decided_at=_NOW, decided_by="test",
+                decision_id="gd_2026-05-02_0002",
+                expires_at=None, predicted_effect=_pe(),
+            )
+        ],
+    )
+
+
+def _make_state_with_threshold(path: str, value) -> OverridesState:
+    return OverridesState(
+        version=1, updated_at=_NOW, updated_by="test", mode="real",
+        applied_threshold_overrides=[
+            ThresholdOverride(
+                path=path, value=value, reason="test", confidence=0.7,
+                decided_at=_NOW, decided_by="test",
+                decision_id="gd_2026-05-02_0003",
+                expires_at=None, predicted_effect=_pe(),
+            )
+        ],
+    )
+
+
+class TestIsSourceDisabled:
+    def test_no_global_reader_falls_back_to_static_only(self, monkeypatch):
+        """Backward-compat: if main.py has not yet called set_global_reader,
+        the helper still consults the static DISABLED_NEWS_SOURCES set and
+        returns the same result as the pre-Phase-1 main.py helper."""
+        monkeypatch.setattr(ro, "_static_disabled_sources",
+                            lambda: frozenset({"static_only"}))
+        ro._global_reader = None
+        assert is_source_disabled("static_only") is True
+        assert is_source_disabled("not_disabled") is False
+
+    def test_runtime_only(self, monkeypatch):
+        monkeypatch.setattr(ro, "_static_disabled_sources", lambda: frozenset())
+        set_global_reader(FakeReader(_make_state_with_source("r/RuntimeOnly")))
+        assert is_source_disabled("r/RuntimeOnly") is True
+        assert is_source_disabled("r/Other") is False
+
+    def test_static_and_runtime_union(self, monkeypatch):
+        monkeypatch.setattr(ro, "_static_disabled_sources",
+                            lambda: frozenset({"r/StaticOnly"}))
+        set_global_reader(FakeReader(_make_state_with_source("r/RuntimeOnly")))
+        assert is_source_disabled("r/StaticOnly") is True
+        assert is_source_disabled("r/RuntimeOnly") is True
+        assert is_source_disabled("r/Neither") is False
+
+    def test_case_insensitive_match_against_static(self, monkeypatch):
+        """Mirrors the existing main.py case-insensitive behavior. Static set
+        contains 'r/Turkey' (per config.py); 'r/turkey' must also match."""
+        monkeypatch.setattr(ro, "_static_disabled_sources",
+                            lambda: frozenset({"r/Turkey"}))
+        ro._global_reader = None
+        assert is_source_disabled("r/Turkey") is True
+        assert is_source_disabled("r/turkey") is True
+        assert is_source_disabled("R/TURKEY") is True
+
+    def test_case_insensitive_match_against_runtime(self, monkeypatch):
+        """Same case-insensitive policy applies to runtime-disabled sources."""
+        monkeypatch.setattr(ro, "_static_disabled_sources", lambda: frozenset())
+        set_global_reader(FakeReader(_make_state_with_source("r/Turkey")))
+        assert is_source_disabled("r/Turkey") is True
+        assert is_source_disabled("r/turkey") is True
+
+
+class TestIsKeywordDisabled:
+    def test_no_global_reader_returns_false(self):
+        ro._global_reader = None
+        assert is_keyword_disabled("anything") is False
+
+    def test_runtime_match(self, monkeypatch):
+        set_global_reader(FakeReader(_make_state_with_keyword("trump may deadline")))
+        assert is_keyword_disabled("trump may deadline") is True
+        assert is_keyword_disabled("not in list") is False
+
+    def test_keyword_match_case_sensitive(self, monkeypatch):
+        """Keywords match against text body where capitalization is preserved.
+        Spec preserves case-sensitivity for keywords."""
+        set_global_reader(FakeReader(_make_state_with_keyword("ceasefire")))
+        assert is_keyword_disabled("ceasefire") is True
+        assert is_keyword_disabled("Ceasefire") is False  # different casing -> not disabled
+
+
+class TestGetThresholdOverride:
+    def test_no_global_reader_returns_none(self):
+        ro._global_reader = None
+        assert get_threshold_override("any.path") is None
+
+    def test_returns_value_when_path_matches(self, monkeypatch):
+        set_global_reader(FakeReader(
+            _make_state_with_threshold("EARLY_MAX_NEWS_AGE_BY_SOURCE.IAEA", 21600)
+        ))
+        assert get_threshold_override("EARLY_MAX_NEWS_AGE_BY_SOURCE.IAEA") == 21600
+        assert get_threshold_override("EARLY_MAX_NEWS_AGE_BY_SOURCE.OtherSrc") is None
+
+
+class TestSetGlobalReader:
+    def test_set_and_clear(self, monkeypatch):
+        monkeypatch.setattr(ro, "_static_disabled_sources", lambda: frozenset())
+        set_global_reader(FakeReader(_make_state_with_source("r/X")))
+        assert is_source_disabled("r/X") is True
+        set_global_reader(None)
+        assert is_source_disabled("r/X") is False
 ```
 
-with:
+Note: `RuntimeOverridesReader` is in the imports but not actually used (the tests use `FakeReader`). Drop the import if ruff F401 complains.
+
+- [ ] **Step 4: Refactor the three call sites**
+
+#### main.py (lines 146-150)
+
+Find:
+
+```python
+def _is_disabled_news_source(source: str) -> bool:
+    if source in DISABLED_NEWS_SOURCES:
+        return True
+    source_lower = source.strip().lower()
+    return any(key.strip().lower() == source_lower for key in DISABLED_NEWS_SOURCES)
+```
+
+Replace with:
+
+```python
+def _is_disabled_news_source(source: str) -> bool:
+    """Defer to the runtime-overrides module-level helper, which combines
+    static DISABLED_NEWS_SOURCES with any runtime-applied disabled set.
+    Behavior with no runtime reader registered: identical to pre-Phase-1.
+    """
+    return is_source_disabled(source)
+```
+
+Add to `main.py` imports near the top (e.g., next to other `utils.` imports):
 
 ```python
 from utils.runtime_overrides import is_source_disabled
-...
-if is_source_disabled(source):
-    # ... drop or skip ...
 ```
 
-(Add the import at the top of the file. Remove `DISABLED_NEWS_SOURCES` from the imports if it's no longer used.)
+Note: `DISABLED_NEWS_SOURCES` is still imported in `main.py:76` and may still be used elsewhere in `main.py` for diagnostics; check. If only used in `_is_disabled_news_source` after the refactor, remove from imports too.
 
-- [ ] **Step 5: Run all tests to verify no regression + new test passes**
+#### feeds/subreddit_selector.py (lines 41-46)
 
-Run: `pytest tests/test_market_matcher.py -v --tb=short 2>&1 | tail -10`
-Expected: All previously-passing tests still pass; new test passes.
+Find:
+
+```python
+def _is_disabled_reddit_source(subreddit: str) -> bool:
+    source = f"r/{subreddit}"
+    if source in DISABLED_NEWS_SOURCES:
+        return True
+    source_lower = source.lower()
+    return any(key.strip().lower() == source_lower for key in DISABLED_NEWS_SOURCES)
+```
+
+Replace with:
+
+```python
+def _is_disabled_reddit_source(subreddit: str) -> bool:
+    """Defer to the runtime-overrides module-level helper. Same behavior
+    as before (case-insensitive UNION of static + runtime sets) when the
+    runtime reader is registered; behaves identically to pre-Phase-1
+    when no reader is registered.
+    """
+    return is_source_disabled(f"r/{subreddit}")
+```
+
+Add to imports:
+
+```python
+from utils.runtime_overrides import is_source_disabled
+```
+
+Remove `DISABLED_NEWS_SOURCES` from the imports if no longer referenced in the file.
+
+#### feeds/gdelt_monitor.py (lines 135-136)
+
+Find:
+
+```python
+gdelt_disabled = "GDELT" in DISABLED_NEWS_SOURCES or any(
+    key.strip().lower() == "gdelt" for key in DISABLED_NEWS_SOURCES
+)
+```
+
+Replace with:
+
+```python
+gdelt_disabled = is_source_disabled("GDELT")
+```
+
+Add the import; remove `DISABLED_NEWS_SOURCES` from the imports if unused after.
+
+- [ ] **Step 5: Run tests**
+
+```
+pytest --tb=short 2>&1 | tail -3
+```
+Expected: 1185+ passed (1180 + new module-helper tests).
+
+```
+pytest tests/test_runtime_overrides_module_helpers.py -v
+```
+Expected: all new tests pass.
+
+```
+ruff check utils/runtime_overrides.py main.py feeds/subreddit_selector.py feeds/gdelt_monitor.py tests/test_runtime_overrides_module_helpers.py
+```
+Expected: clean.
 
 - [ ] **Step 6: Commit**
 
-```bash
-git add utils/runtime_overrides.py analysis/market_matcher.py tests/test_market_matcher.py
-git commit -m "refactor(market-matcher): consult runtime_overrides for source-disable checks (Phase 1, task 15)"
+```
+git add utils/runtime_overrides.py main.py feeds/subreddit_selector.py feeds/gdelt_monitor.py tests/test_runtime_overrides_module_helpers.py
+git commit -m "refactor(sources): route source-disable checks through runtime_overrides helpers (Phase 1, task 15)"
 ```
 
 ---
