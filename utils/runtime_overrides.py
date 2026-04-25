@@ -285,3 +285,42 @@ def parse_yaml_to_state(data: dict) -> OverridesState:
         ],
         last_applied_batch=data.get("last_applied_batch"),
     )
+
+
+def _not_expired(override: _OverrideBase, now: datetime) -> bool:
+    return override.expires_at is None or override.expires_at > now
+
+
+def filter_expired(state: OverridesState, now: datetime) -> OverridesState:
+    """Return a new OverridesState with all expired entries removed.
+
+    Does NOT mutate the input. An entry is expired iff its expires_at
+    is non-None and <= now. Both `applied` and `proposed` sections are
+    filtered (the agent should not see its own expired proposals as
+    in-force when deciding the next batch).
+    """
+    return OverridesState(
+        version=state.version,
+        updated_at=state.updated_at,
+        updated_by=state.updated_by,
+        mode=state.mode,
+        applied_disabled_sources=[
+            o for o in state.applied_disabled_sources if _not_expired(o, now)
+        ],
+        applied_disabled_keywords=[
+            o for o in state.applied_disabled_keywords if _not_expired(o, now)
+        ],
+        applied_threshold_overrides=[
+            o for o in state.applied_threshold_overrides if _not_expired(o, now)
+        ],
+        proposed_disabled_sources=[
+            o for o in state.proposed_disabled_sources if _not_expired(o, now)
+        ],
+        proposed_disabled_keywords=[
+            o for o in state.proposed_disabled_keywords if _not_expired(o, now)
+        ],
+        proposed_threshold_overrides=[
+            o for o in state.proposed_threshold_overrides if _not_expired(o, now)
+        ],
+        last_applied_batch=state.last_applied_batch,
+    )
