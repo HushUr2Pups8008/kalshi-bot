@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from governance.safety import KillSwitch
 from governance.safety import SafetyConfig
 
 
@@ -77,3 +78,81 @@ class TestSafetyConfig:
         SafetyConfig(confidence_threshold=1.0)
         SafetyConfig(blast_radius_max_source_disable_pct=0.0)
         SafetyConfig(blast_radius_max_source_disable_pct=1.0)
+
+
+class TestKillSwitch:
+    def test_default_state_is_active(self, monkeypatch):
+        monkeypatch.delenv("GOVERNANCE_DISABLED", raising=False)
+        monkeypatch.delenv("GOVERNANCE_READONLY", raising=False)
+        ks = KillSwitch()
+        assert ks.is_disabled() is False
+        assert ks.is_readonly() is False
+        assert ks.may_apply() is True
+
+    def test_disabled_env_var_truthy_values(self, monkeypatch):
+        monkeypatch.delenv("GOVERNANCE_READONLY", raising=False)
+        for truthy in ("true", "TRUE", "1", "yes", "on"):
+            monkeypatch.setenv("GOVERNANCE_DISABLED", truthy)
+            ks = KillSwitch()
+            assert ks.is_disabled() is True, f"expected disabled for {truthy!r}"
+            assert ks.may_apply() is False
+
+    def test_disabled_env_var_falsy_values(self, monkeypatch):
+        monkeypatch.delenv("GOVERNANCE_READONLY", raising=False)
+        for falsy in ("false", "FALSE", "0", "no", "off", ""):
+            monkeypatch.setenv("GOVERNANCE_DISABLED", falsy)
+            ks = KillSwitch()
+            assert ks.is_disabled() is False, f"expected enabled for {falsy!r}"
+
+    def test_readonly_blocks_apply_but_not_run(self, monkeypatch):
+        monkeypatch.delenv("GOVERNANCE_DISABLED", raising=False)
+        monkeypatch.setenv("GOVERNANCE_READONLY", "true")
+        ks = KillSwitch()
+        assert ks.is_disabled() is False
+        assert ks.is_readonly() is True
+        assert ks.may_apply() is False
+
+    def test_disabled_takes_precedence_over_readonly(self, monkeypatch):
+        monkeypatch.setenv("GOVERNANCE_DISABLED", "true")
+        monkeypatch.setenv("GOVERNANCE_READONLY", "true")
+        ks = KillSwitch()
+        assert ks.is_disabled() is True
+        assert ks.may_apply() is False
+
+    def test_re_check_picks_up_env_changes(self, monkeypatch):
+        # KillSwitch reads env on each call -- not cached. This is
+        # important so a sysadmin can flip the kill-switch on a running
+        # agent process between cycles.
+        monkeypatch.delenv("GOVERNANCE_DISABLED", raising=False)
+        ks = KillSwitch()
+        assert ks.is_disabled() is False
+        monkeypatch.setenv("GOVERNANCE_DISABLED", "true")
+        assert ks.is_disabled() is True
+
+    def test_readonly_env_var_truthy_values(self, monkeypatch):
+        """GOVERNANCE_READONLY must accept the same truthy variants as GOVERNANCE_DISABLED."""
+        monkeypatch.delenv("GOVERNANCE_DISABLED", raising=False)
+        for truthy in ("true", "TRUE", "1", "yes", "on"):
+            monkeypatch.setenv("GOVERNANCE_READONLY", truthy)
+            ks = KillSwitch()
+            assert ks.is_readonly() is True, f"expected readonly for {truthy!r}"
+            assert ks.may_apply() is False
+
+    def test_readonly_env_var_falsy_values(self, monkeypatch):
+        """GOVERNANCE_READONLY must reject the same falsy variants as GOVERNANCE_DISABLED."""
+        monkeypatch.delenv("GOVERNANCE_DISABLED", raising=False)
+        for falsy in ("false", "FALSE", "0", "no", "off", ""):
+            monkeypatch.setenv("GOVERNANCE_READONLY", falsy)
+            ks = KillSwitch()
+            assert ks.is_readonly() is False, f"expected enabled for {falsy!r}"
+            assert ks.may_apply() is True
+
+    def test_whitespace_around_values_handled(self, monkeypatch):
+        """Operator may set GOVERNANCE_DISABLED='  true  ' from a shell with
+        trailing space; the implementation strips and lowercases.
+        """
+        monkeypatch.delenv("GOVERNANCE_READONLY", raising=False)
+        monkeypatch.setenv("GOVERNANCE_DISABLED", "  true  ")
+        assert KillSwitch().is_disabled() is True
+        monkeypatch.setenv("GOVERNANCE_DISABLED", "\tTRUE\n")
+        assert KillSwitch().is_disabled() is True

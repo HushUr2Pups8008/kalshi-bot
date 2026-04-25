@@ -6,6 +6,7 @@ safety bounds. Built and tested standalone in Phase 1.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 
@@ -45,3 +46,36 @@ class SafetyConfig:
             value = getattr(self, name)
             if value <= 0:
                 raise ValueError(f"{name} must be positive, got {value}")
+
+
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def _env_truthy(name: str) -> bool:
+    """Return True iff env var is set to a truthy string (case-insensitive)."""
+    return os.environ.get(name, "").strip().lower() in _TRUTHY
+
+
+class KillSwitch:
+    """Two-level emergency stop for the governance agent.
+
+    GOVERNANCE_DISABLED=true: agent must exit cleanly without writing
+        any state. Use to halt a misbehaving agent immediately.
+    GOVERNANCE_READONLY=true: agent runs and produces decisions but
+        does NOT write them to data/runtime_overrides.yaml. Useful for
+        debugging the agent's decisions without applying them.
+
+    Both env vars are re-read on every call (not cached) so a sysadmin
+    can flip the switch between cycles on a running agent process.
+    DISABLED takes precedence over READONLY when both are set.
+    """
+
+    def is_disabled(self) -> bool:
+        return _env_truthy("GOVERNANCE_DISABLED")
+
+    def is_readonly(self) -> bool:
+        return _env_truthy("GOVERNANCE_READONLY")
+
+    def may_apply(self) -> bool:
+        """True iff agent is allowed to write state to disk."""
+        return not (self.is_disabled() or self.is_readonly())
