@@ -79,3 +79,91 @@ def test_predicted_effect_holds_all_required_fields():
     assert isinstance(pe.baseline, float)
     assert isinstance(pe.predicted_post_change, float)
     assert pe.evaluate_at.tzinfo is not None
+
+
+import re
+
+
+def test_decision_rejects_confidence_above_one():
+    with pytest.raises(ValueError, match="confidence"):
+        _ok_decision(confidence=1.01)
+
+
+def test_decision_rejects_confidence_below_zero():
+    with pytest.raises(ValueError, match="confidence"):
+        _ok_decision(confidence=-0.01)
+
+
+def test_decision_rejects_unknown_action():
+    with pytest.raises(ValueError, match="action"):
+        _ok_decision(action="set_market_position")  # not in VALID_ACTIONS
+
+
+def test_decision_rejects_unknown_cadence():
+    with pytest.raises(ValueError, match="cadence"):
+        _ok_decision(cadence="hourly")
+
+
+def test_decision_rejects_malformed_decision_id():
+    with pytest.raises(ValueError, match="decision_id"):
+        _ok_decision(decision_id="not-a-valid-id")
+
+
+def test_decision_rejects_malformed_batch_id():
+    with pytest.raises(ValueError, match="batch_id"):
+        _ok_decision(batch_id="batch_001")
+
+
+def test_decision_requires_predicted_effect_for_action_decisions():
+    """no_action decisions may have predicted_effect=None; action decisions
+    must have one (per spec §10 / decision 10 — outcome-tracking is
+    mandatory for any change the agent proposes)."""
+    with pytest.raises(ValueError, match="predicted_effect"):
+        _ok_decision(action="disable_source", predicted_effect=None)
+
+
+def test_decision_allows_no_action_with_null_predicted_effect():
+    d = _ok_decision(
+        action="no_action",
+        predicted_effect=None,
+        proposed_change={},
+        target="",
+    )
+    assert d.action == "no_action"
+    assert d.predicted_effect is None
+
+
+def test_decision_rejects_evaluate_at_at_or_before_decided_at():
+    with pytest.raises(ValueError, match="evaluate_at"):
+        bad_pe = PredictedEffect(
+            metric="m",
+            baseline=0.0,
+            predicted_post_change=0.0,
+            evaluate_at=_NOW,  # not strictly after decided_at
+        )
+        _ok_decision(predicted_effect=bad_pe)
+
+
+def test_decision_rejects_naive_decided_at():
+    naive = datetime(2026, 5, 2, 14, 30, 0)  # no tzinfo
+    with pytest.raises(ValueError, match="decided_at"):
+        _ok_decision(decided_at=naive)
+
+
+def test_decision_rejects_naive_evaluate_at():
+    naive = datetime(2026, 5, 9, 14, 30, 0)
+    with pytest.raises(ValueError, match="evaluate_at"):
+        bad_pe = PredictedEffect(
+            metric="m", baseline=0.0, predicted_post_change=0.0, evaluate_at=naive,
+        )
+        _ok_decision(predicted_effect=bad_pe)
+
+
+def test_decision_rejects_empty_reasoning():
+    with pytest.raises(ValueError, match="reasoning"):
+        _ok_decision(reasoning="")
+
+
+def test_decision_rejects_target_empty_for_action_decisions():
+    with pytest.raises(ValueError, match="target"):
+        _ok_decision(action="disable_source", target="")
