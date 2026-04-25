@@ -237,6 +237,45 @@ class SafetyConfig:
 Run: `pytest tests/test_governance_safety.py -v`
 Expected: 5/5 PASS.
 
+- [ ] **Step 4a: Add comprehensive boundary tests for SafetyConfig**
+
+The five tests above cover representative cases. The user's "100%-confidence on the safety layer" mandate calls for explicit coverage of every validated field's bounds. Append the following test methods to the `TestSafetyConfig` class:
+
+```python
+    def test_all_integer_caps_reject_zero_and_negative(self):
+        """All four integer caps must reject 0 and negative values, not just max_changes_per_run."""
+        for field_name in (
+            "max_changes_per_run",
+            "blast_radius_max_source_disables_per_batch",
+            "blast_radius_max_keyword_changes_per_batch",
+            "blast_radius_max_threshold_tunings_per_batch",
+        ):
+            with pytest.raises(ValueError, match=field_name):
+                SafetyConfig(**{field_name: 0})
+            with pytest.raises(ValueError, match=field_name):
+                SafetyConfig(**{field_name: -1})
+
+    def test_blast_radius_pct_rejects_negative(self):
+        """Symmetric coverage: lower bound, not just upper bound (1.5)."""
+        with pytest.raises(ValueError, match="blast_radius_max_source_disable_pct"):
+            SafetyConfig(blast_radius_max_source_disable_pct=-0.1)
+
+    def test_unit_interval_boundary_values_accepted(self):
+        """0.0 and 1.0 are valid operator settings:
+        - confidence_threshold=0.0 → 'agent never auto-applies'
+        - confidence_threshold=1.0 → 'only perfectly confident decisions apply'
+        - blast_radius_max_source_disable_pct=0.0 → 'never auto-disable via percentage'
+        - blast_radius_max_source_disable_pct=1.0 → 'no percentage cap, only absolute'
+        """
+        SafetyConfig(confidence_threshold=0.0)
+        SafetyConfig(confidence_threshold=1.0)
+        SafetyConfig(blast_radius_max_source_disable_pct=0.0)
+        SafetyConfig(blast_radius_max_source_disable_pct=1.0)
+```
+
+Run: `pytest tests/test_governance_safety.py::TestSafetyConfig -v`
+Expected: 8/8 PASS (5 original + 3 new).
+
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -310,6 +349,34 @@ class TestKillSwitch:
         assert ks.is_disabled() is False
         monkeypatch.setenv("GOVERNANCE_DISABLED", "true")
         assert ks.is_disabled() is True
+
+    def test_readonly_env_var_truthy_values(self, monkeypatch):
+        """GOVERNANCE_READONLY must accept the same truthy variants as GOVERNANCE_DISABLED."""
+        monkeypatch.delenv("GOVERNANCE_DISABLED", raising=False)
+        for truthy in ("true", "TRUE", "1", "yes", "on"):
+            monkeypatch.setenv("GOVERNANCE_READONLY", truthy)
+            ks = KillSwitch()
+            assert ks.is_readonly() is True, f"expected readonly for {truthy!r}"
+            assert ks.may_apply() is False
+
+    def test_readonly_env_var_falsy_values(self, monkeypatch):
+        """GOVERNANCE_READONLY must reject the same falsy variants as GOVERNANCE_DISABLED."""
+        monkeypatch.delenv("GOVERNANCE_DISABLED", raising=False)
+        for falsy in ("false", "FALSE", "0", "no", "off", ""):
+            monkeypatch.setenv("GOVERNANCE_READONLY", falsy)
+            ks = KillSwitch()
+            assert ks.is_readonly() is False, f"expected enabled for {falsy!r}"
+            assert ks.may_apply() is True
+
+    def test_whitespace_around_values_handled(self, monkeypatch):
+        """Operator may set GOVERNANCE_DISABLED='  true  ' from a shell with
+        trailing space; the implementation strips and lowercases.
+        """
+        monkeypatch.delenv("GOVERNANCE_READONLY", raising=False)
+        monkeypatch.setenv("GOVERNANCE_DISABLED", "  true  ")
+        assert KillSwitch().is_disabled() is True
+        monkeypatch.setenv("GOVERNANCE_DISABLED", "\tTRUE\n")
+        assert KillSwitch().is_disabled() is True
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -360,7 +427,7 @@ class KillSwitch:
 - [ ] **Step 4: Run tests to verify all pass**
 
 Run: `pytest tests/test_governance_safety.py -v`
-Expected: 11/11 PASS (5 existing + 6 new).
+Expected: 17/17 PASS (8 SafetyConfig from Task 2 + 9 KillSwitch from Task 3: 6 original + 3 new variants/whitespace).
 
 - [ ] **Step 5: Commit**
 
@@ -1547,6 +1614,104 @@ def atomic_write_state(state: OverridesState, target: Path) -> None:
 Run: `pytest tests/test_runtime_overrides_atomic.py -v`
 Expected: 4/4 PASS (including the concurrency test).
 
+- [ ] **Step 4a: Add failure-mode tests for atomic write**
+
+The four tests above cover the happy path and concurrent reads. Per the "100%-confidence safety layer" mandate, also verify the negative path: a failed write must NOT corrupt or remove the previously valid file.
+
+Append to `tests/test_runtime_overrides_atomic.py`:
+
+```python
+class TestAtomicWriteFailureModes:
+    def test_replace_failure_preserves_previous_file(self, tmp_path: Path, monkeypatch):
+        """If os.replace raises mid-write, the target on disk must still be
+        the previous valid version -- never empty, never partial.
+        """
+        target = tmp_path / "overrides.yaml"
+        atomic_write_state(_make_state("first"), target)
+        original_bytes = target.read_bytes()
+
+        import utils.runtime_overrides as mod
+
+        def boom(*_args, **_kwargs):
+            raise OSError("simulated rename failure")
+
+        monkeypatch.setattr(mod._os, "replace", boom)
+
+        with pytest.raises(OSError, match="simulated rename failure"):
+            atomic_write_state(_make_state("second"), target)
+
+        # Target must still exist and contain the original content unchanged.
+        assert target.exists()
+        assert target.read_bytes() == original_bytes
+
+        # And no .tmp file should be left behind in user-visible state for
+        # production code -- but acceptable here since the rename failed
+        # mid-flight. Just confirm the target itself is intact.
+        loaded = load_from_disk(target)
+        assert loaded.updated_by == "first"
+
+    def test_temp_file_cleaned_up_on_replace_failure(self, tmp_path: Path, monkeypatch):
+        """If os.replace fails, the implementation should remove the orphan
+        temp file so subsequent writes don't trip over it. (Defensive: the
+        cleanup is best-effort -- if it can't remove the temp, the next
+        successful write will overwrite it anyway.)
+        """
+        target = tmp_path / "overrides.yaml"
+        atomic_write_state(_make_state("first"), target)
+
+        import utils.runtime_overrides as mod
+
+        def boom(*_args, **_kwargs):
+            raise OSError("simulated rename failure")
+
+        monkeypatch.setattr(mod._os, "replace", boom)
+
+        with pytest.raises(OSError):
+            atomic_write_state(_make_state("second"), target)
+
+        # The implementation should have cleaned up its own temp file.
+        siblings = sorted(p.name for p in tmp_path.iterdir())
+        assert siblings == ["overrides.yaml"], f"orphan temp file left behind: {siblings}"
+```
+
+The second test asserts a behavioral requirement on the implementation. **Update `atomic_write_state` to clean up its own temp file on rename failure:**
+
+```python
+def atomic_write_state(state: OverridesState, target: Path) -> None:
+    """Write state to target via temp-file-and-rename.
+
+    The bot reader doing a concurrent read at any point during this
+    function will always see either the previous valid file or the new
+    valid file -- never a half-written file. Achieved via os.rename
+    (POSIX atomic) or os.replace (cross-platform atomic on Windows too).
+
+    The temp file is created in the same directory as `target` so the
+    rename is on the same filesystem (rename across filesystems is NOT
+    atomic on POSIX).
+
+    On rename failure the temp file is removed so it doesn't accumulate
+    or confuse the next writer. The original target (if any) is left
+    untouched; previous-content guarantee holds.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    payload = _state_to_yaml_dict(state)
+    text = _yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+    tmp.write_text(text, encoding="utf-8")
+    try:
+        _os.replace(tmp, target)
+    except OSError:
+        # Best-effort cleanup; never mask the original error.
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+```
+
+Run: `pytest tests/test_runtime_overrides_atomic.py -v`
+Expected: 6/6 PASS (4 from Step 1 + 2 new failure-mode).
+
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -2119,6 +2284,25 @@ class TestAuditLoggerRotation:
         assert len(target.read_text(encoding="utf-8").splitlines()) == 2
 
 
+class TestAuditLoggerErrorHandling:
+    def test_non_serializable_record_raises_typeerror(self, tmp_path: Path):
+        """Caller is responsible for pre-serializing values (datetimes, etc).
+        If a non-JSON-serializable value slips through, raise TypeError
+        loudly rather than silently writing a corrupt line.
+        """
+        log_dir = tmp_path / "governance"
+        logger = AuditLogger(log_dir=log_dir, basename="decisions.jsonl")
+        bad = {"type": "T", "ts": datetime(2026, 5, 2, 14, 30, tzinfo=timezone.utc)}
+        with pytest.raises(TypeError):
+            logger.append(bad)
+        # The current file may exist but should not contain a corrupt line.
+        target = log_dir / "decisions.jsonl"
+        if target.exists():
+            text = target.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                json.loads(line)  # would raise if any line is corrupt
+
+
 class TestAuditLoggerCompression:
     def test_archive_older_than_7d_gzipped(self, tmp_path: Path):
         log_dir = tmp_path / "governance"
@@ -2271,7 +2455,9 @@ class AuditLogger:
 - [ ] **Step 4: Run tests to verify all pass**
 
 Run: `pytest tests/test_governance_audit.py -v`
-Expected: 6/6 PASS.
+Expected: 7/7 PASS (6 original + 1 non-serializable error-handling test).
+
+Note: `json.dumps` already raises `TypeError` on a non-serializable value before any file write happens, so the test passes against the existing implementation without changes — but locking the behavior in tests prevents future "swallow the error to keep logging" regressions.
 
 - [ ] **Step 5: Commit**
 
