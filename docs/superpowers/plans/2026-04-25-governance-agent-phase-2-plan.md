@@ -2450,6 +2450,7 @@ boundary is one module rather than two.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Any, Protocol, runtime_checkable
@@ -2763,6 +2764,22 @@ def test_local_qwen_llm_satisfies_protocol():
     assert llm.model_name() == "qwen3:14b"
 
 
+def test_local_qwen_llm_honors_governance_llm_model_env_var(monkeypatch):
+    """Hardware-conditional model selection: env var pins the model so the
+    launchd plist controls MacBook (qwen3:8b) vs Mac Studio (qwen3:14b)
+    without code edits."""
+    from governance.llm import LocalQwenLLM
+    monkeypatch.setenv("GOVERNANCE_LLM_MODEL", "qwen3:8b")
+    assert LocalQwenLLM().model_name() == "qwen3:8b"
+
+
+def test_local_qwen_llm_explicit_model_overrides_env_var(monkeypatch):
+    from governance.llm import LocalQwenLLM
+    monkeypatch.setenv("GOVERNANCE_LLM_MODEL", "qwen3:8b")
+    # Explicit constructor arg wins over env var.
+    assert LocalQwenLLM(model="qwen3:14b").model_name() == "qwen3:14b"
+
+
 def test_local_qwen_llm_posts_to_ollama_and_returns_response_text(monkeypatch):
     from governance import llm as llm_module
     from governance.llm import LocalQwenLLM
@@ -2804,17 +2821,21 @@ import urllib.request
 
 class LocalQwenLLM:
     """Ollama HTTP wrapper. Default base_url tracks the project's existing
-    OLLAMA_BASE_URL convention (utils via signal_analyzer); model defaults
-    to the post-Mac-Studio target (qwen3:14b)."""
+    OLLAMA_BASE_URL convention (utils via signal_analyzer); model is
+    hardware-conditional: qwen3:8b on MacBook (18GB), qwen3:14b on Mac
+    Studio (post-2026-04-29)."""
 
     def __init__(
         self,
         *,
-        model: str = "qwen3:14b",
+        model: str | None = None,
         base_url: str = "http://localhost:11434",
         timeout: float = 120.0,
     ) -> None:
-        self.model = model
+        # Model precedence: explicit constructor arg > GOVERNANCE_LLM_MODEL
+        # env var > hardcoded default. The env-var path lets the launchd
+        # plist (Task 25) pin the model per host without code edits.
+        self.model = model or os.getenv("GOVERNANCE_LLM_MODEL", "qwen3:14b")
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
@@ -4212,6 +4233,11 @@ Create `ops/launchd/com.kalshi.governance.fast.plist`:
     <dict>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
+        <!-- Hardware-conditional: qwen3:8b on MacBook (18GB), qwen3:14b
+             on Mac Studio (post-2026-04-29). Edit this line per host
+             before installing the plist. -->
+        <key>GOVERNANCE_LLM_MODEL</key>
+        <string>qwen3:14b</string>
     </dict>
 
     <key>StartInterval</key>
@@ -4259,6 +4285,11 @@ Create `ops/launchd/com.kalshi.governance.deep.plist`:
     <dict>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
+        <!-- Hardware-conditional: qwen3:8b on MacBook (18GB), qwen3:14b
+             on Mac Studio (post-2026-04-29). Edit this line per host
+             before installing the plist. -->
+        <key>GOVERNANCE_LLM_MODEL</key>
+        <string>qwen3:14b</string>
     </dict>
 
     <key>StartCalendarInterval</key>
@@ -4324,6 +4355,24 @@ Verify Ollama:
 ```bash
 curl -s http://localhost:11434/api/tags | jq -r '.models[].name'
 # expected: qwen3:14b appears in the list
+```
+
+## Model selection (hardware-conditional)
+
+The plists ship with `GOVERNANCE_LLM_MODEL=qwen3:14b` (Mac Studio target).
+On the MacBook (18GB) where the trading bot is also running, edit both
+plist files before installing:
+
+```bash
+sed -i '' 's|qwen3:14b|qwen3:8b|g' ops/launchd/com.kalshi.governance.fast.plist
+sed -i '' 's|qwen3:14b|qwen3:8b|g' ops/launchd/com.kalshi.governance.deep.plist
+ollama pull qwen3:8b
+```
+
+Verify the model file size fits the host's headroom:
+
+```bash
+ollama ls | grep -E "qwen3:(8b|14b)"
 ```
 
 ## Install the launchd agents
