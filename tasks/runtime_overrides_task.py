@@ -11,11 +11,14 @@ See docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md §7.
 from __future__ import annotations
 
 import asyncio
-import logging
 
+from utils.logger import get_logger
 from utils.runtime_overrides import RuntimeOverridesReader
 
-log = logging.getLogger("runtime_overrides_task")
+# Use the project's logger factory so messages reach bot.log + errors.log.
+# Raw `logging.getLogger(...)` returns a logger with no handlers, and the
+# root logger has no handlers either, so its records are silently dropped.
+log = get_logger("runtime_overrides_task")
 
 
 def _format_diff_for_log(diff) -> str:
