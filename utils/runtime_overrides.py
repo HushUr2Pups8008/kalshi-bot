@@ -573,3 +573,75 @@ def _reader_get_threshold_override(self: RuntimeOverridesReader, path: str) -> A
 RuntimeOverridesReader.is_source_disabled = _reader_is_source_disabled  # type: ignore[attr-defined]
 RuntimeOverridesReader.is_keyword_disabled = _reader_is_keyword_disabled  # type: ignore[attr-defined]
 RuntimeOverridesReader.get_threshold_override = _reader_get_threshold_override  # type: ignore[attr-defined]
+
+_global_reader: RuntimeOverridesReader | None = None
+
+
+def set_global_reader(reader: RuntimeOverridesReader | None) -> None:
+    """Register (or clear) the singleton reader for module-level query helpers.
+
+    Called once at bot startup. Tests may set/unset their own (always restore
+    the previous value in `finally`). Pass None to clear.
+    """
+    global _global_reader
+    _global_reader = reader
+
+
+def _matches_case_insensitive(needle: str, haystack) -> bool:
+    """True iff `needle` matches any element of `haystack` case-insensitively.
+
+    Mirrors the existing main.py / feeds/ check pattern: exact-match first
+    (a fast common case), then lowercase iteration as a fallback for
+    inconsistent-casing entries in the static set.
+    """
+    if needle in haystack:
+        return True
+    needle_lower = needle.strip().lower()
+    return any(item.strip().lower() == needle_lower for item in haystack)
+
+
+def is_source_disabled(source: str) -> bool:
+    """Module-level helper combining static config + runtime overrides.
+
+    Returns True iff `source` is in static `DISABLED_NEWS_SOURCES` OR in the
+    runtime-applied disabled set. Comparison is case-insensitive against
+    both sets to preserve the existing main.py / feeds/ semantics.
+
+    Falls back to static-only when no global reader is registered (Phase 1
+    backward-compat: bot operates exactly as pre-Phase-1 if main.py has not
+    yet wired the reader at startup).
+    """
+    if _matches_case_insensitive(source, _static_disabled_sources()):
+        return True
+    if _global_reader is None:
+        return False
+    runtime_sources = [o.source for o in _global_reader.snapshot().applied_disabled_sources]
+    return _matches_case_insensitive(source, runtime_sources)
+
+
+def is_keyword_disabled(keyword: str) -> bool:
+    """Module-level helper for keyword disabling.
+
+    Phase 1 has no static counterpart; returns True only if the runtime
+    reader has the keyword in `applied_disabled_keywords`. Case-sensitive
+    by design (keywords are matched against text body where casing matters).
+    """
+    if _global_reader is None:
+        return False
+    return any(o.keyword == keyword for o in _global_reader.snapshot().applied_disabled_keywords)
+
+
+def get_threshold_override(path: str):
+    """Module-level threshold-override lookup.
+
+    Returns the override value if any applied threshold matches `path`
+    exactly, else None. Caller MUST treat None as 'no override' and fall
+    back to the static config value -- never confuse None-as-override with
+    no-override.
+    """
+    if _global_reader is None:
+        return None
+    for o in _global_reader.snapshot().applied_threshold_overrides:
+        if o.path == path:
+            return o.value
+    return None

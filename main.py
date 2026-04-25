@@ -73,7 +73,7 @@ from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, VERSION
                     FADE_TWEET_FEED_URLS,
                     MARKET_SERIES_BLOCKLIST_PREFIXES, MAX_NEWS_AGE_SECONDS,
                     EARLY_MAX_NEWS_AGE_SECONDS, EARLY_MAX_NEWS_AGE_BY_SOURCE,
-                    EARLY_DROP_IF_NO_TIMESTAMP, DISABLED_NEWS_SOURCES, SOURCE_PRIORITY_TIERS,
+                    EARLY_DROP_IF_NO_TIMESTAMP, SOURCE_PRIORITY_TIERS,
                     FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD,
                     DRIFT_ALERT_CENTS, DRIFT_LOG_COOLDOWN_SECS,
                     PRICE_MOVE_THRESHOLD_CENTS, PRICE_SEARCH_COOLDOWN_SECS,
@@ -94,6 +94,7 @@ from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
 from utils.logger import get_logger, emit_startup_banner, rotate_logs, write_trade_log_async
+from utils.runtime_overrides import is_source_disabled
 
 log = get_logger("main")
 
@@ -144,10 +145,11 @@ def _early_max_news_age_seconds_for_source(source: str) -> int:
 
 
 def _is_disabled_news_source(source: str) -> bool:
-    if source in DISABLED_NEWS_SOURCES:
-        return True
-    source_lower = source.strip().lower()
-    return any(key.strip().lower() == source_lower for key in DISABLED_NEWS_SOURCES)
+    """Defer to the runtime-overrides module-level helper, which combines
+    static DISABLED_NEWS_SOURCES with any runtime-applied disabled set.
+    Behavior with no runtime reader registered: identical to pre-Phase-1.
+    """
+    return is_source_disabled(source)
 
 
 def _account_from_rsshub_url(url: str) -> str:
