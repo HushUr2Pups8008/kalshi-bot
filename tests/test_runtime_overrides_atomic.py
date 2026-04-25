@@ -15,7 +15,11 @@ from pathlib import Path
 import pytest
 
 from utils.runtime_overrides import (
+    DisabledKeyword,
+    DisabledSource,
     OverridesState,
+    PredictedEffect,
+    ThresholdOverride,
     atomic_write_state,
     load_from_disk,
 )
@@ -37,11 +41,84 @@ def _make_state(updated_by: str) -> OverridesState:
 class TestAtomicWriteState:
     def test_writes_valid_yaml_round_trip(self, tmp_path: Path):
         target = tmp_path / "overrides.yaml"
-        state = _make_state("test-writer")
+        # Build a non-trivial state covering all sections to catch regressions
+        # where the serializer silently drops fields.
+        decided_at = _utc()
+        evaluate_at = datetime(2026, 5, 9, 14, 30, 0, tzinfo=timezone.utc)
+        pe = PredictedEffect(
+            metric="anchor_rate",
+            baseline=0.99,
+            predicted_post_change=0.85,
+            evaluate_at=evaluate_at,
+        )
+        ds = DisabledSource(
+            source="r/Turkey",
+            reason="zero matches over 7d",
+            confidence=0.94,
+            decided_at=decided_at,
+            decided_by="agent",
+            decision_id="gd_2026-05-02_0001",
+            expires_at=None,
+            predicted_effect=pe,
+        )
+        dk = DisabledKeyword(
+            keyword="trump may deadline",
+            reason="time-bounded",
+            confidence=0.82,
+            decided_at=decided_at,
+            decided_by="agent",
+            decision_id="gd_2026-05-02_0002",
+            expires_at=evaluate_at,
+            predicted_effect=pe,
+        )
+        to = ThresholdOverride(
+            path="EARLY_MAX_NEWS_AGE_BY_SOURCE.IAEA",
+            value=21600,
+            reason="slow cadence",
+            confidence=0.71,
+            decided_at=decided_at,
+            decided_by="agent",
+            decision_id="gd_2026-05-02_0003",
+            expires_at=None,
+            predicted_effect=pe,
+        )
+        state = OverridesState(
+            version=1,
+            updated_at=_utc(),
+            updated_by="test-writer",
+            mode="shadow",
+            applied_disabled_sources=[ds],
+            applied_disabled_keywords=[dk],
+            applied_threshold_overrides=[to],
+            last_applied_batch={"batch_id": "gd_2026-05-02_batch_001", "applied_count": 3},
+        )
         atomic_write_state(state, target)
         assert target.exists()
+
         loaded = load_from_disk(target)
-        assert loaded.updated_by == "test-writer"
+        # Top-level scalars
+        assert loaded.version == state.version
+        assert loaded.updated_at == state.updated_at
+        assert loaded.updated_by == state.updated_by
+        assert loaded.mode == state.mode
+        # Applied lists -- check counts AND key fields of each entry
+        assert len(loaded.applied_disabled_sources) == 1
+        assert loaded.applied_disabled_sources[0].source == "r/Turkey"
+        assert loaded.applied_disabled_sources[0].confidence == 0.94
+        assert loaded.applied_disabled_sources[0].decision_id == "gd_2026-05-02_0001"
+        assert loaded.applied_disabled_sources[0].predicted_effect.evaluate_at == evaluate_at
+        assert len(loaded.applied_disabled_keywords) == 1
+        assert loaded.applied_disabled_keywords[0].keyword == "trump may deadline"
+        assert loaded.applied_disabled_keywords[0].expires_at == evaluate_at
+        assert len(loaded.applied_threshold_overrides) == 1
+        assert loaded.applied_threshold_overrides[0].path == "EARLY_MAX_NEWS_AGE_BY_SOURCE.IAEA"
+        assert loaded.applied_threshold_overrides[0].value == 21600
+        # Proposed lists empty
+        assert loaded.proposed_disabled_sources == []
+        assert loaded.proposed_disabled_keywords == []
+        assert loaded.proposed_threshold_overrides == []
+        # last_applied_batch round-trips as dict
+        assert loaded.last_applied_batch == {"batch_id": "gd_2026-05-02_batch_001", "applied_count": 3}
 
     def test_no_temp_file_left_behind_on_success(self, tmp_path: Path):
         target = tmp_path / "overrides.yaml"
@@ -69,6 +146,7 @@ class TestAtomicWriteState:
 
         stop = threading.Event()
         errors: list[Exception] = []
+        write_count = [0]  # mutable container so writer thread can update
 
         def writer():
             try:
@@ -76,6 +154,7 @@ class TestAtomicWriteState:
                 while not stop.is_set():
                     atomic_write_state(_make_state(f"writer_{count}"), target)
                     count += 1
+                write_count[0] = count
             except Exception as exc:
                 errors.append(exc)
 
@@ -105,6 +184,10 @@ class TestAtomicWriteState:
             t.join(timeout=2.0)
 
         assert errors == [], f"concurrent access produced errors: {errors}"
+        assert write_count[0] > 0, (
+            "writer thread did not complete any iterations -- the test would "
+            "have passed vacuously without exercising the race window"
+        )
 
 
 class TestAtomicWriteFailureModes:
