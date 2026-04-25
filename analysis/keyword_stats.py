@@ -24,13 +24,17 @@ Why [0.5, 1.5] range?
   Continuous range avoids cliff-edge suppression for borderline keywords.
 """
 
-import logging
 import sqlite3
 import threading
 import time
 from pathlib import Path
 
-log = logging.getLogger("keyword_stats")
+from utils.logger import get_logger
+
+# Use the project's logger factory so messages reach bot.log + errors.log.
+# Raw `logging.getLogger(...)` returns a logger with no handlers, and the
+# root logger has no handlers either, so its records are silently dropped.
+log = get_logger("keyword_stats")
 
 MIN_SAMPLES  = 10      # below this, return neutral 1.0
 REFRESH_SECS = 6 * 3600  # 6 hours between DB refreshes
