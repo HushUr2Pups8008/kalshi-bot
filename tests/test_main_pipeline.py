@@ -360,7 +360,7 @@ async def test_enqueue_news_drops_duplicates_before_queueing():
 
 @pytest.mark.asyncio
 async def test_enqueue_news_drops_disabled_source_before_queueing(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", {"BBC News"})
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset({"BBC News"}))
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_SECONDS", 600)
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_BY_SOURCE", {})
     monkeypatch.setattr("main.EARLY_DROP_IF_NO_TIMESTAMP", True)
@@ -383,7 +383,7 @@ async def test_enqueue_news_drops_disabled_source_before_queueing(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_enqueue_news_drops_disabled_source_case_insensitively(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", {"BBC News"})
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset({"BBC News"}))
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_SECONDS", 600)
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_BY_SOURCE", {})
     monkeypatch.setattr("main.EARLY_DROP_IF_NO_TIMESTAMP", True)
@@ -406,7 +406,7 @@ async def test_enqueue_news_drops_disabled_source_case_insensitively(monkeypatch
 
 @pytest.mark.asyncio
 async def test_enqueue_news_drops_stale_items_using_default_threshold(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", set())
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset())
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_SECONDS", 600)
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_BY_SOURCE", {})
     monkeypatch.setattr("main.EARLY_DROP_IF_NO_TIMESTAMP", True)
@@ -431,7 +431,7 @@ async def test_enqueue_news_drops_stale_items_using_default_threshold(monkeypatc
 
 @pytest.mark.asyncio
 async def test_enqueue_news_applies_per_source_override_threshold(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", set())
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset())
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_SECONDS", 600)
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_BY_SOURCE", {"Reuters": 1800})
     monkeypatch.setattr("main.EARLY_DROP_IF_NO_TIMESTAMP", True)
@@ -451,7 +451,7 @@ async def test_enqueue_news_applies_per_source_override_threshold(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_enqueue_news_drops_missing_timestamp_when_policy_enabled(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", set())
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset())
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_SECONDS", 600)
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_BY_SOURCE", {})
     monkeypatch.setattr("main.EARLY_DROP_IF_NO_TIMESTAMP", True)
@@ -474,7 +474,7 @@ async def test_enqueue_news_drops_missing_timestamp_when_policy_enabled(monkeypa
 
 @pytest.mark.asyncio
 async def test_enqueue_news_drops_invalid_naive_timestamp_when_policy_enabled(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", set())
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset())
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_SECONDS", 600)
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_BY_SOURCE", {})
     monkeypatch.setattr("main.EARLY_DROP_IF_NO_TIMESTAMP", True)
@@ -497,7 +497,7 @@ async def test_enqueue_news_drops_invalid_naive_timestamp_when_policy_enabled(mo
 
 @pytest.mark.asyncio
 async def test_enqueue_news_fresh_item_passes_through_unchanged(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", set())
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset())
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_SECONDS", 600)
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_BY_SOURCE", {})
     monkeypatch.setattr("main.EARLY_DROP_IF_NO_TIMESTAMP", True)
@@ -522,7 +522,7 @@ async def test_enqueue_news_fresh_item_passes_through_unchanged(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_enqueue_news_assigns_source_priority(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", set())
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset())
     monkeypatch.setattr("config.DISABLED_SOURCE_FAMILIES", set())
     bot = _make_bot_stub()
     reddit_news = _make_news()
@@ -545,7 +545,7 @@ async def test_enqueue_news_assigns_source_priority(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_enqueue_news_disabled_source_takes_precedence_over_stale_checks(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", {"BBC News"})
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset({"BBC News"}))
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_SECONDS", 600)
     monkeypatch.setattr("main.EARLY_MAX_NEWS_AGE_BY_SOURCE", {})
     monkeypatch.setattr("main.EARLY_DROP_IF_NO_TIMESTAMP", True)
@@ -569,7 +569,7 @@ async def test_enqueue_news_disabled_source_takes_precedence_over_stale_checks(m
 
 @pytest.mark.asyncio
 async def test_enqueue_news_drops_when_queue_is_full(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", set())
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset())
     monkeypatch.setattr("config.DISABLED_SOURCE_FAMILIES", set())
     bot = _make_bot_stub()
     bot._news_queue = asyncio.PriorityQueue(maxsize=1)
@@ -592,7 +592,7 @@ async def test_enqueue_news_drops_when_queue_is_full(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_enqueue_news_drops_bing_family(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", set())
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset())
     monkeypatch.setattr("config.DISABLED_SOURCE_FAMILIES", {"bing_news_query", "google_news_query"})
     bot = _make_bot_stub()
     news = _make_news()
@@ -612,7 +612,7 @@ async def test_enqueue_news_drops_bing_family(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_enqueue_news_drops_google_family(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", set())
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset())
     monkeypatch.setattr("config.DISABLED_SOURCE_FAMILIES", {"bing_news_query", "google_news_query"})
     bot = _make_bot_stub()
     news = _make_news()
@@ -632,7 +632,7 @@ async def test_enqueue_news_drops_google_family(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_enqueue_news_keeps_publisher_rss(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", set())
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset())
     monkeypatch.setattr("config.DISABLED_SOURCE_FAMILIES", {"bing_news_query", "google_news_query"})
     bot = _make_bot_stub()
     news = _make_news()
@@ -650,7 +650,7 @@ async def test_enqueue_news_keeps_publisher_rss(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_enqueue_news_family_filter_runs_before_timestamp_logic(monkeypatch):
-    monkeypatch.setattr("main.DISABLED_NEWS_SOURCES", set())
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset())
     monkeypatch.setattr("config.DISABLED_SOURCE_FAMILIES", {"bing_news_query", "google_news_query"})
     monkeypatch.setattr("main.EARLY_DROP_IF_NO_TIMESTAMP", True)
     bot = _make_bot_stub()
@@ -1156,8 +1156,8 @@ async def test_trigger_targeted_search_does_not_use_extra_queries():
 
 def test_filter_disabled_subreddits_removes_disabled_reddit_sources(monkeypatch):
     monkeypatch.setattr(
-        "feeds.subreddit_selector.DISABLED_NEWS_SOURCES",
-        {"r/worldnews", "r/geopolitics"},
+        "utils.runtime_overrides._static_disabled_sources",
+        lambda: frozenset({"r/worldnews", "r/geopolitics"}),
     )
 
     allowed, skipped = filter_disabled_subreddits(
@@ -1170,8 +1170,8 @@ def test_filter_disabled_subreddits_removes_disabled_reddit_sources(monkeypatch)
 
 def test_select_subreddits_filters_disabled_core_and_topic_subreddits(monkeypatch):
     monkeypatch.setattr(
-        "feeds.subreddit_selector.DISABLED_NEWS_SOURCES",
-        {"r/worldnews", "r/CredibleDefense", "r/WarCollege"},
+        "utils.runtime_overrides._static_disabled_sources",
+        lambda: frozenset({"r/worldnews", "r/CredibleDefense", "r/WarCollege"}),
     )
     market = KalshiMarket(
         ticker="KXTEST-25DEC31",
@@ -1212,7 +1212,7 @@ async def test_search_monitor_exits_when_all_search_families_are_disabled(monkey
 
 @pytest.mark.asyncio
 async def test_gdelt_monitor_exits_when_source_is_disabled(monkeypatch):
-    monkeypatch.setattr("feeds.gdelt_monitor.DISABLED_NEWS_SOURCES", {"GDELT"})
+    monkeypatch.setattr("utils.runtime_overrides._static_disabled_sources", lambda: frozenset({"GDELT"}))
     callback = AsyncMock()
 
     await run_gdelt_monitor(callback, get_markets=lambda: [_make_market()])
@@ -1412,3 +1412,95 @@ class TestMainAsyncBlocking:
             f"get_notional_bankroll called on event loop thread ({event_loop_thread!r}). "
             "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
         )
+
+
+class TestRuntimeThresholdOverride:
+    """Runtime threshold overrides (when registered via a global reader)
+    must take precedence over the static EARLY_MAX_NEWS_AGE_BY_SOURCE
+    map. Without a reader registered, behavior is identical to pre-Phase-1.
+    """
+
+    def test_runtime_threshold_overrides_static_value(self, monkeypatch):
+        from utils import runtime_overrides as ro
+        from utils.runtime_overrides import (
+            OverridesState, PredictedEffect, ThresholdOverride,
+        )
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
+
+        fake_state = OverridesState(
+            version=1, updated_at=now, updated_by="test", mode="real",
+            applied_threshold_overrides=[
+                ThresholdOverride(
+                    path="EARLY_MAX_NEWS_AGE_BY_SOURCE.IAEA",
+                    value=21600,
+                    reason="test", confidence=0.7,
+                    decided_at=now, decided_by="test",
+                    decision_id="gd_2026-05-02_0044", expires_at=None,
+                    predicted_effect=PredictedEffect(
+                        metric="m", baseline=0, predicted_post_change=0, evaluate_at=now,
+                    ),
+                )
+            ],
+        )
+
+        class FakeReader:
+            def snapshot(self):
+                return fake_state
+
+        monkeypatch.setattr(ro, "_global_reader", FakeReader())
+
+        from main import _early_max_news_age_seconds_for_source
+        # Runtime override wins for the specified source.
+        assert _early_max_news_age_seconds_for_source("IAEA") == 21600
+
+    def test_no_runtime_override_falls_through_to_static(self, monkeypatch):
+        """A source without a runtime override returns the static-config value
+        (exact or case-insensitive) or the default EARLY_MAX_NEWS_AGE_SECONDS.
+        """
+        from utils import runtime_overrides as ro
+        ro._global_reader = None  # explicit: no runtime overrides
+        from main import _early_max_news_age_seconds_for_source
+        from config import EARLY_MAX_NEWS_AGE_SECONDS
+
+        # A source with NO entry in EARLY_MAX_NEWS_AGE_BY_SOURCE falls through
+        # to the default.
+        assert _early_max_news_age_seconds_for_source("UnknownSrc") == EARLY_MAX_NEWS_AGE_SECONDS
+
+    def test_runtime_override_int_coercion(self, monkeypatch):
+        """YAML scalars sometimes deserialize as int; confirm the consumer
+        handles int values directly (get_threshold_override returns the raw
+        value as stored).
+        """
+        from utils import runtime_overrides as ro
+        from utils.runtime_overrides import (
+            OverridesState, PredictedEffect, ThresholdOverride,
+        )
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
+
+        fake_state = OverridesState(
+            version=1, updated_at=now, updated_by="test", mode="real",
+            applied_threshold_overrides=[
+                ThresholdOverride(
+                    path="EARLY_MAX_NEWS_AGE_BY_SOURCE.SomeSrc",
+                    value=7200,
+                    reason="test", confidence=0.7,
+                    decided_at=now, decided_by="test",
+                    decision_id="gd_2026-05-02_0045", expires_at=None,
+                    predicted_effect=PredictedEffect(
+                        metric="m", baseline=0, predicted_post_change=0, evaluate_at=now,
+                    ),
+                )
+            ],
+        )
+
+        class FakeReader:
+            def snapshot(self):
+                return fake_state
+
+        monkeypatch.setattr(ro, "_global_reader", FakeReader())
+        from main import _early_max_news_age_seconds_for_source
+        result = _early_max_news_age_seconds_for_source("SomeSrc")
+        assert result == 7200
+        assert isinstance(result, int)

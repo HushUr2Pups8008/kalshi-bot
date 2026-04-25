@@ -20,6 +20,24 @@ No repo-level semver policy was documented through the v0.29.x stream (patch ver
 
 ---
 
+## Governance Agent (Phase 1 in flight)
+
+**Purpose:** Replace the operator's diagnostic→edit→commit→restart loop with
+an LLM-driven process that decides what sources/keywords/thresholds to
+add/remove/tune, with safety scaffolding ensuring the agent cannot do harm.
+
+**Spec:** `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md`
+**Phase 1 plan:** `docs/superpowers/plans/2026-04-24-governance-agent-phase-1-plan.md`
+
+| ID | Task | Status | Owner | Notes |
+|----|------|--------|-------|-------|
+| GOV.P1 | Runtime overrides plumbing (read-only file format, hot-reload, safety primitives, CLI shim) | COMPLETE | Claude | Phase 1 of 4. Shipped as 0.29.52. See `CHANGELOG.md`. |
+| GOV.P2 | Local-only governance agent in shadow mode | NOT_STARTED | Claude | Spec §8. Builds on P1. Requires Mac Studio (post-2026-04-29). |
+| GOV.P3 | Real-mode flip + auto-revert | NOT_STARTED | Claude | Spec §9. Requires P2 + 14d shadow soak. |
+| GOV.P4 | Tiered LLM (Claude API escalation) + weekly self-review | NOT_STARTED | Claude | Spec §10. Requires P3 + 2w real-mode soak. |
+
+---
+
 ## Stage 0 — Diagnostics Foundation
 
 | ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |

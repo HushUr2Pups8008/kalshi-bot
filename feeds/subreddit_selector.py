@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Sequence
 
 from config import (
-    DISABLED_NEWS_SOURCES,
     REDDIT_CORE_SUBREDDITS,
     REDDIT_MAX_SUBREDDITS,
     REDDIT_SUBREDDIT_TOPIC_MAP,
@@ -25,6 +24,7 @@ from config import (
     SUBREDDIT_PROBE_COOLDOWN_SECS,
     SUBREDDIT_PROBE_SLOTS,
 )
+from utils.runtime_overrides import is_source_disabled
 from kalshi import KalshiMarket
 
 
@@ -39,11 +39,8 @@ _STOP_WORDS = frozenset({
 
 
 def _is_disabled_reddit_source(subreddit: str) -> bool:
-    source = f"r/{subreddit}"
-    if source in DISABLED_NEWS_SOURCES:
-        return True
-    source_lower = source.lower()
-    return any(key.strip().lower() == source_lower for key in DISABLED_NEWS_SOURCES)
+    """Defer to the runtime-overrides module-level helper."""
+    return is_source_disabled(f"r/{subreddit}")
 
 
 def filter_disabled_subreddits(subreddits: Sequence[str]) -> tuple[list[str], list[str]]:

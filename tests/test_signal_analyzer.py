@@ -1213,3 +1213,130 @@ class TestOllamaClassification:
 
         assert result is None
         assert meta["status"] == "ollama_timeout"
+
+
+class TestRuntimeKeywordDisable:
+    """Runtime-disabled keywords must not contribute to the keyword
+    score even though they remain in GEOPOLITICAL_SIGNALS.
+    """
+
+    def test_runtime_disabled_keyword_skipped_in_keyword_score(self, monkeypatch):
+        from utils import runtime_overrides as ro
+        from utils.runtime_overrides import (
+            DisabledKeyword, OverridesState, PredictedEffect,
+        )
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
+
+        # "ceasefire" is a real keyword in GEOPOLITICAL_SIGNALS (config.py).
+        fake_state = OverridesState(
+            version=1, updated_at=now, updated_by="test", mode="real",
+            applied_disabled_keywords=[
+                DisabledKeyword(
+                    keyword="ceasefire", reason="test", confidence=0.9,
+                    decided_at=now, decided_by="test",
+                    decision_id="gd_2026-05-02_0099", expires_at=None,
+                    predicted_effect=PredictedEffect(
+                        metric="m", baseline=0, predicted_post_change=0, evaluate_at=now,
+                    ),
+                )
+            ],
+        )
+
+        class FakeReader:
+            def snapshot(self):
+                return fake_state
+
+        monkeypatch.setattr(ro, "_global_reader", FakeReader())
+
+        from analysis.signal_analyzer import _keyword_score
+        # Signature: (net_shift, dominant, matched_keywords)
+        _shift, _direction, matched_keywords = _keyword_score(
+            "Israel announces ceasefire today"
+        )
+        assert "ceasefire" not in matched_keywords
+
+    def test_runtime_disabled_keyword_skipped_in_count_matched_signal_groups(
+        self, monkeypatch
+    ):
+        """The all_required override mode counts how many signal groups have
+        at least one keyword hit. A runtime-disabled keyword must NOT
+        contribute a hit to its group -- otherwise the override mode would
+        treat a disabled keyword as still evidence.
+        """
+        from utils import runtime_overrides as ro
+        from utils.runtime_overrides import (
+            DisabledKeyword, OverridesState, PredictedEffect,
+        )
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
+
+        fake_state = OverridesState(
+            version=1, updated_at=now, updated_by="test", mode="real",
+            applied_disabled_keywords=[
+                DisabledKeyword(
+                    keyword="ceasefire", reason="test", confidence=0.9,
+                    decided_at=now, decided_by="test",
+                    decision_id="gd_2026-05-02_0100", expires_at=None,
+                    predicted_effect=PredictedEffect(
+                        metric="m", baseline=0, predicted_post_change=0, evaluate_at=now,
+                    ),
+                )
+            ],
+        )
+
+        class FakeReader:
+            def snapshot(self):
+                return fake_state
+
+        monkeypatch.setattr(ro, "_global_reader", FakeReader())
+
+        from analysis.signal_analyzer import _count_matched_signal_groups
+        # A headline whose only hit is the disabled keyword should not
+        # register a matched group.
+        groups_before = _count_matched_signal_groups("benign text with no signals")
+        groups_with_only_disabled = _count_matched_signal_groups(
+            "ceasefire announced"  # only the disabled keyword matches
+        )
+        # The ceasefire-only headline should register zero MORE groups than
+        # the benign one (since ceasefire is disabled).
+        assert groups_with_only_disabled == groups_before
+
+    def test_runtime_disabled_keyword_skipped_in_contributions(self, monkeypatch):
+        """Observability path (_keyword_contributions) must also hide
+        disabled keywords -- otherwise the diagnostic lies about what
+        the scorer actually used.
+        """
+        from utils import runtime_overrides as ro
+        from utils.runtime_overrides import (
+            DisabledKeyword, OverridesState, PredictedEffect,
+        )
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
+
+        fake_state = OverridesState(
+            version=1, updated_at=now, updated_by="test", mode="real",
+            applied_disabled_keywords=[
+                DisabledKeyword(
+                    keyword="ceasefire", reason="test", confidence=0.9,
+                    decided_at=now, decided_by="test",
+                    decision_id="gd_2026-05-02_0101", expires_at=None,
+                    predicted_effect=PredictedEffect(
+                        metric="m", baseline=0, predicted_post_change=0, evaluate_at=now,
+                    ),
+                )
+            ],
+        )
+
+        class FakeReader:
+            def snapshot(self):
+                return fake_state
+
+        monkeypatch.setattr(ro, "_global_reader", FakeReader())
+
+        from analysis.signal_analyzer import _keyword_contributions
+        contributions = _keyword_contributions("Israel announces ceasefire today")
+        for contribution in contributions:
+            assert contribution["keyword"] != "ceasefire", (
+                f"disabled keyword leaked into contributions: {contribution}"
+            )

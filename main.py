@@ -73,7 +73,7 @@ from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, VERSION
                     FADE_TWEET_FEED_URLS,
                     MARKET_SERIES_BLOCKLIST_PREFIXES, MAX_NEWS_AGE_SECONDS,
                     EARLY_MAX_NEWS_AGE_SECONDS, EARLY_MAX_NEWS_AGE_BY_SOURCE,
-                    EARLY_DROP_IF_NO_TIMESTAMP, DISABLED_NEWS_SOURCES, SOURCE_PRIORITY_TIERS,
+                    EARLY_DROP_IF_NO_TIMESTAMP, SOURCE_PRIORITY_TIERS,
                     FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD,
                     DRIFT_ALERT_CENTS, DRIFT_LOG_COOLDOWN_SECS,
                     PRICE_MOVE_THRESHOLD_CENTS, PRICE_SEARCH_COOLDOWN_SECS,
@@ -94,6 +94,13 @@ from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
 from utils.logger import get_logger, emit_startup_banner, rotate_logs, write_trade_log_async
+from utils.runtime_overrides import (
+    RuntimeOverridesReader,
+    get_threshold_override,
+    is_source_disabled,
+    set_global_reader,
+)
+from tasks.runtime_overrides_task import run_runtime_overrides_poll
 
 log = get_logger("main")
 
@@ -134,6 +141,16 @@ def _source_priority(source: str) -> int:
 
 
 def _early_max_news_age_seconds_for_source(source: str) -> int:
+    """Return the freshness threshold (seconds) for a source.
+
+    Runtime threshold overrides (via get_threshold_override) take precedence
+    over the static EARLY_MAX_NEWS_AGE_BY_SOURCE map. Without a runtime
+    reader registered, behavior is identical to pre-Phase-1 (static-only
+    lookup).
+    """
+    runtime = get_threshold_override(f"EARLY_MAX_NEWS_AGE_BY_SOURCE.{source}")
+    if runtime is not None:
+        return int(runtime)
     if source in EARLY_MAX_NEWS_AGE_BY_SOURCE:
         return EARLY_MAX_NEWS_AGE_BY_SOURCE[source]
     source_lower = source.strip().lower()
@@ -144,10 +161,11 @@ def _early_max_news_age_seconds_for_source(source: str) -> int:
 
 
 def _is_disabled_news_source(source: str) -> bool:
-    if source in DISABLED_NEWS_SOURCES:
-        return True
-    source_lower = source.strip().lower()
-    return any(key.strip().lower() == source_lower for key in DISABLED_NEWS_SOURCES)
+    """Defer to the runtime-overrides module-level helper, which combines
+    static DISABLED_NEWS_SOURCES with any runtime-applied disabled set.
+    Behavior with no runtime reader registered: identical to pre-Phase-1.
+    """
+    return is_source_disabled(source)
 
 
 def _account_from_rsshub_url(url: str) -> str:
@@ -431,6 +449,23 @@ class TradingBot:
         # threshold is breached. Uses asyncio.create_task so it's safe from any context.
         self.executor.set_shutdown_callback(
             lambda: asyncio.create_task(_shutdown(self))
+        )
+        # Phase 1: Runtime overrides reader. Loads `data/runtime_overrides.yaml`
+        # if present; falls back to a default empty state if absent. Registered
+        # as the module-level singleton so utils.runtime_overrides.is_source_disabled
+        # / is_keyword_disabled / get_threshold_override consult it.
+        from pathlib import Path as _Path  # local alias — Path not imported at module level
+        self._runtime_overrides_reader = RuntimeOverridesReader(
+            path=_Path("data/runtime_overrides.yaml"),
+        )
+        self._runtime_overrides_reader.reload()  # synchronous initial load
+        set_global_reader(self._runtime_overrides_reader)
+        log.info(
+            "runtime_overrides reader initialized: applied=%d sources / %d keywords / %d thresholds (mode=%s)",
+            len(self._runtime_overrides_reader.snapshot().applied_disabled_sources),
+            len(self._runtime_overrides_reader.snapshot().applied_disabled_keywords),
+            len(self._runtime_overrides_reader.snapshot().applied_threshold_overrides),
+            self._runtime_overrides_reader.snapshot().mode,
         )
         self.source_stats  = SourceStats(db_path=DATA_DIR / "paper_trades.db")
         self.keyword_stats = KeywordStats(DATA_DIR / "paper_trades.db")
@@ -1781,6 +1816,13 @@ class TradingBot:
             asyncio.create_task(self._subreddit_discovery_task(),       name="sub_discovery"),
             asyncio.create_task(self._log_rotation_task(),              name="log_rotation"),
             asyncio.create_task(self._log_maintenance_task(),           name="log_maint"),
+            asyncio.create_task(
+                run_runtime_overrides_poll(
+                    self._runtime_overrides_reader,
+                    interval_secs=600.0,  # 10 minutes
+                ),
+                name="runtime_overrides_poll",
+            ),
             asyncio.create_task(
                 self._accumulation_task.run(self._evidence_queue),      name="accumulation",
             ),
