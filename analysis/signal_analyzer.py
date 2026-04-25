@@ -17,6 +17,7 @@ import time
 from typing import Any, Optional
 
 from config import cfg, GEOPOLITICAL_SIGNALS
+from utils.runtime_overrides import is_keyword_disabled
 from feeds import NewsItem
 from kalshi import KalshiMarket
 from utils.logger import get_logger, trade_log, write_trade_log_async
@@ -214,6 +215,8 @@ def _count_matched_signal_groups(text: str) -> int:
     count = 0
     for sig_def in GEOPOLITICAL_SIGNALS:
         for kw in sig_def["keywords"]:
+            if is_keyword_disabled(kw):
+                continue
             if kw.lower() in text_lower:
                 count += 1
                 break
@@ -305,7 +308,10 @@ def _keyword_score(
         direction = sig_def["direction"]
         strength  = sig_def["strength"]
 
-        hits = [kw for kw in keywords if kw.lower() in text_lower]
+        hits = [
+            kw for kw in keywords
+            if not is_keyword_disabled(kw) and kw.lower() in text_lower
+        ]
         if hits:
             matched.extend(hits)
             weight = strength * (1 + 0.1 * (len(hits) - 1))   # bonus for multiple hits
@@ -336,7 +342,10 @@ def _keyword_contributions(
         direction = sig_def["direction"]
         strength = sig_def["strength"]
 
-        hits = [kw for kw in keywords if kw.lower() in text_lower]
+        hits = [
+            kw for kw in keywords
+            if not is_keyword_disabled(kw) and kw.lower() in text_lower
+        ]
         if not hits:
             continue
 
