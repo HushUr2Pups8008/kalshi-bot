@@ -135,3 +135,153 @@ class OverridesState:
             )
         if self.mode not in ("shadow", "real"):
             raise ValueError(f"mode must be 'shadow' or 'real', got {self.mode!r}")
+
+
+def _parse_iso(value: Any, field_name: str) -> datetime:
+    """Parse an ISO 8601 timestamp string. Accepts both '+00:00' and 'Z' UTC suffixes."""
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be an ISO 8601 string, got {type(value).__name__}")
+    s = value.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError as exc:
+        raise ValueError(f"{field_name}: invalid ISO 8601 timestamp {value!r}") from exc
+
+
+def _parse_optional_iso(value: Any, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    return _parse_iso(value, field_name)
+
+
+def _parse_predicted_effect(data: dict, ctx: str) -> PredictedEffect:
+    if not isinstance(data, dict):
+        raise ValueError(f"{ctx}.predicted_effect must be a mapping")
+    try:
+        return PredictedEffect(
+            metric=str(data["metric"]),
+            baseline=float(data["baseline"]),
+            predicted_post_change=float(data["predicted_post_change"]),
+            evaluate_at=_parse_iso(data["evaluate_at"], f"{ctx}.predicted_effect.evaluate_at"),
+        )
+    except KeyError as exc:
+        raise ValueError(f"{ctx}.predicted_effect: missing required field {exc.args[0]!r}") from exc
+
+
+def _parse_disabled_source(data: dict, idx: int) -> DisabledSource:
+    ctx = f"applied.disabled_sources[{idx}]"
+    if not isinstance(data, dict):
+        raise ValueError(f"{ctx} must be a mapping")
+    try:
+        return DisabledSource(
+            source=str(data["source"]),
+            reason=str(data.get("reason", "")),
+            confidence=float(data["confidence"]),
+            decided_at=_parse_iso(data["decided_at"], f"{ctx}.decided_at"),
+            decided_by=str(data["decided_by"]),
+            decision_id=str(data["decision_id"]),
+            expires_at=_parse_optional_iso(data.get("expires_at"), f"{ctx}.expires_at"),
+            predicted_effect=_parse_predicted_effect(data["predicted_effect"], ctx),
+        )
+    except KeyError as exc:
+        raise ValueError(f"{ctx}: missing required field {exc.args[0]!r}") from exc
+
+
+def _parse_disabled_keyword(data: dict, idx: int) -> DisabledKeyword:
+    ctx = f"applied.disabled_keywords[{idx}]"
+    if not isinstance(data, dict):
+        raise ValueError(f"{ctx} must be a mapping")
+    try:
+        return DisabledKeyword(
+            keyword=str(data["keyword"]),
+            reason=str(data.get("reason", "")),
+            confidence=float(data["confidence"]),
+            decided_at=_parse_iso(data["decided_at"], f"{ctx}.decided_at"),
+            decided_by=str(data["decided_by"]),
+            decision_id=str(data["decision_id"]),
+            expires_at=_parse_optional_iso(data.get("expires_at"), f"{ctx}.expires_at"),
+            predicted_effect=_parse_predicted_effect(data["predicted_effect"], ctx),
+        )
+    except KeyError as exc:
+        raise ValueError(f"{ctx}: missing required field {exc.args[0]!r}") from exc
+
+
+def _parse_threshold_override(data: dict, idx: int) -> ThresholdOverride:
+    ctx = f"applied.threshold_overrides[{idx}]"
+    if not isinstance(data, dict):
+        raise ValueError(f"{ctx} must be a mapping")
+    try:
+        return ThresholdOverride(
+            path=str(data["path"]),
+            value=data["value"],
+            reason=str(data.get("reason", "")),
+            confidence=float(data["confidence"]),
+            decided_at=_parse_iso(data["decided_at"], f"{ctx}.decided_at"),
+            decided_by=str(data["decided_by"]),
+            decision_id=str(data["decision_id"]),
+            expires_at=_parse_optional_iso(data.get("expires_at"), f"{ctx}.expires_at"),
+            predicted_effect=_parse_predicted_effect(data["predicted_effect"], ctx),
+        )
+    except KeyError as exc:
+        raise ValueError(f"{ctx}: missing required field {exc.args[0]!r}") from exc
+
+
+def parse_yaml_to_state(data: dict) -> OverridesState:
+    """Parse a YAML-loaded dict into a typed OverridesState.
+
+    Raises ValueError on schema violations with a path indicating where
+    the failure occurred (e.g., "applied.disabled_sources[0].confidence").
+    Unknown top-level sections are ignored for forward-compat.
+    """
+    if not isinstance(data, dict):
+        raise ValueError(f"top-level YAML must be a mapping, got {type(data).__name__}")
+
+    try:
+        version = int(data["version"])
+        updated_at = _parse_iso(data["updated_at"], "updated_at")
+        updated_by = str(data["updated_by"])
+        mode = str(data["mode"])
+    except KeyError as exc:
+        raise ValueError(f"missing required top-level field {exc.args[0]!r}") from exc
+
+    applied = data.get("applied") or {}
+    proposed = data.get("proposed") or {}
+
+    if not isinstance(applied, dict):
+        raise ValueError("applied must be a mapping")
+    if not isinstance(proposed, dict):
+        raise ValueError("proposed must be a mapping")
+
+    return OverridesState(
+        version=version,
+        updated_at=updated_at,
+        updated_by=updated_by,
+        mode=mode,  # type: ignore[arg-type]  # validated in OverridesState.__post_init__
+        applied_disabled_sources=[
+            _parse_disabled_source(d, i)
+            for i, d in enumerate(applied.get("disabled_sources") or [])
+        ],
+        applied_disabled_keywords=[
+            _parse_disabled_keyword(d, i)
+            for i, d in enumerate(applied.get("disabled_keywords") or [])
+        ],
+        applied_threshold_overrides=[
+            _parse_threshold_override(d, i)
+            for i, d in enumerate(applied.get("threshold_overrides") or [])
+        ],
+        proposed_disabled_sources=[
+            _parse_disabled_source(d, i)
+            for i, d in enumerate(proposed.get("disabled_sources") or [])
+        ],
+        proposed_disabled_keywords=[
+            _parse_disabled_keyword(d, i)
+            for i, d in enumerate(proposed.get("disabled_keywords") or [])
+        ],
+        proposed_threshold_overrides=[
+            _parse_threshold_override(d, i)
+            for i, d in enumerate(proposed.get("threshold_overrides") or [])
+        ],
+        last_applied_batch=data.get("last_applied_batch"),
+    )
