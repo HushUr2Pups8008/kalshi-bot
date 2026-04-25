@@ -3540,22 +3540,29 @@ git commit -m "refactor(signal-analyzer): skip runtime-disabled keywords in all 
 
 ### Task 17: Threshold-override consumer for `EARLY_MAX_NEWS_AGE_BY_SOURCE`
 
+**Plan amendment (2026-04-24):** Function name in `main.py` is `_early_max_news_age_seconds_for_source` (not `_early_max_news_age_for_source` as the plan draft assumed). Tests and references below use the correct name.
+
 **Files:**
-- Modify: `main.py` (or wherever `EARLY_MAX_NEWS_AGE_BY_SOURCE` is consulted — find via grep)
-- Add tests for the consumer
+- Modify: `main.py` — the per-source freshness lookup at line ~137
+- Modify: `tests/test_main_pipeline.py` — append new test class
 
-- [ ] **Step 1: Locate `EARLY_MAX_NEWS_AGE_BY_SOURCE` consumers**
+**Call sites found via grep:**
+- `main.py:75` — import of `EARLY_MAX_NEWS_AGE_BY_SOURCE`
+- `main.py:138-144` — `_early_max_news_age_seconds_for_source()` body (the only consumer in the runtime path)
 
-Run: `grep -rn "EARLY_MAX_NEWS_AGE_BY_SOURCE" /Users/Jake/vscode/kalshi_bot --include='*.py'`
+No other production files consult `EARLY_MAX_NEWS_AGE_BY_SOURCE`.
 
-Identify the function(s) that look up per-source freshness thresholds.
+- [ ] **Step 1: Write the failing test**
 
-- [ ] **Step 2: Write failing test**
-
-Pick the test file that tests the freshness lookup (likely `tests/test_main_pipeline.py` or `tests/test_signal_analyzer.py`). Append:
+Append to `tests/test_main_pipeline.py`:
 
 ```python
 class TestRuntimeThresholdOverride:
+    """Runtime threshold overrides (when registered via a global reader)
+    must take precedence over the static EARLY_MAX_NEWS_AGE_BY_SOURCE
+    map. Without a reader registered, behavior is identical to pre-Phase-1.
+    """
+
     def test_runtime_threshold_overrides_static_value(self, monkeypatch):
         from utils import runtime_overrides as ro
         from utils.runtime_overrides import (
@@ -3586,48 +3593,134 @@ class TestRuntimeThresholdOverride:
 
         monkeypatch.setattr(ro, "_global_reader", FakeReader())
 
-        # Function under test: whatever returns the per-source freshness
-        # threshold. Adjust import to match the codebase.
-        from main import _early_max_news_age_for_source
-        assert _early_max_news_age_for_source("IAEA") == 21600
-        # A source without an override falls through to the static value
-        # (whatever that is in EARLY_MAX_NEWS_AGE_BY_SOURCE; if not present,
-        # to EARLY_MAX_NEWS_AGE_SECONDS).
+        from main import _early_max_news_age_seconds_for_source
+        # Runtime override wins for the specified source.
+        assert _early_max_news_age_seconds_for_source("IAEA") == 21600
+
+    def test_no_runtime_override_falls_through_to_static(self, monkeypatch):
+        """A source without a runtime override returns the static-config value
+        (exact or case-insensitive) or the default EARLY_MAX_NEWS_AGE_SECONDS.
+        """
+        from utils import runtime_overrides as ro
+        ro._global_reader = None  # explicit: no runtime overrides
+        from main import _early_max_news_age_seconds_for_source
         from config import EARLY_MAX_NEWS_AGE_SECONDS
-        assert _early_max_news_age_for_source("UnknownSrc") == EARLY_MAX_NEWS_AGE_SECONDS
+
+        # A source with NO entry in EARLY_MAX_NEWS_AGE_BY_SOURCE falls through
+        # to the default.
+        assert _early_max_news_age_seconds_for_source("UnknownSrc") == EARLY_MAX_NEWS_AGE_SECONDS
+
+    def test_runtime_override_int_coercion(self, monkeypatch):
+        """YAML scalars sometimes deserialize as int; confirm the consumer
+        handles int values directly (get_threshold_override returns the raw
+        value as stored).
+        """
+        from utils import runtime_overrides as ro
+        from utils.runtime_overrides import (
+            OverridesState, PredictedEffect, ThresholdOverride,
+        )
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
+
+        fake_state = OverridesState(
+            version=1, updated_at=now, updated_by="test", mode="real",
+            applied_threshold_overrides=[
+                ThresholdOverride(
+                    path="EARLY_MAX_NEWS_AGE_BY_SOURCE.SomeSrc",
+                    value=7200,
+                    reason="test", confidence=0.7,
+                    decided_at=now, decided_by="test",
+                    decision_id="gd_2026-05-02_0045", expires_at=None,
+                    predicted_effect=PredictedEffect(
+                        metric="m", baseline=0, predicted_post_change=0, evaluate_at=now,
+                    ),
+                )
+            ],
+        )
+
+        class FakeReader:
+            def snapshot(self):
+                return fake_state
+
+        monkeypatch.setattr(ro, "_global_reader", FakeReader())
+        from main import _early_max_news_age_seconds_for_source
+        result = _early_max_news_age_seconds_for_source("SomeSrc")
+        assert result == 7200
+        assert isinstance(result, int)
 ```
 
-- [ ] **Step 3: Refactor the lookup function**
+- [ ] **Step 2: Run tests to verify they fail**
 
-Locate the per-source freshness lookup (likely in `main.py` near line 137). Refactor:
+```
+pytest tests/test_main_pipeline.py::TestRuntimeThresholdOverride -v
+```
+
+Expected: `test_runtime_threshold_overrides_static_value` and `test_runtime_override_int_coercion` fail (runtime-override lookup not yet wired). The fallback test passes because pre-refactor behavior already returns default for unknown sources.
+
+- [ ] **Step 3: Refactor `_early_max_news_age_seconds_for_source` in `main.py`**
+
+Add an import near the existing `utils.` imports in `main.py`:
 
 ```python
 from utils.runtime_overrides import get_threshold_override
+```
 
-def _early_max_news_age_for_source(source: str) -> int:
-    """Return the freshness threshold for a source, with runtime overrides
-    taking precedence over the static EARLY_MAX_NEWS_AGE_BY_SOURCE map."""
+Find the function around line 137:
+
+```python
+def _early_max_news_age_seconds_for_source(source: str) -> int:
+    if source in EARLY_MAX_NEWS_AGE_BY_SOURCE:
+        return EARLY_MAX_NEWS_AGE_BY_SOURCE[source]
+    source_lower = source.strip().lower()
+    for key, value in EARLY_MAX_NEWS_AGE_BY_SOURCE.items():
+        if key.strip().lower() == source_lower:
+            return value
+    return EARLY_MAX_NEWS_AGE_SECONDS
+```
+
+Replace with:
+
+```python
+def _early_max_news_age_seconds_for_source(source: str) -> int:
+    """Return the freshness threshold (seconds) for a source.
+
+    Runtime threshold overrides (via get_threshold_override) take precedence
+    over the static EARLY_MAX_NEWS_AGE_BY_SOURCE map. Without a runtime
+    reader registered, behavior is identical to pre-Phase-1 (static-only
+    lookup).
+    """
     runtime = get_threshold_override(f"EARLY_MAX_NEWS_AGE_BY_SOURCE.{source}")
     if runtime is not None:
         return int(runtime)
     if source in EARLY_MAX_NEWS_AGE_BY_SOURCE:
         return EARLY_MAX_NEWS_AGE_BY_SOURCE[source]
+    source_lower = source.strip().lower()
     for key, value in EARLY_MAX_NEWS_AGE_BY_SOURCE.items():
-        if key.lower() == source.lower():
+        if key.strip().lower() == source_lower:
             return value
     return EARLY_MAX_NEWS_AGE_SECONDS
 ```
 
-(If a function with this purpose already exists, modify it; do not create a duplicate.)
+The runtime override check is path-keyed by the literal source string (no case-insensitive fallback for the runtime path — agent-written paths are assumed exact). Static-config fallback preserves the pre-refactor case-insensitive matching.
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 4: Run tests — expect all pass**
 
-Run: `pytest tests/test_main_pipeline.py tests/test_signal_analyzer.py --tb=short 2>&1 | tail -10`
-Expected: All passing; new threshold-override test passes.
+```
+pytest tests/test_main_pipeline.py -v --tb=short 2>&1 | tail -15
+pytest --tb=short 2>&1 | tail -3
+```
+Expected: all 3 new tests pass; full suite 1198 passed (1195 + 3 new) + 1 skipped.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Run ruff**
 
-```bash
+```
+ruff check main.py tests/test_main_pipeline.py
+```
+Expected: clean.
+
+- [ ] **Step 6: Commit**
+
+```
 git add main.py tests/test_main_pipeline.py
 git commit -m "refactor(main): consult runtime threshold_overrides for per-source freshness (Phase 1, task 17)"
 ```
