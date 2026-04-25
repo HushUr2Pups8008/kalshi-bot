@@ -1412,3 +1412,95 @@ class TestMainAsyncBlocking:
             f"get_notional_bankroll called on event loop thread ({event_loop_thread!r}). "
             "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
         )
+
+
+class TestRuntimeThresholdOverride:
+    """Runtime threshold overrides (when registered via a global reader)
+    must take precedence over the static EARLY_MAX_NEWS_AGE_BY_SOURCE
+    map. Without a reader registered, behavior is identical to pre-Phase-1.
+    """
+
+    def test_runtime_threshold_overrides_static_value(self, monkeypatch):
+        from utils import runtime_overrides as ro
+        from utils.runtime_overrides import (
+            OverridesState, PredictedEffect, ThresholdOverride,
+        )
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
+
+        fake_state = OverridesState(
+            version=1, updated_at=now, updated_by="test", mode="real",
+            applied_threshold_overrides=[
+                ThresholdOverride(
+                    path="EARLY_MAX_NEWS_AGE_BY_SOURCE.IAEA",
+                    value=21600,
+                    reason="test", confidence=0.7,
+                    decided_at=now, decided_by="test",
+                    decision_id="gd_2026-05-02_0044", expires_at=None,
+                    predicted_effect=PredictedEffect(
+                        metric="m", baseline=0, predicted_post_change=0, evaluate_at=now,
+                    ),
+                )
+            ],
+        )
+
+        class FakeReader:
+            def snapshot(self):
+                return fake_state
+
+        monkeypatch.setattr(ro, "_global_reader", FakeReader())
+
+        from main import _early_max_news_age_seconds_for_source
+        # Runtime override wins for the specified source.
+        assert _early_max_news_age_seconds_for_source("IAEA") == 21600
+
+    def test_no_runtime_override_falls_through_to_static(self, monkeypatch):
+        """A source without a runtime override returns the static-config value
+        (exact or case-insensitive) or the default EARLY_MAX_NEWS_AGE_SECONDS.
+        """
+        from utils import runtime_overrides as ro
+        ro._global_reader = None  # explicit: no runtime overrides
+        from main import _early_max_news_age_seconds_for_source
+        from config import EARLY_MAX_NEWS_AGE_SECONDS
+
+        # A source with NO entry in EARLY_MAX_NEWS_AGE_BY_SOURCE falls through
+        # to the default.
+        assert _early_max_news_age_seconds_for_source("UnknownSrc") == EARLY_MAX_NEWS_AGE_SECONDS
+
+    def test_runtime_override_int_coercion(self, monkeypatch):
+        """YAML scalars sometimes deserialize as int; confirm the consumer
+        handles int values directly (get_threshold_override returns the raw
+        value as stored).
+        """
+        from utils import runtime_overrides as ro
+        from utils.runtime_overrides import (
+            OverridesState, PredictedEffect, ThresholdOverride,
+        )
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
+
+        fake_state = OverridesState(
+            version=1, updated_at=now, updated_by="test", mode="real",
+            applied_threshold_overrides=[
+                ThresholdOverride(
+                    path="EARLY_MAX_NEWS_AGE_BY_SOURCE.SomeSrc",
+                    value=7200,
+                    reason="test", confidence=0.7,
+                    decided_at=now, decided_by="test",
+                    decision_id="gd_2026-05-02_0045", expires_at=None,
+                    predicted_effect=PredictedEffect(
+                        metric="m", baseline=0, predicted_post_change=0, evaluate_at=now,
+                    ),
+                )
+            ],
+        )
+
+        class FakeReader:
+            def snapshot(self):
+                return fake_state
+
+        monkeypatch.setattr(ro, "_global_reader", FakeReader())
+        from main import _early_max_news_age_seconds_for_source
+        result = _early_max_news_age_seconds_for_source("SomeSrc")
+        assert result == 7200
+        assert isinstance(result, int)

@@ -94,7 +94,7 @@ from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
 from utils.logger import get_logger, emit_startup_banner, rotate_logs, write_trade_log_async
-from utils.runtime_overrides import is_source_disabled
+from utils.runtime_overrides import is_source_disabled, get_threshold_override
 
 log = get_logger("main")
 
@@ -135,6 +135,16 @@ def _source_priority(source: str) -> int:
 
 
 def _early_max_news_age_seconds_for_source(source: str) -> int:
+    """Return the freshness threshold (seconds) for a source.
+
+    Runtime threshold overrides (via get_threshold_override) take precedence
+    over the static EARLY_MAX_NEWS_AGE_BY_SOURCE map. Without a runtime
+    reader registered, behavior is identical to pre-Phase-1 (static-only
+    lookup).
+    """
+    runtime = get_threshold_override(f"EARLY_MAX_NEWS_AGE_BY_SOURCE.{source}")
+    if runtime is not None:
+        return int(runtime)
     if source in EARLY_MAX_NEWS_AGE_BY_SOURCE:
         return EARLY_MAX_NEWS_AGE_BY_SOURCE[source]
     source_lower = source.strip().lower()
