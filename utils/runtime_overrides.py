@@ -94,6 +94,12 @@ class ThresholdOverride(_OverrideBase):
     def __post_init__(self) -> None:
         if not self.path:
             raise ValueError("path is required and must be non-empty")
+        if self.value is None:
+            raise ValueError(
+                "value is required and must not be None; the = None default "
+                "exists only to satisfy dataclass field-ordering and is not a "
+                "valid runtime value"
+            )
         self._validate_common()
 
 

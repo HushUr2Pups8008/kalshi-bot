@@ -167,6 +167,23 @@ class TestThresholdOverride:
                 ),
             )
 
+    def test_value_required_not_none(self):
+        """value=None is the dataclass field-ordering default, not a valid runtime value."""
+        with pytest.raises(ValueError, match="value"):
+            ThresholdOverride(
+                path="EARLY_MAX_NEWS_AGE_BY_SOURCE.X",
+                value=None,
+                reason="x",
+                confidence=0.5,
+                decided_at=_utc(),
+                decided_by="agent",
+                decision_id="gd_2026-05-02_0001",
+                expires_at=None,
+                predicted_effect=PredictedEffect(
+                    metric="m", baseline=0, predicted_post_change=0, evaluate_at=_utc()
+                ),
+            )
+
 
 class TestOverridesState:
     def test_empty_state(self):
