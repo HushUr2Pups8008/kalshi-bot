@@ -542,10 +542,16 @@ def _static_disabled_sources() -> frozenset[str]:
 
 # Methods for RuntimeOverridesReader -- attach by extending class above.
 def _reader_is_source_disabled(self: RuntimeOverridesReader, source: str) -> bool:
-    """True iff source is in static config OR in runtime-applied disabled set."""
-    if source in _static_disabled_sources():
+    """True iff source is in static config OR in runtime-applied disabled set.
+
+    Comparison is case-insensitive against both sets (mirrors the
+    pre-refactor main.py / feeds/ behavior and keeps the instance method
+    consistent with the module-level is_source_disabled helper).
+    """
+    if _matches_case_insensitive(source, _static_disabled_sources()):
         return True
-    return any(o.source == source for o in self._state.applied_disabled_sources)
+    runtime_sources = [o.source for o in self._state.applied_disabled_sources]
+    return _matches_case_insensitive(source, runtime_sources)
 
 
 def _reader_is_keyword_disabled(self: RuntimeOverridesReader, keyword: str) -> bool:

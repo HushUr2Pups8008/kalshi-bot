@@ -177,6 +177,16 @@ class TestReaderQueries:
         assert r.is_keyword_disabled("trump may deadline") is True
         assert r.is_keyword_disabled("other keyword") is False
 
+    def test_is_source_disabled_case_insensitive(self, tmp_path: Path):
+        """Instance method matches case-insensitively (consistent with module helper)."""
+        p = tmp_path / "overrides.yaml"
+        p.write_text(_yaml_with_disabled_source("r/Turkey", "gd_2026-05-02_0042"))
+        r = RuntimeOverridesReader(path=p)
+        r.reload()
+        assert r.is_source_disabled("r/Turkey") is True
+        assert r.is_source_disabled("r/turkey") is True
+        assert r.is_source_disabled("R/TURKEY") is True
+
     def test_get_threshold_override_returns_value_when_set(self, tmp_path: Path):
         yaml_with_threshold = textwrap.dedent("""
             version: 1
