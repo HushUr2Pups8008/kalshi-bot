@@ -3300,29 +3300,37 @@ git commit -m "refactor(sources): route source-disable checks through runtime_ov
 
 ---
 
-### Task 16: Refactor `analysis/market_matcher.py` keyword-disable handling
+### Task 16: Refactor keyword-disable handling in `analysis/signal_analyzer.py`
+
+**Plan amendment (2026-04-24):** Original title said "market_matcher" but the body correctly targeted `signal_analyzer.py`. Also, the original test incorrectly unpacked `_keyword_score` as a 2-tuple — the actual signature returns a 3-tuple `(net_shift, dominant, matched)`. And the original plan only mentioned refactoring `_keyword_score`; in fact there are three iteration sites in `signal_analyzer.py` that each iterate `sig_def["keywords"]` and need the `is_keyword_disabled` skip:
+
+- `_count_matched_signal_groups` (line ~215) — counts groups with at least one keyword hit (used by the `all_required` override mode)
+- `_keyword_score` (line ~303) — the main scoring function
+- `_keyword_contributions` (line ~334) — observability-only contribution details
+
+All three must skip runtime-disabled keywords consistently so the bot's scoring, override-gate, and diagnostics agree on what's disabled.
 
 **Files:**
-- Modify: `analysis/market_matcher.py`
-- Modify: `analysis/signal_analyzer.py` (where keyword iteration happens)
+- Modify: `analysis/signal_analyzer.py`
 - Modify: `tests/test_signal_analyzer.py`
 
-- [ ] **Step 1: Locate keyword iteration sites**
+- [ ] **Step 1: Confirm the iteration sites**
 
-Run: `grep -n "GEOPOLITICAL_SIGNALS" /Users/Jake/vscode/kalshi_bot/analysis/signal_analyzer.py`
+Run: `grep -n "sig_def\[\"keywords\"\]\|for kw in" analysis/signal_analyzer.py`
 
-Each iteration over `sig_def["keywords"]` needs to skip runtime-disabled keywords.
+Expect three iteration sites in three functions. If you see more or fewer, STOP and report.
 
-- [ ] **Step 2: Write a failing test**
+- [ ] **Step 2: Write failing tests**
 
 Append to `tests/test_signal_analyzer.py`:
 
 ```python
 class TestRuntimeKeywordDisable:
     """Runtime-disabled keywords must not contribute to the keyword
-    score even though they remain in GEOPOLITICAL_SIGNALS."""
+    score even though they remain in GEOPOLITICAL_SIGNALS.
+    """
 
-    def test_runtime_disabled_keyword_skipped_in_scoring(self, monkeypatch):
+    def test_runtime_disabled_keyword_skipped_in_keyword_score(self, monkeypatch):
         from utils import runtime_overrides as ro
         from utils.runtime_overrides import (
             DisabledKeyword, OverridesState, PredictedEffect,
@@ -3330,7 +3338,7 @@ class TestRuntimeKeywordDisable:
         from datetime import datetime, timezone
         now = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
 
-        # Pretend "ceasefire" (a real keyword in GEOPOLITICAL_SIGNALS) is disabled
+        # "ceasefire" is a real keyword in GEOPOLITICAL_SIGNALS (config.py).
         fake_state = OverridesState(
             version=1, updated_at=now, updated_by="test", mode="real",
             applied_disabled_keywords=[
@@ -3352,39 +3360,180 @@ class TestRuntimeKeywordDisable:
         monkeypatch.setattr(ro, "_global_reader", FakeReader())
 
         from analysis.signal_analyzer import _keyword_score
-
-        # Without disable, "ceasefire" would contribute to the score.
-        # With disable, the score for a "ceasefire" headline drops to 0
-        # (or whatever the baseline is when no keywords match).
-        score, matched_keywords = _keyword_score("Israel announces ceasefire today")
+        # Signature: (net_shift, dominant, matched_keywords)
+        _shift, _direction, matched_keywords = _keyword_score(
+            "Israel announces ceasefire today"
+        )
         assert "ceasefire" not in matched_keywords
+
+    def test_runtime_disabled_keyword_skipped_in_count_matched_signal_groups(
+        self, monkeypatch
+    ):
+        """The all_required override mode counts how many signal groups have
+        at least one keyword hit. A runtime-disabled keyword must NOT
+        contribute a hit to its group -- otherwise the override mode would
+        treat a disabled keyword as still evidence.
+        """
+        from utils import runtime_overrides as ro
+        from utils.runtime_overrides import (
+            DisabledKeyword, OverridesState, PredictedEffect,
+        )
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
+
+        fake_state = OverridesState(
+            version=1, updated_at=now, updated_by="test", mode="real",
+            applied_disabled_keywords=[
+                DisabledKeyword(
+                    keyword="ceasefire", reason="test", confidence=0.9,
+                    decided_at=now, decided_by="test",
+                    decision_id="gd_2026-05-02_0100", expires_at=None,
+                    predicted_effect=PredictedEffect(
+                        metric="m", baseline=0, predicted_post_change=0, evaluate_at=now,
+                    ),
+                )
+            ],
+        )
+
+        class FakeReader:
+            def snapshot(self):
+                return fake_state
+
+        monkeypatch.setattr(ro, "_global_reader", FakeReader())
+
+        from analysis.signal_analyzer import _count_matched_signal_groups
+        # A headline whose only hit is the disabled keyword should not
+        # register a matched group.
+        groups_before = _count_matched_signal_groups("benign text with no signals")
+        groups_with_only_disabled = _count_matched_signal_groups(
+            "ceasefire announced"  # only the disabled keyword matches
+        )
+        # The ceasefire-only headline should register zero MORE groups than
+        # the benign one (since ceasefire is disabled).
+        assert groups_with_only_disabled == groups_before
+
+    def test_runtime_disabled_keyword_skipped_in_contributions(self, monkeypatch):
+        """Observability path (_keyword_contributions) must also hide
+        disabled keywords -- otherwise the diagnostic lies about what
+        the scorer actually used.
+        """
+        from utils import runtime_overrides as ro
+        from utils.runtime_overrides import (
+            DisabledKeyword, OverridesState, PredictedEffect,
+        )
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
+
+        fake_state = OverridesState(
+            version=1, updated_at=now, updated_by="test", mode="real",
+            applied_disabled_keywords=[
+                DisabledKeyword(
+                    keyword="ceasefire", reason="test", confidence=0.9,
+                    decided_at=now, decided_by="test",
+                    decision_id="gd_2026-05-02_0101", expires_at=None,
+                    predicted_effect=PredictedEffect(
+                        metric="m", baseline=0, predicted_post_change=0, evaluate_at=now,
+                    ),
+                )
+            ],
+        )
+
+        class FakeReader:
+            def snapshot(self):
+                return fake_state
+
+        monkeypatch.setattr(ro, "_global_reader", FakeReader())
+
+        from analysis.signal_analyzer import _keyword_contributions
+        contributions = _keyword_contributions("Israel announces ceasefire today")
+        for contribution in contributions:
+            assert contribution["keyword"] != "ceasefire", (
+                f"disabled keyword leaked into contributions: {contribution}"
+            )
 ```
 
-- [ ] **Step 3: Locate `_keyword_score` (or equivalent) and refactor it**
+- [ ] **Step 3: Add the `is_keyword_disabled` import to `signal_analyzer.py`**
 
-Open `analysis/signal_analyzer.py`. Find the function that iterates `sig_def["keywords"]`. Add a skip:
+At the top of `analysis/signal_analyzer.py`, near the existing `from config import cfg, GEOPOLITICAL_SIGNALS` import, add:
 
 ```python
 from utils.runtime_overrides import is_keyword_disabled
-
-# Inside the iteration:
-for sig_def in GEOPOLITICAL_SIGNALS:
-    for kw in sig_def["keywords"]:
-        if is_keyword_disabled(kw):
-            continue
-        # ... existing logic ...
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 4: Refactor the three iteration sites**
 
-Run: `pytest tests/test_signal_analyzer.py -v --tb=short 2>&1 | tail -10`
-Expected: All previously-passing tests still pass; new test passes.
+#### Site 1: `_count_matched_signal_groups` (line ~215)
 
-- [ ] **Step 5: Commit**
+Find:
 
-```bash
+```python
+    for sig_def in GEOPOLITICAL_SIGNALS:
+        for kw in sig_def["keywords"]:
+            if kw.lower() in text_lower:
+                count += 1
+                break
+```
+
+Replace with:
+
+```python
+    for sig_def in GEOPOLITICAL_SIGNALS:
+        for kw in sig_def["keywords"]:
+            if is_keyword_disabled(kw):
+                continue
+            if kw.lower() in text_lower:
+                count += 1
+                break
+```
+
+#### Site 2: `_keyword_score` (line ~303)
+
+Find:
+
+```python
+    for sig_def in GEOPOLITICAL_SIGNALS:
+        keywords  = sig_def["keywords"]
+        direction = sig_def["direction"]
+        strength  = sig_def["strength"]
+
+        hits = [kw for kw in keywords if kw.lower() in text_lower]
+```
+
+Replace the `hits = [...]` line with:
+
+```python
+        hits = [
+            kw for kw in keywords
+            if not is_keyword_disabled(kw) and kw.lower() in text_lower
+        ]
+```
+
+#### Site 3: `_keyword_contributions` (line ~334)
+
+Apply the SAME replacement as Site 2 (the code uses the same `hits = [...]` comprehension).
+
+- [ ] **Step 5: Run tests**
+
+```
+pytest tests/test_signal_analyzer.py -v --tb=short 2>&1 | tail -15
+```
+Expected: all existing tests still pass AND the three new tests pass.
+
+```
+pytest --tb=short 2>&1 | tail -3
+```
+Expected: 1195+ passed (1192 baseline + 3 new) + 1 skipped.
+
+```
+ruff check analysis/signal_analyzer.py tests/test_signal_analyzer.py
+```
+Expected: clean.
+
+- [ ] **Step 6: Commit**
+
+```
 git add analysis/signal_analyzer.py tests/test_signal_analyzer.py
-git commit -m "refactor(signal-analyzer): skip runtime-disabled keywords in scoring (Phase 1, task 16)"
+git commit -m "refactor(signal-analyzer): skip runtime-disabled keywords in all 3 iteration sites (Phase 1, task 16)"
 ```
 
 ---
