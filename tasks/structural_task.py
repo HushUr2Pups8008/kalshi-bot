@@ -8,12 +8,9 @@ and emit telemetry. It does not blend, gate trades, or execute anything.
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Protocol
-
-_log = logging.getLogger(__name__)
 
 from analysis.evidence_types import PriorEstimate
 from analysis.structural_prior import compute_structural_prior
@@ -25,7 +22,12 @@ from tasks.evidence_store import (
     StructuralPriorRecord,
     default_store,
 )
-from utils.logger import trade_log, write_trade_log_async
+from utils.logger import get_logger, trade_log, write_trade_log_async
+
+# Use the project's logger factory so messages reach bot.log + errors.log.
+# Raw `logging.getLogger(...)` returns a logger with no handlers, and the
+# root logger has no handlers either, so its records are silently dropped.
+_log = get_logger("structural_task")
 
 
 class StructuralTaskError(Exception):

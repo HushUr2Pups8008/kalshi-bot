@@ -6,7 +6,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.29.52] - 2026-04-24
+## [0.29.54] - 2026-04-25
 
 ### Added
 - **Governance Phase 1: runtime overrides plumbing.** New module
@@ -48,9 +48,66 @@ backward-compat with no overrides file, source-disable and keyword-disable
 refactor coverage, threshold-override consumer, module-level helpers,
 CLI subprocess tests. Total project test count: 1204 (was 1100).
 
+### Notes
+- This entry was originally drafted as `[0.29.52]` and dated 2026-04-24
+  (when implementation completed). Renumbered to `[0.29.54]` at merge
+  time because the daily-review filter (`[0.29.53]`) merged to `main`
+  ahead of this branch; SemVer-monotonic version sequencing requires
+  the next release after 0.29.53 to be 0.29.54+. The 0.29.52 slot
+  stays unused. Body content is unchanged from the original draft.
+
 ### Reference
 Spec: `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md`
 Phase 1 plan: `docs/superpowers/plans/2026-04-24-governance-agent-phase-1-plan.md`
+
+---
+
+## [0.29.53] - 2026-04-25
+
+### Changed
+- **Daily review section 1 — operationally-relevant filter.** The
+  per-source freshness waterfall in `scripts/daily_review.py` is now
+  cross-referenced with section 8's `source_scorecard` tier
+  classification. Sources in `prune` / `remove immediately` /
+  `disabled` tiers, plus those in the freshness `dead` and
+  `insufficient data` buckets, are folded into a one-line summary
+  pointing at section 8 instead of bloating the waterfall. On real
+  current-window data this reduces section 1 from ~1840 lines to
+  ~20 lines (1824 sources hidden, breakdown by tier/bucket
+  preserved).
+
+### Added
+- **Status-changes block in section 1.** Day-over-day diff against a
+  persisted tier baseline (`logs/reports/source_tier_state.json`,
+  two-deep history). Reports tier regressions (`top performers ->
+  watch / investigate`, etc.) and new silences (sources that were in
+  `top performers` / `keep` / `watch / investigate` previously and
+  produced no records this window). Improvements are intentionally
+  not surfaced — the section is for operator triage of regressions.
+- 16 new tests in `tests/test_daily_review.py` covering tier-map
+  flattening, state-file load/save edge cases (corrupt JSON,
+  same-day rerun, day-rollover), change-diff logic (degraded /
+  silent / no-change / no-baseline / improvement-suppressed), and
+  two end-to-end integration tests verifying the new section 1
+  output shape.
+
+### Reasoning
+- Pre-change, section 1 was a ~1840-line wall of text dominated by
+  long-tail sources with no operational relevance to current
+  trading. Operators were skipping the section entirely.
+- The cross-reference uses section 8's existing tier classifier
+  (which already folds in observed_records, signals, paper_trades,
+  win_rate, and P&L) rather than introducing a parallel notion of
+  "source value." Single source of truth.
+- The status-changes block addresses the inverse problem: sources
+  that were operationally relevant yesterday and have degraded or
+  gone silent today, which the unfiltered waterfall buried in noise.
+
+### Notes
+- Version skips 0.29.52, which was originally reserved for the
+  governance Phase 1 plumbing MR. That MR ended up shipping as
+  `[0.29.54]` after merge-order conflicts — see that entry's Notes
+  block for context.
 
 ---
 
