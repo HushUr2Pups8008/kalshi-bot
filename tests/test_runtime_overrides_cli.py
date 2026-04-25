@@ -58,3 +58,19 @@ class TestCliStatus:
         result = _run_cli(["--status"], p)
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert "no overrides file" in result.stdout.lower() or "default" in result.stdout.lower()
+
+
+class TestCliValidate:
+    def test_validate_valid_file_returns_0(self, tmp_path: Path):
+        p = tmp_path / "overrides.yaml"
+        p.write_text(VALID_YAML)
+        result = _run_cli(["--validate", str(p)], path=p)
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "valid" in result.stdout.lower()
+
+    def test_validate_invalid_file_returns_2(self, tmp_path: Path):
+        p = tmp_path / "bad.yaml"
+        p.write_text("not: valid: yaml: : :")
+        result = _run_cli(["--validate", str(p)], path=p)
+        assert result.returncode == 2
+        assert "invalid" in result.stdout.lower() or "invalid" in result.stderr.lower()

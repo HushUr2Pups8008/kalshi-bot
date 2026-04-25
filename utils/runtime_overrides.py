@@ -700,10 +700,68 @@ def _cli_main() -> int:
             print(f"  - {o.path} = {o.value} [{o.decision_id}]")
         return 0
 
-    # Other subcommands implemented in subsequent tasks
-    import sys as _sys
-    print("subcommand not yet implemented", file=_sys.stderr)
-    return 1
+    if args.validate:
+        validate_target = Path(args.validate)
+        try:
+            state = load_from_disk(validate_target)
+        except ValueError as exc:
+            print(f"INVALID: {exc}")
+            return 2
+        n_total = (
+            len(state.applied_disabled_sources)
+            + len(state.applied_disabled_keywords)
+            + len(state.applied_threshold_overrides)
+        )
+        print(f"valid: {validate_target} ({n_total} applied overrides, mode={state.mode})")
+        return 0
+
+    if args.revert_batch:
+        if not target.exists():
+            print(f"no overrides file at {target} -- nothing to revert")
+            return 1
+        try:
+            state = load_from_disk(target)
+        except ValueError as exc:
+            print(f"INVALID overrides file: {exc}")
+            return 2
+
+        batch_meta = state.last_applied_batch or {}
+        if batch_meta.get("batch_id") != args.revert_batch:
+            print(f"batch_id {args.revert_batch!r} not found in last_applied_batch")
+            return 1
+        decision_ids: set[str] = set(batch_meta.get("decision_ids") or [])
+
+        new_state = OverridesState(
+            version=state.version,
+            updated_at=datetime.now(_timezone.utc),
+            updated_by=f"cli-revert-{args.revert_batch}",
+            mode=state.mode,
+            applied_disabled_sources=[
+                o for o in state.applied_disabled_sources if o.decision_id not in decision_ids
+            ],
+            applied_disabled_keywords=[
+                o for o in state.applied_disabled_keywords if o.decision_id not in decision_ids
+            ],
+            applied_threshold_overrides=[
+                o for o in state.applied_threshold_overrides if o.decision_id not in decision_ids
+            ],
+            proposed_disabled_sources=state.proposed_disabled_sources,
+            proposed_disabled_keywords=state.proposed_disabled_keywords,
+            proposed_threshold_overrides=state.proposed_threshold_overrides,
+            last_applied_batch=None,
+        )
+        atomic_write_state(new_state, target)
+        n_dropped = (
+            len(state.applied_disabled_sources) - len(new_state.applied_disabled_sources)
+            + len(state.applied_disabled_keywords) - len(new_state.applied_disabled_keywords)
+            + len(state.applied_threshold_overrides) - len(new_state.applied_threshold_overrides)
+        )
+        print(f"reverted batch {args.revert_batch}: dropped {n_dropped} overrides")
+        return 0
+
+    import sys as _sys  # pragma: no cover
+    print("subcommand not yet implemented", file=_sys.stderr)  # pragma: no cover
+    return 1  # pragma: no cover
 
 
 if __name__ == "__main__":
