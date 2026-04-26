@@ -118,3 +118,119 @@ class Decision:
                 raise ValueError(
                     "predicted_effect.evaluate_at must be strictly after decided_at"
                 )
+
+    def to_audit_record(
+        self,
+        *,
+        applied: bool,
+        shadow_mode: bool,
+        safety_checks_passed: dict[str, bool],
+    ) -> dict[str, Any]:
+        """Serialize as a GOVERNANCE_DECISION JSONL record (spec §6.2)."""
+        if self.predicted_effect is None:
+            pe_record: dict[str, Any] | None = None
+        else:
+            pe_record = {
+                "metric": self.predicted_effect.metric,
+                "baseline": self.predicted_effect.baseline,
+                "predicted_post_change": self.predicted_effect.predicted_post_change,
+                "evaluate_at": self.predicted_effect.evaluate_at.isoformat(),
+            }
+        return {
+            "type": "GOVERNANCE_DECISION",
+            "decision_id": self.decision_id,
+            "batch_id": self.batch_id,
+            "decided_at": self.decided_at.isoformat(),
+            "decided_by": self.decided_by,
+            "cadence": self.cadence,
+            "action": self.action,
+            "target": self.target,
+            "proposed_change": dict(self.proposed_change),
+            "model_used": self.model_used,
+            "escalated_to_claude": self.escalated_to_claude,
+            "claude_response": self.claude_response,
+            "confidence": self.confidence,
+            "reasoning": self.reasoning,
+            "evidence_summary": dict(self.evidence_summary),
+            "predicted_effect": pe_record,
+            "outcome": None,
+            "applied": applied,
+            "shadow_mode": shadow_mode,
+            "safety_checks_passed": dict(safety_checks_passed),
+        }
+
+    def to_disabled_source(self):
+        """Convert to a Phase-1 DisabledSource. action must be 'disable_source'."""
+        from utils.runtime_overrides import DisabledSource, PredictedEffect as ROPredictedEffect
+        if self.action != "disable_source":
+            raise ValueError(
+                f"to_disabled_source called on action={self.action!r}; expected disable_source"
+            )
+        assert self.predicted_effect is not None  # validated in __post_init__
+        return DisabledSource(
+            source=self.target,
+            reason=self.reasoning,
+            confidence=self.confidence,
+            decided_at=self.decided_at,
+            decided_by=self.decided_by,
+            decision_id=self.decision_id,
+            expires_at=self.proposed_change.get("expires_at"),
+            predicted_effect=ROPredictedEffect(
+                metric=self.predicted_effect.metric,
+                baseline=self.predicted_effect.baseline,
+                predicted_post_change=self.predicted_effect.predicted_post_change,
+                evaluate_at=self.predicted_effect.evaluate_at,
+            ),
+        )
+
+    def to_disabled_keyword(self):
+        """Convert to a Phase-1 DisabledKeyword. action must be 'disable_keyword'."""
+        from utils.runtime_overrides import DisabledKeyword, PredictedEffect as ROPredictedEffect
+        if self.action != "disable_keyword":
+            raise ValueError(
+                f"to_disabled_keyword called on action={self.action!r}; expected disable_keyword"
+            )
+        assert self.predicted_effect is not None
+        return DisabledKeyword(
+            keyword=self.target,
+            reason=self.reasoning,
+            confidence=self.confidence,
+            decided_at=self.decided_at,
+            decided_by=self.decided_by,
+            decision_id=self.decision_id,
+            expires_at=self.proposed_change.get("expires_at"),
+            predicted_effect=ROPredictedEffect(
+                metric=self.predicted_effect.metric,
+                baseline=self.predicted_effect.baseline,
+                predicted_post_change=self.predicted_effect.predicted_post_change,
+                evaluate_at=self.predicted_effect.evaluate_at,
+            ),
+        )
+
+    def to_threshold_override(self):
+        """Convert to a Phase-1 ThresholdOverride. action must be 'tune_threshold'.
+        proposed_change.after holds the new value."""
+        from utils.runtime_overrides import ThresholdOverride, PredictedEffect as ROPredictedEffect
+        if self.action != "tune_threshold":
+            raise ValueError(
+                f"to_threshold_override called on action={self.action!r}; expected tune_threshold"
+            )
+        assert self.predicted_effect is not None
+        if "after" not in self.proposed_change:
+            raise ValueError("tune_threshold decisions must have proposed_change.after")
+        return ThresholdOverride(
+            path=self.target,
+            value=self.proposed_change["after"],
+            reason=self.reasoning,
+            confidence=self.confidence,
+            decided_at=self.decided_at,
+            decided_by=self.decided_by,
+            decision_id=self.decision_id,
+            expires_at=self.proposed_change.get("expires_at"),
+            predicted_effect=ROPredictedEffect(
+                metric=self.predicted_effect.metric,
+                baseline=self.predicted_effect.baseline,
+                predicted_post_change=self.predicted_effect.predicted_post_change,
+                evaluate_at=self.predicted_effect.evaluate_at,
+            ),
+        )

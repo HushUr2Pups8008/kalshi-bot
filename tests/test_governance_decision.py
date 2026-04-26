@@ -180,3 +180,106 @@ def test_decision_rejects_empty_reasoning():
 def test_decision_rejects_target_empty_for_action_decisions():
     with pytest.raises(ValueError, match="target"):
         _ok_decision(action="disable_source", target="")
+
+
+from utils.runtime_overrides import (
+    DisabledSource,
+    DisabledKeyword,
+    ThresholdOverride,
+    PredictedEffect as OverridePredictedEffect,
+)
+
+
+def test_to_audit_record_emits_full_spec_shape():
+    d = _ok_decision()
+    record = d.to_audit_record(applied=True, shadow_mode=False, safety_checks_passed={
+        "confidence_threshold": True,
+        "max_changes_per_run": True,
+        "blast_radius": True,
+        "kill_switch": True,
+    })
+    assert record["type"] == "GOVERNANCE_DECISION"
+    assert record["decision_id"] == "gd_2026-05-02_0042"
+    assert record["batch_id"] == "gb_2026-05-02_0012"
+    assert record["decided_at"] == "2026-05-02T14:30:00+00:00"
+    assert record["decided_by"] == "governance-agent-v0.2.1"
+    assert record["cadence"] == "fast"
+    assert record["action"] == "disable_source"
+    assert record["target"] == "r/Turkey"
+    assert record["confidence"] == 0.94
+    assert record["model_used"] == "qwen3-14b-instruct"
+    assert record["escalated_to_claude"] is False
+    assert record["claude_response"] is None
+    assert record["applied"] is True
+    assert record["shadow_mode"] is False
+    assert record["safety_checks_passed"]["confidence_threshold"] is True
+    pe = record["predicted_effect"]
+    assert pe["metric"] == "reddit_rate_limit_budget_consumed_daily"
+    assert pe["baseline"] == 0.12
+    assert pe["predicted_post_change"] == 0.08
+    assert pe["evaluate_at"] == "2026-05-09T14:30:00+00:00"
+    assert record["outcome"] is None  # always null at write time
+
+
+def test_to_disabled_source_for_disable_source_action():
+    d = _ok_decision(action="disable_source", target="r/Turkey")
+    ds = d.to_disabled_source()
+    assert isinstance(ds, DisabledSource)
+    assert ds.source == "r/Turkey"
+    assert ds.confidence == 0.94
+    assert ds.decision_id == "gd_2026-05-02_0042"
+    assert ds.decided_at == _NOW
+    assert ds.decided_by == "governance-agent-v0.2.1"
+    assert ds.predicted_effect.metric == "reddit_rate_limit_budget_consumed_daily"
+
+
+def test_to_disabled_source_rejects_other_actions():
+    d = _ok_decision(action="disable_keyword", target="ceasefire")
+    with pytest.raises(ValueError, match="disable_source"):
+        d.to_disabled_source()
+
+
+def test_to_disabled_keyword_for_disable_keyword_action():
+    d = _ok_decision(action="disable_keyword", target="ceasefire")
+    dk = d.to_disabled_keyword()
+    assert isinstance(dk, DisabledKeyword)
+    assert dk.keyword == "ceasefire"
+    assert dk.decision_id == "gd_2026-05-02_0042"
+
+
+def test_to_threshold_override_for_tune_threshold_action():
+    proposed = {
+        "before": 0.05,
+        "after": 0.07,
+        "expires_at": None,
+    }
+    d = _ok_decision(
+        action="tune_threshold",
+        target="match_quality_threshold",
+        proposed_change=proposed,
+    )
+    to = d.to_threshold_override()
+    assert isinstance(to, ThresholdOverride)
+    assert to.path == "match_quality_threshold"
+    assert to.value == 0.07
+    assert to.decision_id == "gd_2026-05-02_0042"
+
+
+def test_to_threshold_override_rejects_other_actions():
+    d = _ok_decision(action="disable_source", target="r/X")
+    with pytest.raises(ValueError, match="tune_threshold"):
+        d.to_threshold_override()
+
+
+def test_to_audit_record_no_action_decision_keeps_action_disabled_keys_null():
+    d = _ok_decision(
+        action="no_action",
+        target="",
+        predicted_effect=None,
+        proposed_change={},
+    )
+    rec = d.to_audit_record(applied=False, shadow_mode=True, safety_checks_passed={})
+    assert rec["action"] == "no_action"
+    assert rec["target"] == ""
+    assert rec["predicted_effect"] is None
+    assert rec["applied"] is False
