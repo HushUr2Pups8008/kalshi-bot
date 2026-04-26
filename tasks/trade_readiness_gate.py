@@ -11,8 +11,63 @@ from dataclasses import dataclass
 from numbers import Real
 from typing import Any, Mapping
 
-G1_CONFIDENCE_THRESHOLD = 0.35
-G1_FAILSAFE_CONFIDENCE_THRESHOLD = 0.50
+# G1 — scaled-confidence floor.
+#
+# scaled_confidence = blended_confidence × regime_confidence.
+#
+# Threshold history:
+#   0.35 base / 0.50 failsafe (initial, commit 33385d9, "stage 2 accumulation
+#                              guardrails")
+#   0.05 base / 0.10 failsafe (PROFIT-EDGE-003, v0.29.58) — calibration fix.
+#
+# Why 0.05: G1 = 0.35 was set on the same day as G4 = 0.40 with the same
+# unreachable assumptions. The blender's `_effective_confidences()`
+# attenuates each lane's confidence by `lane_conf × (rw_lane × rc + (1-rc)/3)`
+# and `blended_confidence` is the *mean* of those effective confidences. For
+# fast-lane-only LLM signal at conf=0.85 on the new categorical priors:
+#
+#   Sports prior (rc=0.528):           scaled_conf ≈ 0.27
+#   KXTRUMPIRAN prior (rc=0.27):       scaled_conf ≈ 0.10
+#   KXSBUDGETRES prior (rc=0.28):      scaled_conf ≈ 0.06
+#   Polling prior (rc=0.32):           scaled_conf ≈ 0.07
+#
+# G1 = 0.35 would require regime_confidence ≥ ~0.875 with realistic
+# blended_confidence values — only the very-near-close (≤6h) sports markets
+# can achieve that, and we filter sports out of the trading universe by
+# design. So G1 = 0.35 was *deterministically* zero-trade for the bot's
+# actual target market mix.
+#
+# Empirical confirmation — 154 production BLEND_DECISIONs over the 9-day
+# window 2026-04-17 → 2026-04-26 (paper mode, pre-line-688-fix, all-0.5
+# lane probabilities):
+#
+#   percentile  scaled_confidence
+#   median      0.026  (pure noise — uncategorized markets at near-uniform rc)
+#   P75         0.035
+#   P90         0.119  (natural cliff — strong-signal cluster)
+#   P95         0.119
+#   max         0.304  (KXVANCEPAKISTAN-26APR21-APR24 — best in 9 days)
+#
+# Zero of 154 cleared G1 = 0.35 — the threshold is 1.15× the best signal the
+# bot has ever produced in production. Lowering G1 to 0.05 captures the
+# top ~14% of historical signals (the 22 records above 0.05 cluster around
+# the P90 inflection at 0.12) while still rejecting median noise (0.026).
+# Multi-lane high-quality signals at 0.30 clear with 6× headroom.
+#
+# Failsafe (G1 = 0.10) is a 2× base, mirroring the original 0.50/0.35 = 1.4×
+# but pushed further on the conservative side. With fail-safe coupled to
+# G4 in the same threshold (rc < 0.20), failsafe markets had already been
+# rejected by G4 — so the failsafe G1 value is academic. It moves only for
+# consistency in the [0.05, 0.20) decoupling that may follow.
+#
+# This calibration is reversible — change is two constants. The post-deploy
+# audit log will show whether 14% trade rate is correct or whether the gate
+# needs further tightening (e.g. moving G1 to 0.10 = top-10%) once paper
+# trades resolve.
+#
+# See PROFIT-EDGE-003 in docs/profit_path_debt_log.md for the full diagnosis.
+G1_CONFIDENCE_THRESHOLD = 0.05
+G1_FAILSAFE_CONFIDENCE_THRESHOLD = 0.10
 G2_MIN_SOURCE_CLASSES = 2
 G3_DISAGREEMENT_THRESHOLD = 0.20
 G3_FAILSAFE_DISAGREEMENT_THRESHOLD = 0.15
