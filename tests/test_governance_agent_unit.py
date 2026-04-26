@@ -148,3 +148,72 @@ def test_run_cycle_emits_start_and_end_events_with_zero_candidates(tmp_path, mon
     types = [json.loads(line)["type"] for line in body]
     assert "GOVERNANCE_CYCLE_START" in types
     assert "GOVERNANCE_CYCLE_END" in types
+
+
+def test_run_cycle_iterates_candidates_and_records_decisions(tmp_path, monkeypatch):
+    from governance.agent import run_cycle
+    from governance.adapter import KalshiGovernanceAdapter
+    from governance.audit import AuditLogger
+    from governance.evidence import Candidate
+    from governance.llm import FakeLLM, canned_response_for_action, prompt_hash
+    from governance.prompts import render_prompt
+
+    overrides_path = tmp_path / "overrides.yaml"
+    decisions_dir = tmp_path / "logs" / "governance"
+    trade_log = tmp_path / "trades.jsonl"
+    trade_log.write_text("", encoding="utf-8")
+
+    from utils.runtime_overrides import OverridesState, atomic_write_state
+    atomic_write_state(
+        OverridesState(
+            version=1,
+            updated_at=datetime(2026, 5, 2, 14, 0, tzinfo=timezone.utc),
+            updated_by="test", mode="shadow", applied_disabled_sources=[],
+        ),
+        overrides_path,
+    )
+    monkeypatch.delenv("GOVERNANCE_DISABLED", raising=False)
+
+    cand = Candidate(
+        action="disable_source", target="r/Turkey",
+        evidence_pointer={"reddit_sub_index": 0},
+    )
+    adapter = KalshiGovernanceAdapter(
+        trade_log_path=trade_log, paper_db_path=tmp_path / "paper.db",
+        market_provider=lambda: [],  # zero markets
+    )
+    # Pre-compute the prompt this candidate will produce so FakeLLM can match it.
+    from governance.evidence import compose_evidence_for_candidate
+    fake_audit = {
+        "reddit": {"subs": [{"source": "r/Turkey", "ingestion": 408,
+                              "fresh_passes": 7, "matches": 0,
+                              "classification": "all_stale"}]},
+    }
+    evidence = compose_evidence_for_candidate(cand, fake_audit, adapter)
+    sys_p, user_p = render_prompt("disable_source", evidence)
+
+    fake = FakeLLM(canned={
+        prompt_hash(sys_p, user_p): canned_response_for_action("disable_source", target="r/Turkey"),
+    })
+    logger = AuditLogger(log_dir=decisions_dir)
+
+    rc = run_cycle(
+        cadence="fast",
+        loaded_state=load_state(overrides_path=overrides_path),
+        adapter=adapter,
+        llm=fake,
+        audit_logger=logger,
+        overrides_path=overrides_path,
+        candidate_override=[cand],
+        audit_data_override=fake_audit,  # injected for the test
+    )
+    assert rc == 0
+
+    log_lines = (decisions_dir / "decisions.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    types = [json.loads(line)["type"] for line in log_lines]
+    assert types.count("GOVERNANCE_DECISION") == 1
+    decision_record = next(json.loads(l) for l in log_lines if json.loads(l)["type"] == "GOVERNANCE_DECISION")
+    assert decision_record["action"] == "disable_source"
+    assert decision_record["target"] == "r/Turkey"
+    assert decision_record["shadow_mode"] is True
+    assert decision_record["applied"] is False  # shadow mode never applies

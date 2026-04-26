@@ -113,12 +113,17 @@ def run_cycle(
     audit_logger: AuditLogger,
     overrides_path: Path,
     candidate_override: Sequence[Candidate] | None = None,
+    audit_data_override: dict[str, Any] | None = None,
     safety_config: SafetyConfig | None = None,
 ) -> int:
     """Run one governance cycle. Returns process exit code.
 
-    Phase 2 Task 17: emits CYCLE_START / CYCLE_END only; no LLM iteration
-    yet. Task 18 fills in the LLM-driven decision loop.
+    Phase 2 Task 18: full LLM-driven candidate iteration. The agent
+    composes evidence per candidate, renders a prompt, calls the LLM,
+    parses the response into a Decision, evaluates safety, and writes
+    a GOVERNANCE_DECISION audit record. Shadow mode forces applied=False
+    on every decision; the safety_checks fields still reflect the
+    would-have-applied state.
     """
     now = datetime.now(timezone.utc)
     cycle_id = generate_cycle_id(now=now)
@@ -134,19 +139,98 @@ def run_cycle(
     })
 
     cycle_start = now
+    if audit_data_override is not None:
+        audit_data = audit_data_override
+    elif candidate_override is None:
+        audit_data = adapter.collect_audit_data(window=_cadence_window(cadence))
+    else:
+        audit_data = {}
+
     if candidate_override is not None:
         candidates: list[Candidate] = list(candidate_override)
     else:
-        audit_data = adapter.collect_audit_data(window=_cadence_window(cadence))
         candidates = list(select_candidates_for_cadence(
             audit_data, cadence=cadence,
         ))
+
+    # SafetyConfig.from_env() is referenced in the plan but does not exist;
+    # SafetyConfig() with built-in defaults is the supported instantiation
+    # per governance/safety.py. Documented in the Task 18 drift note.
+    safety = safety_config or SafetyConfig()
+    batch_id = generate_batch_id(now=now, sequence=1)
+    decision_seq = 0
 
     decisions_made = 0
     decisions_applied = 0
     decisions_proposed = 0
 
-    # Task 18 will fill in the per-candidate LLM iteration here.
+    from governance.evidence import (
+        compose_evidence_for_candidate,
+        summarize_evidence_for_audit,
+    )
+    from governance.llm import (
+        LLMResponseParseError,
+        parse_llm_response_to_decision,
+    )
+    from governance.prompts import render_prompt
+
+    for cand in candidates:
+        if llm is None:
+            break  # cycle without an LLM is a no-op shape-only test path
+        decision_seq += 1
+        evidence = compose_evidence_for_candidate(cand, audit_data, adapter)
+        sys_p, user_p = render_prompt(cand.action, evidence)
+        try:
+            raw = llm.complete(sys_p, user_p)
+            decided_at = datetime.now(timezone.utc)
+            decision = parse_llm_response_to_decision(
+                raw,
+                decision_id=generate_decision_id(now=decided_at, sequence=decision_seq),
+                batch_id=batch_id,
+                decided_at=decided_at,
+                decided_by="governance-agent-v0.2.0",
+                cadence=cadence,
+                model_used=llm.model_name(),
+                evidence_summary=summarize_evidence_for_audit(evidence),
+            )
+        except LLMResponseParseError as exc:
+            audit_logger.append({
+                "type": "GOVERNANCE_DECISION_PARSE_ERROR",
+                "cycle_id": cycle_id,
+                "candidate_action": cand.action,
+                "candidate_target": cand.target,
+                "error": str(exc),
+            })
+            continue
+        except ValueError as exc:
+            audit_logger.append({
+                "type": "GOVERNANCE_DECISION_VALIDATION_ERROR",
+                "cycle_id": cycle_id,
+                "candidate_action": cand.action,
+                "candidate_target": cand.target,
+                "error": str(exc),
+            })
+            continue
+
+        decisions_made += 1
+
+        applied, shadow_mode, safety_checks = _evaluate_safety(
+            decision=decision,
+            mode=loaded_state.mode,
+            kill_switch_readonly=loaded_state.kill_switch_readonly,
+            safety=safety,
+            applied_so_far=decisions_applied,
+        )
+        if applied:
+            decisions_applied += 1
+        else:
+            decisions_proposed += 1
+
+        audit_logger.append(decision.to_audit_record(
+            applied=applied,
+            shadow_mode=shadow_mode,
+            safety_checks_passed=safety_checks,
+        ))
 
     duration_sec = (datetime.now(timezone.utc) - cycle_start).total_seconds()
     audit_logger.append({
@@ -159,6 +243,43 @@ def run_cycle(
         "batch_aborted": False,
     })
     return 0
+
+
+def _evaluate_safety(
+    *,
+    decision,
+    mode: str,
+    kill_switch_readonly: bool,
+    safety: SafetyConfig,
+    applied_so_far: int,
+) -> tuple[bool, bool, dict[str, bool]]:
+    """Returns (applied, shadow_mode, safety_checks_passed_dict).
+
+    Phase 2: shadow_mode is True iff mode != 'real'. Even in real mode,
+    GOVERNANCE_READONLY=true demotes to shadow. no_action decisions never
+    apply. confidence below threshold never applies. max_changes_per_run
+    caps the number of applied decisions per cycle.
+    """
+    if decision.action == "no_action":
+        return False, mode != "real", {
+            "confidence_threshold": True,
+            "max_changes_per_run": True,
+            "blast_radius": True,
+            "kill_switch": True,
+        }
+    confidence_ok = decision.confidence >= safety.confidence_threshold
+    cap_ok = applied_so_far < safety.max_changes_per_run
+    eligible_for_apply = (
+        mode == "real" and not kill_switch_readonly and confidence_ok and cap_ok
+    )
+    safety_checks = {
+        "confidence_threshold": confidence_ok,
+        "max_changes_per_run": cap_ok,
+        "blast_radius": True,  # Phase 3 enforces; in Phase 2 it always passes
+        "kill_switch": not kill_switch_readonly,
+    }
+    shadow_mode = (mode != "real") or kill_switch_readonly
+    return eligible_for_apply, shadow_mode, safety_checks
 
 
 def _cadence_window(cadence: str):

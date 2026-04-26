@@ -3619,6 +3619,30 @@ fields in the audit record still reflect the would-have-applied state
 so the trust dataset is meaningful."
 ```
 
+**Post-implementation note: signature drift from plan (recorded 2026-04-25)**
+
+Two drifts in Step 2's embedded code; one already covered by the Task 17 note, one new.
+
+**Already covered by Task 17's note (still applies here):**
+- `audit_logger.write({...})` → use `audit_logger.append({...})`. Three call sites in this task (parse-error, validation-error, decision audit record).
+- `AuditLogger(decisions_dir)` in the test → `AuditLogger(log_dir=decisions_dir)`.
+
+**New drift this task:**
+
+| Plan code | Real API |
+|---|---|
+| `safety = safety_config or SafetyConfig.from_env()` | `SafetyConfig.from_env()` does not exist. Use `SafetyConfig()` (zero-arg constructor with built-in defaults at `governance/safety.py:23-28`). The dataclass already has appropriate defaults for Phase 2 (`confidence_threshold=0.7`, `max_changes_per_run=10`, etc.). |
+
+If env-var-driven configuration is later wanted, that's a Phase 3+ extension — adding a real `SafetyConfig.from_env()` classmethod that reads `GOVERNANCE_CONFIDENCE_THRESHOLD`, `GOVERNANCE_MAX_CHANGES_PER_RUN`, etc. Not in scope for Phase 2.
+
+**Workaround as shipped** (`governance/agent.py` `run_cycle()`):
+
+```python
+safety = safety_config or SafetyConfig()  # use dataclass defaults
+```
+
+**For future re-execution:** if Task 18 is ever re-implemented, do NOT call `SafetyConfig.from_env()`. The `_evaluate_safety` helper consumes `safety.confidence_threshold` and `safety.max_changes_per_run` — both fields exist on the bare-defaults `SafetyConfig()` instance, so behavior is unchanged.
+
 ---
 
 ## Task 19: `governance/agent.py` — applied-decisions write to runtime overrides
