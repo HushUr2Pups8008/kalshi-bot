@@ -290,6 +290,61 @@ def _evaluate_safety(
     return eligible_for_apply, shadow_mode, safety_checks
 
 
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="governance",
+        description="Run a governance agent cycle.",
+    )
+    parser.add_argument(
+        "--cadence",
+        choices=["fast", "deep", "weekly_review"],
+        required=True,
+    )
+    parser.add_argument(
+        "--llm",
+        choices=["fake", "qwen"],
+        default="qwen",
+        help="Which LLM to use (fake for tests, qwen for production).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run cycle but skip writing the audit log final flush "
+             "(used by smoke tests).",
+    )
+    args = parser.parse_args(argv)
+
+    overrides_path = Path(os.getenv("GOVERNANCE_OVERRIDES_PATH", str(DEFAULT_OVERRIDES_PATH)))
+    logs_dir = Path(os.getenv("GOVERNANCE_LOGS_DIR", str(DEFAULT_DECISIONS_LOG_DIR)))
+    trade_log_path = Path(os.getenv("GOVERNANCE_TRADE_LOG_PATH", str(DEFAULT_TRADE_LOG_PATH)))
+    paper_db_path = Path(os.getenv("GOVERNANCE_PAPER_DB_PATH", str(DEFAULT_PAPER_DB_PATH)))
+
+    try:
+        loaded = load_state(overrides_path=overrides_path)
+    except KillSwitchActive:
+        return 2
+
+    from governance.adapter import KalshiGovernanceAdapter
+    from governance.llm import FakeLLM, LocalQwenLLM
+    adapter = KalshiGovernanceAdapter(
+        trade_log_path=trade_log_path,
+        paper_db_path=paper_db_path,
+        market_provider=None,
+    )
+    llm = FakeLLM() if args.llm == "fake" else LocalQwenLLM()
+    # AuditLogger uses keyword-only log_dir per Task 17 drift note.
+    audit_logger = AuditLogger(log_dir=logs_dir)
+
+    return run_cycle(
+        cadence=args.cadence,
+        loaded_state=loaded,
+        adapter=adapter,
+        llm=llm,
+        audit_logger=audit_logger,
+        overrides_path=overrides_path,
+    )
+
+
 def _cadence_window(cadence: str):
     from datetime import timedelta
     return {

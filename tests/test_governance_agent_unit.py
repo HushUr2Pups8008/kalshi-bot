@@ -280,3 +280,45 @@ def test_run_cycle_does_not_modify_overrides_in_shadow_mode(tmp_path, monkeypatc
     assert after.snapshot().applied_disabled_sources == [], (
         "Shadow mode wrote an applied override — this is the load-bearing safety bug"
     )
+
+
+def test_main_with_dry_run_exits_zero(tmp_path, monkeypatch):
+    monkeypatch.delenv("GOVERNANCE_DISABLED", raising=False)
+    # Point environment at tmp paths via env vars (cleaner than monkeypatching
+    # constants).
+    overrides_path = tmp_path / "overrides.yaml"
+    from utils.runtime_overrides import OverridesState, atomic_write_state
+    atomic_write_state(
+        OverridesState(version=1,
+            updated_at=datetime(2026, 5, 2, 14, 0, tzinfo=timezone.utc),
+            updated_by="test", mode="shadow", applied_disabled_sources=[]),
+        overrides_path,
+    )
+    monkeypatch.setenv("GOVERNANCE_OVERRIDES_PATH", str(overrides_path))
+    monkeypatch.setenv("GOVERNANCE_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("GOVERNANCE_TRADE_LOG_PATH", str(tmp_path / "trades.jsonl"))
+    (tmp_path / "trades.jsonl").write_text("", encoding="utf-8")
+    monkeypatch.setenv("GOVERNANCE_PAPER_DB_PATH", str(tmp_path / "paper.db"))
+
+    from governance.agent import main
+    rc = main(argv=["--cadence", "fast", "--llm", "fake", "--dry-run"])
+    assert rc == 0
+
+
+def test_main_kill_switch_disabled_exits_with_code_2(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOVERNANCE_DISABLED", "true")
+    monkeypatch.setenv("GOVERNANCE_OVERRIDES_PATH", str(tmp_path / "overrides.yaml"))
+    monkeypatch.setenv("GOVERNANCE_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("GOVERNANCE_TRADE_LOG_PATH", str(tmp_path / "trades.jsonl"))
+    monkeypatch.setenv("GOVERNANCE_PAPER_DB_PATH", str(tmp_path / "paper.db"))
+    (tmp_path / "trades.jsonl").write_text("", encoding="utf-8")
+    from utils.runtime_overrides import OverridesState, atomic_write_state
+    atomic_write_state(
+        OverridesState(version=1,
+            updated_at=datetime(2026, 5, 2, 14, 0, tzinfo=timezone.utc),
+            updated_by="test", mode="shadow", applied_disabled_sources=[]),
+        tmp_path / "overrides.yaml",
+    )
+    from governance.agent import main
+    rc = main(argv=["--cadence", "fast", "--llm", "fake"])
+    assert rc == 2
