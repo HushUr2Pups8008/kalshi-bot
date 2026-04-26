@@ -122,19 +122,18 @@ class KalshiGovernanceAdapter:
     def get_recent_headline_samples(self, source: str, k: int = 5) -> list[str]:
         if not self.trade_log_path.exists():
             return []
+        # Use iter_trade_records — the project's canonical trade-log reader —
+        # so this method handles both single-file logs (test fixtures) and
+        # directory-layout logs (production logs/trades/{archive,live}/...).
+        from utils.trade_log_reader import iter_trade_records
         seen: list[str] = []
-        with self.trade_log_path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if rec.get("source") != source:
-                    continue
-                headline = rec.get("headline")
-                if not headline:
-                    continue
-                seen.append(str(headline))
+        for rec in iter_trade_records(self.trade_log_path):
+            if rec.get("source") != source:
+                continue
+            headline = rec.get("headline")
+            if not headline:
+                continue
+            seen.append(str(headline))
         # Return last k, preserving forward order.
         return seen[-k:]
 
@@ -144,27 +143,14 @@ class KalshiGovernanceAdapter:
     def get_active_source_list(self) -> list[str]:
         if not self.trade_log_path.exists():
             return []
+        from utils.trade_log_reader import iter_trade_records
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         counts: dict[str, int] = {}
-        with self.trade_log_path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                ts = rec.get("ts")
-                if not ts:
-                    continue
-                try:
-                    rec_dt = datetime.fromisoformat(ts)
-                except ValueError:
-                    continue
-                if rec_dt < cutoff:
-                    continue
-                source = rec.get("source")
-                if not source:
-                    continue
-                counts[source] = counts.get(source, 0) + 1
+        for rec in iter_trade_records(self.trade_log_path, since=cutoff):
+            source = rec.get("source")
+            if not source:
+                continue
+            counts[source] = counts.get(source, 0) + 1
         return [s for s, _ in sorted(counts.items(), key=lambda kv: -kv[1])]
 
 
