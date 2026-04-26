@@ -96,3 +96,55 @@ def test_load_state_marks_readonly_without_raising(tmp_path, monkeypatch):
     state = load_state(overrides_path=overrides_path)
     assert state.kill_switch_readonly is True
     assert state.kill_switch_disabled is False
+
+
+import json
+
+
+def test_run_cycle_emits_start_and_end_events_with_zero_candidates(tmp_path, monkeypatch):
+    from governance.agent import run_cycle, AgentLoadedState
+    from governance.adapter import KalshiGovernanceAdapter
+    from governance.audit import AuditLogger
+
+    overrides_path = tmp_path / "overrides.yaml"
+    decisions_dir = tmp_path / "logs" / "governance"
+    trade_log = tmp_path / "trades.jsonl"
+    trade_log.write_text("", encoding="utf-8")
+
+    from utils.runtime_overrides import OverridesState, atomic_write_state
+    atomic_write_state(
+        OverridesState(
+            version=1,
+            updated_at=datetime(2026, 5, 2, 14, 0, tzinfo=timezone.utc),
+            updated_by="test", mode="shadow", applied_disabled_sources=[],
+        ),
+        overrides_path,
+    )
+    monkeypatch.delenv("GOVERNANCE_DISABLED", raising=False)
+    monkeypatch.delenv("GOVERNANCE_READONLY", raising=False)
+
+    adapter = KalshiGovernanceAdapter(
+        trade_log_path=trade_log, paper_db_path=tmp_path / "paper.db",
+        market_provider=None,
+    )
+    # AuditLogger requires log_dir as a keyword arg (not positional) per
+    # governance/audit.py:41 — Task 17 drift note in plan documents this.
+    logger = AuditLogger(log_dir=decisions_dir)
+    rc = run_cycle(
+        cadence="fast",
+        loaded_state=load_state(overrides_path=overrides_path),
+        adapter=adapter,
+        llm=None,  # Task 18 wires LLM in
+        audit_logger=logger,
+        overrides_path=overrides_path,
+        candidate_override=[],  # force zero candidates for this test
+    )
+    assert rc == 0
+
+    # Read the audit log: should have START and END
+    log_files = sorted(decisions_dir.glob("decisions.jsonl*"))
+    assert log_files, "audit logger did not write any decisions log file"
+    body = log_files[-1].read_text(encoding="utf-8").strip().splitlines()
+    types = [json.loads(line)["type"] for line in body]
+    assert "GOVERNANCE_CYCLE_START" in types
+    assert "GOVERNANCE_CYCLE_END" in types

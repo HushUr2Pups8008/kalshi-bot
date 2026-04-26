@@ -3349,6 +3349,39 @@ git add governance/agent.py tests/test_governance_agent_unit.py
 git commit -m "feat(governance): run_cycle skeleton + start/end audit events (Phase 2 Task 17)"
 ```
 
+**Post-implementation note: signature drift from plan (recorded 2026-04-25)**
+
+Step 1's embedded test code and Step 2's `run_cycle` body both referenced `AuditLogger` APIs that do not match what was committed in Phase 1. Recording so a future agent does not believe the embedded code reflects what shipped.
+
+**What the plan-as-written assumed:**
+
+```python
+logger = AuditLogger(decisions_dir)            # positional
+audit_logger.write({"type": "GOVERNANCE_CYCLE_START", ...})   # method name
+```
+
+The plan's "Type / signature consistency" table at line 4670 explicitly says: *"AuditLogger.write({...}) calls everywhere take a flat dict; matches the Phase 1 interface."* That claim is wrong — Phase 1 shipped `.append()`, not `.write()`.
+
+**What the actual library exposes** (verified 2026-04-25 against `governance/audit.py`):
+
+| Member | File:line | Real API |
+|---|---|---|
+| `AuditLogger.__init__` | `governance/audit.py:41-48` | `AuditLogger(*, log_dir: Path, basename: str = "decisions.jsonl", now: Callable = ..., compress_after_days: int = 7)` — **`log_dir` is keyword-only**; positional construction (`AuditLogger(some_path)`) raises `TypeError`. |
+| `AuditLogger.append` | `governance/audit.py:56` | `def append(self, record: dict[str, Any]) -> None`. The plan calls this `.write` everywhere (Tasks 17–22, plus the verification table). The real method is `.append`. |
+
+**Workaround as shipped:**
+
+1. **Tests:** every `AuditLogger(decisions_dir)` becomes `AuditLogger(log_dir=decisions_dir)`.
+2. **`run_cycle`:** every `audit_logger.write(...)` becomes `audit_logger.append(...)`. Two call sites in this task; Tasks 18 and 22 will hit additional ones.
+
+**Impact on downstream tasks: minor mechanical adjustment, no design impact.**
+
+- The audit-log file format and rotation behavior are unchanged — only the method name and constructor calling convention differ.
+- Tasks 18 and 22 will need the same `.write` → `.append` substitution and the same keyword-only construction. The shape of records written (flat dicts with a `"type"` key) matches what the plan assumed.
+- The plan's verification table (`§"Type / signature consistency"` line 4670) remains technically wrong about the method name; this note is the corrective.
+
+**For future re-execution:** before re-implementing any task in this plan that references `AuditLogger`, run `grep -n "def __init__\|def append\|def write" governance/audit.py` to confirm the API. If the plan and code disagree, follow the code.
+
 ---
 
 ## Task 18: `governance/agent.py` — LLM-driven candidate iteration

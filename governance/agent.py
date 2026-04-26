@@ -92,3 +92,79 @@ def load_state(*, overrides_path: Path) -> AgentLoadedState:
         kill_switch_disabled=False,
         kill_switch_readonly=ks.is_readonly(),
     )
+
+
+from typing import Iterable, Sequence
+
+from governance.adapter import GovernanceAdapter
+from governance.evidence import (
+    Candidate,
+    select_candidates_for_cadence,
+)
+from governance.llm import LLMClient
+
+
+def run_cycle(
+    *,
+    cadence: str,
+    loaded_state: AgentLoadedState,
+    adapter: GovernanceAdapter,
+    llm: LLMClient | None,
+    audit_logger: AuditLogger,
+    overrides_path: Path,
+    candidate_override: Sequence[Candidate] | None = None,
+    safety_config: SafetyConfig | None = None,
+) -> int:
+    """Run one governance cycle. Returns process exit code.
+
+    Phase 2 Task 17: emits CYCLE_START / CYCLE_END only; no LLM iteration
+    yet. Task 18 fills in the LLM-driven decision loop.
+    """
+    now = datetime.now(timezone.utc)
+    cycle_id = generate_cycle_id(now=now)
+
+    # AuditLogger's record-append method is .append(), not .write() (the
+    # plan referenced .write throughout — Task 17 drift note in plan).
+    audit_logger.append({
+        "type": "GOVERNANCE_CYCLE_START",
+        "cycle_id": cycle_id,
+        "cadence": cadence,
+        "mode": loaded_state.mode,
+        "started_at": now.isoformat(),
+    })
+
+    cycle_start = now
+    if candidate_override is not None:
+        candidates: list[Candidate] = list(candidate_override)
+    else:
+        audit_data = adapter.collect_audit_data(window=_cadence_window(cadence))
+        candidates = list(select_candidates_for_cadence(
+            audit_data, cadence=cadence,
+        ))
+
+    decisions_made = 0
+    decisions_applied = 0
+    decisions_proposed = 0
+
+    # Task 18 will fill in the per-candidate LLM iteration here.
+
+    duration_sec = (datetime.now(timezone.utc) - cycle_start).total_seconds()
+    audit_logger.append({
+        "type": "GOVERNANCE_CYCLE_END",
+        "cycle_id": cycle_id,
+        "duration_sec": duration_sec,
+        "decisions_made": decisions_made,
+        "decisions_applied": decisions_applied,
+        "decisions_proposed": decisions_proposed,
+        "batch_aborted": False,
+    })
+    return 0
+
+
+def _cadence_window(cadence: str):
+    from datetime import timedelta
+    return {
+        "fast": timedelta(hours=24),
+        "deep": timedelta(days=7),
+        "weekly_review": timedelta(days=30),
+    }.get(cadence, timedelta(hours=24))
