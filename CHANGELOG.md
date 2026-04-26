@@ -6,6 +6,123 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.58] - 2026-04-26
+
+### Fixed (PROFIT-EDGE-003 — G1 scaled-confidence floor calibration)
+
+Same shape of recalibration as PROFIT-EDGE-002 (v0.29.57) for G4, but
+applied to G1. Post-fix simulation against v0.29.57 confirmed all 5
+LLM-positive events from the PROFIT-EDGE-001 diagnosis still failed
+the readiness gate at G1, with `scaled_confidence` (= `blended_conf`
+× `regime_conf`) in the 0.05–0.10 range against the previous
+`G1 = 0.35` requirement.
+
+#### `tasks/trade_readiness_gate.py:G1_CONFIDENCE_THRESHOLD` lowered 0.35 → 0.05
+
+The blender's `_effective_confidences()` attenuates each lane's
+confidence by `lane_conf × (rw_lane × rc + (1-rc)/3)`, and
+`blended_confidence` is the *mean* of those effective confidences. For
+realistic LLM signal (`fast_conf = 0.85`) on the categorical priors
+the regime classifier was designed to emit, achievable
+`scaled_confidence` values are:
+
+```
+Sports prior (rc=0.528):           ~0.27
+KXTRUMPIRAN prior (rc=0.27):       ~0.10
+KXSBUDGETRES prior (rc=0.28):      ~0.06
+Polling prior (rc=0.32):           ~0.07
+```
+
+`G1 = 0.35` would require `regime_confidence ≥ ~0.875` with realistic
+`blended_confidence` — only the very-near-close (≤6h) sports markets
+can achieve that, and we filter sports out of the trading universe by
+design. So `G1 = 0.35` was *deterministically* zero-trade for the
+bot's actual target market mix, regardless of any line-688 or G4
+fixes upstream.
+
+**Empirical confirmation** — distribution of `scaled_confidence`
+across 154 production `BLEND_DECISION` records over the 9-day window
+2026-04-17 → 2026-04-26 (paper mode):
+
+```
+percentile  scaled_confidence
+median      0.026  (pure noise — uncategorized markets at near-uniform rc)
+P75         0.035
+P90         0.119  (natural cliff — strong-signal cluster)
+P95         0.119
+max         0.304  (KXVANCEPAKISTAN-26APR21-APR24 — best signal in 9 days)
+```
+
+Zero of 154 cleared `G1 = 0.35` — the threshold was 1.15× the very
+best signal the bot has ever produced. Setting `G1 = 0.05` captures
+the top ~14% of historical signals (the 22 records above 0.05 cluster
+around the P90 inflection at 0.119) while still rejecting median
+noise (0.026). Multi-lane high-quality signals at 0.30 clear with 6×
+headroom.
+
+#### `tasks/trade_readiness_gate.py:G1_FAILSAFE_CONFIDENCE_THRESHOLD` lowered 0.50 → 0.10
+
+Failsafe G1 is set at 2× base, mirroring the pre-fix 0.50/0.35 = 1.43×
+ratio but pushed slightly more conservative. With failsafe activation
+still coupled to `rc < G4 = 0.20`, this branch only matters in the
+`[failsafe-trigger, G4)` band — currently empty by construction. The
+value moves for consistency in the event of a future failsafe / G4
+threshold decoupling.
+
+### Reasoning
+
+- The defensibility argument mirrors PROFIT-EDGE-002 exactly:
+  (a) closed-form math shows `G1 = 0.35` is unreachable for realistic
+  blender outputs given the categorical priors the system was designed
+  to emit; (b) production data over 9 days confirms zero pass rate;
+  (c) the new threshold sits at the natural P90 inflection of the
+  empirical distribution — captures top-decile signals, rejects
+  median noise; (d) the change is a single constant pair, trivially
+  reversible if post-deploy data shows we're trading noise.
+- We did not lower G3 (disagreement threshold) or change the blender
+  itself. Only the G1 floor moves. If multi-lane disagreement is
+  excessive on any post-fix trade, G3 will still gate it.
+- We explicitly chose to calibrate to the conservative side of the
+  empirical distribution. P90 = 0.119; setting `G1 = 0.10` would have
+  matched P90 directly but excluded the fast-only LLM-positive
+  signals on KXTRUMPIRAN-style markets (which max ~0.10 in
+  fast-only mode). `G1 = 0.05` keeps those open while still demanding
+  ~2× the noise floor.
+
+### Tests
+
+- `tests/test_trade_readiness_gate.py::test_g1_threshold_is_calibrated_to_pass_top_decile_production_signals`
+  — pins the contract: G1 must leave ≥ 50% headroom over the P90
+  production scaled_conf (0.119) AND must be strictly above the
+  median noise floor (0.026). Future bumps back above ~0.08 fail
+  this test until accompanied by explicit recalibration of the
+  regime priors, blender, or blended-confidence model.
+- `tests/test_trade_readiness_gate.py::test_g4_regime_confidence_is_enforced_and_tightens_thresholds`
+  updated `blended_confidence` from 1.0 → 0.50 so the test still
+  exercises G1 failure under the new lower threshold.
+- All other existing tests pass unchanged (1370 pass, 1 skipped).
+
+### Stack of fixes 2026-04-26
+
+PROFIT-EDGE-001 (v0.29.56) → PROFIT-EDGE-002 (v0.29.57) →
+PROFIT-EDGE-003 (v0.29.58) form a single coordinated unblock for
+the no-edge problem. Each was structurally necessary to expose the
+next layer:
+
+1. **EDGE-001:** line-688 `if not keywords:` no longer kills
+   LLM-emitted signals.
+2. **EDGE-002:** G4 lowered 0.40 → 0.20; categorical priors added
+   for engaged series; sport-prefix gap (KXPSL) closed; structural-
+   recompute log surfaces `__cause__`.
+3. **EDGE-003:** G1 lowered 0.35 → 0.05 (failsafe 0.50 → 0.10).
+
+Post-fix simulation predicts ~14% of historical BLEND_DECISIONs would
+now have produced paper trades had the full stack been live during
+the diagnosis window. Real production data starting v0.29.58 will
+either confirm the calibration or surface the next layer.
+
+---
+
 ## [0.29.57] - 2026-04-26
 
 ### Fixed (PROFIT-EDGE-002 — readiness-gate calibration + categorical-prior coverage)

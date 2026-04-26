@@ -11,14 +11,14 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 | Field | Value |
 |-------|-------|
 | Last Updated | 2026-04-26 |
-| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging) |
+| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 37 |
+| Total Items | 38 |
 | Open — HIGH | 2 |
 | Open — MEDIUM | 1 |
 | Open — LOW | 2 |
-| Items COMPLETE | 32 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002) |
+| Items COMPLETE | 33 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003) |
 
 ### High-Risk Areas
 
@@ -976,6 +976,99 @@ Either outcome is informative. The G1 question can be answered with concrete pos
 - *Governance agent Phase 2 (v0.29.55)* — receives the candidate evidence it was designed to learn from once both EDGE-001 and EDGE-002 are in production. Memory note `project_governance_regime_priors.md` flags categorical-prior maintenance as a future governance-agent capability — manual maintenance of `_SERIES_PRIORS` is the wrong shape for a market venue that adds new event series weekly; the agent has all the inputs needed (series title, market subtitles, blend cadence) to propose new categorical priors automatically, in the same shape as keyword/source learning.
 - *Sports-prefix maintenance* — also flagged for future governance-agent automation. Manual curation of ~336 candidate sport prefixes is impractical and brittle; the governance agent should maintain `MARKET_SERIES_BLOCKLIST_PREFIXES` from market-title patterns the same way it manages keyword glossaries.
 - *Dossier coverage (12/847 active markets)* — surfaced during this investigation as a contributing factor to weak structural lane contributions. Not closed in this commit; the structural-log fix from change #4 above is the necessary precondition to diagnose *why* dossier-backed markets fail recompute. Future debt entry expected once cause-traces start landing.
+
+---
+
+### PROFIT-EDGE-003
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EDGE-003 |
+| **Title** | Readiness-gate G1 (`scaled_confidence`) threshold mis-calibration — same shape as G4 |
+| **Category** | Decision Path / Profit-Path Integrity |
+| **Severity** | HIGH |
+| **Status** | COMPLETE (2026-04-26, v0.29.58) |
+| **Priority** | NOW |
+| **Owner** | Shared |
+| **Depends On** | PROFIT-EDGE-002 (same diagnostic methodology, same calibration data) |
+| **Blocks** | (now closed: previously the *next* layer behind EDGE-002 for paper-trade emission on geopolitical / domestic-policy event markets — confirmed via post-EDGE-002 simulation) |
+
+**Description**
+
+Post-fix simulation of PROFIT-EDGE-002 (v0.29.57) confirmed the line-688 + categorical-prior + G4 stack opens the readiness gate at the regime layer, but G1 (`scaled_confidence = blended_confidence × regime_confidence ≥ 0.35`) deterministically blocks every signal regardless of LLM input strength. Five-of-five LLM-positive events from the EDGE-001 diagnosis cleared G4 with the new priors but produced `scaled_confidence` in the 0.05–0.10 range — well below the 0.35 G1 floor.
+
+**Why it mattered to profitability / safety / reliability**
+
+Same stack-of-fixes argument as EDGE-002 — without G1 calibration, EDGE-001 + EDGE-002 unblock the upstream stages but the bot still records zero paper trades. The 9-day no-edge window terminates at G1 once the regime layer is patched.
+
+**Evidence / Source**
+
+- *Closed-form math* — for fast-lane-only LLM signal at `fast_conf = 0.85`, the blender's `_effective_confidences()` (`lane_conf × (rw_lane × rc + (1-rc)/3)`) plus the *mean*-of-effective-confidences blended_confidence formula bound `scaled_confidence` to ~0.27 for sports priors and ≤0.10 for the categorical priors EDGE-002 added. `G1 = 0.35` requires `regime_confidence ≥ ~0.875` with realistic blended_confidence — only the very-near-close (≤6h) sports markets achieve that, and we filter sports out of the trading universe by design. Same shape of unreachable threshold as G4 = 0.40 was; both set in the same commit (33385d9) on the same day with the same incompatible assumptions.
+
+- *Production data* — 154 `BLEND_DECISION` records over 2026-04-17 → 2026-04-26 (paper mode, all-0.5 lane probabilities pre-line-688-fix), distribution of `scaled_confidence`:
+
+  | percentile | scaled_confidence | note |
+  |-----------:|------------------:|------|
+  | median     | 0.026             | uncategorized markets at near-uniform rc |
+  | P75        | 0.035             |       |
+  | P90        | 0.119             | natural cliff — strong-signal cluster |
+  | P95        | 0.119             |       |
+  | max        | 0.304             | KXVANCEPAKISTAN-26APR21-APR24 — best signal in 9 days |
+
+  Zero of 154 cleared `G1 = 0.35`. The threshold is 1.15× the best signal the bot ever produced.
+
+- *Pass-rate sweep* across candidate G1 values (production data, 154 records):
+
+  | G1 candidate | passing |
+  |--------------|---------|
+  | 0.35 (current) | 0  (0.0%) |
+  | 0.20         | 7  (4.5%) |
+  | 0.10         | 20 (13.0%) |
+  | **0.05**     | **22 (14.3%)** ← chosen |
+  | 0.03         | 40 (26.0%) |
+  | 0.02         | 102 (66.2%) — would trade noise |
+
+**Fix**
+
+- `tasks/trade_readiness_gate.py:G1_CONFIDENCE_THRESHOLD` lowered `0.35 → 0.05`.
+- `tasks/trade_readiness_gate.py:G1_FAILSAFE_CONFIDENCE_THRESHOLD` lowered `0.50 → 0.10` (proportional 2× base; academic given fail-safe coupling to G4, but moves for consistency).
+- Inline rationale block at the constant captures the closed-form math, the production scaled_confidence distribution, the pass-rate sweep, and the reversibility note.
+
+**Defensibility**
+
+Mirror of the PROFIT-EDGE-002 argument:
+
+- *Math*: Closed-form bound on blender output shows G1 = 0.35 unreachable for the categorical priors the system was designed to emit.
+- *Production data*: 9-day audit shows zero pass rate at G1 = 0.35; chosen G1 = 0.05 sits at a natural break in the empirical distribution (above P75 noise, below P90 strong-signal cluster).
+- *Calibration test*: `test_g1_threshold_is_calibrated_to_pass_top_decile_production_signals` pins G1 between the median noise floor (0.026) and the P90 strong-signal level (0.119) so a future bump back above ~0.08 fails until accompanied by recalibration of the prior table or blender.
+- *Selectivity preserved*: 14% historical pass rate matches the top decile of signal strength; we did not lower G3 (disagreement) or change the blender, so multi-lane disagreement still gates separately.
+- *Reversibility*: change is two constants. If post-deploy data shows we're trading noise, revert is trivial.
+
+**Acceptance Criteria** (all met at fix-commit time)
+
+- Pre-fix kill chain documented from concrete trade-log evidence — **MET** (this entry; CHANGELOG; inline comment).
+- Math justification captured inline at the threshold definition — **MET**.
+- Production scaled_confidence distribution captured in CHANGELOG and debt log — **MET**.
+- Calibration contract pinned via `test_g1_threshold_is_calibrated_to_pass_top_decile_production_signals` — **MET**.
+- Existing `test_g4_regime_confidence_is_enforced_and_tightens_thresholds` updated to keep all three gates failing under the new lower thresholds — **MET**.
+- Full pytest suite green — **MET** (1370 pass, 1 skipped).
+- VERSION + CHANGELOG bumped per `~/.claude/rules/release_versioning.md` — **MET** (0.29.57 → 0.29.58).
+
+**Notes — what this completes**
+
+The 2026-04-26 stack of fixes (EDGE-001 + EDGE-002 + EDGE-003) collectively addresses the line-688 kill, the regime-layer kill, and the scaled-confidence kill in the readiness gate. Post-EDGE-003 simulation predicts the 5 LLM-positive events from the EDGE-001 diagnosis clear all three gates and reach the executor; whether they ultimately produce paper trades depends on executor gates (E1–E12) which are out of scope here. We explicitly did NOT touch G2 (source class diversity), G3 (disagreement), G5 (drift), G6 (recency), or any executor gate. Those are the next iteration's targets if post-deploy data shows them binding.
+
+**What this leaves open**
+
+- *Dossier coverage / structural recompute reliability* — surfaced during EDGE-002 investigation. The structural-log fix shipped in EDGE-002 is the precondition for diagnosing *why* dossier-backed markets fail recompute. Once cause-traces start landing in `bot.log` post-deploy, file as the next debt entry.
+- *G2/G5/G6 dossier-only gates* — for fast-lane-only signals these don't apply (`is_fast_lane=True` exempts them), but for accumulation-or-structural-driven signals they may bind. Empirical post-deploy data needed before judging.
+- *Post-deploy calibration* — 14% historical pass rate is a prediction, not a guarantee. Real production data on v0.29.58 will either confirm or surface the next layer.
+
+**Related**
+
+- *PROFIT-EDGE-001* (closed 2026-04-26, v0.29.56) — first link in the stack.
+- *PROFIT-EDGE-002* (closed 2026-04-26, v0.29.57) — second link; this entry depends directly on the categorical priors EDGE-002 added (without them, regime_confidence is too low for any G1 threshold short of zero to clear).
+- *Governance agent Phase 2 (v0.29.55)* — finally receives candidate evidence with non-trivial fast_lane_p AND non-trivial scaled_confidence AND no upstream rejection, post-EDGE-003.
 
 ---
 

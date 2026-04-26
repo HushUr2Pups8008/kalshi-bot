@@ -93,10 +93,12 @@ def test_g3_mid_band_passes_with_min_edge_override():
 
 def test_g4_regime_confidence_is_enforced_and_tightens_thresholds():
     # PROFIT-EDGE-002 (v0.29.57): G4 threshold lowered from 0.40 to 0.20.
-    # Use a regime_confidence below the new threshold to exercise the
-    # fail-safe activation path; structure of the assertions is unchanged.
+    # PROFIT-EDGE-003 (v0.29.58): G1 base 0.35→0.05, failsafe 0.50→0.10.
+    # blended_confidence chosen so scaled (= bc × rc) sits below the failsafe
+    # G1 threshold (0.10) when rc is just below the new G4 (0.20):
+    #   bc=0.50, rc=0.19  →  scaled = 0.095 < 0.10  →  G1 fails
     decision = evaluate_readiness(
-        _dossier_candidate(blended_confidence=1.0, disagreement_score=0.16),
+        _dossier_candidate(blended_confidence=0.50, disagreement_score=0.16),
         regime_confidence=G4_REGIME_CONFIDENCE_THRESHOLD - 0.01,
     )
 
@@ -148,6 +150,40 @@ def test_g4_passes_at_threshold_boundary_in_normal_mode():
 
     assert "G4_regime_confidence" not in decision.failure_reasons
     assert decision.fail_safe_active is False
+
+
+def test_g1_threshold_is_calibrated_to_pass_top_decile_production_signals():
+    """PROFIT-EDGE-003 calibration test (analogue of the G4 calibration test).
+
+    Production data over the 9-day window 2026-04-17 → 2026-04-26 produced
+    154 BLEND_DECISIONs with the following scaled_confidence distribution:
+
+        median  P75    P90    P95    max
+        0.026   0.035  0.119  0.119  0.304
+
+    G1 must sit below the P90 cluster (0.119) to actually allow strong
+    signals through, but above the median (0.026) to reject noise. The
+    chosen value is 0.05; this test pins the contract so that future
+    bumps back above ~0.10 fail until accompanied by explicit
+    recalibration of either the regime priors, the blender, or the
+    blended-confidence model.
+
+    A representative top-decile production scaled_conf is 0.119 — that
+    must clear G1 with non-trivial headroom.
+    """
+    p90_production_scaled_conf = 0.119
+    assert p90_production_scaled_conf > G1_CONFIDENCE_THRESHOLD * 1.5, (
+        f"G1={G1_CONFIDENCE_THRESHOLD} leaves <50% headroom over the P90 "
+        f"production scaled_conf of {p90_production_scaled_conf}; either "
+        f"lower G1 or recalibrate the regime classifier"
+    )
+
+    median_production_scaled_conf = 0.026
+    assert median_production_scaled_conf < G1_CONFIDENCE_THRESHOLD, (
+        f"G1={G1_CONFIDENCE_THRESHOLD} is at or below the median noise "
+        f"floor of {median_production_scaled_conf}; the gate is no longer "
+        f"discriminating between signal and noise"
+    )
 
 
 def test_g5_blocks_drift_suspect_dossier():
