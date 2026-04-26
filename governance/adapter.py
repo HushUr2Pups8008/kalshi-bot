@@ -85,21 +85,29 @@ class KalshiGovernanceAdapter:
         match_index, analysis_rows, _read_stats = _foc_collect(
             self.trade_log_path, since, until, False, verbose=False,
         )
-        alignment_result = source_market_alignment_audit.aggregate(
+        # source_market_alignment_audit.aggregate returns a tuple
+        # (pairs_by_(source,series), unpaired_count); reddit_source_audit.collect
+        # returns (sub_stats_by_name, read_stats). Both must be normalized to
+        # the dict shape governance/evidence.py and governance/prompts.py
+        # consume. See plan Task 6 follow-up note for rationale.
+        pairs_dict, _unpaired = source_market_alignment_audit.aggregate(
             match_index, analysis_rows,
+        )
+        sub_stats_dict, _r2 = reddit_source_audit.collect(
+            self.trade_log_path, since, until, False,
+        )
+        keyword_summary = keyword_feedback.summarize(
+            self.trade_log_path, since, until,
+        )
+        freshness_summary = freshness_diagnostics.summarize(
+            self.trade_log_path, since, until,
         )
 
         return {
-            "alignment": alignment_result,
-            "keywords": keyword_feedback.summarize(
-                self.trade_log_path, since, until,
-            ),
-            "reddit": reddit_source_audit.collect(
-                self.trade_log_path, since, until, False,
-            ),
-            "freshness": freshness_diagnostics.summarize(
-                self.trade_log_path, since, until,
-            ),
+            "alignment": _normalize_alignment(pairs_dict),
+            "reddit": _normalize_reddit(sub_stats_dict),
+            "keywords": _normalize_keywords(keyword_summary),
+            "freshness": _normalize_freshness(freshness_summary),
         }
 
     def get_active_market_titles(self) -> list[str]:
@@ -158,3 +166,107 @@ class KalshiGovernanceAdapter:
                     continue
                 counts[source] = counts.get(source, 0) + 1
         return [s for s, _ in sorted(counts.items(), key=lambda kv: -kv[1])]
+
+
+# Normalization helpers below.
+#
+# The four scripts/* helpers return their natural data structures
+# (dataclass-keyed dicts, tuples, or partly-typed nested dicts). The
+# governance agent's evidence builder and prompt renderer expect a
+# bot-agnostic dict-of-lists shape. These helpers translate between them
+# so the agent's downstream code can stay shape-stable across future
+# bot implementations (Polymarket, Alpaca) — the contract is the
+# normalized shape, not the script outputs themselves.
+
+# Reddit-classification floor: reuses the same threshold the
+# diagnostic CLI uses (DEFAULT_MIN_INGESTION = 20 in
+# scripts/reddit_source_audit.py) and matches the >= 20 floor the
+# evidence builder applies in governance/evidence.py.
+_REDDIT_MIN_INGESTION_FOR_CLASSIFY = 20
+
+
+def _normalize_alignment(pairs_dict: dict[Any, Any]) -> dict[str, Any]:
+    """Convert {(source, series_ticker): PairStats} into the
+    {"pairs": [...], "overall_anchor_rate": float, "overall_n": int}
+    shape evidence.py consumes."""
+    pairs_list: list[dict[str, Any]] = []
+    total_n = 0
+    total_anchor = 0
+    for stat in pairs_dict.values():
+        n = int(getattr(stat, "n", 0) or 0)
+        anchor = int(getattr(stat, "anchor", 0) or 0)
+        pairs_list.append({
+            "source": getattr(stat, "source", ""),
+            "series_ticker": getattr(stat, "series_ticker", ""),
+            "n": n,
+            "anchor": anchor,
+            "anchor_rate": (anchor / n) if n else None,
+        })
+        total_n += n
+        total_anchor += anchor
+    return {
+        "pairs": pairs_list,
+        "overall_anchor_rate": (total_anchor / total_n) if total_n else 0.0,
+        "overall_n": total_n,
+    }
+
+
+def _normalize_reddit(sub_stats_dict: dict[str, Any]) -> dict[str, Any]:
+    """Convert {subreddit_name: SubStats} into the {"subs": [...]} shape."""
+    from scripts.reddit_source_audit import classify as _classify_sub
+    subs_list: list[dict[str, Any]] = []
+    for sub_stat in sub_stats_dict.values():
+        ingestion = int(getattr(sub_stat, "ingestion", 0) or 0)
+        subs_list.append({
+            "source": getattr(sub_stat, "subreddit", ""),
+            "ingestion": ingestion,
+            "fresh_passes": int(getattr(sub_stat, "early_fresh", 0) or 0),
+            "matches": int(getattr(sub_stat, "matches", 0) or 0),
+            "classification": _classify_sub(
+                sub_stat, set(), _REDDIT_MIN_INGESTION_FOR_CLASSIFY,
+            ),
+        })
+    return {"subs": subs_list}
+
+
+def _normalize_keywords(kw: dict[str, Any]) -> dict[str, Any]:
+    """Project keyword_feedback.summarize() output into the shape the
+    evidence builder consumes. The diagnostic dict has many fields the
+    agent does not need; we keep only the load-bearing two."""
+    return {
+        "no_keyword_misses": int(kw.get("no_keyword_misses", 0) or 0),
+        "candidate_phrases": [
+            {
+                "phrase": str(p.get("phrase", "")),
+                "count": int(p.get("count", 0) or 0),
+                "category": str(p.get("category", "unknown")),
+            }
+            for p in kw.get("phrases", []) or []
+            if isinstance(p, dict)
+        ],
+    }
+
+
+def _normalize_freshness(fresh: dict[str, Any]) -> dict[str, Any]:
+    """Project freshness_diagnostics.summarize() bucket-keyed output into
+    {"sources": {name: {observed_records, stale_rate, interpretation}}}.
+    Phase 2 evidence/prompt code does not access this dict directly, but
+    the contract test verifies the shape so future Phase 4 self-review
+    can rely on it."""
+    sources: dict[str, dict[str, Any]] = {}
+    for bucket_name, rows in fresh.items():
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            source_name = row.get("source")
+            if not source_name:
+                continue
+            stale_rate = row.get("stale_rate")
+            sources[source_name] = {
+                "observed_records": int(row.get("observed_records", 0) or 0),
+                "stale_rate": float(stale_rate) if stale_rate is not None else 0.0,
+                "interpretation": bucket_name,
+            }
+    return {"sources": sources}

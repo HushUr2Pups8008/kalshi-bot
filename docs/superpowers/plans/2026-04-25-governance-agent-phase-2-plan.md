@@ -1339,6 +1339,42 @@ grep '^def ' scripts/source_market_alignment_audit.py scripts/flag_outcome_corre
 
 The shipped tests in `tests/test_governance_adapter.py` (`test_collect_audit_data_returns_four_named_aggregations` and the three sibling tests) cover the actual call path; if they pass, the workaround is intact.
 
+**Task 6.5 follow-up (recorded 2026-04-25, surfaced during Task 20 execution):**
+
+The original Task 6 fix above resolved the *signature* drift but missed a deeper *shape* drift. The `scripts/*` helpers return dataclass-keyed dicts and tuples — not the `{"pairs": [...], "subs": [...], "candidate_phrases": [...]}` shape the rest of the agent (`governance/evidence.py`, `governance/prompts.py`) reads. Tests passed during Tasks 7–19 only because every test injected a synthetic `audit_data_override` with the *correct* shape; the real production path through `main()` was never exercised by a unit test.
+
+Discovered when Task 20's `test_main_with_dry_run_exits_zero` test crashed with `AttributeError: 'tuple' object has no attribute 'get'` at `governance/evidence.py:46` — `audit.get("reddit", {}).get("subs", [])` — because `data["reddit"]` was a tuple `(stats_dict, read_stats)` from `reddit_source_audit.collect()`, not a dict.
+
+**The fix:** four normalization helpers (`_normalize_alignment`, `_normalize_reddit`, `_normalize_keywords`, `_normalize_freshness`) at the bottom of `governance/adapter.py` translate each script's natural output into the documented shape. `collect_audit_data` now calls those helpers instead of dropping the raw outputs into the dict.
+
+**Resulting shape (load-bearing — this is the contract evidence.py / prompts.py depend on):**
+
+```python
+{
+  "alignment": {
+    "pairs": [{"source": str, "series_ticker": str, "n": int, "anchor": int, "anchor_rate": float | None}],
+    "overall_anchor_rate": float,
+    "overall_n": int,
+  },
+  "reddit": {
+    "subs": [{"source": str, "ingestion": int, "fresh_passes": int, "matches": int, "classification": str}],
+  },
+  "keywords": {
+    "no_keyword_misses": int,
+    "candidate_phrases": [{"phrase": str, "count": int, "category": str}],
+  },
+  "freshness": {
+    "sources": {<source_name>: {"observed_records": int, "stale_rate": float, "interpretation": str}},
+  },
+}
+```
+
+**Two new contract tests** in `tests/test_governance_adapter.py` guard this:
+- `test_collect_audit_data_normalizes_to_dict_shape_consumed_by_evidence` — empty trade log produces empty-but-correctly-shaped dicts (every top-level key isinstance(dict, _) — never tuple).
+- `test_collect_audit_data_shape_lets_select_candidates_run_without_error` — end-to-end: `select_candidates_for_cadence(adapter.collect_audit_data(...), cadence="fast")` returns `[]` on an empty log without crashing.
+
+**Lesson for future plan execution:** "tests pass" is not the same as "production path works" when every test substitutes a synthetic version of the data the production path produces. When introducing new bot-agnostic seams (the audit-data shape here), include at least one test that exercises the real producer-to-consumer chain. The Task 22 integration test was supposed to be that test; landing it earlier (or splitting Task 6 into "raw collection" + "shape normalization" steps) would have caught this before Task 20.
+
 ---
 
 ## Task 7: `governance/evidence.py` — `select_candidates_for_cadence`

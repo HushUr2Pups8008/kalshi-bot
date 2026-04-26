@@ -140,3 +140,68 @@ def test_get_active_market_titles_uses_market_provider_when_present(tmp_path):
     )
     titles = adapter.get_active_market_titles()
     assert titles == ["Will X happen?", "Will Y happen?"]
+
+
+def test_collect_audit_data_normalizes_to_dict_shape_consumed_by_evidence(tmp_path):
+    """Contract test: the four top-level keys must be dicts (NOT tuples)
+    and must carry the keys evidence.py / prompts.py read.
+
+    Regression guard for the Task 6.5 follow-up — scripts/* helpers
+    return dataclass-keyed dicts and tuples; the adapter normalizes
+    them into the bot-agnostic shape the agent loop depends on. With
+    an empty trade log, every collection is empty but the *shape*
+    must be intact so downstream code does not crash on a fresh
+    deployment.
+    """
+    trade_log = tmp_path / "trades.jsonl"
+    trade_log.write_text("", encoding="utf-8")
+    adapter = KalshiGovernanceAdapter(
+        trade_log_path=trade_log,
+        paper_db_path=tmp_path / "paper.db",
+        market_provider=None,
+    )
+    data = adapter.collect_audit_data(window=timedelta(hours=24))
+
+    # Every top-level key is a dict, never a tuple.
+    for key in ("alignment", "reddit", "keywords", "freshness"):
+        assert isinstance(data[key], dict), (
+            f"data[{key!r}] must be a dict, got {type(data[key]).__name__}"
+        )
+
+    # Each section carries the keys evidence.py / prompts.py reach for.
+    assert "pairs" in data["alignment"]
+    assert isinstance(data["alignment"]["pairs"], list)
+    assert "overall_anchor_rate" in data["alignment"]
+    assert "overall_n" in data["alignment"]
+
+    assert "subs" in data["reddit"]
+    assert isinstance(data["reddit"]["subs"], list)
+
+    assert "candidate_phrases" in data["keywords"]
+    assert isinstance(data["keywords"]["candidate_phrases"], list)
+    assert "no_keyword_misses" in data["keywords"]
+
+    assert "sources" in data["freshness"]
+    assert isinstance(data["freshness"]["sources"], dict)
+
+
+def test_collect_audit_data_shape_lets_select_candidates_run_without_error(tmp_path):
+    """End-to-end shape contract: the agent's evidence pipeline runs
+    cleanly on collect_audit_data output, even with an empty trade log.
+    Regression for the Task 20 main() blocker."""
+    from governance.evidence import select_candidates_for_cadence
+
+    trade_log = tmp_path / "trades.jsonl"
+    trade_log.write_text("", encoding="utf-8")
+    adapter = KalshiGovernanceAdapter(
+        trade_log_path=trade_log,
+        paper_db_path=tmp_path / "paper.db",
+        market_provider=None,
+    )
+    audit_data = adapter.collect_audit_data(window=timedelta(hours=24))
+
+    # Empty log: zero candidates produced, but no AttributeError.
+    candidates = select_candidates_for_cadence(audit_data, cadence="fast")
+    assert candidates == []
+    candidates_deep = select_candidates_for_cadence(audit_data, cadence="deep")
+    assert candidates_deep == []
