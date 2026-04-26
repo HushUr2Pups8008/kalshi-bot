@@ -11,14 +11,14 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 | Field | Value |
 |-------|-------|
 | Last Updated | 2026-04-26 |
-| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill) |
+| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 36 |
+| Total Items | 37 |
 | Open — HIGH | 2 |
 | Open — MEDIUM | 1 |
 | Open — LOW | 2 |
-| Items COMPLETE | 31 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001) |
+| Items COMPLETE | 32 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002) |
 
 ### High-Risk Areas
 
@@ -862,6 +862,120 @@ Both outcomes are useful. The fix moves the kill point from a place where there'
 - The on-record P0.5 / P3.4 diagnosis ("input/market mix produces ~99% no-signal events") is *directionally correct* and remains the long-term strategic answer (Appendix A integration; narrower-scope markets). PROFIT-EDGE-001 is the short-term tactical answer for the 0.75% of events where the LLM does find signal.
 - Phase 2 governance (v0.29.55) is the architecturally correct fix for the keyword-glossary-gap symptom this bug was masking. Post-fix the governance agent's audit log will start receiving the candidate evidence it needs to learn from.
 - `PROFIT-CAL-001` (closed 2026-04-24, v0.29.47) wired the calibration loop end-to-end but cannot exercise itself in production until a paper trade actually resolves. PROFIT-EDGE-001 is the unblocker for that observation: until LLM-positive signals survive past `main.py:688`, no paper trade can resolve, and CAL-001's runtime verification stays in unit-test-only mode.
+
+---
+
+### PROFIT-EDGE-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EDGE-002 |
+| **Title** | Readiness-gate G4 mis-calibration + categorical-prior coverage gap + sport-prefix gap (KXPSL) + silent structural-recompute failure |
+| **Category** | Decision Path / Profit-Path Integrity |
+| **Severity** | HIGH |
+| **Status** | COMPLETE (2026-04-26, v0.29.57) |
+| **Priority** | NOW |
+| **Owner** | Shared |
+| **Depends On** | PROFIT-EDGE-001 (necessary precondition; does not directly block) |
+| **Blocks** | (now closed: previously the *deeper* blocker behind PROFIT-EDGE-001 for paper-trade emission on geopolitical / domestic-policy event markets) |
+
+**Description**
+
+Post-fix simulation of PROFIT-EDGE-001 surfaced four additional structural bugs preventing paper trades from clearing the readiness gate even when the LLM emits a positive signal. Each bug compounds on the others.
+
+1. **`analysis/regime_classifier.py:_SERIES_PRIORS` was authored 2026-04-18 and has not kept pace with Kalshi's expanded event-series catalog.** None of the 9 series the bot has actually engaged in the last 7 days had a categorical prior — every blend on those tickers fell through `_series_prior` to the time-based fallback. For the typical 7-14d-to-close window the time fallback returns near-uniform `(0.10, 0.45, 0.45)` weights, producing `regime_confidence = 0.136` — well below the readiness gate's G4 threshold.
+
+2. **`tasks/trade_readiness_gate.py:G4_REGIME_CONFIDENCE_THRESHOLD = 0.40` is mathematically incompatible with the regime classifier's own design.** `regime_confidence = 1 - H(weights) / log(N_lanes)` where H is Shannon entropy. For the 3-lane regime, `rc ≥ 0.40` requires the dominant lane > ~0.80, which excludes almost every categorical prior the original designer added. Production data over 9 days shows zero markets clearing G4 except sports (which we filter out by design via `MARKET_SERIES_BLOCKLIST_PREFIXES`) and the very-short ≤6h time fallback.
+
+3. **`config.py:MARKET_SERIES_BLOCKLIST_PREFIXES` is missing common sport prefixes.** Audit of all ~9.8k Kalshi series surfaced ~336 sport-related series prefixes not currently blocked. KXPSL (Pakistan Super League cricket) was the confirmed leak that prompted the audit — `KXPSL-26-PZA` reached the LLM-analysis pipeline as one of the 5 LLM-positive events in the PROFIT-EDGE-001 diagnosis and contributed false-positive signal.
+
+4. **`tasks/structural_task.py:run_once` warning logs swallowed the underlying cause of recompute failures.** `process_market` wraps every exception in `StructuralComputationError(...) from exc`. The warning at line 146 used `_log.warning("...%s", r)`, which calls `str(r)` on the wrapper and discards `__cause__`. Across all production logs the underlying exception was never written to bot.log or errors.log; structural failures were silently un-diagnosable. This intersects with the no-edge problem because the structural lane has been silently absent from many BLEND_DECISIONs.
+
+**Why it mattered to profitability / safety / reliability**
+
+PROFIT-EDGE-001 unblocked the kill at `main.py:688`. Post-fix simulation against existing BLEND_DECISIONs confirmed that, for the 2 of 5 affected events with reconstructable baselines (both `KXTRUMPIRAN-26MAY01`), G4 alone would still reject every blend regardless of the line-688 fix because the market's `regime_confidence` is intrinsic to the regime weights and never moves above ~0.14 for an uncategorized series with > 7 days to close. The line-688 fix is *necessary but not sufficient*; without PROFIT-EDGE-002, the bot would continue emitting zero paper trades on the user's actual target markets (geopolitical / domestic-policy event series).
+
+Beyond direct profitability, the bug compounded with PROFIT-EDGE-001's governance-agent observability problem: the Phase 2 governance agent (v0.29.55) cannot learn from candidate signals that die at G4 the same way it cannot learn from those that die at line 688.
+
+**Evidence / Source**
+
+- *Categorical-prior coverage gap* — Kalshi-API audit on 2026-04-26: of the top 9 series with BLEND_DECISIONs in the 2026-04-19 → 2026-04-26 window (KXTRUMPIRAN 68, KXMOCTRUMP25 50, KXVANCEPAKISTAN 25, KXFISAEXTEND 4, KXPARDONSTRUMP 2, KXVOTESAVEAMERICA 2, KXELECTIONEMERGENCY 1, KXTRUMPENDORSE 1, KXTRUMPCHINA 1), zero had categorical priors. Inspection of regime_classifier.py:_SERIES_PRIORS git blame: file last meaningfully edited 2026-04-18 (commit `bdeeca5`).
+
+- *G4 mis-calibration* — Closed-form analysis (matches production BLEND_DECISIONs for KXTRUMPIRAN-26MAY01: rc=0.1363):
+
+  | Prior class                           | Weights              | rc    | G4=0.40 | G4=0.20 |
+  |---------------------------------------|----------------------|-------|---------|---------|
+  | Sports (KXNFL etc.)                   | (0.85, 0.10, 0.05)   | 0.528 | PASS    | PASS    |
+  | ≤6h time fallback                     | (0.85, 0.10, 0.05)   | 0.528 | PASS    | PASS    |
+  | Polling (KXAPRPOTUS)                  | (0.05, 0.25, 0.70)   | 0.321 | FAIL    | PASS    |
+  | Central bank (KXCBDECISION)           | (0.05, 0.30, 0.65)   | 0.280 | FAIL    | PASS    |
+  | Crypto (KXCRYPTO)                     | (0.65, 0.28, 0.07)   | 0.251 | FAIL    | PASS    |
+  | Weather (KXWEATHER)                   | (0.10, 0.25, 0.65)   | 0.220 | FAIL    | PASS    |
+  | Trump-say (KXTRUMPSAY)                | (0.55, 0.35, 0.10)   | 0.157 | FAIL    | FAIL    |
+  | 1-3d / 3-7d / 7-14d time fallback     | varies               | 0.06–0.14 | FAIL  | FAIL    |
+  | Entertainment (KXENTERTAIN)           | (0.40, 0.45, 0.15)   | 0.080 | FAIL    | FAIL    |
+
+- *Sport-prefix gap* — KXPSL leak confirmed at `KXPSL-26-PZA` event 2026-04-25T16:14:44, captured in `project_no_edge_diagnosis.md` memory note. Audit script tightened to ~336 missing sport-related prefixes; 33 high-confidence prefixes added in this fix.
+
+- *Structural recompute silent failure* — Inspection of `tasks/structural_task.py:146` confirmed `_log.warning("...%s", r)` with chained-exception object. `cat /Users/Jake/vscode/kalshi_bot/logs/app/launchd.stderr.log | grep "per-market recompute failed"` produces hundreds of `failed structural recompute for X` lines with no traceback. Sample dossier query (.venv/bin/python on 2026-04-26): only 19 dossiers exist; none for the engaged target tickers (KXSBUDGETRES-26APR-APR28, etc.); and the daily structural cycle reports `dossier_markets=12 results={'skipped': 12}` — i.e. all 12 dossier-backed markets get skipped (recomputed=0) yet the wrap-and-suppress path produces dozens of stderr warnings that never carry useful context.
+
+**Fix**
+
+Three coordinated code changes plus the structural-log fix:
+
+1. **`analysis/regime_classifier.py:_SERIES_PRIORS`** — added 21 new categorical priors covering the engaged series families:
+   - Legislative / calendar markets (interpretation-dominant): KXSBUDGETRES, KXFISAEXTEND, KXVOTESAVEAMERICA, KXEFFTARIFF, KXMOCTRUMP25.
+   - Macro releases (structural-dominant, mirroring KXCBDECISION): KXCPIYOY, KXCPICOREYOY, KXCPIEU, KXEZGDPYOYF.
+   - Event-driven political / diplomatic (fast-dominant): KXTRUMPACT, KXTRUMPENDORSE, KXTRUMPCHINA, KXTRUMPCRYPTOCONF, KXVANCEPAKISTAN, KXVISITVENEZUELA, KXPARDONSTRUMP, KXLTGOVGANOMR.
+   - Conflict / military (strongly fast-dominant): KXTRUMPIRAN, KXARMOMINF, KXELECTIONEMERGENCY.
+
+   Each tuple is dimensioned so the resulting `regime_confidence` clears the new `G4 = 0.20` floor with ≥ 0.02 headroom.
+
+2. **`tasks/trade_readiness_gate.py:G4_REGIME_CONFIDENCE_THRESHOLD`** lowered `0.40 → 0.20`. Inline comment block documents the calibration data table and the rationale. The fail-safe activation point follows G4 (existing semantics retained), so markets in `[0.20, 0.40)` now run normal mode (G1=0.35, G3=0.20) rather than fail-safe (G1=0.50, G3=0.15) — the categorical prior IS our knowledge about regime, so the standard gate is appropriate.
+
+3. **`config.py:MARKET_SERIES_BLOCKLIST_PREFIXES`** — added 33 high-confidence sport prefixes including KXIPL/KXPSL/KXWPL (cricket), KXATP/KXWTA (tennis), KXUFC, KXWBC, KXWNBA, KXEPL/KXEGYPL/KXISL/KXCHNSL/KXCANPL/KXAFCC/KXUEFA (international soccer), KXF1, KXPGA, KXWO (Winter Olympics — distinct from KXOLYMPIC), KXEWC (esports), KXCBA/KXNBL/KXEUROCUP (international basketball), KXCFP/KXCFB/KXMARMAD (college sports), and sport-only player-movement / leader / coaching prefixes (KXLEADER, KXNEXTTEAM, KXNEXTCOACH, KXCOACHOUT, KXTEAMSIN, KXTRADEOFF, KXRANKLIST, KXCRICKET, KXT20).
+
+4. **`tasks/structural_task.py:146`** — warning now emits both the wrapper message and `repr(__cause__)`, plus an `exc_info` traceback rooted at the cause. Future structural failures will produce diagnosable log records.
+
+**Defensibility**
+
+The G4 threshold change is the most material of the four, so the defensibility argument is enumerated explicitly:
+
+- *Math*: `regime_confidence = 1 - H/log(N_lanes)` is entropy-based, with `G4 = 0.40` requiring lane dominance > ~0.80. The original sport-only series at (0.85, 0.10, 0.05) clear it; almost nothing else does. The original designer added Polling / Central-bank / Crypto / Weather / Entertainment categorical priors with the express *intent* that those be tradeable — but G4 = 0.40 prevents that. The threshold and prior table were never reconciled.
+- *Production data*: 9 days of paper-mode operation 2026-04-17 → 2026-04-26 produced zero paper trades end-to-end. The line-688 fix unblocked one stage of the funnel; G4 was the next dominant kill. With G4 = 0.20 the categorical priors that were originally designed to be tradeable will now actually trade.
+- *Conservative shape*: G4 = 0.20 still rejects time-fallback uncategorized markets at 1-14d (rc 0.06–0.14), KXTRUMPSAY at rc=0.157, and KXENTERTAIN at rc=0.08 — the fail-safe path remains active for those. We did not lower G1 (0.35) or G3 (0.20); only the regime-confidence floor itself moves.
+- *Calibration test*: `test_g4_threshold_is_calibrated_to_pass_existing_categorical_priors` pins the relationship between G4 and the existing tradeable priors. Future bumps back above 0.20 will fail the test until accompanied by explicit recalibration of the prior table.
+- *Reversibility*: change is a single constant. Reverting is trivial if the post-deploy audit log shows trades that should not be passing.
+
+**Acceptance Criteria** (all met at fix-commit time)
+
+- Pre-fix kill chain documented from concrete trade-log evidence and closed-form analysis — **MET** (this entry).
+- Math justification for G4 = 0.20 captured inline in `tasks/trade_readiness_gate.py` — **MET**.
+- New categorical priors covered by behavioral tests (interpretation-dominant for calendar markets, fast-dominant for event markets, structural-dominant for macro) — **MET** (`tests/test_regime_classifier.py`).
+- Calibration contract pinned: `test_new_categorical_priors_clear_g4_threshold` and `test_g4_threshold_is_calibrated_to_pass_existing_categorical_priors` — **MET**.
+- Existing test `test_g4_regime_confidence_is_enforced_and_tightens_thresholds` updated to use the new threshold via the imported constant rather than literal `0.39` — **MET**.
+- Sport-prefix additions covered by 44 positive parametrized cases (each leak confirmed blocked) and 11 negative cases (geo/policy markets not accidentally blocked) — **MET** (`tests/test_sports_blocklist.py`).
+- Structural log surfaces underlying cause — regression test verifies both the wrapper text and the underlying exception class/message are present — **MET** (`tests/test_structural_task.py::test_run_once_failure_warning_surfaces_underlying_cause`).
+- Full pytest suite green — **MET** (1369 pass, 1 skipped).
+- VERSION + CHANGELOG bumped per `~/.claude/rules/release_versioning.md` — **MET** (0.29.56 → 0.29.57).
+
+**Notes — necessary, possibly still not sufficient at G1**
+
+PROFIT-EDGE-002 unblocks the G4 + regime-prior + sport-prefix layer. The next-most-likely binding constraint is `G1: scaled_confidence = blended_confidence × regime_confidence ≥ 0.35`. Realistic post-fix numbers: a fast-lane-only signal with `fast_conf = 0.85` on a market with `regime_confidence = 0.25` will have `blended_confidence` in the ~0.27 range and `scaled_conf ≈ 0.07` — still below G1. The fix unblocks G4 deterministically; whether G1 also passes depends on accumulation/structural lane contributions, which currently coexist as `acc_p = 0.5` / `str_p = None` for most engaged markets (per the BLEND_DECISIONs inspected during this investigation).
+
+Two outcomes possible post-deploy:
+
+1. *Best case*: Markets with established dossiers (KXTRUMPIRAN already has 10 evidence records and a structural prior) accumulate enough lane signal to clear G1, producing the bot's first end-to-end paper trade.
+2. *Worst case*: G1 still blocks because acc_p and str_p remain near 0.5. The audit log will then contain BLEND_DECISIONs with non-trivial fast_lane_p (PROFIT-EDGE-001's contribution) and now passes-G4-but-fails-G1 records (PROFIT-EDGE-002's contribution) — qualitatively distinct from the all-0.5 records pre-fix and far more actionable for the next iteration.
+
+Either outcome is informative. The G1 question can be answered with concrete post-fix data; we explicitly chose not to bundle a G1 recalibration into this commit, both for conservatism and because G1's correct value depends on the accumulation/structural lane dynamics — not the regime calculation alone.
+
+**Related**
+
+- *PROFIT-EDGE-001* (closed 2026-04-26, v0.29.56) — necessary precondition for this fix to matter end-to-end. Without EDGE-001 the LLM-positive events never reach blend; without EDGE-002 they reach blend but die at G4.
+- *Governance agent Phase 2 (v0.29.55)* — receives the candidate evidence it was designed to learn from once both EDGE-001 and EDGE-002 are in production. Memory note `project_governance_regime_priors.md` flags categorical-prior maintenance as a future governance-agent capability — manual maintenance of `_SERIES_PRIORS` is the wrong shape for a market venue that adds new event series weekly; the agent has all the inputs needed (series title, market subtitles, blend cadence) to propose new categorical priors automatically, in the same shape as keyword/source learning.
+- *Sports-prefix maintenance* — also flagged for future governance-agent automation. Manual curation of ~336 candidate sport prefixes is impractical and brittle; the governance agent should maintain `MARKET_SERIES_BLOCKLIST_PREFIXES` from market-title patterns the same way it manages keyword glossaries.
+- *Dossier coverage (12/847 active markets)* — surfaced during this investigation as a contributing factor to weak structural lane contributions. Not closed in this commit; the structural-log fix from change #4 above is the necessary precondition to diagnose *why* dossier-backed markets fail recompute. Future debt entry expected once cause-traces start landing.
 
 ---
 

@@ -18,7 +18,48 @@ G3_DISAGREEMENT_THRESHOLD = 0.20
 G3_FAILSAFE_DISAGREEMENT_THRESHOLD = 0.15
 G3_OVERRIDE_BAND_START = 0.15
 G3_OVERRIDE_MULTIPLIER = 1.5
-G4_REGIME_CONFIDENCE_THRESHOLD = 0.40
+
+# G4 — regime-confidence floor.
+#
+# regime_confidence = 1 - entropy(regime_weights) / log(N_lanes)
+#
+# Threshold history:
+#   0.40 (initial, commit 33385d9, "stage 2 accumulation guardrails")
+#   0.20 (PROFIT-EDGE-002, v0.29.57) — calibration fix.
+#
+# Why 0.20: at the original 0.40, only regime distributions with the dominant
+# lane > 0.80 cleared the gate, which excluded almost every categorical prior
+# defined in analysis/regime_classifier.py:_SERIES_PRIORS. Concretely, on
+# 9 days of production (2026-04-17 → 2026-04-26), bot trade flow stalled at
+# zero — every blend on a non-sport categorical-priored market failed G4.
+# Existing categorical priors with their regime_confidence values:
+#
+#   Sports (KXNFL/KXNBA/...)        rc = 0.528  passes 0.40
+#   ≤6h time fallback               rc = 0.528  passes 0.40
+#   Polling (KXAPRPOTUS)            rc = 0.321  fails 0.40 — DESIGNED tradeable
+#   Central bank (KXCBDECISION)     rc = 0.280  fails 0.40 — DESIGNED tradeable
+#   Crypto (KXCRYPTO)               rc = 0.251  fails 0.40 — DESIGNED tradeable
+#   Weather (KXWEATHER)             rc = 0.220  fails 0.40 — DESIGNED tradeable
+#   Trump-say (KXTRUMPSAY)          rc = 0.157  fails 0.40
+#   Entertainment (KXENTERTAIN)     rc = 0.080  fails 0.40
+#
+# 0.20 is the cleanest separator that:
+#   (a) PASSES the categorical priors marked above as designed-tradeable
+#       (Polling, Central bank, Crypto, Weather);
+#   (b) FAILS the time-fallback uncategorized buckets (1-3d rc=0.080,
+#       3-7d rc=0.063, 7-14d rc=0.136) and weakly-categorical KXTRUMPSAY /
+#       KXENTERTAIN, which are correctly subjected to fail-safe.
+#
+# Note: lowering this threshold also broadens the fail-safe activation band.
+# fail_safe_active = (rc < G4_REGIME_CONFIDENCE_THRESHOLD), so markets with
+# rc in [0.20, 0.40) move from fail-safe to normal mode (G1=0.35, G3=0.20)
+# instead of fail-safe (G1=0.50, G3=0.15). This is the intended effect: a
+# categorical prior IS our knowledge about the market regime, so demanding
+# additional caution beyond the standard gate is over-tight.
+#
+# See PROFIT-EDGE-002 in docs/profit_path_debt_log.md for the full diagnosis.
+G4_REGIME_CONFIDENCE_THRESHOLD = 0.20
+
 G6_RECENCY_THRESHOLD = 0.30
 
 FAST_SOURCE_LANE = "fast"

@@ -598,16 +598,55 @@ MARKET_SERIES_BLOCKLIST_PREFIXES = [
     "KXLIGUE1",  # French Ligue 1
     "KXBUNDESLIGA",  # German Bundesliga
     "KXVENFUTVE",  # Venezuela soccer
+    # International cricket
+    "KXIPL",  # Indian Premier League cricket
+    "KXPSL",  # Pakistan Super League cricket
+    "KXWPL",  # Women's Indian Premier League cricket
+    "KXCRICKET",  # General cricket markets (ODI / Test / T20I)
+    "KXT20",  # T20 cricket
     # Other international sports
-    "KXTENNIS",  # Tennis
-    "KXGOLF",  # Golf
-    "KXBOXING",  # Boxing
-    "KXMMA",  # MMA / UFC
+    "KXTENNIS",  # Tennis (generic)
+    "KXATP",  # ATP tennis (men's)
+    "KXWTA",  # WTA tennis (women's)
+    "KXGOLF",  # Golf (generic)
+    "KXPGA",  # PGA golf
+    "KXBOXING",  # Boxing (generic)
+    "KXWBC",  # World Boxing Council title fights / World Baseball Classic (both sports)
+    "KXMMA",  # MMA / generic UFC
+    "KXUFC",  # UFC-prefixed series (titles, fights, weight classes)
     "KXNASCAR",  # NASCAR
-    "KXFORMULA",  # Formula 1
-    "KXOLYMPIC",  # Olympics
+    "KXFORMULA",  # Formula 1 (KXFORMULA prefix)
+    "KXF1",  # Formula 1 (KXF1 prefix variants)
+    "KXOLYMPIC",  # Summer / generic Olympics
+    "KXWO",  # Winter Olympics (KXWO* prefix is distinct from KXOLYMPIC*)
+    "KXEWC",  # Esports World Cup
     "KXBSL",  # Basketball Super Lig (Turkey)
     "KXFIBAECUP",  # FIBA Europe Cup
+    # Additional basketball leagues
+    "KXWNBA",  # Women's NBA
+    "KXCBA",  # Chinese Basketball Association
+    "KXNBL",  # Australian National Basketball League
+    "KXEUROCUP",  # European basketball EuroCup
+    # Additional soccer leagues
+    "KXEPL",  # English Premier League
+    "KXEGYPL",  # Egyptian Premier League
+    "KXISL",  # Israel Super League
+    "KXCHNSL",  # Chinese Super League
+    "KXCANPL",  # Canadian Premier League
+    "KXAFCC",  # AFC Champions League (sibling of KXUCL/KXUEL)
+    "KXUEFA",  # UEFA Champions League / UEFA-prefixed (covers KXUEFAGAME etc.)
+    # College sports
+    "KXCFP",  # College Football Playoff
+    "KXCFB",  # College Football
+    "KXMARMAD",  # March Madness (college basketball)
+    # Sports leader / draft / coaching markets — uniformly sport-driven
+    "KXLEADER",  # Per-sport leader markets (KXLEADERMLB, KXLEADERNBA, KXLEADERNFL)
+    "KXNEXTTEAM",  # Player next-team
+    "KXNEXTCOACH",  # Next coach
+    "KXCOACHOUT",  # Coach out / fired
+    "KXTEAMSIN",  # Teams in [final / playoff round]
+    "KXTRADEOFF",  # Trade offseason
+    "KXRANKLIST",  # Fantasy football rank lists
     # Polling / approval rating markets (not geopolitical events)
     "KXAPRPOTUS",  # Presidential approval rating polls
     "KXPOLLPOTUS",  # Presidential polls
