@@ -10,14 +10,14 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-04-23 |
-| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state |
+| Last Updated | 2026-04-25 |
+| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 34 |
+| Total Items | 35 |
 | Open — HIGH | 3 |
 | Open — MEDIUM | 1 |
-| Open — LOW | 1 |
+| Open — LOW | 2 |
 | Items COMPLETE | 28 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001) |
 
 ### High-Risk Areas
@@ -680,6 +680,84 @@ Two-track strategy per `docs/plans/news_sources_evaluation.md` §7.2:
 
 **Notes**  
 Do not treat this as a go-live blocker. Per `docs/plans/news_sources_evaluation.md` §6, the operator-confirmed priority is correctness over velocity, and the Reddit-unique signal is thin enough that going live without Reddit is acceptable provided the source mix is honestly reported. The go-live blocker is `PROFIT-CAL-001`, not this item.
+
+---
+
+### PROFIT-LLM-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-LLM-001 |
+| **Title** | Signal-analyzer / governance-agent LLM unification deferred until after Phase 2 lands |
+| **Category** | LLM Layer / Operational Reliability |
+| **Severity** | LOW |
+| **Status** | OPEN |
+| **Priority** | AFTER (post governance Phase 2 close) |
+| **Owner** | Operator |
+| **Depends On** | Governance Phase 2 implementation closing (Task 27 — VERSION/CHANGELOG bump) |
+| **Blocks** | — (no downstream item; Phase 2 ships fine without unification) |
+
+**Description**
+Two distinct Ollama model strings are configured side-by-side after governance Phase 2:
+
+- Signal analyzer (existing trading): `OLLAMA_MODEL` defaults to `qwen2.5:7b` per `config.py:1077`.
+- Governance agent (Phase 2): `GOVERNANCE_LLM_MODEL` set to `qwen3:8b` on MacBook (via the launchd plist landing in Task 25), `qwen3:14b` on Mac Studio.
+
+Ollama runs single-model by default — a request for a model that isn't loaded unloads the previous one and loads the new one (5 min idle TTL). So in steady state at most one model is resident; the runtime cost is a ~5-10s cold-load each time governance and signal analysis fire close in time. RAM is safe on the MacBook's 18GB.
+
+The deferred decision is whether to bump `OLLAMA_MODEL=qwen3:8b` so signal analysis upgrades to the same model the governance agent already uses, eliminating swap latency and unifying calibration. The agent decided on 2026-04-25 to **defer this past Phase 2** rather than bundle it into the governance ship, after operator pushback against the original "wait for Mac Studio" recommendation made the actual risks explicit.
+
+**Why it matters to profitability / safety / reliability**
+A unilateral model swap on the signal-analyzer path carries three concrete risks that need observation, not just a unit-test pass:
+
+1. **JSON-parse reliability.** Different LLMs wrap JSON output in different preamble styles. The existing parser uses `JSONDecoder.raw_decode()` scanning each `{` (per CLAUDE.md "Critical Gotchas / Signal analysis") because some prior model emitted preambles like `Sure, here is the analysis: {...}`. qwen3:8b may emit a different preamble or new failure modes. A regression here looks fine in unit tests but breaks in production when the parser silently drops a malformed response.
+2. **Probability calibration drift.** qwen2.5:7b's "0.42" doesn't necessarily mean the same thing as qwen3:8b's "0.42". The bot's edge-threshold gating, Kelly sizing, and same-signal guards are all calibrated against what 2.5:7b currently produces. A more-confident model pushes more bets through the gate; a less-confident one starves it. Either drift would only show in cross-week comparisons of EV-gate pass-rate and decision distribution — not in any single test.
+3. **Prompt-template fit.** The existing signal-analyzer prompt (in `analysis/signal_analyzer.py`) was written with one model's reasoning style in mind. qwen3 is a different generation — it could refuse, over-explain, ignore an instruction, or hit token limits differently.
+
+These risks are observable but not catchable by tests alone. They need a baseline-comparison observation window in paper mode.
+
+**Why deferral is the right call (not "wait for Mac Studio")**
+The original agent recommendation was "wait until Mac Studio arrives" and was wrong-by-default rather than reasoned. The honest reason to defer past Phase 2:
+
+- Bundling a model swap into Phase 2 makes any regression hard to attribute — was it the new governance code, or the new signal model?
+- Phase 2's risk surface is already large enough (new agent, new prompt, new audit log, new launchd plists). Keeping the signal-analyzer path frozen during Phase 2 cutover means any issue surfaces against a known baseline.
+- Once Phase 2 is closed and observed quiet for a few cycles, swapping `OLLAMA_MODEL=qwen3:8b` is a one-keystroke change with a one-keystroke revert. The cost of waiting is small (a few governance/signal coordination cold-loads per day). The cost of bundling is harder root-cause analysis if something goes wrong.
+
+Hardware is not the gate. Both models fit comfortably on the 18GB MacBook (4.7GB on disk each, ~5-6GB resident); only `qwen3:14b` is too tight for MacBook (8-9GB on disk, 10-12GB resident with context — that's the Mac Studio model).
+
+**Evidence / Source**
+- `config.py:1077` — `ollama_model` field default factory `os.getenv("OLLAMA_MODEL", "qwen2.5:7b")`.
+- `.env:84` — commented `OLLAMA_MODEL=qwen2.5:7b` line.
+- Governance Phase 2 plan (`docs/superpowers/plans/2026-04-25-governance-agent-phase-2-plan.md`) Task 15 — `LocalQwenLLM` constructor default `qwen3:14b` with env-var override `GOVERNANCE_LLM_MODEL`; comment block flags `qwen3:8b` as the MacBook model and `qwen3:14b` as the Mac Studio model.
+- CLAUDE.md "Critical Gotchas / Signal analysis" — JSON-extraction workaround documents past brittleness when changing model output behavior.
+- Operator-pulled models on MacBook as of 2026-04-25: `qwen2.5:7b` (active for signal analysis), `qwen3.5:9b` (idle), `qwen3:8b` (newly pulled, will be used by governance agent).
+
+**Proposed Fix**
+After governance Phase 2 closes (PROFIT-LLM-001 transitions to `IN_PROGRESS` only after Task 27's VERSION/CHANGELOG commit lands):
+
+1. Single-line `.env` change: set `OLLAMA_MODEL=qwen3:8b` (uncomment + update the existing line at `.env:84`).
+2. Restart the bot and let it run paper mode for at least one full diurnal cycle (~24h) of news ingestion.
+3. Compare the post-change cycle against the prior week's `bot.log` and trade-funnel diagnostics on:
+   - JSON-parse error count in `signal_analyzer` log lines (must be ≤ baseline; ideally zero).
+   - Distribution of `estimated_probability` outputs (should be roughly the same shape; gross shifts indicate calibration drift).
+   - EV-gate pass-rate (rate of analyses that produce a candidate trade decision; should be within ±20% of baseline).
+   - Bet-size distribution from any paper trades produced (gross shifts indicate confidence-calibration drift).
+4. **Revert criteria — set `OLLAMA_MODEL=qwen2.5:7b` and re-open this item** if any of:
+   - Any new JSON-parse error class shows up in logs that wasn't there pre-change.
+   - EV-gate pass-rate moves outside ±20% of the pre-change weekly baseline.
+   - Manual review of 5 random paper trades shows reasoning quality clearly worse than baseline.
+5. **Promote criteria — mark COMPLETE** if all of:
+   - One full 24h paper cycle produces zero new parse errors.
+   - Probability-output distribution and EV-gate pass-rate stay within tolerance.
+   - Manual review of 5 random paper trades shows reasoning quality at least equivalent.
+
+**Acceptance Criteria**
+- One of: (a) `.env` carries `OLLAMA_MODEL=qwen3:8b` with a commit referencing this item ID and at least 24h of paper-mode observation logged, OR (b) the operator consciously re-defers past 2026-Q3 with rationale in this item's Notes section, OR (c) the operator decides the unification is not worth doing (e.g. Mac Studio brings `qwen3:14b` and a different model topology).
+
+**Notes**
+This item is decision-track, not bug-track. It exists because the reasoning behind the deferral matters as much as the deferral itself — a future agent reading the file structure could otherwise see two model strings configured and treat it as an oversight instead of an intentional ordering decision. The operator-confirmed priority on 2026-04-25 was: ship Phase 2 cleanly first; unify second; never bundle.
+
+If `PROFIT-CAL-001`'s calibration-feedback wiring lands before this item moves to `IN_PROGRESS`, the per-lane confidence scaling will detect calibration drift automatically — that strengthens the safety net for this swap and tightens the revert criteria above.
 
 ---
 
