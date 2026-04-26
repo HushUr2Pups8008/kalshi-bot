@@ -240,6 +240,71 @@ async def test_process_candidate_returns_early_when_no_keywords(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_process_candidate_proceeds_when_llm_emits_signal_despite_no_keywords(monkeypatch):
+    """PROFIT-EDGE-001 regression: empty `keywords` list with an LLM-emitted
+    signal (llm_mag != "none") should NOT be rejected as no_keywords.
+
+    The LLM can identify semantic relevance the keyword glossary misses;
+    killing those events at the no_keywords gate is what produced zero paper
+    trades from 2026-04-17 -> 2026-04-26 across 5 LLM-validated real-market
+    events (KXSBUDGETRES x2, KXTRUMPIRAN x2, KXPSL x1).
+    """
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
+    monkeypatch.setattr(_cfg_module.cfg, "min_bet_dollars", 2.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_half_life", 14.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_floor", 0.20)
+    monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
+    bot = _make_bot_stub()
+    news = _make_news()
+    market = _make_market()
+
+    # Mirrors event #3 from the 2026-04-26 investigation: KXTRUMPIRAN-26MAY01,
+    # "Trump dispatching Witkoff..." headline; LLM produced small/yes/+0.068.
+    with patch("main.estimate_probability", new=AsyncMock(return_value=(
+        0.568, 0.85, [], "LLM small/yes signal", "yes", "small", 0.85
+    ))), patch("utils.logger.trade_log.log_analysis_rejected") as reject_mock, \
+         patch("main.kelly_bet", return_value=(0.10, 10.0, 8.0)):
+        await bot._process_candidate(news, market, 0.20)
+
+    # The fix: empty keywords + non-trivial LLM signal must NOT trigger the
+    # no_keywords rejection. Other downstream gates may still kill the
+    # candidate; this test only asserts the no_keywords gate itself.
+    no_kw_calls = [c for c in reject_mock.call_args_list
+                   if c.kwargs.get("reason") == "no_keywords"]
+    assert not no_kw_calls, (
+        "Empty keywords with LLM-emitted signal should not trigger "
+        "no_keywords rejection. Hit calls: " + str(no_kw_calls)
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_candidate_still_rejects_when_neither_signal_source_speaks(monkeypatch):
+    """PROFIT-EDGE-001 regression: with no keywords AND llm_mag == "none"
+    (LLM ran but found no actionable signal), the no_keywords rejection MUST
+    still fire. The fix at main.py:688 must not let through truly-silent
+    events -- it only spares LLM-positive signal, not LLM-neutral signal."""
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    bot = _make_bot_stub()
+    news = _make_news()
+    market = _make_market()
+
+    with patch("main.estimate_probability", new=AsyncMock(return_value=(
+        market.yes_prob, 0.0, [], "no signal", "neutral", "none", 0.95
+    ))), patch("utils.logger.trade_log.log_analysis_rejected") as reject_mock:
+        await bot._process_candidate(news, market, 0.20)
+
+    bot.executor.execute.assert_not_called()
+    reject_mock.assert_called_once_with(
+        reason="no_keywords",
+        ticker=market.ticker,
+        source=news.source,
+        headline=news.headline,
+        match_score=0.20,
+    )
+
+
+@pytest.mark.asyncio
 async def test_process_candidate_skips_stale_news_before_estimation(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     monkeypatch.setattr("main.MAX_NEWS_AGE_SECONDS", 300)
