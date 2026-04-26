@@ -950,7 +950,7 @@ from the prompt text change. No test asserted on prompt content.
 ### Added
 - **Six new RSS sources targeting the bot's active market set** (Tier 1,
   Batch 1 of 3 per the 2026-04-23 source-integration audit in
-  `docs/plans/news_sources_evaluation.md` + ROADMAP Appendix A). All URLs
+  `docs/_archive/studies/news_sources_evaluation.md` + ROADMAP Appendix A). All URLs
   were live-probed before commit (HTTP 200 + current items):
   - **Kyiv Independent** (`kyivindependent.com/news-archive/rss/`,
     feed.title `"The Kyiv Independent"`) — Ukraine coverage; URL discovered
@@ -2176,8 +2176,8 @@ from the prompt text change. No test asserted on prompt content.
 - **Plan archiving convention** (`docs/plans/` NEW) -- non-trivial implementation
   plans archived as Architectural Decision Records. Added rule to both project
   `CLAUDE.md` and global `~/.claude/CLAUDE.md`. First two ADRs archived:
-  `docs/plans/v0.20.0_source_quality_feedback_loop.md` and
-  `docs/plans/v0.21.0_subreddit_discovery_loop.md`.
+  `docs/_archive/plans/v0.20.0_source_quality_feedback_loop.md` and
+  `docs/_archive/plans/v0.21.0_subreddit_discovery_loop.md` (relocated 2026-04-26 — see `docs/_archive/README.md`).
 
 ## [0.20.0] - 2026-04-06
 

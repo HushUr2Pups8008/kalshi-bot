@@ -106,7 +106,7 @@ add/remove/tune, with safety scaffolding ensuring the agent cannot do harm.
 | S4.4 | Regime weight validation against historical outcomes | COMPLETE | Claude | Check that regime weights improve blended calibration vs unweighted blend | Use `windows_archive` data for backtesting | Calibration improvement documented |
 | S4.5a | Section 13 implementation gate | COMPLETE | Shared | Verify all code-correctness criteria in Section 13 by test and static inspection — no runtime required | pytest must pass without weakening assertions; covers criteria 1, 2, 5, 6, 7, 8 | All verifiable Section 13 criteria confirmed; results recorded. Note: most recent comprehensive run was 229 passed (2026-04-20, PROFIT-PERF-001 validation). |
 | S4.5b | Runtime wiring verification | COMPLETE | Shared | Confirm all three lanes produce expected event types under real intake in a 2-hour minimum window | No intake modification; production-intended feed config; no code changes to force events; startup probe events excluded | ≥1 each of `EVIDENCE_INGESTION`, `DOSSIER_UPDATE`, `STRUCTURAL_PRIOR_RECOMPUTE`, `BLEND_DECISION` (with `fast_lane_p` non-null); zero unhandled exceptions; pass/fail verdict recorded in Notes. **PASS (2026-04-23)**: over a 47-hour continuous window (2026-04-21T00:09 → 2026-04-22T23:44 UTC, post-2731d9a structural fix deployed 2026-04-21T01:38 UTC), `logs/trades/archive/2026/04/2026-04-{21,22}.jsonl` contain `EVIDENCE_INGESTION ×46`, `DOSSIER_UPDATE ×46`, `BLEND_DECISION ×49` (fast_lane_p non-null on sampled events), `STRUCTURAL_PRIOR_RECOMPUTE ×20` across 6 distinct dossier markets; first structural event at 2026-04-21T16:52:38 UTC; zero unhandled exceptions in `bot.log`. |
-| S4.5c | Extended validation window | COMPLETE | Shared | Provide statistical basis for Section 13 completeness and calibration criteria; final gate before Phase 4 | 24-hour early-close window (one-time bounded exception, rationale in Notes); production-intended intake; startup probe events excluded; no config changes during window | Section 13 criteria 3, 4, 5, 6 pass against window output; observability completeness review PASS; ≥3 distinct dossier markets observed; signed Section 13 checklist recorded in Notes. **Window opened 2026-04-23T00:28:31 UTC** (commit `4074e13`). **Original plan:** 72h minimum close at ~2026-04-26T00:28:31 UTC. **Revised plan (2026-04-23, operator-approved):** close early at **2026-04-24T00:28:31 UTC** (24h from open). Window overlaps P2.2 (opened 2026-04-22T12:07:35 UTC per `0f91bf7`); P2.2 continues to its full 72h minimum close at **2026-04-25T12:07:35 UTC** independently and is **not** subject to this S4.5c truncation. If P2.2 fails and `all_required` is reverted, a post-revert S4.5c-prime window must be opened from the revert commit. **Early-close rationale (bounded exception, not a general precedent):** (a) criteria 3-5 already PASS per the S4.5b bridge evidence (47h continuous, zero exceptions, 6 distinct dossier markets — exceeds ≥3 threshold, zero-baseline trade-frequency) supplemented by the ongoing S4.5c observation; (b) criterion 6 is structurally vacuously passing per `PROFIT-CAL-001` — the `CALIBRATION_CHECK` emission site does not exist at runtime, so no amount of additional soak time produces the events the 72h window was designed to evaluate; (c) marginal information gain from hours 25-72 in the current zero-trade, zero-resolution regime is ≈ 0; (d) early close unblocks `PROFIT-CAL-001` execution (the pre-live-trading blocker) by ~2 calendar days. **This exception is bound to the specific conditions above**: a future S4.5c-style window in an *active*-calibration or non-zero-trade regime requires the full 72h minimum and the truncation precedent does not apply. **Post-CAL-001 re-validation (S4.5c-prime):** Once the `PROFIT-CAL-001` emission wiring lands (design in `docs/plans/profit_cal_001_calibration_wiring.md`), open a new **S4.5c-prime** window (24-48h) to re-validate Section 13 criteria under an active calibration loop. This is additional rigor above the original plan — the original 72h run would have validated only the inert state; S4.5c-prime validates the fixed state. **Pre-assessment (2026-04-23) against prior-window evidence (2026-04-21 → 2026-04-22):** "Safe to Run in Paper Mode" criterion 3 PASS (47h, zero exceptions), criterion 4 PASS (`BLEND_DECISION ×49`, `DOSSIER_UPDATE ×46`, `EVIDENCE_INGESTION ×46` across 6 distinct markets — already exceeds ≥3 threshold), criterion 5 PASS (zero-baseline rule: 0 paper trades), criterion 6 PASS (vacuous — see `PROFIT-CAL-001` 2026-04-23 Validation Notes: in addition to zero resolutions in window, an investigation confirmed the emission site from `resolve_market` to `log_calibration_check` does not exist at runtime, so criterion 6 is *silently* vacuously satisfied; the wiring gap is a deferred post-window fix and is not a blocker for S4.5c closure). "Not Done Until" red flags CLEAR: `blend_mode` varies (weighted_blend 67.3% / dominant_lane 32.7%); `trade_blocked_reason` populated on all 49 BLEND_DECISION (all `G1_blended_confidence`, consistent with Phase 0 zero-signal verdict). Traceability chain intact (`evidence_ids_contributing` non-null on all 49). Section 8 required-field audit: 12/16 fields 100% non-null; 4/16 (accumulation/structural p/confidence) are 67.3% non-null — deliberately null in dominant_lane mode per S4.2 accepted interpretation. Final close requires: signed Section 13 checklist + re-run observability completeness review against the new window output. **CLOSED 2026-04-23 on aggregate post-fix runtime.** The S4.5c window contained an operator-initiated bot shutdown during pytest infinite-loop debugging (unrelated to the lanes under evaluation); that shutdown accounts for the `STRUCTURAL_PRIOR_RECOMPUTE` gap between 2026-04-22T20:05:01 UTC and window close. Aggregate trusted telemetry across the S4.5b bridge (47.5h continuous) + S4.5c window (~12.8h observed) = **~60h of post-fix runtime** across all four event streams with zero unhandled exceptions — exceeding the original 24h target even excluding the shutdown interval. Per the early-close rationale already on record, marginal information gain from the unshutdown-adjusted remaining hours in the current zero-trade, zero-resolution regime is ≈ 0. **Signed sign-off scaffold:** `[x]` criterion 3 — runtime=59.70h (aggregate post-fix), unhandled exceptions=0 (no Tracebacks, no Exception strings in `bot.log`, `bot.log.2026-04-{21,22,23}`, or `errors.log`); `[x]` criterion 4 — BLEND_DECISION=55, DOSSIER_UPDATE=52, EVIDENCE_INGESTION=52 (aggregate post-fix; S4.5c-window subset: 6 / 6 / 6); `[x]` criterion 5 — trades=0 vs. fast-lane baseline=0 (zero-baseline N/A); `[x]` criterion 6 — CALIBRATION_CHECK events=0, vacuous per `PROFIT-CAL-001` emission-wiring gap; `[x]` red flag — `blend_mode` variance confirmed (aggregate post-fix: weighted_blend 37 / dominant_lane 18 = 67.3% / 32.7%, not pinned); `[x]` red flag — `trade_blocked_reason` populated on all 55 BLEND_DECISION (100%, all `G1_blended_confidence`); `[x]` Section 8 required-field audit — 16/16 fields at 100% non-null per `scripts/observability_completeness_review.py` S4.5c window run (target ≥90%, exceeded); `[x]` observability completeness review PASS against window output (Target met: True); `[x]` ≥ 3 distinct dossier markets observed (6 confirmed via `market_ticker` field, matches S4.5b baseline); signed: Claude, date: 2026-04-23. **Unblocks `PROFIT-CAL-001` emission-wiring work (the pre-live critical-path blocker); S4.5c-prime re-validation per the earlier plan remains required post-CAL-001 before Phase 4 authorization.** |
+| S4.5c | Extended validation window | COMPLETE | Shared | Provide statistical basis for Section 13 completeness and calibration criteria; final gate before Phase 4 | 24-hour early-close window (one-time bounded exception, rationale in Notes); production-intended intake; startup probe events excluded; no config changes during window | Section 13 criteria 3, 4, 5, 6 pass against window output; observability completeness review PASS; ≥3 distinct dossier markets observed; signed Section 13 checklist recorded in Notes. **Window opened 2026-04-23T00:28:31 UTC** (commit `4074e13`). **Original plan:** 72h minimum close at ~2026-04-26T00:28:31 UTC. **Revised plan (2026-04-23, operator-approved):** close early at **2026-04-24T00:28:31 UTC** (24h from open). Window overlaps P2.2 (opened 2026-04-22T12:07:35 UTC per `0f91bf7`); P2.2 continues to its full 72h minimum close at **2026-04-25T12:07:35 UTC** independently and is **not** subject to this S4.5c truncation. If P2.2 fails and `all_required` is reverted, a post-revert S4.5c-prime window must be opened from the revert commit. **Early-close rationale (bounded exception, not a general precedent):** (a) criteria 3-5 already PASS per the S4.5b bridge evidence (47h continuous, zero exceptions, 6 distinct dossier markets — exceeds ≥3 threshold, zero-baseline trade-frequency) supplemented by the ongoing S4.5c observation; (b) criterion 6 is structurally vacuously passing per `PROFIT-CAL-001` — the `CALIBRATION_CHECK` emission site does not exist at runtime, so no amount of additional soak time produces the events the 72h window was designed to evaluate; (c) marginal information gain from hours 25-72 in the current zero-trade, zero-resolution regime is ≈ 0; (d) early close unblocks `PROFIT-CAL-001` execution (the pre-live-trading blocker) by ~2 calendar days. **This exception is bound to the specific conditions above**: a future S4.5c-style window in an *active*-calibration or non-zero-trade regime requires the full 72h minimum and the truncation precedent does not apply. **Post-CAL-001 re-validation (S4.5c-prime):** Once the `PROFIT-CAL-001` emission wiring lands (design in `docs/_archive/studies/profit_cal_001_calibration_wiring.md`), open a new **S4.5c-prime** window (24-48h) to re-validate Section 13 criteria under an active calibration loop. This is additional rigor above the original plan — the original 72h run would have validated only the inert state; S4.5c-prime validates the fixed state. **Pre-assessment (2026-04-23) against prior-window evidence (2026-04-21 → 2026-04-22):** "Safe to Run in Paper Mode" criterion 3 PASS (47h, zero exceptions), criterion 4 PASS (`BLEND_DECISION ×49`, `DOSSIER_UPDATE ×46`, `EVIDENCE_INGESTION ×46` across 6 distinct markets — already exceeds ≥3 threshold), criterion 5 PASS (zero-baseline rule: 0 paper trades), criterion 6 PASS (vacuous — see `PROFIT-CAL-001` 2026-04-23 Validation Notes: in addition to zero resolutions in window, an investigation confirmed the emission site from `resolve_market` to `log_calibration_check` does not exist at runtime, so criterion 6 is *silently* vacuously satisfied; the wiring gap is a deferred post-window fix and is not a blocker for S4.5c closure). "Not Done Until" red flags CLEAR: `blend_mode` varies (weighted_blend 67.3% / dominant_lane 32.7%); `trade_blocked_reason` populated on all 49 BLEND_DECISION (all `G1_blended_confidence`, consistent with Phase 0 zero-signal verdict). Traceability chain intact (`evidence_ids_contributing` non-null on all 49). Section 8 required-field audit: 12/16 fields 100% non-null; 4/16 (accumulation/structural p/confidence) are 67.3% non-null — deliberately null in dominant_lane mode per S4.2 accepted interpretation. Final close requires: signed Section 13 checklist + re-run observability completeness review against the new window output. **CLOSED 2026-04-23 on aggregate post-fix runtime.** The S4.5c window contained an operator-initiated bot shutdown during pytest infinite-loop debugging (unrelated to the lanes under evaluation); that shutdown accounts for the `STRUCTURAL_PRIOR_RECOMPUTE` gap between 2026-04-22T20:05:01 UTC and window close. Aggregate trusted telemetry across the S4.5b bridge (47.5h continuous) + S4.5c window (~12.8h observed) = **~60h of post-fix runtime** across all four event streams with zero unhandled exceptions — exceeding the original 24h target even excluding the shutdown interval. Per the early-close rationale already on record, marginal information gain from the unshutdown-adjusted remaining hours in the current zero-trade, zero-resolution regime is ≈ 0. **Signed sign-off scaffold:** `[x]` criterion 3 — runtime=59.70h (aggregate post-fix), unhandled exceptions=0 (no Tracebacks, no Exception strings in `bot.log`, `bot.log.2026-04-{21,22,23}`, or `errors.log`); `[x]` criterion 4 — BLEND_DECISION=55, DOSSIER_UPDATE=52, EVIDENCE_INGESTION=52 (aggregate post-fix; S4.5c-window subset: 6 / 6 / 6); `[x]` criterion 5 — trades=0 vs. fast-lane baseline=0 (zero-baseline N/A); `[x]` criterion 6 — CALIBRATION_CHECK events=0, vacuous per `PROFIT-CAL-001` emission-wiring gap; `[x]` red flag — `blend_mode` variance confirmed (aggregate post-fix: weighted_blend 37 / dominant_lane 18 = 67.3% / 32.7%, not pinned); `[x]` red flag — `trade_blocked_reason` populated on all 55 BLEND_DECISION (100%, all `G1_blended_confidence`); `[x]` Section 8 required-field audit — 16/16 fields at 100% non-null per `scripts/observability_completeness_review.py` S4.5c window run (target ≥90%, exceeded); `[x]` observability completeness review PASS against window output (Target met: True); `[x]` ≥ 3 distinct dossier markets observed (6 confirmed via `market_ticker` field, matches S4.5b baseline); signed: Claude, date: 2026-04-23. **Unblocks `PROFIT-CAL-001` emission-wiring work (the pre-live critical-path blocker); S4.5c-prime re-validation per the earlier plan remains required post-CAL-001 before Phase 4 authorization.** |
 
 **Dependencies:** All Stage 3 tasks COMPLETE before Stage 4 begins. **S4.5a** is complete on test evidence. **S4.5b** COMPLETE (2026-04-23); structural recompute participation verified post-2731d9a via trade-log evidence. **S4.5c** COMPLETE (2026-04-23) on aggregate post-fix runtime (~60h across the S4.5b bridge + S4.5c window); zero unhandled exceptions; 6 distinct dossier markets; observability completeness review PASS (16/16 required fields at 100%, target ≥90%). Signed sign-off scaffold and the shutdown-accounting rationale are recorded in the S4.5c row Notes. A post-`PROFIT-CAL-001` **S4.5c-prime** window (24-48h) will re-validate Section 13 under an active calibration loop before Phase 4 is authorized. Stage 5 Phases 0–3 may proceed in parallel with S4.5c since they are diagnostics-only.
 
@@ -356,7 +356,7 @@ The literal interpretation will likely block a high fraction of current Trump/Ir
 
 **Purpose:** Validate that edge is real, stable, and sufficient for live consideration. Requires explicit written authorization from Codex before beginning.
 
-**Dependencies:** P3-GATE PASS; explicit written authorization from Codex; S4.5 COMPLETE; `PROFIT-CAL-001` calibration-emission wiring COMPLETE (done 2026-04-24, v0.29.47; see `docs/plans/profit_cal_001_calibration_wiring.md`).
+**Dependencies:** P3-GATE PASS; explicit written authorization from Codex; S4.5 COMPLETE; `PROFIT-CAL-001` calibration-emission wiring COMPLETE (done 2026-04-24, v0.29.47; see `docs/_archive/studies/profit_cal_001_calibration_wiring.md`).
 
 | ID | Task | Status | Owner | Purpose | Constraints | Expected Outcome |
 |----|------|--------|-------|---------|-------------|-----------------|
@@ -397,13 +397,13 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 
 ---
 
-## Appendix A — Post-OT&E News Source Options (investigated 2026-04-22; expanded 2026-04-23)
+## Appendix A — Post-OT&E News Source Options (investigated 2026-04-22; expanded 2026-04-23; integration status updated 2026-04-26)
 
-**Status:** investigation only. No integration until S4.5c COMPLETE and P4-GATE outcome known. Order below is recommended *post-OT&E* integration sequence, smallest-risk-first, each A/B-testable against the paper-mode baseline individually rather than bundled.
+**Status (2026-04-26):** Tiers 1 and 2 are integrated per operator confirmation. Tier 3 remains deferred indefinitely; the watch-list X/Twitter note still applies.
 
 **Constraints considered:** zero/low cost, architecturally reliable, low latency, geopolitical-market relevance, fits existing `feeds/` async-generator pattern (INV-4 preserved).
 
-**Comprehensive evaluation:** a fuller analysis of the current `feeds/` architecture, warts worth fixing pre-expansion, Reddit's degraded-permanent state (see `PROFIT-SOURCE-001`), and expanded source candidates lives in `docs/plans/news_sources_evaluation.md`. This appendix is the short-form reference; the evaluation doc is authoritative for architectural context and sequencing rationale.
+**Historical research:** the original architectural evaluation, `feeds/` warts audit, Reddit-degraded-permanent diagnosis (`PROFIT-SOURCE-001`), and source-candidate analysis live at [`docs/_archive/studies/news_sources_evaluation.md`](_archive/studies/news_sources_evaluation.md) — moved to archive after Tier 1 + Tier 2 integration completed.
 
 ### Tier 1 — Zero cost, production-reliable, drop-in `rss_monitor.py` additions
 
@@ -429,16 +429,18 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 | Institute for the Study of War (ISW) | RSS | daily | Russia/Ukraine analysis; slow cadence, high quality |
 | CSIS, CFR, Brookings, RAND | RSS | days | Analytical depth; treat as context/enrichment, not fast lane |
 | Bellingcat, Liveuamap | RSS / JSON | hours | OSINT investigations; crowd-sourced conflict mapping |
-| Polymarket cross-reference | Public GraphQL / Gamma REST | sub-second poll | Parallel prediction market; price moves can precede news — highest novel-signal leverage of any item in this appendix. **Scope pivot (2026-04-22):** the user has redefined Polymarket as a candidate **second trading venue** (peer to Kalshi), not only a news-signal lane. The venue-integration investigation is the primary design document — see [`docs/plans/polymarket_venue_integration_investigation.md`](plans/polymarket_venue_integration_investigation.md). This appendix row remains valid as the *read-only market-data observer* sub-initiative (Phase 1 of that plan), which is still the right entry point whether or not live trading follows. |
+| Polymarket cross-reference | (see Appendix B) | (see Appendix B) | Superseded by the dual-venue initiative. Polymarket is now scoped as a candidate **second trading venue** rather than a news-signal lane; the read-only observer is Phase 1 of that initiative. See [Appendix B — Polymarket Dual-Venue Integration](#appendix-b--polymarket-dual-venue-integration-long-term-pending). |
 | Metaculus | REST | minutes | Probabilistic forecasts with rationale |
 | Bluesky (AT Protocol) | Public API | near-realtime streaming | Open protocol; growing journalist/newswire user base; covers the "social news" gap without X/ToS issues |
 | Mastodon (ActivityPub) | Public API + WebSocket stream | near-realtime | Journalist community on journa.host and mstdn.social |
 
-### Tier 3 — Consider carefully
+### Tier 3 — Deferred indefinitely (2026-04-26 status)
+
+Operator-confirmed deferral. Revisit only if a concrete signal-volume gap emerges that none of the integrated Tier 1/2 sources can close.
 
 | Source | Access | Latency | Signal notes |
 |---|---|---|---|
-| Telegram channels | Bot API (free) | near-realtime | Conflict-zone reporters often post first on Telegram, especially Ukraine. Russian-language dominant. Per-channel setup cost. |
+| Telegram channels (BreakingNews / ReutersBreaking / ISW_Research) | Bot API (free) | near-realtime | Conflict-zone reporters often post first on Telegram, especially Ukraine. Russian-language dominant. Per-channel setup cost. Lower-risk subset is the bot-accessible public channels rather than generic user-auth Telegram. |
 | ACLED (Armed Conflict Location & Event Data) | Free academic tier | daily | Structured event data; non-commercial license |
 | USGS earthquakes / NOAA / GDACS | Public APIs | minutes | Only relevant if disaster-related Kalshi markets are being traded |
 | Wikipedia Current Events portal | RSS | daily | Human-curated validation/context layer |
@@ -449,14 +451,103 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 - **NewsAPI.org, GNews, Currents, MediaStack, NewsAPI.ai** — all free tiers are 100–2000 req/day and ToS-restricted to "development." Paid tiers land at $50–$500/mo. Not zero-cost for production polling.
 - **Paid aggregators (Benzinga, Bloomberg, Feedly Pro, Inoreader)** — outside the zero-cost criterion.
 
-### Suggested post-OT&E integration order (smallest risk / highest leverage first)
+### Integration history (closed)
 
-1. Government RSS expansion (Tier 1, group 1–3) — weekend-scale work, zero risk, direct primary-source signal.
-2. Google Alerts → RSS per high-specificity market — natural pairing with P3.2.
-3. Polymarket cross-reference — highest novel signal type in the whole list; well-defined API. **See the separate [venue-integration investigation](plans/polymarket_venue_integration_investigation.md) — this item is now Phase 1 of a larger dual-venue question, not just a news-source add.**
-4. Wire service regional expansion (Al Jazeera, France 24, DW, BBC) — breadth.
-5. Bluesky journalist-timeline feed — covers the "social news" gap cleanly; also the recommended replacement for Reddit's firsthand / ground-level content (see `PROFIT-SOURCE-001` and `docs/plans/news_sources_evaluation.md` §7).
-6. ISW / CSIS / CFR RSS — context layer.
-7. GDELT extended endpoints — incremental extension to existing monitor.
+The post-OT&E source-expansion sequence executed roughly in this order; the result is captured in `feeds/` and `config.py`'s active source registry. Operator confirmed Tiers 1 and 2 integrated as of 2026-04-26.
 
-Each addition should be evaluated against a stable paper-mode baseline individually, not bundled, so edge attribution stays clean.
+1. ✅ Government RSS expansion (Tier 1, group 1–3) — primary-source signal.
+2. ✅ Google Alerts → RSS per high-specificity market.
+3. ⏸ Polymarket cross-reference — superseded; now scoped as Appendix B dual-venue initiative, blocked on retail waitlist.
+4. ✅ Wire service regional expansion (Al Jazeera, France 24, DW, BBC).
+5. ✅ Bluesky journalist-timeline feed — replaces Reddit's firsthand content (`PROFIT-SOURCE-001`).
+6. ✅ ISW / CSIS / CFR RSS — context layer.
+7. ✅ GDELT extended endpoints — extension to existing monitor.
+
+Each addition was evaluated against a paper-mode baseline individually so edge attribution stays clean. Future Tier-3 additions (if any) follow the same A/B-per-source rule documented in the archived evaluation.
+
+---
+
+## Appendix B — Polymarket Dual-Venue Integration (long-term pending)
+
+**Status (2026-04-26):** Phase 0 research CLOSED. Phase 1 BLOCKED on retail waitlist (operator at position #1,302,257 as of 2026-04-22).
+
+**Why it lives here:** condensed status + 6-phase plan, retained in ROADMAP because the initiative is *active-but-blocked*, not closed. Full research transcript (regulatory landscape, codebase coupling audit, all gating Q&A with sources) is preserved at [`docs/_archive/studies/polymarket_venue_integration_investigation.md`](_archive/studies/polymarket_venue_integration_investigation.md).
+
+### Decision tree
+
+* **Q1 — programmatic API for US retail?** Yes. `api.polymarket.us`; Ed25519 keypair; 23 REST endpoints + 2 WS. SDK: `polymarket-us` for Python and TypeScript. Rate-limited 60 req/min.
+* **Q2 — same API as Polymarket Global CLOB?** No. Different surface entirely: single-level Ed25519 (vs Global's two-level EIP-712 + HMAC), unified host, slug-based market IDs (vs Global's token IDs), USDC.e collateral. Plan a new `polymarket/` client; do not vendor `py-clob-client`.
+* **Q3 — operator state eligibility?** Colorado is CLEAR of cease-and-desist enforcement and benefits from CFTC federal preemption (per Sen. Matt Ball, 2026-04-09). Sports contracts retain residual state risk; geopolitical contracts (the bot's edge) do not.
+* **Q7 — unauthenticated read-only access?** No. Polymarket US requires Ed25519 auth even for market-data reads. Polymarket Global has anonymous Gamma REST but US IPs are geoblocked at country level.
+* **Active blocker:** retail KYC onboarding is waitlist-gated; operator at position #1,302,257. Phase 1 cannot start until that clears.
+
+### Sequenced execution plan (one phase per branch, no parallel tracks)
+
+| Phase | Branch | Predecessor / entry gate | Scope | Exit gate |
+|---|---|---|---|---|
+| **0** Research | doc-only | none | Answer Q1–Q7 | All Q&A recorded; Q1 = "yes" or **abort** |
+| **1** Read-only observer | `feature/polymarket-market-data-observer` | Operator off waitlist + KYC + Ed25519 keypair generated; `POLYMARKET_US_*` in `.env` | `feeds/polymarket_market_data.py`; authenticated `/v1/ws/markets` WebSocket; cross-venue quote storage; **no orders, no executor changes** | ≥2 weeks of post-merge observation; ≥5% of overlapping market-hours show ≥3¢ cross-venue divergence |
+| **2** Venue abstraction | `refactor/venue-abstraction` | Phase 1 evidence recorded | `trading/venue_client.py` Protocol; `executor.py` refactor; `paper_trades.db venue` column with reversible migration; venue-namespaced ticker tuples; venue-aware blocklist predicate. **No Polymarket code on this branch.** | All tests green; bitwise-identical Kalshi paper-replay outcomes |
+| **3** Polymarket paper client | `feature/polymarket-client` | Phase 2 merged | `polymarket/` peer to `kalshi/`: REST + WS + auth + cross-venue matcher. Paper mode only with hard-coded live-guard. | ≥2 weeks paper EV positive net of modeled fees; cross-venue matcher reliable |
+| **4** Live enable | `feature/polymarket-live-enable` | (a) `PROFIT-CAL-001` resolved (any-venue pre-live blocker; closed 2026-04-24) (b) Phase 3 paper EV positive (c) State eligibility re-confirmed on the day | Smallest possible live-enable diff on a narrow market subset (recommend: fee-free geopolitics only); bounded bankroll cap | Bounded live-window clean; immediate revert on any unexpected fill/settlement/resolution |
+| **5** Multi-outcome support | `feature/polymarket-multi-outcome` | Phase 4 stable ≥1 month live | Extend analysis layer + matcher + executor for 3+ outcome markets; Kelly over categorical distributions | Multi-outcome paper-then-live on a bounded subset |
+
+### Abort triggers (any of these stops the whole initiative)
+
+* Phase 0: Q1 = "no programmatic access for US retail."
+* Phase 1: <5% overlapping markets show meaningful cross-venue divergence after the ≥2-week window.
+* Any phase: state-level geoblock changes operator eligibility.
+* Any phase: CFTC revokes / amends Polymarket US designation.
+* Any phase: a Kalshi-edge bug requires focus — pause this initiative, fix Kalshi, resume.
+
+### Branching rules
+
+Standard: branch off `main`, no stacking, no bundling, preserve execution-criteria gates per [CLAUDE.md](../CLAUDE.md) `/trading` constraint, update `VERSION` + `CHANGELOG.md` in the same commit as any shipped-behavior change.
+
+### Holding-pattern posture (current)
+
+Do not open any Polymarket code branch. Do not start Phase 2 prophylactically — its value depends on Phase 1 divergence data. Continue Kalshi pre-live work. Optionally share the waitlist referral link. When the operator has an active account + KYC + Ed25519 keypair, return to this appendix and open the Phase 1 branch.
+
+---
+
+## Appendix C — Post-Mac-Studio Backlog (deferred to GPU-class inference latency)
+
+**Status:** queued. None of these are pre-go-live requirements; they all depend on consistent sub-5s LLM inference, which the current MacBook + `qwen2.5:7b` setup does not deliver. Mac Studio M4 Max (Phase 1 of the original future-plans doc, now landed) provides the hardware envelope; the items below become viable once latency is in budget.
+
+**Origin and scope-split:** the kalshi-specific items below were originally sketched in [`docs/_archive/studies/future_plans.md`](_archive/studies/future_plans.md) (March 2026 draft, Phases 5–6). The **dynamic-adaptation parts** of that draft — specifically Phase 6's "dynamic keyword weighting" loop — have been **absorbed into the governance agent project** ([`docs/governance/`](governance/)), which by design dynamically manages keyword / source / threshold configuration through LLM-driven `Decision` records. C.3 below remains as a backlog placeholder *only* for the residual signal-analyzer-side weighting question; the broader keyword-management capability is governance's responsibility now. The remaining Appendix-C items (C.1, C.2, C.4, C.5) are static runtime-pipeline restructures that are not in the governance agent's scope. Cross-project content from the original doc (Alpaca equity bot, OpenClaw assistant) is preserved in the archived future_plans.md for reference but is not part of the kalshi-bot roadmap.
+
+### C.1 — Three-stage LLM pipeline (replace single combined prompt)
+
+Replace the single combined LLM call with three smaller stages, each with early-exit:
+
+1. **Relevance filter** (binary: does this news item concern this market at all?)
+2. **Novelty detector** (binary: does it add information vs. already-priced-in?)
+3. **Impact estimator** (direction + magnitude only)
+
+Rationale: each stage is a cheaper, more focused prompt; early exits cut total inference time for the ~75% of items that correctly resolve to `magnitude="none"` on stage 1 or 2. Only practical once per-call latency is low enough that three serial calls still fit the ingestion budget.
+
+### C.2 — Consensus voting
+
+Run 3 evaluations per signal, take majority vote on direction, median magnitude, mean confidence. Stabilizes borderline outputs and makes calibration more honest. Same latency constraint as C.1 (3× inference per evaluation).
+
+### C.3 — Dynamic keyword weighting (Loop B upgrade) — superseded by governance agent
+
+> **Absorbed by the governance agent project.** The original future_plans.md Phase 6 sketch (signal analyzer reads `paper_trades.db:keyword_outcomes` at startup and adjusts each keyword's `strength` multiplier based on historical accuracy) has been replaced by the governance agent's dynamic keyword/source/threshold management capability — see [`docs/governance/`](governance/) and the Phase 1 / Phase 2 plans in [`docs/superpowers/plans/`](superpowers/plans/). The agent emits `Decision` records that propose keyword adjustments based on observed outcomes; this is the mechanism that closes the Loop-B feedback loop.
+>
+> Item retained here only as a placeholder in case a residual *signal-analyzer-side* startup-weighting tweak surfaces post-governance. If governance handles the keyword question end-to-end (likely), this item closes without further work.
+
+### C.4 — Drift-triggered LLM re-analysis (Loop C upgrade)
+
+A `POSITION_DRIFT` event is currently log-only. With fast inference: fetch recent news for the ticker, re-run signal analysis, and if `estimated_prob` has flipped direction by > 0.15, emit `POSITION_REASSESSMENT` and optionally close + reverse. Requires sub-5s inference budget to keep the drift→decision loop under human-supervision cadence.
+
+### C.5 — Loop A threshold tuning
+
+Current thresholds are conservative for CPU latency: `PRICE_MOVE_THRESHOLD_CENTS = 10`, `PRICE_SEARCH_COOLDOWN_SECS = 1800`. With GPU-class inference, lower to ~5 cents / ~600s cooldown so volatile markets hunt news more aggressively.
+
+### Sequencing
+
+1. C.1 → C.2 (LLM pipeline first; consensus voting builds on the staged pipeline).
+2. C.3 is governance-realized (no separate work expected unless a residual signal-analyzer tweak surfaces).
+3. C.4 → C.5 (feedback-loop tuning; both depend on stable post-go-live operation).
+
+The runtime-pipeline items (C.1, C.2, C.4, C.5) share the same precondition: consistent sub-5s inference observed in production for ≥1 week. Sequence after the readiness-gate stack (EDGE-001/002/003) has produced its first paper-trade resolution and the calibration loop has run end-to-end.
