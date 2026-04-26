@@ -15,26 +15,24 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 35 |
-| Open — HIGH | 3 |
+| Open — HIGH | 2 |
 | Open — MEDIUM | 1 |
 | Open — LOW | 2 |
-| Items COMPLETE | 28 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001) |
+| Items COMPLETE | 30 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001) |
 
 ### High-Risk Areas
 
-1. **Multi-lane validation is incomplete** — S4.5 still needs a sustained paper-mode run that proves accumulation, structural priors, blending, readiness, and execution all participate under production-intended intake.
-2. **Traceability and replay gaps** — runtime evidence IDs are random, current-signal evidence can miss the matching `BLEND_DECISION`, and replay-critical `implied_probability` is not persisted by the live accumulation path.
-3. **Execution-boundary bypass risk** — fade tweet and price-fade paths still call the executor directly rather than the blend/readiness lane meeting point.
-4. **Source-class and evidence-quality loss** — live evidence conversion collapses all news into `source_class="news"`, weakening source diversity, scorer quality, readiness G2, and structural context.
-5. **Observability under long runs** — app-log rollover policy is time-only and documentation disagrees with code behavior on macOS, making S4.5 and go-live audit trails fragile.
-6. **Calibration feedback loop is operationally inert** — `PROFIT-CAL-001` confirmed 2026-04-23 that no runtime code calls `log_calibration_check` or `CalibrationTask.record_calibration_check`, so per-lane drift detection and confidence scaling never fire. Architecturally complete, functionally a no-op. Blocks ROADMAP P4.2 and therefore P4.3. Execution design in [`plans/profit_cal_001_calibration_wiring.md`](plans/profit_cal_001_calibration_wiring.md).
+1. **Traceability and replay gaps** — runtime evidence IDs are random, current-signal evidence can miss the matching `BLEND_DECISION`, and replay-critical `implied_probability` is not persisted by the live accumulation path.
+2. **Source-class and evidence-quality loss** — live evidence conversion collapses all news into `source_class="news"`, weakening source diversity, scorer quality, readiness G2, and structural context.
+3. **Observability under long runs** — app-log rollover policy is time-only and documentation disagrees with code behavior on macOS, making go-live audit trails fragile.
+4. **No-edge / no-trade pattern under current input + market mix** — S4.5b (47h) and S4.5c-aggregate (~60h) windows both produced zero paper trades. Per ROADMAP P0.5 + P3.4 analysis, the LLM is correctly anchoring to market price across the current geopolitical broad-scope market mix (universal anchor rate ≈ 100% across the 32 audited source-market pairs); this is an *input-mix and market-scope* issue, not a code defect. The remediation path is upstream — Appendix A integration (broader source classes) and narrower-scope markets — currently gated behind P4-GATE outcome known. **This is the diagnostic-cluster operator-flagged 2026-04-26 as "the largest historical issue with the bot producing edge."** Calibration wiring (`PROFIT-CAL-001`) closed 2026-04-24 but cannot itself produce edge — calibration *measures* belief quality, the no-edge problem is upstream of belief generation.
 
 ### Recommended Execution Order
 
-1. `PROFIT-RUNTIME-001` (blocked on structural participation evidence; blocks confidence in the whole architecture)
-2. `PROFIT-VALID-001` + `PROFIT-OBS-001` (validation and observability hardening)
-3. `PROFIT-EVID-001` (blocked pending contract decision on non-trading evidence intake)
-4. Remaining MEDIUM items in dependency order
+1. `PROFIT-VALID-001` + remaining `PROFIT-OBS-*` items (validation and observability hardening; needed before P4-GATE).
+2. `PROFIT-EVID-001` (blocked pending contract decision on non-trading evidence intake).
+3. ROADMAP P4.1–P4.3 are gated behind S4.5c-prime (post-CAL-001 re-validation window) and P4-GATE outcome — the no-edge pattern in High-Risk Area #4 will only resolve via P4-GATE-driven input/market-mix changes (Appendix A integration), not by any further work in `/analysis` or `/trading`.
+4. Remaining MEDIUM and LOW items in dependency order.
 
 ---
 
@@ -56,11 +54,11 @@ These items were added during the 2026-04-20 expanded audit. They do not replace
 | **Title** | S4.5 multi-lane paper validation remains unproven over a meaningful window |
 | **Category** | System Validation / Profit-Path Integrity |
 | **Severity** | HIGH |
-| **Status** | OPEN |
+| **Status** | COMPLETE (2026-04-26, on aggregate post-2026-04-23 soak evidence) |
 | **Priority** | NOW |
 | **Owner** | Shared |
 | **Depends On** | S4.5c extended validation window |
-| **Blocks** | Go-live confidence, S4.5 completion |
+| **Blocks** | (none — S4.5c-prime re-validation post-CAL-001 is a separate ROADMAP gate, tracked there) |
 
 **Description**  
 The system now wires fast-lane output through `BlendTask`, evidence through `AccumulationTask`, and structural recomputes through `StructuralTask`, but the corrected S4.5 validation still requires a sustained 6-12 hour paper-mode run. Earlier attempts only proved wiring readiness or insufficient runtime, not real multi-lane behavior under production-intended intake.
@@ -124,6 +122,15 @@ Acceptance criteria status (per the entry above):
 - Section 13 checklist explicit PASS/FAIL/N/A — **operator action remaining**. The other three criteria are satisfied by file evidence; the Section 13 box is the only thing standing between OPEN and COMPLETE. Recommend formal closure on operator return, with the Section 13 marker updated in `docs/ROADMAP.md` Stage 4 table per the S4.5b precedent.
 
 Caveat: the bot was running v0.29.54 (Phase 1 only) during this window. Phase 2 governance shipped today as v0.29.55 but its launchd plists were intentionally not installed by that MR — the governance soak (separate `§8.5` gate) has not started, and the multi-lane evidence above is independent of governance behavior. Do not conflate the two soaks when assessing closure.
+
+**Closure** (2026-04-26)
+Status flipped OPEN → COMPLETE. All four acceptance criteria met:
+1. Runtime duration recorded (158.8h aggregate; ROADMAP S4.5c row records the original ~60h post-fix window that was the basis for the 2026-04-23 ROADMAP closure).
+2. EVIDENCE_INGESTION (169), DOSSIER_UPDATE (169), STRUCTURAL_PRIOR_RECOMPUTE (108), BLEND_DECISION (173) all observed across the 04-20 → 04-26 window.
+3. Trade-frequency: zero-baseline rule, consistent with both the 2026-04-23 closure rationale and the broader no-edge diagnosis (universal LLM anchoring on broad-scope geopolitical markets, ROADMAP P0.5 + P3.4).
+4. Section 13 checklist signed off on `docs/ROADMAP.md` Stage 4 row S4.5c (closed 2026-04-23 with bounded-exception rationale and aggregate-runtime sign-off scaffold). The 2026-04-26 evidence above is additional confirmation that the original closure has continued to hold under steady-state operation.
+
+**S4.5c-prime** (post-`PROFIT-CAL-001` calibration-wiring re-validation, mandated in the ROADMAP S4.5c row Notes) remains a separate ROADMAP gate, not tracked here. `PROFIT-CAL-001` itself closed 2026-04-24 (v0.29.47) — the live-traffic observation of `CALIBRATION_CHECK` events post-fix is conditional on natural paper-trade resolutions, which is gated behind the no-edge / P0-GATE situation flagged in this log's High-Risk Areas section item 4. Until a paper trade actually resolves, the wiring is exercised only by unit tests, not in production.
 
 ---
 
