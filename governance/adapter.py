@@ -8,7 +8,8 @@ behind these five method signatures.
 
 from __future__ import annotations
 
-from datetime import timedelta
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -67,16 +68,93 @@ class KalshiGovernanceAdapter:
         self.market_provider = market_provider
 
     def collect_audit_data(self, window: timedelta) -> dict[str, Any]:
-        raise NotImplementedError("Implemented in Task 6")
+        from scripts import (
+            freshness_diagnostics,
+            keyword_feedback,
+            reddit_source_audit,
+            source_market_alignment_audit,
+        )
+        from scripts.flag_outcome_correlation import collect as _foc_collect
+
+        until = datetime.now(timezone.utc)
+        since = until - window
+
+        # alignment requires collecting match_index + analysis_rows first,
+        # then aggregating — source_market_alignment_audit.aggregate does not
+        # accept a path directly; it wraps flag_outcome_correlation.collect.
+        match_index, analysis_rows, _read_stats = _foc_collect(
+            self.trade_log_path, since, until, False, verbose=False,
+        )
+        alignment_result = source_market_alignment_audit.aggregate(
+            match_index, analysis_rows,
+        )
+
+        return {
+            "alignment": alignment_result,
+            "keywords": keyword_feedback.summarize(
+                self.trade_log_path, since, until,
+            ),
+            "reddit": reddit_source_audit.collect(
+                self.trade_log_path, since, until, False,
+            ),
+            "freshness": freshness_diagnostics.summarize(
+                self.trade_log_path, since, until,
+            ),
+        }
 
     def get_active_market_titles(self) -> list[str]:
-        raise NotImplementedError("Implemented in Task 6")
+        if self.market_provider is None:
+            return []
+        return [
+            getattr(m, "title", "")
+            for m in self.market_provider()
+            if getattr(m, "title", "")
+        ]
 
     def get_recent_headline_samples(self, source: str, k: int = 5) -> list[str]:
-        raise NotImplementedError("Implemented in Task 6")
+        if not self.trade_log_path.exists():
+            return []
+        seen: list[str] = []
+        with self.trade_log_path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("source") != source:
+                    continue
+                headline = rec.get("headline")
+                if not headline:
+                    continue
+                seen.append(str(headline))
+        # Return last k, preserving forward order.
+        return seen[-k:]
 
     def get_active_source_count(self) -> int:
-        raise NotImplementedError("Implemented in Task 6")
+        return len(self.get_active_source_list())
 
     def get_active_source_list(self) -> list[str]:
-        raise NotImplementedError("Implemented in Task 6")
+        if not self.trade_log_path.exists():
+            return []
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        counts: dict[str, int] = {}
+        with self.trade_log_path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts = rec.get("ts")
+                if not ts:
+                    continue
+                try:
+                    rec_dt = datetime.fromisoformat(ts)
+                except ValueError:
+                    continue
+                if rec_dt < cutoff:
+                    continue
+                source = rec.get("source")
+                if not source:
+                    continue
+                counts[source] = counts.get(source, 0) + 1
+        return [s for s, _ in sorted(counts.items(), key=lambda kv: -kv[1])]
