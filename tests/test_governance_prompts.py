@@ -78,3 +78,36 @@ def test_render_prompt_returns_system_user_pair_for_disable_source():
 def test_render_prompt_rejects_unknown_action():
     with pytest.raises(ValueError, match="action"):
         render_prompt("set_market_position", {})
+
+
+from pathlib import Path
+
+_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
+
+
+def test_disable_source_prompt_matches_golden():
+    evidence = {
+        "candidate_action": "disable_source",
+        "target": "r/Turkey",
+        "ingestion_events": 408,
+        "fresh_pass_count": 7,
+        "match_count": 0,
+        "anchor_rate": None,
+        "recent_headline_sample": [
+            "Turkey discussion of AKP economic policy",
+            "Istanbul mayoral election analysis",
+            "NATO exercises this week",
+            "Lira exchange rate debate",
+            "Erdogan speech reactions",
+        ],
+        "active_market_titles_top": [
+            "Will Iran agree to a peace deal this month?",
+            "Will Trump pardon X by Y?",
+        ],
+        "active_market_count": 287,
+        "active_source_count": 42,
+        "window_hours": 168,
+    }
+    sys_p, user_p = render_prompt("disable_source", evidence)
+    expected = (_FIXTURE_DIR / "governance_prompt_disable_source.txt").read_text(encoding="utf-8")
+    assert user_p == expected

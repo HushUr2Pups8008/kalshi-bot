@@ -1,0 +1,21 @@
+CANDIDATE ACTION: disable_source
+TARGET: r/Turkey
+
+EVIDENCE (window: last 168h):
+- Ingestion events: 408
+- Fresh-pass count: 7
+- Match count (events that produced a MATCH_DIAGNOSTIC): 0
+- LLM anchor rate (final_probability == market_price): n/a
+
+RECENT HEADLINE SAMPLE (3-5 most recent):
+- Turkey discussion of AKP economic policy
+- Istanbul mayoral election analysis
+- NATO exercises this week
+- Lira exchange rate debate
+- Erdogan speech reactions
+
+CURRENT ACTIVE MARKETS (287 total — top 20):
+- Will Iran agree to a peace deal this month?
+- Will Trump pardon X by Y?
+
+Should this source be disabled? Output JSON per schema.
