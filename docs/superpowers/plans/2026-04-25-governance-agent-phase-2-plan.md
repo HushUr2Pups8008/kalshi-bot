@@ -1295,6 +1295,50 @@ spinning up the real KalshiClient. In production the agent will pass
 a callable that snapshots the bot's in-memory market_cache."
 ```
 
+**Post-implementation note: signature drift from plan (recorded 2026-04-25, commit `f113858`)**
+
+Step 3's embedded `collect_audit_data` body assumed all four `scripts/*` helpers share the signature `(path, since=since, until=until)`. Two of them do not. The shipped implementation in `governance/adapter.py:70-103` deviates accordingly. This note records the deviation so a future agent (Claude, Codex, or otherwise) re-reading this plan does not believe the embedded Step 3 code reflects what was committed.
+
+**What the plan-as-written assumed (Step 3, lines 1199–1210 of this plan):**
+
+```python
+"alignment": source_market_alignment_audit.aggregate(self.trade_log_path, since=since, until=until),
+"keywords":  keyword_feedback.summarize(self.trade_log_path, since=since, until=until),
+"reddit":    reddit_source_audit.collect(self.trade_log_path, since=since, until=until),
+"freshness": freshness_diagnostics.summarize(self.trade_log_path, since=since, until=until),
+```
+
+**What the actual library exposes** (verified 2026-04-25 by `grep '^def ' scripts/{source_market_alignment_audit,flag_outcome_correlation,reddit_source_audit,keyword_feedback,freshness_diagnostics}.py` against tree at `f113858`):
+
+| Function | File:line | Real signature |
+|---|---|---|
+| `source_market_alignment_audit.aggregate` | `scripts/source_market_alignment_audit.py:177` | `aggregate(match_index, analysis_rows) -> tuple[dict[(source, series_ticker), PairStats], int]` — **no path/since/until args; consumes pre-collected match_index + analysis_rows** |
+| `flag_outcome_correlation.collect` | `scripts/flag_outcome_correlation.py:183` | `collect(log_path, since, until, exclude_test, *, verbose) -> tuple[match_index, analysis_rows, read_stats]` |
+| `reddit_source_audit.collect` | `scripts/reddit_source_audit.py:193` | `collect(log_path, since, until, exclude_test)` — `exclude_test` is **positional, no default** |
+| `keyword_feedback.summarize` | `scripts/keyword_feedback.py:234` | `summarize(path, since, until, exclude_test=False)` — matches plan ✅ |
+| `freshness_diagnostics.summarize` | `scripts/freshness_diagnostics.py:160` | `summarize(path, since, until, exclude_test=False, *, progress_tracker=None)` — matches plan ✅ |
+
+**Workaround as shipped** (`governance/adapter.py:70-103`):
+
+1. The adapter's `collect_audit_data()` first imports `flag_outcome_correlation.collect` (under the alias `_foc_collect`) and calls it with `(self.trade_log_path, since, until, False, verbose=False)`. This returns `(match_index, analysis_rows, _read_stats)`.
+2. It then feeds those into `source_market_alignment_audit.aggregate(match_index, analysis_rows)` to populate `data["alignment"]`. The `aggregate()` call **cannot** take a path directly — it is the second stage of a two-stage pipeline whose first stage is `flag_outcome_correlation.collect`.
+3. `reddit_source_audit.collect(...)` is called with `exclude_test=False` as a **positional** fourth argument, since that parameter has no default in the real signature.
+4. `keyword_feedback.summarize` and `freshness_diagnostics.summarize` are called positionally (`since, until` rather than `since=..., until=...`); both are equivalent — neither is keyword-only.
+
+**Impact on downstream tasks: none.**
+
+- The `Candidate` surface (Task 7) and the prompt renderer (Tasks 8–10) consume the **shape** of `data` — the four top-level keys (`alignment`, `keywords`, `reddit`, `freshness`) and the dict shape returned by each helper. None of that shape changed; only the *call mechanics* inside `collect_audit_data` changed.
+- The Protocol (Task 5) is signature-stable: `collect_audit_data(window) -> dict[str, Any]` is unchanged.
+- Adapter audit (§8.5, this plan's verification table at line 4648) still passes: `governance/adapter.py` remains the only `governance/*` file that imports from `scripts/`.
+
+**For future re-execution:** if Task 6 is ever re-implemented from scratch, **do not copy Step 3's embedded code verbatim** — it will fail with `TypeError` on the `aggregate` and `reddit_source_audit.collect` calls. Use the workaround pattern above; verify signatures first with:
+
+```bash
+grep '^def ' scripts/source_market_alignment_audit.py scripts/flag_outcome_correlation.py scripts/reddit_source_audit.py scripts/keyword_feedback.py scripts/freshness_diagnostics.py
+```
+
+The shipped tests in `tests/test_governance_adapter.py` (`test_collect_audit_data_returns_four_named_aggregations` and the three sibling tests) cover the actual call path; if they pass, the workaround is intact.
+
 ---
 
 ## Task 7: `governance/evidence.py` — `select_candidates_for_cadence`
