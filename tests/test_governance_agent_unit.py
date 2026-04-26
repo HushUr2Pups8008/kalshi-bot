@@ -217,3 +217,66 @@ def test_run_cycle_iterates_candidates_and_records_decisions(tmp_path, monkeypat
     assert decision_record["target"] == "r/Turkey"
     assert decision_record["shadow_mode"] is True
     assert decision_record["applied"] is False  # shadow mode never applies
+
+
+def test_run_cycle_does_not_modify_overrides_in_shadow_mode(tmp_path, monkeypatch):
+    """Even with high-confidence applicable decisions, shadow mode must
+    never write `applied` overrides to disk."""
+    from governance.agent import run_cycle
+    from governance.adapter import KalshiGovernanceAdapter
+    from governance.audit import AuditLogger
+    from governance.evidence import Candidate
+    from governance.llm import FakeLLM, canned_response_for_action, prompt_hash
+    from governance.prompts import render_prompt
+    from governance.evidence import compose_evidence_for_candidate
+    from utils.runtime_overrides import OverridesState, atomic_write_state, RuntimeOverridesReader
+
+    overrides_path = tmp_path / "overrides.yaml"
+    initial = OverridesState(
+        version=1,
+        updated_at=datetime(2026, 5, 2, 14, 0, tzinfo=timezone.utc),
+        updated_by="test", mode="shadow", applied_disabled_sources=[],
+    )
+    atomic_write_state(initial, overrides_path)
+
+    cand = Candidate(action="disable_source", target="r/Turkey",
+                     evidence_pointer={"reddit_sub_index": 0})
+    adapter = KalshiGovernanceAdapter(
+        trade_log_path=tmp_path / "trades.jsonl",
+        paper_db_path=tmp_path / "paper.db",
+        market_provider=lambda: [],
+    )
+    (tmp_path / "trades.jsonl").write_text("", encoding="utf-8")
+    fake_audit = {
+        "reddit": {"subs": [{"source": "r/Turkey", "ingestion": 408,
+                              "fresh_passes": 7, "matches": 0,
+                              "classification": "all_stale"}]},
+    }
+    evidence = compose_evidence_for_candidate(cand, fake_audit, adapter)
+    sys_p, user_p = render_prompt("disable_source", evidence)
+    fake = FakeLLM(canned={
+        prompt_hash(sys_p, user_p): canned_response_for_action("disable_source", target="r/Turkey"),
+    })
+    monkeypatch.delenv("GOVERNANCE_DISABLED", raising=False)
+    # AuditLogger uses keyword-only log_dir per Task 17 drift note in plan.
+    logger = AuditLogger(log_dir=tmp_path / "logs" / "governance")
+
+    run_cycle(
+        cadence="fast",
+        loaded_state=load_state(overrides_path=overrides_path),
+        adapter=adapter,
+        llm=fake,
+        audit_logger=logger,
+        overrides_path=overrides_path,
+        candidate_override=[cand],
+        audit_data_override=fake_audit,
+    )
+
+    # Reload overrides — applied list must still be empty.
+    # snapshot is a method on RuntimeOverridesReader, not an attribute
+    # (Task 16 drift note in plan).
+    after = RuntimeOverridesReader(path=overrides_path)
+    after.reload()
+    assert after.snapshot().applied_disabled_sources == [], (
+        "Shadow mode wrote an applied override — this is the load-bearing safety bug"
+    )

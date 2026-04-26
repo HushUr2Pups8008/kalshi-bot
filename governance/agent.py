@@ -232,6 +232,14 @@ def run_cycle(
             safety_checks_passed=safety_checks,
         ))
 
+        # Phase 3 will gate the following on applied=True:
+        # new_state = state.with_applied_added([d.to_disabled_source() for d in applied_decisions])
+        # atomic_write_state(new_state, overrides_path)
+        # Phase 2: load-bearing safety property is `applied` is False everywhere
+        # in shadow mode (mode != "real" or kill_switch_readonly), so this
+        # branch never fires. The Task 19 regression test in
+        # tests/test_governance_agent_unit.py guards that invariant.
+
     duration_sec = (datetime.now(timezone.utc) - cycle_start).total_seconds()
     audit_logger.append({
         "type": "GOVERNANCE_CYCLE_END",
