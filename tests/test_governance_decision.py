@@ -7,6 +7,12 @@ from datetime import datetime, timezone
 import pytest
 
 from governance.decision import Decision, PredictedEffect, VALID_ACTIONS, VALID_CADENCES
+from utils.runtime_overrides import (
+    DisabledSource,
+    DisabledKeyword,
+    ThresholdOverride,
+    PredictedEffect as OverridePredictedEffect,
+)
 
 
 _NOW = datetime(2026, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
@@ -182,14 +188,6 @@ def test_decision_rejects_target_empty_for_action_decisions():
         _ok_decision(action="disable_source", target="")
 
 
-from utils.runtime_overrides import (
-    DisabledSource,
-    DisabledKeyword,
-    ThresholdOverride,
-    PredictedEffect as OverridePredictedEffect,
-)
-
-
 def test_to_audit_record_emits_full_spec_shape():
     d = _ok_decision()
     record = d.to_audit_record(applied=True, shadow_mode=False, safety_checks_passed={
@@ -245,6 +243,15 @@ def test_to_disabled_keyword_for_disable_keyword_action():
     assert isinstance(dk, DisabledKeyword)
     assert dk.keyword == "ceasefire"
     assert dk.decision_id == "gd_2026-05-02_0042"
+    # Confirm the dual-class bridge: predicted_effect is the runtime-overrides
+    # type, NOT the agent-internal governance.decision.PredictedEffect.
+    assert isinstance(dk.predicted_effect, OverridePredictedEffect)
+
+
+def test_to_disabled_keyword_rejects_other_actions():
+    d = _ok_decision(action="disable_source", target="r/X")
+    with pytest.raises(ValueError, match="disable_keyword"):
+        d.to_disabled_keyword()
 
 
 def test_to_threshold_override_for_tune_threshold_action():

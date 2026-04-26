@@ -166,7 +166,11 @@ class Decision:
             raise ValueError(
                 f"to_disabled_source called on action={self.action!r}; expected disable_source"
             )
-        assert self.predicted_effect is not None  # validated in __post_init__
+        if self.predicted_effect is None:
+            raise ValueError(
+                "predicted_effect must not be None for an action decision; "
+                "this should have been caught by Decision.__post_init__"
+            )
         return DisabledSource(
             source=self.target,
             reason=self.reasoning,
@@ -190,7 +194,11 @@ class Decision:
             raise ValueError(
                 f"to_disabled_keyword called on action={self.action!r}; expected disable_keyword"
             )
-        assert self.predicted_effect is not None
+        if self.predicted_effect is None:
+            raise ValueError(
+                "predicted_effect must not be None for an action decision; "
+                "this should have been caught by Decision.__post_init__"
+            )
         return DisabledKeyword(
             keyword=self.target,
             reason=self.reasoning,
@@ -215,7 +223,11 @@ class Decision:
             raise ValueError(
                 f"to_threshold_override called on action={self.action!r}; expected tune_threshold"
             )
-        assert self.predicted_effect is not None
+        if self.predicted_effect is None:
+            raise ValueError(
+                "predicted_effect must not be None for an action decision; "
+                "this should have been caught by Decision.__post_init__"
+            )
         if "after" not in self.proposed_change:
             raise ValueError("tune_threshold decisions must have proposed_change.after")
         return ThresholdOverride(
