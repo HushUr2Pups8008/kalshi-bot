@@ -3151,6 +3151,51 @@ git add governance/agent.py governance/__main__.py tests/test_governance_agent_u
 git commit -m "feat(governance): agent skeleton + ID generators + load_state (Phase 2 Task 16)"
 ```
 
+**Post-implementation note: signature drift from plan (recorded 2026-04-25, same commit as Task 16)**
+
+Step 3's embedded `load_state()` body assumed two APIs that do not exist as written. Recording here so a future agent (Claude, Codex, or otherwise) re-reading this plan does not believe the embedded Step 3 code reflects what was committed.
+
+**What the plan-as-written assumed:**
+
+```python
+ks = KillSwitch.from_env()
+if ks.disabled: ...
+# ...
+return AgentLoadedState(
+    reader=reader,
+    state=reader.snapshot,         # attribute access
+    mode=reader.snapshot.mode,     # attribute-of-attribute access
+    ...
+    kill_switch_readonly=ks.readonly,
+)
+```
+
+**What the actual library exposes** (verified 2026-04-25):
+
+| Name | File:line | Real API |
+|---|---|---|
+| `KillSwitch` | `governance/safety.py:59` | Plain class with no factory. Construct via `KillSwitch()` (zero-arg). Status is checked via instance methods `is_disabled()` and `is_readonly()` — no `disabled` / `readonly` attributes. |
+| `RuntimeOverridesReader.snapshot` | `utils/runtime_overrides.py:518` | **Method**, not property. `reader.snapshot()` returns the current `OverridesState`; `reader.snapshot` (no call) returns the bound method. |
+
+**Workaround as shipped** (`governance/agent.py` `load_state()`):
+
+1. `ks = KillSwitch()` — drop the non-existent `from_env()` factory.
+2. `ks.is_disabled()` and `ks.is_readonly()` — call the methods rather than read attributes.
+3. Capture `state_now = reader.snapshot()` once (single method invocation), then build `AgentLoadedState(state=state_now, mode=state_now.mode, ...)`. Avoids two method calls and removes the bound-method-stored-as-attribute trap.
+
+**Impact on downstream tasks: none.**
+- `AgentLoadedState`'s public surface (the fields the tests read: `mode`, `kill_switch_disabled`, `kill_switch_readonly`, `reader`) is unchanged.
+- Tasks 17, 18, 19's references to the loaded state read these public fields, not the internal call mechanics.
+- The five Phase 1 dependencies (`AuditLogger`, `KillSwitch`, `SafetyConfig`, `OverridesState`, `RuntimeOverridesReader`) are all imported and used as expected.
+
+**For future re-execution:** if Task 16 is ever re-implemented from scratch, **do not copy Step 3's embedded code verbatim** — both `KillSwitch.from_env()` and `reader.snapshot.mode` will fail (`AttributeError` on the first; `AttributeError: 'function' object has no attribute 'mode'` on the second). Use the workaround pattern above; verify APIs first with:
+
+```bash
+grep -n "def is_disabled\|def is_readonly\|def from_env\|def snapshot\|@property" governance/safety.py utils/runtime_overrides.py
+```
+
+The shipped tests in `tests/test_governance_agent_unit.py` (6 tests, plan said 5; readonly test is the 6th) cover the actual call path — if they pass, the workaround is intact.
+
 ---
 
 ## Task 17: `governance/agent.py` — `run_cycle` core (no LLM yet)
