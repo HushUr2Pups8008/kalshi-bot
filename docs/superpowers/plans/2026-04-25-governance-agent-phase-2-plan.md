@@ -1295,6 +1295,86 @@ spinning up the real KalshiClient. In production the agent will pass
 a callable that snapshots the bot's in-memory market_cache."
 ```
 
+**Post-implementation note: signature drift from plan (recorded 2026-04-25, commit `f113858`)**
+
+Step 3's embedded `collect_audit_data` body assumed all four `scripts/*` helpers share the signature `(path, since=since, until=until)`. Two of them do not. The shipped implementation in `governance/adapter.py:70-103` deviates accordingly. This note records the deviation so a future agent (Claude, Codex, or otherwise) re-reading this plan does not believe the embedded Step 3 code reflects what was committed.
+
+**What the plan-as-written assumed (Step 3, lines 1199–1210 of this plan):**
+
+```python
+"alignment": source_market_alignment_audit.aggregate(self.trade_log_path, since=since, until=until),
+"keywords":  keyword_feedback.summarize(self.trade_log_path, since=since, until=until),
+"reddit":    reddit_source_audit.collect(self.trade_log_path, since=since, until=until),
+"freshness": freshness_diagnostics.summarize(self.trade_log_path, since=since, until=until),
+```
+
+**What the actual library exposes** (verified 2026-04-25 by `grep '^def ' scripts/{source_market_alignment_audit,flag_outcome_correlation,reddit_source_audit,keyword_feedback,freshness_diagnostics}.py` against tree at `f113858`):
+
+| Function | File:line | Real signature |
+|---|---|---|
+| `source_market_alignment_audit.aggregate` | `scripts/source_market_alignment_audit.py:177` | `aggregate(match_index, analysis_rows) -> tuple[dict[(source, series_ticker), PairStats], int]` — **no path/since/until args; consumes pre-collected match_index + analysis_rows** |
+| `flag_outcome_correlation.collect` | `scripts/flag_outcome_correlation.py:183` | `collect(log_path, since, until, exclude_test, *, verbose) -> tuple[match_index, analysis_rows, read_stats]` |
+| `reddit_source_audit.collect` | `scripts/reddit_source_audit.py:193` | `collect(log_path, since, until, exclude_test)` — `exclude_test` is **positional, no default** |
+| `keyword_feedback.summarize` | `scripts/keyword_feedback.py:234` | `summarize(path, since, until, exclude_test=False)` — matches plan ✅ |
+| `freshness_diagnostics.summarize` | `scripts/freshness_diagnostics.py:160` | `summarize(path, since, until, exclude_test=False, *, progress_tracker=None)` — matches plan ✅ |
+
+**Workaround as shipped** (`governance/adapter.py:70-103`):
+
+1. The adapter's `collect_audit_data()` first imports `flag_outcome_correlation.collect` (under the alias `_foc_collect`) and calls it with `(self.trade_log_path, since, until, False, verbose=False)`. This returns `(match_index, analysis_rows, _read_stats)`.
+2. It then feeds those into `source_market_alignment_audit.aggregate(match_index, analysis_rows)` to populate `data["alignment"]`. The `aggregate()` call **cannot** take a path directly — it is the second stage of a two-stage pipeline whose first stage is `flag_outcome_correlation.collect`.
+3. `reddit_source_audit.collect(...)` is called with `exclude_test=False` as a **positional** fourth argument, since that parameter has no default in the real signature.
+4. `keyword_feedback.summarize` and `freshness_diagnostics.summarize` are called positionally (`since, until` rather than `since=..., until=...`); both are equivalent — neither is keyword-only.
+
+**Impact on downstream tasks: none.**
+
+- The `Candidate` surface (Task 7) and the prompt renderer (Tasks 8–10) consume the **shape** of `data` — the four top-level keys (`alignment`, `keywords`, `reddit`, `freshness`) and the dict shape returned by each helper. None of that shape changed; only the *call mechanics* inside `collect_audit_data` changed.
+- The Protocol (Task 5) is signature-stable: `collect_audit_data(window) -> dict[str, Any]` is unchanged.
+- Adapter audit (§8.5, this plan's verification table at line 4648) still passes: `governance/adapter.py` remains the only `governance/*` file that imports from `scripts/`.
+
+**For future re-execution:** if Task 6 is ever re-implemented from scratch, **do not copy Step 3's embedded code verbatim** — it will fail with `TypeError` on the `aggregate` and `reddit_source_audit.collect` calls. Use the workaround pattern above; verify signatures first with:
+
+```bash
+grep '^def ' scripts/source_market_alignment_audit.py scripts/flag_outcome_correlation.py scripts/reddit_source_audit.py scripts/keyword_feedback.py scripts/freshness_diagnostics.py
+```
+
+The shipped tests in `tests/test_governance_adapter.py` (`test_collect_audit_data_returns_four_named_aggregations` and the three sibling tests) cover the actual call path; if they pass, the workaround is intact.
+
+**Task 6.5 follow-up (recorded 2026-04-25, surfaced during Task 20 execution):**
+
+The original Task 6 fix above resolved the *signature* drift but missed a deeper *shape* drift. The `scripts/*` helpers return dataclass-keyed dicts and tuples — not the `{"pairs": [...], "subs": [...], "candidate_phrases": [...]}` shape the rest of the agent (`governance/evidence.py`, `governance/prompts.py`) reads. Tests passed during Tasks 7–19 only because every test injected a synthetic `audit_data_override` with the *correct* shape; the real production path through `main()` was never exercised by a unit test.
+
+Discovered when Task 20's `test_main_with_dry_run_exits_zero` test crashed with `AttributeError: 'tuple' object has no attribute 'get'` at `governance/evidence.py:46` — `audit.get("reddit", {}).get("subs", [])` — because `data["reddit"]` was a tuple `(stats_dict, read_stats)` from `reddit_source_audit.collect()`, not a dict.
+
+**The fix:** four normalization helpers (`_normalize_alignment`, `_normalize_reddit`, `_normalize_keywords`, `_normalize_freshness`) at the bottom of `governance/adapter.py` translate each script's natural output into the documented shape. `collect_audit_data` now calls those helpers instead of dropping the raw outputs into the dict.
+
+**Resulting shape (load-bearing — this is the contract evidence.py / prompts.py depend on):**
+
+```python
+{
+  "alignment": {
+    "pairs": [{"source": str, "series_ticker": str, "n": int, "anchor": int, "anchor_rate": float | None}],
+    "overall_anchor_rate": float,
+    "overall_n": int,
+  },
+  "reddit": {
+    "subs": [{"source": str, "ingestion": int, "fresh_passes": int, "matches": int, "classification": str}],
+  },
+  "keywords": {
+    "no_keyword_misses": int,
+    "candidate_phrases": [{"phrase": str, "count": int, "category": str}],
+  },
+  "freshness": {
+    "sources": {<source_name>: {"observed_records": int, "stale_rate": float, "interpretation": str}},
+  },
+}
+```
+
+**Two new contract tests** in `tests/test_governance_adapter.py` guard this:
+- `test_collect_audit_data_normalizes_to_dict_shape_consumed_by_evidence` — empty trade log produces empty-but-correctly-shaped dicts (every top-level key isinstance(dict, _) — never tuple).
+- `test_collect_audit_data_shape_lets_select_candidates_run_without_error` — end-to-end: `select_candidates_for_cadence(adapter.collect_audit_data(...), cadence="fast")` returns `[]` on an empty log without crashing.
+
+**Lesson for future plan execution:** "tests pass" is not the same as "production path works" when every test substitutes a synthetic version of the data the production path produces. When introducing new bot-agnostic seams (the audit-data shape here), include at least one test that exercises the real producer-to-consumer chain. The Task 22 integration test was supposed to be that test; landing it earlier (or splitting Task 6 into "raw collection" + "shape normalization" steps) would have caught this before Task 20.
+
 ---
 
 ## Task 7: `governance/evidence.py` — `select_candidates_for_cadence`
@@ -3107,6 +3187,51 @@ git add governance/agent.py governance/__main__.py tests/test_governance_agent_u
 git commit -m "feat(governance): agent skeleton + ID generators + load_state (Phase 2 Task 16)"
 ```
 
+**Post-implementation note: signature drift from plan (recorded 2026-04-25, same commit as Task 16)**
+
+Step 3's embedded `load_state()` body assumed two APIs that do not exist as written. Recording here so a future agent (Claude, Codex, or otherwise) re-reading this plan does not believe the embedded Step 3 code reflects what was committed.
+
+**What the plan-as-written assumed:**
+
+```python
+ks = KillSwitch.from_env()
+if ks.disabled: ...
+# ...
+return AgentLoadedState(
+    reader=reader,
+    state=reader.snapshot,         # attribute access
+    mode=reader.snapshot.mode,     # attribute-of-attribute access
+    ...
+    kill_switch_readonly=ks.readonly,
+)
+```
+
+**What the actual library exposes** (verified 2026-04-25):
+
+| Name | File:line | Real API |
+|---|---|---|
+| `KillSwitch` | `governance/safety.py:59` | Plain class with no factory. Construct via `KillSwitch()` (zero-arg). Status is checked via instance methods `is_disabled()` and `is_readonly()` — no `disabled` / `readonly` attributes. |
+| `RuntimeOverridesReader.snapshot` | `utils/runtime_overrides.py:518` | **Method**, not property. `reader.snapshot()` returns the current `OverridesState`; `reader.snapshot` (no call) returns the bound method. |
+
+**Workaround as shipped** (`governance/agent.py` `load_state()`):
+
+1. `ks = KillSwitch()` — drop the non-existent `from_env()` factory.
+2. `ks.is_disabled()` and `ks.is_readonly()` — call the methods rather than read attributes.
+3. Capture `state_now = reader.snapshot()` once (single method invocation), then build `AgentLoadedState(state=state_now, mode=state_now.mode, ...)`. Avoids two method calls and removes the bound-method-stored-as-attribute trap.
+
+**Impact on downstream tasks: none.**
+- `AgentLoadedState`'s public surface (the fields the tests read: `mode`, `kill_switch_disabled`, `kill_switch_readonly`, `reader`) is unchanged.
+- Tasks 17, 18, 19's references to the loaded state read these public fields, not the internal call mechanics.
+- The five Phase 1 dependencies (`AuditLogger`, `KillSwitch`, `SafetyConfig`, `OverridesState`, `RuntimeOverridesReader`) are all imported and used as expected.
+
+**For future re-execution:** if Task 16 is ever re-implemented from scratch, **do not copy Step 3's embedded code verbatim** — both `KillSwitch.from_env()` and `reader.snapshot.mode` will fail (`AttributeError` on the first; `AttributeError: 'function' object has no attribute 'mode'` on the second). Use the workaround pattern above; verify APIs first with:
+
+```bash
+grep -n "def is_disabled\|def is_readonly\|def from_env\|def snapshot\|@property" governance/safety.py utils/runtime_overrides.py
+```
+
+The shipped tests in `tests/test_governance_agent_unit.py` (6 tests, plan said 5; readonly test is the 6th) cover the actual call path — if they pass, the workaround is intact.
+
 ---
 
 ## Task 17: `governance/agent.py` — `run_cycle` core (no LLM yet)
@@ -3259,6 +3384,39 @@ def _cadence_window(cadence: str):
 git add governance/agent.py tests/test_governance_agent_unit.py
 git commit -m "feat(governance): run_cycle skeleton + start/end audit events (Phase 2 Task 17)"
 ```
+
+**Post-implementation note: signature drift from plan (recorded 2026-04-25)**
+
+Step 1's embedded test code and Step 2's `run_cycle` body both referenced `AuditLogger` APIs that do not match what was committed in Phase 1. Recording so a future agent does not believe the embedded code reflects what shipped.
+
+**What the plan-as-written assumed:**
+
+```python
+logger = AuditLogger(decisions_dir)            # positional
+audit_logger.write({"type": "GOVERNANCE_CYCLE_START", ...})   # method name
+```
+
+The plan's "Type / signature consistency" table at line 4670 explicitly says: *"AuditLogger.write({...}) calls everywhere take a flat dict; matches the Phase 1 interface."* That claim is wrong — Phase 1 shipped `.append()`, not `.write()`.
+
+**What the actual library exposes** (verified 2026-04-25 against `governance/audit.py`):
+
+| Member | File:line | Real API |
+|---|---|---|
+| `AuditLogger.__init__` | `governance/audit.py:41-48` | `AuditLogger(*, log_dir: Path, basename: str = "decisions.jsonl", now: Callable = ..., compress_after_days: int = 7)` — **`log_dir` is keyword-only**; positional construction (`AuditLogger(some_path)`) raises `TypeError`. |
+| `AuditLogger.append` | `governance/audit.py:56` | `def append(self, record: dict[str, Any]) -> None`. The plan calls this `.write` everywhere (Tasks 17–22, plus the verification table). The real method is `.append`. |
+
+**Workaround as shipped:**
+
+1. **Tests:** every `AuditLogger(decisions_dir)` becomes `AuditLogger(log_dir=decisions_dir)`.
+2. **`run_cycle`:** every `audit_logger.write(...)` becomes `audit_logger.append(...)`. Two call sites in this task; Tasks 18 and 22 will hit additional ones.
+
+**Impact on downstream tasks: minor mechanical adjustment, no design impact.**
+
+- The audit-log file format and rotation behavior are unchanged — only the method name and constructor calling convention differ.
+- Tasks 18 and 22 will need the same `.write` → `.append` substitution and the same keyword-only construction. The shape of records written (flat dicts with a `"type"` key) matches what the plan assumed.
+- The plan's verification table (`§"Type / signature consistency"` line 4670) remains technically wrong about the method name; this note is the corrective.
+
+**For future re-execution:** before re-implementing any task in this plan that references `AuditLogger`, run `grep -n "def __init__\|def append\|def write" governance/audit.py` to confirm the API. If the plan and code disagree, follow the code.
 
 ---
 
@@ -3496,6 +3654,30 @@ applied=False on every decision regardless of confidence; the safety
 fields in the audit record still reflect the would-have-applied state
 so the trust dataset is meaningful."
 ```
+
+**Post-implementation note: signature drift from plan (recorded 2026-04-25)**
+
+Two drifts in Step 2's embedded code; one already covered by the Task 17 note, one new.
+
+**Already covered by Task 17's note (still applies here):**
+- `audit_logger.write({...})` → use `audit_logger.append({...})`. Three call sites in this task (parse-error, validation-error, decision audit record).
+- `AuditLogger(decisions_dir)` in the test → `AuditLogger(log_dir=decisions_dir)`.
+
+**New drift this task:**
+
+| Plan code | Real API |
+|---|---|
+| `safety = safety_config or SafetyConfig.from_env()` | `SafetyConfig.from_env()` does not exist. Use `SafetyConfig()` (zero-arg constructor with built-in defaults at `governance/safety.py:23-28`). The dataclass already has appropriate defaults for Phase 2 (`confidence_threshold=0.7`, `max_changes_per_run=10`, etc.). |
+
+If env-var-driven configuration is later wanted, that's a Phase 3+ extension — adding a real `SafetyConfig.from_env()` classmethod that reads `GOVERNANCE_CONFIDENCE_THRESHOLD`, `GOVERNANCE_MAX_CHANGES_PER_RUN`, etc. Not in scope for Phase 2.
+
+**Workaround as shipped** (`governance/agent.py` `run_cycle()`):
+
+```python
+safety = safety_config or SafetyConfig()  # use dataclass defaults
+```
+
+**For future re-execution:** if Task 18 is ever re-implemented, do NOT call `SafetyConfig.from_env()`. The `_evaluate_safety` helper consumes `safety.confidence_threshold` and `safety.max_changes_per_run` — both fields exist on the bare-defaults `SafetyConfig()` instance, so behavior is unchanged.
 
 ---
 

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kalshi.governance.deep</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/Jake/vscode/kalshi_bot/.venv/bin/python</string>
+        <string>-m</string>
+        <string>governance</string>
+        <string>--cadence</string>
+        <string>deep</string>
+        <string>--llm</string>
+        <string>qwen</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/Jake/vscode/kalshi_bot</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <!-- Hardware-conditional. Currently set for MacBook (18GB).
+             When migrating to Mac Studio (post-2026-04-29), change to
+             qwen3:14b. The launchd plist is the single source of truth
+             for which model the governance agent talks to. -->
+        <key>GOVERNANCE_LLM_MODEL</key>
+        <string>qwen3:8b</string>
+    </dict>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/Jake/vscode/kalshi_bot/logs/governance/cycle.deep.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/Jake/vscode/kalshi_bot/logs/governance/cycle.deep.stderr.log</string>
+</dict>
+</plist>
