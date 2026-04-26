@@ -1070,6 +1070,16 @@ The 2026-04-26 stack of fixes (EDGE-001 + EDGE-002 + EDGE-003) collectively addr
 - *PROFIT-EDGE-002* (closed 2026-04-26, v0.29.57) — second link; this entry depends directly on the categorical priors EDGE-002 added (without them, regime_confidence is too low for any G1 threshold short of zero to clear).
 - *Governance agent Phase 2 (v0.29.55)* — finally receives candidate evidence with non-trivial fast_lane_p AND non-trivial scaled_confidence AND no upstream rejection, post-EDGE-003.
 
+**Follow-on simulation harness** (2026-04-26)
+
+The G1/G4 calibration analyses and the 5-LLM-positive-event readiness/executor walkthroughs that produced this entry have been captured as permanent operational simulations in [`scripts/simulations/`](../../scripts/simulations/) so future code changes can re-validate the calibration before deploying. Available simulations:
+
+* [`scripts/simulations/threshold_calibration.py`](../../scripts/simulations/threshold_calibration.py) — G4 priors audit + G1 production scaled_confidence distribution.
+* [`scripts/simulations/readiness_gate_events.py`](../../scripts/simulations/readiness_gate_events.py) — readiness gate end-to-end against the 5 canonical EDGE-001 events.
+* [`scripts/simulations/executor_validate.py`](../../scripts/simulations/executor_validate.py) — executor `_validate()` (E1–E12) against the same 5 events, in independent + sequential passes.
+
+Smoke tests in [`tests/test_simulations_smoke.py`](../../tests/test_simulations_smoke.py) (13 cases) keep the harnesses themselves green under code changes. The plan for the remaining seven pipeline-stage simulations (match-score audit, BlendTask integration, paper-trade roundtrip, trading-queue handoff, governance-fast-cycle, resolution+calibration, dossier-creation) is in [`docs/superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md`](superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md). Each remaining simulation is scoped to its own task with file/test deliverables and acceptance criteria.
+
 ---
 
 ### MAC-ASYNC-001

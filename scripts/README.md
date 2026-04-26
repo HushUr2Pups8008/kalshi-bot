@@ -67,3 +67,22 @@ state.
 | `ollama_test_harness.py` | Standalone harness for validating the Ollama OpenAI-compatible path. |
 | `regime_weight_validation.py` | S4.4 — Regime weight validation against historical outcomes. |
 | `structured_log_latency_benchmark.py` | Measure durable structured-log append latency. |
+
+## Behavioural simulations (read-only)
+
+End-to-end harnesses that exercise specific pipeline stages against
+production code paths and curated event fixtures. Read-only — never
+mutate `paper_trades.db`, `evidence_store.db`, or the trade-log archive.
+Safe to run while the bot is active.
+
+| Script | Pipeline stage |
+|---|---|
+| `simulations/threshold_calibration.py` | Readiness-gate G4 + G1 thresholds vs. categorical priors and production `BLEND_DECISION` distribution. |
+| `simulations/readiness_gate_events.py` | Readiness gate end-to-end against the 5 canonical LLM-positive events from the PROFIT-EDGE-001 investigation. |
+| `simulations/executor_validate.py` | Executor `_validate()` (E1–E12) against the same 5 canonical events, in independent + sequential passes. |
+
+See [`scripts/simulations/README.md`](simulations/README.md) for detailed
+usage. Smoke tests in [`tests/test_simulations_smoke.py`](../tests/test_simulations_smoke.py)
+keep the harnesses themselves green under code changes. The plan for
+remaining pipeline-stage simulations is in
+[`docs/superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md`](../docs/superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md).
