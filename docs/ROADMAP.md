@@ -514,7 +514,7 @@ Do not open any Polymarket code branch. Do not start Phase 2 prophylactically �
 
 **Status:** queued. None of these are pre-go-live requirements; they all depend on consistent sub-5s LLM inference, which the current MacBook + `qwen2.5:7b` setup does not deliver. Mac Studio M4 Max (Phase 1 of the original future-plans doc, now landed) provides the hardware envelope; the items below become viable once latency is in budget.
 
-Originally scoped in `docs/_archive/studies/future_plans.md` (March 2026 draft) — kalshi-bot-relevant Phases 5 and 6 of that document have been folded into this appendix; the cross-project content (Alpaca equity bot, OpenClaw assistant) is preserved in [`docs/_archive/studies/future_plans.md`](_archive/studies/future_plans.md) but is not part of the kalshi-bot roadmap.
+**Origin and scope-split:** the kalshi-specific items below were originally sketched in [`docs/_archive/studies/future_plans.md`](_archive/studies/future_plans.md) (March 2026 draft, Phases 5–6). The **dynamic-adaptation parts** of that draft — specifically Phase 6's "dynamic keyword weighting" loop — have been **absorbed into the governance agent project** ([`docs/governance/`](governance/)), which by design dynamically manages keyword / source / threshold configuration through LLM-driven `Decision` records. C.3 below remains as a backlog placeholder *only* for the residual signal-analyzer-side weighting question; the broader keyword-management capability is governance's responsibility now. The remaining Appendix-C items (C.1, C.2, C.4, C.5) are static runtime-pipeline restructures that are not in the governance agent's scope. Cross-project content from the original doc (Alpaca equity bot, OpenClaw assistant) is preserved in the archived future_plans.md for reference but is not part of the kalshi-bot roadmap.
 
 ### C.1 — Three-stage LLM pipeline (replace single combined prompt)
 
@@ -530,9 +530,11 @@ Rationale: each stage is a cheaper, more focused prompt; early exits cut total i
 
 Run 3 evaluations per signal, take majority vote on direction, median magnitude, mean confidence. Stabilizes borderline outputs and makes calibration more honest. Same latency constraint as C.1 (3× inference per evaluation).
 
-### C.3 — Dynamic keyword weighting (Loop B upgrade)
+### C.3 — Dynamic keyword weighting (Loop B upgrade) — superseded by governance agent
 
-Signal analyzer reads `paper_trades.db:keyword_outcomes` at startup and adjusts each keyword's `strength` multiplier based on historical accuracy. Sketch: load `keyword_outcomes` aggregates with `min_samples=10`; map accuracy ratio to a multiplier (50% accuracy → 0.5×; 80% → 1.3×) clamped to [0.01×, 2× base_strength]. Becomes meaningful once `keyword_outcomes` rows accumulate post-go-live.
+> **Absorbed by the governance agent project.** The original future_plans.md Phase 6 sketch (signal analyzer reads `paper_trades.db:keyword_outcomes` at startup and adjusts each keyword's `strength` multiplier based on historical accuracy) has been replaced by the governance agent's dynamic keyword/source/threshold management capability — see [`docs/governance/`](governance/) and the Phase 1 / Phase 2 plans in [`docs/superpowers/plans/`](superpowers/plans/). The agent emits `Decision` records that propose keyword adjustments based on observed outcomes; this is the mechanism that closes the Loop-B feedback loop.
+>
+> Item retained here only as a placeholder in case a residual *signal-analyzer-side* startup-weighting tweak surfaces post-governance. If governance handles the keyword question end-to-end (likely), this item closes without further work.
 
 ### C.4 — Drift-triggered LLM re-analysis (Loop C upgrade)
 
@@ -545,7 +547,7 @@ Current thresholds are conservative for CPU latency: `PRICE_MOVE_THRESHOLD_CENTS
 ### Sequencing
 
 1. C.1 → C.2 (LLM pipeline first; consensus voting builds on the staged pipeline).
-2. C.3 (independent of pipeline shape; depends on accumulated `keyword_outcomes` rows).
+2. C.3 is governance-realized (no separate work expected unless a residual signal-analyzer tweak surfaces).
 3. C.4 → C.5 (feedback-loop tuning; both depend on stable post-go-live operation).
 
-All five items share the same precondition: consistent sub-5s inference observed in production for ≥1 week. Sequence after the readiness-gate stack (EDGE-001/002/003) has produced its first paper-trade resolution and the calibration loop has run end-to-end.
+The runtime-pipeline items (C.1, C.2, C.4, C.5) share the same precondition: consistent sub-5s inference observed in production for ≥1 week. Sequence after the readiness-gate stack (EDGE-001/002/003) has produced its first paper-trade resolution and the calibration loop has run end-to-end.

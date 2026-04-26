@@ -1,5 +1,19 @@
 # Future Plans & Architecture Roadmap
-*Last updated: March 2026 — reflects Mac Studio planning session + OpenClaw research*
+
+> **ARCHIVED 2026-04-26.** This document is preserved as historical context only. The kalshi-bot-relevant content has been split as follows:
+>
+> | Section in this doc | Where it lives now |
+> |---|---|
+> | **Phase 1 — Mac Studio infrastructure** | Hardware landed. No active work item. |
+> | **Phase 3 — Multi-agent architecture (kalshi-side governance)** | Realised by the **governance agent project** — see [`docs/governance/`](../../governance/) and the Phase 1 / Phase 2 plans in [`docs/superpowers/plans/`](../../superpowers/plans/). The "dynamic adaptation" intent that Phase 6 below sketches is the same intent the governance agent now implements. |
+> | **Phase 5 — LLM pipeline upgrades** (3-stage pipeline, consensus voting) | [`docs/ROADMAP.md`](../../ROADMAP.md) **Appendix C**, items C.1 and C.2. |
+> | **Phase 6 — Feedback loop upgrades** | Phase 6.1 (dynamic keyword weighting) is **absorbed into the governance agent**; Phase 6.2 (drift-triggered LLM re-analysis) and Phase 6.3 (Loop A threshold tuning) remain as ROADMAP **Appendix C** items C.4 and C.5. |
+> | **Phase 2 — Equity Trading Bot (Alpaca)** | Cross-project; **not** part of kalshi-bot. Preserved here for historical reference only. |
+> | **Phase 4 — OpenClaw Personal Assistant** | Cross-project; **not** part of kalshi-bot. Preserved here for historical reference only. |
+>
+> **If a future agent is editing this file looking for active backlog**, stop and use [`docs/ROADMAP.md`](../../ROADMAP.md) Appendix C and [`docs/governance/`](../../governance/) instead. This file is frozen; corrections to the live roadmap go in those documents.
+
+*Original draft: March 2026 — reflects Mac Studio planning session + OpenClaw research.*
 
 ---
 
