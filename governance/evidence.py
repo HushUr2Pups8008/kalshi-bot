@@ -142,10 +142,68 @@ def select_candidates_for_cadence(
 def compose_evidence_for_candidate(
     candidate: Candidate,
     audit: dict[str, Any],
-    adapter,  # GovernanceAdapter — annotated loosely to avoid import cycle
+    adapter,  # GovernanceAdapter
 ) -> dict[str, Any]:
-    """Build the evidence dict for a single LLM call. Implemented in Task 8."""
-    raise NotImplementedError("Implemented in Task 8")
+    """Build the evidence dict for a single LLM call.
+
+    The shape is action-specific; the prompt-renderer dispatches on
+    candidate.action. Common keys (candidate_action, target,
+    active_market_count, active_market_titles_top, active_source_count,
+    window_hours) appear regardless of action.
+    """
+    common = {
+        "candidate_action": candidate.action,
+        "target": candidate.target,
+        "active_market_titles_top": adapter.get_active_market_titles()[:20],
+        "active_market_count": len(adapter.get_active_market_titles()),
+        "active_source_count": adapter.get_active_source_count(),
+        "window_hours": 168,
+    }
+
+    if candidate.action == "disable_source":
+        ingest = 0
+        fresh = 0
+        match = 0
+        anchor_rate: float | None = None
+        # Reddit audit lookup
+        idx = candidate.evidence_pointer.get("reddit_sub_index")
+        if isinstance(idx, int):
+            sub = audit.get("reddit", {}).get("subs", [])[idx]
+            ingest = int(sub.get("ingestion", 0) or 0)
+            fresh = int(sub.get("fresh_passes", 0) or 0)
+            match = int(sub.get("matches", 0) or 0)
+        # Alignment audit lookup (overrides if both present)
+        align_src = candidate.evidence_pointer.get("alignment_source")
+        if align_src:
+            pairs = audit.get("alignment", {}).get("pairs", []) or []
+            n_total = sum(int(p.get("n", 0) or 0) for p in pairs if p.get("source") == align_src)
+            anchored_total = sum(int(p.get("anchor", 0) or 0) for p in pairs if p.get("source") == align_src)
+            ingest = max(ingest, n_total)
+            anchor_rate = anchored_total / n_total if n_total else None
+        return {
+            **common,
+            "ingestion_events": ingest,
+            "fresh_pass_count": fresh,
+            "match_count": match,
+            "anchor_rate": anchor_rate,
+            "recent_headline_sample": adapter.get_recent_headline_samples(
+                candidate.target, k=5,
+            ),
+        }
+
+    if candidate.action == "disable_keyword":
+        return {
+            **common,
+            "candidate_phrase_summary": candidate.evidence_pointer,
+        }
+
+    if candidate.action == "tune_threshold":
+        return {
+            **common,
+            "current_value": candidate.evidence_pointer.get("current_value"),
+        }
+
+    raise ValueError(f"unknown candidate.action: {candidate.action!r}")
 
 
 def summarize_evidence_for_audit(evidence: dict[str, Any]) -> dict[str, Any]:
