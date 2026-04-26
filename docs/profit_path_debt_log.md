@@ -10,8 +10,8 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-04-25 |
-| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001) |
+| Last Updated | 2026-04-26 |
+| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 35 |
@@ -90,6 +90,40 @@ Runtime evidence exists for accumulation and blend participation, but the gate c
 
 **Validation Notes** (2026-04-23)  
 Structural-lane block cleared. Over the 47-hour window 2026-04-21T00:09 → 2026-04-22T23:44 UTC (post-commit `2731d9a` structural crash-loop fix deployed 2026-04-21T01:38 UTC), `logs/trades/archive/2026/04/2026-04-{21,22}.jsonl` contain `EVIDENCE_INGESTION ×46`, `DOSSIER_UPDATE ×46`, `BLEND_DECISION ×49` (with `fast_lane_p` non-null on sampled events), and `STRUCTURAL_PRIOR_RECOMPUTE ×20` across 6 distinct dossier markets (`KXELECTIONEMERGENCY-26MAY01`, `KXMOCTRUMP25-26-APR24`, `KXMOCTRUMP25-26-MAY01`, `KXPARDONSTRUMP-26APR-1`, `KXTRUMPENDORSE-26SEP15-NMOR`, `KXTRUMPIRAN-26MAY01`). First structural event at 2026-04-21T16:52:38 UTC. Zero unhandled exceptions in `bot.log`. Trade-frequency observation: zero paper trades, consistent with Phase 0 verdict (LLM correctly declines directional views on broad-scope markets — not a runtime defect) — zero-baseline rule applies. **S4.5b closed PASS** (see `docs/ROADMAP.md` Stage 4 table). Status advanced `BLOCKED → OPEN`. The only remaining blocker is S4.5c — the 72-hour extended statistical-basis window — which is a soak-time requirement, not an architectural concern. No code or intake changes are required to reach S4.5c; depends only on elapsed observation time after any current configuration changes stabilize.
+
+**Validation Notes** (2026-04-26, S4.5c soak evidence sweep)
+Operator stopped the bot at 2026-04-26T19:05 UTC ahead of travel; this note records the soak-window evidence observable at that point so a returning operator (or agent) can decide on closure without re-running the queries.
+
+Window: **2026-04-20T03:43:52 UTC → 2026-04-26T18:33:43 UTC = 158.8 hours (6.6 days).** Source files: `logs/trades/archive/2026/04/2026-04-{20..25}.jsonl` plus `logs/trades/live/trades.jsonl`.
+
+Multi-lane event totals across the full window (per-day breakdown was healthy every day from 04-20 onward; counts grep'd against `"type": "<NAME>"` JSONL records, counted from the trade log only — these events do NOT appear in `bot.log`, which was the original error in the 2026-04-26 first-pass sweep):
+
+| Event | Count |
+|---|---|
+| `EVIDENCE_INGESTION` | 169 |
+| `DOSSIER_UPDATE` | 169 |
+| `STRUCTURAL_PRIOR_RECOMPUTE` | 108 |
+| `BLEND_DECISION` | 173 |
+| **Total** | **619** |
+
+Distinct dossier markets touched by these events: **19** (up from 6 at S4.5b close on 04-23). New markets since S4.5b include `KXFISAEXTEND-*`, `KXPARDONSTRUMP-26APR-{12,22,24}`, `KXTRUMPCHINA-26-APR24`, `KXVANCEPAKISTAN-*` (5 expirations), `KXVOTESAVEAMERICA-*`. The structural lane is firing across a meaningfully broader market footprint than at S4.5b.
+
+Continuity check: 5 gaps > 6 hours between consecutive multi-lane events, all overnight (low news volume, not a defect):
+- 04-20T12:50 → 04-21T07:30 (18.7h)
+- 04-21T07:30 → 04-21T13:33 (6.0h)
+- 04-21T23:34 → 04-22T11:30 (11.9h)
+- 04-22T20:05 → 04-23T13:08 (17.1h)
+- 04-25T08:15 → 04-25T15:17 (7.0h)
+
+Post-S4.5b-close subwindow (04-23T13:08 → 04-26T13:08 = exactly 72.0h) contains the four event types every day with only the 7h 04-25 gap. That is the cleanest read of the S4.5c "72-hour extended statistical-basis window" criterion in the entry above. Trade-frequency is again zero-baseline (no paper trades in the window), consistent with the 2026-04-23 closure rationale.
+
+Acceptance criteria status (per the entry above):
+- Runtime duration recorded — **PASS** (158.8h, well over 72h).
+- All four event types observed — **PASS**.
+- Trade-frequency comparison or zero-baseline — **PASS** (zero-baseline as before).
+- Section 13 checklist explicit PASS/FAIL/N/A — **operator action remaining**. The other three criteria are satisfied by file evidence; the Section 13 box is the only thing standing between OPEN and COMPLETE. Recommend formal closure on operator return, with the Section 13 marker updated in `docs/ROADMAP.md` Stage 4 table per the S4.5b precedent.
+
+Caveat: the bot was running v0.29.54 (Phase 1 only) during this window. Phase 2 governance shipped today as v0.29.55 but its launchd plists were intentionally not installed by that MR — the governance soak (separate `§8.5` gate) has not started, and the multi-lane evidence above is independent of governance behavior. Do not conflate the two soaks when assessing closure.
 
 ---
 
