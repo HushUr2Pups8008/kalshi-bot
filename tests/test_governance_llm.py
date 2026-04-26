@@ -154,3 +154,58 @@ def test_parse_strips_markdown_fences_around_json():
         decided_by="x", cadence="fast", model_used="m", evidence_summary={},
     )
     assert d.action == "no_action"
+
+
+def test_local_qwen_llm_satisfies_protocol():
+    from governance.llm import LocalQwenLLM
+    llm = LocalQwenLLM()
+    assert isinstance(llm, LLMClient)
+    assert llm.model_name() == "qwen3:14b"
+
+
+def test_local_qwen_llm_honors_governance_llm_model_env_var(monkeypatch):
+    """Hardware-conditional model selection: env var pins the model so the
+    launchd plist controls MacBook (qwen3:8b) vs Mac Studio (qwen3:14b)
+    without code edits."""
+    from governance.llm import LocalQwenLLM
+    monkeypatch.setenv("GOVERNANCE_LLM_MODEL", "qwen3:8b")
+    assert LocalQwenLLM().model_name() == "qwen3:8b"
+
+
+def test_local_qwen_llm_explicit_model_overrides_env_var(monkeypatch):
+    from governance.llm import LocalQwenLLM
+    monkeypatch.setenv("GOVERNANCE_LLM_MODEL", "qwen3:8b")
+    # Explicit constructor arg wins over env var.
+    assert LocalQwenLLM(model="qwen3:14b").model_name() == "qwen3:14b"
+
+
+def test_local_qwen_llm_posts_to_ollama_and_returns_response_text(monkeypatch):
+    import json
+    from governance import llm as llm_module
+    from governance.llm import LocalQwenLLM
+
+    captured = {}
+
+    class _StubResponse:
+        def __init__(self, body): self._body = body
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return self._body
+
+    def _stub_urlopen(req, timeout):
+        captured["url"] = req.full_url
+        captured["body"] = req.data
+        captured["headers"] = dict(req.headers)
+        return _StubResponse(json.dumps({"response": '{"action": "no_action"}'}).encode("utf-8"))
+
+    monkeypatch.setattr(llm_module.urllib.request, "urlopen", _stub_urlopen)
+
+    out = LocalQwenLLM(model="qwen3:14b").complete("sys", "user")
+    assert out == '{"action": "no_action"}'
+    assert captured["url"].endswith("/api/generate")
+    payload = json.loads(captured["body"])
+    assert payload["model"] == "qwen3:14b"
+    assert payload["system"] == "sys"
+    assert payload["prompt"] == "user"
+    assert payload["format"] == "json"
+    assert payload["options"]["temperature"] == 0.0

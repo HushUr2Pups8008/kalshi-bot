@@ -167,3 +167,48 @@ def parse_llm_response_to_decision(
         predicted_effect=predicted_effect,
         model_used=model_used,
     )
+
+
+import urllib.request
+
+
+class LocalQwenLLM:
+    """Ollama HTTP wrapper. Default base_url tracks the project's existing
+    OLLAMA_BASE_URL convention (utils via signal_analyzer); model is
+    hardware-conditional: qwen3:8b on MacBook (18GB), qwen3:14b on Mac
+    Studio (post-2026-04-29)."""
+
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        base_url: str = "http://localhost:11434",
+        timeout: float = 120.0,
+    ) -> None:
+        # Model precedence: explicit constructor arg > GOVERNANCE_LLM_MODEL
+        # env var > hardcoded default. The env-var path lets the launchd
+        # plist (Task 25) pin the model per host without code edits.
+        self.model = model or os.getenv("GOVERNANCE_LLM_MODEL", "qwen3:14b")
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+
+    def complete(self, system: str, user: str) -> str:
+        payload = {
+            "model": self.model,
+            "system": system,
+            "prompt": user,
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": 0.0},
+        }
+        req = urllib.request.Request(
+            f"{self.base_url}/api/generate",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return str(data.get("response", ""))
+
+    def model_name(self) -> str:
+        return self.model
