@@ -327,3 +327,39 @@ async def test_run_once_market_failure_does_not_propagate(tmp_path: Path):
     results = await task.run_once([_market("KXSTRUCT-A"), _market("KXSTRUCT-B")])
 
     assert results == [], "all failures → empty result list, no exception raised"
+
+
+@pytest.mark.asyncio
+async def test_run_once_failure_warning_surfaces_underlying_cause(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """PROFIT-EDGE-002: structural failure log MUST surface __cause__.
+
+    process_market wraps every exception in StructuralComputationError(...)
+    from exc. The original logging used `%s % r`, which only shows the
+    wrapper message ("failed structural recompute for X") and discards the
+    chained cause — so production failures across many markets were silently
+    untraceable. v0.29.57 surfaces the cause explicitly.
+    """
+    task, _, _ = _task(tmp_path, computer=SpyComputer(fail=True))
+    await task.store.update_dossier(_dossier("KXSTRUCT-A"))
+
+    with caplog.at_level("WARNING", logger="tasks.structural_task"):
+        await task.run_once([_market("KXSTRUCT-A")])
+
+    failure_records = [
+        r for r in caplog.records
+        if "per-market recompute failed" in r.getMessage()
+    ]
+    assert failure_records, "expected a per-market failure WARNING"
+    msg = failure_records[0].getMessage()
+    # The wrapper text is preserved for backwards compatibility.
+    assert "failed structural recompute for KXSTRUCT-A" in msg
+    # The cause must be surfaced so failures stop being silent.
+    assert "RuntimeError" in msg, (
+        f"underlying cause not surfaced in log message: {msg!r}"
+    )
+    assert "structural prior failed" in msg, (
+        f"underlying message not surfaced in log message: {msg!r}"
+    )

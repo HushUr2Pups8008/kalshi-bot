@@ -119,6 +119,65 @@ class TestSeriesClassification:
         w = compute_regime_weights(_market(series_ticker="KXENTERTAIN"))
         assert w[INTERPRETATION] >= 0.40
 
+    # ── PROFIT-EDGE-002 (v0.29.57) categorical priors ─────────────────────
+    # Domestic-policy / geopolitical event series we engage. Each is required
+    # to have a categorical prior because the time-fallback (≥7d) drops
+    # regime_confidence to ~0.14, below G4=0.20. Weights chosen so the
+    # resulting regime_confidence clears the gate.
+
+    def test_legislative_calendar_priors_are_interpretation_dominant(self):
+        for prefix in ("KXSBUDGETRES", "KXFISAEXTEND", "KXVOTESAVEAMERICA",
+                       "KXEFFTARIFF", "KXMOCTRUMP25"):
+            w = compute_regime_weights(_market(series_ticker=prefix))
+            assert w[INTERPRETATION] > w[FAST], f"{prefix}: {w}"
+            assert w[INTERPRETATION] > w[STRUCTURAL], f"{prefix}: {w}"
+
+    def test_macro_release_priors_are_structural_dominant(self):
+        for prefix in ("KXCPIYOY", "KXCPICOREYOY", "KXCPIEU", "KXEZGDPYOYF"):
+            w = compute_regime_weights(_market(series_ticker=prefix))
+            assert w[STRUCTURAL] > w[INTERPRETATION], f"{prefix}: {w}"
+            assert w[STRUCTURAL] > w[FAST], f"{prefix}: {w}"
+
+    def test_event_driven_political_priors_are_fast_dominant(self):
+        for prefix in ("KXTRUMPACT", "KXTRUMPENDORSE", "KXTRUMPCHINA",
+                       "KXTRUMPCRYPTOCONF", "KXVANCEPAKISTAN",
+                       "KXVISITVENEZUELA"):
+            w = compute_regime_weights(_market(series_ticker=prefix))
+            assert w[FAST] > w[INTERPRETATION], f"{prefix}: {w}"
+            assert w[FAST] > w[STRUCTURAL], f"{prefix}: {w}"
+
+    def test_conflict_priors_are_strongly_fast_dominant(self):
+        for prefix in ("KXTRUMPIRAN", "KXARMOMINF", "KXELECTIONEMERGENCY"):
+            w = compute_regime_weights(_market(series_ticker=prefix))
+            assert w[FAST] >= 0.65, f"{prefix}: {w}"
+
+    def test_new_categorical_priors_clear_g4_threshold(self):
+        """Every new prior added in PROFIT-EDGE-002 MUST clear G4=0.20.
+
+        Pinning this contract here prevents future weight tweaks from
+        reintroducing the no-edge regression.
+        """
+        import math
+        from tasks.trade_readiness_gate import G4_REGIME_CONFIDENCE_THRESHOLD
+
+        new_prefixes = (
+            "KXSBUDGETRES", "KXFISAEXTEND", "KXVOTESAVEAMERICA",
+            "KXEFFTARIFF", "KXMOCTRUMP25",
+            "KXCPIYOY", "KXCPICOREYOY", "KXCPIEU", "KXEZGDPYOYF",
+            "KXTRUMPACT", "KXTRUMPENDORSE", "KXTRUMPCHINA",
+            "KXTRUMPCRYPTOCONF", "KXVANCEPAKISTAN", "KXVISITVENEZUELA",
+            "KXPARDONSTRUMP", "KXLTGOVGANOMR",
+            "KXTRUMPIRAN", "KXARMOMINF", "KXELECTIONEMERGENCY",
+        )
+        for prefix in new_prefixes:
+            w = compute_regime_weights(_market(series_ticker=prefix))
+            ent = -sum(v * math.log(v) for v in w.values() if v > 0)
+            rc = 1.0 - ent / math.log(3)
+            assert rc >= G4_REGIME_CONFIDENCE_THRESHOLD, (
+                f"{prefix}: rc={rc:.4f} below G4={G4_REGIME_CONFIDENCE_THRESHOLD}; "
+                f"weights={w}"
+            )
+
     def test_series_ticker_prefix_matching_not_exact(self):
         # KXNFL-2025-SUPERB should still match KXNFL prefix
         w = compute_regime_weights(_market(series_ticker="KXNFL-2025-SUPERB"))

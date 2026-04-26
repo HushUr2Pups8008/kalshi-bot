@@ -143,7 +143,18 @@ class StructuralTask:
         for r in raw:
             if isinstance(r, BaseException):
                 failed += 1
-                _log.warning("[STRUCTURAL] per-market recompute failed: %s", r)
+                # Surface the underlying cause: process_market wraps every
+                # exception in StructuralComputationError(...) from exc, so
+                # str(r) only shows "failed structural recompute for X" and
+                # discards the actual root cause. exc_info=cause logs the
+                # inner traceback so silent failures become diagnosable.
+                cause = getattr(r, "__cause__", None)
+                _log.warning(
+                    "[STRUCTURAL] per-market recompute failed: %s (cause: %s)",
+                    r,
+                    repr(cause) if cause is not None else "<none>",
+                    exc_info=cause if cause is not None else r,
+                )
             else:
                 ok.append(r)
         if failed:

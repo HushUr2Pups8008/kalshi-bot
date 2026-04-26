@@ -71,6 +71,48 @@ _SERIES_PRIORS: dict[str, tuple[float, float, float]] = {
     # Trump say markets — speech-driven, fast/interpretation
     "KXTRUMPSAY":        (0.55, 0.35, 0.10),
     "KXTRUMPSAYMONTH":   (0.30, 0.45, 0.25),
+    # ── Legislative / calendar-driven policy markets ─────────────────────────
+    # Bills, budget resolutions, scheduled votes — slow legislative cadence
+    # with intermittent fast events. Interpretation lane carries the most
+    # weight because the read-through from a news event to the binary
+    # outcome requires synthesis (e.g. "does this floor vote count as
+    # resolving the bill?"). Structural anchor for the calendar; minimal
+    # fast contribution since legislative timing rarely breaks suddenly.
+    # Weights chosen so regime_confidence (1 - H/log(3)) ≥ 0.20 — the
+    # threshold below which G4 fails the readiness gate (see
+    # tasks/trade_readiness_gate.py:G4_REGIME_CONFIDENCE_THRESHOLD).
+    "KXSBUDGETRES":  (0.05, 0.65, 0.30),  # Budget / continuing resolution / ICE funding (rc≈0.28)
+    "KXFISAEXTEND":  (0.05, 0.65, 0.30),  # FISA extension legislation (rc≈0.28)
+    "KXVOTESAVEAMERICA": (0.05, 0.60, 0.35),  # Save America vote events (rc≈0.24)
+    "KXEFFTARIFF":   (0.05, 0.60, 0.35),  # Effective tariff schedule (rc≈0.24)
+    "KXMOCTRUMP25":  (0.10, 0.65, 0.25),  # Trump month-of-action calendar windows (rc≈0.22)
+    # Macroeconomic data releases — known calendar, structural prior dominates,
+    # interpretation handles the surprise-vs-consensus read-through. Same
+    # shape as the existing KXCBDECISION prior (rc≈0.28).
+    "KXCPIYOY":      (0.05, 0.30, 0.65),  # Headline CPI YoY
+    "KXCPICOREYOY":  (0.05, 0.30, 0.65),  # Core CPI YoY
+    "KXCPIEU":       (0.05, 0.30, 0.65),  # Euro-area inflation
+    "KXEZGDPYOYF":   (0.05, 0.30, 0.65),  # Euro-area GDP forecast
+    # ── Event-driven political / diplomatic markets ──────────────────────────
+    # Decisions and announcements that may break suddenly. Fast lane carries
+    # speed advantage; interpretation handles ambiguous wording. Low
+    # structural weight because the timing is event-driven, not calendar.
+    # Weights concentrated to clear G4=0.20 (see Trump-say existing prior at
+    # rc=0.157 — too dispersed; we err on the more concentrated side here).
+    "KXTRUMPACT":    (0.65, 0.25, 0.10),  # Executive actions / orders (rc≈0.22)
+    "KXTRUMPENDORSE":(0.65, 0.25, 0.10),  # Endorsement events (rc≈0.22)
+    "KXTRUMPCHINA":  (0.65, 0.25, 0.10),  # China-related decisions (rc≈0.22)
+    "KXTRUMPCRYPTOCONF": (0.65, 0.25, 0.10),  # Crypto conference attendance / announcements (rc≈0.22)
+    "KXVANCEPAKISTAN":(0.65, 0.25, 0.10),  # Vance / Pakistan diplomacy (rc≈0.22)
+    "KXVISITVENEZUELA":(0.65, 0.25, 0.10),  # Venezuela visit / diplomacy (rc≈0.22)
+    "KXPARDONSTRUMP":(0.15, 0.70, 0.15),  # Pardon decisions — interpretation-heavy (rc≈0.25)
+    "KXLTGOVGANOMR": (0.10, 0.70, 0.20),  # Long-tail policy / personnel decisions (rc≈0.27)
+    # ── Conflict / military events ───────────────────────────────────────────
+    # Sudden kinetic events. Speed dominates; interpretation handles
+    # escalation framing; structural lane has minimal calendar to anchor on.
+    "KXTRUMPIRAN":   (0.70, 0.20, 0.10),  # Iran diplomacy / kinetic events (rc≈0.27)
+    "KXARMOMINF":    (0.70, 0.20, 0.10),  # Armed-conflict / military (rc≈0.27)
+    "KXELECTIONEMERGENCY": (0.70, 0.20, 0.10),  # Crisis / emergency events (rc≈0.27)
     # Crypto price markets — rapid, but direction requires interpretation
     "KXCRYPTO":      (0.65, 0.28, 0.07),
     "KXDOGE":        (0.65, 0.28, 0.07),

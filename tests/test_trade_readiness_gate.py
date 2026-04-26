@@ -5,6 +5,7 @@ import pytest
 from tasks.trade_readiness_gate import (
     G1_CONFIDENCE_THRESHOLD,
     G3_OVERRIDE_MULTIPLIER,
+    G4_REGIME_CONFIDENCE_THRESHOLD,
     ReadinessInputError,
     evaluate_readiness,
 )
@@ -91,9 +92,12 @@ def test_g3_mid_band_passes_with_min_edge_override():
 
 
 def test_g4_regime_confidence_is_enforced_and_tightens_thresholds():
+    # PROFIT-EDGE-002 (v0.29.57): G4 threshold lowered from 0.40 to 0.20.
+    # Use a regime_confidence below the new threshold to exercise the
+    # fail-safe activation path; structure of the assertions is unchanged.
     decision = evaluate_readiness(
         _dossier_candidate(blended_confidence=1.0, disagreement_score=0.16),
-        regime_confidence=0.39,
+        regime_confidence=G4_REGIME_CONFIDENCE_THRESHOLD - 0.01,
     )
 
     assert decision.passed is False
@@ -103,6 +107,47 @@ def test_g4_regime_confidence_is_enforced_and_tightens_thresholds():
         "G3_disagreement_score",
         "G4_regime_confidence",
     )
+
+
+def test_g4_threshold_is_calibrated_to_pass_existing_categorical_priors():
+    """PROFIT-EDGE-002 calibration test.
+
+    The G4 threshold MUST be at or below the regime_confidence values produced
+    by the polling, central-bank, crypto, and weather categorical priors in
+    analysis/regime_classifier.py — those priors were intentionally designed
+    to be tradeable. The pre-fix threshold (0.40) excluded all four. Pinning
+    this expectation here prevents a future bump back above 0.20 without
+    explicit recalibration of the prior table.
+    """
+    import math
+
+    def _rc(weights: tuple[float, float, float]) -> float:
+        ent = -sum(w * math.log(w) for w in weights if w > 0)
+        return 1.0 - ent / math.log(3)
+
+    designed_tradeable_priors = {
+        "Polling (KXAPRPOTUS)":      (0.05, 0.25, 0.70),
+        "Central bank (KXCBDECISION)": (0.05, 0.30, 0.65),
+        "Crypto (KXCRYPTO)":         (0.65, 0.28, 0.07),
+        "Weather (KXWEATHER)":       (0.10, 0.25, 0.65),
+    }
+    for name, w in designed_tradeable_priors.items():
+        rc = _rc(w)
+        assert rc >= G4_REGIME_CONFIDENCE_THRESHOLD, (
+            f"{name} prior rc={rc:.3f} fails G4={G4_REGIME_CONFIDENCE_THRESHOLD}; "
+            "either lower G4 or concentrate the prior weights"
+        )
+
+
+def test_g4_passes_at_threshold_boundary_in_normal_mode():
+    """Markets exactly at G4 should pass G4 and run in normal (non-failsafe) mode."""
+    decision = evaluate_readiness(
+        _dossier_candidate(),
+        regime_confidence=G4_REGIME_CONFIDENCE_THRESHOLD,
+    )
+
+    assert "G4_regime_confidence" not in decision.failure_reasons
+    assert decision.fail_safe_active is False
 
 
 def test_g5_blocks_drift_suspect_dossier():
@@ -152,7 +197,7 @@ def test_fast_lane_exempts_dossier_only_conditions():
 def test_fast_lane_does_not_exempt_common_conditions():
     decision = evaluate_readiness(
         _fast_candidate(blended_confidence=0.10, disagreement_score=0.21),
-        regime_confidence=0.39,
+        regime_confidence=G4_REGIME_CONFIDENCE_THRESHOLD - 0.01,
     )
 
     assert decision.passed is False
