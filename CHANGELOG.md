@@ -6,6 +6,66 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.55] - 2026-04-25
+
+### Added
+- **Governance Agent Phase 2 — local-only governance agent in shadow mode.**
+  New `governance/` modules: `agent.py`, `adapter.py`, `evidence.py`,
+  `prompts.py`, `decision.py`, `llm.py`. CLI: `python -m governance
+  --cadence fast|deep|weekly_review`. Cadence wired via launchd plists
+  at `ops/launchd/com.kalshi.governance.{fast,deep}.plist` (not
+  installed by this commit; install procedure in
+  `docs/governance/PHASE2_RUNBOOK.md`).
+- **`KalshiGovernanceAdapter`** implements the `GovernanceAdapter`
+  Protocol — the cross-bot seam (spec decision 9). Wraps the four
+  audit-script library functions (`source_market_alignment_audit`,
+  `keyword_feedback`, `reddit_source_audit`, `freshness_diagnostics`)
+  and normalizes their natural outputs (tuples, dataclass-keyed dicts)
+  into the `{pairs, subs, candidate_phrases, sources}` shape the
+  evidence builder consumes.
+- **Decision dataclass** with strict `__post_init__` validation:
+  decision_id / batch_id format, tz-aware timestamps, confidence
+  ∈ [0, 1], action whitelist, mandatory predicted_effect for action
+  decisions.
+- **FakeLLM test double + LocalQwenLLM Ollama wrapper** behind one
+  `LLMClient` Protocol. Phase 2 ships with both; production uses
+  LocalQwenLLM (`qwen3:8b` on MacBook 18GB, `qwen3:14b` on Mac Studio
+  via the launchd plist's `GOVERNANCE_LLM_MODEL` env var). The
+  trading-bot signal analyzer remains on `qwen2.5:7b`; unification
+  intentionally deferred and tracked as `PROFIT-LLM-001`.
+- **`scripts/__init__.py`** — formalizes the audit-script package
+  boundary so the agent's evidence builder can import library
+  functions cleanly.
+- **Shadow-mode invariant test coverage:** unit tests, integration
+  test (3-candidate end-to-end with FakeLLM), chaos tests
+  (kill-switch / malformed JSON / validation errors), and Hypothesis
+  property test asserting `confidence < threshold ⇒ applied=False`
+  across 30 randomly-generated `(confidence, threshold, mode)` tuples.
+- **Operator runbook** at `docs/governance/PHASE2_RUNBOOK.md`:
+  install, smoke test, kill switches, soak monitoring, common
+  failures, uninstall.
+
+### Changed
+- (none — Phase 2 is purely additive on top of Phase 1; no existing
+  code paths modified.)
+
+### Reasoning
+- Phase 2 is the trust-dataset accumulation phase. The agent runs
+  for ≥14 days in shadow mode, never writing `applied`, while a
+  ≥30-decision corpus accumulates for manual review. Phase 3 flips
+  the mode to `real` only after that review confirms ≥85% reasonable
+  decisions.
+- `mode != "real"` is the only thing standing between the agent and
+  live config changes during Phase 2. The Hypothesis property test
+  in `tests/test_governance_agent_property.py` is the load-bearing
+  guarantee.
+- Two production-path bugs surfaced and fixed during execution
+  (Task 6.5 audit-data shape normalization; Task 21 directory-aware
+  trade-log reads). Both are documented in the plan as
+  post-implementation notes for future agents.
+
+---
+
 ## [0.29.54] - 2026-04-25
 
 ### Added
