@@ -111,3 +111,20 @@ def test_disable_source_prompt_matches_golden():
     sys_p, user_p = render_prompt("disable_source", evidence)
     expected = (_FIXTURE_DIR / "governance_prompt_disable_source.txt").read_text(encoding="utf-8")
     assert user_p == expected
+
+
+def test_dump_prompt_revision_writes_versioned_file(tmp_path):
+    from governance.prompts import dump_prompt_revision
+    out_path = dump_prompt_revision(revision_label="0.30.0", out_dir=tmp_path)
+    assert out_path.exists()
+    assert out_path.name.endswith("-0.30.0.txt")
+    content = out_path.read_text(encoding="utf-8")
+    assert "SYSTEM_PROMPT" in content
+    assert "DISABLE_SOURCE_TEMPLATE" in content
+
+
+def test_dump_prompt_revision_refuses_to_overwrite(tmp_path):
+    from governance.prompts import dump_prompt_revision
+    dump_prompt_revision(revision_label="0.30.0", out_dir=tmp_path)
+    with pytest.raises(FileExistsError):
+        dump_prompt_revision(revision_label="0.30.0", out_dir=tmp_path)

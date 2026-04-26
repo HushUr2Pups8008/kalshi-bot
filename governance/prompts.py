@@ -173,3 +173,25 @@ def render_prompt(action: str, evidence: dict[str, Any]) -> tuple[str, str]:
         raise ValueError(f"unknown action for render_prompt: {action!r}")
 
     return SYSTEM_PROMPT, user
+
+
+def dump_prompt_revision(*, revision_label: str, out_dir):
+    """Write the current prompt set to a versioned file. Refuses to
+    overwrite — historical context must not be erased accidentally.
+    Returns the path written."""
+    from pathlib import Path
+    from datetime import datetime, timezone
+    out_dir_path = Path(out_dir)
+    out_dir_path.mkdir(parents=True, exist_ok=True)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    out_path = out_dir_path / f"{today}-{revision_label}.txt"
+    if out_path.exists():
+        raise FileExistsError(out_path)
+    body = (
+        "# SYSTEM_PROMPT\n\n" + SYSTEM_PROMPT + "\n\n"
+        "# DISABLE_SOURCE_TEMPLATE\n\n" + DISABLE_SOURCE_TEMPLATE + "\n\n"
+        "# DISABLE_KEYWORD_TEMPLATE\n\n" + DISABLE_KEYWORD_TEMPLATE + "\n\n"
+        "# TUNE_THRESHOLD_TEMPLATE\n\n" + TUNE_THRESHOLD_TEMPLATE + "\n"
+    )
+    out_path.write_text(body, encoding="utf-8")
+    return out_path
