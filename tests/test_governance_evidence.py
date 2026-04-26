@@ -171,3 +171,32 @@ def test_compose_evidence_excludes_pii_or_secret_fields():
     flat = repr(evidence)
     for s in forbidden_substrings:
         assert s not in flat
+
+
+def test_summarize_evidence_keeps_metrics_drops_samples():
+    full = {
+        "candidate_action": "disable_source",
+        "target": "r/Turkey",
+        "ingestion_events": 408,
+        "fresh_pass_count": 7,
+        "match_count": 0,
+        "anchor_rate": None,
+        "recent_headline_sample": ["a", "b", "c"],
+        "active_market_titles_top": ["X", "Y", "Z"] * 10,
+        "active_market_count": 30,
+        "active_source_count": 42,
+        "window_hours": 168,
+    }
+    summary = summarize_evidence_for_audit(full)
+    # metrics retained
+    assert summary["ingestion_events"] == 408
+    assert summary["fresh_pass_count"] == 7
+    assert summary["match_count"] == 0
+    assert summary["active_market_count"] == 30
+    assert summary["active_source_count"] == 42
+    assert summary["window_hours"] == 168
+    # samples retained but capped
+    assert len(summary["recent_headline_sample"]) == 3
+    # active market titles trimmed to top themes
+    assert "active_market_themes_top" in summary
+    assert "active_market_titles_top" not in summary  # large list dropped

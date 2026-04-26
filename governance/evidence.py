@@ -206,7 +206,45 @@ def compose_evidence_for_candidate(
     raise ValueError(f"unknown candidate.action: {candidate.action!r}")
 
 
+def _extract_themes(titles: list[str], top_k: int = 3) -> list[str]:
+    """Cheap theme extraction for audit summary: take frequent first-tokens
+    of market titles. Not intended as ML — purely a compact shorthand for
+    the audit log."""
+    from collections import Counter
+    tokens = []
+    for t in titles:
+        if not t:
+            continue
+        first = t.split()
+        if first:
+            tokens.append(first[0].lower())
+    return [t for t, _ in Counter(tokens).most_common(top_k)]
+
+
 def summarize_evidence_for_audit(evidence: dict[str, Any]) -> dict[str, Any]:
-    """Trim a per-candidate evidence dict for the audit-log record. Implemented
-    in Task 9."""
-    raise NotImplementedError("Implemented in Task 9")
+    """Trim per-candidate evidence to the fields worth persisting in the
+    audit log.
+
+    Drops the large free-text market-titles list; keeps headline samples
+    (small and operationally useful when reviewing a decision retroactively);
+    keeps every numeric metric the LLM saw.
+    """
+    keep_keys = {
+        "candidate_action",
+        "target",
+        "ingestion_events",
+        "fresh_pass_count",
+        "match_count",
+        "anchor_rate",
+        "recent_headline_sample",
+        "active_market_count",
+        "active_source_count",
+        "window_hours",
+        "current_value",
+        "candidate_phrase_summary",
+    }
+    summary = {k: v for k, v in evidence.items() if k in keep_keys}
+    titles = evidence.get("active_market_titles_top") or []
+    if titles:
+        summary["active_market_themes_top"] = _extract_themes(titles, top_k=3)
+    return summary
