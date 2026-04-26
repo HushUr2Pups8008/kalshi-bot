@@ -73,3 +73,97 @@ class FakeLLM:
 
     def model_name(self) -> str:
         return "fake-llm"
+
+
+import re
+from datetime import datetime, timedelta
+from governance.decision import Decision, PredictedEffect
+
+
+class LLMResponseParseError(ValueError):
+    """Raised when an LLM response cannot be turned into a valid Decision."""
+
+
+_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n?(.*?)\n?\s*```\s*$", re.DOTALL)
+_REQUIRED_FIELDS = ("action", "target", "reasoning", "confidence", "predicted_effect")
+
+
+def _strip_fences(raw: str) -> str:
+    m = _FENCE_RE.match(raw)
+    return m.group(1) if m else raw
+
+
+def parse_llm_response_to_decision(
+    raw: str,
+    *,
+    decision_id: str,
+    batch_id: str,
+    decided_at: datetime,
+    decided_by: str,
+    cadence: str,
+    model_used: str,
+    evidence_summary: dict[str, Any],
+) -> Decision:
+    """Validate raw LLM JSON and produce a Decision instance.
+
+    Raises LLMResponseParseError on schema violations. Decision-level
+    invariants (confidence range, ID format, etc.) are enforced by
+    Decision.__post_init__ and surface as ValueError; we don't catch
+    those — the Decision's own validation is the right boundary."""
+    try:
+        body = json.loads(_strip_fences(raw))
+    except json.JSONDecodeError as exc:
+        raise LLMResponseParseError(f"LLM output is not valid JSON: {exc}") from exc
+
+    missing = [f for f in _REQUIRED_FIELDS if f not in body]
+    if missing:
+        raise LLMResponseParseError(f"LLM output missing required fields: {missing}")
+
+    action = body["action"]
+    target = body.get("target", "") or ""
+    reasoning = body["reasoning"]
+    confidence = float(body["confidence"])
+    pe_in = body["predicted_effect"]
+
+    predicted_effect: PredictedEffect | None
+    if action == "no_action" or pe_in is None:
+        predicted_effect = None
+    else:
+        days = int(pe_in.get("evaluate_at_days", 7))
+        days = max(1, min(30, days))  # clamp into valid range
+        predicted_effect = PredictedEffect(
+            metric=str(pe_in["metric"]),
+            baseline=float(pe_in["baseline"]),
+            predicted_post_change=float(pe_in["predicted_post_change"]),
+            evaluate_at=decided_at + timedelta(days=days),
+        )
+
+    proposed_change: dict[str, Any]
+    if action == "disable_source":
+        proposed_change = {"before": "source_active", "after": "source_disabled", "expires_at": None}
+    elif action == "disable_keyword":
+        proposed_change = {"before": "keyword_active", "after": "keyword_disabled", "expires_at": None}
+    elif action == "tune_threshold":
+        proposed_change = {
+            "before": pe_in.get("baseline") if pe_in else None,
+            "after": pe_in.get("predicted_post_change") if pe_in else None,
+            "expires_at": None,
+        }
+    else:
+        proposed_change = {}
+
+    return Decision(
+        decision_id=decision_id,
+        batch_id=batch_id,
+        decided_at=decided_at,
+        decided_by=decided_by,
+        cadence=cadence,  # type: ignore[arg-type]
+        action=action,
+        target=target,
+        proposed_change=proposed_change,
+        confidence=confidence,
+        reasoning=reasoning,
+        evidence_summary=evidence_summary,
+        predicted_effect=predicted_effect,
+        model_used=model_used,
+    )
