@@ -279,7 +279,7 @@ When a market has a dossier with recent evidence, the **accumulation lane** fire
 * Create: `scripts/simulations/resolution_calibration.py`
 * Test: extend `tests/test_simulations_smoke.py`
 
-**Why MEDIUM priority:** [PROFIT-CAL-001](../profit_path_debt_log.md) closed 2026-04-24 wired the calibration loop end-to-end but has never run against a real resolution. This won't matter until the first paper trade resolves (could be hours-days post-launch), so it's lower pre-launch priority — but worth verifying the wiring is sound before the first resolution event hits production.
+**Why MEDIUM priority:** [PROFIT-CAL-001](../../profit_path_debt_log.md) closed 2026-04-24 wired the calibration loop end-to-end but has never run against a real resolution. This won't matter until the first paper trade resolves (could be hours-days post-launch), so it's lower pre-launch priority — but worth verifying the wiring is sound before the first resolution event hits production.
 
 ### Scope
 

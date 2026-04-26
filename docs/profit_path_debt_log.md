@@ -534,13 +534,13 @@ Trace resolved paper outcomes through calibration and add validation output if t
 Do not tune scaling factors as part of this debt item.
 
 **Priority Elevation Note** (2026-04-23)  
-Severity raised MEDIUM → HIGH and Priority raised MEDIUM → NOW (post-window) after follow-on analysis of ROADMAP Phase 4 dependencies. ROADMAP P4.2 ("Calibration review: est distribution vs resolved outcomes") has an expected outcome of "Calibration curve documented; over/underconfidence measured" — an output that requires `CALIBRATION_CHECK` events to exist in the first place. Without this fix, P4.2 cannot complete, which means P4.3 (live trading authorization) cannot be reached by transitive dependency. This elevates PROFIT-CAL-001 from "observation gap" to "pre-live-trading blocker." Execution is sequenced as the first action after S4.5c closes (earliest 2026-04-26); full implementation design in [`docs/plans/profit_cal_001_calibration_wiring.md`](plans/profit_cal_001_calibration_wiring.md) (Path A: schema migration + emission at resolve time). Header Open-counts updated: HIGH 3 → 4, MEDIUM 1 → 0.
+Severity raised MEDIUM → HIGH and Priority raised MEDIUM → NOW (post-window) after follow-on analysis of ROADMAP Phase 4 dependencies. ROADMAP P4.2 ("Calibration review: est distribution vs resolved outcomes") has an expected outcome of "Calibration curve documented; over/underconfidence measured" — an output that requires `CALIBRATION_CHECK` events to exist in the first place. Without this fix, P4.2 cannot complete, which means P4.3 (live trading authorization) cannot be reached by transitive dependency. This elevates PROFIT-CAL-001 from "observation gap" to "pre-live-trading blocker." Execution is sequenced as the first action after S4.5c closes (earliest 2026-04-26); full implementation design in [`docs/_archive/studies/profit_cal_001_calibration_wiring.md`](_archive/studies/profit_cal_001_calibration_wiring.md) (Path A: schema migration + emission at resolve time). Header Open-counts updated: HIGH 3 → 4, MEDIUM 1 → 0.
 
 **Validation Notes** (2026-04-23)  
 End-to-end trace confirms the feedback loop is **wired but incomplete**. Satisfies the acceptance criterion's "*explicitly document why no update is expected yet*" branch. Components that exist: `log_calibration_check` (`utils/logger.py:1242`), `CalibrationTask.record_calibration_check` (`tasks/calibration_task.py`), pure-function Brier/drift/scaling state machine (`analysis/calibration_monitor.py`), schema tests (`tests/test_calibration_check_schema.py`), `CalibrationTask` construction + injection into `BlendTask` (`main.py:435-438`), and `BlendTask` consuming `get_scaling_factor(lane)`. Missing glue: **zero runtime callers of `log_calibration_check` or `CalibrationTask.record_calibration_check`**. Repo-wide grep (2026-04-23) returns only definitions, schema tests, and a single script comment — no runtime call site from any resolution or trade path. Specifically, `trading/paper_trader.py:resolve_market` calls `log_paper_resolution` but never `log_calibration_check`. Consequence: `CalibrationTask._state` is permanently empty, `get_scaling_factor(lane)` always returns `1.0` (no-op scaling), and `BlendTask` consumes a neutral factor regardless of how many markets resolve. Contract Section 13 item 6 is therefore *silently* unverifiable — vacuously satisfied not because of "zero resolutions in window" (prior pre-assessment framing) but because the emission site does not exist. This is observation-unsafe to fix; the runtime wire-up (`resolve_market` → `log_calibration_check` → `CalibrationTask.record_calibration_check`) must wait until after S4.5c closes. Deferred action item: add emission at the resolution boundary, backfill one end-to-end test asserting `CALIBRATION_CHECK` is written and consumed, and cross-link to S4.5c criterion 6 once verified.
 
 **Resolution Notes** (2026-04-24, v0.29.47 — commits `186b495`, `74649c6`)
-Feedback loop now complete end-to-end per the Path A design in [`docs/plans/profit_cal_001_calibration_wiring.md`](plans/profit_cal_001_calibration_wiring.md). Implementation delivered across two commits:
+Feedback loop now complete end-to-end per the Path A design in [`docs/_archive/studies/profit_cal_001_calibration_wiring.md`](_archive/studies/profit_cal_001_calibration_wiring.md). Implementation delivered across two commits:
 
 - **Zone 1 + 2** (`186b495`): six nullable columns added to the `paper_trades` table via the existing `_migrate_db` pattern (`fast_lane_p`, `fast_lane_confidence`, `accumulation_p`, `accumulation_confidence`, `structural_p`, `structural_confidence`). Per-lane estimates are already propagated through `analysis.signal_meta` from `BlendTask`'s `TradeCandidate` construction (`tasks/blend_task.py:425-440`) — no `/trading` adapter extension required; `record_trade` reads directly from `signal_meta`. This supersedes the design note's §3.2 Zone 2 sub-step and reduces the overall change footprint. INV-4 purity preserved (no `/analysis` changes). A `_lane_float` helper guards against non-dict `signal_meta` and non-numeric values so legacy or test-mock signal paths don't crash the INSERT.
 
@@ -688,13 +688,13 @@ Deferred until the Stage 5 Phase 2 (P2.2) 72-hour paper-mode observation window 
 | **Priority** | NOW (mitigation is cheap; unblock is externally gated) |
 | **Owner** | Shared |
 | **Depends On** | Reddit Responsible Builder Policy review (externally blocked; app submitted, no response) |
-| **Blocks** | — (Reddit-unique signal assessed as thin per `docs/plans/news_sources_evaluation.md` §7) |
+| **Blocks** | — (Reddit-unique signal assessed as thin per `docs/_archive/studies/news_sources_evaluation.md` §7) |
 
 **Description**  
 Reddit intake runs in public-JSON mode because OAuth credentials are not available — the operator submitted an application per Reddit's Responsible Builder Policy and has received no response. Public-JSON polling is rate-limited per-IP and triggers structural 403 storms; on 2026-04-22 the 403 storm tripped `reddit_monitor.py`'s global circuit breaker within ~11 seconds of startup ("100% of subreddits failed (1/1), suspending all Reddit polling for 30m"). The circuit-breaker behavior is the *intended* response to 403 storms, not a bug — but it means Reddit contributes effectively zero signal whenever the circuit is open, which is most of the time during cold polling cycles.
 
 **Why it matters to profitability / safety / reliability**  
-Reddit contributes a small but non-zero share of the signal mix when it works. Losing it permanently is a coverage reduction, not a correctness or safety issue. The full evaluation in `docs/plans/news_sources_evaluation.md` §7 concludes Reddit-unique content is thin (most is wire-service repost; analytical content is slower than ISW/CSIS RSS; firsthand-witness content is replaceable by Bluesky/Mastodon/Telegram when those integrations are authorized). The residual risk is that downstream diagnostics (`source_scorecard`, feedback loops that attribute signal to Reddit posts) silently report a distorted source mix if Reddit is treated as "active" while it's actually degraded.
+Reddit contributes a small but non-zero share of the signal mix when it works. Losing it permanently is a coverage reduction, not a correctness or safety issue. The full evaluation in `docs/_archive/studies/news_sources_evaluation.md` §7 concludes Reddit-unique content is thin (most is wire-service repost; analytical content is slower than ISW/CSIS RSS; firsthand-witness content is replaceable by Bluesky/Mastodon/Telegram when those integrations are authorized). The residual risk is that downstream diagnostics (`source_scorecard`, feedback loops that attribute signal to Reddit posts) silently report a distorted source mix if Reddit is treated as "active" while it's actually degraded.
 
 **Evidence / Source**  
 - `logs/app/bot.log` 2026-04-22T11:16:43 UTC — "Reddit access denied for r/ArmedConflicts (403) -- backing off 120s", followed by 30+ similar lines across all 20 polled subreddits within 10 seconds, followed by "Reddit global circuit open -- suspending all Reddit polling for 30m".
@@ -702,7 +702,7 @@ Reddit contributes a small but non-zero share of the signal mix when it works. L
 - Operator confirmation (2026-04-23): Reddit app submitted via Responsible Builder Policy intake; no response. Treat as permanently blocked for planning purposes.
 
 **Proposed Fix**  
-Two-track strategy per `docs/plans/news_sources_evaluation.md` §7.2:
+Two-track strategy per `docs/_archive/studies/news_sources_evaluation.md` §7.2:
 
 *Track A — mitigation (cheap, post-S4.5c close):*
 1. Trim `REDDIT_SUBREDDITS` polling pool from 20 to a curated 2-3 (candidates: `r/ArmedConflicts`, `r/CredibleDefense`, plus 1-2 region-specific rotated in by `subreddit_selector.py`) to reduce the 403-storm attack surface.
@@ -717,10 +717,10 @@ Two-track strategy per `docs/plans/news_sources_evaluation.md` §7.2:
 **Acceptance Criteria**  
 - Track A mitigations deployed post-S4.5c close and observed in `bot.log` (circuit-open events drop significantly in volume; no unexpected-outage false positives in `SOURCE_HEALTH` emissions).
 - This debt-log entry transitions to COMPLETE under either (a) Track B succeeds and OAuth is active, OR (b) Reddit formally deprecated and replacement source integrated.
-- `docs/plans/news_sources_evaluation.md` §7.2 steps 1-5 are executed or consciously re-deferred.
+- `docs/_archive/studies/news_sources_evaluation.md` §7.2 steps 1-5 are executed or consciously re-deferred.
 
 **Notes**  
-Do not treat this as a go-live blocker. Per `docs/plans/news_sources_evaluation.md` §6, the operator-confirmed priority is correctness over velocity, and the Reddit-unique signal is thin enough that going live without Reddit is acceptable provided the source mix is honestly reported. The go-live blocker is `PROFIT-CAL-001`, not this item.
+Do not treat this as a go-live blocker. Per `docs/_archive/studies/news_sources_evaluation.md` §6, the operator-confirmed priority is correctness over velocity, and the Reddit-unique signal is thin enough that going live without Reddit is acceptable provided the source mix is honestly reported. The go-live blocker is `PROFIT-CAL-001`, not this item.
 
 ---
 
@@ -1072,13 +1072,13 @@ The 2026-04-26 stack of fixes (EDGE-001 + EDGE-002 + EDGE-003) collectively addr
 
 **Follow-on simulation harness** (2026-04-26)
 
-The G1/G4 calibration analyses and the 5-LLM-positive-event readiness/executor walkthroughs that produced this entry have been captured as permanent operational simulations in [`scripts/simulations/`](../../scripts/simulations/) so future code changes can re-validate the calibration before deploying. Available simulations:
+The G1/G4 calibration analyses and the 5-LLM-positive-event readiness/executor walkthroughs that produced this entry have been captured as permanent operational simulations in [`scripts/simulations/`](../scripts/simulations/) so future code changes can re-validate the calibration before deploying. Available simulations:
 
-* [`scripts/simulations/threshold_calibration.py`](../../scripts/simulations/threshold_calibration.py) — G4 priors audit + G1 production scaled_confidence distribution.
-* [`scripts/simulations/readiness_gate_events.py`](../../scripts/simulations/readiness_gate_events.py) — readiness gate end-to-end against the 5 canonical EDGE-001 events.
-* [`scripts/simulations/executor_validate.py`](../../scripts/simulations/executor_validate.py) — executor `_validate()` (E1–E12) against the same 5 events, in independent + sequential passes.
+* [`scripts/simulations/threshold_calibration.py`](../scripts/simulations/threshold_calibration.py) — G4 priors audit + G1 production scaled_confidence distribution.
+* [`scripts/simulations/readiness_gate_events.py`](../scripts/simulations/readiness_gate_events.py) — readiness gate end-to-end against the 5 canonical EDGE-001 events.
+* [`scripts/simulations/executor_validate.py`](../scripts/simulations/executor_validate.py) — executor `_validate()` (E1–E12) against the same 5 events, in independent + sequential passes.
 
-Smoke tests in [`tests/test_simulations_smoke.py`](../../tests/test_simulations_smoke.py) (13 cases) keep the harnesses themselves green under code changes. The plan for the remaining seven pipeline-stage simulations (match-score audit, BlendTask integration, paper-trade roundtrip, trading-queue handoff, governance-fast-cycle, resolution+calibration, dossier-creation) is in [`docs/superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md`](superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md). Each remaining simulation is scoped to its own task with file/test deliverables and acceptance criteria.
+Smoke tests in [`tests/test_simulations_smoke.py`](../tests/test_simulations_smoke.py) (13 cases) keep the harnesses themselves green under code changes. The plan for the remaining seven pipeline-stage simulations (match-score audit, BlendTask integration, paper-trade roundtrip, trading-queue handoff, governance-fast-cycle, resolution+calibration, dossier-creation) is in [`docs/superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md`](superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md). Each remaining simulation is scoped to its own task with file/test deliverables and acceptance criteria.
 
 ---
 

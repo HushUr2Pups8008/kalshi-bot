@@ -5,8 +5,8 @@
 | Status | DRAFT — pending user review |
 | Author | Claude |
 | Date drafted | 2026-04-24 |
-| Hardware target | Mac Studio M4 Max 128GB (arrival 2026-04-29 / 30, see `docs/future_plans.md`) |
-| Cross-references | `docs/future_plans.md` (Phase 3 multi-agent, Phase 6 dynamic keyword weighting); `~/.claude/projects/-Users-Jake-vscode-kalshi-bot/memory/project_adaptive_governance_direction.md` (user direction memo) |
+| Hardware target | Mac Studio M4 Max 128GB (arrival 2026-04-29 / 30, see `docs/_archive/studies/future_plans.md`) |
+| Cross-references | `docs/_archive/studies/future_plans.md` (Phase 3 multi-agent, Phase 6 dynamic keyword weighting); `~/.claude/projects/-Users-Jake-vscode-kalshi-bot/memory/project_adaptive_governance_direction.md` (user direction memo) |
 | Implements | The "LLM-driven adaptive pipeline governance" design direction articulated by the user 2026-04-24 |
 | Blocks | None — net-new feature |
 | Phase rollout | Approach 2 (phased, four phases — see §10) |
@@ -536,7 +536,7 @@ All in MVP per decision 7. Every mechanism's failure mode is "lock the agent int
 
 ### 13.1 Hardware fit (Mac Studio, post-2026-04-29)
 
-- 128GB unified memory, 546 GB/s bandwidth (`docs/future_plans.md` Phase 1).
+- 128GB unified memory, 546 GB/s bandwidth (`docs/_archive/studies/future_plans.md` Phase 1).
 - Phase 3 agent stack budget (`future_plans.md`): ~58GB for trading agents + macOS + KV cache, ~70GB free headroom.
 - Governance agent's Qwen3-14B-class local model: ~9GB. Comfortably within free headroom.
 - Claude API escalation: tiered cost-bounded per §10. Default $1/day cap.
@@ -572,7 +572,7 @@ All in MVP per decision 7. Every mechanism's failure mode is "lock the agent int
 ## 15. Cross-references to existing project docs
 
 - `docs/ROADMAP.md` — overall project roadmap; governance feature does not currently appear there. Should be added under a new top-level section (suggest "Governance Agent (Phase 7+)") once the design is approved and writing-plans produces a phased plan.
-- `docs/future_plans.md` — Phase 3 multi-agent architecture and Phase 6 dynamic keyword weighting. Governance agent is structurally a 6th agent but operates on diagnostic-batch cadence rather than trade-path latency.
+- `docs/_archive/studies/future_plans.md` — Phase 3 multi-agent architecture and Phase 6 dynamic keyword weighting. Governance agent is structurally a 6th agent but operates on diagnostic-batch cadence rather than trade-path latency.
 - `docs/IMPLEMENTATION_CONTRACT.md` — Section 13 calibration emission criteria are unrelated; governance is a separate concern.
 - `docs/profit_path_debt_log.md` — no current entries directly relate to governance.
 - `~/.claude/projects/-Users-Jake-vscode-kalshi-bot/memory/project_adaptive_governance_direction.md` — the user direction memo this spec implements.
