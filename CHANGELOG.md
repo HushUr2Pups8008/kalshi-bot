@@ -6,6 +6,47 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.56] - 2026-04-26
+
+### Fixed
+- **`main.py:_process_candidate` no longer kills LLM-emitted signal when
+  the keyword scoring step returns an empty list (PROFIT-EDGE-001).** The
+  `if not keywords:` rejection at line 688 now also requires the LLM to be
+  silent (`llm_mag is None or llm_mag == "none"`) before rejecting.
+  Diagnosed on 2026-04-26 from the v0.29.54 paper-mode trade log: across
+  9 days of unattended operation, 5 of 666 real-market
+  `SIGNAL_ANALYSIS_DETAIL` events had `llm_useful=True` with non-trivial
+  probability movement; all 5 were rejected at the no_keywords gate, and
+  the bot recorded zero paper trades end-to-end. The Phase 2 governance
+  agent (v0.29.55) cannot do its job — dynamically learning what keyword
+  config is missing — while LLM-positive events are filed as
+  `ANALYSIS_REJECTED reason=no_keywords` instead of surfacing as
+  candidate evidence.
+
+### Reasoning
+- This is necessary but possibly not sufficient. Once an event proceeds
+  past line 688, it still has to survive BLEND/G1, readiness G2-G6, and
+  executor E1-E12. Existing BLEND_DECISION evidence (173/173 G1-blocked
+  in the diagnosis window) may extend to the new LLM-positive blends;
+  the audit log post-fix is the actual evidence, and the next
+  investigation iteration can target whatever gate becomes the new kill
+  point. This ships the *necessary* part of the fix.
+- The change preserves the CLAUDE.md anti-blend gotcha: keywords remain
+  a gate when LLM is silent, and LLM result is *not* blended with
+  keyword-derived probability — it's the sole signal source on the
+  LLM-positive empty-keywords path.
+- Test coverage:
+  `test_process_candidate_proceeds_when_llm_emits_signal_despite_no_keywords`
+  (new, PROFIT-EDGE-001 regression guard) and
+  `test_process_candidate_still_rejects_when_neither_signal_source_speaks`
+  (new, anti-bypass regression guard) pin both directions of the
+  contract. Existing
+  `test_process_candidate_returns_early_when_no_keywords` continues to
+  pass unchanged — its mock has `llm_mag=None`, which is the
+  no-LLM-signal case the fix preserves.
+
+---
+
 ## [0.29.55] - 2026-04-25
 
 ### Added

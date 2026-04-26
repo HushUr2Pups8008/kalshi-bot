@@ -685,7 +685,14 @@ class TradingBot:
 
         estimated_prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
             await estimate_probability(news, market, keyword_stats=self.keyword_stats, match_meta=match_meta)
-        if not keywords:
+        # PROFIT-EDGE-001: reject only when neither signal source produced
+        # anything. Empty `keywords` with a usable LLM signal (mag != none) is
+        # a legitimate LLM-only path — the LLM identifies semantic relevance
+        # the keyword glossary misses, and the governance agent (v0.29.55+)
+        # learns keyword-config gaps from these events. Pre-fix, all 5 LLM-
+        # validated real-market events in a 9-day window were killed here.
+        llm_emitted_signal = llm_mag is not None and llm_mag != "none"
+        if not keywords and not llm_emitted_signal:
             await write_trade_log_async(
                 trade_log.log_analysis_rejected,
                 reason="no_keywords",

@@ -11,14 +11,14 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 | Field | Value |
 |-------|-------|
 | Last Updated | 2026-04-26 |
-| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel |
+| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 35 |
+| Total Items | 36 |
 | Open — HIGH | 2 |
 | Open — MEDIUM | 1 |
 | Open — LOW | 2 |
-| Items COMPLETE | 30 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001) |
+| Items COMPLETE | 31 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001) |
 
 ### High-Risk Areas
 
@@ -799,6 +799,69 @@ After governance Phase 2 closes (PROFIT-LLM-001 transitions to `IN_PROGRESS` onl
 This item is decision-track, not bug-track. It exists because the reasoning behind the deferral matters as much as the deferral itself — a future agent reading the file structure could otherwise see two model strings configured and treat it as an oversight instead of an intentional ordering decision. The operator-confirmed priority on 2026-04-25 was: ship Phase 2 cleanly first; unify second; never bundle.
 
 If `PROFIT-CAL-001`'s calibration-feedback wiring lands before this item moves to `IN_PROGRESS`, the per-lane confidence scaling will detect calibration drift automatically — that strengthens the safety net for this swap and tightens the revert criteria above.
+
+---
+
+### PROFIT-EDGE-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EDGE-001 |
+| **Title** | `main.py:688` no_keywords kill rejects LLM-emitted signal regardless of LLM result |
+| **Category** | Decision Path / Profit-Path Integrity |
+| **Severity** | HIGH |
+| **Status** | COMPLETE (2026-04-26, v0.29.56) |
+| **Priority** | NOW |
+| **Owner** | Shared |
+| **Depends On** | — |
+| **Blocks** | (now closed: previously blocked the bot from ever recording a paper trade end-to-end against LLM-only signal; transitively blocked the Phase 2 governance agent from observing keyword-config gaps in its audit log) |
+
+**Description**
+The `if not keywords:` check at `main.py:688` rejected every candidate where keyword scoring (`_keyword_score()` in `analysis/signal_analyzer.py`) returned an empty list, regardless of whether the LLM had emitted a usable signal. In the bot's pipeline the LLM runs even when keyword scoring is empty (since the pre-LLM gate is currently disabled by default), so an LLM that *did* identify semantic relevance and produced a non-trivial probability movement was being silently discarded immediately after producing the signal. The `SIGNAL_ANALYSIS_DETAIL` event emitted from inside `estimate_probability()` shows `llm_useful=True` and the adjusted probability; the same timestamp's `ANALYSIS_REJECTED reason=no_keywords` event from `main.py:688` then kills the candidate.
+
+**Why it mattered to profitability / safety / reliability**
+Across nine days of unattended paper-mode operation under v0.29.54 (window 2026-04-17 → 2026-04-26), the bot processed 666 real-market `SIGNAL_ANALYSIS_DETAIL` events. Five of those (0.75%) had `llm_useful=True` with non-zero `llm_probability_movement`: cricket news on the KXPSL cricket market, ICE-funding news on the KXSBUDGETRES budget-resolution market, and Iran-talks news on the KXTRUMPIRAN visit market. All five had empty `keywords` lists because the headlines did not contain glossary keywords from `GEOPOLITICAL_SIGNALS` or per-market keyword config, even though the LLM correctly identified the headlines as semantically related to the markets. All five were rejected at `main.py:688`. The bot's `paper_trades` table contained zero rows at the time of investigation — the *architecture had never produced an end-to-end paper trade against LLM-only signal*. Beyond the direct profitability impact, the Phase 2 governance agent (shipped 2026-04-25 as v0.29.55) is structurally designed to learn keyword-config gaps from exactly these "LLM-positive, keyword-empty" events; with them filed as `ANALYSIS_REJECTED reason=no_keywords` rather than surfacing as candidate evidence, the governance agent had no signal to learn from.
+
+**Evidence / Source**
+- Trade-log analysis (2026-04-26, scripted, in conversation memory `project_no_edge_diagnosis.md`):
+  - 666 real-market SAD events; 5 with `llm_useful=True`; 100% of those 5 followed by `ANALYSIS_REJECTED reason=no_keywords` at `+0.00s`.
+  - Timestamps: `2026-04-23T19:19:02` and `T19:19:05` (KXSBUDGETRES x2, "ICE funding resolution"), `2026-04-24T16:50:17` (KXTRUMPIRAN, "Trump dispatching Witkoff/Kushner"), `2026-04-25T16:14:44` (KXPSL, "Babar/Bracewell lead Zalmi"), `2026-04-26T00:16:54` (KXTRUMPIRAN, "Iran talks stall").
+  - All 5 had `pre_llm_quality_pass: True` — the pre-LLM gate (which is itself disabled in deployment) was *not* the kill point.
+- Code trace (`main.py:686-703`, `analysis/signal_analyzer.py:1123`): `estimate_probability()` returns `(estimated_prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf)` and main.py only consults `keywords` for the rejection decision.
+- Pure-logic test artifact: `/tmp/phase3_hypothesis_test.py` confirmed the hypothesis pre-fix (5/5 hypothesis-confirming + 4/4 regression-safe).
+
+**Fix**
+`main.py:688` updated to gate on "neither signal source produced anything":
+
+```python
+llm_emitted_signal = llm_mag is not None and llm_mag != "none"
+if not keywords and not llm_emitted_signal:
+    log_analysis_rejected(reason="no_keywords")
+    return
+```
+
+The change preserves the CLAUDE.md anti-blend gotcha — keywords remain a gate when LLM is silent, and LLM probability is *not* blended with keyword-derived probability on the LLM-only path (the LLM result is the sole signal source). It only spares the LLM-emitted-signal-with-empty-keywords case that the prior check incorrectly rejected.
+
+**Acceptance Criteria** (all met at commit time)
+- Pre-fix kill mechanism documented from concrete trade-log evidence — **MET**.
+- Hypothesis verified before code change via isolated logic test — **MET** (`/tmp/phase3_hypothesis_test.py`).
+- Production fix covered by two new pytest cases that pin both directions of the contract: LLM-positive empty-keywords proceeds; LLM-silent empty-keywords still rejects — **MET** (`tests/test_main_pipeline.py::test_process_candidate_proceeds_when_llm_emits_signal_despite_no_keywords` and `::test_process_candidate_still_rejects_when_neither_signal_source_speaks`).
+- Existing test `test_process_candidate_returns_early_when_no_keywords` continues to pass unchanged (its mock has `llm_mag=None`, the LLM-silent case the fix preserves) — **MET**.
+- Full pytest suite green — verified at fix-commit time.
+- VERSION + CHANGELOG bumped per `~/.claude/rules/release_versioning.md` — **MET** (0.29.55 → 0.29.56).
+
+**Notes — necessary but possibly not sufficient**
+This fix unblocks the kill at `main.py:688`. Once an event proceeds past line 688 it still has to survive the rest of the funnel: BLEND/G1 (`blended_confidence × regime_confidence ≥ 0.35`), readiness G2-G6, executor E1-E12. In the diagnosis window all 173 BLEND_DECISIONs were G1-blocked because every lane probability was 0.5 (no signal). With `fast_lane_p` now non-0.5 on LLM-positive blends, the G1 math shifts in ways that were not simulated before this fix. Two outcomes are possible post-deploy:
+
+1. *Best case:* LLM-positive blends pass G1 and at least one of the rare-but-real signal events results in a paper trade. The audit log gains its first nontrivial `OPPORTUNITY` records with `edge > 0.02`, and the Phase 2 governance agent begins observing real signal candidates.
+2. *Worst case:* G1 still blocks the new blends because lane disagreement (`fast_lane_p=0.568` vs accumulation/structural at 0.5) produces low blended_confidence. The audit log will then contain LLM-positive G1-blocked records — a *qualitatively different* failure mode than the all-0.5 BLEND_DECISIONs we have today, and far more actionable for the next investigation iteration.
+
+Both outcomes are useful. The fix moves the kill point from a place where there's no signal to debug to a place where there is. The audit log post-deploy is the actual evidence; if a new dominant kill point emerges, file it as the next debt entry and iterate.
+
+**Related**
+- The on-record P0.5 / P3.4 diagnosis ("input/market mix produces ~99% no-signal events") is *directionally correct* and remains the long-term strategic answer (Appendix A integration; narrower-scope markets). PROFIT-EDGE-001 is the short-term tactical answer for the 0.75% of events where the LLM does find signal.
+- Phase 2 governance (v0.29.55) is the architecturally correct fix for the keyword-glossary-gap symptom this bug was masking. Post-fix the governance agent's audit log will start receiving the candidate evidence it needs to learn from.
+- `PROFIT-CAL-001` (closed 2026-04-24, v0.29.47) wired the calibration loop end-to-end but cannot exercise itself in production until a paper trade actually resolves. PROFIT-EDGE-001 is the unblocker for that observation: until LLM-positive signals survive past `main.py:688`, no paper trade can resolve, and CAL-001's runtime verification stays in unit-test-only mode.
 
 ---
 
