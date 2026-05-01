@@ -6,7 +6,7 @@ A 24/7 automated paper/live trading bot for [Kalshi](https://kalshi.com) geopoli
 
 Monitors RSS news feeds (wire services + government press feeds + regional / OSINT desks), Bluesky journalist timelines, and Reddit for breaking geopolitical events; matches them against open Kalshi markets via the multi-lane decision pipeline (fast / accumulation / structural lanes blended under a market-regime classifier); estimates probability shifts using a local LLM (Ollama `qwen2.5:7b`); evaluates a six-gate readiness contract (G1–G6) plus a twelve-gate executor (E1–E12); and records paper trades. Live trading requires explicit opt-in.
 
-> **Status (2026-04-26):** Paper-mode operator-stopped pending the v0.29.58 stack restart. The 2026-04-26 PROFIT-EDGE-001/002/003 fix stack lowered G4 (regime confidence) and G1 (scaled confidence) thresholds, added 21 categorical priors for the policy/geopolitical series we engage, and closed the line-688 LLM-positive-but-no-keywords kill. Simulation harness in [`scripts/simulations/`](scripts/simulations/) predicts the readiness + executor gates clear cleanly post-fix. Restart launches the v0.29.58 code path for the first time.
+> **Status (2026-05-01):** **Operational host migrated from MacBook to Mac Studio.** All 24/7 paper-mode + governance-agent workloads now run on the Mac Studio; the MacBook is archive-only and will not run live or paper trades again. The MacBook's last paper-mode boot ran v0.29.58 from 2026-04-27T13:03:19Z and was operator-stopped at 2026-05-01T13:05:54Z; the v0.29.58 stack (PROFIT-EDGE-001/002/003 fixes) is the code path the Mac Studio inherits. The 13-day MacBook paper soak (2026-04-18 → 2026-05-01) emitted 260 OPPORTUNITY events, 17 SKIPPED, **3 PAPER_TRADEs** (all on `KXFISAEXTEND-26APR-MAY0{1,2,3}` from VitalLaw.com, 0/3 wins, source-credibility multiplier auto-dropped to 0.5x); 248 EVIDENCE_INGESTION + 248 DOSSIER_UPDATE + 178 STRUCTURAL_PRIOR_RECOMPUTE + 3 CALIBRATION_CHECK events confirm the multi-lane pipeline is fully wired in production. Net: **the bot is no longer architecturally inert** (PROFIT-EDGE-004's "edge=0.0 across all lanes" diagnosis is sharpened — 255/260 OPPORTUNITY records still have `edge=0.0`, but two had **non-trivial positive edge** that produced no trade, which is fresh empirical evidence that the OPPORTUNITY → SKIPPED gap (`PROFIT-OBS-003`) is more material than originally scoped, and the "matcher quality / market-mix" investigation continues on the Studio with full per-event telemetry available in `logs/trades/`). **Governance Agent Phase 2 (shadow-mode) launchd jobs were never bootstrapped on the MacBook;** they were bootstrapped on the Mac Studio on 2026-05-01 at ~14:00 UTC against `qwen3:14b` — the **14-day shadow soak clock starts there, not on the MacBook**, with the §8.5 acceptance window targeting **2026-05-15** (≥30 decisions accumulated, ≥85% deemed reasonable on manual review). The Mac Studio replays the MacBook's `paper_trades.db` (3 trades, 405-source `source_stats` registry, 2,508-row `subreddit_candidates` discovery state, 1-source `source_credibility` graduation entry) and `evidence_store.db` (32 dossiers / 248 dossier_updates / 7,510 dossier_update_evidence rows / 32 structural_priors) via the SQL-dump + restore pattern documented in [`transfer/macbook_handoff_2026-05-01/`](transfer/macbook_handoff_2026-05-01/) so a clean `git clone` brings the full operational state.
 
 See [CLAUDE.md](CLAUDE.md) for project-local agent rules + critical gotchas (Kalshi RSA-PSS signing, websockets-version-dependent header kwarg, market `status="active"`, etc). See [AGENTS.md](AGENTS.md) for the global agent contract.
 
@@ -17,9 +17,10 @@ See [CLAUDE.md](CLAUDE.md) for project-local agent rules + critical gotchas (Kal
 | Topic | Document | Status |
 |---|---|---|
 | **Active work plan** | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Stages S0–S5; Appendix A (news sources, Tiers 1–2 integrated; Tier 3 deferred); Appendix B (Polymarket dual-venue, blocked on retail waitlist); Appendix C (post-Mac-Studio LLM/feedback backlog) |
-| **Unified debt tracking** | [`docs/profit_path_debt_log.md`](docs/profit_path_debt_log.md) | Authoritative item-by-item log (per CLAUDE.md). PROFIT-EDGE-001/002/003 closed 2026-04-26. |
+| **Unified debt tracking** | [`docs/profit_path_debt_log.md`](docs/profit_path_debt_log.md) | Authoritative item-by-item log (per CLAUDE.md). PROFIT-EDGE-001/002/003 closed 2026-04-26; 2026-05-01 13-day MacBook paper soak summary appended (PROFIT-OBS-003 promoted to HIGH/NOW; PROFIT-EDGE-004 follow-up evidence; PROFIT-OBS-004 + PROFIT-CUTOVER-001 + PROFIT-PHASE2-001 added). |
 | **Implementation contract** | [`docs/IMPLEMENTATION_CONTRACT.md`](docs/IMPLEMENTATION_CONTRACT.md) | Binding invariants + boundary rules across `/feeds`, `/analysis`, `/tasks`, `/trading` |
-| **Governance agent (Phase 2 in flight)** | [`docs/governance/`](docs/governance/) | Operator manual + Phase 2 runbook (v0.29.55). Shadow-mode for ≥14 days. |
+| **Governance agent (Phase 2 shadow soak in progress on Mac Studio)** | [`docs/governance/`](docs/governance/) | Operator manual + Phase 2 runbook (v0.29.55). 14-day soak started 2026-05-01 on Mac Studio (`qwen3:14b`); §8.5 acceptance target ETA **2026-05-15**. |
+| **Mac Studio operational handoff** | [`transfer/macbook_handoff_2026-05-01/`](transfer/macbook_handoff_2026-05-01/) | SQL dumps of `paper_trades.db` + `evidence_store.db` from the MacBook's 13-day v0.29.5→v0.29.58 paper soak, plus `MANIFEST.md` and `PROVENANCE.md`. Restored on the Studio by [`scripts/restore_macbook_handoff.sh`](scripts/restore_macbook_handoff.sh) so a fresh `git clone` carries the full paper-trade history, dossier corpus, source_credibility graduations, and subreddit-discovery state across the cutover. |
 | **Simulation harness** | [`scripts/simulations/README.md`](scripts/simulations/README.md) | Three captured simulations (G1/G4 calibration, readiness gate, executor); buildout plan for seven more in [`docs/superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md`](docs/superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md) |
 | **Recent dated plans** | [`docs/superpowers/plans/`](docs/superpowers/plans/) | Governance Phase 1/2; simulation buildout |
 | **Archive** | [`docs/_archive/`](docs/_archive/) | Closed plans + investigations; not load-bearing |
@@ -112,6 +113,8 @@ main.py                              — Async entry point; ~10 concurrent tasks
 ---
 
 ## Setup
+
+> **Bringing up a new host (Mac Studio or replacement workstation)?** Read [Mac Studio operational handoff](#mac-studio-operational-handoff-2026-05-01) below first — there is a `scripts/restore_macbook_handoff.sh` step that **must** run before the first bot launch on a new machine, so the SQLite state (paper trades, bankroll, dossiers, source credibility, subreddit discovery) carries across via the committed SQL dumps in `transfer/macbook_handoff_2026-05-01/`. Skipping it gives the new host a fresh-DB baseline and erases 13 days of paper-trade institutional memory.
 
 ### 1. Clone and create virtualenv
 
@@ -207,6 +210,130 @@ tail -f logs/app/bot.log
 ```
 
 Installation is automated via `scripts/setup_launchd.sh`. Before first launch, ensure Ollama is running (it autostarts on macOS via the Ollama tray app).
+
+---
+
+## Mac Studio operational handoff (2026-05-01)
+
+This section documents the cutover from MacBook to Mac Studio so anyone (or any future agent) coming in cold can re-establish or re-verify the production runtime. **Both hosts must never run the bot concurrently** — the bot's two SQLite stores (`data/paper_trades.db`, `data/evidence_store.db`) are designed for single-writer mode, the source-credibility multipliers diverge under concurrent updates, and Reddit / Kalshi will see the combined external IP signature as a rate-abuse pattern (the CLAUDE.md "Concurrent Mac + Windows instances" gotcha applies equally to two Macs sharing a network).
+
+### Why the cutover happened
+
+- The MacBook's 18 GB unified memory is the hardware ceiling for `qwen3:8b` governance + `qwen2.5:7b` signal-analyzer concurrency. The Mac Studio's larger memory footprint allows the governance LLM to run at `qwen3:14b` (per [`docs/governance/PHASE2_RUNBOOK.md`](docs/governance/PHASE2_RUNBOOK.md) "Model selection (hardware-conditional)"), which is the configuration the Phase 2 spec was designed against.
+- Phase 2 governance shadow soak (per [`docs/governance/PHASE2_RUNBOOK.md`](docs/governance/PHASE2_RUNBOOK.md)) requires ≥14 days of clean shadow operation against `qwen3:14b` on Mac Studio. The launchd plists for `com.kalshi.governance.fast` (every 2 h) and `com.kalshi.governance.deep` (daily 09:00) were **never bootstrapped on the MacBook** — the Mac Studio was the intended host all along. Soak clock started 2026-05-01 ~14:00 UTC.
+- The MacBook is preserved as an offline analysis workstation. Its data — 13 days of paper soak telemetry — is migrated via the SQL-dump pattern documented below so the Studio inherits the operational history rather than starting fresh.
+
+### What gets carried across
+
+The cutover preserves four bot-state pillars so the Studio's first paper run does not regress on already-learned behaviour:
+
+1. **Paper-trade history.** `data/paper_trades.db.paper_trades` — three rows for `KXFISAEXTEND-26APR-MAY0{1,2,3}`. Lifetime P&L: −$7.50 from a $50 starting bankroll, current `bot_state.notional_bankroll = 42.50`. Dropping these would reset bankroll to the `BANKROLL` env default and erase the only resolved-trade evidence the calibration loop has.
+2. **Source credibility graduations.** `data/paper_trades.db.source_credibility` — currently one row: `VitalLaw.com` at 0W/3L, multiplier 0.5×, auto-flagged `no (3/10)`. Without this row the LLM would re-trust VitalLaw at 1.0× and could repeat the same losing entries. The graduation table is the executor's institutional memory.
+3. **Source statistics + Reddit discovery state.** `data/paper_trades.db.source_stats` (405 rows) records the lifetime funnel per source — 3,960 posts seen → 249 signals → 249 opportunities → 3 trades. `data/paper_trades.db.subreddit_candidates` (2,508 rows) is the governance-discovery state for adaptive sub-reddit registry expansion (memory note: `project_adaptive_governance_direction`). Both feed the Phase 2 governance agent's decision context.
+4. **Dossier + structural-prior corpus.** `data/evidence_store.db` — 32 dossiers, 248 dossier_updates, **7,510 dossier_update_evidence rows**, 32 structural_priors. The structural lane and accumulation lane both depend on this corpus to produce non-uniform priors. A fresh DB would put every market back to the time-to-close fallback and re-invalidate the EDGE-002 categorical-prior fixes.
+
+### Migration mechanics
+
+`.gitignore` excludes `data/*.db` and `logs/` ("too large/personal for version control"). Following the existing `windows_archive/` precedent, the cutover uses **committed SQL dumps + a logs tarball + plaintext reports + a restore script** rather than committing binary DB files or the live log directories. The handoff is structured as three layers so the Studio operator pulls **everything** from the MacBook in a single `git clone` and never returns to the MacBook physically:
+
+**Layer 1 — Runtime state** (required before first bot launch):
+- [`transfer/macbook_handoff_2026-05-01/paper_trades.sql`](transfer/macbook_handoff_2026-05-01/paper_trades.sql) — `sqlite3 .dump` of the entire MacBook `paper_trades.db` (schema + data; 456 KB; restored to `data/paper_trades.db`).
+- [`transfer/macbook_handoff_2026-05-01/evidence_store.sql`](transfer/macbook_handoff_2026-05-01/evidence_store.sql) — `sqlite3 .dump` of `evidence_store.db` (1.2 MB; restored to `data/evidence_store.db`).
+
+**Layer 2 — Bulk log archive** (optional extract; canonical for any post-cutover audit):
+- [`transfer/macbook_handoff_2026-05-01/logs_app_and_trades.tar.gz`](transfer/macbook_handoff_2026-05-01/logs_app_and_trades.tar.gz) — 27 MB compressed (151 MB raw). Contains the entire 13-day `logs/app/` (33 files: bot logs, error logs, daily-report stdout, launchd stdout/stderr) + `logs/trades/` (14 files: JSONL decision-event archive that backs the `PROFIT-EDGE-004` / `PROFIT-OBS-003` / `PROFIT-RUNTIME-001` evidence). Extracts to `mac_archive/macbook_2026-05-01_import/logs/{app,trades}/` — a `.gitignore`d destination, separate from the Studio's own going-forward `logs/` so the archives don't co-mingle. The tarball is the **canonical committed copy**; the extracted tree is regenerable from it.
+
+**Layer 3 — Plain-text reports** (committed directly, no extract step needed):
+- [`transfer/macbook_handoff_2026-05-01/reports/daily_review/`](transfer/macbook_handoff_2026-05-01/reports/daily_review/) — 14 daily-review reports as `.txt` files (operator-facing rollups of trade-summary, signal-quality, match-quality, source-credibility, go-live-assessment per UTC day; readable in any editor).
+- [`transfer/macbook_handoff_2026-05-01/reports/code_review_eval/`](transfer/macbook_handoff_2026-05-01/reports/code_review_eval/) — `summary.md` (5.8 KB) and 30 per-test-repo CSVs from the 2026-04-27 `code-review-graph` evaluation harness run.
+
+**Documentation:**
+- [`transfer/macbook_handoff_2026-05-01/MANIFEST.md`](transfer/macbook_handoff_2026-05-01/MANIFEST.md) — captured row counts, file hashes, source-machine identity, source date range, restore commands, paste-friendly verification checklist.
+- [`transfer/macbook_handoff_2026-05-01/PROVENANCE.md`](transfer/macbook_handoff_2026-05-01/PROVENANCE.md) — narrative provenance.
+
+**Restore script:**
+- [`scripts/restore_macbook_handoff.sh`](scripts/restore_macbook_handoff.sh) — restore script. Flags: `--force` (overwrite existing `data/*.db`), `--extract-logs` (also extract the Layer 2 tarball), `--extract-logs-only` (skip DB restore, just extract logs), `--dry-run`. Refuses to overwrite without `--force`; verifies post-restore row counts + key values; idempotent. macOS-default bash 3.2 compatible.
+
+### Studio first-launch recipe
+
+On a fresh Mac Studio (after `git clone`):
+
+```bash
+# 1. Standard setup — clone, virtualenv, dependencies (see "Setup" above)
+git clone https://gitlab.com/HushUr2Pups8008/kalshi-bot.git
+cd kalshi-bot
+python3.14 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# 2. Configure .env (Kalshi credentials, BANKROLL, etc.)
+cp .env.example .env
+$EDITOR .env                       # set KALSHI_API_KEY_*, leave LIVE_TRADING_ENABLED=false
+
+# 3. Pull both Ollama models — Mac Studio gets qwen3:14b for governance
+ollama pull qwen2.5:7b             # signal analyzer (unchanged from MacBook)
+ollama pull qwen3:14b              # governance agent (Mac Studio model — see PHASE2_RUNBOOK.md "Model selection")
+
+# 4. Restore the MacBook handoff state (BEFORE first bot launch)
+#    Use --extract-logs to also expand the bot.log + trades JSONL archive into
+#    mac_archive/macbook_2026-05-01_import/logs/. Drop the flag if you only
+#    want the DBs restored and intend to consult the tarball later via
+#    ./scripts/restore_macbook_handoff.sh --extract-logs-only
+./scripts/restore_macbook_handoff.sh --extract-logs
+
+# 5. Edit governance plists for qwen3:14b (per PHASE2_RUNBOOK.md "Model selection")
+sed -i '' 's|qwen3:8b|qwen3:14b|g' ops/launchd/com.kalshi.governance.fast.plist
+sed -i '' 's|qwen3:8b|qwen3:14b|g' ops/launchd/com.kalshi.governance.deep.plist
+
+# 6. Bootstrap the bot LaunchAgent + governance LaunchAgents
+cp ops/launchd/com.kalshi.governance.fast.plist ~/Library/LaunchAgents/
+cp ops/launchd/com.kalshi.governance.deep.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kalshi.governance.fast.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kalshi.governance.deep.plist
+# (Bot LaunchAgent setup follows the same `scripts/setup_launchd.sh` flow as the MacBook.)
+
+# 7. Smoke-test, then verify the soak clock is ticking
+launchctl print gui/$(id -u)/com.kalshi.governance.fast | grep -E '(state|last|next)'
+.venv/bin/python -m main --report
+.venv/bin/python -m main --credibility    # should show VitalLaw.com 0W/3L / 0.5× — confirms restore worked
+```
+
+### What the MacBook keeps doing
+
+After cutover, the MacBook is a **decommissioned operational host**. The handoff bundle in `transfer/macbook_handoff_2026-05-01/` carries the full 13-day v0.29.5 → v0.29.58 paper-era state across to the Studio (DBs + logs + reports), so the Studio operator never needs to physically return to the MacBook for any future analysis — `git pull` + `./scripts/restore_macbook_handoff.sh --extract-logs` reconstructs the full evidence base locally on the Studio. The MacBook's local copies of `data/` and `logs/` remain on its disk as a redundant fallback; treat them as superseded by the committed handoff. **Do not start the bot on the MacBook again** — the lockfile-based duplicate-start protection (`data/bot_runtime.lock` via `fcntl.flock`) is local-only and does not coordinate across machines, so a concurrent MacBook + Mac Studio run could corrupt the source-credibility table or trip Kalshi/Reddit IP-rate signals.
+
+If the Mac Studio fails and the MacBook needs to take over temporarily, the failover sequence is:
+
+```bash
+# On Mac Studio (if reachable):
+launchctl bootout gui/$(id -u)/com.kalshi.governance.fast
+launchctl bootout gui/$(id -u)/com.kalshi.governance.deep
+launchctl unload ~/Library/LaunchAgents/com.jake.kalshi-bot.plist
+
+# Reverse-direction handoff: dump Studio dbs to transfer/, commit, push
+# Then pull on MacBook and restore via scripts/restore_macbook_handoff.sh
+
+# On MacBook:
+git pull
+rm -f data/bot_runtime.lock                             # the 2026-04-29 stale lock from pid 793
+./scripts/restore_macbook_handoff.sh --force            # restore from latest committed dump
+launchctl load ~/Library/LaunchAgents/com.jake.kalshi-bot.plist
+```
+
+This is the canonical "single-writer at a time" pattern. The bot is not designed for active-active operation; treat the failover as an explicit cutover, not a load-balanced fallback.
+
+### Pre-cutover housekeeping that did not transfer
+
+A few MacBook-side artifacts are intentionally **not** part of the handoff bundle (see `transfer/macbook_handoff_2026-05-01/MANIFEST.md` "Not included" for the full list with rationale):
+
+- **`data/bot_runtime.lock`** — a runtime-only lockfile from the last MacBook bot session (pid 793, started 2026-04-30T04:00:58Z, now stale by tens of hours). It is `.gitignore`d and self-heals on stale PIDs. The Studio writes its own; do not copy or restore.
+- **`data/evidence_store.db-shm` + `-wal`** — SQLite WAL artifacts. Not durable state; SQLite recreates them on first open of the restored `evidence_store.db`. Their contents at handoff time are already inside the SQL dump.
+- **`evaluate/test_repos/`** — 172 MB of cloned external git repos (Express, FastAPI, Flask, Gin, httpx, nextjs) used as inputs to the `code-review-graph` evaluation harness. Trivially re-clonable; not bot data. The CSV outputs (Layer 3 of the handoff) are the unique results and ARE included.
+- **`logs/coverage/`, `logs/tests/`** — pytest coverage artifacts and per-run pytest output. Regeneratable via `pytest --cov`; not load-bearing for any audit.
+- **`.venv/`, `__pycache__/`, `.ruff_cache/`, `.hypothesis/`, `.code-review-graph/`** — derived/cached artifacts. Regenerate on first install / first run on the Studio.
+- **`.env`** — secrets file; `.gitignore`d. The Studio operator sets up `.env` independently per `.env.example`.
+
+Everything that *is* load-bearing — the two SQLite databases, the entire 13-day rotated bot.log + JSONL trade-log archive, the daily-review reports, and the code-review-graph eval outputs — ships through the handoff bundle. A fresh `git clone` on the Studio carries it all.
 
 ---
 

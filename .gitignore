@@ -62,6 +62,12 @@ windows_archive/analysis/2026-04-18_import/db/
 # README, PROVENANCE.md, manifest.json, and notes.md are NOT listed above
 # and will be committed as the durable provenance record
 
+# MacBook -> Mac Studio handoff (2026-05-01): extracted logs from the tarball
+# in transfer/macbook_handoff_2026-05-01/ live here. Same pattern as the windows
+# archive above -- the tarball is canonical, the extracted tree is re-derivable.
+# Re-extract: ./scripts/restore_macbook_handoff.sh --extract-logs
+mac_archive/macbook_2026-05-01_import/
+
 # PAT / credential files
 *_pat.txt
 JRP_GamingDesktop_pat.txt

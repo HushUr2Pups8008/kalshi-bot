@@ -3,6 +3,23 @@
 This runbook covers Phase 2 (shadow mode) operations. Phase 3 (real mode)
 adds an additional flip protocol; Phase 4 adds Claude-API escalation.
 
+> **Active soak (2026-05-01):** the Phase 2 launchd jobs `com.kalshi.governance.fast`
+> and `com.kalshi.governance.deep` were bootstrapped on the **Mac Studio** at
+> approximately **2026-05-01 ~14:00 UTC** against `qwen3:14b` (Mac-Studio-only
+> model selection per "Model selection (hardware-conditional)" below). The §8.5
+> 14-day acceptance window targets close on **2026-05-15 ~14:00 UTC**, requires
+> **≥30 `GOVERNANCE_DECISION` events** accumulated and **≥85%** deemed reasonable
+> on manual review (per the "Manual decision review" section). The **MacBook never
+> hosted these launchd jobs** (`launchctl list` on the MacBook returns zero
+> `com.kalshi.governance.*` entries) — the soak clock starts on the Studio, not
+> on whichever host the bot itself was running on previously. Engineering tracker:
+> `PROFIT-PHASE2-001` in [`docs/profit_path_debt_log.md`](../profit_path_debt_log.md);
+> operational state: `PROFIT-CUTOVER-001` in the same file. Do **not** restart the
+> soak from zero unless `applied=` in `runtime_overrides.yaml` grew during the
+> window or a `KILL_SWITCH` event was emitted; benign interruptions (host reboot,
+> Ollama restart) pause the clock, not reset it — record the gap in the entry's
+> Notes.
+
 ## Prerequisites
 
 - macOS host (MacBook 18GB or Mac Studio) with Ollama installed.

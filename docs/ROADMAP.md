@@ -20,7 +20,7 @@ No repo-level semver policy was documented through the v0.29.x stream (patch ver
 
 ---
 
-## Governance Agent (Phase 1 in flight)
+## Governance Agent (Phase 2 shadow soak in progress on Mac Studio)
 
 **Purpose:** Replace the operator's diagnostic→edit→commit→restart loop with
 an LLM-driven process that decides what sources/keywords/thresholds to
@@ -28,13 +28,15 @@ add/remove/tune, with safety scaffolding ensuring the agent cannot do harm.
 
 **Spec:** `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md`
 **Phase 1 plan:** `docs/superpowers/plans/2026-04-24-governance-agent-phase-1-plan.md`
+**Phase 2 plan:** `docs/superpowers/plans/2026-04-25-governance-agent-phase-2-plan.md`
+**Phase 2 runbook:** `docs/governance/PHASE2_RUNBOOK.md`
 
 | ID | Task | Status | Owner | Notes |
 |----|------|--------|-------|-------|
 | GOV.P1 | Runtime overrides plumbing (read-only file format, hot-reload, safety primitives, CLI shim) | COMPLETE | Claude | Phase 1 of 4. Shipped as 0.29.52. See `CHANGELOG.md`. |
-| GOV.P2 | Local-only governance agent in shadow mode | NOT_STARTED | Claude | Spec §8. Builds on P1. Requires Mac Studio (post-2026-04-29). |
-| GOV.P3 | Real-mode flip + auto-revert | NOT_STARTED | Claude | Spec §9. Requires P2 + 14d shadow soak. |
-| GOV.P4 | Tiered LLM (Claude API escalation) + weekly self-review | NOT_STARTED | Claude | Spec §10. Requires P3 + 2w real-mode soak. |
+| GOV.P2 | Local-only governance agent in shadow mode | IN_PROGRESS | Claude | Spec §8. Code shipped as 0.29.55 (Phase 2 Tasks 22–26 per `git log`); launchd plists bootstrapped on **Mac Studio** 2026-05-01 ~14:00 UTC against `qwen3:14b`; **§8.5 14-day shadow soak in progress, ETA close 2026-05-15**. Engineering tracker: `PROFIT-PHASE2-001` in [`profit_path_debt_log.md`](profit_path_debt_log.md). MacBook never hosted these launchd jobs. |
+| GOV.P3 | Real-mode flip + auto-revert | NOT_STARTED | Claude | Spec §9. Requires P2 + 14d shadow soak (`PROFIT-PHASE2-001` close). Earliest start: post-2026-05-15. |
+| GOV.P4 | Tiered LLM (Claude API escalation) + weekly self-review | NOT_STARTED | Claude | Spec §10. Requires P3 + 2w real-mode soak. Also gates `PROFIT-LLM-001` (signal-analyzer LLM unification) per its own deferral rationale. |
 
 ---
 

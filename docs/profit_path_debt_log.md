@@ -10,14 +10,15 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-04-26 |
-| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window |
+| Last Updated | 2026-05-01 |
+| Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 38 |
-| Open — HIGH | 2 |
+| Total Items | 44 |
+| Open — HIGH | 4 |
 | Open — MEDIUM | 1 |
-| Open — LOW | 2 |
+| Open — LOW | 3 |
+| Items IN_PROGRESS | 1 (PROFIT-PHASE2-001 — soak clock running, no operator action until 2026-05-15) |
 | Items COMPLETE | 33 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003) |
 
 ### High-Risk Areas
@@ -25,14 +26,19 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 1. **Traceability and replay gaps** — runtime evidence IDs are random, current-signal evidence can miss the matching `BLEND_DECISION`, and replay-critical `implied_probability` is not persisted by the live accumulation path.
 2. **Source-class and evidence-quality loss** — live evidence conversion collapses all news into `source_class="news"`, weakening source diversity, scorer quality, readiness G2, and structural context.
 3. **Observability under long runs** — app-log rollover policy is time-only and documentation disagrees with code behavior on macOS, making go-live audit trails fragile.
-4. **No-edge / no-trade pattern under current input + market mix** — S4.5b (47h) and S4.5c-aggregate (~60h) windows both produced zero paper trades. Per ROADMAP P0.5 + P3.4 analysis, the LLM is correctly anchoring to market price across the current geopolitical broad-scope market mix (universal anchor rate ≈ 100% across the 32 audited source-market pairs); this is an *input-mix and market-scope* issue, not a code defect. The remediation path is upstream — Appendix A integration (broader source classes) and narrower-scope markets — currently gated behind P4-GATE outcome known. **This is the diagnostic-cluster operator-flagged 2026-04-26 as "the largest historical issue with the bot producing edge."** Calibration wiring (`PROFIT-CAL-001`) closed 2026-04-24 but cannot itself produce edge — calibration *measures* belief quality, the no-edge problem is upstream of belief generation.
+4. **No-edge / no-trade pattern under current input + market mix** — S4.5b (47h) and S4.5c-aggregate (~60h) windows both produced zero paper trades. Per ROADMAP P0.5 + P3.4 analysis, the LLM is correctly anchoring to market price across the current geopolitical broad-scope market mix (universal anchor rate ≈ 100% across the 32 audited source-market pairs); this is an *input-mix and market-scope* issue, not a code defect. The remediation path is upstream — Appendix A integration (broader source classes) and narrower-scope markets — currently gated behind P4-GATE outcome known. **This is the diagnostic-cluster operator-flagged 2026-04-26 as "the largest historical issue with the bot producing edge."** Calibration wiring (`PROFIT-CAL-001`) closed 2026-04-24 but cannot itself produce edge — calibration *measures* belief quality, the no-edge problem is upstream of belief generation. **Post-2026-04-28 update:** the EDGE-001/002/003 fix stack (v0.29.58) closed three sequential readiness-funnel kills and the kill point relocated to the executor at `edge = 0.0`; this no-edge pattern is now formally registered as `PROFIT-EDGE-004` with a sequenced investigation across matcher Jaccard threshold, pre-LLM-gate re-evaluation, market-mix specificity, and Appendix A source completeness. The "diagnostic cluster" of High-Risk Area #4 is therefore now an *open active investigation* with concrete next steps rather than a strategic backlog item. **Post-2026-05-01 update (full 13-day MacBook paper soak archive aggregated post-cutover):** the EDGE-001/002/003 stack also produced **3 actual paper trades** in the final ~36h of MacBook runtime (all on `KXFISAEXTEND-26APR-MAY0{1,2,3}` from VitalLaw.com, all losses, all with logged `edge=-0.068` — see PROFIT-OBS-004 for the sign-bug explanation; the actual decision-side edge was +0.068), and the lifetime trade-log confirms **2 OPPORTUNITY events at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE despite clearing PAPER_MIN_EDGE = 0.02** — direct evidence that PROFIT-OBS-003 is *not* limited to edge=0.0 candidates as the original 2026-04-28 entry implied. The OPPORTUNITY → PAPER_TRADE conversion gap is therefore both a "no edge" upstream condition (PROFIT-EDGE-004) *and* a "positive edge silently lost" downstream condition (PROFIT-OBS-003 promoted to HIGH/NOW). The two are now co-equal blockers; closing either in isolation does not resolve the no-trade pattern.
 
 ### Recommended Execution Order
 
-1. `PROFIT-VALID-001` + remaining `PROFIT-OBS-*` items (validation and observability hardening; needed before P4-GATE).
-2. `PROFIT-EVID-001` (blocked pending contract decision on non-trading evidence intake).
-3. ROADMAP P4.1–P4.3 are gated behind S4.5c-prime (post-CAL-001 re-validation window) and P4-GATE outcome — the no-edge pattern in High-Risk Area #4 will only resolve via P4-GATE-driven input/market-mix changes (Appendix A integration), not by any further work in `/analysis` or `/trading`.
-4. Remaining MEDIUM and LOW items in dependency order.
+1. `PROFIT-OBS-003` (now HIGH/NOW) — close the OPPORTUNITY → PAPER_TRADE silent-exit gap so the post-EDGE-003 audit can attribute every kill to a specific gate. Promoted ahead of EDGE-004 because the lifetime trade log (260 OPP / 17 SKIP / 3 PAPER = 240 silent exits, 17/17 SKIP reasons identical to `"edge +0.0000 below min_edge 0.02"`, plus 2 positive-edge OPPs that never produced trades) confirms the gap is actively losing actionable candidates, not just observability noise. Without this, every other audit (EDGE-004, CAL-001 calibration sample, governance Phase 2 reasoning) operates from a partial view of the pipeline.
+2. `PROFIT-EDGE-004` — the operationally-surfaced binding constraint after the EDGE-001/002/003 stack landed; sequenced investigation (matcher audit → pre-LLM-gate re-eval → market-mix audit → Appendix A re-eval). With OBS-003's instrumentation in hand, EDGE-004's evidence section can quote per-gate kill counts rather than the present aggregate. Until this advances, paper trades remain effectively zero (the FISAEXTEND emission notwithstanding — same source, same series, single losing pattern).
+3. `PROFIT-OBS-004` (new 2026-05-01) — fix the edge-sign display/persistence bug in `paper_trades.edge` so future post-mortems read the executed-side edge, not the YES-side perspective. Cosmetic-but-load-bearing for any audit that joins the trade record back to the executor's actual decision math.
+4. `PROFIT-PHASE2-001` (new 2026-05-01, IN_PROGRESS) — soak clock is ticking; the only operator action is the daily monitoring checklist in [`docs/governance/PHASE2_RUNBOOK.md`](governance/PHASE2_RUNBOOK.md). No code work is appropriate inside the soak window unless a PARSE_ERROR / VALIDATION_ERROR / KILL_SWITCH event surfaces.
+5. `PROFIT-CUTOVER-001` (new 2026-05-01) — MacBook → Mac Studio operational handoff. The only operator-side dependency is verifying the Studio's Phase 2 launchd is actually firing cycles (per RUNBOOK monitoring) and confirming the SQL-dump restore on the Studio matches the manifest counts. Closes when the first Studio paper trade resolves cleanly *or* when the §8.5 acceptance milestone is reached, whichever first.
+6. `PROFIT-VALID-001` + remaining `PROFIT-OBS-*` items (validation and observability hardening; needed before P4-GATE).
+7. `PROFIT-EVID-001` (blocked pending contract decision on non-trading evidence intake).
+8. ROADMAP P4.1–P4.3 are gated behind S4.5c-prime (post-CAL-001 re-validation window) and P4-GATE outcome — the no-edge pattern in High-Risk Area #4 will only resolve via the OBS-003 → EDGE-004 investigation chain (which gate, then which matcher/market/source root cause), not by any further work in `/trading` or readiness-gate calibration.
+9. `PROFIT-STRUCT-002` (verifies an already-shipped sub-fix's runtime format) and remaining MEDIUM and LOW items in dependency order.
 
 ---
 
@@ -131,6 +137,41 @@ Status flipped OPEN → COMPLETE. All four acceptance criteria met:
 4. Section 13 checklist signed off on `docs/ROADMAP.md` Stage 4 row S4.5c (closed 2026-04-23 with bounded-exception rationale and aggregate-runtime sign-off scaffold). The 2026-04-26 evidence above is additional confirmation that the original closure has continued to hold under steady-state operation.
 
 **S4.5c-prime** (post-`PROFIT-CAL-001` calibration-wiring re-validation, mandated in the ROADMAP S4.5c row Notes) remains a separate ROADMAP gate, not tracked here. `PROFIT-CAL-001` itself closed 2026-04-24 (v0.29.47) — the live-traffic observation of `CALIBRATION_CHECK` events post-fix is conditional on natural paper-trade resolutions, which is gated behind the no-edge / P0-GATE situation flagged in this log's High-Risk Areas section item 4. Until a paper trade actually resolves, the wiring is exercised only by unit tests, not in production.
+
+**Validation Notes** (2026-05-01, full 13-day MacBook paper-soak archive aggregated post-cutover)
+
+This is the post-cutover audit of the *entire* MacBook paper era (2026-04-18T02:11:24Z → 2026-05-01T13:05:54Z = ~13 days, ~314 hours wall-clock, 115 boots across versions 0.29.5 → 0.29.58). Captured here for completeness and as the durable provenance record before the MacBook becomes archive-only and the Mac Studio's runtime takes over. RUNTIME-001's COMPLETE status remains valid; this note expands the supporting evidence base that informed the 2026-04-23/26 closures.
+
+Multi-lane event totals across the full 13-day window (counted from `logs/trades/archive/2026/04/2026-04-{18..30}.jsonl` + `logs/trades/live/trades.jsonl`):
+
+| Event | Count |
+|---|---|
+| `EARLY_STALE_DROP` | 237,073 |
+| `EARLY_FRESH_PASS` | 4,694 |
+| `MATCH_DIAGNOSTIC` | 2,838 |
+| `SIGNAL_ANALYSIS_DETAIL` | 1,315 |
+| `ANALYSIS_REJECTED` | 1,249 |
+| `NEW_MARKET` | 1,029 |
+| `MATCH_SUPPRESSION_CANDIDATE` | 489 |
+| `MATCH_SUPPRESSED` | 489 |
+| `SIGNAL` | 260 |
+| `OPPORTUNITY` | 260 |
+| `BLEND_DECISION` | 252 |
+| `EVIDENCE_INGESTION` | 248 |
+| `DOSSIER_UPDATE` | 248 |
+| `STRUCTURAL_PRIOR_RECOMPUTE` | 178 |
+| `SKIPPED` | 17 |
+| `PAPER_TRADE` | 3 |
+| `PAPER_RESOLUTION` | 3 |
+| `CALIBRATION_CHECK` | 3 |
+
+All four originally-required event types (EVIDENCE_INGESTION, DOSSIER_UPDATE, STRUCTURAL_PRIOR_RECOMPUTE, BLEND_DECISION) appeared on **every day of the 13-day window** (operator-confirmed daily-bucket grep against the `ts` field). Dossier markets touched: 32 distinct `series_ticker` values per `evidence_store.db.dossiers` row count. Lifetime `paper_trades.db.source_stats` aggregates: 3,960 posts seen, 249 source-level signals, 249 source-level opportunities, 3 source-level trades — minor count drift versus the trade-log JSONL aggregate (260 SIGNAL / 260 OPPORTUNITY) is attributable to startup-probe records and aggregation-window boundary effects, well within audit tolerance.
+
+Source-funnel concentration: out of 405 distinct sources discovered into `source_stats`, only **1** (`VitalLaw.com`) has graduated to a paper trade; **31 sources** have non-zero `opportunities` but zero `trades`. Top-by-opportunities list is dominated by wire-service feeds (`Middle East and north Africa | The Guardian` 87 opp / 0 trade; `World news | The Guardian` 40 / 0; `Al Jazeera` 29 / 0; `NYT > World News` 28 / 0) — the same broad-policy-coverage feeds that ROADMAP P0.5/P3.4 flagged as the universal-anchor problem. This concentration is the empirical face of PROFIT-EDGE-004's matcher / market-mix root cause from the source side.
+
+Boot stability: 115 boots over 13 days = ~8.8 boots/day average; 64 errors total (39 REST connectivity, 18 WebSocket reconnect, 5 db_open during early `0.29.5` boots before MAC-DB-005 stabilized, 1 unhandled, 1 other), zero unhandled tracebacks. The boot-density skew is itself informative — 49 of the 115 boots fall in the 2026-04-20/21 window during the v0.29.31 stack, after which deployments stabilized and a single v0.29.58 boot held for the entire 2026-04-29/30 window.
+
+Cross-host caveat: the entire 13-day window was on the **MacBook** (`hostname = MacBook-Pro.local`, Apple T6030 / M3 Pro, 18 GB unified memory). The cutover to **Mac Studio** (`qwen3:14b` governance model per `docs/governance/PHASE2_RUNBOOK.md`) closes the MacBook era at 2026-05-01T13:05:54Z. Post-cutover RUNTIME-001 evidence accumulates on the Mac Studio against `data/paper_trades.db` and `data/evidence_store.db` restored from `transfer/macbook_handoff_2026-05-01/` (see `PROFIT-CUTOVER-001`). This entry remains COMPLETE; the Mac Studio is not expected to require an S4.5b/c re-run absent a deploy that materially changes lane wiring.
 
 ---
 
@@ -550,6 +591,12 @@ Feedback loop now complete end-to-end per the Path A design in [`docs/_archive/s
 
 Acceptance criteria from the design note §4: (1) status moved OPEN → COMPLETE with validation notes; (2) Zone 5 test added and passing; (3) full test suite clean; (4) ROADMAP P4.2 blocker-cross-reference can be struck; (5) `CalibrationTask.get_calibration_summary()` now returns non-empty per-lane stats once resolved paper trades with populated `signal_meta` land — this is already the case in the `TestCalibrationEmission` unit test; the live-traffic observation (≥1 `CALIBRATION_CHECK` in `logs/trades/live/trades.jsonl` after the first paper-trade resolution post-fix) remains a production-soak observation, tracked in the v0.29.47 `CHANGELOG` entry. Fix status: **closed against acceptance criteria**; production-soak observation pending natural paper-trade resolutions (blocked behind P0-GATE LLM market-anchoring, which is a separate debt item). Contract Section 13 item 6 is now substantively verifiable rather than vacuously satisfied.
 
+**Production-Soak Observation** (2026-05-01, post-cutover audit)
+
+The "live-traffic observation" footnote that the 2026-04-24 closure left as production-soak-pending is now satisfied — minimally — by the 13-day MacBook paper soak. The trade-log archive contains exactly **3 `CALIBRATION_CHECK` events** in `logs/trades/live/trades.jsonl`, each emitted at the resolution time of one of the three KXFISAEXTEND PAPER_TRADE rows (all on 2026-05-01 around the same window: trades opened ~01:57 UTC and the `PAPER_RESOLUTION` + `CALIBRATION_CHECK` fan-out fired the same day). Per-lane breakdown was minimal because the three trades shared `accumulation_p=null` and `structural_p=null` (only `fast_lane_p=0.432` was populated), so each `CALIBRATION_CHECK` carried only the fast-lane prediction error — but that is exactly the v0.29.47 design intent ("Historical rows ... null lane columns ... emit zero CALIBRATION_CHECK events" was the backward-compat contract; the v0.29.58 emission path correctly fired one `CALIBRATION_CHECK` per *populated* lane).
+
+This satisfies acceptance criterion (5) above on a runtime basis as well as a unit-test basis. The sample is too small to compute meaningful Brier scores or scaling factors, but the wiring is provably alive in production. Three resolutions on a single ticker from a single source (VitalLaw.com FISAEXTEND) is not a calibration sample — the next milestone for this entry's footnote is "first ≥10-resolution sample with ≥2 distinct lanes populated," which depends on PROFIT-OBS-003 (silent-exit gap closure unlocking the 2 known positive-edge non-trades + likely more) and PROFIT-EDGE-004 (matcher quality lifting the conversion rate above the current ~1%). Both of those are post-cutover Mac Studio work; no further action needed on CAL-001 itself.
+
 ---
 
 ### PROFIT-EXEC-001
@@ -863,6 +910,18 @@ Both outcomes are useful. The fix moves the kill point from a place where there'
 - Phase 2 governance (v0.29.55) is the architecturally correct fix for the keyword-glossary-gap symptom this bug was masking. Post-fix the governance agent's audit log will start receiving the candidate evidence it needs to learn from.
 - `PROFIT-CAL-001` (closed 2026-04-24, v0.29.47) wired the calibration loop end-to-end but cannot exercise itself in production until a paper trade actually resolves. PROFIT-EDGE-001 is the unblocker for that observation: until LLM-positive signals survive past `main.py:688`, no paper trade can resolve, and CAL-001's runtime verification stays in unit-test-only mode.
 
+**Post-Deploy Verification** (2026-04-28, v0.29.58, ~48h runtime since 2026-04-27T13:03:19Z boot)
+
+The line-688 fix is in production. Trade-log audit of `logs/trades/archive/2026/04/2026-04-{27,28}.jsonl` + `logs/trades/live/trades.jsonl` over the 48h window:
+
+- 242 `SIGNAL_ANALYSIS_DETAIL` events; 0 `ANALYSIS_REJECTED reason=no_keywords` events. Pre-fix the same conditions would have produced N kills equal to the count of LLM-emitting-signal-with-empty-keywords cases. Post-fix, none.
+- `Counter(llm_useful)` over the 242 SAD records = `{False: 240, True: 2}`. Both `True` records carry `is_startup_probe=true / is_synthetic_probe=true` — the deterministic startup probe the bot fires once per boot to verify the LLM path. The synthetic probe payload includes a non-empty `keywords` list (`["peace deal"]`), so the fix's contract (proceed when LLM emits signal *or* keywords are present) is exercised on the synthetic side, not the empty-keywords side.
+- `Counter(llm_magnitude)` = `{'none': 240, 'moderate': 1, 'small': 1}`. The non-`none` records are the synthetic probe, not real-headline signal.
+
+End-to-end exercise against a *real* LLM-positive headline with empty keywords has not yet occurred in this window. The underlying base rate of "LLM emits directional view on a matched real headline" is consistent with the pre-fix 9-day measurement of 5/666 (0.75%). Two days at ~120 SAD/day = 240 events; expected ~2 LLM-positive on real data; observed 0. Within statistical noise (95% CI for a 0.75% binomial with n=240 includes 0); not evidence of regression in the LLM signal layer.
+
+Verdict: fix code-path is live and synthetic-probe verified. Real-data verification is gated behind base-rate occurrence of a true LLM-positive event; whenever one lands, the line-688 path is now the *correct* outcome (proceed past gate). The next-layer kill that produced this bug's downstream symptom — the executor's `PAPER_MIN_EDGE` rejection of `edge=0.0` blends emitted by neutral-LLM-output matched headlines — is filed as `PROFIT-EDGE-004`.
+
 ---
 
 ### PROFIT-EDGE-002
@@ -977,6 +1036,27 @@ Either outcome is informative. The G1 question can be answered with concrete pos
 - *Sports-prefix maintenance* — also flagged for future governance-agent automation. Manual curation of ~336 candidate sport prefixes is impractical and brittle; the governance agent should maintain `MARKET_SERIES_BLOCKLIST_PREFIXES` from market-title patterns the same way it manages keyword glossaries.
 - *Dossier coverage (12/847 active markets)* — surfaced during this investigation as a contributing factor to weak structural lane contributions. Not closed in this commit; the structural-log fix from change #4 above is the necessary precondition to diagnose *why* dossier-backed markets fail recompute. Future debt entry expected once cause-traces start landing.
 
+**Post-Deploy Verification** (2026-04-28, v0.29.58, ~48h runtime since 2026-04-27T13:03:19Z boot)
+
+All four sub-fixes confirmed working under live runtime, with the exception of sub-fix #4 which has a verification-method gap (filed as `PROFIT-STRUCT-002`):
+
+1. *Categorical-prior coverage gap (new priors firing in production).* Sample SKIPPED record from 2026-04-28T07:31:02Z on `KXTRUMPCHINA-26-MAY08`:
+
+   ```
+   regime_weights: { fast: 0.65, interpretation: 0.25, structural: 0.10 }
+   regime_confidence: 0.22006971533310082
+   ```
+
+   This is the EDGE-002-added "Event-driven political/diplomatic (fast-dominant)" prior firing in production. Pre-fix this market would have fallen through `_series_prior` to the time-fallback `(0.10, 0.45, 0.45)` with `regime_confidence ≈ 0.14` — below the now-lowered G4 = 0.20. Live data matches the closed-form prediction in EDGE-002 evidence Table A: KXTRUMPCHINA fits the "Event-driven political / diplomatic (fast-dominant)" family, gets `(0.65, 0.25, 0.10)`, produces `rc = 0.220` with ~0.02 headroom over G4 = 0.20 — exactly as designed.
+
+2. *G4 = 0.20 threshold passable.* The same SKIPPED record reaches the executor — meaning it cleared G4 at runtime. Pre-fix `G4 = 0.40` would have rejected `regime_confidence = 0.22` outright. Across the 48h window, 34 candidates emitted as `OPPORTUNITY` (post-readiness-gate event), confirming G4 is now passable for the engaged market mix.
+
+3. *Sport-prefix gap (KXPSL etc.).* No KXPSL events appear in the post-restart `SIGNAL_ANALYSIS_DETAIL` set (242 records). The blocklist is preventing them from reaching the LLM-analysis path — exact behavior intended. Cannot positively confirm absence-of-leak across the *full* set of 33 prefixes added without longer runtime + cross-checking against Kalshi's complete live market list, but the pre-fix smoking-gun event (KXPSL-26-PZA reaching LLM at 2026-04-25T16:14:44Z) does not recur.
+
+4. *Structural-recompute log fix (`tasks/structural_task.py:146`).* **Verification incomplete.** `launchd.stderr.log` lines containing `per-market recompute failed` show only the wrapper text in the sample inspected; no `caused by` / `repr(__cause__)` / `Traceback` lines visible from the sampled lines. However, `launchd.stderr.log` does not carry per-line timestamps for these entries, so the 10,605 visible lines could not be cleanly split into pre-restart vs post-restart subsets via stderr alone. The 30 successful `STRUCTURAL_PRIOR_RECOMPUTE` events post-restart confirm the structural lane *is* running; the open question is whether failure cases now carry diagnostic context. Filed as `PROFIT-STRUCT-002` to close the verification gap by inspecting timestamped `bot.log` instead.
+
+Verdict: sub-fixes 1–3 confirmed live and behaving as designed; sub-fix 4 verification deferred to `PROFIT-STRUCT-002` (low-priority observability check, not a behavior concern).
+
 ---
 
 ### PROFIT-EDGE-003
@@ -1079,6 +1159,587 @@ The G1/G4 calibration analyses and the 5-LLM-positive-event readiness/executor w
 * [`scripts/simulations/executor_validate.py`](../scripts/simulations/executor_validate.py) — executor `_validate()` (E1–E12) against the same 5 events, in independent + sequential passes.
 
 Smoke tests in [`tests/test_simulations_smoke.py`](../tests/test_simulations_smoke.py) (13 cases) keep the harnesses themselves green under code changes. The plan for the remaining seven pipeline-stage simulations (match-score audit, BlendTask integration, paper-trade roundtrip, trading-queue handoff, governance-fast-cycle, resolution+calibration, dossier-creation) is in [`docs/superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md`](superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md). Each remaining simulation is scoped to its own task with file/test deliverables and acceptance criteria.
+
+**Post-Deploy Verification** (2026-04-28, v0.29.58, ~48h runtime since 2026-04-27T13:03:19Z boot)
+
+G1 = 0.05 confirmed clearing the readiness gate for the engaged market mix. Sample SKIPPED record from 2026-04-28T07:31:02Z on `KXTRUMPCHINA-26-MAY08`:
+
+- `blended_confidence = 0.38287097269604115`
+- `regime_confidence = 0.22006971533310082`
+- `scaled_confidence = 0.382871 × 0.220070 ≈ 0.0843` → ≥ G1 = 0.05 (PASS); pre-fix G1 = 0.35 would have rejected.
+
+Across the 48h window, 34 readiness-gate candidates survived to the executor as `OPPORTUNITY` events — vs. 0 over the pre-fix 9-day window (per EDGE-003 evidence table; 0/154 BLEND_DECISIONs cleared G1 = 0.35). Empirical post-fix pass rate vs predicted: 34 OPPORTUNITY emissions for 34 BLEND_DECISIONs (100% pass rate) in this window — *higher* than the 14% historical projection from EDGE-003's pass-rate sweep. The reason is structural rather than concerning: every BLEND_DECISION in this window had `blended_p = 0.5` (every lane neutral, see PROFIT-EDGE-004), which produces predictable `scaled_confidence` values clustered above 0.05 once the new categorical priors apply. The 14% projection was derived from a 154-record pre-fix distribution that included markets without the new priors and a wider `regime_confidence` spread; the post-fix mix in this 48h window is dominated by series with the EDGE-002 categorical priors and so sits higher than the historical median.
+
+The 34 `OPPORTUNITY` events all hit a single ticker (`KXMOCTRUMP25-26-MAY01`) with `edge = 0.0`, `kelly_dollars = 0.0`, `estimated_probability = 0.5`, `market_yes_price = 50.0¢`, `llm_magnitude = "none"`, `llm_direction = "neutral"`. Reasoning lines uniformly read "*[LLM] The headline is unrelated to ...*". The kill point has moved cleanly from G1 (pre-fix) to executor `PAPER_MIN_EDGE` (post-fix) — exactly the qualitatively-distinct outcome EDGE-003's "Notes — what this completes" predicted, and exactly the actionable failure mode the EDGE-001/002/003 stack was designed to surface. The follow-on debt entry for the upstream signal-sourcing root cause is `PROFIT-EDGE-004`.
+
+Verdict: G1 calibration confirmed correct against live data. Pipeline now flows end-to-end through the readiness gate. The remaining "no paper trades" symptom has a different root cause (signal sourcing / matcher pairing / market-mix), surfaced by this fix and tracked separately.
+
+---
+
+### PROFIT-EDGE-004
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EDGE-004 |
+| **Title** | Post-EDGE-003 pipeline reaches executor with `edge = 0.0` because every lane returns `p = 0.5` — signal sourcing / matcher quality / market-mix root cause |
+| **Category** | Decision Path / Profit-Path Integrity / Signal Quality |
+| **Severity** | HIGH |
+| **Status** | OPEN |
+| **Priority** | NOW |
+| **Owner** | Shared |
+| **Depends On** | PROFIT-EDGE-001 + PROFIT-EDGE-002 + PROFIT-EDGE-003 (the stack that exposed this; without them the readiness gate would still mask the upstream condition) |
+| **Blocks** | Paper-trade emission; transitively `PROFIT-CAL-001` production-soak observation; transitively live-trading authorization (ROADMAP P4.3) |
+
+**Description**
+
+The EDGE-001/002/003 stack closed three sequential kill points in the readiness funnel (line-688 no-keywords kill → G4 = 0.40 regime-confidence floor → G1 = 0.35 scaled-confidence floor). v0.29.58 in production for ~48h confirms all three fixes work as designed — readiness candidates now survive to the executor. But the bot still records zero paper trades, with the kill point relocated downstream: every blend reaches the executor with `blended_p = 0.5` and `edge = 0.0`, where `PAPER_MIN_EDGE = 0.02` correctly rejects them.
+
+The structural condition is not a bug in the readiness gate or the executor — both are doing exactly what they were designed to do. It is an *upstream* condition: the LLM is correctly identifying that most matched headlines are not semantically related to the markets they were paired with by the matcher, returning `llm_direction = "neutral"` and `llm_magnitude = "none"`, which sets `fast_lane_p = 0.5`. With `accumulation_p` and `structural_p` also null-or-0.5 on these tickers, `blended_p = 0.5` mechanically; `edge = |0.5 − market_yes_price/100|` collapses to ~0 when markets sit near 50¢, and the executor rightly skips.
+
+This is the operational manifestation of the "input/market mix produces ~99% no-signal events" hypothesis that the on-record P0.5 / P3.4 ROADMAP analysis flagged as the long-term strategic problem, and that the EDGE-001 entry's Notes section explicitly forecast: *"The on-record P0.5 / P3.4 diagnosis ... is directionally correct and remains the long-term strategic answer (Appendix A integration; narrower-scope markets). PROFIT-EDGE-001 is the short-term tactical answer for the 0.75% of events where the LLM does find signal."* The EDGE-001/002/003 stack made the funnel reach the executor; with the funnel open, the upstream signal-sourcing problem becomes the new dominant kill.
+
+**Why it matters to profitability / safety / reliability**
+
+This is the binding constraint between "v0.29.58 pipeline runs cleanly" and "v0.29.58 produces a paper trade." Every other gate is now passable; only the absence of real signal stops the bot from emitting trades. Until this is closed:
+
+- `paper_trades` table stays empty regardless of how long the bot runs — the EDGE-002 governance-agent observability concern is unblocked structurally (events flow into the audit trail) but the trades the agent is supposed to learn from never materialize.
+- `PROFIT-CAL-001`'s production-soak observation cannot complete (needs a resolved paper trade to emit `CALIBRATION_CHECK`). CAL-001 is closed against unit-test acceptance criteria but the runtime confirmation footnote remains contingent on this.
+- ROADMAP P4 (calibration review + live-trading authorization) is transitively blocked.
+- Phase 2 governance agent (v0.29.55) lands its candidate-evidence stream — but every record describes a non-signal event. The agent is structurally able to learn from these (correctly identifying "this matcher pairing was not actually a signal" is itself a useful learning signal), so the impact on Phase 2 is observability-positive rather than blocked. The agent cannot, however, help the matcher emit *fewer* false-positive matches without code changes elsewhere or until governance moves out of shadow mode.
+
+**Evidence / Source**
+
+Trade-log audit of `logs/trades/archive/2026/04/2026-04-{27,28}.jsonl` + `logs/trades/live/trades.jsonl` (window 2026-04-27T13:03:19Z boot through 2026-04-29T~12:34Z, ~48h):
+
+| Event type | Count |
+|---|---|
+| `EARLY_STALE_DROP` | 63,349 |
+| `EARLY_FRESH_PASS` | 950 |
+| `MATCH_DIAGNOSTIC` | 538 |
+| `ANALYSIS_REJECTED` | 274 |
+| `SIGNAL_ANALYSIS_DETAIL` | 242 |
+| `NEW_MARKET` | 224 |
+| `MATCH_SUPPRESSION_CANDIDATE` | 70 |
+| `MATCH_SUPPRESSED` | 70 |
+| `SIGNAL` | 34 |
+| `OPPORTUNITY` | 34 |
+| `BLEND_DECISION` | 34 |
+| `EVIDENCE_INGESTION` | 34 |
+| `DOSSIER_UPDATE` | 34 |
+| `STRUCTURAL_PRIOR_RECOMPUTE` | 30 |
+| `SKIPPED` | 3 |
+
+Key distributional data:
+
+- 242 `SIGNAL_ANALYSIS_DETAIL` events; `Counter(llm_useful)` = `{False: 240, True: 2}`. Both `True` records are `is_startup_probe=true / is_synthetic_probe=true`. **Real-headline LLM-positive count = 0.**
+- `Counter(llm_magnitude)` = `{'none': 240, 'moderate': 1, 'small': 1}`; `Counter(llm_direction)` = `{'neutral': 238, 'no': 3, 'yes': 1}`. The non-`none` magnitude records and the non-`neutral` direction records are the synthetic startup probe + downstream effects of those probes.
+- All 34 `OPPORTUNITY` records hit a single ticker: `KXMOCTRUMP25-26-MAY01` ("Will any Republican member of Congress calls on Trump to be removed as President through the 25th amendment before May 1, 2026?"). All have:
+  - `estimated_probability: 0.5`, `market_yes_price: 50.0`, `edge: 0.0`, `kelly_dollars: 0.0`, `capped_dollars: 0.0`
+  - `llm_direction: "neutral"`, `llm_magnitude: "none"`
+  - `reasoning` lines: e.g. *"[LLM] The headline is unrelated to Republican members of Congress calling for Trump's removal under the 25th amendment. (LLM: 0.500, Keywords(ref): 0.600)"*
+  - First record: 2026-04-27T13:59:33Z (~57m post-boot); last: 2026-04-29T12:33:54Z. Distributed across the window.
+  - Sample headlines that triggered the match-and-LLM-pass-but-emit-neutral path: *"What does Trump shooting at White House dinner mean for World Cup security?"* / *"'No more Mr Nice Guy': Trump warns Iran to 'get smart' over stalled talks"* / *"Man charged with attempted assassination of Trump"* — all related to Trump but none semantically about a 25th-amendment removal vote.
+
+- 3 `SKIPPED` records all carry `reason: "edge +0.0000 below min_edge 0.02"` with `signal_meta` showing a fully-blended path (`source_lane: "blend"`) and the new categorical priors firing. Sample (2026-04-28T07:31:02Z, `KXTRUMPCHINA-26-MAY08`, headline *"King Charles' US visit begins amid Trump assassination attempt and diplomatic ri[ft]"*):
+
+  ```json
+  {
+    "fast_lane_p": 0.5, "fast_lane_confidence": 0.9,
+    "accumulation_p": null, "accumulation_confidence": null,
+    "structural_p": null, "structural_confidence": null,
+    "blended_p": 0.5, "blended_confidence": 0.36271986886993374,
+    "regime_weights": {"fast": 0.65, "interpretation": 0.25, "structural": 0.1},
+    "regime_confidence": 0.22006971533310082,
+    "blend_mode": "dominant_lane",
+    "disagreement_score": 0.0,
+    "readiness_gate_min_edge_override": null
+  }
+  ```
+
+  This record — the cleanest evidence in the audit — confirms the EDGE-002 categorical prior is firing, G4 = 0.20 is clearing (`rc = 0.220 ≥ 0.20`), G1 = 0.05 is clearing (`scaled_conf ≈ 0.080 ≥ 0.05`), and the executor's `PAPER_MIN_EDGE = 0.02` is the binding rejection point because every lane is `0.5`.
+
+- Pre-fix 9-day baseline (PROFIT-EDGE-001 evidence section): 5/666 SAD events were LLM-positive on real headlines = 0.75%. Post-fix 2-day window: 0/240 LLM-positive on real headlines. Within statistical noise (95% CI for a 0.75% binomial with n=240 includes 0). Not evidence of regression in the LLM signal layer; consistent with the same low base rate.
+
+- `paper_trades` SQLite count: 0 rows.
+
+**Hypotheses to investigate**
+
+The chain `news headline → market_matcher.py (Jaccard + keyword boost) → LLM neutral output → blended_p = 0.5 → edge = 0.0` fails at the matcher step in the sense that the matcher is confidently pairing items the LLM then says are unrelated. At least three contributing causes are plausible and not mutually exclusive:
+
+1. **Matcher too loose.** [`analysis/market_matcher.py`](../analysis/market_matcher.py) uses Jaccard token similarity with a geopolitical keyword boost. The pre-LLM gate (`ENABLE_PRE_LLM_MATCH_GATE=false`) is currently disabled by design — diagnostics-only per CLAUDE.md and the README. Without the gate, broader Jaccard matches reach the LLM unchallenged. Sample evidence from this audit window: *"What does Trump shooting at White House dinner mean for World Cup security?"* → matched to `KXMOCTRUMP25` (25th-amendment removal). The token "Trump" alone carries enough Jaccard weight to clear the matcher even though the headline is about a separate event entirely. Consider re-enabling or strengthening the pre-LLM gate, raising the Jaccard threshold, or adding a *semantic* (embedding-based) match step before the LLM.
+
+2. **Engaged market universe too broad.** The 34 OPPORTUNITY events all hit one market with 7+ days to close and very specific conditions (a Republican member of Congress invoking the 25th amendment) — a market that almost no real news will move. Most of the bot's matched-headline volume hits these long-horizon, specific-trigger markets where the LLM is correctly calling neutral. The existing `MARKET_SERIES_BLOCKLIST_PREFIXES` (EDGE-002 added 33 sport prefixes) controls only which series are *allowed*; it does not constrain by event-window or specificity. Consider an event-horizon filter (`min_hours_to_close`, `max_hours_to_close`) or a "specificity score" derived from the market title's question structure.
+
+3. **News mix too generic.** Wire-service feeds dominate the source mix and produce broad-coverage stories that match many narrow markets weakly. Bluesky journalist firehoses and OSINT desks (per Appendix A Tier 2, integrated) add narrower content but still tend toward general-political coverage. The Phase 2 governance agent is designed to dynamically adjust the source registry, but until it's out of shadow mode (≥14 days from 2026-04-27, i.e. ≥2026-05-11) it will not modify production sources. Operator-driven curation in `config.py` source registries is the short-term lever.
+
+The on-record ROADMAP analysis (P0.5 / P3.4) treats this as the *strategic* problem; EDGE-004 documents it as the *operational* problem now that the readiness gate is no longer masking it.
+
+**Proposed Fix — sequenced investigation, not a single commit**
+
+This is a multi-step problem and should not be bundled into one fix. A reasonable sequence:
+
+1. **Extend the simulation harness with a match-score audit** — the eighth simulation in [`docs/superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md`](superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md). Capture the matcher's output distribution (Jaccard score percentiles, keyword-boost contribution, pre-LLM gate would-block rate) for the same 5 canonical EDGE-001 events plus the 34 KXMOCTRUMP25 OPPORTUNITY-emitting events from this window. The output will tell us whether the matcher is producing genuinely "narrow" matches that the LLM then rejects, or whether it's producing broad matches at a Jaccard threshold the LLM correctly tightens.
+
+2. **Re-evaluate the pre-LLM gate** (`ENABLE_PRE_LLM_MATCH_GATE`). The gate is currently `false` (diagnostics-only). The `pre_llm_quality_pass` / `pre_llm_would_block` / `pre_llm_keyword_signal_strength` fields are already present on every `SIGNAL_ANALYSIS_DETAIL` event in this audit window — these tell us what the gate *would* have done if active. If gate-would-block correlates strongly with LLM-emits-neutral, the gate is well-calibrated and switching it on (or fail-safe-on for specific market families) would suppress the noisy matches before they consume LLM cycles.
+
+3. **Audit the engaged market mix.** A sample of 20 markets the bot has actively engaged in the 48h window. Are they predominantly broad-policy with 7+ days to close and specific-trigger conditions? If yes, narrow the engagement window via a config knob and re-observe.
+
+4. **Re-evaluate Appendix A integration completeness.** README says Tier 1–2 integrated; Tier 3 deferred. Check whether the deferred Tier 3 sources (or other sources flagged for evaluation in `docs/_archive/studies/news_sources_evaluation.md`) would meaningfully shift the news-mix toward narrower-scope content. Operator decision; agent provides the cost/value matrix.
+
+5. **Preserve domain-constraint boundaries.** Per CLAUDE.md domain constraints, `/analysis` should remain pure (no API calls or trade execution). The matcher itself is in `/analysis`; changes to its scoring or gate behavior are in scope but should preserve purity. Anything touching market-cache scope or source registries goes in `/feeds` or `config.py`.
+
+**Acceptance Criteria**
+
+- One match-score audit simulation captures the empirical Jaccard / pre-LLM-gate / LLM-neutral-correlation distribution for the EDGE-004 evidence window, committed to `scripts/simulations/`.
+- A dated inline note in this entry records which of hypotheses 1–3 the audit data supports (one, multiple, or "neither — the binding constraint is something else again").
+- Either:
+  - (a) A code change closes one specific contributing cause (e.g. pre-LLM gate enabled with a documented threshold; or a market-engagement filter added), AND a follow-up post-deploy observation window of ≥48h shows non-zero `paper_trades` rows (or `OPPORTUNITY` events with non-zero `edge`); OR
+  - (b) The audit demonstrates that no single contributing cause dominates, and the entry is split into one debt entry per hypothesis to be addressed independently; OR
+  - (c) The Phase 2 governance agent (post-shadow-mode) is judged the right architectural fix and EDGE-004 is consciously deferred to a governance-agent activation milestone, with rationale captured here.
+
+**Notes**
+
+- The 31-of-34 OPPORTUNITY records that have no matching SKIPPED counterpart (34 OPPORTUNITY → 3 SKIPPED + 0 paper trades = 31 silent exits) is *not* a failure of EDGE-004; it is an observability gap in the post-OPPORTUNITY → executor path. Filed separately as `PROFIT-OBS-003` to keep this entry focused on the signal-sourcing root cause.
+- This entry is the operational counterpart to the strategic P0.5 / P3.4 finding from the ROADMAP. Do not close it without either resolving the underlying signal-sourcing condition *or* documenting the conscious deferral to a governance-agent milestone. Closing it as "won't fix" leaves the bot perpetually unable to trade.
+- The Phase 2 governance agent (v0.29.55, in shadow mode through ~2026-05-11) is the longer-term architectural answer — dynamic source/keyword/series management instead of the current static `config.py` registries. EDGE-004's hypotheses 1 and 3 are exactly what governance is designed to manage. But until shadow mode closes and the agent is allowed to *modify production state*, the short-term levers are operator-driven.
+- The `KXMOCTRUMP25-26-MAY01` ticker as the sole OPPORTUNITY-emitting market is a strong tell. Inspect whether the bot's market-cache is over-indexed on a small set of long-horizon broad-trigger markets vs Kalshi's actual current event-series catalog. The matcher may be pairing many Trump-related headlines to this single market because it survives keyword filters with a low Jaccard floor, while other engaged markets in the same window are being skipped at earlier pipeline stages (suppression / dedup / pre-LLM diagnostics) and never producing OPPORTUNITY events.
+
+**Related**
+
+- `PROFIT-EDGE-001` (closed 2026-04-26, v0.29.56) — necessary precondition; the line-688 fix is what made any LLM-negative-but-matched candidate reach the executor in the first place.
+- `PROFIT-EDGE-002` (closed 2026-04-26, v0.29.57) — necessary precondition; without the categorical priors and G4 = 0.20, no candidate would clear the readiness gate to expose this layer.
+- `PROFIT-EDGE-003` (closed 2026-04-26, v0.29.58) — direct precondition; G1 = 0.05 is what made the 34 OPPORTUNITY emissions possible.
+- `PROFIT-CAL-001` (closed 2026-04-24, v0.29.47) — production-soak observation contingent on a paper trade resolving; structurally blocked by EDGE-004 the same way it was structurally blocked by EDGE-001 pre-fix.
+- `PROFIT-OBS-003` (opened 2026-04-28) — observability of the post-OPPORTUNITY exit path; would expand EDGE-004's evidence base if closed first.
+- `PROFIT-STRUCT-002` (opened 2026-04-28) — verifies EDGE-002 sub-fix #4 (structural-recompute cause emission); independent of EDGE-004 but registered in the same investigation.
+- ROADMAP Appendix A — broader source classes and narrower market scope are the long-horizon strategic answer to which EDGE-004 is the operational wrapper.
+- ROADMAP P0.5 / P3.4 — the on-record diagnosis from prior analysis that this entry operationalizes.
+- Memory note `project_no_edge_diagnosis.md` — the original 2026-04-26 EDGE-001 systematic-debugging trace; EDGE-004 is its post-deploy continuation.
+
+**Follow-up Evidence** (2026-05-01, full 13-day MacBook paper-soak archive aggregated post-cutover)
+
+The 2026-04-28 evidence above covered ~48 h of v0.29.58 runtime. The post-cutover audit covers the entire 13-day MacBook paper era including the additional ~96 h of v0.29.58 (2026-04-29 → 2026-05-01) that ran after the original entry was written. Lifetime totals (full window 2026-04-18T02:11:24Z → 2026-05-01T13:05:54Z):
+
+| Counter | 2026-04-28 audit (~48 h v0.29.58 only) | 2026-05-01 audit (full 13 d) | Notes |
+|---|---|---|---|
+| `OPPORTUNITY` | 34 | 260 | 7.6× more lifetime data; same edge=0.0 dominance (98.1% lifetime vs 100% in the original 48h) |
+| `BLEND_DECISION` | 34 | 252 | 1:1 with OPPORTUNITY in original; 8-event drift in lifetime due to startup-probe + cross-version emission ordering |
+| `SKIPPED` | 3 | 17 | All 17 reasons identical (`"edge +0.0000 below min_edge 0.02"`) — see PROFIT-OBS-003 evidence section |
+| `PAPER_TRADE` | 0 | 3 | All on `KXFISAEXTEND-26APR-MAY0{1,2,3}` from VitalLaw.com; recorded `edge=-0.068` (sign bug — see PROFIT-OBS-004; actual executed-side edge was +0.068); resolved 0/3 wins; source-credibility multiplier auto-dropped to 0.5x |
+| `STRUCTURAL_PRIOR_RECOMPUTE` | 30 | 178 | Continued steady firing across the full window (~13.7/day average); the structural lane is provably alive in production, closing PROFIT-STRUCT-002's "lane is running" half of the verification (the warning-format half remains open per the entry's own scope) |
+| `CALIBRATION_CHECK` | 0 | 3 | First production observations of the CALIBRATION_CHECK emission. Per the original CAL-001 closure footnote, three resolutions in 13 days is a small but real signal that the wiring fired in production. See updated PROFIT-CAL-001 Notes. |
+
+OPPORTUNITY edge distribution (lifetime, 260 events): `0.0` ×255, `-0.068` ×3 (the FISAEXTEND trades — sign bug per PROFIT-OBS-004), `+0.06` ×1, `+0.064` ×1. **Critically: 2 OPPORTUNITY events with non-trivial positive edge cleared PAPER_MIN_EDGE = 0.02 and produced no PAPER_TRADE.** This is direct evidence that the silent-exit gap (PROFIT-OBS-003) is dropping legitimately-tradeable candidates, not just edge=0.0 candidates the executor would correctly reject. Promoted OBS-003 from MEDIUM/LATER to HIGH/NOW on this evidence (see OBS-003 entry for the per-day breakdown).
+
+Source-funnel concentration (from `paper_trades.db.source_stats`, lifetime aggregate): out of 405 sources discovered, the top opportunity producers — Guardian Middle East/North Africa (87 OPP / 0 trade), Guardian World (40/0), Al Jazeera (29/0), NYT World (28/0), Times of Israel (6/0), Kyiv Independent (5/0) — produced **zero** paper trades. The only graduated source is VitalLaw.com (3/3 losses, multiplier 0.5x). This is the empirical face of EDGE-004's "matcher quality / market-mix" hypothesis from the source side: the wire-service feeds emit broad-coverage stories that the matcher confidently pairs with narrow markets, the LLM correctly rejects the pairing as semantically weak, and the resulting OPPORTUNITY → PAPER_TRADE conversion stays at zero across the entire feed mix.
+
+OPPORTUNITY ticker concentration (lifetime, top 5): `KXTRUMPIRAN-26MAY01` ×112 (43%), `KXMOCTRUMP25-26-MAY01` ×54 (21%), `KXMOCTRUMP25-26-APR24` ×22 (8%), `KXVANCEPAKISTAN-26APR21-APR30` ×15 (6%), `KXVANCEPAKISTAN-26APR21-APR25` ×8 (3%) — five tickers account for 81% of lifetime OPPORTUNITY emissions. The market-mix concentration is even more skewed than the original 2026-04-28 entry suggested (which sampled only the 34-OPP window where KXMOCTRUMP25 was sole emitter); over 13 days, the bot's matched-headline volume hits 5 tickers consistently, none of which moved meaningfully on real news during the soak. EDGE-004 hypothesis 2 ("Engaged market universe too broad / too long-horizon") is reinforced: the long-horizon, broad-trigger markets the matcher loves are precisely the ones that don't move.
+
+This evidence does not require revising EDGE-004's investigation plan (matcher audit → pre-LLM-gate re-eval → market-mix audit → Appendix A re-eval); it just makes the priority ordering more concrete. **Sequenced fixes 1–3 are now applicable; fix 4 (Appendix A) likely won't shift the conversion rate until at least one of fixes 1–3 lands.** The Phase 2 governance agent (Mac Studio shadow soak ETA 2026-05-15 per PROFIT-PHASE2-001) is the longer-term architectural lever for source/market dynamic adjustment, but its application requires governance to exit shadow mode — which is itself blocked behind the §8.5 acceptance criteria (≥30 decisions, ≥85% reasonable on review). On the current observed cadence, governance exiting shadow mode is the *post-* fix-3 milestone, not the *replacement* for it.
+
+Cutover note: this entry's "Evidence / Source" + this Follow-up section together represent the entire MacBook paper-era evidence base for EDGE-004. Post-cutover, future EDGE-004 evidence accumulates on the **Mac Studio** against the same `data/paper_trades.db` and `data/evidence_store.db` (restored from `transfer/macbook_handoff_2026-05-01/` per PROFIT-CUTOVER-001) plus its own fresh `logs/trades/` JSONL stream. The MacBook will not produce new EDGE-004 evidence; treat the lifetime totals above as the closed v0.29.58 MacBook-era baseline against which Studio progress is compared.
+
+---
+
+### PROFIT-OBS-003
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-OBS-003 |
+| **Title** | OPPORTUNITY → SKIPPED/PAPER_TRADE arithmetic gap: 240-of-260 lifetime OPPORTUNITY events exit with no matching executor record (including 2 OPPORTUNITY at non-trivial positive edge that produced no PAPER_TRADE) |
+| **Category** | Observability / Trade-Log Fidelity |
+| **Severity** | HIGH (promoted 2026-05-01 from MEDIUM) |
+| **Status** | OPEN |
+| **Priority** | NOW (promoted 2026-05-01 from LATER) |
+| **Owner** | Shared |
+| **Depends On** | — |
+| **Blocks** | PROFIT-EDGE-004 audit completeness (the missing SKIPPED records would tell us *which* executor gate is killing each candidate); PROFIT-CAL-001 production-soak observation (tiny resolved-trade sample is partially attributable to silent-exit candidates that should have traded); paper-trade emission throughput in general (per the 2026-05-01 evidence below, the silent-exit gap drops *positive-edge* candidates, not just edge=0.0 ones) |
+
+**Description**
+
+In the v0.29.58 post-deploy audit window (2026-04-27T13:03:19Z → 2026-04-29T~12:34Z, ~48h), the trade-log archive contains 34 `OPPORTUNITY` events and 3 `SKIPPED` events. The expected accounting is `OPPORTUNITY = paper_trades + SKIPPED + (in-flight-at-audit-time)`. With 0 paper trades and effectively 0 in-flight at the audit moment, 34 − 3 = 31 candidates exited the executor without producing a recorded SKIPPED event.
+
+`trading/executor.py:152` is the single visible call site for `await write_trade_log_async(trade_log.log_skipped, **skipped_kwargs)`. Either there are early-exit branches in the executor's `_validate()` (E1–E12) that bypass the SKIPPED log, or `log_opportunity` ([`utils/logger.py:548`](../utils/logger.py)) is called from an upstream checkpoint distinct from where SKIPPED-eligible candidates land in the executor.
+
+**Why it matters to profitability / safety / reliability**
+
+Operationally, this is observability debt — every OPPORTUNITY that exits the funnel should produce exactly one of `{paper_trade, SKIPPED}` (or be retained as in-flight). Without that invariant, every post-deploy audit of which gate is killing trades has a blind spot. EDGE-004's investigation specifically wants to know: of the 31 silent-exit candidates, did they fail at PAPER_MIN_EDGE the same way the 3 visible SKIPPEDs did? Or did they hit a different executor gate (E1–E12 enumerate twelve gates per the README)? The answer determines whether one fix or several is needed to enable paper-trade emission once EDGE-004 is closed.
+
+**Evidence / Source**
+
+- Counter from 2026-04-27/28 trade-log archive + live trades.jsonl: `OPPORTUNITY = 34, SKIPPED = 3, paper_trades_db = 0`.
+- `trading/executor.py:152` — single `log_skipped` call site visible from `grep -nE '(log_skipped|log_opportunity|log_signal|log_paper|log_trade|log_blend)' trading/executor.py utils/logger.py`.
+- `utils/logger.py:548` defines `log_opportunity`; `utils/logger.py:686` defines `log_skipped`.
+- Hypothesis: `_validate()` returns early on certain failure conditions before reaching the SKIPPED emission point. Possibilities include the same-signal guard, the opposing-position guard, the per-ticker cooldown, or balance/exposure caps — each is documented in [`tasks/trade_readiness_gate.py`](../tasks/trade_readiness_gate.py) and the README's Executor section, but the executor-side implementations may not all funnel through `log_skipped`.
+
+**Proposed Fix**
+
+Audit `trading/executor.py` for early-exit branches in `_validate()` (E1–E12) and either:
+
+1. Route every executor reject through `log_skipped` with a distinct `reason` string (one per gate, e.g. `"opposing_position_guard"`, `"ticker_cooldown_active"`, `"insufficient_balance"`), so post-deploy audits can attribute the kill to a specific gate. Lower-friction; preserves the existing SKIPPED schema.
+
+2. Add a separate `log_executor_reject` event type that mirrors SKIPPED's payload but carries an explicit `gate: str` field, and emit it from every early-exit branch. Cleaner if there are gates whose context doesn't fit the SKIPPED payload shape (e.g. multi-position-state guards).
+
+Approach (1) is preferred unless the audit reveals gates whose context is genuinely incompatible with the SKIPPED schema.
+
+**Acceptance Criteria**
+
+- Every `OPPORTUNITY` event in a paper-mode trade-log window has exactly one of `{paper_trade, SKIPPED, in-flight-at-audit-time}`.
+- A 24h paper-mode audit confirms `OPPORTUNITY = paper_trades + SKIPPED` within ±N for at-the-moment in-flight (N small).
+- Reasons in the SKIPPED records are diverse enough to attribute kills to specific executor gates.
+
+**Notes**
+
+- ~~This is observability debt, not a correctness bug. The bot is doing the right thing (rejecting `edge = 0.0` candidates); the audit log just doesn't cleanly record *why* for 31 of the 34.~~ **Revised 2026-05-01:** the original "observability-only" framing was wrong. The 2026-05-01 lifetime audit shows two OPPORTUNITY records at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE despite clearing PAPER_MIN_EDGE = 0.02. So the silent-exit branches in `_validate()` are *also* dropping legitimately-tradeable candidates, not just rejecting edge=0.0 candidates the operator would expect to be skipped. This makes OBS-003 a correctness-adjacent bug, not pure observability debt.
+- Closing this is a precondition for cleanly closing EDGE-004's investigation — without it, EDGE-004's evidence section is constrained to the 17 visible SKIPPED records (a small sample of a 13-day window with 260 OPPORTUNITY → 240 silent exits = 92.3% silent-exit rate).
+- Do not bundle this with EDGE-004's signal-quality investigation. Different boundary, different code path, different review owner. EDGE-004 fixes "why is edge=0 on most OPPORTUNITY"; OBS-003 fixes "why does the executor not log (and not trade) candidates that survive the readiness gate."
+
+**Validation Notes** (2026-05-01, full 13-day MacBook paper-soak archive)
+
+Lifetime trade-log totals from `logs/trades/archive/2026/04/2026-04-{18..30}.jsonl` + `logs/trades/live/trades.jsonl` (2026-04-18T02:11:24Z → 2026-05-01T13:05:54Z, ~13 days, 115 boots across versions 0.29.5 → 0.29.58):
+
+| Counter | Value |
+|---|---|
+| OPPORTUNITY events | 260 |
+| SKIPPED events | 17 |
+| PAPER_TRADE events | 3 |
+| OPPORTUNITY → exit accounted for | 20 (17 SKIP + 3 PAPER) |
+| OPPORTUNITY → silent exit | **240 (92.3%)** |
+
+OPPORTUNITY edge distribution:
+
+| Edge bucket | Count | Note |
+|---|---|---|
+| `0.0` | 255 | 98.1% of all OPPORTUNITY — the EDGE-004 universal-anchor pattern |
+| `-0.068` | 3 | The KXFISAEXTEND PAPER_TRADE emissions — the recorded edge sign is wrong (PROFIT-OBS-004); the executed-side edge was +0.068 |
+| `+0.06` | 1 | **Non-trivial positive edge that produced no PAPER_TRADE.** Cleared PAPER_MIN_EDGE = 0.02, then silently lost. |
+| `+0.064` | 1 | **Same as above.** Same lifetime, same fate. |
+
+SKIPPED reason monoculture: 17/17 SKIPPED records carry the identical reason string `"edge +0.0000 below min_edge 0.02"`. No other rejection reason has *ever* been emitted into the trade log in 13 days. This is the empirical confirmation of OBS-003's original hypothesis that early-exit branches in `_validate()` (E1–E12) bypass the SKIPPED log call site at `trading/executor.py:152`. Specifically, the candidates we now know were silently lost include **at least 2 candidates that should have traded** under the executor's documented behaviour.
+
+Per-day breakdown of the post-EDGE-003 (v0.29.58) window:
+
+| Date | OPPORTUNITY | SKIPPED | PAPER_TRADE | Silent exits |
+|---|---|---|---|---|
+| 2026-04-27 | 13 | 1 | 0 | 12 |
+| 2026-04-28 | 17 | 2 | 0 | 15 |
+| 2026-04-29 | 4 | 0 | 0 | 4 |
+| 2026-04-30 | 32 | 6 | 0 | 26 |
+| 2026-05-01 | 13 | 1 | 3 | 9 |
+| **Subtotal** | **79** | **10** | **3** | **66 (83.5%)** |
+
+The silent-exit rate is consistent across the entire 13-day window (92.3% lifetime, 83.5% in the post-EDGE-003 subset where the sample is most relevant). OBS-003's promotion to HIGH/NOW is on the basis of this consistency plus the two confirmed positive-edge non-trades — the gap is not a transient artifact of the immediate post-EDGE-003 window.
+
+**Acceptance Criteria** (revised 2026-05-01 in light of the new evidence)
+
+- Every `OPPORTUNITY` event in a paper-mode trade-log window has exactly one of `{paper_trade, SKIPPED, in-flight-at-audit-time}`.
+- A 24h paper-mode audit on the **Mac Studio** (post-cutover; the MacBook is no longer the source of new audit windows) confirms `OPPORTUNITY = paper_trades + SKIPPED` within ±N for at-the-moment in-flight (N small).
+- SKIPPED reasons are diverse enough to attribute kills to specific executor gates (E1–E12 named per the README's Executor section).
+- **The 2 historical positive-edge silent-exit candidates** (+0.06 and +0.064 in the trade-log archive) are explainable post-fix: re-running `_validate()` against the persisted candidate state should produce a SKIPPED record with a specific gate name (likely opposing-position guard, same-signal guard, or per-ticker cooldown).
+
+**Notes**
+
+- This entry's previous "observability debt" framing was correct in scope but wrong in severity. 2026-05-01 evidence (positive-edge silent exits) makes it correctness-adjacent. Do not downgrade severity again without invalidating this evidence.
+- Closing OBS-003 unblocks the EDGE-004 audit's evidence section AND likely produces a small but real uplift in PAPER_TRADE throughput on the Mac Studio (unblocking the 2 positive-edge candidates per ~13 days observed on the MacBook).
+- After OBS-003 closes, EDGE-004's "matcher quality / market-mix" investigation can quote per-gate kill counts. The remaining gap (still huge — 92% of OPP at edge=0.0) is then the correct EDGE-004 problem.
+
+**Related**
+
+- `PROFIT-EDGE-004` (opened 2026-04-28) — direct beneficiary of this fix; EDGE-004 audit is constrained until executor reject reasons are visible.
+- `PROFIT-EXEC-001` (closed) — addressed direct executor bypass risk; OBS-003 is observability of the bypass-not-bypass outcome path.
+- `PROFIT-OBS-004` (opened 2026-05-01) — companion entry for the edge-sign display bug surfaced by the same 2026-05-01 audit; PAPER_TRADE records on KXFISAEXTEND show the YES-side edge (-0.068) regardless of which side was actually traded.
+- `PROFIT-CUTOVER-001` (opened 2026-05-01) — the post-cutover Mac Studio audit window is where the 24h acceptance criterion above will run. Do not run that audit on the MacBook; the MacBook is archive-only.
+
+---
+
+### PROFIT-STRUCT-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-STRUCT-002 |
+| **Title** | Verify EDGE-002 sub-fix #4: post-deploy structural-recompute warnings carry underlying-cause `repr(__cause__)` and traceback as designed |
+| **Category** | Observability / Structural Lane |
+| **Severity** | LOW |
+| **Status** | OPEN |
+| **Priority** | LATER |
+| **Owner** | Claude |
+| **Depends On** | — |
+| **Blocks** | PROFIT-EDGE-002 sub-fix #4 acceptance is not fully verifiable without it; closes a small observability gap |
+
+**Description**
+
+PROFIT-EDGE-002 sub-fix #4 modified `tasks/structural_task.py:146` so the warning emitted on per-market structural recompute failure now includes both the wrapper text and `repr(__cause__)`, plus an `exc_info` traceback rooted at the cause. The intent was to make future structural failures diagnosable in `bot.log` rather than producing the silent "failed structural recompute for X" lines the pre-fix code emitted.
+
+The v0.29.58 post-deploy audit (2026-04-28) attempted to confirm the new format is live but ran into a methodological block: `launchd.stderr.log` is the file that historically captured these warnings, and it does *not* carry per-line timestamps for the structural failure entries. The 10,605 visible `[STRUCTURAL] per-market recompute failed` lines in stderr could not be split cleanly into pre-restart vs post-restart subsets via stderr alone. As a result it is not currently confirmable whether (a) post-restart failures carry the new cause format, (b) the fix is live but no post-restart structural failures occurred so the format hasn't been exercised, or (c) the fix did not deploy cleanly despite the test passing.
+
+**Why it matters to profitability / safety / reliability**
+
+Low direct impact. The structural lane is provably running post-restart (30 successful `STRUCTURAL_PRIOR_RECOMPUTE` events in the trade-log archive within the 48h audit window), which is the operationally important fact. The cause-emission fix is observability-only — it ensures *future* failures can be diagnosed without resorting to ad-hoc instrumentation.
+
+But leaving it unverified means EDGE-002's acceptance criteria are not fully met at the runtime layer; EDGE-002 itself is COMPLETE on the basis of unit-test verification (`tests/test_structural_task.py::test_run_once_failure_warning_surfaces_underlying_cause`), but the runtime confirmation footnote remains pending.
+
+**Proposed Fix**
+
+Inspect `logs/app/bot.log` (timestamped, unlike `launchd.stderr.log`) within the post-2026-04-27T13:03:19Z window for the structural warning format. Specifically:
+
+1. Grep for `per-market recompute failed` in `bot.log` and `bot.log.2026-04-29` (the rotated post-restart files).
+2. If matches exist, sample 5 and confirm they include the `repr(__cause__)` text and the `Traceback (most recent call last):` block.
+3. If no matches exist in the post-restart window, the structural lane has had zero failures since restart — note that explicitly and consider the fix verified-in-test only, with a watch-for-future-cases acceptance criterion.
+4. If matches exist but lack the expected format, file a follow-up: the fix did not deploy as designed despite the test passing.
+
+**Acceptance Criteria**
+
+- One of: (a) a sample of post-2026-04-27T13:03:19Z `bot.log` lines confirms the cause + traceback format is live; OR (b) post-restart inspection finds zero structural failures so far and a watch-this rule is added to a future audit's checklist; OR (c) the fix is found to have deployed incorrectly and a code follow-up is filed.
+
+**Notes**
+
+- This is purely a verification-gap closure for EDGE-002. No code changes anticipated unless option (c) above turns out to be the case.
+- Do not bundle with broader log-format work. This is a specific check against a specific commit.
+
+**Related**
+
+- `PROFIT-EDGE-002` (closed 2026-04-26) — sub-fix #4 is the change being verified.
+- `PROFIT-OBS-002` (closed) — ensured log rollover policy works on macOS; STRUCT-002 depends on the rotated `bot.log` files being readable, which OBS-002 closed.
+
+---
+
+### PROFIT-OBS-004
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-OBS-004 |
+| **Title** | `paper_trades.edge` records the YES-side edge regardless of which side was traded; sign is misleading on every NO-side trade |
+| **Category** | Observability / Trade-Log Fidelity |
+| **Severity** | LOW (correctness-of-display, not correctness-of-decision) |
+| **Status** | OPEN |
+| **Priority** | LATER (does not block trade emission, calibration, or any safety gate; affects audit readability) |
+| **Owner** | Shared |
+| **Depends On** | — |
+| **Blocks** | Audit ergonomics — every retrospective that joins `paper_trades.edge` to a directional thesis (e.g. "did the bot get edge wrong?") gets the wrong sign on NO-side trades; for the current 3 paper trades, this would mislead a reviewer into thinking the executor cleared a negative-edge trade when it actually cleared a positive-edge trade with a flipped log field |
+
+**Description**
+
+The 3 PAPER_TRADE records on `KXFISAEXTEND-26APR-MAY0{1,2,3}` (the only paper trades to date, all from the 2026-05-01 emission window) record `edge=-0.068`. Inspection of the same records' `estimated_probability` (0.432) and `side` (`no`) shows the executor's actual decision math used `P(NO) = 1 − 0.432 = 0.568`, traded NO at 50¢, and computed an executed-side edge of `0.568 − 0.5 = +0.068`. The recorded `edge=-0.068` is the YES-side perspective (`estimated_probability − 0.5 = 0.432 − 0.5 = -0.068`), not the executed-side edge. The executor decision was correct (positive expected value); the persisted display is wrong.
+
+This is the most likely explanation for the "wait, the executor took a negative-edge trade?" question that surfaced during the 2026-05-01 post-cutover audit and that would surface again on every future audit until fixed.
+
+**Why it matters to profitability / safety / reliability**
+
+Zero direct profit/safety impact — the executor is doing the right thing; only the persisted log field is wrong. But every retrospective that filters `paper_trades.edge < 0` to find "executor mistakes" gets a false positive on every NO-side trade, and every retrospective that joins `edge` to outcome will mis-attribute losses on NO-side trades. This is exactly the kind of low-severity observability bug that quietly poisons every downstream analysis until someone explicitly notices the sign convention.
+
+**Evidence / Source**
+
+- `data/paper_trades.db` table `paper_trades`, all 3 rows: `side='no'`, `estimated_probability=0.432`, `market_yes_price=50.0`, `edge=-0.068`. Computed executed-side edge: `(1 - 0.432) - 0.5 = +0.068`.
+- The 2 OPPORTUNITY records at positive edge in the same lifetime window (`+0.06` and `+0.064`, see PROFIT-OBS-003 evidence) are presumably YES-side (the convention in OPPORTUNITY records appears self-consistent — needs source-code verification per Proposed Fix below); they did not produce trades, so the bug is not visible there.
+
+**Proposed Fix**
+
+Audit the path from executor → `paper_trader.record_trade()` → `paper_trades.edge` column write. Two plausible fixes:
+
+1. **Persist the executed-side edge.** Compute the side-aware edge at the executor (which already knows the side) and pass that value to `paper_trader.record_trade()` instead of (or in addition to) the YES-side edge. Lower-friction; preserves the existing schema; updates only the recorded value. Backward-compatibility: the existing 3 rows would remain in the YES-side convention; either backfill them (3 rows is trivial — they're all `side=no`, `estimated_probability=0.432`, so the migration is a single SQL update) or document the schema change in CHANGELOG and accept the discontinuity.
+
+2. **Add a `executed_edge` column alongside `edge`.** Cleaner if there's a reason to preserve the YES-side edge as a separate column for reasoning purposes. Requires a schema migration.
+
+Approach (1) is preferred unless an audit of `evidence_store` and downstream consumers reveals a need to preserve both perspectives.
+
+**Acceptance Criteria**
+
+- The `paper_trades.edge` column reflects the executed-side edge for both YES-side and NO-side trades.
+- The 3 historical KXFISAEXTEND records are either backfilled (preferred) or annotated in a one-line CHANGELOG note explaining the convention change at the schema-cut date.
+- A test in `tests/test_executor.py` or `tests/test_paper_trader.py` covers both sides and asserts the executed-side convention.
+
+**Notes**
+
+- Surface this with the 3 historical KXFISAEXTEND audit attempts in mind. The 2026-05-01 post-cutover audit was the third time the negative-edge question came up; documenting it now means the next reviewer (or agent) starts from "this is a known display bug" rather than "wait, did the bot trade negative edge?"
+- This is not load-bearing for any other entry; close it independently when convenient.
+- If approach (1) is taken, also confirm the convention used in `OPPORTUNITY` records — they currently appear consistent (positive edge means tradeable) but a source-code audit at the same time is cheap insurance against schema drift.
+
+**Related**
+
+- `PROFIT-OBS-003` (promoted HIGH/NOW 2026-05-01) — companion observability item; both surfaced from the same 2026-05-01 audit.
+- `PROFIT-EDGE-004` (open) — neither blocks nor depends on OBS-004; the EDGE-004 audit reads `OPPORTUNITY.edge`, not `paper_trades.edge`, and OPPORTUNITY's edge convention appears to be already consistent.
+
+---
+
+### PROFIT-CUTOVER-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-CUTOVER-001 |
+| **Title** | MacBook → Mac Studio operational handoff (paper-mode runtime, governance Phase 2 launchd, SQLite state migration) |
+| **Category** | Operations / Reliability / State Management |
+| **Severity** | HIGH (until verified; downgrade to MEDIUM after first Mac Studio paper trade emits cleanly) |
+| **Status** | OPEN |
+| **Priority** | NOW (operator action ongoing; some sub-tasks pending Mac Studio verification) |
+| **Owner** | Shared (operator + Claude) |
+| **Depends On** | — |
+| **Blocks** | All future EDGE-004 evidence accumulation (Mac Studio is the only host where new evidence is produced); Phase 2 §8.5 acceptance review (clock runs on Studio per `PROFIT-PHASE2-001`); any future production-soak audit of the post-EDGE-003 v0.29.58 stack |
+
+**Description**
+
+The MacBook (`hostname = MacBook-Pro.local`, Apple T6030 / M3 Pro, 18 GB unified memory) ran the bot from 2026-04-18T02:11:24Z (`paper_start_time` per `bot_state` table) through 2026-05-01T13:05:54Z (`Bot shutting down...` line in `logs/app/bot.log`) — 13 days of paper-mode operation across versions v0.29.5 → v0.29.58. The Mac Studio (sufficient memory headroom for `qwen3:14b` per `docs/governance/PHASE2_RUNBOOK.md` "Model selection") took over operations on 2026-05-01.
+
+The cutover requires preserving four bot-state pillars across hosts (per the README's "Mac Studio operational handoff" section):
+
+1. **Paper-trade history.** `data/paper_trades.db.paper_trades` (3 rows). Without it, bankroll resets to the `BANKROLL` env default and the only resolved-trade calibration evidence is erased.
+2. **Source credibility graduations.** `data/paper_trades.db.source_credibility` (1 row: VitalLaw.com 0W/3L 0.5x). Without it, the LLM re-trusts VitalLaw at 1.0x and could repeat the same losing entries.
+3. **Source statistics + Reddit discovery state.** `data/paper_trades.db.source_stats` (405 rows lifetime funnel) + `data/paper_trades.db.subreddit_candidates` (2,508 rows discovery state). Both feed the Phase 2 governance agent's decision context (memory note: `project_adaptive_governance_direction`).
+4. **Dossier + structural-prior corpus.** `data/evidence_store.db` (32 dossiers / 248 dossier_updates / 7,510 dossier_update_evidence / 32 structural_priors). Without it, the structural and accumulation lanes lose their accumulated context and revert every market to a near-uniform time-to-close fallback.
+
+`.gitignore` excludes `data/*.db` and `logs/` ("too large/personal for version control"), so the migration uses **committed SQL dumps + a logs tarball + plaintext reports** (per the existing `windows_archive/` precedent) rather than committing binary DB files or live log directories. Three layers so a single Studio `git clone` carries the full MacBook era forward — operator never returns to MacBook hardware:
+
+- **Layer 1 (runtime state):** `transfer/macbook_handoff_2026-05-01/paper_trades.sql` (456 KB, sha256 `3b21a4f9…`) and `evidence_store.sql` (1.2 MB, sha256 `9e70227b…`) — `sqlite3 .dump` of both DBs; restored to `data/*.db`.
+- **Layer 2 (bulk log archive):** `transfer/macbook_handoff_2026-05-01/logs_app_and_trades.tar.gz` (27 MB compressed, 151 MB raw, sha256 `0af4f320…`) — full 13-day `logs/app/` (33 files: bot logs + errors + launchd stdout) + `logs/trades/` (14 files: JSONL decision-event archive that backs all of EDGE-004/OBS-003/RUNTIME-001 evidence). 47 files total. Extracts to `mac_archive/macbook_2026-05-01_import/logs/{app,trades}/` (`.gitignore`d destination, separate from Studio's live `logs/`).
+- **Layer 3 (plaintext reports):** `transfer/macbook_handoff_2026-05-01/reports/daily_review/` (14 daily-review `.txt` rollups, 1.6 MB total) + `reports/code_review_eval/` (summary.md + 30 per-test-repo CSVs from the 2026-04-27 code-review-graph eval). Committed directly as text — no extraction needed.
+- **Documentation:** `transfer/macbook_handoff_2026-05-01/MANIFEST.md` (row counts, hashes, restore command, paste-friendly verification checklist) + `PROVENANCE.md` (narrative).
+- **Restore script:** `scripts/restore_macbook_handoff.sh` — flags: `--force`, `--extract-logs`, `--extract-logs-only`, `--dry-run`. Refuses to overwrite without `--force`; verifies post-restore row counts + key values; idempotent; macOS-default bash 3.2 compatible.
+
+Excluded from the bundle (and why): `evaluate/test_repos/` (172 MB of clonable external repos), `data/bot_runtime.lock` (host-specific), `data/evidence_store.db-shm/.wal` (SQLite WAL artifacts; not durable), `logs/coverage/` + `logs/tests/` (regeneratable from pytest), `.venv/` + `__pycache__/` + `.ruff_cache/` + `.hypothesis/` + `.code-review-graph/` (derived/cached). See `transfer/macbook_handoff_2026-05-01/MANIFEST.md` "Not included" for the full rationale.
+
+**Why it matters to profitability / safety / reliability**
+
+The two SQLite stores are designed for single-writer mode. A botched cutover that left both hosts running concurrently would either (a) corrupt `source_credibility` multipliers under concurrent updates, (b) lose paper-trade emissions to whichever host wrote last, or (c) trip Reddit / Kalshi rate signals from the combined external IP signature (per the CLAUDE.md "Concurrent Mac + Windows instances on the same network" gotcha — extends naturally to two Macs sharing a NAT). The cutover must be **explicit and final**, not active-active.
+
+Operationally, until the cutover is verified, the bot is in a known-fragile state: the MacBook has stopped, the Studio has just started, no Studio paper trade has yet resolved, and the §8.5 Phase 2 soak clock has only been ticking ~1 hour at the time of this entry's creation. Verification produces a step-function reduction in operational risk.
+
+**Evidence / Source**
+
+- MacBook last shutdown: `logs/app/bot.log` final line — `2026-05-01 13:05:54,500 UTC INFO main Bot shutting down...`.
+- MacBook hostname / hardware: `Darwin MacBook-Pro.local 25.3.0 ... arm64` (T6030 = Apple M3 Pro/Max, 18 GB unified memory ceiling for `qwen3:14b` per Ollama memory model).
+- MacBook governance launchd state: `launchctl list | grep -E "kalshi|governance"` returns only `com.kalshibot.dailyreview` — `com.kalshi.governance.fast` / `.deep` were never bootstrapped on this host.
+- MacBook stale lock: `data/bot_runtime.lock` mtime 2026-04-29T22:00:58, contents `{"pid":793,"cwd":"...","started_utc":"2026-04-30T04:00:58Z","argv":["..."]}` — a stale leftover from a crashed/terminated bot that the lock-file's self-healing PID check would clear on next start, but should be deleted as part of cutover housekeeping.
+- Operator confirmation 2026-05-01: Mac Studio launchd jobs (`com.kalshi.governance.fast` and `.deep`) were bootstrapped earlier today; the Studio is now the active operational host.
+
+**Proposed Fix — checklist**
+
+This entry tracks the cutover as a sequenced operation. Items already complete are checked; remaining items are operator/agent action:
+
+- [x] Generate SQL dumps of `paper_trades.db` + `evidence_store.db` from the MacBook.
+- [x] Commit dumps + `MANIFEST.md` + `PROVENANCE.md` to `transfer/macbook_handoff_2026-05-01/`.
+- [x] Bundle `logs/app/` + `logs/trades/` (151 MB raw → 27 MB compressed) into `transfer/macbook_handoff_2026-05-01/logs_app_and_trades.tar.gz` so the Studio inherits the full 13-day evidence base, not just the SQLite-backed durable state.
+- [x] Commit `logs/reports/` (14 daily-review `.txt` files, 1.6 MB) and `evaluate/{reports,results}/` (12 KB code-review-graph eval outputs) directly as plaintext under `transfer/macbook_handoff_2026-05-01/reports/`.
+- [x] Add `mac_archive/macbook_2026-05-01_import/` to `.gitignore` (matches existing `windows_archive/raw/` pattern); the tarball in `transfer/` is canonical, the extracted tree is regenerable.
+- [x] Commit `scripts/restore_macbook_handoff.sh` with row-count verification + `--extract-logs` / `--extract-logs-only` flags. End-to-end tested: dry-run, fresh restore, collision-refusal, `--force` overwrite, `--extract-logs-only` extract, all PASS.
+- [x] Update `README.md` with the cutover handbook (the "Mac Studio operational handoff" section, three-layer migration explanation, Studio first-launch recipe).
+- [x] Update `docs/governance/PHASE2_RUNBOOK.md` with the soak-clock start time and §8.5 ETA.
+- [ ] **Mac Studio operator action:** `git pull`, run `./scripts/restore_macbook_handoff.sh --extract-logs`, verify post-restore row counts match the manifest (Layer 1) AND `find mac_archive/macbook_2026-05-01_import/logs -type f | wc -l` returns 47 (Layer 2). Confirm `bot_state.notional_bankroll = 42.50` and `source_credibility` shows VitalLaw.com at 0W/3L / 0.5x.
+- [ ] **Mac Studio operator action:** Confirm Phase 2 launchd is firing cycles (per `PHASE2_RUNBOOK.md` "Monitoring during the 14-day soak"). Specifically, after the next `com.kalshi.governance.fast` cycle window, verify `logs/governance/decisions.jsonl.<DATE>` contains `GOVERNANCE_CYCLE_START` + `GOVERNANCE_CYCLE_END` records.
+- [ ] **Closure trigger:** when the *first Mac Studio paper trade* resolves cleanly (any outcome, any market) AND the bankroll math is consistent on the Studio. This proves the migrated state is being used live and that no schema/fk drift was introduced by the dump/restore.
+- [ ] **MacBook side:** delete `data/bot_runtime.lock` and confirm via `launchctl list` that no kalshi or governance LaunchAgents remain bootstrapped. (Removing the bot LaunchAgent itself is optional; it can stay installed but stopped.)
+
+**Acceptance Criteria**
+
+- Mac Studio's first paper trade resolves; `bot_state.notional_bankroll` shows arithmetic continuity with the migrated $42.50 starting value.
+- `paper_trades.db.source_credibility` shows VitalLaw.com at 0W/3L (i.e., the migration brought across the auto-suppression).
+- Mac Studio `logs/governance/` directory exists and contains at least one full `GOVERNANCE_CYCLE_START` → `GOVERNANCE_CYCLE_END` pair.
+- MacBook `data/bot_runtime.lock` deleted; no bot processes running (`pgrep -f "kalshi_bot/main"` returns empty).
+- This entry is closed with a one-paragraph "Closure" note recording (a) the date the first Studio trade resolved, (b) the row counts the post-restore verification produced, and (c) any drift from the manifest counts.
+
+**Notes**
+
+- Do not run the bot on the MacBook again. The bot is not designed for active-active operation across hosts. If the Studio fails, follow the README's "What the MacBook keeps doing" failover procedure (reverse-direction handoff via `transfer/`).
+- `transfer/macbook_handoff_2026-05-01/` is a one-time directory tagged with the cutover date. Future migrations between machines should use the same pattern with a new dated directory; do not edit or overwrite the 2026-05-01 directory.
+- The dump/restore is *additive* in the sense that the MacBook's data still exists on its disk for offline analysis; only the live runtime moves. Treat the MacBook as a read-only analysis workstation per the README.
+- If the Studio's first paper trade drops `data/paper_trades.db` rows or `bot_state.notional_bankroll` is reset to the `BANKROLL` env default, the restore did not happen or did not happen before first launch — re-run `scripts/restore_macbook_handoff.sh` (with `--force` to overwrite the partial state).
+
+**Related**
+
+- `PROFIT-PHASE2-001` (opened 2026-05-01) — the Phase 2 shadow soak clock starts on the Studio post-cutover; CUTOVER-001 closure is the precondition for PHASE2-001's first daily monitoring entry.
+- `PROFIT-RUNTIME-001` (closed) — RUNTIME-001's 2026-05-01 Validation Notes provide the lifetime-aggregate evidence that informed the cutover-state inventory above.
+- `PROFIT-OBS-003` + `PROFIT-OBS-004` (both open as of 2026-05-01) — both surfaced from the same audit that motivated the cutover; closing them is appropriate Studio-side work.
+- README "Mac Studio operational handoff (2026-05-01)" — operator-facing handbook; this entry tracks the engineering state, the README tracks the operator-runbook state.
+
+---
+
+### PROFIT-PHASE2-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-PHASE2-001 |
+| **Title** | Governance Agent Phase 2 shadow-mode 14-day soak (started 2026-05-01 ~14:00 UTC on Mac Studio against `qwen3:14b`; §8.5 acceptance ETA 2026-05-15) |
+| **Category** | Governance / Validation |
+| **Severity** | MEDIUM (the soak itself is the validation; only acceptance failure or a `KILL_SWITCH` trip during the soak elevates severity) |
+| **Status** | IN_PROGRESS (soak clock running; no operator action expected during the window unless monitoring surfaces a failure mode) |
+| **Priority** | NOW (operator's daily monitoring checklist per `PHASE2_RUNBOOK.md`) |
+| **Owner** | Operator (monitoring) + Claude (post-soak acceptance review) |
+| **Depends On** | `PROFIT-CUTOVER-001` (Mac Studio is the only host where the soak clock ticks; clock did not start until cutover happened) |
+| **Blocks** | Governance Phase 3 real-mode flip (per ROADMAP `GOV.P3` — "Requires P2 + 14d shadow soak"); ultimately Phase 4 Claude-API tier and weekly self-review |
+
+**Description**
+
+Per the Phase 2 spec (`docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md` §8.5) and the operator runbook (`docs/governance/PHASE2_RUNBOOK.md` "Monitoring during the 14-day soak"), Phase 2 acceptance requires:
+
+- ≥14 days of clean shadow-mode operation
+- ≥30 governance decisions accumulated
+- ≥85% of decisions deemed reasonable on manual review
+
+The shadow-mode invariant is that `runtime_overrides.yaml`'s `applied=` field never grows during the soak (the agent writes only to `proposed`, never to `applied`). Any growth in `applied=` during the soak is a load-bearing safety bug and stops the clock immediately.
+
+Bootstrap state on 2026-05-01:
+
+- Mac Studio launchd: `com.kalshi.governance.fast` (every 2 h, `RunAtLoad=false`) and `com.kalshi.governance.deep` (daily 09:00) bootstrapped at ~14:00 UTC.
+- Governance LLM model: `qwen3:14b` (per `PHASE2_RUNBOOK.md` "Model selection (hardware-conditional)"; the launchd plists shipped configured for the MacBook 18 GB target with `qwen3:8b` and were edited to `qwen3:14b` for the Studio).
+- Trading-bot signal-analyzer LLM: `qwen2.5:7b` unchanged (per `PROFIT-LLM-001` — unification with the governance model is intentionally deferred to post-Phase 2).
+- Logs path: `logs/governance/decisions.jsonl.<DATE>` per the runbook.
+
+**Why it matters to profitability / safety / reliability**
+
+Phase 2 is the load-bearing safety milestone for the LLM-driven governance agent. The agent is designed to dynamically add/remove sources, keywords, and thresholds — exactly the levers that PROFIT-EDGE-004 hypotheses 1 and 3 want manipulated. But a governance agent that rewrites production state without first proving 14 days of reasonable shadow decisions is the riskiest possible thing in the codebase: it has root-cause access to the bot's belief inputs.
+
+The 14-day clock is not arbitrary; it's the minimum sample size for the §8.5 acceptance criteria (≥30 decisions on a `fast` cadence of 2h means a theoretical maximum of 168 decisions over 14 days, but the agent's `no_action` default and the `FakeLLM` baseline mean actual decision count is much lower — 30 is the floor below which acceptance is statistically unstable).
+
+**Evidence / Source**
+
+- Operator-confirmed bootstrap on Mac Studio 2026-05-01 ~14:00 UTC.
+- `ops/launchd/com.kalshi.governance.fast.plist` — every 2 h cadence, `GOVERNANCE_LLM_MODEL=qwen3:8b` (default; edited to `qwen3:14b` on the Studio per `PHASE2_RUNBOOK.md`).
+- `ops/launchd/com.kalshi.governance.deep.plist` — daily 09:00.
+- `docs/governance/PHASE2_RUNBOOK.md` — operator-facing daily monitoring checklist; this entry tracks the engineering view.
+- ROADMAP `GOV.P3` row — explicit "Requires P2 + 14d shadow soak" dependency.
+
+**Proposed Fix — milestone tracking, not a code-fix entry**
+
+Phase 2 acceptance is the work itself, not a fix. The entry remains IN_PROGRESS for the duration of the soak. Per-day operator action is the runbook's monitoring checklist:
+
+```bash
+DATE=$(date -u -v-1d +%Y-%m-%d)
+grep -c "GOVERNANCE_CYCLE_START" "logs/governance/decisions.jsonl.${DATE}"
+grep -c "GOVERNANCE_DECISION" "logs/governance/decisions.jsonl.${DATE}"
+grep -E "PARSE_ERROR|VALIDATION_ERROR|BATCH_ABORTED|KILL_SWITCH" "logs/governance/decisions.jsonl.${DATE}"
+python -m utils.runtime_overrides --status | grep "applied="
+```
+
+Per-day Claude action: none unless the operator surfaces an event from the monitoring grep.
+
+Acceptance review (target ~2026-05-15 or as soon as ≥30 decisions accumulated):
+
+1. Aggregate decision count from `logs/governance/decisions.jsonl.*` across the soak window.
+2. Sample 10 decisions per day (`shuf -n 10`) for the runbook-described "reasonable / not reasonable" review.
+3. Confirm `applied=` is unchanged from soak start.
+4. Confirm zero `KILL_SWITCH` events during the soak.
+5. Aggregate "reasonable" rate; if ≥85%, mark this entry COMPLETE and unblock `GOV.P3`.
+
+**Acceptance Criteria**
+
+- Soak runs uninterrupted from 2026-05-01 ~14:00 UTC for ≥14 days (target close: 2026-05-15 ~14:00 UTC).
+- ≥30 `GOVERNANCE_DECISION` events accumulated in the soak window.
+- Manual review marks ≥85% of sampled decisions reasonable (10/day × 14 days = 140 max sample, sample-and-record process per the runbook).
+- Zero `applied=` growth in `runtime_overrides.yaml` during the window.
+- Zero `KILL_SWITCH` events during the window.
+- Closure note records (a) actual close date, (b) total decision count, (c) reasonable-rate percentage, (d) any deferred follow-ups.
+
+**Notes**
+
+- Do not run governance against `qwen3:8b` on the Studio. The plists were intentionally edited to `qwen3:14b` for this host per the runbook; reverting to `qwen3:8b` would invalidate the soak.
+- If the operator needs to stop the soak (e.g. the bot crashes for unrelated reasons and the operator can't get the host back up quickly), the soak clock pauses, not resets — but record the gap explicitly in this entry's Notes section so the post-soak review knows the actual continuous-operation duration.
+- `PROFIT-LLM-001` (LOW, OPEN) tracks the post-Phase 2 decision on whether to unify the signal-analyzer LLM to `qwen3:14b` (or whatever model Phase 2 validates). Do not bundle that decision with PHASE2-001 acceptance.
+- The runbook's "Common failures" section is the first stop for any per-cycle anomaly (Ollama unreachable, parse-error rate, KillSwitchActive). This entry is the *outcome* tracker; failures during the soak are individual incidents that don't necessarily block acceptance unless they're systemic.
+
+**Related**
+
+- `PROFIT-CUTOVER-001` (opened 2026-05-01) — direct dependency; the soak clock cannot tick on a host that doesn't have the Studio's `qwen3:14b` configuration and the migrated state.
+- `PROFIT-LLM-001` (open, LOW, deferred) — explicitly post-Phase 2; do not unify until PHASE2-001 closes.
+- ROADMAP `GOV.P3` — direct downstream consumer; `GOV.P3` is BLOCKED until PHASE2-001 closes.
+- `docs/governance/PHASE2_RUNBOOK.md` — operator-facing companion document; this entry is the engineering tracker.
 
 ---
 
@@ -1876,16 +2537,22 @@ Created `PLATFORMS.md` at repo root with four sections: Runtime/Process Manageme
 
 ### A. Current Profit-Path Fix Queue
 
-Open or blocked items, ordered for safe sequential execution:
+Open or blocked items, ordered for safe sequential execution. **Updated 2026-05-01 post-cutover** to reflect the OBS-003 promotion, the new CUTOVER-001 + PHASE2-001 + OBS-004 entries, and the Mac Studio operational handoff.
 
-| Order | ID | Title | Why First |
-|-------|----|-------|-----------|
-| 1 | PROFIT-RUNTIME-001 | S4.5 multi-lane paper validation remains unproven | Re-run after structural participation fix and sufficient wall-clock runtime |
-| 2 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Blocked on contract decision for rejected-evidence intake semantics |
-| 3 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible |
-| 4 | PROFIT-CAL-001 | Calibration outcome feedback is not proven end-to-end | Depends on S4.5/resolved outcomes but remains visible |
+| Order | ID | Title | Why this order |
+|-------|----|-------|---------------|
+| 1 | PROFIT-CUTOVER-001 | MacBook → Mac Studio operational handoff | Operator action partially in flight (Studio bootstrap done, post-restore verification pending); must close before any other Studio-side audit windows are trustworthy |
+| 2 | PROFIT-PHASE2-001 | Phase 2 shadow soak clock (started 2026-05-01 ~14:00 UTC; ETA 2026-05-15) | IN_PROGRESS; only operator action is the daily monitoring checklist in `PHASE2_RUNBOOK.md`; closes when ≥30 decisions accumulate at ≥85% reasonable on review |
+| 3 | PROFIT-OBS-003 | OPPORTUNITY → PAPER_TRADE silent-exit gap (240/260 lifetime, includes 2 positive-edge non-trades) | Promoted HIGH/NOW 2026-05-01; fixes a correctness-adjacent bug (positive-edge candidates silently dropped) AND unblocks EDGE-004 audit completeness; do this before EDGE-004 |
+| 4 | PROFIT-EDGE-004 | Pipeline reaches executor with `edge = 0.0`; matcher / market-mix / source-mix root cause | Operationally surfaced as the binding constraint after EDGE-001/002/003 closed; lifetime evidence (2026-05-01) reinforces the original diagnosis but adds the OBS-003 dependency |
+| 5 | PROFIT-OBS-004 | `paper_trades.edge` records YES-side edge regardless of trade side | Cosmetic-but-load-bearing for audits; safe to fix in parallel with OBS-003 since both touch the same persistence path |
+| 6 | PROFIT-RUNTIME-001 | S4.5 multi-lane paper validation | COMPLETE on 13-day MacBook evidence (see 2026-05-01 Validation Notes); listed for completeness — no Mac Studio re-run expected unless lane wiring materially changes |
+| 7 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Blocked on contract decision for rejected-evidence intake semantics |
+| 8 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible |
+| 9 | PROFIT-CAL-001 | Calibration outcome feedback | COMPLETE; 2026-05-01 production-soak observation appended (3 `CALIBRATION_CHECK` events fired in production); next footnote milestone is ≥10-resolution sample with ≥2 distinct lanes populated, which depends on OBS-003 + EDGE-004 progress |
+| 10 | PROFIT-STRUCT-002 | Verify EDGE-002 sub-fix #4 runtime cause-emission format | Verification-only; small observability gap; can run in parallel with the higher-priority items |
 
-**Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence.
+**Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence. **Cutover-specific note (2026-05-01):** items 3–10 are all Mac Studio work — do not re-run any of them on the MacBook. The MacBook is read-only archive after 2026-05-01T13:05:54Z.
 
 ---
 
