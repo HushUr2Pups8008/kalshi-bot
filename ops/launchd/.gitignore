@@ -1,0 +1,4 @@
+# Generated plists are per-machine artifacts written by install.sh.
+# Templates (*.plist.template) are the checked-in source of truth.
+com.kalshi.governance.fast.plist
+com.kalshi.governance.deep.plist

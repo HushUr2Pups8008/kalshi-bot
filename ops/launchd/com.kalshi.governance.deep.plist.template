@@ -8,7 +8,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/Jake/vscode/kalshi_bot/.venv/bin/python</string>
+        <string>@VENV_PYTHON@</string>
         <string>-m</string>
         <string>governance</string>
         <string>--cadence</string>
@@ -18,18 +18,17 @@
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/Jake/vscode/kalshi_bot</string>
+    <string>@REPO_ROOT@</string>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
-        <!-- Hardware-conditional. Currently set for MacBook (18GB).
-             When migrating to Mac Studio (post-2026-04-29), change to
-             qwen3:14b. The launchd plist is the single source of truth
-             for which model the governance agent talks to. -->
+        <!-- Source of truth for the governance LLM. Set per-machine via
+             install.sh (env override GOVERNANCE_LLM_MODEL). Default qwen3:14b
+             for Mac Studio (M4 Max, 128GB); set to qwen3:8b for MacBook (18GB). -->
         <key>GOVERNANCE_LLM_MODEL</key>
-        <string>qwen3:8b</string>
+        <string>@GOVERNANCE_LLM_MODEL@</string>
     </dict>
 
     <key>StartCalendarInterval</key>
@@ -41,8 +40,8 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/Jake/vscode/kalshi_bot/logs/governance/cycle.deep.stdout.log</string>
+    <string>@REPO_ROOT@/logs/governance/cycle.deep.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/Jake/vscode/kalshi_bot/logs/governance/cycle.deep.stderr.log</string>
+    <string>@REPO_ROOT@/logs/governance/cycle.deep.stderr.log</string>
 </dict>
 </plist>

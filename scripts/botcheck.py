@@ -405,9 +405,26 @@ def print_history(
             )
 
 
+def _default_repo_root() -> Path:
+    """Resolve the repo root for botcheck without a hardcoded user/repo path.
+
+    Order: $KALSHI_HOME, then ~/vscode/kalshi-bot (Mac Studio), then
+    ~/vscode/kalshi_bot (legacy MacBook), then ~/vscode/kalshi-bot as a final
+    default if neither directory exists.
+    """
+    if (env := os.environ.get("KALSHI_HOME")):
+        return Path(env)
+    home = Path.home()
+    for name in ("kalshi-bot", "kalshi_bot"):
+        candidate = home / "vscode" / name
+        if candidate.exists():
+            return candidate
+    return home / "vscode" / "kalshi-bot"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    default_home = Path(os.environ.get("KALSHI_HOME", "/Users/Jake/vscode/kalshi_bot"))
+    default_home = _default_repo_root()
     parser.add_argument("--home", type=Path, default=default_home)
     parser.add_argument("--label", default=os.environ.get("KALSHI_LAUNCHD_LABEL", "com.jake.kalshi-bot"))
     parser.add_argument("--python", type=Path, default=Path(os.environ.get("KALSHI_PYTHON", default_home / ".venv/bin/python")))
