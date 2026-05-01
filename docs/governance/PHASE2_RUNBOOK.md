@@ -23,13 +23,14 @@ adds an additional flip protocol; Phase 4 adds Claude-API escalation.
 ## Prerequisites
 
 - macOS host (MacBook 18GB or Mac Studio) with Ollama installed.
-- Governance LLM pulled. The launchd plists ship configured for the
-  MacBook host (`qwen3:8b`). On Mac Studio, you'll edit them to
-  `qwen3:14b` (see "Model selection" below).
+- Governance LLM pulled. The plist templates default to `qwen3:14b`
+  (Mac Studio target). Override at install time on MacBook (see
+  "Model selection" below).
 - Kalshi-bot Phase 1 governance plumbing merged (`AuditLogger`,
   `KillSwitch`, `RuntimeOverridesReader` exist in `governance/` and
   `utils/`).
-- venv at `/Users/Jake/vscode/kalshi_bot/.venv` with Phase 2 deps.
+- venv at `$KALSHI_HOME/.venv` with Phase 2 deps (paths resolve
+  per-machine via the install script).
 
 Verify Ollama:
 
@@ -40,15 +41,18 @@ curl -s http://localhost:11434/api/tags | jq -r '.models[].name'
 
 ## Model selection (hardware-conditional)
 
-The launchd plists in `ops/launchd/` ship with `GOVERNANCE_LLM_MODEL=qwen3:8b`
-— the MacBook 18GB target. On Mac Studio, change the value in both plists
-before installing:
+The plist templates in `ops/launchd/` resolve `GOVERNANCE_LLM_MODEL` at
+install time, defaulting to `qwen3:14b` (Mac Studio target). On MacBook
+(18GB), pass an env override when running the installer:
 
 ```bash
-# Mac Studio only:
-sed -i '' 's|qwen3:8b|qwen3:14b|g' ops/launchd/com.kalshi.governance.fast.plist
-sed -i '' 's|qwen3:8b|qwen3:14b|g' ops/launchd/com.kalshi.governance.deep.plist
+# Mac Studio (default):
 ollama pull qwen3:14b
+bash ops/launchd/install.sh
+
+# MacBook (18GB):
+ollama pull qwen3:8b
+GOVERNANCE_LLM_MODEL=qwen3:8b bash ops/launchd/install.sh
 ```
 
 Verify the model file size fits the host's headroom:
@@ -64,9 +68,13 @@ considering an `OLLAMA_MODEL` change in `.env`.
 
 ## Install the launchd agents
 
+`ops/launchd/install.sh` substitutes per-machine paths into the
+`*.plist.template` files and writes generated plists to
+`~/Library/LaunchAgents/`. It does not bootstrap the services — that
+is an explicit step below.
+
 ```bash
-cp ops/launchd/com.kalshi.governance.fast.plist ~/Library/LaunchAgents/
-cp ops/launchd/com.kalshi.governance.deep.plist ~/Library/LaunchAgents/
+bash ops/launchd/install.sh
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kalshi.governance.fast.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kalshi.governance.deep.plist
 launchctl print gui/$(id -u)/com.kalshi.governance.fast | head -20
@@ -82,7 +90,7 @@ launchctl kickstart gui/$(id -u)/com.kalshi.governance.fast
 ## Smoke-test (manual, before enabling launchd)
 
 ```bash
-cd /Users/Jake/vscode/kalshi_bot
+cd "$KALSHI_HOME"
 GOVERNANCE_DISABLED=false \
   ./.venv/bin/python -m governance --cadence fast --llm fake
 ```

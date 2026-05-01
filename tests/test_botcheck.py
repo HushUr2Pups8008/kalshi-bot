@@ -26,8 +26,12 @@ from scripts.botcheck import (
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
-PYTHON_PATH = Path("/Users/Jake/vscode/kalshi_bot/.venv/bin/python")
-MAIN_PATH = Path("/Users/Jake/vscode/kalshi_bot/main.py")
+# Synthetic test paths — must be portable across machines (no hardcoded
+# /Users/<name>). The values do not need to exist on disk; tests only verify
+# the parser logic against these strings as opaque tokens.
+_REPO_ROOT_FIXTURE = Path.home() / "vscode" / "kalshi-bot"
+PYTHON_PATH = _REPO_ROOT_FIXTURE / ".venv" / "bin" / "python"
+MAIN_PATH = _REPO_ROOT_FIXTURE / "main.py"
 CAFFEINATE_CMD = f"/usr/bin/caffeinate -dimsu {PYTHON_PATH} {MAIN_PATH}"
 
 

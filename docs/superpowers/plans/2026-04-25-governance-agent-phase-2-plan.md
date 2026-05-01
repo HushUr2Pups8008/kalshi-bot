@@ -4386,6 +4386,12 @@ git commit -m "test(governance): Hypothesis safety invariants (Phase 2 Task 24)"
 
 - [ ] **Step 1: Create the fast-cadence plist**
 
+> **Superseded (2026-05-01):** The hardcoded paths in the plist literals
+> below have been replaced by `ops/launchd/com.kalshi.governance.{fast,deep}.plist.template`
+> with `@REPO_ROOT@`, `@VENV_PYTHON@`, `@GOVERNANCE_LLM_MODEL@` placeholders.
+> `ops/launchd/install.sh` substitutes per-machine paths at install time.
+> The plist content below is preserved as historical reference.
+
 Create `ops/launchd/com.kalshi.governance.fast.plist`:
 
 ```xml
@@ -4530,7 +4536,8 @@ adds an additional flip protocol; Phase 4 adds Claude-API escalation.
 - Mac Studio with Ollama installed and `qwen3:14b` model pulled.
 - Kalshi-bot Phase 1 plumbing merged (commit on or after the
   governance Phase 1 MR).
-- venv at `/Users/Jake/vscode/kalshi_bot/.venv` with Phase 2 deps.
+- venv at `$KALSHI_HOME/.venv` with Phase 2 deps (paths resolve
+  per-machine via `ops/launchd/install.sh`).
 
 Verify Ollama:
 
@@ -4559,9 +4566,12 @@ ollama ls | grep -E "qwen3:(8b|14b)"
 
 ## Install the launchd agents
 
+`ops/launchd/install.sh` substitutes per-machine paths into the
+`*.plist.template` files and writes generated plists to
+`~/Library/LaunchAgents/`. Bootstrap is a separate explicit step.
+
 ```bash
-cp ops/launchd/com.kalshi.governance.fast.plist ~/Library/LaunchAgents/
-cp ops/launchd/com.kalshi.governance.deep.plist ~/Library/LaunchAgents/
+bash ops/launchd/install.sh
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kalshi.governance.fast.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kalshi.governance.deep.plist
 launchctl print gui/$(id -u)/com.kalshi.governance.fast | head -20
@@ -4577,7 +4587,7 @@ launchctl kickstart gui/$(id -u)/com.kalshi.governance.fast
 ## Smoke-test (manual, before enabling launchd)
 
 ```bash
-cd /Users/Jake/vscode/kalshi_bot
+cd "$KALSHI_HOME"
 GOVERNANCE_DISABLED=false \
   ./.venv/bin/python -m governance --cadence fast --llm fake
 ```
