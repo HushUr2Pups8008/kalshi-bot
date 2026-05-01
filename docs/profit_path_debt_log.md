@@ -640,6 +640,80 @@ Resolved direct executor bypasses by routing fade-tweet and price-fade `SignalAn
 
 ---
 
+### PROFIT-EXEC-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EXEC-002 |
+| **Title** | Same-signal-multi-correlated-markets guard gap: one news event triggered 3 simultaneous trades on 3 correlated FISA tickers in 7 seconds |
+| **Category** | Execution Boundary / Trade Selectivity / Risk Management |
+| **Severity** | MEDIUM (correctness-of-risk-management; not a hard safety bug, but produces measurable correlated overexposure) |
+| **Priority** | LATER (defer to post-EDGE-004; this gap only fires on series with multiple date-based markets, and EDGE-004 work upstream may meaningfully reduce signal volume on those series) |
+| **Status** | OPEN |
+| **Owner** | Shared |
+| **Depends On** | — |
+| **Blocks** | — (no downstream entry hard-blocked; correlation-aware sizing is a profit-path improvement, not a release gate) |
+
+**Description**
+
+Existing same-signal guards in `tasks/trade_readiness_gate.py` and `trading/executor.py` operate **per-ticker** — they prevent the bot from re-trading the same ticker on a recent matching headline. They do not detect that two or more *different* tickers in the same series-prefix (or with overlapping resolution conditions) are economically correlated and therefore should not all be traded on the same news event.
+
+Empirical demonstration: on 2026-05-01 between 01:57:33Z and 01:57:40Z (a 7-second window), the bot placed 3 paper trades on `KXFISAEXTEND-26APR-MAY01`, `-MAY02`, and `-MAY03`. All three trades:
+
+- consumed the same headline (`"After House Reauthorizes Surveillance Law, Senate Punts (Apr 30, 2026) - VitalLaw.com"`)
+- carried the same LLM verdict (`direction=no, magnitude=small, confidence=0.85, P(YES)=0.432`)
+- were sized identically (5 contracts NO @ 50¢)
+- resolved identically at ~03:31Z the same morning (1.5h later)
+- lost the same amount (-$2.50 each, -$7.50 aggregate)
+
+The 3 markets are economically the same bet at slightly different resolution boundaries; they correlate near 1.0 because FISA Section 702 either gets reauthorized by some date or it doesn't. From a Kelly-sizing perspective the bot took 3× the risk it intended to take on a single conviction.
+
+**Why it matters to profitability / safety / reliability**
+
+- **Sizing correctness:** the operator-set `MAX_TICKER_EXPOSURE_PCT=0.25` cap is per-ticker, so it does not cap correlated-series exposure. On a hot news cycle with N date-based markets in a single series, the bot can deploy `N × 25% = 25N%` of bankroll on what is effectively one bet. For N=3 (FISA case) that's 75% theoretical max. The 2026-05-01 trades only used $7.50 / $50 = 15% because Kelly sized small, but the cap mechanism wouldn't have stopped the bot from going larger if Kelly had sized larger.
+- **Source-credibility distortion:** the 0/3 W/L outcome on VitalLaw.com auto-dropped its credibility multiplier to 0.5x. Treating one prediction outcome as three artificially over-penalizes a source on a single losing prediction, and would symmetrically over-credit a source on a single winning prediction.
+- **No safety-gate violation:** the executor's existing E1–E12 gates correctly cleared all 3 trades on their merits. The gap is *correlation awareness*, not gate failure.
+
+**Evidence / Source**
+
+- `data/paper_trades.db` table `paper_trades`, 3 rows (`KXFISAEXTEND-26APR-MAY0{1,2,3}`):
+  - All 3 carry identical `signal_headline`, `signal_source='VitalLaw.com'`, `llm_direction='no'`, `llm_magnitude='small'`, `llm_confidence=0.85`, `estimated_prob=0.432`, `match_score` in [0.106, 0.132].
+  - Trade timestamps: 01:57:33.265 / 01:57:40.926 / 01:57:37.103 — placement window 7.66s.
+  - Resolution timestamps: 03:31:04.530 / 03:31:05.480 / 03:31:04.964 — resolution window 0.95s, all `resolved_yes=1`.
+- `data/paper_trades.db` table `source_credibility`: row `(VitalLaw.com, 0W, 3L, multiplier=0.5)` after the 3 trades resolved.
+- `tasks/trade_readiness_gate.py` and `trading/executor.py` — same-signal logic operates on `ticker`, not on series-prefix or correlated-resolution-conditions.
+
+**Proposed Fix**
+
+Add a series-prefix correlation guard at the trade-readiness or executor layer. Sketch:
+
+1. **Series-prefix dedupe within a short window.** When a candidate is about to be sized, scan recent (e.g. 1h) `BLEND_DECISION` and `OPPORTUNITY` events that share the same series prefix (`KXFISAEXTEND`, `KXMOCTRUMP25`, etc., extracted via the existing `series_ticker` field on `paper_trades` and on the live market objects). If a candidate with the same series prefix has already been sized in-window, mark this candidate as "correlated-suppressed" and emit a SKIPPED with reason `"series_correlation_in_window"`. **The first candidate in a series-prefix burst still trades**; subsequent ones within the window are suppressed. This preserves the ability to trade the series at all but prevents the multi-bet on one news event.
+
+2. **(Stronger) Headline-hash dedupe across series.** Some news events span multiple unrelated series — e.g., a single Trump-related headline could fire on `KXTRUMPIRAN`, `KXMOCTRUMP25`, `KXPARDONSTRUMP` simultaneously. A headline-hash (or `signal_headline + signal_source` key) recent-window lookup would catch those too. More invasive than the series-prefix approach; defer until EDGE-004's matcher-quality work is further along, since better matching upstream may make this less load-bearing.
+
+Approach (1) is preferred as the immediate fix; approach (2) is a follow-up to consider after EDGE-004's evidence section quantifies the cross-series-headline overlap rate.
+
+**Acceptance Criteria**
+
+- A test in `tests/test_trade_readiness_gate.py` or `tests/test_executor.py` exercising the 2026-05-01 FISA replay (3 candidates with the same `KXFISAEXTEND` series prefix arriving in <10s) confirms exactly 1 candidate proceeds to executor and 2 are SKIPPED with reason `"series_correlation_in_window"`.
+- The series-prefix dedupe window is operator-tunable via env var (e.g. `SERIES_CORRELATION_WINDOW_SECONDS`, default 3600).
+- The fix is paper-mode-safe (no live-mode-specific code paths added).
+- Source-credibility scoring continues to operate on per-trade outcomes; this fix does not retroactively rewrite the existing 3-row trade history.
+
+**Notes**
+
+- This entry surfaced from the 2026-05-01 post-cutover forensic of the 3 paper trades to date. The trade-resolution outcome (3 losses) made the gap visible, but the gap exists regardless of outcome — a 3-win streak on correlated markets would have been just as misleading on the upside.
+- Defer to post-EDGE-004 because EDGE-004's "matcher quality / market-mix" work may meaningfully reduce the rate at which the same headline matches multiple correlated markets in a series. If matcher quality improves, this gap fires less often and the fix is correspondingly less urgent.
+- A retroactive fairness adjustment to VitalLaw.com's `source_credibility` multiplier (0.5x → ~0.83x, the credit one would expect from one losing prediction with one degree of freedom) is **out of scope for this entry**. Track separately if pursued; the credibility-update math is itself a small correctness item.
+
+**Related**
+
+- `PROFIT-EDGE-004` (open) — upstream cause; better matcher quality should reduce the rate of correlated false-signal bursts.
+- `PROFIT-OBS-003` (open) — companion observability item; OBS-003's fix (route every executor reject through `log_skipped` with distinct reasons) makes it possible to count `series_correlation_in_window` SKIPPEDs cleanly post-fix.
+- `PROFIT-OBS-004` (open) — surfaced from the same 3-trade audit; sign-convention display bug.
+
+---
+
 ### PROFIT-STARTUP-001
 
 | Field | Value |
@@ -1436,6 +1510,29 @@ The silent-exit rate is consistent across the entire 13-day window (92.3% lifeti
 - A 24h paper-mode audit on the **Mac Studio** (post-cutover; the MacBook is no longer the source of new audit windows) confirms `OPPORTUNITY = paper_trades + SKIPPED` within ±N for at-the-moment in-flight (N small).
 - SKIPPED reasons are diverse enough to attribute kills to specific executor gates (E1–E12 named per the README's Executor section).
 - **The 2 historical positive-edge silent-exit candidates** (+0.06 and +0.064 in the trade-log archive) are explainable post-fix: re-running `_validate()` against the persisted candidate state should produce a SKIPPED record with a specific gate name (likely opposing-position guard, same-signal guard, or per-ticker cooldown).
+
+**Forensic addendum** (2026-05-01, Mac Studio post-cutover session, full lifetime archive)
+
+*Per-ticker silent-exit concentration:* the silent exits are not uniformly distributed across markets; a small number of "hot" tickers account for the bulk:
+
+| Ticker | OPPORTUNITY | SKIPPED | PAPER_TRADE | Silent |
+|---|---|---|---|---|
+| `KXTRUMPIRAN-26MAY01` | 112 | 3 | 0 | 109 |
+| `KXMOCTRUMP25-26-MAY01` | 54 | 2 | 0 | 52 |
+| `KXMOCTRUMP25-26-APR24` | 22 | 2 | 0 | 20 |
+| `KXVANCEPAKISTAN-26APR21-APR30` | 15 | 0 | 0 | 15 |
+| `KXVANCEPAKISTAN-26APR21-APR25` | 8 | 0 | 0 | 8 |
+| (other tickers) | 49 | 10 | 3 | 36 |
+
+109 silent exits on a single ticker (KXTRUMPIRAN-26MAY01) is highly suggestive of the **4-hour ticker-cooldown gate** firing repeatedly — once the bot trades or near-trades on a ticker, every subsequent OPPORTUNITY within the cooldown window dies silently in `_validate()` rather than emitting a SKIPPED with reason `"ticker_cooldown_active"`.
+
+*Gate-hypothesis mapping for the 2 positive-edge non-trades:*
+
+1. **`KXMOCTRUMP25-26-MAY01` @ 2026-04-28T07:30:52, edge +0.060.** `kelly_dollars=$2.25` was successfully computed. At a 50¢ contract price that's 4 contracts ($2.00), which clears `MIN_BET_DOLLARS=2.00`. Most likely killed by the **per-ticker cooldown** — KXMOC had 54 lifetime OPPORTUNITY events with only 2 SKIPPED, so the cooldown gate is firing on most of them after some prior signal. Until OBS-003 closes, this hypothesis cannot be confirmed (the gate firing is silent).
+
+2. **`KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH` @ 2026-04-30T19:24:59, edge +0.064.** `kelly_dollars=$0.00` was computed despite the positive raw edge — the Kelly calculator itself zeroed it out. Most likely the **time-discount factor** drove the effective edge below `PAPER_MIN_EDGE=0.02`: market closes 2026-05-26, signal was 2026-04-30 (26 days out), `TIME_DISCOUNT_HALF_LIFE=14` → factor `0.5^(26/14) ≈ 0.27` → effective edge `0.064 × 0.27 ≈ 0.017`, below the 0.02 floor. This is the bot **correctly** discounting a long-dated edge, but the rejection silently bypasses `log_skipped` instead of emitting a SKIPPED with reason `"effective_edge_below_min_edge_after_time_discount"`. The fix routes this through the SKIPPED log without changing the gate's behavior — distinguishing "discounted-out" rejections from "raw-edge-below-floor" rejections is itself useful telemetry.
+
+These two hypotheses imply at least **two distinct silent-exit code paths** in `_validate()` (cooldown + time-discounted-edge), and likely several more that this addendum cannot identify without source-code inspection. The OBS-003 fix should enumerate every early-exit branch and route each through `log_skipped` with a distinct reason.
 
 **Notes**
 

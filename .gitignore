@@ -24,6 +24,7 @@ logs/reports/
 logs/trades/
 logs/service/
 logs/tests/
+logs/governance/
 
 # Test temp directories
 tests/_tmp_*/
