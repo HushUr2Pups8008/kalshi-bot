@@ -507,6 +507,19 @@ class PaperTrader:
         source_mult = self.credibility.get_multiplier(analysis.news_item.source)
         market_snapshot = json.dumps(dataclasses.asdict(analysis.market))
 
+        # PROFIT-OBS-004 (closed 2026-05-02): persist the EXECUTED-side edge,
+        # not the YES-side edge. analysis.edge is set upstream as
+        # (estimated_probability - market.yes_prob), which is the YES-side
+        # perspective regardless of which side the executor traded. For
+        # NO-side trades the executed-side edge is the negation. The 3
+        # historical KXFISAEXTEND-26APR-MAY0{1,2,3} rows persisted under the
+        # old YES-side convention are backfilled in the same commit; from
+        # this point forward every paper_trades.edge value is the side the
+        # executor actually traded.
+        executed_edge = (
+            analysis.edge if analysis.side == "yes" else -analysis.edge
+        )
+
         # PROFIT-CAL-001: per-lane estimates arrive via signal_meta, populated by
         # BlendTask when the candidate is built. Fast-lane-only paths leave these
         # as None; resolve_market skips CALIBRATION_CHECK emission for null lanes.
@@ -550,7 +563,7 @@ class PaperTrader:
                 cost_dollars,
                 analysis.estimated_probability,
                 analysis.market_yes_price,
-                analysis.edge,
+                executed_edge,
                 analysis.kelly_dollars,
                 analysis.capped_dollars,
                 analysis.news_item.headline,

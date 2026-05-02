@@ -299,6 +299,42 @@ class TestKellyShadow:
         assert rows[0]["contracts"] == 5
         assert rows[1]["contracts"] == 5
 
+    def test_record_trade_persists_executed_side_edge_yes(self, trader):
+        """PROFIT-OBS-004 (closed 2026-05-02): yes-side trades persist
+        analysis.edge unchanged (the YES-side perspective IS the executed
+        perspective when the executor traded YES)."""
+        analysis = _make_mock_analysis(side="yes", yes_price=40.0,
+                                       estimated_prob=0.60, edge=0.20)
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trader.record_trade(analysis)
+        row = trader._conn.execute("SELECT side, edge FROM paper_trades").fetchone()
+        assert row["side"] == "yes"
+        assert row["edge"] == pytest.approx(0.20)
+
+    def test_record_trade_persists_executed_side_edge_no(self, trader):
+        """PROFIT-OBS-004 (closed 2026-05-02): no-side trades persist
+        -analysis.edge so the recorded value reflects the executed side.
+
+        Without this fix, every NO-side trade would persist a misleadingly
+        negative edge — exactly the symptom that surfaced on the 3
+        KXFISAEXTEND-26APR-MAY0{1,2,3} historical rows."""
+        # YES-side edge of -0.068 (estimated_prob 0.432, market_yes 50c).
+        # Executed-side edge for NO is +0.068.
+        analysis = _make_mock_analysis(
+            side="no", yes_price=50.0, estimated_prob=0.432, edge=-0.068,
+            ticker="KXOBS004-NO",
+        )
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXOBS004"}):
+            trader.record_trade(analysis)
+        row = trader._conn.execute(
+            "SELECT side, edge FROM paper_trades WHERE ticker='KXOBS004-NO'"
+        ).fetchone()
+        assert row["side"] == "no"
+        assert row["edge"] == pytest.approx(0.068), (
+            "PROFIT-OBS-004: NO-side trade must persist executed-side edge "
+            "(positive), not the YES-side perspective (negative)."
+        )
+
 
 class TestModeSelection:
     @pytest.mark.parametrize("kill_switch_enabled", [False, True])

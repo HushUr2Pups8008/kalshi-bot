@@ -1610,7 +1610,7 @@ Inspect `logs/app/bot.log` (timestamped, unlike `launchd.stderr.log`) within the
 | **Title** | `paper_trades.edge` records the YES-side edge regardless of which side was traded; sign is misleading on every NO-side trade |
 | **Category** | Observability / Trade-Log Fidelity |
 | **Severity** | LOW (correctness-of-display, not correctness-of-decision) |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | LATER (does not block trade emission, calibration, or any safety gate; affects audit readability) |
 | **Owner** | Shared |
 | **Depends On** | — |
@@ -1657,6 +1657,8 @@ Approach (1) is preferred unless an audit of `evidence_store` and downstream con
 
 - `PROFIT-OBS-003` (promoted HIGH/NOW 2026-05-01) — companion observability item; both surfaced from the same 2026-05-01 audit.
 - `PROFIT-EDGE-004` (open) — neither blocks nor depends on OBS-004; the EDGE-004 audit reads `OPPORTUNITY.edge`, not `paper_trades.edge`, and OPPORTUNITY's edge convention appears to be already consistent.
+
+**CLOSED 2026-05-02 (Claude):** Approach (1) per the entry — `paper_trades.edge` now persists the executed-side edge. Implementation: `trading/paper_trader.py:record_trade` computes `executed_edge = analysis.edge if side=='yes' else -analysis.edge` and writes that to the `edge` column instead of `analysis.edge`. The 3 historical KXFISAEXTEND-26APR-MAY0{1,2,3} rows were backfilled in-place via `UPDATE paper_trades SET edge = -edge WHERE side='no' AND edge < 0;` — verified post-update: all 3 now read `edge=+0.068`. Two new tests in `tests/test_paper_trader.py` (`test_record_trade_persists_executed_side_edge_yes`, `test_record_trade_persists_executed_side_edge_no`) pin the executed-side convention for both directions. No CHANGELOG entry — the schema and shipped runtime behaviour are unchanged from the executor's perspective; only the persisted display flips sign for NO-side rows. Landed during the v0.29.59 governance Phase 2 shadow soak (no governance audit-data path touched).
 
 ---
 
