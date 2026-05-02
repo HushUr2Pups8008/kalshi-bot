@@ -1664,6 +1664,65 @@ Approach (1) is preferred unless an audit of `evidence_store` and downstream con
 
 ---
 
+### PROFIT-OBS-005
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-OBS-005 |
+| **Title** | Cooldown gate trips spuriously on never-traded tickers for ~4h after process restart (`time.monotonic()` vs default 0.0) |
+| **Category** | Observability / Decision Consistency |
+| **Severity** | LOW–MEDIUM (silent: every never-traded ticker receives a `paper cooldown` skip in the first 14 400 s after each bot restart, regardless of whether it was actually ever traded) |
+| **Status** | OPEN (not fixed mid-soak; deferred per the "decision consistency = high-risk during soak" rule in CLAUDE.md) |
+| **Priority** | LATER (no production impact during the current 14-day Phase 2 soak — bot has been continuously running since 2026-05-02 04:12 UTC, so `time.monotonic()` is well past 14 400) |
+| **Owner** | Claude (post-soak) |
+| **Depends On** | None |
+| **Blocks** | None |
+
+**Symptom (CI-only at present):**
+
+`tests/test_executor.py::test_price_boundary_behavior` and 13 other executor / sims-smoke tests fail on a freshly-booted GitLab runner with assertions like:
+
+```
+assert 'paper cooldown: last trade 0.0h ago (cooldown=4h)' is None
+```
+
+The exact same suite passes on the Mac Studio dev box (uptime measured in days).
+
+**Root cause:**
+
+`trading/executor.py:208`:
+```python
+last    = self._last_traded.get(analysis.market.ticker, 0.0)
+elapsed = time.monotonic() - last
+if elapsed < cfg.paper_ticker_cooldown:
+```
+
+`_last_traded.get(ticker, 0.0)` returns `0.0` for any ticker that has never been traded. `time.monotonic()` on a freshly-booted machine returns seconds-since-boot (low, e.g. ~50 s in CI). `elapsed = monotonic - 0.0 ≈ 50 s`, which is `< 14 400 s` cooldown, so the gate trips — even though no trade has ever happened on that ticker.
+
+The bug is silent on long-uptime hosts because `time.monotonic()` quickly exceeds 14 400 (4 h after boot), at which point all 0.0 defaults look "old enough." Locally, every uptime past 4 h hides the bug.
+
+**Production impact:**
+
+After every bot restart (operator-driven only — no auto-restart in current ops), the first 4 h of decisions on any ticker not present in `paper_trades.db` will be skipped with a misleading "paper cooldown" reason. The bot does not lose money (skips are safe); the decision log is just polluted with false-positive cooldown skips. Restart frequency is currently ~once per multi-day soak window, so impact is bounded.
+
+**Fix (deferred):**
+
+Two viable approaches; pick post-soak:
+
+1. **Sentinel default:** change `_last_traded.get(ticker, 0.0)` → `_last_traded.get(ticker, float("-inf"))`. Never-traded tickers report infinite elapsed time, so the cooldown gate is bypassed. Smallest possible diff; preserves all other semantics.
+
+2. **Membership check:** replace the `dict.get` with `if ticker not in self._last_traded: <skip cooldown>; else: <existing logic>`. Slightly more explicit but equivalent.
+
+Option 1 is the minimal change. Add a unit test that boots a `TradeExecutor` against a paper-trader stub with no DB rows and asserts no cooldown skip is emitted.
+
+**Why deferred:** changing executor cooldown logic is a "decision consistency" change per the global `domain_constraints.md` rule and CLAUDE.md "high-risk during soak" guidance. Soak window runs through 2026-05-16 04:12 UTC.
+
+**CI workaround (landed 2026-05-02):**
+
+`tests/conftest.py:_ci_stub_env` now sets `PAPER_TICKER_COOLDOWN=0` and `LIVE_TICKER_COOLDOWN=0` when the `CI` env var is present. This is a CI-only mitigation — production defaults remain `14400` and `0` respectively. The 14 affected CI tests pass under this stub. Local runs are unaffected (no `CI` var).
+
+---
+
 ### PROFIT-CUTOVER-001
 
 | Field | Value |

@@ -46,6 +46,16 @@ def _ci_stub_env() -> None:
     os.environ.setdefault("KALSHI_ENV", "demo")
     os.environ.setdefault("BANKROLL", "1000")
     os.environ.setdefault("OLLAMA_MODEL", "ci-stub-model")
+    # Disable cooldown gates in CI: `time.monotonic()` on a freshly-booted
+    # container is tiny (seconds since container start), so the executor's
+    # `_last_traded.get(ticker, 0.0)` fallback makes never-traded tickers
+    # look just-traded. Tests that bypass the `_make_executor` fixture
+    # (which monkeypatches these) trip the cooldown spuriously. Tracked as
+    # PROFIT-OBS-005 — a latent prod bug for never-traded tickers in the
+    # first 4h after bot restart. Stubbing here keeps CI signal honest
+    # without touching production behaviour mid-soak.
+    os.environ.setdefault("PAPER_TICKER_COOLDOWN", "0")
+    os.environ.setdefault("LIVE_TICKER_COOLDOWN", "0")
 
 
 def pytest_configure(config: object) -> None:
