@@ -19,10 +19,40 @@ import pytest
 _KALSHI_TEST_LOG_DIR: str = ""
 
 
+def _ci_stub_env() -> None:
+    """Populate Kalshi/Ollama env vars when running in CI without a `.env`.
+
+    Local runs already load real values from `.env` via `dotenv` inside
+    `config.py`. CI has no `.env`, so `BotConfig.__post_init__` calls
+    `sys.exit(1)`. Only stubs when `CI` is set; uses `setdefault` so any
+    real value in the runner environment still wins.
+    """
+    if not os.environ.get("CI"):
+        return
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    pem = rsa.generate_private_key(
+        public_exponent=65537, key_size=2048
+    ).private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode().replace("\n", "\\n")
+
+    os.environ.setdefault("KALSHI_API_KEY_ID", "ci-stub-key-id")
+    os.environ.setdefault("KALSHI_API_KEY_SECRET", pem)
+    os.environ.setdefault("KALSHI_ENV", "demo")
+    os.environ.setdefault("BANKROLL", "1000")
+    os.environ.setdefault("OLLAMA_MODEL", "ci-stub-model")
+
+
 def pytest_configure(config: object) -> None:
     global _KALSHI_TEST_LOG_DIR
     _KALSHI_TEST_LOG_DIR = tempfile.mkdtemp(prefix="kalshi_test_logs_")
     os.environ["KALSHI_LOG_ROOT"] = _KALSHI_TEST_LOG_DIR
+    _ci_stub_env()
 
 
 def pytest_unconfigure(config: object) -> None:
