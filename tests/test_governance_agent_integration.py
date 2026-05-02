@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
@@ -34,7 +33,6 @@ def test_full_shadow_cycle_three_reddit_candidates(tmp_path, tmp_overrides, monk
     from governance.audit import AuditLogger
     from governance.agent import load_state, run_cycle
     from governance.evidence import (
-        Candidate,
         compose_evidence_for_candidate,
         select_candidates_for_cadence,
     )

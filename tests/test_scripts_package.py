@@ -3,8 +3,6 @@ and no side effects (no argparse, no I/O, no print) at import time."""
 
 from __future__ import annotations
 
-import io
-import sys
 
 
 def test_scripts_is_a_package():

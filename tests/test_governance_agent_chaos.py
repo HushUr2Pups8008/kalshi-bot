@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-import pytest
 
 
 def test_kill_switch_disabled_short_circuits_main(tmp_path, monkeypatch):

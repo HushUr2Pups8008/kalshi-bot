@@ -3,9 +3,7 @@ Integration tests live in test_governance_agent_integration.py."""
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
@@ -102,7 +100,7 @@ import json
 
 
 def test_run_cycle_emits_start_and_end_events_with_zero_candidates(tmp_path, monkeypatch):
-    from governance.agent import run_cycle, AgentLoadedState
+    from governance.agent import run_cycle
     from governance.adapter import KalshiGovernanceAdapter
     from governance.audit import AuditLogger
 

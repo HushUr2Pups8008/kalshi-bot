@@ -7,15 +7,12 @@ diff makes the change reviewable.
 
 from __future__ import annotations
 
-import json
 
 import pytest
 
 from governance.prompts import (
     SYSTEM_PROMPT,
     DISABLE_SOURCE_TEMPLATE,
-    DISABLE_KEYWORD_TEMPLATE,
-    TUNE_THRESHOLD_TEMPLATE,
     LLM_OUTPUT_SCHEMA,
     render_prompt,
 )

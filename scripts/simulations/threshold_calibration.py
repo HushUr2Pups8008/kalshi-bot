@@ -150,7 +150,7 @@ def _print_g4_report(audits: list[PriorAudit]) -> None:
 def _print_g1_report(records: list[tuple[float, float, float, str]]) -> None:
     print()
     print("=" * 100)
-    print(f"G1 audit — production scaled_confidence distribution")
+    print("G1 audit — production scaled_confidence distribution")
     print(f"  G1_CONFIDENCE_THRESHOLD = {G1_CONFIDENCE_THRESHOLD}")
     print("=" * 100)
     if not records:
@@ -158,10 +158,10 @@ def _print_g1_report(records: list[tuple[float, float, float, str]]) -> None:
         return
     sc = sorted(r[0] for r in records)
     print(f"\n  Production records analysed: {len(sc)}")
-    print(f"\n  scaled_confidence distribution:")
+    print("\n  scaled_confidence distribution:")
     for pct in (0, 25, 50, 75, 90, 95, 99, 100):
         print(f"    P{pct:>3d}: {percentile(sc, pct):.4f}")
-    print(f"\n  Pass-rate sweep (records ≥ threshold):")
+    print("\n  Pass-rate sweep (records ≥ threshold):")
     for thr in (0.35, 0.20, 0.15, 0.10, 0.08, 0.05, 0.03, 0.02):
         n = sum(1 for v in sc if v >= thr)
         marker = "  ← current" if abs(thr - G1_CONFIDENCE_THRESHOLD) < 1e-9 else ""
@@ -171,7 +171,7 @@ def _print_g1_report(records: list[tuple[float, float, float, str]]) -> None:
     for sc_val, _, _, ticker in records:
         prefix = ticker.split("-", 1)[0] if ticker else "<unknown>"
         by_series[prefix].append(sc_val)
-    print(f"\n  Top-10 series by scaled_confidence (max):")
+    print("\n  Top-10 series by scaled_confidence (max):")
     series_max = sorted(
         ((prefix, max(vals), len(vals)) for prefix, vals in by_series.items()),
         key=lambda t: -t[1],

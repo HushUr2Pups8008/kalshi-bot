@@ -14,7 +14,6 @@ Tasks 17-21 layer on top of this skeleton.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -94,7 +93,7 @@ def load_state(*, overrides_path: Path) -> AgentLoadedState:
     )
 
 
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from governance.adapter import GovernanceAdapter
 from governance.evidence import (

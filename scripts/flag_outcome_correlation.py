@@ -46,7 +46,6 @@ from __future__ import annotations
 import argparse
 import math
 import sys
-from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any

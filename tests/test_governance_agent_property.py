@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 
 from hypothesis import HealthCheck, given, settings, strategies as st
 
-import pytest
 
 
 def _fixed_audit_data():
@@ -113,5 +112,5 @@ def test_below_threshold_never_applies(tmp_path_factory, confidence, threshold, 
             )
         if mode != "real":
             assert d["applied"] is False, (
-                f"INVARIANT VIOLATED: shadow mode produced applied=True"
+                "INVARIANT VIOLATED: shadow mode produced applied=True"
             )
