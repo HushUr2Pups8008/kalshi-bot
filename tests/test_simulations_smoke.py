@@ -19,6 +19,7 @@ import pytest
 from scripts.simulations import _common
 from scripts.simulations import (
     executor_validate,
+    match_score_audit,
     readiness_gate_events,
     threshold_calibration,
 )
@@ -163,3 +164,62 @@ def test_executor_main_runs_clean(capsys):
     out = capsys.readouterr().out
     assert "Pass: independent" in out
     assert "Pass: sequential" in out
+
+
+# ── match_score_audit ----------------------------------------------------------
+
+def test_match_audit_finds_target_ticker_for_each_event():
+    """A1 acceptance pin: every canonical event surfaces its anchor ticker
+    in the top-3 matches at score ≥ PAPER_MIN_MATCH_SCORE. If this fails,
+    the matcher's first kill point is silently dropping a real LLM-positive
+    signal — file a new debt-log item before changing thresholds."""
+    from config import PAPER_MIN_MATCH_SCORE
+    reports = match_score_audit.run()
+    assert len(reports) == len(_common.LLM_POSITIVE_EVENTS_2026_04_26)
+    for r in reports:
+        assert r.target_in_top_3, (
+            f"{r.event_name}: anchor ticker {r.target_ticker} not in top 3 "
+            f"({[t for t, _ in r.top_3_matches]})"
+        )
+        assert r.target_score is not None
+        assert r.target_score >= PAPER_MIN_MATCH_SCORE, (
+            f"{r.event_name}: anchor score {r.target_score:.4f} below "
+            f"PAPER_MIN_MATCH_SCORE = {PAPER_MIN_MATCH_SCORE}"
+        )
+
+
+def test_match_audit_main_runs_clean(capsys):
+    assert match_score_audit.main([]) == 0
+    out = capsys.readouterr().out
+    assert "Match-score gate audit" in out
+    assert "Threshold sweep" in out
+    # JSON path also exercised
+    assert match_score_audit.main(["--json"]) == 0
+    import json
+    payload = json.loads(capsys.readouterr().out)
+    assert isinstance(payload, list)
+    assert len(payload) == len(_common.LLM_POSITIVE_EVENTS_2026_04_26)
+
+
+def test_match_audit_kxpsl_does_not_match_geo_news():
+    """Cross-contamination guard: ICE-funding and Iran headlines must not
+    surface KXPSL (cricket) in the top-3. Sport-blocklist filters KXPSL at
+    series-discovery in production, but the matcher's geo + named-entity
+    gates should *also* keep cricket out of geo-news top matches based on
+    semantic similarity alone — a regression in either direction is worth
+    catching here."""
+    reports = match_score_audit.run()
+    geo_event_names = {
+        "Event 1: KXSBUDGETRES-APR28 (ICE funding)",
+        "Event 2: KXSBUDGETRES-APR25 (ICE funding)",
+        "Event 3: KXTRUMPIRAN (Trump dispatching)",
+        "Event 5: KXTRUMPIRAN (talks stall)",
+    }
+    for r in reports:
+        if r.event_name not in geo_event_names:
+            continue
+        top_tickers = {t for t, _ in r.top_3_matches}
+        assert "KXPSL-26-PZA" not in top_tickers, (
+            f"{r.event_name}: KXPSL leaked into top-3 ({top_tickers}) — "
+            "cricket market scored against geo-news headline, regression"
+        )

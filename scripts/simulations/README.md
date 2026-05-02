@@ -41,6 +41,7 @@ verify the harnesses themselves stay green under code changes.
 | [`threshold_calibration.py`](threshold_calibration.py) | G4 + G1 readiness-gate threshold calibration vs. existing categorical priors and production `BLEND_DECISION` distribution | PROFIT-EDGE-002 / EDGE-003 (v0.29.57 / v0.29.58) |
 | [`readiness_gate_events.py`](readiness_gate_events.py) | Readiness gate (G1 / G3 / G4) end-to-end against the 5 canonical LLM-positive events from the 9-day no-edge investigation | PROFIT-EDGE-001 / EDGE-002 / EDGE-003 |
 | [`executor_validate.py`](executor_validate.py) | Executor `_validate()` (E1–E12) against the same 5 canonical events, in independent + sequential passes | PROFIT-EDGE-002 (post-readiness-gate audit) |
+| [`match_score_audit.py`](match_score_audit.py) | Match-score gate (`PAPER_MIN_MATCH_SCORE` — first kill point) against the production headlines + market titles for the 5 canonical events; threshold sweep + cross-contamination guard | PROFIT-EDGE-004 (Task A of pipeline simulation buildout) |
 
 ## Canonical event fixtures
 
@@ -75,6 +76,10 @@ once committed.
 
 # Executor simulation can run a single pass:
 .venv/bin/python scripts/simulations/executor_validate.py --pass independent
+
+# Match-score audit:
+.venv/bin/python scripts/simulations/match_score_audit.py
+.venv/bin/python scripts/simulations/match_score_audit.py --json
 ```
 
 ## When to run

@@ -80,6 +80,7 @@ Safe to run while the bot is active.
 | `simulations/threshold_calibration.py` | Readiness-gate G4 + G1 thresholds vs. categorical priors and production `BLEND_DECISION` distribution. |
 | `simulations/readiness_gate_events.py` | Readiness gate end-to-end against the 5 canonical LLM-positive events from the PROFIT-EDGE-001 investigation. |
 | `simulations/executor_validate.py` | Executor `_validate()` (E1–E12) against the same 5 canonical events, in independent + sequential passes. |
+| `simulations/match_score_audit.py` | Match-score gate (`PAPER_MIN_MATCH_SCORE` — pipeline's first kill point) against production headlines + market titles, with threshold sweep + cross-contamination guard. |
 
 See [`scripts/simulations/README.md`](simulations/README.md) for detailed
 usage. Smoke tests in [`tests/test_simulations_smoke.py`](../tests/test_simulations_smoke.py)

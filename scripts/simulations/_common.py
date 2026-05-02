@@ -93,6 +93,47 @@ LLM_POSITIVE_EVENTS_2026_04_26: tuple[LLMPositiveEvent, ...] = (
 )
 
 
+# Canonical news headlines that produced each LLM-positive signal in the
+# 9-day v0.29.54 paper-mode window (2026-04-18 → 2026-04-26 MacBook archive).
+# Sourced by reading SIGNAL_ANALYSIS_DETAIL records with ``llm_useful=True``
+# (or, for KXPSL where llm_useful was True with magnitude="none", the
+# only llm_useful=True record on the target ticker) from
+# ``mac_archive/macbook_2026-05-01_import/logs/trades/archive/2026/04/``.
+#
+# Keyed by event ``name`` rather than ``ticker`` because Events 3 and 5
+# share ``KXTRUMPIRAN-26MAY01`` — a ticker-keyed dict cannot represent
+# both. Any simulation that needs the headline for an event should look
+# it up by ``event.name``.
+# Production market titles for the same five events — captured from the
+# ``MATCH_DIAGNOSTIC`` records adjacent to each LLM-positive signal in the
+# MacBook archive. These are the *real* titles the matcher saw at the
+# moment each headline was scored, which is what makes the audit faithful
+# to production scoring instead of the generic placeholder titles in
+# :class:`LLMPositiveEvent.title`. Keyed by ``ticker`` because two of the
+# five events share ``KXTRUMPIRAN-26MAY01`` *and* therefore share the same
+# market title — a ticker-keyed dict is the natural fit for titles.
+LLM_POSITIVE_EVENT_MARKET_TITLES_2026_04_26: dict[str, str] = {
+    "KXSBUDGETRES-26APR-APR28": "Will a budget resolution passed the Senate before Apr 28, 2026?",
+    "KXSBUDGETRES-26APR-APR25": "Will a budget resolution passed the Senate before Apr 25, 2026?",
+    "KXTRUMPIRAN-26MAY01": "Will Donald Trump visit Iran before May 1, 2026?",
+    "KXPSL-26-PZA": "Will Peshawar Zalmi win the Pakistan Super League?",
+}
+
+
+LLM_POSITIVE_EVENT_HEADLINES_2026_04_26: dict[str, str] = {
+    "Event 1: KXSBUDGETRES-APR28 (ICE funding)":
+        "US Senate passes ICE funding resolution after ‘vote-a-rama’: What’s next?",
+    "Event 2: KXSBUDGETRES-APR25 (ICE funding)":
+        "US Senate passes ICE funding resolution after ‘vote-a-rama’: What’s next?",
+    "Event 3: KXTRUMPIRAN (Trump dispatching)":
+        "Trump said dispatching Witkoff, Kushner for talks with Iran FM in Pakistan in coming days",
+    "Event 4: KXPSL-PZA (cricket — should be sport-blocked)":
+        "PSL 11: Babar, Bracewell lead Zalmi to massive total against Qalandars - Geo Super",
+    "Event 5: KXTRUMPIRAN (talks stall)":
+        "US-Iran Peace Talks Stall as Trump Scraps Diplomatic Visit - Global Banking & Finance Review®",
+}
+
+
 def regime_confidence(weights: Iterable[float]) -> float:
     """``1 - H(weights) / log(N)`` — matches ``tasks.blend_task._regime_confidence``.
 
