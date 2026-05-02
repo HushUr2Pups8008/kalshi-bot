@@ -1559,7 +1559,7 @@ These two hypotheses imply at least **two distinct silent-exit code paths** in `
 | **Title** | Verify EDGE-002 sub-fix #4: post-deploy structural-recompute warnings carry underlying-cause `repr(__cause__)` and traceback as designed |
 | **Category** | Observability / Structural Lane |
 | **Severity** | LOW |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | LATER |
 | **Owner** | Claude |
 | **Depends On** | — |
@@ -1599,6 +1599,8 @@ Inspect `logs/app/bot.log` (timestamped, unlike `launchd.stderr.log`) within the
 
 - `PROFIT-EDGE-002` (closed 2026-04-26) — sub-fix #4 is the change being verified.
 - `PROFIT-OBS-002` (closed) — ensured log rollover policy works on macOS; STRUCT-002 depends on the rotated `bot.log` files being readable, which OBS-002 closed.
+
+**CLOSED 2026-05-02 (Claude) per option (b) — verified-in-test, no live failures since cutover.** Inspection of `logs/app/bot.log*` (3 files, ~13MB total spanning the post-cutover window 2026-05-01 → 2026-05-02) returned **0 matches** for `per-market recompute failed`. The structural lane has had zero failures since the Mac Studio cutover at 2026-05-01 ~14:00 UTC; the cause-emission format has therefore not been exercised in production but is verified at the unit level by `tests/test_structural_task.py::test_run_once_failure_warning_surfaces_underlying_cause`. Watch-this acceptance criterion: if a `per-market recompute failed` warning fires post-2026-05-02, immediately confirm the line includes `repr(__cause__)` text and a `Traceback (most recent call last):` block. If either is missing, reopen this entry as a deploy-correctness regression. The 1 successful `STRUCTURAL_PRIOR_RECOMPUTE` event in the post-cutover trade log confirms the structural lane is operationally alive.
 
 ---
 
