@@ -84,6 +84,7 @@ Safe to run while the bot is active.
 | `simulations/blend_task_integration.py` | Full `BlendTask.process_fast_lane_result` integration with seeded slow-lane context for KXTRUMPIRAN; cross-checks the readiness outcome against the no-dossier readiness simulation. |
 | `simulations/paper_trade_roundtrip.py` | Paper-trade INSERT path against a real `PaperTrader` over a temp SQLite DB; pins per-event row write, bankroll debit, and source-credibility persistence. |
 | `simulations/trading_queue_handoff.py` | Replicates `main._trading_queue_consumer_task` wiring; pins FIFO drain + back-pressure (no-drop) contracts via an in-memory queue and recording executor stub. |
+| `simulations/governance_fast_cycle.py` | One fast-cadence governance cycle with `FakeLLM` against a temp filesystem; pins shadow-mode + kill-switch + audit-JSONL append-only contracts. |
 
 See [`scripts/simulations/README.md`](simulations/README.md) for detailed
 usage. Smoke tests in [`tests/test_simulations_smoke.py`](../tests/test_simulations_smoke.py)

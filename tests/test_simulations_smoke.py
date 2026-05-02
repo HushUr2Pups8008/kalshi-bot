@@ -21,6 +21,7 @@ from scripts.simulations import _common
 from scripts.simulations import (
     blend_task_integration,
     executor_validate,
+    governance_fast_cycle,
     match_score_audit,
     paper_trade_roundtrip,
     readiness_gate_events,
@@ -346,6 +347,65 @@ def test_handoff_main_runs_clean(capsys):
     payload = json.loads(capsys.readouterr().out)
     assert "fifo_handoffs" in payload
     assert "backpressure" in payload
+
+
+# ── governance_fast_cycle ------------------------------------------------------
+
+def test_governance_fast_cycle_writes_only_to_proposed(tmp_path):
+    """Shadow-mode invariant + readonly invariant: ``applied`` is False on
+    every emitted GOVERNANCE_DECISION, regardless of overrides mode or
+    LLM confidence. The Phase 2 launchd soak depends on this; a code
+    change that flips applied=True in shadow would be a load-bearing
+    safety regression."""
+    report = governance_fast_cycle.run(work_dir=tmp_path)
+    for cycle in (
+        report.shadow_first_cycle,
+        report.shadow_second_cycle,
+        report.readonly_real_mode_cycle,
+    ):
+        assert cycle.applied_count == 0, (
+            f"{cycle.cycle_label}: applied_count={cycle.applied_count}; "
+            "shadow-mode + readonly must never apply"
+        )
+        assert cycle.proposed_count > 0, (
+            f"{cycle.cycle_label}: zero proposed decisions — fixture broken"
+        )
+
+
+def test_governance_fast_cycle_audit_jsonl_append_only(tmp_path):
+    """Two cycles in sequence: the second cycle must strictly extend the
+    audit log; cycle-1 records remain byte-for-byte identical."""
+    report = governance_fast_cycle.run(work_dir=tmp_path)
+    assert report.audit_log_size_grew, "audit log did not grow on second cycle"
+    assert report.pre_existing_records_preserved, (
+        "audit JSONL is not append-only — earlier records were rewritten"
+    )
+    # Cycle 2's record count matches cycle 1's record count (same fixture).
+    assert (
+        report.shadow_second_cycle.audit_records_emitted
+        == report.shadow_first_cycle.audit_records_emitted
+    )
+
+
+def test_governance_fast_cycle_kill_switch_active_blocks_all_apply(tmp_path):
+    """Even with mode='real' in the overrides file, GOVERNANCE_READONLY=true
+    must demote the cycle to shadow and block every apply. This is the
+    second leg of the kill switch: a misbehaving real-mode agent the
+    operator wants to halt without rolling back the YAML mode field."""
+    report = governance_fast_cycle.run(work_dir=tmp_path)
+    real_readonly = report.readonly_real_mode_cycle
+    assert real_readonly.overrides_mode == "real"
+    assert real_readonly.governance_readonly is True
+    assert real_readonly.applied_count == 0, (
+        "GOVERNANCE_READONLY=true did not block apply path in real mode"
+    )
+
+
+def test_governance_fast_cycle_main_runs_clean(capsys, tmp_path):
+    assert governance_fast_cycle.main(["--work-dir", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "Governance Phase 2 fast-cycle simulation" in out
+    assert "Append-only contract" in out
 
 
 def test_match_audit_kxpsl_does_not_match_geo_news():
