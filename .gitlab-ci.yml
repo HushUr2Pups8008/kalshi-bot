@@ -1,0 +1,97 @@
+# Kalshi-bot CI pipeline (Proposal A — PROFIT-EDGE-004 follow-up).
+#
+# Three jobs run on every push to main and every merge request:
+#   - lint        : ruff check across the repo
+#   - tests       : full pytest suite (1421 cases at the time of this commit)
+#   - sims_smoke  : the simulation-buildout smoke subset (37 cases) by itself,
+#                   so a regression in the simulation harnesses surfaces with
+#                   a focused failure rather than getting buried in a 1421-case
+#                   summary
+#
+# Compute budget: free-tier GitLab.com SaaS gives 400 compute minutes/month
+# on the HushUr2Pups8008 namespace (verified 2026-05-02). Each pipeline run
+# costs ~2 minutes (mostly pip install). Budget caps at ~200 pushes/month.
+#
+# What this pipeline does NOT do:
+#   - Hit Ollama / Anthropic / Kalshi (tests use FakeLLM + FakeStore + tempdirs)
+#   - Run the bot itself
+#   - Touch the production trade-log archive or paper_trades.db
+#   - Force-push, rewrite history, or modify branch state
+#
+# tests/conftest.py sets KALSHI_LOG_ROOT to a tempdir before collection, so
+# logging is isolated from any logs/app paths the SaaS runner happens to have.
+
+image: python:3.14-slim
+
+# Pip cache lives in the project dir so the SaaS runner can persist it
+# between jobs in the same pipeline (and between pipelines on the same
+# branch via the cache key).
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PYTHONUNBUFFERED: "1"
+  # Force pip to fail loudly on resolver problems instead of silently
+  # falling back to legacy resolution.
+  PIP_USE_PEP517: "1"
+
+cache:
+  key:
+    files:
+      - requirements.txt
+      - requirements-dev.txt
+  paths:
+    - .cache/pip
+    - .venv/
+
+# Shared install — extracted into a YAML anchor so each job's before_script
+# stays one line.
+.install: &install
+  - python -m venv .venv
+  - .venv/bin/pip install --upgrade pip wheel
+  - .venv/bin/pip install -r requirements-dev.txt
+
+stages:
+  - lint
+  - test
+
+lint:
+  stage: lint
+  before_script:
+    - *install
+  script:
+    - .venv/bin/ruff check .
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+tests:
+  stage: test
+  before_script:
+    - *install
+  script:
+    - .venv/bin/python -m pytest -q --tb=short --junitxml=junit.xml
+  artifacts:
+    when: always
+    reports:
+      junit: junit.xml
+    paths:
+      - junit.xml
+    expire_in: 7 days
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+sims_smoke:
+  # Focused subset — runs the simulation-buildout smoke tests on their own so
+  # a regression in the harnesses (PROFIT-EDGE-004 deliverable) is highlighted
+  # rather than absorbed into the 1421-test summary.
+  stage: test
+  before_script:
+    - *install
+  script:
+    - .venv/bin/python -m pytest tests/test_simulations_smoke.py -q --tb=short
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
