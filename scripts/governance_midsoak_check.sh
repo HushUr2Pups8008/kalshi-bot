@@ -26,9 +26,15 @@ MIDSOAK_LABEL="com.jake.kalshi-governance-midsoak"
 MIDSOAK_PLIST="$HOME/Library/LaunchAgents/$MIDSOAK_LABEL.plist"
 
 # Soak window anchors — match the PROFIT-PHASE2-001 entry exactly.
-SOAK_START_UTC="2026-05-01T14:00:00Z"
-SOAK_TARGET_CLOSE_UTC="2026-05-15T14:00:00Z"
+# The 2026-05-02 reset baseline supersedes the original 2026-05-01
+# start (see PROFIT-GOV-001 + PROFIT-PHASE2-001 reset note).
+SOAK_START_UTC="2026-05-02T04:12:53Z"
+SOAK_HARD_CLOSE_UTC="2026-05-16T04:12:53Z"
+SOAK_EARLIEST_CLOSE_UTC="2026-05-09T04:12:53Z"
 ACCEPTANCE_MIN_DECISIONS=30
+ACCEPTANCE_MIN_DEEP_CYCLES=7
+ACCEPTANCE_MIN_DISTINCT_TARGETS=3
+ACCEPTANCE_MIN_DAYS_ELAPSED=7
 ACCEPTANCE_REASONABLE_PCT=85
 
 TS="$(date -u +%Y%m%d_%H%M%SZ)"
@@ -49,9 +55,13 @@ codeblock_end()   { printf '```\n' >>"$REPORT"; }
     printf 'Repo: %s\n' "$REPO_ROOT"
     printf 'Branch: %s @ %s\n' "$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)" "$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     printf '\n'
-    printf 'Soak window: %s → %s (target)\n' "$SOAK_START_UTC" "$SOAK_TARGET_CLOSE_UTC"
-    printf 'Acceptance:  ≥%d decisions, ≥%d%% reasonable on manual review, applied=0 throughout, KILL_SWITCH=0 throughout\n' \
-        "$ACCEPTANCE_MIN_DECISIONS" "$ACCEPTANCE_REASONABLE_PCT"
+    printf 'Soak window: %s → %s (hard close)\n' "$SOAK_START_UTC" "$SOAK_HARD_CLOSE_UTC"
+    printf 'Earliest close: %s (T+%d days, when conjunction below first becomes evaluable)\n' \
+        "$SOAK_EARLIEST_CLOSE_UTC" "$ACCEPTANCE_MIN_DAYS_ELAPSED"
+    printf 'Acceptance (ALL must hold): ≥%d days elapsed, ≥%d decisions, ≥%d deep cycles, '\
+        "$ACCEPTANCE_MIN_DAYS_ELAPSED" "$ACCEPTANCE_MIN_DECISIONS" "$ACCEPTANCE_MIN_DEEP_CYCLES"
+    printf '≥%d distinct targets, ≥%d%% reasonable on manual review, applied=0, KILL_SWITCH=0\n' \
+        "$ACCEPTANCE_MIN_DISTINCT_TARGETS" "$ACCEPTANCE_REASONABLE_PCT"
 } >"$REPORT"
 
 # ── 1. Window progress ────────────────────────────────────────────────────────
@@ -59,9 +69,11 @@ section "Window progress"
 {
     NOW_EPOCH="$(date -u +%s)"
     START_EPOCH="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$SOAK_START_UTC" +%s 2>/dev/null || date -d "$SOAK_START_UTC" +%s)"
-    END_EPOCH="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$SOAK_TARGET_CLOSE_UTC" +%s 2>/dev/null || date -d "$SOAK_TARGET_CLOSE_UTC" +%s)"
+    END_EPOCH="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$SOAK_HARD_CLOSE_UTC" +%s 2>/dev/null || date -d "$SOAK_HARD_CLOSE_UTC" +%s)"
+    EARLIEST_EPOCH="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$SOAK_EARLIEST_CLOSE_UTC" +%s 2>/dev/null || date -d "$SOAK_EARLIEST_CLOSE_UTC" +%s)"
     ELAPSED_SEC=$((NOW_EPOCH - START_EPOCH))
     REMAINING_SEC=$((END_EPOCH - NOW_EPOCH))
+    UNTIL_EARLIEST_SEC=$((EARLIEST_EPOCH - NOW_EPOCH))
     TOTAL_SEC=$((END_EPOCH - START_EPOCH))
     if (( ELAPSED_SEC > 0 && TOTAL_SEC > 0 )); then
         PCT=$(( ELAPSED_SEC * 100 / TOTAL_SEC ))
@@ -69,9 +81,17 @@ section "Window progress"
         PCT=0
     fi
     printf '```\n'
-    printf 'Elapsed   : %d days %d hours\n' $((ELAPSED_SEC / 86400)) $(((ELAPSED_SEC % 86400) / 3600))
-    printf 'Remaining : %d days %d hours\n' $((REMAINING_SEC / 86400)) $(((REMAINING_SEC % 86400) / 3600))
-    printf 'Progress  : %d%%\n' "$PCT"
+    printf 'Elapsed since reset   : %d days %d hours\n' $((ELAPSED_SEC / 86400)) $(((ELAPSED_SEC % 86400) / 3600))
+    if (( UNTIL_EARLIEST_SEC > 0 )); then
+        printf 'Until earliest close  : %d days %d hours\n' \
+            $((UNTIL_EARLIEST_SEC / 86400)) $(((UNTIL_EARLIEST_SEC % 86400) / 3600))
+    else
+        printf 'Past earliest close   : %d days %d hours (acceptance evaluable now)\n' \
+            $((-UNTIL_EARLIEST_SEC / 86400)) $(((-UNTIL_EARLIEST_SEC % 86400) / 3600))
+    fi
+    printf 'Until hard close      : %d days %d hours\n' \
+        $((REMAINING_SEC / 86400)) $(((REMAINING_SEC % 86400) / 3600))
+    printf 'Progress              : %d%% of hard window\n' "$PCT"
     printf '```\n'
 } >>"$REPORT"
 
@@ -106,7 +126,7 @@ if (( ${#GOV_FILES[@]} == 0 )); then
     CYCLE_START=0; CYCLE_END=0; DECISIONS=0; APPLIED=0; PROPOSED=0
     PARSE_ERR=0; VAL_ERR=0; BATCH_ABORT=0; KILL_SWITCH=0
     NO_ACTION=0; DISABLE_SOURCE=0; DISABLE_KEYWORD=0; TUNE_THRESHOLD=0
-    FAST_CYCLES=0; DEEP_CYCLES=0
+    FAST_CYCLES=0; DEEP_CYCLES=0; DISTINCT_TARGETS=0
 else
     ALL_RECS="$(cat "${GOV_FILES[@]}" 2>/dev/null)"
 
@@ -126,8 +146,20 @@ else
     DISABLE_KEYWORD=$(printf '%s\n' "$ALL_RECS" | awk '/"GOVERNANCE_DECISION"/ && /"action": "disable_keyword"/' | wc -l | awk '{print $1}')
     TUNE_THRESHOLD=$(printf '%s\n' "$ALL_RECS" | awk '/"GOVERNANCE_DECISION"/ && /"action": "tune_threshold"/' | wc -l | awk '{print $1}')
 
+    # CYCLE_END records do not carry the `cadence` field — only START does.
+    # For acceptance we want completed-and-not-aborted cycles, but in practice
+    # CYCLE_START==CYCLE_END across the whole soak (no asserts have aborted),
+    # so the START count is the correct proxy. The batch_aborted invariant
+    # below catches the case where they diverge.
     FAST_CYCLES=$(printf '%s\n' "$ALL_RECS" | awk '/"GOVERNANCE_CYCLE_START"/ && /"cadence": "fast"/' | wc -l | awk '{print $1}')
     DEEP_CYCLES=$(printf '%s\n' "$ALL_RECS" | awk '/"GOVERNANCE_CYCLE_START"/ && /"cadence": "deep"/' | wc -l | awk '{print $1}')
+
+    # Distinct decision targets — counts unique values of "target" in
+    # GOVERNANCE_DECISION records. Acceptance criterion: ≥3 distinct.
+    DISTINCT_TARGETS=$(printf '%s\n' "$ALL_RECS" \
+        | awk '/"GOVERNANCE_DECISION"/' \
+        | grep -oE '"target": "[^"]*"' \
+        | sort -u | wc -l | awk '{print $1}')
 
     printf 'GOVERNANCE_CYCLE_START : %s\n' "$CYCLE_START" >>"$REPORT"
     printf '  fast cadence         : %s\n' "$FAST_CYCLES" >>"$REPORT"
@@ -141,6 +173,7 @@ else
     printf '  disable_source      : %s\n' "$DISABLE_SOURCE" >>"$REPORT"
     printf '  disable_keyword     : %s\n' "$DISABLE_KEYWORD" >>"$REPORT"
     printf '  tune_threshold      : %s\n' "$TUNE_THRESHOLD" >>"$REPORT"
+    printf 'Distinct targets       : %s\n' "$DISTINCT_TARGETS" >>"$REPORT"
     printf '\n' >>"$REPORT"
     printf 'Errors:\n' >>"$REPORT"
     printf '  PARSE_ERROR         : %s\n' "$PARSE_ERR" >>"$REPORT"
@@ -187,40 +220,74 @@ launchctl list 2>/dev/null | awk '$3 ~ /^com\.kalshi\.governance\./' >>"$REPORT"
     printf '(launchctl list returned no governance entries)\n' >>"$REPORT"
 codeblock_end
 
-# ── 6. Verdict + projection ───────────────────────────────────────────────────
+# ── 6. Verdict — conjunction-based acceptance gate ────────────────────────────
 section "Verdict"
+
+DAYS_ELAPSED=0
+if [[ -n "${ELAPSED_SEC:-}" && "$ELAPSED_SEC" -gt 0 ]]; then
+    DAYS_ELAPSED=$((ELAPSED_SEC / 86400))
+fi
+
+# Per-criterion pass/fail + emoji-free PASS/FAIL marker for grep-friendliness.
+mark() { (( $1 )) && printf 'PASS' || printf 'FAIL'; }
+
+TIME_OK=$(( DAYS_ELAPSED >= ACCEPTANCE_MIN_DAYS_ELAPSED ? 1 : 0 ))
+DEC_OK=$(( DECISIONS >= ACCEPTANCE_MIN_DECISIONS ? 1 : 0 ))
+DEEP_OK=$(( DEEP_CYCLES >= ACCEPTANCE_MIN_DEEP_CYCLES ? 1 : 0 ))
+TGT_OK=$(( DISTINCT_TARGETS >= ACCEPTANCE_MIN_DISTINCT_TARGETS ? 1 : 0 ))
+APPLIED_OK=$(( APPLIED == 0 ? 1 : 0 ))
+KS_OK=$(( KILL_SWITCH == 0 ? 1 : 0 ))
+ABORT_OK=$(( BATCH_ABORT == 0 ? 1 : 0 ))
+
+ALL_GATES=$(( TIME_OK && DEC_OK && DEEP_OK && TGT_OK && APPLIED_OK && KS_OK && ABORT_OK ))
+
 {
-    if [[ "${KILL_SWITCH:-0}" -gt 0 ]]; then
-        printf 'Kill switch tripped during soak: **YES** (%s events) — investigate immediately.\n\n' "$KILL_SWITCH"
-    fi
-    if [[ "${APPLIED:-0}" -gt 0 ]]; then
-        printf 'Shadow-mode invariant violated: **YES** (%s applied=true decisions) — soak invalid; reset clock.\n\n' "$APPLIED"
+    printf 'Acceptance criteria — all must hold. Manual reasonable-rate review (≥%d%%) is the\n' \
+        "$ACCEPTANCE_REASONABLE_PCT"
+    printf 'one criterion not auto-evaluable here; the operator runs that against the audit log.\n\n'
+    printf '```\n'
+    printf '  [%s] Time elapsed         : %d / %d days\n' "$(mark "$TIME_OK")"   "$DAYS_ELAPSED"      "$ACCEPTANCE_MIN_DAYS_ELAPSED"
+    printf '  [%s] Decisions accumulated: %d / %d\n'      "$(mark "$DEC_OK")"    "$DECISIONS"         "$ACCEPTANCE_MIN_DECISIONS"
+    printf '  [%s] Deep cycles          : %d / %d\n'      "$(mark "$DEEP_OK")"   "$DEEP_CYCLES"       "$ACCEPTANCE_MIN_DEEP_CYCLES"
+    printf '  [%s] Distinct targets     : %d / %d\n'      "$(mark "$TGT_OK")"    "$DISTINCT_TARGETS"  "$ACCEPTANCE_MIN_DISTINCT_TARGETS"
+    printf '  [%s] applied=0 invariant  : %d applied=true\n' "$(mark "$APPLIED_OK")" "$APPLIED"
+    printf '  [%s] KILL_SWITCH=0        : %d events\n'    "$(mark "$KS_OK")"     "$KILL_SWITCH"
+    printf '  [%s] no batch_aborted     : %d batches\n'   "$(mark "$ABORT_OK")"  "$BATCH_ABORT"
+    printf '```\n\n'
+
+    if (( ALL_GATES )); then
+        printf 'Auto-evaluable conjunction: **HOLDING — ready for manual reasonable-rate review.**\n\n'
     else
-        printf 'Shadow-mode invariant: **HOLDING** (applied=true count is 0).\n\n'
+        printf 'Auto-evaluable conjunction: **NOT YET CLOSEABLE.** See FAIL rows above.\n\n'
     fi
 
-    # Projection: are we on track for ≥30 decisions by 2026-05-15?
-    if [[ -n "${ELAPSED_SEC:-}" && "$ELAPSED_SEC" -gt 0 && "${DECISIONS:-0}" -gt 0 ]]; then
-        DAYS_ELAPSED=$((ELAPSED_SEC / 86400))
-        if (( DAYS_ELAPSED > 0 )); then
-            DECISIONS_PER_DAY=$((DECISIONS / DAYS_ELAPSED))
-            DAYS_REMAINING=$((REMAINING_SEC / 86400))
-            PROJECTED_TOTAL=$((DECISIONS + DECISIONS_PER_DAY * DAYS_REMAINING))
-            printf 'Decision rate: ~%s/day so far (%d days observed).\n' "$DECISIONS_PER_DAY" "$DAYS_ELAPSED"
-            printf 'Projected total at soak close: ~%s decisions (acceptance floor: %d).\n\n' \
-                "$PROJECTED_TOTAL" "$ACCEPTANCE_MIN_DECISIONS"
-            if (( PROJECTED_TOTAL >= ACCEPTANCE_MIN_DECISIONS )); then
-                printf 'On-track for decision-count acceptance.\n\n'
-            else
-                printf 'BELOW projected acceptance floor — investigate cadence / FakeLLM hit rate.\n\n'
-            fi
+    if [[ "${APPLIED:-0}" -gt 0 ]]; then
+        printf '⚠ Shadow-mode invariant VIOLATED — investigate immediately. Soak invalid until applied=0 again.\n\n'
+    fi
+    if [[ "${KILL_SWITCH:-0}" -gt 0 ]]; then
+        printf '⚠ Kill switch tripped — investigate immediately.\n\n'
+    fi
+
+    # Projection against the auto-evaluable conjunction.
+    if (( DAYS_ELAPSED > 0 && DECISIONS > 0 )); then
+        DECISIONS_PER_DAY=$((DECISIONS / DAYS_ELAPSED))
+        DAYS_TO_EARLIEST=$(( UNTIL_EARLIEST_SEC > 0 ? UNTIL_EARLIEST_SEC / 86400 : 0 ))
+        PROJECTED_AT_EARLIEST=$((DECISIONS + DECISIONS_PER_DAY * DAYS_TO_EARLIEST))
+        printf 'Decision rate: ~%s/day so far (%d days post-reset).\n' "$DECISIONS_PER_DAY" "$DAYS_ELAPSED"
+        if (( UNTIL_EARLIEST_SEC > 0 )); then
+            printf 'Projected at earliest close (%s): ~%s decisions.\n' \
+                "$SOAK_EARLIEST_CLOSE_UTC" "$PROJECTED_AT_EARLIEST"
         fi
-    else
-        printf '(insufficient data to project decision rate)\n\n'
+        # Deep-cycle projection: deep runs daily (1/day on calendar trigger).
+        DEEP_REMAINING_DAYS=$(( UNTIL_EARLIEST_SEC > 0 ? UNTIL_EARLIEST_SEC / 86400 : 0 ))
+        PROJECTED_DEEP=$((DEEP_CYCLES + DEEP_REMAINING_DAYS))
+        printf 'Projected deep cycles at earliest close: ~%s (need ≥%d).\n\n' \
+            "$PROJECTED_DEEP" "$ACCEPTANCE_MIN_DEEP_CYCLES"
     fi
 
     printf 'Next operator action: continue daily monitoring per docs/governance/PHASE2_RUNBOOK.md.\n'
-    printf 'Next gate: 2026-05-15 ~14:00 UTC — soak close + manual reasonable-rate review (10/day x 14 days = 140 max sample).\n'
+    printf 'Earliest acceptance check: %s. Hard close if not converged: %s.\n' \
+        "$SOAK_EARLIEST_CLOSE_UTC" "$SOAK_HARD_CLOSE_UTC"
 } >>"$REPORT"
 
 # ── 7. Self-cleanup: bootout + remove the trigger plist ───────────────────────

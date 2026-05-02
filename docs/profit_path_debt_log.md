@@ -1819,12 +1819,18 @@ Acceptance review (target ~2026-05-15 or as soon as ≥30 decisions accumulated)
 
 **Acceptance Criteria**
 
-- Soak runs uninterrupted from 2026-05-01 ~14:00 UTC for ≥14 days (target close: 2026-05-15 ~14:00 UTC).
-- ≥30 `GOVERNANCE_DECISION` events accumulated in the soak window.
-- Manual review marks ≥85% of sampled decisions reasonable (10/day × 14 days = 140 max sample, sample-and-record process per the runbook).
-- Zero `applied=` growth in `runtime_overrides.yaml` during the window.
-- Zero `KILL_SWITCH` events during the window.
-- Closure note records (a) actual close date, (b) total decision count, (c) reasonable-rate percentage, (d) any deferred follow-ups.
+The original spec §8.5 floor was a single time-based gate (≥14 days). After the 2026-05-02 clock reset (see Notes), post-fix decision throughput is ~3.3/cycle × 12 cycles/day = ~40 decisions/day — 25× the assumed density the 14-day floor was sized against. Decision *count* is no longer the binding constraint; *coverage* is. The exit gate is therefore tightened from a single time floor to the conjunction below — operator-approved 2026-05-02 ~14:00 UTC. Earliest organic close: ~2026-05-09 (T+7d from reset, when the first deep-cycle weekly window completes).
+
+**ALL of the following must hold simultaneously:**
+
+- **Time:** ≥7 days elapsed since the reset baseline (2026-05-02 ~04:12 UTC) — earliest acceptance check 2026-05-09 ~04:12 UTC.
+- **Volume:** ≥30 `GOVERNANCE_DECISION` events accumulated post-reset.
+- **Cadence coverage:** ≥7 successful deep-cadence cycles (`GOVERNANCE_CYCLE_END` with `cadence=deep`) — this is the load-bearing addition; deep cycle pulls a 7-day audit window vs. fast's 24h, so without it we are validating only half the agent's behaviour.
+- **Candidate diversity:** ≥3 distinct `target` values across all decisions (otherwise we are sampling the same 2-3 underlying decisions repeatedly).
+- **Quality:** Manual review marks ≥85% of sampled decisions reasonable (sample 10/day × actual days elapsed; if the soak closes at T+7d the sample is 70 decisions).
+- **Safety:** Zero `applied=` growth in `runtime_overrides.yaml` during the window. Zero `KILL_SWITCH` events.
+- **Hard ceiling:** the original 14-day target close (2026-05-16 ~04:12 UTC) remains the upper bound — if the conjunction above does not converge by then, declare acceptance failure and re-plan rather than extend.
+- **Closure note** records: (a) actual close date and elapsed soak time, (b) total decision count + breakdown by action and cadence, (c) distinct-target count, (d) reasonable-rate percentage with sample size, (e) any deferred follow-ups.
 
 **Notes**
 
