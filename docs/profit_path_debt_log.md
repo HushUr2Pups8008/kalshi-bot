@@ -1830,6 +1830,8 @@ Acceptance review (target ~2026-05-15 or as soon as ≥30 decisions accumulated)
 
 - Do not run governance against `qwen3:8b` on the Studio. The plists were intentionally edited to `qwen3:14b` for this host per the runbook; reverting to `qwen3:8b` would invalidate the soak.
 - If the operator needs to stop the soak (e.g. the bot crashes for unrelated reasons and the operator can't get the host back up quickly), the soak clock pauses, not resets — but record the gap explicitly in this entry's Notes section so the post-soak review knows the actual continuous-operation duration.
+
+**2026-05-02 ~04:12 UTC clock reset** — operator-approved reset, not a pause. The first 5 fast cycles (gc_2026-05-01_190127 → gc_2026-05-02_030140, 14 hours of wall-clock soak time) emitted **0 GOVERNANCE_DECISION records and 7 PARSE_ERROR records** because every Ollama call against `qwen3:14b` returned the empty JSON object `{}`. Root cause + fix tracked under `PROFIT-GOV-001`: qwen3 chain-of-thought reasoning + `format=json` produces empty output unless the top-level `think=False` parameter is set. The pre-fix audit data is structurally meaningless (no decisions to review), so continuing the original 2026-05-01 → 2026-05-15 window would only delay discovery of the failure mode. Reset baseline: first valid decision is `gd_2026-05-02_0001` at 2026-05-02T04:12:53Z. **New target close: 2026-05-16 ~04:12 UTC.** The mid-soak check LaunchAgent (`com.jake.kalshi-governance-midsoak`, scheduled 2026-05-08 09:07 MDT) was set against the *original* window and now fires at ~T+5d50min into the reset window — still mid-window enough to be useful; not worth re-scheduling.
 - `PROFIT-LLM-001` (LOW, OPEN) tracks the post-Phase 2 decision on whether to unify the signal-analyzer LLM to `qwen3:14b` (or whatever model Phase 2 validates). Do not bundle that decision with PHASE2-001 acceptance.
 - The runbook's "Common failures" section is the first stop for any per-cycle anomaly (Ollama unreachable, parse-error rate, KillSwitchActive). This entry is the *outcome* tracker; failures during the soak are individual incidents that don't necessarily block acceptance unless they're systemic.
 
@@ -1911,6 +1913,90 @@ Documentation-only.
 - `PROFIT-EDGE-002` (closed 2026-04-26) — "1.4% coverage" framing originates here; the runtime fix landed but the framing didn't get corrected.
 - `PROFIT-EDGE-004` (closed 2026-05-02) — Task G surfaced the empirical trigger that disproves the threshold-gate hypothesis.
 - `PROFIT-LLM-001` (open) — actionable-lever home; "raise LLM signal density" is what raises *real* dossier coverage.
+
+---
+
+### PROFIT-GOV-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-GOV-001 |
+| **Title** | `LocalQwenLLM` returns empty `{}` on every call — qwen3 chain-of-thought + `format=json` interaction; fix with top-level `think=False` |
+| **Category** | Governance / LLM Integration |
+| **Severity** | HIGH (blocked governance Phase 2 acceptance — every decision parsed as missing-fields; soak was structurally invalid until fix landed) |
+| **Status** | COMPLETE |
+| **Priority** | NOW |
+| **Owner** | Claude |
+| **Depends On** | — |
+| **Blocks** | `PROFIT-PHASE2-001` acceptance (would have failed at the ≥30-decision floor regardless of soak duration) |
+
+**Description**
+
+`governance/llm.py:LocalQwenLLM.complete` issued Ollama `generate` requests with `format=json` against the qwen3:14b model on Mac Studio. Every response was the empty JSON object `{}`. `governance/agent.py:run_cycle` wraps each response in `parse_llm_response_to_decision`, which raises `LLMResponseParseError("LLM output missing required fields: ['action', 'target', 'reasoning', 'confidence', 'predicted_effect']")` for `{}`. Result: every governance cycle produced 0 GOVERNANCE_DECISION records and 1+ GOVERNANCE_DECISION_PARSE_ERROR records per evaluated candidate.
+
+Empirical confirmation across 5 cycles before the fix (gc_2026-05-01_190127 → gc_2026-05-02_030140): **0 GOVERNANCE_DECISION records, 7 PARSE_ERROR records**, all with the identical "missing all 5 required fields" error.
+
+Root cause is qwen3-specific: qwen3 models use a chain-of-thought reasoning phase before producing the final answer. Ollama's `format=json` grammar constraint applies *during generation*, which causes the JSON grammar to consume the reasoning stream and emit only an empty object when the model "thinks" first. The interaction does not occur in qwen2.x or earlier; it is a qwen3 family regression introduced when Ollama added native qwen3 thinking support.
+
+The fix is the top-level `think: false` parameter in the Ollama `generate` request body. The `/no_think` *prompt* directive (used by some qwen3 documentation) does NOT fix this — only the server-side `think` parameter disables the reasoning phase. Verified empirically 2026-05-02 against qwen3:14b @ Ollama:
+
+| Variant | Output |
+|---|---|
+| `format=json` (current code, before fix) | `{}` |
+| `format=json` + `/no_think` directive | `{}` (no effect) |
+| `format=json` + top-level `think=False` (the fix) | full schema with action/target/reasoning/confidence/predicted_effect |
+| Free text (no `format=json`) | full schema (the model does want to answer) |
+
+**Why it matters to profitability / safety / reliability**
+
+This is the *load-bearing* failure mode for `PROFIT-PHASE2-001`. The Phase 2 acceptance criteria require ≥30 GOVERNANCE_DECISION records over 14 days; without this fix the agent would have produced exactly zero. The soak was on track to fail acceptance entirely, with the failure mode invisible to anyone not actively reading the audit log (the bot itself was healthy and the launchd jobs were firing on schedule).
+
+The shadow-mode safety invariant (applied=0) was unaffected — `{}` parses to a missing-fields error, which never reaches the apply path. So safety-wise this was a "fail-closed" failure. But it would have invalidated the entire Phase 2 → Phase 3 → Phase 4 plan if it had not been caught until 2026-05-15 acceptance review.
+
+**Evidence / Source**
+
+- `logs/governance/decisions.jsonl` (2026-05-01 19:01 UTC → 2026-05-02 04:12 UTC):
+  - 5 fast cycles, all `decisions_made=0`.
+  - 7 PARSE_ERROR records, all identical: `LLM output missing required fields: ['action', 'target', 'reasoning', 'confidence', 'predicted_effect']`.
+- Direct LLM call test (2026-05-02 04:00 UTC) against `http://localhost:11434/api/generate` with the production system prompt + a representative user prompt produced `{}` for current code path; `think=False` produced full schema.
+- Manual cycle after fix (`gc_2026-05-02_041248`): 2 valid GOVERNANCE_DECISION records, full schema, both `applied=false` (shadow invariant holds).
+
+**Proposed Fix — applied 2026-05-02**
+
+`governance/llm.py:LocalQwenLLM.complete` — add `"think": False` at the top level of the Ollama generate-request payload (sibling of `format`, not nested under `options`). Comment with the empirical context so a future reader does not delete it during a "this looks unused" cleanup.
+
+```python
+payload = {
+    "model": self.model,
+    "system": system,
+    "prompt": user,
+    "stream": False,
+    "format": "json",
+    "think": False,            # load-bearing for qwen3 family
+    "options": {"temperature": 0.0},
+}
+```
+
+**Acceptance Criteria**
+
+- [x] `governance/llm.py` carries the `"think": False` payload field with an explanatory comment.
+- [x] `tests/test_governance_llm.py` 16 / 16 pass.
+- [x] `tests/test_governance_agent_unit.py` + `test_governance_agent_integration.py` pass.
+- [x] One manual `python -m governance --cadence fast --llm qwen` cycle on Mac Studio produces ≥1 valid GOVERNANCE_DECISION record (with full schema).
+- [x] `PROFIT-PHASE2-001` clock reset noted in that entry's Notes section.
+- [x] `CLAUDE.md` "Critical Gotchas" updated to capture the qwen3 + `format=json` interaction so a future operator upgrading the model catches it on day one.
+
+**Notes**
+
+- The launchd jobs fire fresh Python processes on each cycle, so the next scheduled fire (every 2 h) picks up the patched binary automatically — no `launchctl bootout` / `bootstrap` cycle needed.
+- The fix is qwen3-specific by chain-of-thought; if a future operator switches `GOVERNANCE_LLM_MODEL` to a non-thinking model (e.g. qwen2.5:14b or llama3.1:70b-instruct) the `think=False` parameter is a no-op — Ollama ignores it on models that don't expose a thinking phase.
+- The launchd plist's `GOVERNANCE_LLM_MODEL=qwen3:14b` env override is preserved as the source of truth for which model is in use; this fix is in the LLM-client wrapper, not in the model selection.
+
+**Related**
+
+- `PROFIT-PHASE2-001` — direct dependency; soak clock reset 2026-05-02 ~04:12 UTC pegged to the first valid decision after the fix.
+- `PROFIT-LLM-001` — separate, pre-existing entry tracking the post-Phase 2 unification of the signal-analyzer LLM. Once Phase 2 closes, the `think=False` pattern needs to apply there as well if `OLLAMA_MODEL` ever points at a qwen3 family model.
+- `CLAUDE.md` "Critical Gotchas" / Kalshi API section — neighbours; this entry updates the gotchas list with the qwen3 + JSON interaction.
 
 ---
 

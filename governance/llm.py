@@ -193,12 +193,22 @@ class LocalQwenLLM:
         self.timeout = timeout
 
     def complete(self, system: str, user: str) -> str:
+        # think=False is load-bearing for qwen3* family on Ollama: qwen3
+        # uses chain-of-thought reasoning, and combining its thinking phase
+        # with `format=json` produces an empty `{}` because the JSON grammar
+        # constraint consumes the reasoning stream. The `/no_think` prompt
+        # directive does NOT fix this — only the top-level `think` parameter
+        # disables the thinking phase server-side. Verified empirically
+        # 2026-05-02 against qwen3:14b @ Ollama: with `think=False` the
+        # model returns the full schema; without it, every response is `{}`.
+        # Filed as PROFIT-GOV-001 in docs/profit_path_debt_log.md.
         payload = {
             "model": self.model,
             "system": system,
             "prompt": user,
             "stream": False,
             "format": "json",
+            "think": False,
             "options": {"temperature": 0.0},
         }
         req = urllib.request.Request(

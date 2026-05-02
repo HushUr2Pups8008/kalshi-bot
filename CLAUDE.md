@@ -41,6 +41,9 @@ Non-obvious constraints that have each cost real debugging time. Treat as load-b
 - **LLM JSON extraction must use `JSONDecoder.raw_decode()`** scanning each `{` and keeping the last valid object. Greedy `re.search(r"\{.*\}", ..., re.DOTALL)` grabs from the first `{` through the last `}` and breaks on any preambles containing braces.
 - **DB transaction atomicity in `resolve_market()`**: pre-calculate all outcomes, wrap the UPDATEs in `with self._conn:`, credit bankroll exactly once at the end. A crash mid-loop without the context manager permanently corrupts bankroll, which poisons every subsequent Kelly calculation.
 
+### Governance LLM (qwen3 family)
+- **Ollama `format=json` + qwen3 thinking returns empty `{}`.** qwen3 chain-of-thought reasoning gets consumed by the JSON grammar constraint. Pass top-level `think: False` in the Ollama generate-request payload (sibling of `format`, not nested under `options`). The `/no_think` *prompt* directive does NOT fix this — only the server-side `think` parameter. `governance/llm.py:LocalQwenLLM.complete` carries this; do not remove it. Filed as `PROFIT-GOV-001` (closed 2026-05-02).
+
 ### Infrastructure
 - **Python 3.14 on Windows requires `aiohttp>=3.10.0`.** `aiohttp==3.9.5` has no cp314 wheel. Do not pin aiohttp to 3.9.x.
 - **Concurrent Mac + Windows instances on the same network trigger Reddit 403s.** Reddit sees the combined request rate from the shared external IP. Only one instance per external IP — stop the old before starting the new.
