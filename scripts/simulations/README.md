@@ -42,6 +42,7 @@ verify the harnesses themselves stay green under code changes.
 | [`readiness_gate_events.py`](readiness_gate_events.py) | Readiness gate (G1 / G3 / G4) end-to-end against the 5 canonical LLM-positive events from the 9-day no-edge investigation | PROFIT-EDGE-001 / EDGE-002 / EDGE-003 |
 | [`executor_validate.py`](executor_validate.py) | Executor `_validate()` (E1–E12) against the same 5 canonical events, in independent + sequential passes | PROFIT-EDGE-002 (post-readiness-gate audit) |
 | [`match_score_audit.py`](match_score_audit.py) | Match-score gate (`PAPER_MIN_MATCH_SCORE` — first kill point) against the production headlines + market titles for the 5 canonical events; threshold sweep + cross-contamination guard | PROFIT-EDGE-004 (Task A of pipeline simulation buildout) |
+| [`blend_task_integration.py`](blend_task_integration.py) | Full `BlendTask.process_fast_lane_result` integration with seeded dossier + structural prior + recent evidence for KXTRUMPIRAN; surfaces accumulation-lane disagreement and any post-blend gate that wouldn't fire on the no-dossier readiness simulation | PROFIT-EDGE-004 (Task B of pipeline simulation buildout) |
 
 ## Canonical event fixtures
 
@@ -80,6 +81,10 @@ once committed.
 # Match-score audit:
 .venv/bin/python scripts/simulations/match_score_audit.py
 .venv/bin/python scripts/simulations/match_score_audit.py --json
+
+# Full BlendTask integration (with seeded dossier for KXTRUMPIRAN):
+.venv/bin/python scripts/simulations/blend_task_integration.py
+.venv/bin/python scripts/simulations/blend_task_integration.py --json
 ```
 
 ## When to run
