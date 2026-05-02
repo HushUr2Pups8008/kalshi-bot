@@ -1,0 +1,62 @@
+[
+  {
+    "case_id": "edge_001_01_KXSBUDGETRES-APR28",
+    "headline": "US Senate passes ICE funding resolution after ‘vote-a-rama’: What’s next?",
+    "source": "Al Jazeera",
+    "market_ticker": "KXSBUDGETRES-26APR-APR28",
+    "market_title": "Will a budget resolution passed the Senate before Apr 28, 2026?",
+    "market_subtitle": "Will a budget resolution passed the Senate before Apr 28, 2026?",
+    "market_close_time": "2026-04-28T23:59:59Z",
+    "expected_direction": "yes",
+    "expected_magnitude": "small",
+    "notes": "PROFIT-EDGE-001 canonical Event 1. Production LLM emitted fast_p=0.568, conf=0.85, magnitude=small on 2026-04-23. ICE funding bill passing Senate is direct evidence that a budget resolution will pass before the market close."
+  },
+  {
+    "case_id": "edge_001_02_KXSBUDGETRES-APR25",
+    "headline": "US Senate passes ICE funding resolution after ‘vote-a-rama’: What’s next?",
+    "source": "Al Jazeera",
+    "market_ticker": "KXSBUDGETRES-26APR-APR25",
+    "market_title": "Will a budget resolution passed the Senate before Apr 25, 2026?",
+    "market_subtitle": "Will a budget resolution passed the Senate before Apr 25, 2026?",
+    "market_close_time": "2026-04-25T23:59:59Z",
+    "expected_direction": "yes",
+    "expected_magnitude": "small",
+    "notes": "PROFIT-EDGE-001 canonical Event 2. Same headline, earlier-close ticker. Production LLM emitted fast_p=0.568, conf=0.85, magnitude=small on 2026-04-23."
+  },
+  {
+    "case_id": "edge_001_03_KXTRUMPIRAN_dispatch",
+    "headline": "Trump said dispatching Witkoff, Kushner for talks with Iran FM in Pakistan in coming days",
+    "source": "Reuters",
+    "market_ticker": "KXTRUMPIRAN-26MAY01",
+    "market_title": "Will Donald Trump visit Iran before May 1, 2026?",
+    "market_subtitle": "Will Donald Trump visit Iran before May 1, 2026?",
+    "market_close_time": "2026-05-01T23:59:59Z",
+    "expected_direction": "yes",
+    "expected_magnitude": "small",
+    "notes": "PROFIT-EDGE-001 canonical Event 3. Production LLM emitted fast_p=0.568, dir=yes, mag=small on 2026-04-24. Note: dispatching envoys is a directional precursor to a Trump visit, not the visit itself — small magnitude is appropriate."
+  },
+  {
+    "case_id": "edge_001_04_KXPSL_PZA",
+    "headline": "PSL 11: Babar, Bracewell lead Zalmi to massive total against Qalandars - Geo Super",
+    "source": "Geo Super",
+    "market_ticker": "KXPSL-26-PZA",
+    "market_title": "Will Peshawar Zalmi win the Pakistan Super League?",
+    "market_subtitle": "Will Peshawar Zalmi win the Pakistan Super League?",
+    "market_close_time": "2026-05-15T23:59:59Z",
+    "expected_direction": "yes",
+    "expected_magnitude": "small",
+    "notes": "PROFIT-EDGE-001 canonical Event 4. Production LLM emitted fast_p=0.568, dir=yes, mag=small on 2026-04-25. The bot does not trade KXPSL (sport-blocklist filters cricket markets out at series discovery), but the LLM’s view on the headline-vs-market relationship is the eval target here, not whether the bot acts on it."
+  },
+  {
+    "case_id": "edge_001_05_KXTRUMPIRAN_stall",
+    "headline": "US-Iran Peace Talks Stall as Trump Scraps Diplomatic Visit - Global Banking & Finance Review®",
+    "source": "Global Banking & Finance Review",
+    "market_ticker": "KXTRUMPIRAN-26MAY01",
+    "market_title": "Will Donald Trump visit Iran before May 1, 2026?",
+    "market_subtitle": "Will Donald Trump visit Iran before May 1, 2026?",
+    "market_close_time": "2026-05-01T23:59:59Z",
+    "expected_direction": "no",
+    "expected_magnitude": "small",
+    "notes": "PROFIT-EDGE-001 canonical Event 5. Production LLM emitted fast_p=0.432, dir=no, mag=small on 2026-04-26. ‘Trump scraps diplomatic visit’ is direct evidence the visit will not happen — small magnitude is appropriate (a single-source rumour, not yet confirmed by official channels)."
+  }
+]

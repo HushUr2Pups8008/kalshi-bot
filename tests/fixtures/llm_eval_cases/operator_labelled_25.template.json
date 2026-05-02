@@ -1,0 +1,58 @@
+[
+  {
+    "case_id": "TODO-01",
+    "headline": "TODO: paste a real production headline (from logs/trades/archive/*.jsonl SIGNAL_ANALYSIS_DETAIL records, or any current RSS feed)",
+    "source": "TODO: source label as it appears in the trade log",
+    "market_ticker": "TODO: real Kalshi ticker the headline matched against",
+    "market_title": "TODO: real Kalshi market title at match time",
+    "market_subtitle": "TODO: real subtitle (often the same as title for binary markets)",
+    "market_close_time": "TODO: ISO8601 close time (e.g. 2026-06-01T23:59:59Z)",
+    "expected_direction": "TODO: yes | no | neutral",
+    "expected_magnitude": "TODO: none | small | moderate | large",
+    "notes": "TODO: one sentence — why is this case here? what coverage does it add (e.g. 'cross-class news vs binary politics market', 'high-source-credibility wire vs low-cred Reddit', 'sport-prefix bait', etc.)?"
+  }
+]
+
+NOTE TO OPERATOR (this is not valid JSON — strip this block before using).
+
+This template needs ~25 hand-labelled cases. Suggested coverage:
+
+  Direction-positive cases (~10):
+    - 3 from KXTRUMP* series (varied subtopics: Iran, China, immigration)
+    - 2 from KXFISA / legislation series
+    - 2 from KXMOC* / political-event series
+    - 3 from sources that are NOT Reuters/Al Jazeera/AP (the eval should
+      not over-fit on top-tier wires)
+
+  Direction-negative cases (~5):
+    - Headlines that suggest the market resolves NO (talks scrapped,
+      bill killed, deal cancelled).
+    - Cover both Trump-administration and non-administration actors.
+
+  Direction-neutral cases (~10):
+    - Headlines that mention market entities but are NOT new information
+      (rhetoric, opposition figures, speculation, recap pieces) —
+      these are the cases the LLM should correctly classify as
+      magnitude=none.
+    - Include at least 2 “Trump-token false positive” headlines (ones
+      that should match KXTRUMPENDORSE / KXPARDONSTRUMP etc. by token
+      overlap but are about unrelated Trump activity) — these are the
+      PROFIT-MATCH-001 long-tail cases the eval should catch.
+
+  Edge cases (~5):
+    - 1 headline in non-English (or with extensive emoji) — robustness check.
+    - 1 satire or opinion headline (the LLM should classify as
+      neutral/none even if it mentions the market entity).
+    - 1 very short headline (≤8 words).
+    - 1 very long headline (≥30 words).
+    - 1 numeric-data headline (poll result, stock price) — these often
+      misclassify as small/moderate when the actual signal is none.
+
+After labelling, rename this file to operator_labelled_25.json (drop the
+.template extension and remove the NOTE TO OPERATOR block above) and run:
+
+  .venv/bin/python scripts/llm_eval.py --model qwen2.5:7b --cases tests/fixtures/llm_eval_cases/operator_labelled_25.json
+  .venv/bin/python scripts/llm_eval.py --model qwen3:14b --cases tests/fixtures/llm_eval_cases/operator_labelled_25.json
+
+Compare the two reports in logs/eval/ to inform the PROFIT-LLM-001
+unification decision (or any future model upgrade).
