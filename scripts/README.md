@@ -86,6 +86,7 @@ Safe to run while the bot is active.
 | `simulations/trading_queue_handoff.py` | Replicates `main._trading_queue_consumer_task` wiring; pins FIFO drain + back-pressure (no-drop) contracts via an in-memory queue and recording executor stub. |
 | `simulations/governance_fast_cycle.py` | One fast-cadence governance cycle with `FakeLLM` against a temp filesystem; pins shadow-mode + kill-switch + audit-JSONL append-only contracts. |
 | `simulations/resolution_calibration.py` | YES-wins / NO-wins resolution loop against a temp DB; pins row mutation, bankroll credit, source-credibility update, and per-lane calibration callback. |
+| `simulations/dossier_creation.py` | Streams synthetic `Evidence` records into `AccumulationTask`; documents the eager dossier-creation trigger (N=1) and pins the version + evidence-count contract. |
 
 See [`scripts/simulations/README.md`](simulations/README.md) for detailed
 usage. Smoke tests in [`tests/test_simulations_smoke.py`](../tests/test_simulations_smoke.py)

@@ -47,6 +47,7 @@ verify the harnesses themselves stay green under code changes.
 | [`trading_queue_handoff.py`](trading_queue_handoff.py) | Replicates `main._trading_queue_consumer_task` wiring against an in-memory queue + recording executor stub; FIFO drain + back-pressure (no-drop) contracts | PROFIT-EDGE-004 (Task D of pipeline simulation buildout) |
 | [`governance_fast_cycle.py`](governance_fast_cycle.py) | Drives `governance.agent.run_cycle` for one fast cadence with `FakeLLM` against a temp filesystem; pins shadow-mode invariant, audit JSONL append-only, and kill-switch (`GOVERNANCE_READONLY`) demotion of real → shadow | PROFIT-EDGE-004 (Task E of pipeline simulation buildout) |
 | [`resolution_calibration.py`](resolution_calibration.py) | YES-wins / NO-wins resolution loop against a temp DB; pins `paper_trades` row mutation, bankroll credit math, source-credibility update, and per-lane `record_calibration_check` callback (PROFIT-CAL-001 wiring) | PROFIT-EDGE-004 (Task F of pipeline simulation buildout) |
+| [`dossier_creation.py`](dossier_creation.py) | Streams synthetic `Evidence` records into `AccumulationTask` against a temp `EvidenceStore`; documents the empirical trigger (eager — dossier created at N=1) and pins the version + evidence-count contract step-by-step | PROFIT-EDGE-004 (Task G of pipeline simulation buildout) |
 
 ## Canonical event fixtures
 
@@ -105,6 +106,10 @@ once committed.
 # Resolution + calibration loop (YES-wins + NO-wins, temp DB):
 .venv/bin/python scripts/simulations/resolution_calibration.py
 .venv/bin/python scripts/simulations/resolution_calibration.py --json
+
+# Evidence → dossier creation (eager, no threshold gate):
+.venv/bin/python scripts/simulations/dossier_creation.py
+.venv/bin/python scripts/simulations/dossier_creation.py --json
 ```
 
 ## When to run

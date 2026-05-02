@@ -20,6 +20,7 @@ import pytest
 from scripts.simulations import _common
 from scripts.simulations import (
     blend_task_integration,
+    dossier_creation,
     executor_validate,
     governance_fast_cycle,
     match_score_audit,
@@ -462,6 +463,58 @@ def test_resolution_calibration_main_runs_clean(capsys, tmp_path):
     out = capsys.readouterr().out
     assert "Resolution + calibration loop" in out
     assert "YES wins" in out and "NO wins" in out
+
+
+# ── dossier_creation -----------------------------------------------------------
+
+def test_dossier_not_created_below_threshold(tmp_path):
+    """At N=0 (no evidence streamed), no dossier exists for the ticker.
+
+    The harness's pre-loop snapshot is the load-bearing observation here:
+    it confirms the temp DB is genuinely empty before any evidence is
+    ingested, so a future change that auto-creates dossiers from market
+    metadata alone would surface."""
+    report = dossier_creation.run(evidence_count=1, db_root=tmp_path)
+    assert report.pre_first_evidence_dossier_present is False, (
+        "dossier present before any evidence was ingested"
+    )
+
+
+def test_dossier_created_at_threshold(tmp_path):
+    """Empirical trigger: dossier exists after the *first* evidence record.
+
+    No minimum-evidence threshold gate — creation is eager. Pin this so a
+    future change that adds a min-evidence threshold (e.g. ≥3 records
+    before persisting) is caught by the harness rather than discovered
+    when KXTRUMPIRAN's structural lane silently disappears."""
+    report = dossier_creation.run(evidence_count=1, db_root=tmp_path)
+    assert report.dossier_created is True
+    assert report.creation_threshold_reached_at_n == 1
+    assert report.final_dossier_version is not None and report.final_dossier_version >= 1
+
+
+def test_dossier_evidence_records_attached(tmp_path):
+    """Streamed evidence records all appear in store.get_recent_evidence,
+    and the dossier_version grows monotonically with evidence count."""
+    report = dossier_creation.run(evidence_count=5, db_root=tmp_path)
+    assert report.final_recent_evidence_count == 5
+    versions = [obs.dossier_version for obs in report.step_observations]
+    # Strictly monotonic — every new evidence advances the dossier.
+    assert all(versions[i] is not None and versions[i + 1] is not None
+               and versions[i + 1] > versions[i]
+               for i in range(len(versions) - 1)), (
+        f"dossier_version not strictly monotonic across evidence stream: {versions}"
+    )
+
+
+def test_dossier_creation_main_runs_clean(capsys, tmp_path):
+    assert dossier_creation.main([
+        "--db-root", str(tmp_path),
+        "--evidence-count", "3",
+    ]) == 0
+    out = capsys.readouterr().out
+    assert "Dossier creation simulation" in out
+    assert "Per-step observations" in out
 
 
 def test_match_audit_kxpsl_does_not_match_geo_news():
