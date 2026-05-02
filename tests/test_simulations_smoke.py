@@ -21,6 +21,7 @@ from scripts.simulations import (
     blend_task_integration,
     executor_validate,
     match_score_audit,
+    paper_trade_roundtrip,
     readiness_gate_events,
     threshold_calibration,
 )
@@ -255,6 +256,54 @@ def test_blend_integration_main_runs_clean(capsys):
     assert len(lines) == len(_common.LLM_POSITIVE_EVENTS_2026_04_26)
     for ln in lines:
         json.loads(ln)
+
+
+# ── paper_trade_roundtrip ------------------------------------------------------
+
+def test_roundtrip_inserts_one_row_per_accepted_event(tmp_path):
+    """A4 #1: every accepted event produces exactly one paper_trades row."""
+    reports = paper_trade_roundtrip.run(db_root=tmp_path)
+    accepted = [r for r in reports if r.accepted]
+    assert accepted, "expected at least one accepted event in the round-trip sim"
+    for r in accepted:
+        assert r.inserted_trade_id, f"{r.event_name}: accepted but no trade_id"
+        assert r.inserted_row is not None, f"{r.event_name}: row missing from DB"
+        assert r.inserted_row["ticker"] == r.ticker
+
+
+def test_roundtrip_bankroll_debit_matches_paper_flat_cost(tmp_path):
+    """A4 #2: bankroll debit equals the paper-flat cost recorded on the row.
+
+    Paper mode uses ``PAPER_FLAT_CONTRACTS`` rather than ``capped_dollars``,
+    so the debit math contract is "delta == row.cost_dollars" rather than
+    "delta == capped_dollars". Pin that explicitly so a future change that
+    reroutes paper sizing to capped_dollars surfaces here."""
+    reports = paper_trade_roundtrip.run(db_root=tmp_path)
+    for r in reports:
+        if not r.accepted:
+            continue
+        row_cost = float(r.inserted_row["cost_dollars"])
+        assert r.bankroll_delta == pytest.approx(-row_cost, abs=1e-6), (
+            f"{r.event_name}: bankroll Δ={r.bankroll_delta} but row cost={row_cost}"
+        )
+        assert row_cost == pytest.approx(r.expected_cost_dollars, abs=1e-6)
+
+
+def test_roundtrip_source_multiplier_persists_to_row(tmp_path):
+    """A4 #3 (substituted): source_multiplier (read from SourceCredibility)
+    is persisted to every accepted row. Source-stats orchestration lives in
+    main.py and isn't exercised by record_trade — but ``record_trade`` does
+    query SourceCredibility and write the result, so that contract is the
+    one this harness can pin."""
+    reports = paper_trade_roundtrip.run(db_root=tmp_path)
+    accepted = [r for r in reports if r.accepted]
+    assert accepted
+    for r in accepted:
+        assert r.source_multiplier_persisted is not None, (
+            f"{r.event_name}: source_multiplier missing from inserted row"
+        )
+        # Fresh DB → no prior credibility → neutral 1.0 multiplier.
+        assert r.source_multiplier_persisted == pytest.approx(1.0)
 
 
 def test_match_audit_kxpsl_does_not_match_geo_news():
