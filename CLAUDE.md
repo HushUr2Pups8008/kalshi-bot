@@ -23,6 +23,27 @@ See `~/.claude/rules/planning.md` for planning rules.
 See `~/.claude/rules/validation.md` for validation rules.
 See `~/.claude/rules/git_workflow.md` for git workflow rules.
 
+## Release Versioning (project-local)
+
+Extends `~/.claude/rules/release_versioning.md`.
+
+- **VERSION ↔ README parity is enforced by CI.** The lint job runs
+  `scripts/sync_readme_version.py --check` and fails the pipeline on drift.
+- **One-time setup per clone:** `git config core.hooksPath .githooks`.
+  This activates the `pre-commit` hook that auto-rewrites the README
+  badges + "Current through" line whenever `VERSION` is staged, then
+  re-stages `README.md` so the bump and the README sync land in the same
+  commit. Without this `git config`, the hook is dormant and the CI gate
+  is the only safety net.
+- **Trigger: when bumping VERSION.** Stage `VERSION` first; the hook
+  handles README. Add a `CHANGELOG.md` entry in the same commit. Tag
+  the commit (`git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`)
+  for any non-trivial release — solo project, but tags are the only
+  rollback anchor and the only thing that lets `git describe HEAD`
+  return a meaningful version string.
+- **Bypass (emergency only):** `git commit --no-verify`. CI will still
+  catch the drift; only use when the hook itself is broken.
+
 ## Critical Gotchas
 
 Non-obvious constraints that have each cost real debugging time. Treat as load-bearing.

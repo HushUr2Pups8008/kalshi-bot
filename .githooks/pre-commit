@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Pre-commit hook: when VERSION is staged, sync README badges + "Current
+# through" line, then re-stage README so the bump and the README sync land
+# in the same commit. Skip silently if VERSION isn't staged.
+#
+# Activate per clone:  git config core.hooksPath .githooks
+#
+# Bypass (for emergency commits only):  git commit --no-verify
+set -euo pipefail
+
+if ! git diff --cached --name-only | grep -qx "VERSION"; then
+    exit 0
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+SYNC_SCRIPT="$REPO_ROOT/scripts/sync_readme_version.py"
+
+if [ ! -x "$SYNC_SCRIPT" ]; then
+    echo "[pre-commit] WARNING: $SYNC_SCRIPT not executable; skipping README sync." >&2
+    exit 0
+fi
+
+# Use the venv's python so the test-collection sub-call has the right deps.
+PYTHON="$REPO_ROOT/.venv/bin/python"
+if [ ! -x "$PYTHON" ]; then
+    PYTHON="$(command -v python3)"
+fi
+
+echo "[pre-commit] VERSION staged → syncing README badges + version refs..."
+"$PYTHON" "$SYNC_SCRIPT" --write
+git add README.md
+echo "[pre-commit] README re-staged."

@@ -59,6 +59,10 @@ lint:
     - *install
   script:
     - .venv/bin/ruff check .
+    # README ↔ VERSION drift gate — see scripts/sync_readme_version.py.
+    # Catches a hand-edit or a forgotten pre-commit hook (the hook is
+    # the convenience layer; this is the safety net).
+    - .venv/bin/python scripts/sync_readme_version.py --check
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
