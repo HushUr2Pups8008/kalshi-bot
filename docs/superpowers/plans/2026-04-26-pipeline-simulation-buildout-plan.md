@@ -1,6 +1,6 @@
 # Pipeline Simulation Buildout Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the remaining behavioural-simulation harnesses identified during the 2026-04-26 PROFIT-EDGE-001/002/003 systematic-debugging investigation. The G1/G4 calibration audits, the readiness-gate end-to-end against the 5 canonical events, and the executor `_validate()` walkthrough were captured in v0.29.58 (commit pending). This plan covers the remaining seven pipeline stages that the operator + agents agreed should have permanent simulation harnesses before the bot reaches go-live.
 
@@ -90,18 +90,18 @@ Files this plan does NOT create:
 
 ### Implementation steps
 
-- [ ] **A1** — Extract the headline strings from the trade-log archive for each of the 5 canonical events (look up by `MATCH_DIAGNOSTIC` records around the timestamps in `_common.LLM_POSITIVE_EVENTS_2026_04_26`). Add the headlines to `_common.py` as `LLM_POSITIVE_EVENT_HEADLINES_2026_04_26: dict[ticker, str]` (immutable fixture).
+- [x] **A1** — Extract the headline strings from the trade-log archive for each of the 5 canonical events (look up by `MATCH_DIAGNOSTIC` records around the timestamps in `_common.LLM_POSITIVE_EVENTS_2026_04_26`). Add the headlines to `_common.py` as `LLM_POSITIVE_EVENT_HEADLINES_2026_04_26: dict[ticker, str]` (immutable fixture).
 
-- [ ] **A2** — Write `match_score_audit.py:run()` returning `list[MatchAuditReport]` where each report contains: `event_name`, `headline`, `top_3_matches` (list of `(ticker, score)`), `target_ticker`, `target_in_top_3` (bool), `target_score` (float | None).
+- [x] **A2** — Write `match_score_audit.py:run()` returning `list[MatchAuditReport]` where each report contains: `event_name`, `headline`, `top_3_matches` (list of `(ticker, score)`), `target_ticker`, `target_in_top_3` (bool), `target_score` (float | None).
 
-- [ ] **A3** — `main()` prints a per-event table and a threshold-sweep summary identical in structure to `threshold_calibration.py:_print_g1_report`.
+- [x] **A3** — `main()` prints a per-event table and a threshold-sweep summary identical in structure to `threshold_calibration.py:_print_g1_report`.
 
-- [ ] **A4** — Smoke tests (in `tests/test_simulations_smoke.py`):
+- [x] **A4** — Smoke tests (in `tests/test_simulations_smoke.py`):
   * `test_match_audit_finds_target_ticker_for_each_event` — `target_in_top_3` is `True` for all 5 events at default `PAPER_MIN_MATCH_SCORE`.
   * `test_match_audit_main_runs_clean` — CLI returns 0, output contains expected headers.
   * `test_match_audit_kxpsl_does_not_match_geo_news` — KXPSL cricket should NOT be a top-3 match for ICE-funding or Iran headlines (cross-contamination guard).
 
-- [ ] **A5** — Document in `scripts/simulations/README.md` "Available simulations" table.
+- [x] **A5** — Document in `scripts/simulations/README.md` "Available simulations" table.
 
 **Acceptance:**
 * Each canonical event surfaces its anchor ticker in the top-3 matches.
@@ -138,18 +138,18 @@ When a market has a dossier with recent evidence, the **accumulation lane** fire
 
 ### Implementation steps
 
-- [ ] **B1** — Build a `_seed_kxtrumpiran_state(store, market_ticker)` helper in the simulation module that creates a dossier with 5+ evidence records and a structural prior. Schema reference: [`tasks/evidence_store.py`](../../../tasks/evidence_store.py); test fixtures in [`tests/test_blend_task.py`](../../../tests/test_blend_task.py) and [`tests/test_structural_task.py`](../../../tests/test_structural_task.py) show the pattern.
+- [x] **B1** — Build a `_seed_kxtrumpiran_state(store, market_ticker)` helper in the simulation module that creates a dossier with 5+ evidence records and a structural prior. Schema reference: [`tasks/evidence_store.py`](../../../tasks/evidence_store.py); test fixtures in [`tests/test_blend_task.py`](../../../tests/test_blend_task.py) and [`tests/test_structural_task.py`](../../../tests/test_structural_task.py) show the pattern.
 
-- [ ] **B2** — Implement `run() -> list[BlendIntegrationReport]` returning, for each canonical event: `event_name`, `ticker`, `regime_weights`, `regime_confidence`, `blended_p`, `blended_confidence`, `disagreement_score`, `readiness_passed`, `trade_blocked_reason`.
+- [x] **B2** — Implement `run() -> list[BlendIntegrationReport]` returning, for each canonical event: `event_name`, `ticker`, `regime_weights`, `regime_confidence`, `blended_p`, `blended_confidence`, `disagreement_score`, `readiness_passed`, `trade_blocked_reason`.
 
-- [ ] **B3** — Cross-check each result against `readiness_gate_events.py`'s prediction. Expect divergence on KXTRUMPIRAN (which has the dossier-driven accumulation lane in production). Surface the divergence as part of the report.
+- [x] **B3** — Cross-check each result against `readiness_gate_events.py`'s prediction. Expect divergence on KXTRUMPIRAN (which has the dossier-driven accumulation lane in production). Surface the divergence as part of the report.
 
-- [ ] **B4** — Smoke tests:
+- [x] **B4** — Smoke tests:
   * `test_blend_integration_produces_blend_decision_per_event` — one `BLEND_DECISION` per event.
   * `test_blend_integration_kxtrumpiran_with_dossier_changes_disagreement` — the dossier-backed KXTRUMPIRAN case has different `disagreement_score` from the no-dossier case.
   * `test_blend_integration_main_runs_clean`.
 
-- [ ] **B5** — README + smoke-test row updates.
+- [x] **B5** — README + smoke-test row updates.
 
 **Acceptance:**
 * `BlendTask.process_fast_lane_result` produces a `BlendTaskResult` for every canonical event.
@@ -177,18 +177,18 @@ When a market has a dossier with recent evidence, the **accumulation lane** fire
 
 ### Implementation steps
 
-- [ ] **C1** — Build a `_make_real_paper_executor(db_path)` helper that constructs a real `PaperTrader` + temp DB rather than the mock used in `executor_validate.py`. Reuse fixture patterns from `tests/test_executor.py`.
+- [x] **C1** — Build a `_make_real_paper_executor(db_path)` helper that constructs a real `PaperTrader` + temp DB rather than the mock used in `executor_validate.py`. Reuse fixture patterns from `tests/test_executor.py`.
 
-- [ ] **C2** — Implement `run() -> list[RoundtripReport]` returning, for each canonical event that the executor accepts: `event_name`, `inserted_trade_id`, `inserted_row_dict`, `bankroll_before`, `bankroll_after`, `bankroll_delta`.
+- [x] **C2** — Implement `run() -> list[RoundtripReport]` returning, for each canonical event that the executor accepts: `event_name`, `inserted_trade_id`, `inserted_row_dict`, `bankroll_before`, `bankroll_after`, `bankroll_delta`.
 
-- [ ] **C3** — `main()` prints a per-event table showing every column of the inserted row and the bankroll delta.
+- [x] **C3** — `main()` prints a per-event table showing every column of the inserted row and the bankroll delta.
 
-- [ ] **C4** — Smoke tests:
+- [x] **C4** — Smoke tests:
   * `test_roundtrip_inserts_one_row_per_accepted_event` — count assertion against accepted events.
   * `test_roundtrip_bankroll_debit_matches_capped_dollars` — math contract.
   * `test_roundtrip_source_stats_updated` — `source_stats.signals` increments per event.
 
-- [ ] **C5** — README + smoke-test row updates.
+- [x] **C5** — README + smoke-test row updates.
 
 **Acceptance:**
 * Every canonical event the executor accepts produces exactly one `paper_trades` row.
@@ -216,18 +216,18 @@ When a market has a dossier with recent evidence, the **accumulation lane** fire
 
 ### Implementation steps
 
-- [ ] **D1** — Replicate the queue + consumer wiring from `main.py:_trading_queue_consumer_task` in the simulation. Reference: the real implementation reads `candidate = await self._trading_queue.get()` and calls `await self._executor.execute(candidate)`.
+- [x] **D1** — Replicate the queue + consumer wiring from `main.py:_trading_queue_consumer_task` in the simulation. Reference: the real implementation reads `candidate = await self._trading_queue.get()` and calls `await self._executor.execute(candidate)`.
 
-- [ ] **D2** — Implement `run() -> list[HandoffReport]`: per-candidate, capture `enqueue_ts`, `dequeue_ts`, `executor_call_args`.
+- [x] **D2** — Implement `run() -> list[HandoffReport]`: per-candidate, capture `enqueue_ts`, `dequeue_ts`, `executor_call_args`.
 
-- [ ] **D3** — Backpressure scenario: enqueue `maxsize + 1` candidates; assert the (maxsize+1)th enqueue blocks and the consumer drains correctly.
+- [x] **D3** — Backpressure scenario: enqueue `maxsize + 1` candidates; assert the (maxsize+1)th enqueue blocks and the consumer drains correctly.
 
-- [ ] **D4** — Smoke tests:
+- [x] **D4** — Smoke tests:
   * `test_handoff_drains_in_order` — FIFO contract.
   * `test_handoff_no_candidate_lost_on_backpressure` — no silent drop.
   * `test_handoff_main_runs_clean`.
 
-- [ ] **D5** — README + smoke-test row updates.
+- [x] **D5** — README + smoke-test row updates.
 
 **Acceptance:**
 * Each enqueued candidate reaches the executor exactly once.
@@ -253,18 +253,18 @@ When a market has a dossier with recent evidence, the **accumulation lane** fire
 
 ### Implementation steps
 
-- [ ] **E1** — Inspect [`docs/governance/PHASE2_RUNBOOK.md`](../../../docs/governance/PHASE2_RUNBOOK.md) for the canonical fast-cycle invocation pattern.
+- [x] **E1** — Inspect [`docs/governance/PHASE2_RUNBOOK.md`](../../../docs/governance/PHASE2_RUNBOOK.md) for the canonical fast-cycle invocation pattern.
 
-- [ ] **E2** — Implement `run(*, fake_llm_responses: list[str], shadow_dir: Path) -> CycleReport` that drives one cycle and returns `proposed_count`, `applied_count`, `audit_records_emitted`, `kill_switch_tripped`.
+- [x] **E2** — Implement `run(*, fake_llm_responses: list[str], shadow_dir: Path) -> CycleReport` that drives one cycle and returns `proposed_count`, `applied_count`, `audit_records_emitted`, `kill_switch_tripped`.
 
-- [ ] **E3** — `main()` accepts `--responses-file` to point at a deterministic JSON of FakeLLM responses; defaults to a built-in canonical fixture.
+- [x] **E3** — `main()` accepts `--responses-file` to point at a deterministic JSON of FakeLLM responses; defaults to a built-in canonical fixture.
 
-- [ ] **E4** — Smoke tests:
+- [x] **E4** — Smoke tests:
   * `test_governance_fast_cycle_writes_only_to_proposed`.
   * `test_governance_fast_cycle_audit_jsonl_append_only`.
   * `test_governance_fast_cycle_kill_switch_active_blocks_all_apply`.
 
-- [ ] **E5** — README + smoke-test row updates.
+- [x] **E5** — README + smoke-test row updates.
 
 **Acceptance:**
 * Shadow-mode invariant holds: zero `applied` writes for any FakeLLM response.
@@ -288,16 +288,16 @@ When a market has a dossier with recent evidence, the **accumulation lane** fire
 
 ### Implementation steps
 
-- [ ] **F1** — Locate the resolution-loop entry point (likely `main.py:_resolution_loop_task` or similar). Document the call signature in the simulation module docstring.
+- [x] **F1** — Locate the resolution-loop entry point (likely `main.py:_resolution_loop_task` or similar). Document the call signature in the simulation module docstring.
 
-- [ ] **F2** — Implement `run(outcome: Literal["yes", "no"]) -> ResolutionReport` that drives one resolution against a temp DB seeded with one synthetic trade.
+- [x] **F2** — Implement `run(outcome: Literal["yes", "no"]) -> ResolutionReport` that drives one resolution against a temp DB seeded with one synthetic trade.
 
-- [ ] **F3** — Smoke tests:
+- [x] **F3** — Smoke tests:
   * `test_resolution_yes_wins_credits_bankroll`.
   * `test_resolution_no_wins_zero_credit`.
   * `test_resolution_triggers_calibration_callback`.
 
-- [ ] **F4** — README + smoke-test row updates.
+- [x] **F4** — README + smoke-test row updates.
 
 **Acceptance:**
 * Bankroll math correct for both YES-wins and NO-wins outcomes.
@@ -322,16 +322,16 @@ When a market has a dossier with recent evidence, the **accumulation lane** fire
 
 ### Implementation steps
 
-- [ ] **G1** — Trace the dossier-creation logic: `EvidenceStore.add_evidence` → dossier-update or dossier-creation? Document the trigger condition.
+- [x] **G1** — Trace the dossier-creation logic: `EvidenceStore.add_evidence` → dossier-update or dossier-creation? Document the trigger condition.
 
-- [ ] **G2** — Implement `run(*, ticker: str, evidence_count: int) -> DossierCreationReport` that streams N synthetic evidence records and returns: `dossier_created` (bool), `creation_threshold_reached_at_n` (int | None), `created_dossier_state`.
+- [x] **G2** — Implement `run(*, ticker: str, evidence_count: int) -> DossierCreationReport` that streams N synthetic evidence records and returns: `dossier_created` (bool), `creation_threshold_reached_at_n` (int | None), `created_dossier_state`.
 
-- [ ] **G3** — Smoke tests:
+- [x] **G3** — Smoke tests:
   * `test_dossier_not_created_below_threshold`.
   * `test_dossier_created_at_threshold`.
   * `test_dossier_evidence_records_attached`.
 
-- [ ] **G4** — README + smoke-test row updates.
+- [x] **G4** — README + smoke-test row updates.
 
 **Acceptance:**
 * The threshold for dossier creation is documented (in the module docstring).
@@ -369,8 +369,8 @@ After merge, the operator runs each simulation manually once and confirms output
 
 This plan is complete when:
 
-- [ ] All seven tasks land on `main` as separate commits.
-- [ ] [`tests/test_simulations_smoke.py`](../../../tests/test_simulations_smoke.py) has ≥ 13 + (~21 new) ≈ 34 smoke tests passing.
-- [ ] [`scripts/simulations/README.md`](../../../scripts/simulations/README.md) lists all 10 simulations (3 captured + 7 new).
-- [ ] Any bugs surfaced during buildout are filed as their own debt-log items and triaged.
-- [ ] The operator can run the full simulation suite from a fresh shell and produce a report covering every documented pipeline stage.
+- [x] All seven tasks land on `main` as separate commits.
+- [x] [`tests/test_simulations_smoke.py`](../../../tests/test_simulations_smoke.py) has ≥ 13 + (~21 new) ≈ 34 smoke tests passing.
+- [x] [`scripts/simulations/README.md`](../../../scripts/simulations/README.md) lists all 10 simulations (3 captured + 7 new).
+- [x] Any bugs surfaced during buildout are filed as their own debt-log items and triaged.
+- [x] The operator can run the full simulation suite from a fresh shell and produce a report covering every documented pipeline stage.
