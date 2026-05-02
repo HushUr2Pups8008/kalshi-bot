@@ -12,6 +12,7 @@ Read-only — no DB writes, no trade-log writes, no network.
 """
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -24,6 +25,7 @@ from scripts.simulations import (
     paper_trade_roundtrip,
     readiness_gate_events,
     threshold_calibration,
+    trading_queue_handoff,
 )
 
 
@@ -126,7 +128,6 @@ def test_readiness_simulation_main_text_and_json(capsys):
     assert readiness_gate_events.main(["--json"]) == 0
     out_json = capsys.readouterr().out
     # one JSON object per event, all decodable
-    import json
     lines = [ln for ln in out_json.splitlines() if ln.strip()]
     assert len(lines) == len(_common.LLM_POSITIVE_EVENTS_2026_04_26)
     for ln in lines:
@@ -197,7 +198,6 @@ def test_match_audit_main_runs_clean(capsys):
     assert "Threshold sweep" in out
     # JSON path also exercised
     assert match_score_audit.main(["--json"]) == 0
-    import json
     payload = json.loads(capsys.readouterr().out)
     assert isinstance(payload, list)
     assert len(payload) == len(_common.LLM_POSITIVE_EVENTS_2026_04_26)
@@ -251,7 +251,6 @@ def test_blend_integration_main_runs_clean(capsys):
     # JSON path also exercised — one JSON object per event line.
     assert blend_task_integration.main(["--json"]) == 0
     out_json = capsys.readouterr().out
-    import json
     lines = [ln for ln in out_json.splitlines() if ln.strip()]
     assert len(lines) == len(_common.LLM_POSITIVE_EVENTS_2026_04_26)
     for ln in lines:
@@ -304,6 +303,49 @@ def test_roundtrip_source_multiplier_persists_to_row(tmp_path):
         )
         # Fresh DB → no prior credibility → neutral 1.0 multiplier.
         assert r.source_multiplier_persisted == pytest.approx(1.0)
+
+
+# ── trading_queue_handoff ------------------------------------------------------
+
+def test_handoff_drains_in_order():
+    """FIFO contract: candidates exit the queue in enqueue order."""
+    report = trading_queue_handoff.run()
+    assert report.fifo_in_order, "trading queue did not preserve FIFO order"
+    assert len(report.fifo_handoffs) == len(_common.LLM_POSITIVE_EVENTS_2026_04_26)
+    for h in report.fifo_handoffs:
+        assert h.dequeue_ts >= h.enqueue_ts, (
+            f"candidate {h.candidate_index} dequeued before it was enqueued"
+        )
+
+
+def test_handoff_no_candidate_lost_on_backpressure():
+    """Backpressure contract: enqueueing past maxsize must not drop candidates.
+
+    The producer has to await the consumer (asyncio.Queue.put blocks when
+    full). If a future change replaces ``put`` with ``put_nowait`` or adds
+    a silent drop path, this surfaces it."""
+    report = trading_queue_handoff.run()
+    bp = report.backpressure
+    assert bp.no_drops, (
+        f"backpressure dropped candidates: enqueued={bp.enqueued} "
+        f"drained={bp.drained}"
+    )
+    assert bp.enqueued > bp.queue_maxsize, "scenario must overflow maxsize"
+    assert bp.producer_ever_blocked, (
+        "producer never observed a full queue — backpressure path not exercised"
+    )
+
+
+def test_handoff_main_runs_clean(capsys):
+    assert trading_queue_handoff.main([]) == 0
+    out = capsys.readouterr().out
+    assert "Trading-queue → executor handoff" in out
+    assert "Back-pressure scenario" in out
+    # JSON path also exercised
+    assert trading_queue_handoff.main(["--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "fifo_handoffs" in payload
+    assert "backpressure" in payload
 
 
 def test_match_audit_kxpsl_does_not_match_geo_news():

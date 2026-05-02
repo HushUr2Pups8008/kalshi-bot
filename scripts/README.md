@@ -83,6 +83,7 @@ Safe to run while the bot is active.
 | `simulations/match_score_audit.py` | Match-score gate (`PAPER_MIN_MATCH_SCORE` — pipeline's first kill point) against production headlines + market titles, with threshold sweep + cross-contamination guard. |
 | `simulations/blend_task_integration.py` | Full `BlendTask.process_fast_lane_result` integration with seeded slow-lane context for KXTRUMPIRAN; cross-checks the readiness outcome against the no-dossier readiness simulation. |
 | `simulations/paper_trade_roundtrip.py` | Paper-trade INSERT path against a real `PaperTrader` over a temp SQLite DB; pins per-event row write, bankroll debit, and source-credibility persistence. |
+| `simulations/trading_queue_handoff.py` | Replicates `main._trading_queue_consumer_task` wiring; pins FIFO drain + back-pressure (no-drop) contracts via an in-memory queue and recording executor stub. |
 
 See [`scripts/simulations/README.md`](simulations/README.md) for detailed
 usage. Smoke tests in [`tests/test_simulations_smoke.py`](../tests/test_simulations_smoke.py)

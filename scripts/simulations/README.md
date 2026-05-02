@@ -44,6 +44,7 @@ verify the harnesses themselves stay green under code changes.
 | [`match_score_audit.py`](match_score_audit.py) | Match-score gate (`PAPER_MIN_MATCH_SCORE` — first kill point) against the production headlines + market titles for the 5 canonical events; threshold sweep + cross-contamination guard | PROFIT-EDGE-004 (Task A of pipeline simulation buildout) |
 | [`blend_task_integration.py`](blend_task_integration.py) | Full `BlendTask.process_fast_lane_result` integration with seeded dossier + structural prior + recent evidence for KXTRUMPIRAN; surfaces accumulation-lane disagreement and any post-blend gate that wouldn't fire on the no-dossier readiness simulation | PROFIT-EDGE-004 (Task B of pipeline simulation buildout) |
 | [`paper_trade_roundtrip.py`](paper_trade_roundtrip.py) | Paper-trade INSERT path against a real `PaperTrader` over a temp SQLite DB; per-event row write, bankroll debit, and source-credibility persistence | PROFIT-EDGE-004 (Task C of pipeline simulation buildout) |
+| [`trading_queue_handoff.py`](trading_queue_handoff.py) | Replicates `main._trading_queue_consumer_task` wiring against an in-memory queue + recording executor stub; FIFO drain + back-pressure (no-drop) contracts | PROFIT-EDGE-004 (Task D of pipeline simulation buildout) |
 
 ## Canonical event fixtures
 
@@ -90,6 +91,10 @@ once committed.
 # Paper-trade INSERT path (real PaperTrader against a temp SQLite DB):
 .venv/bin/python scripts/simulations/paper_trade_roundtrip.py
 .venv/bin/python scripts/simulations/paper_trade_roundtrip.py --json
+
+# Trading-queue → executor handoff (FIFO + back-pressure):
+.venv/bin/python scripts/simulations/trading_queue_handoff.py
+.venv/bin/python scripts/simulations/trading_queue_handoff.py --json
 ```
 
 ## When to run
