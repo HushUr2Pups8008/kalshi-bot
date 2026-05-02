@@ -72,6 +72,30 @@ def pytest_unconfigure(config: object) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _ci_skip_cooldown_via_monotonic_offset(monkeypatch):
+    """Workaround for PROFIT-OBS-005 in CI.
+
+    On a freshly-booted runner, `time.monotonic()` returns seconds since
+    container start (~50 s). The executor's `_last_traded.get(ticker, 0.0)`
+    fallback then makes never-traded tickers look just-traded, so any
+    nonzero `paper_ticker_cooldown` gate trips. The env-var stub fixes
+    tests that respect the default, but tests using `_make_paper_executor`
+    explicitly set `paper_ticker_cooldown=14400` and bypass that path.
+
+    We offset `time.monotonic` by 8 h so even the explicit-14400 cases see
+    elapsed > cooldown for default-0.0 last-traded entries. Production
+    behaviour untouched (only fires when `CI` is set). Reverts after every
+    test via monkeypatch teardown.
+    """
+    if os.environ.get("CI"):
+        import time as _t
+        real_monotonic = _t.monotonic
+        offset = 8 * 3600  # 8 h — comfortably > 4 h paper cooldown
+        monkeypatch.setattr(_t, "monotonic", lambda: real_monotonic() + offset)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_governance_global_reader():
     """Ensure tests cannot leak runtime-overrides global-reader state.
 
