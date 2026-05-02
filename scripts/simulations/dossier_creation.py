@@ -18,7 +18,9 @@ Trigger condition (Task G1, traced from
   threshold gate. PROFIT-EDGE-002's ``12 of 847 active markets had
   dossiers (~1.4%)`` observation is therefore a *coverage* problem
   driven by which markets receive evidence at all, not a creation
-  threshold.
+  threshold. See ``PROFIT-DOSSIER-001`` in
+  ``docs/profit_path_debt_log.md`` for the full re-framing and the
+  empirical 100% OPPORTUNITY → dossier alignment as of 2026-05-02.
 
 Origin: PROFIT-EDGE-004 — Task G in
 ``docs/superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md``.

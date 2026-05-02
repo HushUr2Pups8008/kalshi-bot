@@ -1110,7 +1110,7 @@ Either outcome is informative. The G1 question can be answered with concrete pos
 - *PROFIT-EDGE-001* (closed 2026-04-26, v0.29.56) — necessary precondition for this fix to matter end-to-end. Without EDGE-001 the LLM-positive events never reach blend; without EDGE-002 they reach blend but die at G4.
 - *Governance agent Phase 2 (v0.29.55)* — receives the candidate evidence it was designed to learn from once both EDGE-001 and EDGE-002 are in production. Memory note `project_governance_regime_priors.md` flags categorical-prior maintenance as a future governance-agent capability — manual maintenance of `_SERIES_PRIORS` is the wrong shape for a market venue that adds new event series weekly; the agent has all the inputs needed (series title, market subtitles, blend cadence) to propose new categorical priors automatically, in the same shape as keyword/source learning.
 - *Sports-prefix maintenance* — also flagged for future governance-agent automation. Manual curation of ~336 candidate sport prefixes is impractical and brittle; the governance agent should maintain `MARKET_SERIES_BLOCKLIST_PREFIXES` from market-title patterns the same way it manages keyword glossaries.
-- *Dossier coverage (12/847 active markets)* — surfaced during this investigation as a contributing factor to weak structural lane contributions. Not closed in this commit; the structural-log fix from change #4 above is the necessary precondition to diagnose *why* dossier-backed markets fail recompute. Future debt entry expected once cause-traces start landing.
+- *Dossier coverage (12/847 active markets at the time of this entry)* — surfaced during this investigation as a contributing factor to weak structural lane contributions. **2026-05-02 framing update (per PROFIT-DOSSIER-001):** the "12/847" active-market denominator is misleading. Dossier creation is eager (N=1 evidence record) — not threshold-gated — so coverage is bounded by which markets receive evidence at all, which is downstream of the LLM emitting a directional view. As of 2026-05-02 the alignment is 100%: every ticker that has produced an OPPORTUNITY also has a dossier. The actionable lever for "raise dossier coverage" is matcher quality + LLM signal density (PROFIT-EDGE-004 hypotheses 1 and 3), not a dossier-creation gate.
 
 **Post-Deploy Verification** (2026-04-28, v0.29.58, ~48h runtime since 2026-04-27T13:03:19Z boot)
 
@@ -1839,6 +1839,78 @@ Acceptance review (target ~2026-05-15 or as soon as ≥30 decisions accumulated)
 - `PROFIT-LLM-001` (open, LOW, deferred) — explicitly post-Phase 2; do not unify until PHASE2-001 closes.
 - ROADMAP `GOV.P3` — direct downstream consumer; `GOV.P3` is BLOCKED until PHASE2-001 closes.
 - `docs/governance/PHASE2_RUNBOOK.md` — operator-facing companion document; this entry is the engineering tracker.
+
+---
+
+### PROFIT-DOSSIER-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-DOSSIER-001 |
+| **Title** | Dossier coverage is LLM-output-bound, not matcher-bound — re-frame the "1.4% of active markets had dossiers" metric and identify the actionable lever |
+| **Category** | Observability / Diagnostics Framing |
+| **Severity** | LOW (framing fix, not a runtime bug) |
+| **Status** | OPEN |
+| **Priority** | LATER (post-Phase 2) |
+| **Owner** | Claude |
+| **Depends On** | — |
+| **Blocks** | Any future "improve dossier coverage" item that would otherwise misdiagnose the lever |
+
+**Description**
+
+PROFIT-EDGE-002's empirical observation — "12 of 847 active markets had dossiers (~1.4%)" — has been cited as evidence that the structural lane is silently absent because the dossier-creation pipeline isn't keeping up with the active-market universe. Task G of PROFIT-EDGE-004 (`scripts/simulations/dossier_creation.py`) traced the actual creation trigger and found it is **eager**: `AccumulationTask._process_evidence_locked` calls `store.update_dossier(initial_state)` on the first evidence record for any ticker, with no minimum-evidence threshold gate. So dossier coverage is *not* gated by the matcher, the dossier-creation logic, or any threshold.
+
+A 2026-05-02 read-only audit of the *current* `data/evidence_store.db` (post-MacBook → Mac Studio cutover) confirms what's actually happening:
+
+| Stage | Distinct tickers | Notes |
+|---|---|---|
+| `MATCH_DIAGNOSTIC` (matched at least once across the full 2026-04-18 → 2026-05-02 archive) | **82** | 2,880 total match events; long tail of one-offs |
+| `OPPORTUNITY` (LLM produced a directional view that survived the readiness gate) | **32** | 260 total events |
+| `dossiers` table | **32** | exact 1:1 with OPPORTUNITY tickers |
+
+100% of OPPORTUNITY tickers have dossiers; 50 of the 82 matched tickers (61%) have no dossier because the LLM declined to give a directional view (post-EDGE-001 the line-688 path is unblocked, so this is the *legitimate* "magnitude=none" passthrough — those events do not produce evidence). The actionable lever is therefore not "speed up dossier creation" but "raise LLM signal density" (which is what PROFIT-EDGE-004 was already chasing).
+
+The "1.4% coverage" denominator (active-market count) is the wrong frame. The right denominator is "tickers the LLM gave a directional view on", and the answer is 100% — the slow lane covers the markets it should cover.
+
+**Why it matters to profitability / safety / reliability**
+
+This is a **framing fix**, not a runtime bug. Misdiagnosis of the coverage gap as a dossier-creation problem would push optimization effort onto the wrong code path (e.g. lowering thresholds in the dossier-creation gate, which doesn't exist) and miss the real lever (matcher quality + LLM-output density). Cleaning up the framing before it gets cited a third time avoids a future-Claude rabbit hole.
+
+**Evidence / Source**
+
+- `scripts/simulations/dossier_creation.py` (PROFIT-EDGE-004 Task G) — empirical trigger trace; dossier created at N=1 with no threshold gate.
+- 2026-05-02 read-only audit of `data/evidence_store.db`:
+  - 32 dossiers / 32 structural priors / 248 evidence records / 248 dossier_updates.
+  - Top-2 tickers (KXTRUMPIRAN-26MAY01, KXMOCTRUMP25-26-MAY01) account for 158/248 = 64% of all evidence.
+  - Source-class diversity gap: 202 news / 45 other / 1 official across the full corpus — a single dossier rarely sees diverse classes (relevant to Task B's `blend_task_integration` finding that single-class evidence trips G2).
+- 2026-05-02 trade-log archive scan (16 jsonl files across `logs/trades/` and `mac_archive/`):
+  - 82 distinct MATCH_DIAGNOSTIC tickers; 32 distinct OPPORTUNITY tickers; perfect overlap with dossiers table.
+  - 50 matched-but-undossiered tickers (61%) — including all 13 `KXJPTRADEBAL-*` markets, 1-3 matches each, never produced an LLM-positive signal. Long tail.
+
+**Proposed Fix**
+
+Documentation-only.
+
+1. Update the PROFIT-EDGE-002 Description / Why-it-matters paragraphs to soften the "1.4% had dossiers" claim — replace with "100% of LLM-positive tickers had dossiers; the long tail of matched-but-undossiered tickers is the matcher-quality / market-mix problem already tracked under PROFIT-EDGE-004 hypotheses 1 and 3, not a dossier-creation problem."
+2. Add a one-line note at the top of `scripts/simulations/dossier_creation.py` (already has the eager-creation note in its docstring; just cross-link to this entry).
+3. Reference this entry from the next ROADMAP P3 / structural-lane discussion as the definitive answer to "should we lower the dossier-creation threshold?"
+
+**Acceptance Criteria**
+
+- PROFIT-EDGE-002 entry updated with the corrected framing.
+- This entry cross-linked from `dossier_creation.py` docstring.
+- No code changes — runtime behavior is correct.
+
+**Notes**
+
+- Source-class concentration (1 official / 45 other / 202 news in the current evidence corpus) is *not* in scope for this entry. That's a feed-mix / source-diversity problem and belongs in its own PROFIT-* item (or PROFIT-EVID-002 if it fits there) when triaged.
+- The "100% of OPPORTUNITY tickers have dossiers" alignment is the load-bearing observation for this entry. If a future runtime change breaks that alignment (e.g. a candidate appears in OPPORTUNITY without an upstream evidence_store.update_dossier call), file as a NEW entry — that would be the actual bug this misdiagnosis was guarding against.
+
+**Related**
+
+- `PROFIT-EDGE-002` (closed 2026-04-26) — "1.4% coverage" framing originates here; the runtime fix landed but the framing didn't get corrected.
+- `PROFIT-EDGE-004` (closed 2026-05-02) — Task G surfaced the empirical trigger that disproves the threshold-gate hypothesis.
+- `PROFIT-LLM-001` (open) — actionable-lever home; "raise LLM signal density" is what raises *real* dossier coverage.
 
 ---
 
