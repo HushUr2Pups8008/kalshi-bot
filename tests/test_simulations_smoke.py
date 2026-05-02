@@ -25,6 +25,7 @@ from scripts.simulations import (
     match_score_audit,
     paper_trade_roundtrip,
     readiness_gate_events,
+    resolution_calibration,
     threshold_calibration,
     trading_queue_handoff,
 )
@@ -406,6 +407,61 @@ def test_governance_fast_cycle_main_runs_clean(capsys, tmp_path):
     out = capsys.readouterr().out
     assert "Governance Phase 2 fast-cycle simulation" in out
     assert "Append-only contract" in out
+
+
+# ── resolution_calibration -----------------------------------------------------
+
+def test_resolution_yes_wins_credits_bankroll(tmp_path):
+    """A4 #1: YES-side trade wins on resolved_yes=True. Bankroll credit
+    equals the per-row payout (contracts as dollars), pnl = payout - cost,
+    resolved=1 + resolved_ts populated."""
+    report = resolution_calibration.run(db_root=tmp_path)
+    r = report.yes_wins
+    assert r.side == "yes" and r.outcome == "yes"  # event-3 is yes-side
+    expected_credit = r.expected_payout
+    assert r.bankroll_after_resolution - r.bankroll_after_entry == pytest.approx(expected_credit, abs=1e-6)
+    row = r.resolved_row
+    assert row["resolved"] == 1
+    assert row["resolved_yes"] == 1
+    assert row["resolved_ts"], "resolved_ts must be populated"
+    assert row["pnl_dollars"] == pytest.approx(expected_credit - row["cost_dollars"], abs=1e-6)
+
+
+def test_resolution_no_wins_zero_credit(tmp_path):
+    """A4 #2: YES-side trade loses on resolved_yes=False. Bankroll credit
+    is exactly zero (cost was already debited at entry); pnl is negative
+    and equals -cost."""
+    report = resolution_calibration.run(db_root=tmp_path)
+    r = report.no_wins
+    assert r.bankroll_after_resolution == pytest.approx(r.bankroll_after_entry, abs=1e-6)
+    row = r.resolved_row
+    assert row["resolved"] == 1
+    assert row["resolved_yes"] == 0
+    assert row["pnl_dollars"] == pytest.approx(-row["cost_dollars"], abs=1e-6)
+
+
+def test_resolution_triggers_calibration_callback(tmp_path):
+    """A4 #3: every populated lane in signal_meta produces one
+    record_calibration_check call per resolved trade. Wiring closed in
+    PROFIT-CAL-001 (v0.29.47); this is its read-only regression anchor."""
+    report = resolution_calibration.run(db_root=tmp_path)
+    for r in (report.yes_wins, report.no_wins):
+        lanes = {c["lane"] for c in r.calibration_calls}
+        assert lanes == {"fast", "accumulation", "structural"}, (
+            f"{r.outcome}-wins: expected one calibration call per lane, got {lanes}"
+        )
+        # error == |estimate - final_resolution|, asserted directly so a
+        # future change in the resolution signature surfaces here.
+        for c in r.calibration_calls:
+            expected_err = abs(c["lane_estimate"] - c["final_resolution"])
+            assert c["error"] == pytest.approx(expected_err, abs=1e-6)
+
+
+def test_resolution_calibration_main_runs_clean(capsys, tmp_path):
+    assert resolution_calibration.main(["--db-root", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "Resolution + calibration loop" in out
+    assert "YES wins" in out and "NO wins" in out
 
 
 def test_match_audit_kxpsl_does_not_match_geo_news():

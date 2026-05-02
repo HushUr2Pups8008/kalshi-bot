@@ -46,6 +46,7 @@ verify the harnesses themselves stay green under code changes.
 | [`paper_trade_roundtrip.py`](paper_trade_roundtrip.py) | Paper-trade INSERT path against a real `PaperTrader` over a temp SQLite DB; per-event row write, bankroll debit, and source-credibility persistence | PROFIT-EDGE-004 (Task C of pipeline simulation buildout) |
 | [`trading_queue_handoff.py`](trading_queue_handoff.py) | Replicates `main._trading_queue_consumer_task` wiring against an in-memory queue + recording executor stub; FIFO drain + back-pressure (no-drop) contracts | PROFIT-EDGE-004 (Task D of pipeline simulation buildout) |
 | [`governance_fast_cycle.py`](governance_fast_cycle.py) | Drives `governance.agent.run_cycle` for one fast cadence with `FakeLLM` against a temp filesystem; pins shadow-mode invariant, audit JSONL append-only, and kill-switch (`GOVERNANCE_READONLY`) demotion of real → shadow | PROFIT-EDGE-004 (Task E of pipeline simulation buildout) |
+| [`resolution_calibration.py`](resolution_calibration.py) | YES-wins / NO-wins resolution loop against a temp DB; pins `paper_trades` row mutation, bankroll credit math, source-credibility update, and per-lane `record_calibration_check` callback (PROFIT-CAL-001 wiring) | PROFIT-EDGE-004 (Task F of pipeline simulation buildout) |
 
 ## Canonical event fixtures
 
@@ -100,6 +101,10 @@ once committed.
 # Governance Phase 2 fast cycle (FakeLLM, temp filesystem):
 .venv/bin/python scripts/simulations/governance_fast_cycle.py
 .venv/bin/python scripts/simulations/governance_fast_cycle.py --json
+
+# Resolution + calibration loop (YES-wins + NO-wins, temp DB):
+.venv/bin/python scripts/simulations/resolution_calibration.py
+.venv/bin/python scripts/simulations/resolution_calibration.py --json
 ```
 
 ## When to run
