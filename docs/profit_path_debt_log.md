@@ -1914,6 +1914,89 @@ Documentation-only.
 
 ---
 
+### PROFIT-MATCH-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-MATCH-001 |
+| **Title** | Match-quality long tail — 78% of matches flagged low-quality, dominated by single-entity ticker-name overlap (`trump`, `iran`, `pakistan`, `russia`) |
+| **Category** | Matcher / Signal Quality |
+| **Severity** | MEDIUM |
+| **Status** | OPEN |
+| **Priority** | LATER (post-Phase 2 governance soak; do not change matcher behaviour during PROFIT-PHASE2-001) |
+| **Owner** | Claude |
+| **Depends On** | `PROFIT-PHASE2-001` close (2026-05-15 ETA); P2.5 enforcement decision (separate deferred runbook step) |
+| **Blocks** | Real-mode flip readiness (LLM signal-quality denominator stays inflated until this is tightened) |
+
+**Description**
+
+The 2026-05-02 read-only audit of `MATCH_DIAGNOSTIC` events across the full 16-file trade-log archive (`logs/trades/` + `mac_archive/macbook_2026-05-01_import/logs/trades/`) found **2,257 of 2,880 matches (78.4%) carry the `low_match_quality` flag**. The dominant pattern is laser-specific:
+
+| Heuristic flag | Count | % of low-quality |
+|---|---|---|
+| `single_named_entity_only` | 1,705 | 75.5% |
+| `minimal_overlap` | 1,705 | 75.5% |
+| `near_threshold_score` | 1,664 | 73.7% |
+| `low_token_overlap` | 598 | 26.5% |
+
+1,705 matches (60% of all matches) carry both `single_named_entity_only` AND `minimal_overlap` — i.e., a single named-entity token (`trump`, `iran`, `pakistan`, `russia`) is the only meaningful overlap between headline and market title. Top concrete pairs:
+
+| matched token | series | matches | sample headline |
+|---|---|---|---|
+| `iran` | KXTRUMPIRAN | 342 | "Iran among dozens selected for vice presidency post at UN non-proliferation conf…" |
+| `trump` | KXMOCTRUMP25 | 253 | "King Charles Visits US as Britain Seeks to Steady Ties With Trump" |
+| `pakistan` | KXVANCEPAKISTAN | 233 | "Putin assures Iranian FM Moscow will do 'everything' to help secure ME peace…" |
+| `trump` | KXPARDONSTRUMP | 157 | "Inside Trump press dinner shooting suspect's court appearance" |
+| `pakistan` | KXPSL | 136 | "Iran War Live Updates: Witkoff and Kushner to Go to Pakistan for Talks on Iran" |
+| `russia` | KXRUCRUDEX | 90 | "Kyiv Says It Struck Russia's High-End Su-57 Stealth Fighters in Deep Rear Operat…" |
+
+558 of these 1,705 records (32.7%) ESCAPE the current `ENABLE_LOW_QUALITY_MATCH_SUPPRESSION` path because their score is above 0.08 (the `near_threshold_score` flag only fires within `min_score + 0.02`). The current suppression criteria require `near_threshold_score` AND (`minimal_overlap` OR `single_named_entity_only`) AND `_token_not_in_ticker`. The `_token_not_in_ticker` guard correctly preserves "iran story matches KXTRUMPIRAN because both contain iran"-style coherent matches, but it ALSO over-protects every `trump`-token false-positive against KXTRUMP*-prefixed series, which is the dominant noise source in the archive.
+
+**Why it matters to profitability / safety / reliability**
+
+1. The matcher is the pipeline's first kill point (`PAPER_MIN_MATCH_SCORE = 0.06`). Every spurious match downstream of this gate consumes an LLM call (~5–8 seconds at qwen2.5:7b) and dilutes the signal-quality denominator the governance agent will eventually optimise against (`PROFIT-PHASE2-001` → `GOV.P3` → `GOV.P4`).
+2. Source-credibility scoring (`analysis/source_credibility.py`) is updated on resolution; a source that produces 100 low-quality matches that all resolve neutrally pollutes the credibility prior for that source's *future* high-quality signals.
+3. The pre-LLM gate (currently P2.4-COMPLETE in diagnostics-mode, P2.5 enforcement deferred) would catch 66.6% of these matches at no LLM cost. P2.5 is the short-term lever; this entry is the medium-term lever for the long tail that survives even the pre-LLM gate.
+
+**Evidence / Source**
+
+- 2026-05-02 read-only audit, full 16-file `MATCH_DIAGNOSTIC` corpus:
+  - Total: 2,880 events / 82 distinct tickers.
+  - Score distribution: 57.5% in `[0.06, 0.08)`, 21.9% in `[0.08, 0.10)`, 17.4% in `[0.10, 0.15)`, 3.2% above 0.15.
+  - 1,917 (66.6%) carry `would_fail_pre_llm_gate=true`.
+- `MATCH_SUPPRESSED` event count: 498 (across the same archive). `ENABLE_LOW_QUALITY_MATCH_SUPPRESSION` is on; the suppression criteria are too narrow.
+- `analysis/market_matcher.py:625-680` — current suppression definition; the `_meets_suppression_criteria` triple-AND is the load-bearing predicate.
+
+**Proposed Fix — three options, ranked by priority**
+
+**Option A (recommended, short-term):** land P2.5 pre-LLM gate enforcement (already drafted in `/tmp/sunday_commit_draft/`). Cuts 66.6% of match volume at zero LLM cost. Independent of this entry's deeper fix.
+
+**Option B (medium-term, this entry):** widen the suppression predicate. Drop the `near_threshold_score` requirement so `single_named_entity_only + minimal_overlap` alone triggers suppression for ticker-name-overlap matches. Empirical impact: ~1,705 records suppressed instead of ~498. Requires a 24-hour observation window post-flip to confirm no canonical events are killed (the EDGE-001 5-event regression set is the canonical anchor and is captured by `scripts/simulations/match_score_audit.py`).
+
+**Option C (long-term, separate entry):** series-aware token weighting — `trump` in `KXTRUMPENDORSE` should NOT count as a meaningful match unless additional context tokens align (endorsement, candidate name, state). Matcher would need to peel the entity out of the ticker prefix and require non-entity overlap with the rest of the title. Larger refactor; file as `PROFIT-MATCH-002` if Option B's empirical results are insufficient.
+
+**Acceptance Criteria** (Option B path)
+
+- `analysis/market_matcher.py:_meets_suppression_criteria` updated; `near_threshold_score` no longer required when `single_named_entity_only + minimal_overlap` are both present.
+- `scripts/simulations/match_score_audit.py` re-run post-fix; all 5 canonical events still surface their anchor in top-3 at score ≥ 0.06.
+- 24h post-deploy `MATCH_SUPPRESSED` count rises to ~1.7× current (proportional to the per-day archive rate); no canonical-event ticker appears in `MATCH_SUPPRESSED`.
+- New smoke test added to `tests/test_market_matcher.py` pinning the widened predicate.
+
+**Notes**
+
+- Do not land any matcher change during `PROFIT-PHASE2-001` (governance Phase 2 14-day soak, ETA close 2026-05-15). The matcher feeds the governance agent's audit data; changing it mid-soak invalidates the soak's signal density distribution and resets the clock.
+- The `_token_not_in_ticker` guard is intentionally kept in this proposal — it preserves the "iran story → KXTRUMPIRAN" path that *is* coherent. The fix is to suppress when the single entity overlap is the *only* token in common, not to remove the guard.
+- The full 78.4% low-quality rate is consistent with the 2026-04-26 daily-review snapshot (228/269 = 84.8%) cited in the original PROFIT-EDGE-001/002/003 investigation; the slight delta reflects the broader window vs. the single-day sample.
+
+**Related**
+
+- `PROFIT-EDGE-001` / `PROFIT-EDGE-004` — line-688 fix removed the `no_keywords` kill, exposing this long tail; this entry is the next layer of the same investigation.
+- `PROFIT-EDGE-002` "P2.5 enforcement" — Option A above.
+- `PROFIT-DOSSIER-001` — companion finding; raising matcher quality is *the* lever for raising real (not nominal) dossier coverage.
+- `scripts/simulations/match_score_audit.py` — the regression-anchor harness that validates Option B's safety on the 5 canonical events.
+
+---
+
 ### MAC-ASYNC-001
 
 | Field | Value |
