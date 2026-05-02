@@ -6,6 +6,94 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.29.59] - 2026-05-02
+
+### Added (PROFIT-EDGE-004 — pipeline simulation buildout)
+
+Seven new behavioural-simulation harnesses landed as
+[`scripts/simulations/`](scripts/simulations/) per the plan in
+[`docs/superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md`](docs/superpowers/plans/2026-04-26-pipeline-simulation-buildout-plan.md).
+Each harness pins one previously-uncovered pipeline stage end-to-end
+against the five canonical LLM-positive events from the EDGE-001
+diagnosis (or, for governance / dossier creation, against
+production-shaped synthetic fixtures). All harnesses are read-only —
+they write only to tempdirs owned by the harness itself.
+
+| Harness | Stage pinned | Smoke contracts |
+|---|---|---|
+| [`scripts/simulations/match_score_audit.py`](scripts/simulations/match_score_audit.py) | Match-score gate (`PAPER_MIN_MATCH_SCORE`) — first kill point in the pipeline | anchor in top-3 ≥ 0.06; CLI happy path; KXPSL cross-contamination guard against geo headlines |
+| [`scripts/simulations/blend_task_integration.py`](scripts/simulations/blend_task_integration.py) | Full `BlendTask.process_fast_lane_result` with seeded slow-lane context for KXTRUMPIRAN | per-event BLEND_DECISION emission; KXTRUMPIRAN dossier non-zero disagreement contract; CLI text + JSON |
+| [`scripts/simulations/paper_trade_roundtrip.py`](scripts/simulations/paper_trade_roundtrip.py) | Paper-trade INSERT path against a real `PaperTrader` over a temp DB | one row per accepted event; bankroll Δ == row.cost_dollars; source_multiplier persistence |
+| [`scripts/simulations/trading_queue_handoff.py`](scripts/simulations/trading_queue_handoff.py) | Replicates `main._trading_queue_consumer_task` wiring | FIFO drain; back-pressure no-drop; CLI happy path |
+| [`scripts/simulations/governance_fast_cycle.py`](scripts/simulations/governance_fast_cycle.py) | One fast-cadence governance cycle with `FakeLLM` against a temp filesystem | shadow-mode invariant (`applied=0`); audit JSONL append-only; `GOVERNANCE_READONLY` demotion of real → shadow; CLI happy path |
+| [`scripts/simulations/resolution_calibration.py`](scripts/simulations/resolution_calibration.py) | YES-wins / NO-wins resolution + the PROFIT-CAL-001 calibration callback | bankroll credit math both outcomes; per-lane `record_calibration_check` callback contract; CLI happy path |
+| [`scripts/simulations/dossier_creation.py`](scripts/simulations/dossier_creation.py) | Evidence → dossier flow via `AccumulationTask` against a temp `EvidenceStore` | empty-DB baseline (no dossier at N=0); eager creation at N=1; strict monotonic dossier_version + evidence_count; CLI happy path |
+
+#### `scripts/simulations/_common.py`
+
+Two new immutable fixtures captured from the MacBook trade-log
+archive and used by `match_score_audit`:
+
+* `LLM_POSITIVE_EVENT_HEADLINES_2026_04_26` — production headline that
+  triggered each LLM-positive signal, keyed by event name (Events 3
+  and 5 share `KXTRUMPIRAN-26MAY01` so a ticker-keyed dict is not
+  representable).
+* `LLM_POSITIVE_EVENT_MARKET_TITLES_2026_04_26` — production market
+  title at match time, keyed by ticker.
+
+#### Empirical baselines captured at v0.29.59
+
+* `match_score_audit` — every anchor surfaces in top-3 well above
+  `PAPER_MIN_MATCH_SCORE = 0.06` (KXSBUDGETRES 0.282, KXTRUMPIRAN
+  0.176–0.268, KXPSL 0.147 only on its own headline).
+* `blend_task_integration` — 4/5 events enqueue (KXPSL blocked at G1
+  by post-fix sport-class regime); KXTRUMPIRAN dossier-seeded
+  disagreement 0.05–0.11, well under G3 = 0.20 → no PROFIT-G3-001
+  needed.
+* `paper_trade_roundtrip` — 5/5 events INSERT a `paper_trades` row;
+  bankroll Δ == row.cost_dollars exactly.
+* `trading_queue_handoff` — FIFO holds; 8/8 enqueued candidates drain
+  past `maxsize=2` without drop; producer back-pressure path
+  exercised.
+* `governance_fast_cycle` — 3/3 proposed and 0/0 applied across
+  shadow×2 + real-mode-with-readonly cycles; audit log grows
+  3.7KB → 7.4KB → 11.1KB; cycle-1 prefix preserved on subsequent
+  writes.
+* `resolution_calibration` — YES wins → +$5 payout, pnl=+$2.50,
+  credibility wins=1; NO wins → $0 payout, pnl=−$2.50,
+  credibility losses=1; 3 calibration callbacks per resolution
+  (fast / accumulation / structural); error formula
+  `|estimate − final_resolution|` confirmed.
+* `dossier_creation` — dossier created EAGERLY on N=1 (no minimum-
+  evidence threshold gate). PROFIT-EDGE-002's "12 of 847 active
+  markets had dossiers (~1.4%)" observation is therefore a
+  *coverage* problem (which markets receive evidence at all), not a
+  creation-threshold problem.
+
+#### Test surface
+
+`tests/test_simulations_smoke.py` grew from 13 → 37 smoke tests
+(+24 new pinning the contracts above). All pass on a clean checkout.
+
+#### Notes
+
+* Plan A1 specified the headline fixture as `dict[ticker, str]`;
+  shipped as `dict[event_name, str]` because Events 3 and 5 share
+  `KXTRUMPIRAN-26MAY01` and a ticker-keyed dict cannot represent
+  both. Documented inline at the fixture site.
+* Plan A4 #3 specified
+  `test_roundtrip_source_stats_updated`; substituted with
+  `test_roundtrip_source_multiplier_persists_to_row` because
+  source-stats orchestration lives in `main.py` (called separately
+  from `record_trade`), so the per-row contract is what
+  `paper_trade_roundtrip` can faithfully pin. Documented in the
+  smoke test docstring.
+
+No production code paths changed in this release. The simulations
+themselves are the deliverable.
+
+---
+
 ## [0.29.58] - 2026-04-26
 
 ### Fixed (PROFIT-EDGE-003 — G1 scaled-confidence floor calibration)
