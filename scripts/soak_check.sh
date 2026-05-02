@@ -142,6 +142,15 @@ section "Verdict"
     printf 'investigate before continuing the soak.\n'
 } >>"$REPORT"
 
+# ── 7b. Pending follow-ups (deferred work that the soak gated) ────────────────
+section "Pending follow-ups (deferred during soak)"
+{
+    printf '- **P2.5 — Enable pre-LLM gate enforcement** (ROADMAP row 318). Unblocked by P2.4 closure (commit `d9560c9`, 2026-05-01) at 0.00%% false-positive rate. Deferred to post-soak per Path Y so this baseline got clean attribution. Action when ready: set `ENABLE_PRE_LLM_MATCH_GATE=true` and `PRE_LLM_MATCH_GATE_DIAGNOSTICS_ONLY=false` in `.env` (and flip the `config.py` defaults to match, per P2.3 precedent), `restartbot`, then open a fresh ~72h enforcement-mode observation window before considering enforcement validated.\n'
+    printf '- **PROFIT-CFG-001** — delete dead `KALSHI_GEOPOLITICAL_SERIES` allowlist from `config.py:475-489`. Provably inert (zero callers), deferred to avoid editing `config.py` during this soak window.\n'
+    printf '- **`.env.example`** — `BANKROLL=500.00 -> 50.00` modification still uncommitted on disk. Trivial single-line commit.\n'
+    printf '- **`.gitignore`** — add `data/*.db-shm` and `data/*.db-wal` (currently untracked SQLite WAL artifacts that should be ignored).\n'
+} >>"$REPORT"
+
 # ── 8. Self-cleanup: bootout + remove the trigger plist ───────────────────────
 if [[ -f "$SOAK_PLIST" ]]; then
     launchctl bootout "gui/$(id -u)" "$SOAK_PLIST" 2>/dev/null || \

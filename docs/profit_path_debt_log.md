@@ -763,7 +763,7 @@ Added startup observability that records the first non-empty market cache timest
 | **Title** | Remove deprecated `KALSHI_GEOPOLITICAL_SERIES` dead-code allowlist from `config.py` |
 | **Category** | Code Hygiene / Config Cleanup |
 | **Severity** | LOW |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | LATER |
 | **Owner** | Claude |
 | **Depends On** | Stage 5 Phase 2 (P2.2) 72-hour paper-mode observation window closing |
@@ -794,6 +794,8 @@ Delete `config.py:475-489` (the `NOTE` comment block and the `KALSHI_GEOPOLITICA
 
 **Notes**  
 Deferred until the Stage 5 Phase 2 (P2.2) 72-hour paper-mode observation window closes (opened 2026-04-22 per commit `b86c624`). Rationale: the change is provably safe (no runtime path reads the symbol), but editing `config.py` during an active observation window is avoided as a general rule even when the specific diff is inert. Execute after the window closes.
+
+**CLOSED 2026-05-02 (Claude):** dead-code deleted from `config.py` (block was at lines 562–577 after intervening commits, not the original 475–489 in this entry). `CLAUDE.md:52` warning preserved verbatim. Repo-wide grep confirms zero remaining Python references; the only surviving mention is the CLAUDE.md gotcha. Landed during the v0.29.59 governance Phase 2 shadow soak (no runtime change).
 
 ---
 

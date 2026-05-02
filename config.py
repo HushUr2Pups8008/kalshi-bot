@@ -560,22 +560,6 @@ REDDIT_TOPIC_KEYWORDS: dict[str, frozenset] = {
 REDDIT_MAX_SUBREDDITS: int = 20
 
 # ── Kalshi market filters ─────────────────────────────────────────────────────
-# NOTE: KALSHI_GEOPOLITICAL_SERIES is no longer used by the market cache.
-# Kalshi retired these organised geo series (KXUKR, KXINTL, etc.) — there are
-# no open markets under them. The market cache now uses series-title keyword
-# discovery via _GEO_SERIES_KEYWORDS in analysis/market_matcher.py.
-KALSHI_GEOPOLITICAL_SERIES = [
-    "KXPRESGELECT",
-    "KXINTL",
-    "KXUKR",
-    "KXMIDEAST",
-    "KXCHINA",
-    "KXNATO",
-    "KXRUSSIA",
-    "KXIRAN",
-    "KXNK",
-]
-
 # Series ticker PREFIXES to reject — used as a second filter after keyword
 # discovery to drop sports leagues from geo-relevant countries (e.g. Saudi Pro
 # League matches "saudi", J-League matches "japan").
