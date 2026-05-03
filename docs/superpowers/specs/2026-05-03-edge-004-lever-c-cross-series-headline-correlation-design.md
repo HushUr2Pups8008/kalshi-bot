@@ -44,9 +44,9 @@ def _headline_hash(headline: str) -> str:
 - **Catches:** identical headlines (the FISA case shape).
 - **Misses:** semantically-identical headlines with different punctuation, case, or trailing source-suffix (e.g., `"... - VitalLaw.com"` vs `"...   -   VitalLaw.com"` vs no suffix).
 - **Risk:** zero false-positives (two distinct headlines never collide).
-- **Verdict:** sufficient for the FISA-shape canonical case. Use this for the v1 implementation.
+- **Verdict (revised post-Codex audit):** **fallback — not v1.** Codex's 2026-05-03 audit validated the §3.2 normalized surface at 49.2 % overlap; §3.1 is a strict subset of §3.2 and would understate the catch. §3.1 stays documented here as the conservative fallback if §3.2's normalized regex turns out to over-collapse in production.
 
-### 3.2 Normalized-string hash (moderate)
+### 3.2 Normalized-string hash (moderate) — **v1 implementation**
 
 ```python
 def _headline_hash(headline: str) -> str:
@@ -56,10 +56,10 @@ def _headline_hash(headline: str) -> str:
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
 ```
 
-- **Catches:** the 3.1 set + cosmetic variants.
+- **Catches:** the §3.1 set + cosmetic variants (case, punctuation, trailing source-suffix, whitespace).
 - **Misses:** semantically-identical headlines with rewordings (paraphrases).
 - **Risk:** small false-positive rate (regex-based normalization can collide on edge cases).
-- **Verdict:** v2 candidate if 3.1's empirical hit rate is too narrow.
+- **Verdict (revised post-Codex audit):** **v1 — Codex's 2026-05-03 audit (`docs/governance/2026-05-03-cross-series-headline-overlap-audit.md` + `scripts/simulations/cross_series_headline_overlap_audit.py`) validated this surface at 49.2 % overlap on the 13-day archive.** Use exactly the normalization rules in Codex's audit script so the production gate matches the empirical sizing.
 
 ### 3.3 Token-overlap-Jaccard hash (semantic)
 

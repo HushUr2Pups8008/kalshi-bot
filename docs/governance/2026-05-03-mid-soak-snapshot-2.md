@@ -1,10 +1,12 @@
-# Phase 2 governance shadow-soak — snapshot 2 (~6 h delta from snapshot 1)
+# Phase 2 governance shadow-soak — snapshot 2 (~4 h soak-hour delta from snapshot 1)
 
-**Generated:** 2026-05-03 (~19:30Z)
+**Generated:** 2026-05-03 (~19:30Z, latest cycle 19:29Z)
 **Soak tracker:** `PROFIT-PHASE2-001`
 **Source:** `logs/governance/decisions.jsonl`
 **Reviewer:** Claude
-**Baseline:** `docs/governance/2026-05-03-mid-soak-health-report.md` (snapshot 1, ~13:30Z)
+**Baseline:** `docs/governance/2026-05-03-mid-soak-health-report.md` (snapshot 1; latest cycle 15:28Z, soak elapsed 44.5 h)
+
+> **Time-axis note:** the "delta" throughout this report is the *soak-hour* delta (latest-cycle timestamp difference), not the report-generation wall-clock delta. Snapshot 1 was generated ~13:30Z but its data slice extended through latest-cycle 15:28Z (+5.5 h after wall-clock-of-generation due to the immediate-prior cycle finishing during analysis). Snapshot 2 generated ~19:30Z, latest-cycle 19:29Z. Soak-hour delta is 48.5 − 44.5 = 4.0 h, not the 6 h wall-clock difference.
 
 ## TL;DR
 

@@ -146,3 +146,61 @@ def test_blendtask_records_carry_post_blend_edge_not_fast_lane(tmp_path: Path):
         if r["reason"] in blendtask_reasons:
             assert r["edge"] == pytest.approx(r["model_probability"] - r["market_price"])
             assert r["market_price"] == 0.50
+
+
+# ---------------------------------------------------------------------------
+# Per Codex 2026-05-03 review (commit e5b7213): the previous test set pins
+# only the synthesizer + Python aggregator. It does not pin that the actual
+# `scripts/bothealth.sh` script will surface a Skipped trades section after
+# the OBS-003 update lands. Add a strict-xfail test that pins the contract
+# on the script itself.
+# ---------------------------------------------------------------------------
+
+_BOTHEALTH_OBS003_XFAIL_REASON = (
+    "OBS-003 + bothealth.sh update not yet landed. The script currently has "
+    "zero SKIPPED-reason aggregation logic; once the OBS-003 fix lands and "
+    "bothealth.sh is updated to surface the new histogram (per OBS-003 spec "
+    "§7 step 4), this test xpasses and CI forces marker removal."
+)
+
+
+@pytest.mark.xfail(reason=_BOTHEALTH_OBS003_XFAIL_REASON, strict=True)
+def test_bothealth_script_aggregates_skipped_reasons():
+    """Pin the OBS-003-required `bothealth.sh` aggregation behaviour.
+
+    Source-inspection contract: post-OBS-003 the script must reference the
+    SKIPPED stream (`logs/trades/live/trades.jsonl` filtered to
+    `type==SKIPPED`) and emit a per-reason histogram. Today the script does
+    not handle SKIPPED records at all (verified during 2026-05-03 spec
+    drafting; `grep -E 'SKIPPED|skip_reason' scripts/bothealth.sh` returns
+    empty). Once OBS-003 lands and bothealth gains the aggregation hook,
+    this test xpasses.
+
+    Pinned via source-inspection rather than subprocess-shell-out to avoid
+    requiring a populated repo state (paper_trades.db, evidence_store.db,
+    governance logs) for every test invocation. The post-OBS-003 bothealth
+    update can pair this contract with a richer integration test if needed.
+    """
+    from pathlib import Path
+    repo_root = Path(__file__).resolve().parent.parent
+    bothealth = repo_root / "scripts" / "bothealth.sh"
+    assert bothealth.exists(), "scripts/bothealth.sh must exist"
+    body = bothealth.read_text(encoding="utf-8")
+    # Two markers must appear post-OBS-003: a section header for skipped
+    # trades and a reference to the SKIPPED record type or `reason` field.
+    has_skipped_section = any(
+        token in body
+        for token in ("Skipped trades", "skipped_trades", "SKIPPED reason", "skipped trades")
+    )
+    has_skipped_lookup = any(
+        token in body
+        for token in ('"type": "SKIPPED"', '"type":"SKIPPED"', "type=SKIPPED", '"reason"')
+    )
+    assert has_skipped_section, (
+        "bothealth.sh must surface a Skipped trades section once the OBS-003 "
+        "update lands (per OBS-003 spec §7 step 4)."
+    )
+    assert has_skipped_lookup, (
+        "bothealth.sh must filter on SKIPPED type or read the `reason` field "
+        "to produce the histogram per OBS-003 spec §5."
+    )
