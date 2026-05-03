@@ -109,10 +109,10 @@ Single-PR-equivalent change, lands as one commit:
 4. **Pre-deploy archive replay**:
    - One-shot script (committed under `scripts/simulations/match_b_prime_dry_run.py` or similar — soak-safe naming pattern) that replays the full `MATCH_DIAGNOSTIC` archive against the new predicate locally, counting how many records would flip from `survived → suppressed`.
    - Acceptance: post-fix flip count is in the 600–1,300 range (consistent with the 2026-05-02 forensic addendum's revised 1,207 estimate; the wider band tolerates archive-window drift).
-   - Acceptance: zero canonical-event tickers (KXSBUDGETRES-26APR-APR28, KXSBUDGETRES-26APR-APR25, KXTRUMPIRAN-26MAY01, KXPSL-26-PZA, KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH from PROFIT-OBS-003's positive-edge silent-exit) appear in the flip set.
+   - Acceptance: zero canonical-event *headlines* (paired with their canonical tickers KXSBUDGETRES-26APR-APR28, KXSBUDGETRES-26APR-APR25, KXTRUMPIRAN-26MAY01, KXPSL-26-PZA, KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH from PROFIT-OBS-003's positive-edge silent-exit) appear in the flip set. **Important:** the canonical *tickers* themselves WILL appear in `MATCH_SUPPRESSED` for non-canonical low-quality headlines, and that is correct behavior — Codex's 2026-05-03 anchor audit (`docs/governance/2026-05-03-match001-bprime-anchor-sizing.md`) found 399 legitimate low-quality suppressions on `KXTRUMPIRAN-26MAY01` alone. The guard is headline-level, not ticker-level.
 5. **Post-deploy 24-hour monitoring**:
    - `MATCH_SUPPRESSED` event count over the first 24 h post-deploy. Expected: ~1.5–2.5× the prior 24h rate (proportional to the ~498 → ~1,200–1,700 archive-rate scaling).
-   - Confirm no canonical-event ticker appears in `MATCH_SUPPRESSED` records. Any false-positive on a canonical ticker is grounds for immediate revert.
+   - Confirm no canonical-event *headline* (paired with its canonical ticker) appears in `MATCH_SUPPRESSED` records. Any false-positive on a canonical *headline* (not just the ticker) is grounds for immediate revert.
 6. **Closure**:
    - Update PROFIT-MATCH-001 entry: status OPEN → COMPLETE, citing harness pass + archive-replay range + 24h `MATCH_SUPPRESSED` count.
    - Update top-of-file counters: Open MEDIUM 1 → 0; Items COMPLETE += 1.
@@ -122,8 +122,8 @@ Single-PR-equivalent change, lands as one commit:
 
 - `analysis/market_matcher.py:_meets_suppression_criteria` updated; `_token_not_in_ticker` replaced with `_has_supporting_non_ticker_token` (the asymmetry fix).
 - `scripts/simulations/match_score_audit.py` re-run post-fix; all 5 canonical events still surface their anchor in top-3 at score ≥ 0.06.
-- Pre-deploy archive replay confirms ~600–1,300 records flip from survived → suppressed; zero canonical-event tickers in the flip set.
-- Post-deploy 24-hour `MATCH_SUPPRESSED` count rises proportionally; no canonical-event ticker appears in `MATCH_SUPPRESSED`.
+- Pre-deploy archive replay confirms ~600–1,300 records flip from survived → suppressed; zero canonical-event *headlines* (paired with their canonical tickers) in the flip set. Codex's 2026-05-03 anchor audit landed the empirical: 1,076 keys flip; 0/5 canonical headlines suppressed; canonical tickers do legitimately appear in non-canonical low-quality suppressions and that is correct.
+- Post-deploy 24-hour `MATCH_SUPPRESSED` count rises proportionally; no canonical-event *headline* (paired with its canonical ticker) appears in `MATCH_SUPPRESSED`. Headline-level guard, not ticker-level.
 - Two new smoke tests in `tests/test_market_matcher.py` pin the new predicate. Full pytest suite green.
 
 ## 8. Rollback
@@ -138,7 +138,7 @@ The change is a single conjunction in one file. Revert is trivial:
 + and _token_not_in_ticker
 ```
 
-Trigger to revert: any canonical-event ticker shows up in `MATCH_SUPPRESSED` records during the post-deploy 24-hour window, OR `MATCH_SUPPRESSED` count drops below the prior baseline (suggesting the predicate broke the other direction and now suppresses *less* than before, which would mean the refactor inverted a logical operator).
+Trigger to revert: any canonical-event *headline* (paired with its canonical ticker) shows up in `MATCH_SUPPRESSED` records during the post-deploy 24-hour window, OR `MATCH_SUPPRESSED` count drops below the prior baseline (suggesting the predicate broke the other direction and now suppresses *less* than before, which would mean the refactor inverted a logical operator). The bare canonical ticker appearing in `MATCH_SUPPRESSED` is *not* a revert trigger — the guard is headline-level.
 
 ## 9. Soak-window contract
 
