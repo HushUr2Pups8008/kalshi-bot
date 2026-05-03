@@ -43,12 +43,13 @@ Each lever lists: target mechanism, expected impact direction, blast radius, siz
 ### Lever B — G1 calibration tightening (post-OBS-003)
 
 - **Mechanism:** the G1 confidence floor of 0.05 in `analysis/decision_blender.py` blocks 197/240 silent exits. Lowering it to 0.04 / 0.03 admits a fraction of those candidates to the executor.
-- **Expected impact:** sizable on trade-rate (197 candidates currently stuck behind the gate); unknown on EV (the gate exists for a reason — admitting low-confidence candidates may surface losses).
+- **Codex 2026-05-03 G1 counterfactual** (`docs/governance/2026-05-03-g1-admittance-counterfactual.md`): 0.04 admits 32/197, 0.03 admits 65/197, but mean predicted edge is 0.001-0.002 and only 1-2 candidates clear `paper_min_edge=0.02`. **Lever B is not a trade-rate lever in expectation** — it's an attribution / calibration lever. Spec details in `2026-05-03-edge-004-lever-b-g1-calibration-design.md`.
+- **Expected impact (revised):** small on trade-rate (1-2 trades per 14 days predicted); meaningful on attribution (G1 SKIPPED count drops 30 %+ at 0.04 floor; admitted candidates expose downstream gate behavior). The "right direction" question Codex's data partially answers: floor is approximately correct as an EV gate.
 - **Blast radius:** one constant in `decision_blender`; widely-dependent file.
-- **Sizing cost:** MED — requires post-OBS-003 SKIPPED stream to attribute counter-factual edges to admitted candidates. Cannot size meaningfully until OBS-003 lands.
-- **Risk shape:** HIGH. This is a calibration change to a load-bearing gate. Wrong direction = trade-rate explosion + Kelly-fidelity loss. Right direction = right-sized signal admission. Empirically uncertain at draft time.
+- **Sizing cost:** ZERO additional — Codex's counterfactual covered it pre-deploy.
+- **Risk shape:** MED (downgraded from HIGH). The wrong-direction concern (trade-rate explosion) is empirically falsified for 0.04 / 0.03 floors; admitted candidates have low edge so no admission cascade. Still high enough to require OBS-003 attribution clarity for post-deploy validation.
 - **Dependencies:** **OBS-003 must land first** (per OBS-003 spec §11 explicit deferral). MATCH-001 (B') landing first is also recommended since the post-MATCH-001 OPPORTUNITY mix is materially different from the current mix.
-- **Verdict:** evaluate after MATCH-001 + OBS-003 land and produce a clean 14-day post-fix attribution dataset. Earliest evaluation: 2026-05-23. Earliest implementation: 2026-06-06 (post-evaluation soak).
+- **Verdict:** lands as an attribution-data exercise IF Lever A doesn't close EDGE-004. Earliest implementation: 2026-06-06 (post-base-stack stabilization + Lever-A first-feed verdict).
 
 ### Lever C — Cross-series headline correlation (EXEC-002 Approach 2)
 
