@@ -204,3 +204,49 @@ def test_bothealth_script_aggregates_skipped_reasons():
         "bothealth.sh must filter on SKIPPED type or read the `reason` field "
         "to produce the histogram per OBS-003 spec §5."
     )
+
+
+@pytest.mark.xfail(
+    reason=(
+        "Codex review F2 follow-up: bothealth.sh must support a "
+        "`SKIPPED_LOG_OVERRIDE` env var so the OBS-003 §7 step 4 validation "
+        "harness can point the aggregator at a synthetic-fixture JSONL. "
+        "Today the script reads only the hardcoded `logs/trades/live/trades.jsonl` "
+        "path; once the OBS-003 update adds the env override + aggregation, "
+        "this xfail flips xpass and CI forces marker removal."
+    ),
+    strict=True,
+)
+def test_bothealth_script_honours_skipped_log_override_env_var():
+    """F2 (Codex review of `f786246`): pin the env-override mechanism that
+    lets a test (or operator) point bothealth.sh at a synthetic SKIPPED
+    JSONL fixture.
+
+    Source-inspection contract: the script must reference
+    `SKIPPED_LOG_OVERRIDE` (as an env-var consumed at script start) AND
+    use it as a path source for the SKIPPED-stream read. Subprocess-style
+    integration testing is deferred until the OBS-003 prod-code commit
+    actually updates bothealth.sh — at that point this test xpasses and
+    a richer subprocess invocation can be added in the same commit.
+    """
+    from pathlib import Path
+    repo_root = Path(__file__).resolve().parent.parent
+    bothealth = repo_root / "scripts" / "bothealth.sh"
+    assert bothealth.exists(), "scripts/bothealth.sh must exist"
+    body = bothealth.read_text(encoding="utf-8")
+    assert "SKIPPED_LOG_OVERRIDE" in body, (
+        "bothealth.sh must accept a `SKIPPED_LOG_OVERRIDE` env var so the "
+        "OBS-003 validation harness can point the aggregator at a synthetic "
+        "JSONL fixture (per OBS-003 spec §7 step 4 + Codex review F2 of "
+        "commit f786246). Today the script reads only the hardcoded "
+        "`logs/trades/live/trades.jsonl` path."
+    )
+    # Sanity-check: the env var is *used* in a path-resolution expression,
+    # not just declared. Look for the `${SKIPPED_LOG_OVERRIDE:-` default-
+    # expansion shape OR the unconditional reference.
+    used_with_default = "${SKIPPED_LOG_OVERRIDE:-" in body or '"$SKIPPED_LOG_OVERRIDE"' in body
+    assert used_with_default, (
+        "bothealth.sh references SKIPPED_LOG_OVERRIDE but does not use it as "
+        "a path source. Expected either `${SKIPPED_LOG_OVERRIDE:-default}` "
+        'or `"$SKIPPED_LOG_OVERRIDE"`. Pure declaration without use is a no-op.'
+    )
