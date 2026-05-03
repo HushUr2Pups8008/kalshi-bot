@@ -10,12 +10,12 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-05-02 |
+| Last Updated | 2026-05-03 |
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 44 |
-| Open — HIGH | 4 |
+| Open — HIGH | 5 |
 | Open — MEDIUM | 1 |
 | Open — LOW | 2 |
 | Items IN_PROGRESS | 1 (PROFIT-PHASE2-001 — soak clock running, no operator action until 2026-05-15) |
@@ -2015,10 +2015,19 @@ The original spec §8.5 floor was a single time-based gate (≥14 days). After t
 - `PROFIT-LLM-001` (LOW, OPEN) tracks the post-Phase 2 decision on whether to unify the signal-analyzer LLM to `qwen3:14b` (or whatever model Phase 2 validates). Do not bundle that decision with PHASE2-001 acceptance.
 - The runbook's "Common failures" section is the first stop for any per-cycle anomaly (Ollama unreachable, parse-error rate, KillSwitchActive). This entry is the *outcome* tracker; failures during the soak are individual incidents that don't necessarily block acceptance unless they're systemic.
 
+**2026-05-03 mid-soak halt — §8.5 manual-review criterion only** — operator-approved per session decision 2026-05-03 ~13:30 UTC. The 14-day clock is **not** reset. Hard ceiling 2026-05-16 ~04:12 UTC stays put — newly-discovered bugs do not extend the window; the soak is being treated as a bug-discovery opportunity that must converge to acceptance within the original budget. Concretely:
+
+- **Halted gate (one of six):** the §8.5 "Quality — Manual review marks ≥85% of sampled decisions reasonable" criterion is paused. Reason: `PROFIT-GOV-002` (filed 2026-05-03) confirms qwen3:14b rubber-stamps the `disable_source` candidates the heuristic feeds it, so the manual-review reasonable-rate is a confounded measurement (every flagged candidate is genuinely off-topic; agreement looks correct without proving discrimination). The 74 pre-fix decisions in `decisions.jsonl` are not authoritative for this gate.
+- **Continuing gates (five of six):** `Time` (≥7d post-reset), `Volume` (≥30 post-reset DECISIONs — already met at 74), `Cadence coverage` (≥7 deep cycles), `Candidate diversity` (≥3 distinct targets — already met at 11), `Safety: applied=` no growth (intact; YAML absent), `Safety: KILL_SWITCH = 0` (intact). Launchd cycles continue running; their evidence still counts toward these criteria.
+- **Resume condition for §8.5 manual-review:** `PROFIT-GOV-002` closes (rubber-stamp fix lands and the negative-control harness shows `NEG_A_high_signal_source` returns `no_action` with confidence ≥ 0.7), then a fresh ≥30-decision window accumulates *post-fix*, then the manual-review sample is drawn from that post-fix window only.
+- **Hard-ceiling consequence:** if GOV-002 cannot land + a fresh 30-decision window cannot accumulate before 2026-05-16 ~04:12 UTC, Phase 2 acceptance fails by the time gate, not by the manual-review gate. That is the intended outcome — the budget enforces convergence rather than letting bug-discovery push the bar back indefinitely.
+- **Operational guidance during halt:** continue the runbook's daily monitoring grep block. PARSE_ERROR / VALIDATION_ERROR / KILL_SWITCH events still trigger investigation. Do not change the launchd cadence or the model. The harness in `scripts/simulations/governance_negative_control.py` is the iteration loop for the GOV-002 fix; it does not touch production state.
+
 **Related**
 
 - `PROFIT-CUTOVER-001` (opened 2026-05-01) — direct dependency; the soak clock cannot tick on a host that doesn't have the Studio's `qwen3:14b` configuration and the migrated state.
 - `PROFIT-LLM-001` (open, LOW, deferred) — explicitly post-Phase 2; do not unify until PHASE2-001 closes.
+- `PROFIT-GOV-002` (opened 2026-05-03, HIGH) — blocks the §8.5 manual-review criterion; see the 2026-05-03 mid-soak halt note above.
 - ROADMAP `GOV.P3` — direct downstream consumer; `GOV.P3` is BLOCKED until PHASE2-001 closes.
 - `docs/governance/PHASE2_RUNBOOK.md` — operator-facing companion document; this entry is the engineering tracker.
 
@@ -2321,6 +2330,82 @@ The discriminator is the *non-ticker-token* overlap count: keep the guard only w
 *Pre-fix audit lever.* The existing `MATCH_DIAGNOSTIC` records carry both `matched_tokens` and `ticker` — every claim above is verifiable from the existing trade-log archive without code change. A read-only count of `len(set(matched_tokens) - tokenize(ticker))` per `MATCH_DIAGNOSTIC` is the immediate empirical answer to "how many records would (B′) suppress vs. preserve". That count is *not* run in this addendum — running it requires invoking the matcher's tokenizer or replaying the harness, which we are deferring to the post-soak fix window so that the empirical baseline and the fix land against the same code state.
 
 *Severity unchanged.* MEDIUM is correct. The (B′) refinement is the right scope; severity stays where the entry placed it because the lever is the same and the stale-Option-B framing did not understate the upside.
+
+---
+
+### PROFIT-GOV-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-GOV-002 |
+| **Title** | qwen3:14b rubber-stamp bias on the Phase 2 `disable_source` prompt — confirmed via offline negative-control probe |
+| **Category** | Governance / LLM Behaviour |
+| **Severity** | HIGH (blocks Phase 3 real-mode flip; invalidates `PROFIT-PHASE2-001` §8.5 "≥85% reasonable" gate as currently measured — see PHASE2-001 mid-soak halt note) |
+| **Status** | OPEN |
+| **Priority** | NOW (must be resolved within the existing soak window, hard ceiling 2026-05-16 ~04:12 UTC; the 14-day clock is intentionally not extended for newly-discovered bugs) |
+| **Owner** | Claude |
+| **Depends On** | — |
+| **Blocks** | `PROFIT-PHASE2-001` §8.5 acceptance (manual-review criterion), Governance Phase 3 real-mode flip (per ROADMAP `GOV.P3`), Phase 4 Claude-API tier |
+
+**Description**
+
+The 2026-05-02 Phase 2 monitoring read found 74-of-74 `GOVERNANCE_DECISION` events were `disable_source` with zero `no_action`. The architectural slice of that finding is benign (only the `_disable_source_candidates` selector is implemented in Phase 2; `_disable_keyword_candidates` and `_tune_threshold_candidates` are explicit Phase-4 placeholders per `governance/evidence.py:96–114`). The remaining open question — *within the disable_source binary, is the LLM actually discriminating, or rubber-stamping?* — was answered empirically by the 2026-05-03 negative-control probe documented below.
+
+**The model is rubber-stamping.** Specifically, qwen3:14b on the current `DISABLE_SOURCE_TEMPLATE` (`governance/prompts.py:82–98`) at temperature 0.0 with `think=False` returns `disable_source` with high confidence on a synthetic high-signal candidate that should obviously be `no_action`, and confabulates plausible-sounding domain reasoning to justify the verdict.
+
+**Why it matters to profitability / safety / reliability**
+
+1. **`PROFIT-PHASE2-001` §8.5 manual-review gate ("≥85% reasonable") is unmeasurable in its current form.** Production traffic only contains genuinely-bad candidates (the heuristic selector at `governance/evidence.py:36–88` only flags subreddits with `0 fresh_pass + 0 match` over 168h, or alignment-anchor-rate ≥ 0.95). The LLM's 100% agreement rate on those candidates *looks* correct because the candidates *are* genuinely disable-worthy, but the LLM is not actually doing the discrimination work the gate is meant to validate. The model would also agree with high confidence on a *good* source presented in the same shape — which the negative-control probe confirms.
+2. **Phase 3 real-mode flip is HIGH-RISK without resolving this.** Phase 3 promotes `proposed_*` decisions to `applied_*` in `runtime_overrides.yaml`. A rubber-stamping LLM's proposals being auto-applied would systematically remove sources whenever the upstream heuristic flags them — including any false-positive heuristic flag, since the LLM is no longer a real second check.
+3. **The §8.5 sample-size question** (per the same monitoring read: 74 raw decisions decompose to ~12 distinct `(target, reasoning)` tuples — qwen3:14b emits byte-identical reasoning for the same target across cycles) is downstream of this entry. Even if the rubber-stamp bias is fixed, the ~7× duplication factor means the §8.5 manual-review sampling protocol needs to weight by distinct decisions, not raw count.
+
+**Evidence / Source**
+
+- `scripts/simulations/governance_negative_control.py` (added in this commit) — 3-probe harness that calls `governance.llm.LocalQwenLLM.complete` with the production `governance.prompts.render_prompt("disable_source", evidence)` output, never touches `logs/governance/decisions.jsonl` or `data/`, and is therefore soak-safe by construction.
+- 2026-05-03 13:01:56 → 13:02:11 UTC probe run, model = `qwen3:14b` via Ollama at `http://localhost:11434`, three calls totaling 14.3 wall-clock seconds:
+
+  | Probe | Inputs | Expected | Observed | Confidence | Verdict |
+  |---|---|---|---|---|---|
+  | `POS_unresolvedmysteries` | replay of production `gd_2026-05-02_0001` evidence (23 ingestion / 0 fresh / 0 match, off-topic cold-case headlines) | `disable_source` | `disable_source` | 0.9 | reproduces production decision |
+  | `NEG_A_high_signal_source` | 50 ingestion / 15 fresh-pass / 10 matches / `anchor_rate=0.40` (LLM disagreed with market 60% of cases — strong signal) / on-topic Iran-diplomacy + Senate-budget headlines | `no_action` | **`disable_source`** | 0.75 | **rubber-stamp confirmed** |
+  | `NEG_B_borderline_source` | 15 ingestion / 2 fresh-pass / 1 match / `anchor_rate=0.70` / mixed headlines | ambiguous | `disable_source` | 0.85 | calibration over-confident toward disable |
+
+- Two distinct failure modes in the NEG_A response:
+  1. **Polarity inverted on `anchor_rate`.** The model wrote *"low match quality (LLM anchor rate of 40.0%)"*. Per `governance/evidence.py:62–84` the alignment-audit selector flags `anchor_rate ≥ 0.95` as a *disable* signal — high anchor rate means the LLM agrees with market price = no information. `anchor_rate=0.40` is the opposite: LLM disagrees with market 60% of cases = high information value = a source the bot should KEEP. The model treated low anchor rate as bad.
+  2. **Confabulated framing.** The model wrote *"10 out of 50 ingestion events produced a MATCH_DIAGNOSTIC, suggesting poor signal-to-noise ratio"*. There is no signal-to-noise metric in the prompt; the model invented one and used it to justify the disable verdict.
+- Determinism check: temperature is 0.0 in `governance/llm.py:212`. The 74-decision production sample shows byte-identical reasoning across cycles for the same `(target, evidence)` tuple. Rubber-stamp behaviour is therefore deterministic, not a sampling artifact.
+
+**Proposed Fix**
+
+Iterate on the prompt against the negative-control harness as the regression gate. Three classes of intervention worth testing, ranked by cost:
+
+1. **Prompt clarification (cheapest).** Restate the `anchor_rate` semantics inline so the model cannot invert the polarity: e.g. "The `anchor_rate` field is the rate at which our LLM final probability *agreed with* market price. **High values (≥0.95) indicate the source contributes no edge** and is a disable candidate. **Low values indicate informative signal — the source disagrees with market price often** and should usually NOT be disabled regardless of other metrics."
+2. **Counter-argument step (moderate).** Add a required output field `argument_against_action` that the model fills *before* picking the action: "Before deciding, write one sentence arguing for keeping this source. If your argument is plausible, output `no_action`." Forces the model to consider the alternative.
+3. **Two-pass deliberation (expensive).** Two LLM calls per candidate: first call returns `argument_for_disable + argument_against_disable`; second call (or post-process) picks the action. Highest cost but cleanest discrimination.
+
+(1) is the right first attempt because it is testable in seconds via the harness and fits within the soak window's hard ceiling. (2) is the right fallback if (1) does not flip NEG_A. (3) is the right move if (2) also fails — at that point the prompt template is structurally inadequate and the spec needs a richer schema.
+
+**Acceptance Criteria**
+
+- The negative-control harness `scripts/simulations/governance_negative_control.py` is the regression gate. The post-fix run must satisfy:
+  - `POS_unresolvedmysteries` returns `disable_source` (production reproducer must continue to work; if it doesn't, the prompt change has broken the genuine-bad-source path).
+  - **`NEG_A_high_signal_source` returns `no_action`** with confidence ≥ 0.7. This is the load-bearing criterion.
+  - `NEG_B_borderline_source` returns either `no_action` or `disable_source` — operator decision based on whether the reasoning shows the model considered the alternative.
+- `tests/test_governance_prompts.py` snapshot tests updated to pin the new prompt revision. (Ensures the post-fix prompt is locked against drift.)
+- Before resuming the §8.5 manual-review gate in `PROFIT-PHASE2-001`: a fresh ≥30-decision window must accumulate post-fix and the manual-review sample drawn from that window only. The 74 pre-fix decisions are not authoritative for the gate.
+
+**Notes**
+
+- The 74 pre-fix `disable_source` proposals in `logs/governance/decisions.jsonl` are NOT applied (`applied=False`, shadow mode) and `data/runtime_overrides.yaml` does not exist. Production safety is intact. This entry is purely about Phase 2 *acceptance evidence quality*, not production behaviour.
+- The harness must continue to be soak-safe across iteration. Specifically, do not have it write to `logs/governance/`, `data/`, or any path under `transfer/`. Output to stdout only; `--json` for machine-readable. Already enforced in the current implementation.
+- This finding does not affect the operational layer of `PROFIT-PHASE2-001`: cycle reliability, `applied=` invariant, KILL_SWITCH count, error rate. Those gates continue to accumulate evidence at the launchd cadence and remain valid acceptance criteria.
+
+**Related**
+
+- `PROFIT-PHASE2-001` — direct dependency. The mid-soak halt note added 2026-05-03 records that the §8.5 manual-review criterion is paused pending GOV-002 resolution; the operational criteria continue.
+- `PROFIT-GOV-001` (closed 2026-05-02) — neighbour; resolved a different qwen3 + Ollama interaction (empty `{}` from `format=json` + thinking phase). GOV-002 is a behavioural bias on the same model; not a transport-layer bug.
+- `PROFIT-LLM-001` (open, LOW) — post-Phase 2 unification of the signal-analyzer LLM. GOV-002 is a precondition: a unified model must clear the negative-control harness before it can replace the signal-analyzer's qwen2.5:7b.
+- `scripts/simulations/governance_negative_control.py` — the regression harness this entry's acceptance criteria pin against.
 
 ---
 
