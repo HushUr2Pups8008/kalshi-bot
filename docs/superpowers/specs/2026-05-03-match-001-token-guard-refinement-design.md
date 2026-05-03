@@ -89,14 +89,77 @@ The 5 canonical LLM-positive events in `scripts/simulations/_common.py:LLM_POSIT
 
 Events 3 and 5 are the load-bearing safety case. Both retain non-ticker support tokens that pass the new guard. The fix preserves every canonical event's anchor in the top-3 at score ≥ 0.06.
 
+## 5.1 Implementation gotcha — `_tokenize` vs substring (added 2026-05-03 post-Codex simulation)
+
+**Spec §2 / §6 step 1 propose** computing the new predicate as a set difference against `_tokenize(market.ticker)`:
+
+```python
+ticker_tokens = _tokenize(market.ticker)
+non_ticker_overlap = overlap - ticker_tokens
+_has_supporting_non_ticker_token = bool(non_ticker_overlap)
+```
+
+**This formulation is wrong** under the existing `_tokenize` (`analysis/market_matcher.py:128-132`). Verified empirically:
+
+```
+>>> _tokenize("KXTRUMPIRAN-26MAY01")
+{'kxtrumpiran-26may01'}        # one hyphenated token
+>>> _tokenize("KXFISAEXTEND-26APR-MAY01")
+{'kxfisaextend-26apr-may01'}    # one hyphenated token
+```
+
+`_tokenize` keeps hyphens (`re.sub(r"[^\w\s-]", " ", ...)` preserves `-`; `text.split()` splits only on whitespace). A Kalshi ticker therefore tokenizes to a single hyphenated string, which almost never matches any short overlap token (`trump`, `iran`, etc.). Under set-difference semantics, `non_ticker_overlap` is **always essentially the full overlap**, so `_has_supporting_non_ticker_token` is **almost always True**, so suppression is **almost always BLOCKED**. The spec as written produces a near-no-op fix.
+
+**Codex's 2026-05-03 sizing simulation** (`docs/governance/2026-05-03-match001-bprime-anchor-sizing.md` + `scripts/simulations/match001_bprime_anchor_sizing.py`) does NOT use this formulation. It uses **substring containment** against the raw ticker text:
+
+```python
+# scripts/simulations/match001_bprime_anchor_sizing.py:bprime_suppresses
+ticker_lower = _ticker(match).lower()
+has_supporting_non_ticker = any(token not in ticker_lower for token in overlap)
+return (not has_supporting_non_ticker) and (near_threshold_weak or pure_single_entity)
+```
+
+This produces 1,076 keys flip from kept → suppressed across the 13-day archive — the empirical basis for the entire MATCH-001 (B') landing case.
+
+**The spec text and the simulation diverge on the predicate.** Both are functionally describing "all overlap tokens are inside the ticker text," but only the simulation correctly captures it under the existing `_tokenize`. The spec's set-difference form would produce ~0 flips because `_tokenize` doesn't split hyphenated tickers.
+
+**Codex 2026-05-03 tokenization-equivalence audit** (`docs/governance/2026-05-03-match001-tokenization-equivalence-audit.md` + `scripts/simulations/match001_tokenization_equivalence_audit.py`) independently confirmed the divergence on 2,838 archived `MATCH_DIAGNOSTIC` records:
+
+| interpretation | suppressed keys |
+|---|---:|
+| substring membership (simulation) | **1,076** |
+| `_tokenize(ticker)` set-difference (literal spec text) | **0** |
+| symmetric difference | **1,076** (100 % divergence) |
+
+Every single canonical example diverged: `_tokenize('KXTRUMPIRAN-26MAY01') = ['kxtrumpiran-26may01']` (single hyphenated token); matched tokens like `trump` / `iran` are non-elements of that singleton; set-difference returns the full overlap; suppression always blocked. The substring path correctly identifies these as ticker-substring matches and suppresses.
+
+**Resolution at landing time** — the implementer must choose ONE of:
+
+(a) **Match the simulation: substring containment.** Replace the proposed set-difference with the substring form Codex's simulation uses:
+```python
+ticker_lower = market.ticker.lower()
+_has_supporting_non_ticker_token = any(token not in ticker_lower for token in overlap)
+_meets_suppression_criteria = (
+    bool(heuristic_flags)
+    and not _has_supporting_non_ticker_token
+    and (_near_threshold_weak or _pure_single_entity)
+)
+```
+This is the **recommended** path. It matches the simulation's 1,076-flip estimate exactly and inverts the existing pre-fix predicate cleanly. The spec's "asymmetry fix" framing still applies — pre-fix suppression fires when overlap doesn't touch ticker; post-fix suppression fires when overlap is entirely subsumed by ticker text.
+
+(b) **Define a ticker-specific tokenizer that splits on hyphens.** E.g., `re.split(r'[-\s]+', text.lower())`. Then the spec's set-difference form works as written, but the simulation's harness needs to be updated to use the new tokenizer too — otherwise the 1,076 estimate diverges from production behavior. **More work, more risk; not recommended.**
+
+Pre-deploy validation must include a ticker-by-ticker comparison between the chosen production predicate and Codex's simulation script. If they diverge for any non-trivial subset of `MATCH_DIAGNOSTIC` records, one of them is wrong.
+
+This gotcha was caught during 2026-05-03 spec-implementation deep-dive prior to landing day; documented here so the implementer doesn't blindly transcribe the spec §2 code into production.
+
 ## 6. Implementation plan
 
 Single-PR-equivalent change, lands as one commit:
 
 1. **Source change** (`analysis/market_matcher.py`):
-   - Tokenize the market ticker via the existing `_tokenize` helper (lowercase, drop non-alphanum, drop short tokens per the helper's existing rules).
-   - Compute `non_ticker_overlap = overlap - ticker_tokens`.
-   - Replace `_token_not_in_ticker = not any(token in ticker_lower for token in overlap)` with `_has_supporting_non_ticker_token = bool(non_ticker_overlap)`, and update the `_meets_suppression_criteria` conjunction to use `not _has_supporting_non_ticker_token`.
+   - **Per §5.1 implementation gotcha, use substring containment, NOT set-difference against `_tokenize`.** The corrected hunk is option (a) in §5.1.
+   - Replace `_token_not_in_ticker = not any(token in ticker_lower for token in overlap)` with `_has_supporting_non_ticker_token = any(token not in ticker_lower for token in overlap)`, and update the `_meets_suppression_criteria` conjunction to use `not _has_supporting_non_ticker_token`.
    - Preserve the `# Path A` and `# Path B` inline-comment headers; add a one-line docstring update on the new guard explaining the asymmetry fix.
 2. **Smoke test** (`tests/test_market_matcher.py`):
    - Add `test_b_prime_token_in_ticker_with_supporting_non_ticker_token_survives` — POS_event_3 / POS_event_5 shape: matched tokens include both ticker entity AND non-ticker support tokens; assert match is *not* suppressed.
