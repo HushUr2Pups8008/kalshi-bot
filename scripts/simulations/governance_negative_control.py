@@ -1,6 +1,6 @@
 """Governance Phase 2 negative-control rubber-stamp probe.
 
-Sends three handcrafted ``disable_source`` candidates to the production
+Sends handcrafted ``disable_source`` candidates to the production
 governance LLM (qwen3:14b on Ollama via :class:`governance.llm.LocalQwenLLM`)
 to test whether the agent ever returns ``no_action`` — i.e. whether it
 disagrees with a poor-quality candidate when the evidence does not
@@ -34,7 +34,7 @@ Soak-window safety contract
   ``data/runtime_overrides.yaml``, or any file under ``data/``.
 * No call to ``governance.agent.run_cycle`` or any code path that
   emits audit records.
-* One Ollama HTTP call per probe (3 total), via the same
+* One Ollama HTTP call per probe, via the same
   ``LocalQwenLLM.complete`` path the production cycle uses.
 * Output goes to stdout only; ``--json`` switches to machine-readable.
 
@@ -326,6 +326,162 @@ _PROBES: tuple[Probe, ...] = (
             "match_count": 0,
             "anchor_rate": 0.98,
             "recent_headline_sample": [],
+        },
+    ),
+    Probe(
+        probe_id="NEG_A_high_anchor_no_edge_disable",
+        description=(
+            "Adversarial polarity check: high match volume but anchor_rate=0.98, "
+            "meaning matches add no information edge. Expect: disable_source."
+        ),
+        expected_action="disable_source",
+        evidence={
+            "target": "r/consensus_repeater_no_edge",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 60,
+            "fresh_pass_count": 18,
+            "match_count": 22,
+            "anchor_rate": 0.98,
+            "recent_headline_sample": [
+                "Prediction thread mirrors market odds on Trump-Iran visit",
+                "Budget resolution watch repeats same consensus whip count",
+                "FISA renewal traders say price already reflects Senate delay",
+                "FOMC preview tracks market-implied no-hike consensus",
+                "China trade deal thread posts price screenshots without reporting",
+            ],
+        },
+    ),
+    Probe(
+        probe_id="NEG_A_high_anchor_high_volume_disable",
+        description=(
+            "Adversarial polarity check: very high ingestion/fresh-pass/matches but "
+            "anchor_rate=1.00. Expect: disable_source."
+        ),
+        expected_action="disable_source",
+        evidence={
+            "target": "r/high_volume_consensus_feed",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 110,
+            "fresh_pass_count": 45,
+            "match_count": 34,
+            "anchor_rate": 1.00,
+            "recent_headline_sample": [
+                "Live thread copies Kalshi price move after Iran headline",
+                "Budget resolution tracker repeats public Senate calendar",
+                "FISA odds roundup cites prediction market consensus only",
+                "Trump-China deal thread reposts stale probability screenshot",
+                "FOMC decision preview lists current market odds as analysis",
+            ],
+        },
+    ),
+    Probe(
+        probe_id="NEG_A_low_anchor_high_match_keep",
+        description=(
+            "Adversarial polarity check: high match count with very low anchor_rate "
+            "is the desired signal. Expect: no_action."
+        ),
+        expected_action="no_action",
+        evidence={
+            "target": "r/low_anchor_high_match_feed",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 72,
+            "fresh_pass_count": 28,
+            "match_count": 20,
+            "anchor_rate": 0.10,
+            "recent_headline_sample": [
+                "Trump said dispatching Witkoff, Kushner for talks with Iran FM in Pakistan in coming days",
+                "US-Iran Peace Talks Stall as Trump Scraps Diplomatic Visit",
+                "Senate negotiators add FISA renewal to floor package",
+                "Vance team leaves Pakistan stop on regional trip calendar",
+                "China trade negotiators draft signing timeline before deadline",
+            ],
+        },
+    ),
+    Probe(
+        probe_id="NEG_A_mid_anchor_supporting_matches_keep",
+        description=(
+            "Adversarial polarity check: mid anchor_rate plus supporting matches "
+            "should not be disabled solely for not being high-volume consensus."
+        ),
+        expected_action="no_action",
+        evidence={
+            "target": "r/mid_anchor_policy_signal",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 32,
+            "fresh_pass_count": 12,
+            "match_count": 7,
+            "anchor_rate": 0.55,
+            "recent_headline_sample": [
+                "White House adviser says Iran talks depend on Pakistan meeting",
+                "Senate whip count narrows before budget resolution deadline",
+                "FISA renewal amendment gets late bipartisan backing",
+                "Trump-China trade negotiators plan weekend technical session",
+                "Fed officials cool speculation about surprise hike",
+            ],
+        },
+    ),
+    Probe(
+        probe_id="NEG_A_anchor_absent_with_matches_keep",
+        description=(
+            "V_A regression guard: anchor_rate absent but source has fresh-pass "
+            "and matches. Missing anchor alone must not imply disable."
+        ),
+        expected_action="no_action",
+        evidence={
+            "target": "r/no_anchor_yet_matching_feed",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 20,
+            "fresh_pass_count": 9,
+            "match_count": 6,
+            "anchor_rate": None,
+            "recent_headline_sample": [
+                "Iran foreign minister accepts Pakistan-hosted talks framework",
+                "Senate leaders schedule budget resolution vote before deadline",
+                "FISA extension package clears procedural hurdle",
+                "China trade deal signing date remains under negotiation",
+                "FOMC no-hike scenario firms after inflation release",
+            ],
+        },
+    ),
+    Probe(
+        probe_id="NEG_A_va_regression_pos_sparse_disable",
+        description=(
+            "V_A regression guard: sparse off-topic POS shape with anchor_rate=None "
+            "must still return disable_source, not empty or no_action."
+        ),
+        expected_action="disable_source",
+        evidence={
+            "target": "r/entertainment_sparse_no_signal",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 19,
+            "fresh_pass_count": 0,
+            "match_count": 0,
+            "anchor_rate": None,
+            "recent_headline_sample": [
+                "Fan photos from weekend convention panel",
+                "Cast reunion rumor gets debunked by moderator",
+                "Throwback interview clip resurfaces on social media",
+                "Merch drop sells out after livestream announcement",
+                "Behind-the-scenes podcast episode discussion thread",
+            ],
         },
     ),
 

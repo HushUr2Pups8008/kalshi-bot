@@ -2374,6 +2374,8 @@ The discriminator is the *non-ticker-token* overlap count: keep the guard only w
 
 *Pre-fix audit lever.* The existing `MATCH_DIAGNOSTIC` records carry both `matched_tokens` and `ticker` — every claim above is verifiable from the existing trade-log archive without code change. A read-only count of `len(set(matched_tokens) - tokenize(ticker))` per `MATCH_DIAGNOSTIC` is the immediate empirical answer to "how many records would (B′) suppress vs. preserve". That count is *not* run in this addendum — running it requires invoking the matcher's tokenizer or replaying the harness, which we are deferring to the post-soak fix window so that the empirical baseline and the fix land against the same code state.
 
+*2026-05-03 threshold-bisection result.* `docs/governance/2026-05-03-matcher-jaccard-threshold-bisection.md` sweeps the 13-day MacBook `MATCH_DIAGNOSTIC` archive against raised score floors. A simple Jaccard-threshold raise is a poor EDGE-004 primary lever: threshold 0.08 retains all 3 paper trades but only 134/260 OPPORTUNITY records (51.5%), while threshold 0.10 retains only 72/260 (27.7%). MATCH-001 B′ remains the better-shaped post-soak fix because it targets single-entity noise rather than globally discarding opportunity-producing matches.
+
 *Severity unchanged.* MEDIUM is correct. The (B′) refinement is the right scope; severity stays where the entry placed it because the lever is the same and the stale-Option-B framing did not understate the upside.
 
 ---
@@ -2562,7 +2564,7 @@ Neither is worth filing as `PROFIT-GOV-003` at this point. The phenomenon is obs
 - `PROFIT-PHASE2-001` — direct dependency. The mid-soak halt note added 2026-05-03 records that the §8.5 manual-review criterion is paused pending GOV-002 resolution; the operational criteria continue.
 - `PROFIT-GOV-001` (closed 2026-05-02) — neighbour; resolved a different qwen3 + Ollama interaction (empty `{}` from `format=json` + thinking phase). GOV-002 is a behavioural bias on the same model; not a transport-layer bug.
 - `PROFIT-LLM-001` (open, LOW) — post-Phase 2 unification of the signal-analyzer LLM. GOV-002 is a precondition: a unified model must clear the negative-control harness before it can replace the signal-analyzer's qwen2.5:7b.
-- `scripts/simulations/governance_negative_control.py` — the regression harness this entry's acceptance criteria pin against.
+- `scripts/simulations/governance_negative_control.py` — the regression harness this entry's acceptance criteria pin against. Expanded 2026-05-03 to 17 probes with adversarial anchor-rate polarity flips and V_A regression guards for `anchor_rate=None` sparse POS shapes.
 
 ---
 
