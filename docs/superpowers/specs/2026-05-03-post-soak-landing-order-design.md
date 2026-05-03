@@ -4,6 +4,21 @@
 **Tracker:** umbrella note, no new debt-log entry; references `PROFIT-OBS-003`, `PROFIT-OBS-005`, `PROFIT-MATCH-001`, `PROFIT-EXEC-002`
 **Owner:** Claude (sequencing) + Codex (per-spec adversarial review remains in scope)
 **Drafted:** 2026-05-03
+**Last refresh:** 2026-05-03 (post-Lever-E closure + Lever-D demotion + MATCH-001 tokenization gotcha + Lever-C empirics)
+
+## 0. Current state header (refreshed 2026-05-03)
+
+This spec was drafted before several empirics landed. The **base-stack landing order is unchanged** (OBS-005 → MATCH-001 → OBS-003 → EXEC-002 in Wave 1) — but downstream EDGE-004 work and per-spec implementation details have shifted. Quick map of what changed and where:
+
+| change | impact on Wave-1 | spec section |
+|---|---|---|
+| **MATCH-001 (B') tokenization gotcha** (commit `cdbf6ef` + Codex audit `e5b7213`) — spec §2 set-difference vs `_tokenize` produces 0 keys; substring containment is the correct semantic. | Step 2 implementation must use option (a) substring containment; option (b) hyphen-splitting tokenizer documented as alternative in `2026-05-03-match-001-tokenization-option-b-design.md`. | Step 2 acceptance + restart trigger unchanged |
+| **MATCH-001 canonical-event guard** revised from ticker-level to headline-level (commit `9e2fffa`) | Step 2 acceptance: "no canonical-event headline appears in `MATCH_SUPPRESSED` for its canonical ticker" (was ticker-level) | Already integrated |
+| **Lever D demoted to outside closure path** (commit `18e0b6c`) | No Wave-1 impact; Lever D is post-Wave-1 cost-control only | downstream EDGE-004 only |
+| **Lever E closed empirically** (commit `4279bd2`) | No Wave-1 impact | downstream EDGE-004 only |
+| **Lever C §3.2 hash empirically validated** (Codex `ed3c57d`, spec update commit `f786246`) | No Wave-1 impact; informs Wave-3 only | downstream EDGE-004 only |
+
+Net: **Wave-1 base stack landing-order is stable.** Per-spec implementation details have sharpened (especially MATCH-001's tokenization). Downstream EDGE-004 closure path simplified to A → B → C → D (D outside path; E closed; F out of scope).
 
 ## 1. Purpose
 
