@@ -745,3 +745,68 @@ class TestLowQualityMatchSuppression:
 
         assert results, "token-in-ticker match must not be suppressed"
         assert suppressed_calls == [], "MATCH_SUPPRESSED must not be logged when token is in ticker"
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-MATCH-001 (B') harness — token-guard refinement to non-ticker-overlap.
+#
+# Spec: docs/superpowers/specs/2026-05-03-match-001-token-guard-refinement-design.md
+# Status: pre-loaded during PROFIT-PHASE2-001 soak; do not implement before
+# 2026-05-09. The fix replaces the binary `_token_not_in_ticker` predicate
+# with `_has_supporting_non_ticker_token = bool(overlap - ticker_tokens)`,
+# meaning the ticker-guard now passes (suppression blocked) only when at
+# least one matched token is *outside* the ticker tokenization.
+#
+# Approach: source-inspection contract pins. The two smoke tests required
+# by spec §8 acceptance reduce to (a) the new symbol must exist post-fix
+# and (b) the old symbol must be removed. Behavioral pins via the existing
+# `find_candidates`-based fixtures are deferred to landing time because
+# the existing TestLowQualityMatchSuppression cases themselves rely on the
+# pre-fix predicate and will need to be updated as part of the fix commit.
+# ---------------------------------------------------------------------------
+
+_MATCH001_XFAIL_REASON = (
+    "PROFIT-MATCH-001 (B'): ticker-guard predicate not yet refined. "
+    "Lands post-soak per docs/superpowers/specs/2026-05-03-match-001-token-guard-refinement-design.md."
+)
+
+
+def _matcher_source_text() -> str:
+    import inspect
+    import analysis.market_matcher as _mm
+    return inspect.getsource(_mm)
+
+
+class TestSuppressionTokenGuardMATCH001:
+    """Pin the post-fix `_meets_suppression_criteria` predicate refactor.
+
+    Pre-fix: the predicate uses `_token_not_in_ticker` — a binary
+    "no matched token is a substring of the ticker" guard joined with AND.
+    Post-fix: the predicate uses `_has_supporting_non_ticker_token` derived
+    from `overlap - ticker_tokens`, so any matched token outside the ticker
+    blocks suppression (the asymmetry fix).
+    """
+
+    @pytest.mark.xfail(reason=_MATCH001_XFAIL_REASON, strict=True)
+    def test_post_fix_supporting_non_ticker_token_symbol_exists(self):
+        """Post-fix marker — `_has_supporting_non_ticker_token` must appear in source."""
+        src = _matcher_source_text()
+        assert "_has_supporting_non_ticker_token" in src, (
+            "post-fix invariant: the refactored predicate must surface "
+            "`_has_supporting_non_ticker_token` in analysis/market_matcher.py"
+        )
+
+    @pytest.mark.xfail(reason=_MATCH001_XFAIL_REASON, strict=True)
+    def test_post_fix_drops_binary_token_not_in_ticker_predicate(self):
+        """Pre-fix marker — `_token_not_in_ticker` must be removed once B' lands.
+
+        The fix replaces the predicate; the old name must not survive in
+        analysis/market_matcher.py to avoid a stale dual-predicate ambiguity.
+        Other modules / scripts referencing the old name are out of scope —
+        this pin is bounded to the matcher source itself.
+        """
+        src = _matcher_source_text()
+        assert "_token_not_in_ticker" not in src, (
+            "post-fix invariant: `_token_not_in_ticker` must be removed from "
+            "analysis/market_matcher.py once `_has_supporting_non_ticker_token` lands"
+        )

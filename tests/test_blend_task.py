@@ -550,8 +550,8 @@ def _blocked_blender_factory(reason: str):
         "G1_blended_confidence",
         "G2_evidence_source_class_diversity",
         "G3_disagreement_score",
-        "G4_recency_floor",
-        "G5_structural_tier",
+        "G4_regime_confidence",
+        "G5_dossier_drift_suspect",
         "G6_recency_score",
         "structural_tier2_veto: synthetic test",
     ],
@@ -696,3 +696,244 @@ async def test_skipped_payload_carries_blended_edge_not_fast_lane_edge() -> None
     assert record["ticker"] == fast_lane.market.ticker
     assert record["source"] == "Reuters"
     assert record["headline"].startswith("Iran-deal headline")
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-EXEC-002 harness — series-correlation guard inside BlendTask.
+#
+# Spec: docs/superpowers/specs/2026-05-03-exec-002-series-correlation-guard-design.md
+# Status: pre-loaded during PROFIT-PHASE2-001 soak; do not implement before
+# 2026-05-09. Lands AFTER OBS-003 (the EXEC-002 spec §8 acceptance criterion
+# explicitly assumes the OBS-003 SKIPPED-emission path is in place).
+#
+# Until BlendTask gains `_recent_series_enqueues` / `_series_prefix` /
+# the in-window suppression check, these tests xfail strictly. The
+# AttributeError on the missing symbol is the xfail trigger; the strict
+# marker forces removal once prod lands.
+# ---------------------------------------------------------------------------
+
+import tasks.blend_task as _bt_mod  # noqa: E402
+
+_EXEC002_XFAIL_REASON = (
+    "PROFIT-EXEC-002: series-correlation guard not yet implemented in BlendTask. "
+    "Lands post-soak per docs/superpowers/specs/2026-05-03-exec-002-series-correlation-guard-design.md."
+)
+
+
+def _market_for_series(ticker: str) -> KalshiMarket:
+    return KalshiMarket(
+        ticker=ticker,
+        title=f"Will {ticker} resolve YES?",
+        yes_bid=49,
+        yes_ask=51,
+        yes_price=50,
+        volume=100,
+        open_interest=50,
+        close_time="2026-06-01T00:00:00Z",
+    )
+
+
+def _analysis_for_series(ticker: str) -> SignalAnalysis:
+    return SignalAnalysis(
+        news_item=None,
+        market=_market_for_series(ticker),
+        estimated_probability=0.72,
+        market_yes_price=50,
+        edge=0.22,
+        side="yes",
+        kelly_fraction=0.0,
+        kelly_dollars=0.0,
+        capped_dollars=0.0,
+        reasoning="EXEC-002 harness signal",
+        confidence=0.90,
+        match_score=0.8,
+    )
+
+
+@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
+@pytest.mark.parametrize(
+    "ticker,expected_prefix",
+    [
+        ("KXFISAEXTEND-26APR-MAY01", "KXFISAEXTEND"),
+        ("KXFISAEXTEND-26APR-MAY02", "KXFISAEXTEND"),
+        ("KXMOCTRUMP25-26-APR24", "KXMOCTRUMP25"),
+        ("KXTRUMPIRAN-26MAY01", "KXTRUMPIRAN"),
+        ("KXSBUDGETRES-26APR-APR28", "KXSBUDGETRES"),
+        ("KXVANCEPAKISTAN-26MAY15", "KXVANCEPAKISTAN"),
+    ],
+    ids=["FISA-MAY01", "FISA-MAY02", "MOCTRUMP25", "TRUMPIRAN", "SBUDGETRES", "VANCEPAKISTAN"],
+)
+def test_series_prefix_extraction(ticker: str, expected_prefix: str) -> None:
+    """The `_series_prefix` helper splits on `-` and returns the first component."""
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
+        _bt_mod.BlendTask, "_series_prefix", None
+    )
+    assert helper is not None, "_series_prefix helper must exist on BlendTask or module"
+    assert helper(ticker) == expected_prefix
+
+
+@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
+@pytest.mark.asyncio
+async def test_fisa_replay_three_same_series_only_one_enqueues() -> None:
+    """The 2026-05-01 FISA case (3 trades within 7s) must collapse to 1."""
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(
+            dossier=_dossier(),
+            structural_prior=_structural_prior(),
+            evidence=[
+                _evidence("ev-1", source_class="news"),
+                _evidence("ev-2", source_class="news", source="AP"),
+                _evidence("ev-3", source_class="court", source="VitalLaw.com"),
+            ],
+        ),
+        logger=logger,
+        is_paper_mode=True,
+    )
+
+    tickers = [
+        "KXFISAEXTEND-26APR-MAY01",
+        "KXFISAEXTEND-26APR-MAY02",
+        "KXFISAEXTEND-26APR-MAY03",
+    ]
+    for ticker in tickers:
+        await task.process_fast_lane_result(_analysis_for_series(ticker))
+
+    assert queue.qsize() == 1, (
+        f"FISA series burst must produce exactly 1 enqueue; got {queue.qsize()}"
+    )
+    in_window_records = [
+        r for r in logger.skipped_records
+        if r.get("reason") == "series_correlation_in_window"
+    ]
+    assert len(in_window_records) == 2, (
+        f"expected 2 series_correlation_in_window SKIPPED records; got {len(in_window_records)}"
+    )
+
+
+@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
+@pytest.mark.asyncio
+async def test_cross_series_burst_does_not_interfere() -> None:
+    """Different series prefixes within the window must both enqueue."""
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(
+            dossier=_dossier(),
+            structural_prior=_structural_prior(),
+            evidence=[
+                _evidence("ev-1", source_class="news"),
+                _evidence("ev-2", source_class="news", source="AP"),
+                _evidence("ev-3", source_class="court", source="VitalLaw.com"),
+            ],
+        ),
+        logger=logger,
+        is_paper_mode=True,
+    )
+
+    await task.process_fast_lane_result(_analysis_for_series("KXFISAEXTEND-26APR-MAY01"))
+    await task.process_fast_lane_result(_analysis_for_series("KXTRUMPIRAN-26MAY01"))
+
+    assert queue.qsize() == 2, "cross-series candidates must both enqueue"
+    assert not any(
+        r.get("reason") == "series_correlation_in_window" for r in logger.skipped_records
+    ), "no series_correlation_in_window SKIPPED expected for cross-series traffic"
+
+
+@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
+@pytest.mark.asyncio
+async def test_window_expiry_allows_second_same_series_candidate(monkeypatch) -> None:
+    """Same series, second candidate arriving after the window has expired."""
+    import time as _t
+
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    monkeypatch.setattr(
+        cfg, "series_correlation_window_seconds", 60, raising=False,
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(
+            dossier=_dossier(),
+            structural_prior=_structural_prior(),
+            evidence=[
+                _evidence("ev-1", source_class="news"),
+                _evidence("ev-2", source_class="news", source="AP"),
+                _evidence("ev-3", source_class="court", source="VitalLaw.com"),
+            ],
+        ),
+        logger=logger,
+        is_paper_mode=True,
+    )
+
+    await task.process_fast_lane_result(_analysis_for_series("KXFISAEXTEND-26APR-MAY01"))
+    # Forward-shift the recorded enqueue timestamp so it sits past the window.
+    series_state = getattr(task, "_recent_series_enqueues", None)
+    assert series_state is not None, "_recent_series_enqueues must exist on BlendTask"
+    series_state["KXFISAEXTEND"] = _t.monotonic() - 120  # 2 minutes ago, > 60s window
+
+    await task.process_fast_lane_result(_analysis_for_series("KXFISAEXTEND-26APR-MAY02"))
+
+    assert queue.qsize() == 2, "post-window same-series candidate must enqueue"
+
+
+@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
+@pytest.mark.asyncio
+async def test_window_override_zero_disables_guard(monkeypatch) -> None:
+    """`cfg.series_correlation_window_seconds = 0` must disable the guard entirely."""
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    monkeypatch.setattr(
+        cfg, "series_correlation_window_seconds", 0, raising=False,
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(
+            dossier=_dossier(),
+            structural_prior=_structural_prior(),
+            evidence=[
+                _evidence("ev-1", source_class="news"),
+                _evidence("ev-2", source_class="news", source="AP"),
+                _evidence("ev-3", source_class="court", source="VitalLaw.com"),
+            ],
+        ),
+        logger=logger,
+        is_paper_mode=True,
+    )
+
+    for ticker in (
+        "KXFISAEXTEND-26APR-MAY01",
+        "KXFISAEXTEND-26APR-MAY02",
+        "KXFISAEXTEND-26APR-MAY03",
+    ):
+        await task.process_fast_lane_result(_analysis_for_series(ticker))
+
+    assert queue.qsize() == 3, "window=0 must allow every candidate"
+    assert not any(
+        r.get("reason") == "series_correlation_in_window" for r in logger.skipped_records
+    ), "window=0 must fully bypass the guard"
+
+
+@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
+def test_blend_task_carries_recent_series_enqueues_state() -> None:
+    """`BlendTask.__init__` must initialize `_recent_series_enqueues: dict[str, float]`.
+
+    Pinned independently from the runtime tests so the spec §3 component
+    contract is observable even if a code-path test regresses.
+    """
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+    )
+
+    assert hasattr(task, "_recent_series_enqueues"), (
+        "BlendTask.__init__ must initialise `_recent_series_enqueues`"
+    )
+    assert isinstance(task._recent_series_enqueues, dict)
+    assert task._recent_series_enqueues == {}

@@ -1000,3 +1000,124 @@ class TestLiveExecuteErrorPaths:
 
         assert result is None
         assert rest.place_limit_order.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-OBS-005 harness — never-traded sentinel must not trip the cooldown.
+#
+# Spec: docs/superpowers/specs/2026-05-03-obs-005-cooldown-sentinel-fix-design.md
+# Status: pre-loaded during PROFIT-PHASE2-001 soak; do not implement before
+# 2026-05-09. Until trading/executor.py:208 + :276 swap the sentinel from
+# `0.0` to `float("-inf")` these tests xfail strictly.
+#
+# Approach: contract-pin via source inspection. The bug is silent in
+# production (continuous uptime → time.monotonic() well past 14 400);
+# replicating the bug at runtime requires either a new process or
+# monkeypatching `time.monotonic`. Source-inspection avoids both and is
+# stable against unrelated executor refactors — the assertion only fails
+# when the literal sentinel at the two `_last_traded.get(...)` call sites
+# changes.
+# ---------------------------------------------------------------------------
+
+_OBS005_XFAIL_REASON = (
+    "PROFIT-OBS-005: never-traded cooldown sentinel still defaults to 0.0. "
+    "Lands post-soak per docs/superpowers/specs/2026-05-03-obs-005-cooldown-sentinel-fix-design.md."
+)
+
+
+def _executor_source_lines() -> list[str]:
+    import inspect
+    import trading.executor as _ex_mod
+    return inspect.getsource(_ex_mod).splitlines()
+
+
+def _last_traded_get_lines() -> list[tuple[int, str]]:
+    """Return (1-indexed line, stripped text) for every `_last_traded.get(...)` call site."""
+    return [
+        (i, line.strip())
+        for i, line in enumerate(_executor_source_lines(), start=1)
+        if "_last_traded.get(" in line
+    ]
+
+
+class TestCooldownSentinelOBS005:
+    """Pin the post-fix sentinel default for never-traded tickers in `_validate`.
+
+    Source-inspection contract: every `self._last_traded.get(...)` call site
+    in `trading/executor.py` (the paper-mode site near line 208 and the
+    live-mode site near line 276) must default to `float("-inf")` after
+    PROFIT-OBS-005 lands. The set-on-trade write at line ~171 is unaffected.
+    """
+
+    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
+    def test_all_last_traded_get_call_sites_use_neg_inf_sentinel(self):
+        """Every `_last_traded.get(ticker, <default>)` must default to float('-inf')."""
+        sites = _last_traded_get_lines()
+        # We expect at least the paper site and the live site.
+        assert len(sites) >= 2, (
+            f"expected at least 2 `_last_traded.get(...)` call sites; got {len(sites)}: {sites}"
+        )
+        bad_sites = [
+            (lineno, text)
+            for lineno, text in sites
+            if 'float("-inf")' not in text and "float('-inf')" not in text
+        ]
+        assert bad_sites == [], (
+            "post-fix invariant: every `_last_traded.get(ticker, <default>)` must use "
+            "`float(\"-inf\")` as the sentinel; offending sites:\n"
+            + "\n".join(f"  line {ln}: {tx}" for ln, tx in bad_sites)
+        )
+
+    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
+    def test_paper_cooldown_call_site_uses_neg_inf(self):
+        """Paper path (executor.py:208 area) — sentinel pinned for the paper site."""
+        sites = _last_traded_get_lines()
+        # The paper-mode site sits near the `paper_ticker_cooldown` reference.
+        src = _executor_source_lines()
+        for lineno, text in sites:
+            window = "\n".join(src[max(0, lineno - 1):min(len(src), lineno + 4)])
+            if "paper_ticker_cooldown" in window:
+                assert 'float("-inf")' in text or "float('-inf')" in text, (
+                    f"paper-mode site at line {lineno} must use float('-inf') sentinel; got: {text}"
+                )
+                return
+        pytest.fail("could not locate paper-mode `_last_traded.get(...)` call site")
+
+    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
+    def test_live_cooldown_call_site_uses_neg_inf(self):
+        """Live path (executor.py:276 area) — sentinel pinned for the live site."""
+        sites = _last_traded_get_lines()
+        src = _executor_source_lines()
+        for lineno, text in sites:
+            window = "\n".join(src[max(0, lineno - 1):min(len(src), lineno + 4)])
+            if "live_ticker_cooldown" in window:
+                assert 'float("-inf")' in text or "float('-inf')" in text, (
+                    f"live-mode site at line {lineno} must use float('-inf') sentinel; got: {text}"
+                )
+                return
+        pytest.fail("could not locate live-mode `_last_traded.get(...)` call site")
+
+    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
+    def test_ci_conftest_no_longer_zeroes_cooldowns(self):
+        """Spec §7 acceptance: tests/conftest.py:_ci_stub_env must drop the
+        PAPER_TICKER_COOLDOWN=0 / LIVE_TICKER_COOLDOWN=0 stubs once the fix lands.
+
+        This test fails today because the stubs are still present (and required —
+        without them, today's pre-fix tests would trip on never-traded tickers in
+        CI). It xpasses post-fix when the stubs are removed.
+        """
+        from pathlib import Path
+        conftest = Path(__file__).parent / "conftest.py"
+        if not conftest.exists():
+            pytest.skip("conftest.py not found")
+        text = conftest.read_text()
+        bad = []
+        for needle in ("PAPER_TICKER_COOLDOWN", "LIVE_TICKER_COOLDOWN"):
+            # The stub sets the env-var to "0"; we look for that exact pairing.
+            if f'"{needle}"' in text and '"0"' in text and "_ci_stub_env" in text:
+                # Heuristic: both names appear within the same stub block.
+                bad.append(needle)
+        assert bad == [], (
+            f"conftest.py still zeroes cooldowns ({bad}); spec §7 requires removing "
+            "these stubs once the executor sentinel fix lands."
+        )
