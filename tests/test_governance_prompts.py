@@ -29,6 +29,29 @@ def test_system_prompt_advertises_json_output_schema():
         assert action in SYSTEM_PROMPT
 
 
+def test_system_prompt_carries_anchor_rate_polarity_callout():
+    """PROFIT-GOV-002 fix: the prompt must spell out anchor_rate polarity so
+    qwen3:14b does not invert it. Pinned via the H5 bisection (Codex commit
+    83bf954) — A5_ANCHOR_ONLY was the minimum-content variant that flipped
+    the high-signal NEG_A case to no_action without breaking POS shapes.
+
+    If anchor_rate semantics are reworded, run the negative-control harness
+    (scripts/simulations/governance_negative_control.py) in a clean window
+    and confirm NEG_A_high_signal_source returns no_action with conf >= 0.7
+    before updating these assertions.
+    """
+    assert "Interpreting disable_source evidence:" in SYSTEM_PROMPT
+    assert "LLM anchor rate" in SYSTEM_PROMPT
+    # HIGH = no edge = disable
+    assert "HIGH (>=0.95)" in SYSTEM_PROMPT
+    assert "NO information edge" in SYSTEM_PROMPT
+    assert "DISABLE signal" in SYSTEM_PROMPT
+    # LOW = informative = keep
+    assert "LOW (<=0.50)" in SYSTEM_PROMPT
+    assert "INFORMATIVE signal" in SYSTEM_PROMPT
+    assert "KEEP this source" in SYSTEM_PROMPT
+
+
 def test_llm_output_schema_lists_all_required_fields():
     required = {"action", "target", "reasoning", "confidence", "predicted_effect"}
     assert required <= set(LLM_OUTPUT_SCHEMA["required"])

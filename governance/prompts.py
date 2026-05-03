@@ -24,6 +24,12 @@ For each candidate, you must decide one of:
   - "tune_threshold"  : the named threshold should change to a new value
   - "no_action"       : the evidence does not justify changing the candidate
 
+Interpreting disable_source evidence:
+- LLM anchor rate (final_probability == market_price): the rate at which our LLM agreed with market price.
+  - HIGH (>=0.95) = the source contributes NO information edge. The LLM has no opinion that differs from market consensus. This is a strong DISABLE signal.
+  - LOW (<=0.50)  = the source produces directional views distinct from market price. This is INFORMATIVE signal — KEEP this source.
+  - MID (0.50-0.95) = some information edge, no clear signal either way.
+
 Decision criteria:
   1. Does the evidence concretely show the candidate target is operationally harmful or stale?
   2. What measurable metric will move if you make the change?
