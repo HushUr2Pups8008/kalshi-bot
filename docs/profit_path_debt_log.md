@@ -2400,6 +2400,7 @@ Iterate on the prompt against the negative-control harness as the regression gat
 - The harness must continue to be soak-safe across iteration. Specifically, do not have it write to `logs/governance/`, `data/`, or any path under `transfer/`. Output to stdout only; `--json` for machine-readable. Already enforced in the current implementation.
 - This finding does not affect the operational layer of `PROFIT-PHASE2-001`: cycle reliability, `applied=` invariant, KILL_SWITCH count, error rate. Those gates continue to accumulate evidence at the launchd cadence and remain valid acceptance criteria.
 - Empty-response follow-up: `docs/governance/2026-05-03-empty-response-audit.md` ran 110 clean-window `qwen3:14b + format=json + think=False` calls across concurrency, evidence-shape, prompt-length, and sequential-accumulation axes with 0 empty responses. Treat the 13:19-13:33 UTC iteration failures as transient daemon/session-state evidence until a reproducible H1-H4 axis appears.
+- H5 semantic-content follow-up: `docs/governance/2026-05-03-h5-semantic-bisection.md` ran 96 clean-window calls across V_A SYSTEM_PROMPT ablations with 0 POS empty responses. A5 (`LLM anchor rate` semantics only) and A6 (final high-match/low-anchor keep instruction only) both flipped `NEG_A_high_signal_source` to `no_action` without POS regression; A5 is the minimum-content next fix candidate.
 
 **Iteration session log — 2026-05-03 13:19–13:33 UTC** (no production change landed; scratch-only; surfaced for the next session)
 
