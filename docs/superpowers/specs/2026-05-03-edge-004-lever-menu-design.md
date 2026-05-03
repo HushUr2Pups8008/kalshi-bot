@@ -30,15 +30,16 @@ We need a different lever. This spec enumerates the candidate levers with cost /
 
 Each lever lists: target mechanism, expected impact direction, blast radius, sizing cost (how cheaply we can size impact pre-deploy), risk shape, dependencies.
 
-### Lever A — Source-class diversification audit (Codex, in flight 2026-05-03)
+### Lever A — Source-class diversification (revised twice on 2026-05-03)
 
-- **Mechanism:** identify whether OPPORTUNITY events at zero edge are concentrated in particular `source_class` values (news / court / etc.). If so, the fix is source-class weighting in `evidence_scorer`, not the matcher.
-- **Expected impact:** depends on empirics. If a single source-class accounts for >60% of zero-edge events, weighting that class down lifts conversion materially.
-- **Blast radius:** `analysis/evidence_scorer.py` weight tuning (config knob; no schema change).
-- **Sizing cost:** LOW — Codex's audit is producing the answer this week. No deploy needed for sizing.
-- **Risk shape:** LOW. Source-class weights are a calibration knob; rollback is a config diff.
-- **Dependencies:** none. Independent of MATCH-001 / OBS-003 / EXEC-002.
-- **Verdict:** **first lever to evaluate** because the empirics are arriving in days, not weeks, and the fix surface is small.
+- **Mechanism (revised twice):** original framing was "identify single-class concentration in zero-edge OPP and weight that class down." Codex's 2026-05-03 source-class audit (`docs/governance/2026-05-03-source-class-diversification-audit.md`) showed weight-only tweaks won't work (per-event diversity is mixed; positive-edge events are NOT official-driven). Lever A was reframed as **intake diversification** (`2026-05-03-edge-004-lever-a-source-class-diversification-design.md`) with two stages: A.1 classifier fix → A.1+ feed onboarding.
+- **Codex 2026-05-03 archive replay** (`docs/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md`, commit `8001a16`) **further revised A.1's role**: standalone empirical lift on the archive is ~0 (`official` stays at 1/260; only 2 records flip `other → news`). A.1 is now a **prerequisite for A.1+, not a standalone edge-producer.** Edge production lives entirely in A.1+ feed onboarding.
+- **Expected impact:** A.1 alone produces ~0 archive lift. **Edge-production claim hinges entirely on A.1+** — adding new non-news feeds whose events the post-A.1 classifier correctly buckets and whose volume materially shifts the OPPORTUNITY mix.
+- **Blast radius:** A.1 = 5-line token-list patch (`main.py:_source_class_for_evidence`). A.1+ = new feed modules in `/feeds/` per spec; first feed deploy ≥ 2026-05-22 (Wave 2).
+- **Sizing cost:** A.1 done (Codex archive replay); A.1+ requires per-feed ingestion-rate / match-score / latency audits.
+- **Risk shape:** A.1 = LOW (prerequisite hygiene; falsifiable on per-source basis via xfail-strict harness). A.1+ = MED-HIGH (each new feed adds operational debt; closure depends on whether new sources actually produce edge — open empirical question).
+- **Dependencies:** A.1 has none. A.1+ depends on A.1 being deployed first.
+- **Verdict (revised post-Codex 2026-05-03 archive replay):** **A.1 is hygiene/prerequisite — land it but do not expect standalone lift.** A.1+ is the only edge-production lever in EDGE-004's scope; if A.1+ feed onboarding doesn't lift conversion to ≥ 5 % over 14 d, EDGE-004's honest closure escalates to PROFIT-LLM-001 or P4-GATE Appendix A market-mix work — both already ROADMAP-tracked and out of EDGE-004 scope.
 
 ### Lever B — G1 calibration tightening (post-OBS-003)
 
@@ -111,21 +112,23 @@ The sequence has gone through three revisions on 2026-05-03 as Codex's empirics 
 
 1. Original (drafted): A → D → B → E → C
 2. Post-Lever-D audit: A → B → E → C → D (D demoted to tertiary)
-3. **Current — post-Lever-E sizing audit: A → B → C → D (E closed as out-of-scope)**
+3. Post-Lever-E sizing audit: A → B → C → D (E closed as out-of-scope)
+4. **Current — post-Lever-A.1-archive-replay: A.1+ → B → C → D (A.1 is prerequisite hygiene, A.1+ is the actual edge-production lever)**
 
 The current sequence:
 
-1. **Wait for Lever A intake-diversification verdict.** Stage A.0 calibration check is cheap; Stage A.1 first-feed sizing happens during the post-soak base-stack validation windows.
-2. **If Lever A's first feed lifts conversion to ≥ 5 % over 14 d:** EDGE-004 closes. Stop here.
-3. **If Lever A stalls (after 2 feeds, no rate lift):** evaluate Lever B (G1 calibration tightening) using the post-OBS-003 attribution dataset. Land B post-MATCH-001 + post-OBS-003 + post-Lever-A-stall confirmation. Per Codex's G1 admittance counterfactual, B is an attribution lever, not an edge lever — predicted lift 1-2 trades / 14 d.
-4. **If A and B both stall on edge production:** Lever C (cross-series headline correlation, EXEC-002 Approach 2) becomes the next investigation. Codex's audit already confirmed 49.2 % cross-series overlap (commit `ed3c57d`); spec at `2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md`. Land if A + B both fail to close EDGE-004.
-5. **Lever D (pre-LLM gate re-enablement)** sits outside this sequence. Land D only if the Wave-1 stack + a successful Lever A/B/C lift creates LLM call-budget pressure. D doesn't produce edge.
-6. **Lever E (multi-source corroboration)** is **CLOSED** as of 2026-05-03 per Codex's sizing audit (`docs/governance/2026-05-03-lever-e-source-corroboration-sizing.md`). Source-INSTANCE distribution `{0: 9, 1: 251}` makes the lever structurally infeasible; source-CLASS without fast-lane exemption kills 3/3 historical paper trades; source-CLASS with fast-lane exemption is redundant with G2. See `2026-05-03-edge-004-lever-e-multi-source-corroboration-design.md` §0 for the closure note.
-7. **Lever F (P4-GATE / Appendix A market-mix)** stays out of EDGE-004 scope. ROADMAP-tracked, separate decision.
+1. **Land Lever A.1 classifier patch as prerequisite hygiene.** Codex's archive replay confirmed A.1 alone produces ~0 lift on the existing archive; land it anyway so any new sources A.1+ adds get bucketed correctly from day 0.
+2. **Wait for Lever A.1+ first-feed verdict.** A.1+ is the actual edge-production lever — adds new non-news feeds whose source labels A.1's classifier will correctly bucket. Per-feed sizing happens during the post-soak base-stack validation windows.
+3. **If A.1+'s first feed lifts conversion to ≥ 5 % over 14 d:** EDGE-004 closes. Stop here.
+4. **If A.1+ stalls (after 2 feeds, no rate lift):** evaluate Lever B (G1 calibration tightening) using the post-OBS-003 attribution dataset. Land B post-MATCH-001 + post-OBS-003 + post-A.1+-stall confirmation. Per Codex's G1 admittance counterfactual, B is an attribution lever, not an edge lever — predicted lift 1-2 trades / 14 d.
+5. **If A.1+ and B both stall on edge production:** Lever C (cross-series headline correlation, EXEC-002 Approach 2) becomes the next investigation. Codex's audit already confirmed 49.2 % cross-series overlap (commit `ed3c57d`); spec at `2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md`. Land if A.1+ and B both fail to close EDGE-004.
+6. **Lever D (pre-LLM gate re-enablement)** sits outside this sequence. Land D only if the Wave-1 stack + a successful Lever A.1+/B/C lift creates LLM call-budget pressure. D doesn't produce edge.
+7. **Lever E (multi-source corroboration)** is **CLOSED** as of 2026-05-03 per Codex's sizing audit. See `2026-05-03-edge-004-lever-e-multi-source-corroboration-design.md` §0 for the closure note.
+8. **Lever F (P4-GATE / Appendix A market-mix)** stays out of EDGE-004 scope. ROADMAP-tracked, separate decision.
 
 This is a probabilistic sequence. Each step's verdict modifies the prior on the next; abandon a lever after 2 honest attempts rather than burn unbounded calendar time on a hypothesis the data didn't support.
 
-**Honest read post-2026-05-03 empirics:** the realistic edge-production lever is just Lever A. B and C are risk-control / attribution levers. If A's intake-diversification (classifier fix + new feeds) doesn't lift conversion to ≥ 5 %, EDGE-004 closure honestly requires escalation to a wider-scope program (PROFIT-LLM-001 or P4-GATE Appendix A) — both already tracked outside EDGE-004 scope.
+**Honest read post-2026-05-03 empirics (revised post-A.1-archive-replay):** EDGE-004's edge-production hypothesis is now solely **A.1+ feed onboarding** — adding new non-news feeds that produce new edge. A.1 alone produces ~0 archive lift (Codex archive replay); A.1+ is open-ended empirical work. B and C are risk-control / attribution levers, not edge levers. If A.1+ feed onboarding doesn't lift conversion to ≥ 5 % within ~30 days of post-soak deploy, EDGE-004 closure honestly requires escalation to a wider-scope program — PROFIT-LLM-001 (signal-analyzer LLM unification, gated behind GOV.P4) or P4-GATE Appendix A market-mix work — both already ROADMAP-tracked and out of EDGE-004 scope.
 
 ## 6. Risk
 

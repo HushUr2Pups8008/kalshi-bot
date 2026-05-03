@@ -1,13 +1,48 @@
-# PROFIT-EDGE-004 Lever A Stage A.1 — fix `_source_class_for_evidence` classifier (first concrete action)
+# PROFIT-EDGE-004 Lever A Stage A.1 — fix `_source_class_for_evidence` classifier (prerequisite, not standalone lever)
 
-**Status:** design (Wave 2 of post-soak landing — earliest deploy ≥ 2026-05-22; lands as the first Lever A action because it's smaller, faster, and arithmetically lifts the `official` count using feeds the bot is already polling)
+**Status:** design — **REVISED 2026-05-03 post-Codex archive replay** (Wave 2 of post-soak landing, earliest deploy ≥ 2026-05-22; lands as a *prerequisite* for A.1+ feed onboarding, not as a standalone edge-production lever)
 **Tracker:** `PROFIT-EDGE-004` Lever A → Stage A.1
-**Owner:** Claude (design) + Codex (post-fix counterfactual replay against the 13-day archive to size the lift)
-**Severity:** HIGH (parent EDGE-004 closure path)
+**Owner:** Claude (design) + Codex (post-fix counterfactual replay; landed `e5b7213` / `8001a16`)
+**Severity:** MEDIUM (revised down from HIGH after the archive replay showed standalone lift ≈ 0; severity reflects "prerequisite hygiene" not "edge-producing lever")
 **Drafted:** 2026-05-03
-**Empirical basis:** `docs/governance/2026-05-03-source-class-diversification-audit.md` + the existing `main.py:_source_class_for_evidence` source.
+**Last revision:** 2026-05-03 (same day) — revised scope post-Codex archive replay
+**Empirical basis:** `docs/governance/2026-05-03-source-class-diversification-audit.md` + `docs/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md` (Codex archive replay) + existing `main.py:_source_class_for_evidence` source.
 
-## 1. Surprise finding (and why this is the first A.1 action)
+## 0. Revised scope header (added 2026-05-03 post-Codex archive replay)
+
+The original spec framed Lever A.1 as a "first concrete action that arithmetically lifts the official count using feeds the bot is already polling" — predicting **≥ 30/260 official** post-fix on the 13-day archive. **Codex's 2026-05-03 archive replay falsified that prediction.**
+
+**Codex empirics** (`docs/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md`, commit `8001a16`):
+
+| surface | rows | flips under post-A.1 classifier | post-fix `official` |
+|---|---:|---|---:|
+| EVIDENCE_INGESTION | 248 | **N/A — 0/248 carry raw source strings** | unmeasurable |
+| OPPORTUNITY (surrogate) | 260 | 2 (`other → news`: Breaking Defense × 1, Defense News × 1) | **1/260 (unchanged from pre-fix)** |
+| MATCH_DIAGNOSTIC (surrogate) | 2,838 | 8 (`other → news`) | 63/2,838 (unchanged) |
+
+**The 6 misclassified canonical sources** (Department of War / UN News / EC press releases / IAEA / Defense News / Breaking Defense) **do not appear at the OPPORTUNITY or EVIDENCE_INGESTION surface in the 13-day archive.** Defense News and Breaking Defense appear at MATCH_DIAGNOSTIC but flip to `news` (not `official`); the four `official`-target sources are absent entirely.
+
+**Why those sources don't appear:**
+
+- The RSS feeds may not have fired on Kalshi-relevant headlines during the archive window, OR
+- They fired but were filtered upstream (matcher score floor, sport-prefix blocklist, pre-LLM gate), OR
+- The evidence-pipeline join doesn't preserve their `source` field through to OPPORTUNITY.
+
+Whichever cause, the empirical fact is: **classifier patch alone produces ~0 lift on the archive's `official` count.**
+
+**Revised role of Lever A.1:**
+
+1. **Prerequisite, not lever.** A.1 is hygiene work — fix the classifier so when *new* sources land via A.1+ (feed onboarding) or *existing* sources begin firing during a post-soak window, they get bucketed correctly from day 0. Without A.1, every A.1+ feed addition risks landing as `other`.
+
+2. **No standalone empirical target.** The "≥ 30/260 official" target is removed from acceptance criteria. The classifier patch is correct on a per-source basis (verified by `tests/test_lever_a1_classifier_counterfactual.py`); whether the archive distribution shifts is downstream of feed-firing patterns the classifier doesn't control.
+
+3. **Edge-production lever is A.1+.** Lever A's edge-production hypothesis lives entirely in **A.1+ feed onboarding** — adding new non-news feeds whose source labels the post-A.1 classifier will correctly bucket. Codex's audit found 0 `other → official` flips at the OPP surface; the only path to `official > 1` is *new sources we don't currently poll.*
+
+4. **EDGE-004 closure-path implication.** Lever A's standalone path was already speculative (Codex's Lever B counterfactual showed B doesn't produce edge; C is risk-control; E closed; D demoted). With A.1's archive replay showing zero standalone lift, **EDGE-004's edge-production hypothesis is now solely "intake diversification adds new sources that produce new edge."** That's an open-ended bet on feed-onboarding empirics yet to be done.
+
+**Spec body below is preserved — most of it is still correct on a per-source basis** (the token-list patch, the test cases, the rollback story). The §1 "surprise finding" framing is now historical context, not a claim about empirical lift; the §4 sizing methodology + §5 acceptance criteria's "≥ 30/260 official" target are obsolete and superseded by this §0.
+
+## 1. Original "surprise finding" framing (preserved as historical context)
 
 The Lever A umbrella spec frames Stage A.1 as "add new non-news feed modules" (government bulletins, specialist analyst feeds, market microstructure). The naive read of the source-class audit's `official=9/260` is "we don't have enough official feeds."
 
@@ -104,27 +139,31 @@ Plus tests:
 
 **No changes to** `analysis/`, `tasks/`, `trading/`, `feeds/`, or `config.py` (in §2.1/§2.2; §2.3 would touch `config.py` but is out of scope here).
 
-## 4. Sizing methodology (Codex's task before deploy)
+## 4. Sizing methodology (OBSOLETE per §0 — Codex archive replay falsified the prediction)
 
-Pre-deploy counterfactual replay on the 13-day archive:
+> **Superseded.** Codex's 2026-05-03 archive replay (`docs/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md`) found EVIDENCE_INGESTION rows do not carry raw source strings (0/248) and OPPORTUNITY surrogate replay shows post-A.1 official count stays at 1/260 — same as pre-fix. The methodology and target below are preserved as historical context only.
+
+Original methodology (preserved):
 
 1. Read every `EVIDENCE_INGESTION` event from `logs/trades/archive/2026/04/*.jsonl` and `logs/trades/archive/2026/05/*.jsonl`.
 2. For each event, recompute `source_class` under the **post-fix** classifier.
 3. Compare distribution: how many events flip `other → official`? `other → news`?
 4. Re-run the source-class audit script (`scripts/simulations/source_class_audit.py` or whatever Codex used) against the post-fix classifier. Report:
-   - `official` count under the post-fix classifier (target: ≥ 30/260, i.e., 3.4× the current 9/260).
-   - `news` count change (likely small).
-   - `other` count drop (the residual `other` bucket should shrink to truly-unknown sources).
+   - ~~`official` count under the post-fix classifier (target: ≥ 30/260, i.e., 3.4× the current 9/260).~~ **Empirical actual: 1/260 — unchanged.**
+   - `news` count change (likely small). **Empirical actual: 213 → 215 (+2).**
+   - `other` count drop (the residual `other` bucket should shrink to truly-unknown sources). **Empirical actual: 46 → 44 (-2).**
 
 Sizing-cost: LOW. The classifier is a pure function; replay is a single-pass over archived JSONL. No infrastructure required.
 
-## 5. Acceptance criteria
+## 5. Acceptance criteria (REVISED post-Codex archive replay)
 
 - `main.py:_source_class_for_evidence` updated per §2.1 + §2.2.
-- New test cases in `tests/test_main_pipeline.py` pin the post-fix classifications.
-- Codex's counterfactual replay confirms ≥ 30/260 events flip `other → official` (3.4× the current `official=9/260` baseline).
-- Post-deploy 7 d EVIDENCE_INGESTION distribution shows `official` count rising in the predicted band.
-- Full pytest suite green.
+- New test cases in `tests/test_main_pipeline.py` pin the post-fix classifications (already pre-loaded as 6 strict-xfail tests + 1 positive control in `TestSourceClassClassifierLeverA1`, commit `7ff5a8b`).
+- ~~Codex's counterfactual replay confirms ≥ 30/260 events flip `other → official`.~~ **Removed: empirically falsified per §0.**
+- ~~Post-deploy 7 d EVIDENCE_INGESTION distribution shows `official` count rising in the predicted band.~~ **Removed: predicted band is empirically zero on archive data; no meaningful post-deploy lift expected from A.1 alone.**
+- Per-source classification matches the reference classifier in `scripts/simulations/lever_a1_classifier_counterfactual.py:classify_post_fix`.
+- Full pytest suite green; 6 strict-xfail markers in `TestSourceClassClassifierLeverA1` flip to xpass and are removed in the same commit as the classifier patch.
+- A.1 is now a **prerequisite for A.1+** (feed onboarding) per §0; A.1's edge-production claim moves to A.1+'s acceptance criteria.
 
 ## 6. Rollback
 
