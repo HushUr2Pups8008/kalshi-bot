@@ -2458,6 +2458,47 @@ New axis to characterize before the next prompt-iteration session:
 
 Decision: retain the prior iteration log's "do not file PROFIT-GOV-003" stance. The semantic-content failure surface is a sub-question of GOV-002 (the prompt fix is what's actually being characterized), not a separate transport-layer bug. Track via the next Codex task on H5 bisection.
 
+**2026-05-03 15:08–15:19 UTC — Codex H5 bisection + A5 retest** (Codex commit `83bf954`, no production change landed)
+
+Codex's H5 semantic-content bisection (`docs/governance/2026-05-03-h5-semantic-bisection.md`, 96 calls clean window starting `audit_started_utc=2026-05-03T15:09:18Z`) found:
+
+| Ablation | Description | NEG_A no_action rate | POS empty rate |
+|---|---|---|---|
+| A0_PROD | baseline | 0/3 (rubber-stamp) | 0/3 |
+| A1_DEFAULT_ONLY | "DEFAULT TO no_action" paragraph alone | 0/3 (still rubber-stamps) | 0/3 |
+| A2_INGESTION_ONLY | header + ingestion bullet | 0/3 | 0/3 |
+| A3_FRESH_ONLY | header + fresh-pass bullet | 0/3 | 0/3 |
+| A4_MATCH_ONLY | header + match-count bullet | 0/3 | 0/3 |
+| **A5_ANCHOR_ONLY** | **header + anchor-rate semantics block** | **3/3 ✅** | **0/3 ✅** |
+| A6_FINAL_ONLY | header + final "high Match + LOW anchor_rate = KEEP" line | 3/3 ✅ | 0/3 |
+| A7_FULL_V_A | full V_A block | 3/3 | 0/3 (clean — opposite of Claude's prior runs) |
+
+Verdict: **A5_ANCHOR_ONLY is the minimum-content polarity fix.** Adding only the LLM anchor rate semantics block (HEADER + ANCHOR sub-bullets, lines 49–53 of `scripts/simulations/governance_semantic_bisect_h5.py`) inserted after the `no_action` bullet in the production `SYSTEM_PROMPT` flips NEG_A correctly while leaving POS shapes valid. The DEFAULT paragraph and the per-metric bullets contribute nothing to the polarity fix and can be omitted from the production landing.
+
+Independent observation that contradicts Claude's prior retest evidence: **A7 (full V_A) returned 0/3 POS empty in Codex's bisection**, while Claude's three retests of full V_A returned 4/4 POS empty. Same prompt, same model, same Ollama daemon. The contradiction reveals a new failure axis Codex's H1–H4 + H5 ablation matrix does not capture.
+
+Claude's A5 full-harness retest (15:18:29 UTC, 11 probes, started ~7 min after Codex's bisection completed): **9/11 empty**, including 2 of 3 of Codex's "valid" sentinel cells (S_POS, S_NEG_A_zero, S_NEG_B). Only S_NEG_A returned valid output (`no_action` confidence 0.65 with sound polarity-aware reasoning). The same 4-sentinel set Codex tested 3× per cell with 0/12 empty went 1/4 valid 7 minutes later under A5.
+
+**New hypothesis — cumulative session-call instability.** Empty-response rate appears tied to cumulative LLM calls within a daemon-state window, not prompt content. Empirical timeline this session:
+
+| Time UTC | Cumulative calls | Run | Empty rate |
+|---|---|---|---|
+| 13:01:56 | 0 → 3 | first PROD harness | 0/3 |
+| 13:20:34 | ~3 → 14 | second PROD harness | 0/11 |
+| 13:22:38 | ~14 → 25 | first V_A iteration | 6/11 |
+| 13:25–13:32 | 25–60 | PROD/V_A3/V_A retests | mostly empty |
+| 14:00–14:30 | fresh process | Codex empty-response audit | 0/110 |
+| 15:09–15:11 | fresh process | Codex H5 bisection | 0/96 |
+| 15:18 | ~96 → 107 | Claude A5 full-harness retest | 9/11 |
+
+Production launchd cycles emit ~5 LLM calls per 2h cycle = ~60 calls/day — well below the ~50–100-call apparent threshold. That is why `logs/governance/decisions.jsonl` shows zero post-2026-05-02-baseline PARSE_ERRORs across 74 decisions while iteration sessions reproduce empty responses readily.
+
+This is a separate failure mode from the rubber-stamp bias GOV-002 was opened to characterize. It does not block landing A5 as the prompt fix; it does block local validation of A5 from this Claude session because the daemon-state threshold has been crossed. Production is unaffected.
+
+Decision: **do not land A5 to `governance/prompts.py` from this session.** Codex's clean-state bisection is strong evidence A5 works, but a soak-window production prompt change without local Claude validation is too aggressive given the open daemon-stability question. Next session: restart Ollama (`ollama stop qwen3:14b` then trigger a single warm-up call), run the A5-modified harness against the 11-probe set ONCE in cold-window, confirm 11/11 valid, then land A5 to production with the post-fix harness output as the in-commit acceptance evidence.
+
+Decision: **promote the cumulative-session-call instability to a candidate `PROFIT-GOV-003` filing pending one more clean-window confirmation in the next session.** If next session also reproduces the post-~100-call empty-response degradation (e.g. cold restart returns 0/11, then 100 sequential probe calls reproduce the empty rate climbing toward 50%+), that is the falsifiable test. File GOV-003 LOW (production unaffected; iteration sessions blocked) only if confirmed.
+
 **Related**
 
 - `PROFIT-PHASE2-001` — direct dependency. The mid-soak halt note added 2026-05-03 records that the §8.5 manual-review criterion is paused pending GOV-002 resolution; the operational criteria continue.
