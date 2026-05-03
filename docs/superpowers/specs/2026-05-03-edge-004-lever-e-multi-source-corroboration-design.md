@@ -1,12 +1,47 @@
 # PROFIT-EDGE-004 Lever E — multi-source corroboration
 
-**Status:** design (Wave 3 of post-soak landing — gated on Lever A and Lever B verdicts. Earliest deploy ≥ 2026-06-13)
+**Status:** **CLOSED — empirically infeasible** (closed 2026-05-03 same day as drafted, after Codex's sizing audit landed)
 **Tracker:** `PROFIT-EDGE-004` (Lever E entry from `2026-05-03-edge-004-lever-menu-design.md`)
-**Owner:** Claude (design) + Codex (sizing — see §4)
-**Severity:** HIGH (parent EDGE-004 closure path; 3rd lever in the revised A → B → E → C → D sequence)
-**Drafted:** 2026-05-03
+**Owner:** Claude (closure) + Codex (sizing audit that produced the closure)
+**Closure date:** 2026-05-03
+**Closure basis:** `docs/governance/2026-05-03-lever-e-source-corroboration-sizing.md` (commit `e5b7213`)
 
-## 1. Why this lever
+## 0. Closure summary (added 2026-05-03 post-Codex audit)
+
+Codex's 2026-05-03 sizing audit ran the distinct-source distribution per OPPORTUNITY across the 13-day MacBook archive:
+
+| dimension | distribution | N≥2 retention |
+|---|---|---:|
+| source-CLASS | `{0: 9, 1: 142, 2: 100, 3: 9}` | 109/260 (41.9 %), kills 100 % of historical PAPER_TRADE |
+| source-INSTANCE | `{0: 9, 1: 251}` (no record has ≥ 2) | **0/260** |
+
+**Three framings of Lever E, all dead:**
+
+| framing | empirical result | verdict |
+|---|---|---|
+| source-INSTANCE N≥2 | retains 0/260 — kills everything | structurally infeasible (pipeline always joins ≤ 1 source per blend) |
+| source-CLASS N≥2, no fast-lane exemption | retains 109/260, kills 3/3 historical PAPER_TRADE | trade-rate killer |
+| source-CLASS N≥2, with fast-lane exemption | identical to existing G2 (`tasks/trade_readiness_gate.py:192`) | redundant |
+
+**The 3 historical paper trades all sit in the N=1-source-class bucket.** They passed `G2_evidence_source_class_diversity` only via G2's fast-lane exemption (G2 fires only when a dossier exists). Lever E proposed a stricter G7 with no fast-lane exemption — would have suppressed every historical paper trade plus the 142+9 zero/single-class tail.
+
+**Why source-instance is structurally always 1 (most likely):** the `BLEND_DECISION.evidence_ids_contributing` join → `EVIDENCE_INGESTION.source` produces ≤ 1 distinct source per blend. Could be (a) fast-lane fires on the first matching source and downstream sources don't get joined into the blend, (b) `evidence_ids_contributing` dedupes to one source per blend by design, or (c) typical headlines come from one source instance even when present in multiple feed channels. Regardless of cause, the empirical fact is: source-instance ≥ 2 doesn't happen on the 13-day archive.
+
+**Closure verdict:** Lever E is closed against EDGE-004's closure path. The sequence revises from A → B → E → C → D to **A → B → C → D** (D already outside the closure path per its own demotion in commit `18e0b6c`). EDGE-004 has three in-scope levers: A (intake diversification), B (G1 calibration / attribution), C (cross-series headline correlation). Codex's empirics already characterise A's path strongly; B is an attribution lever, not an edge lever; C is a cross-series risk-control lever. **Realistic EDGE-004 closure path is essentially just Lever A.** If A.1 + A.1+ feeds fail to lift conversion to ≥ 5 % over 14 d, EDGE-004's honest closure requires escalation to PROFIT-LLM-001 (signal-analyzer LLM unification, currently gated behind GOV.P4) or P4-GATE Appendix A market-mix work — both ROADMAP-tracked and out of EDGE-004 scope.
+
+**Companion edits in this same closure commit:**
+- `docs/superpowers/specs/2026-05-03-edge-004-lever-menu-design.md` §3-E updated to reflect Codex's empirics + closure verdict.
+- §5 sequencing updated A → B → E → C → D ⇒ A → B → C → D.
+
+**Spec body below is preserved for historical context.** It documents the original design intent that the audit invalidated. Do not re-implement against this spec; treat it as a closed entry.
+
+---
+
+## HISTORICAL — Original design intent (drafted 2026-05-03, invalidated same day)
+
+The text below is the as-drafted Lever E spec. It is preserved verbatim for the audit trail. **Do not implement.**
+
+## 1. Why this lever (HISTORICAL)
 
 The EDGE-004 lever menu's revised sequencing puts E third after A and B. Codex's 2026-05-03 source-class diversification audit (`docs/governance/2026-05-03-source-class-diversification-audit.md`) shows 142/260 OPPORTUNITY events are *single-source-class* — meaning a candidate can clear today's readiness gates with evidence from one source class only. The G2 gate (`evidence_source_class_diversity ≥ 2`) is the existing *class*-level corroboration check; Lever E adds a stricter *source-instance* check on top.
 

@@ -72,15 +72,18 @@ Each lever lists: target mechanism, expected impact direction, blast radius, siz
 - **Dependencies:** post-MATCH-001 + post-OBS-003 + post-Lever-A landing. Don't size or land D until A's data has landed.
 - **Verdict (revised post-audit):** **demoted from secondary to tertiary.** Only consider D if Levers A + B + E all succeed at lifting edge but LLM call budget then becomes the bottleneck. If the Wave-1 stack stabilises within budget, D is unnecessary; if A/B/E stall on edge production, D doesn't help (it doesn't produce edge).
 
-### Lever E — Source-quality weighting (multi-source corroboration requirement)
+### Lever E — Source-quality weighting (multi-source corroboration requirement) — **CLOSED 2026-05-03**
 
-- **Mechanism:** require N≥2 distinct sources to corroborate before a candidate clears the readiness gate. Today single-source candidates can produce trades; this changes the gate to require corroboration.
-- **Expected impact:** large on trade *rate* (down) and *quality* (up). Cuts trade rate further before lifting edge.
-- **Blast radius:** new gate in `trade_readiness_gate` or `decision_blender`. Decision-path edit.
-- **Sizing cost:** MED — count single-source vs multi-source OPPORTUNITY events in the 13-day archive; size the cut.
-- **Risk shape:** HIGH. Combined with MATCH-001's expected suppression lift, this lever could halve trade rate again. Premature absent compelling evidence.
-- **Dependencies:** post-MATCH-001 + post-OBS-003 attribution data.
-- **Verdict (revised post-Lever-D audit):** promoted from "land only if A + B + D fail" to "evaluate after A and B." Lever D's audit (`2026-05-03-edge004-lever-d-pre-llm-gate-audit.md`) demoted D to tertiary; E now occupies D's former secondary slot. Sizing cost stays MED, dependencies unchanged.
+- **Mechanism (as drafted):** require N≥2 distinct sources to corroborate before a candidate clears the readiness gate. Today single-source candidates can produce trades; this changes the gate to require corroboration.
+- **Codex 2026-05-03 sizing audit** (`docs/governance/2026-05-03-lever-e-source-corroboration-sizing.md`, commit `e5b7213`):
+  - source-CLASS distribution: `{0: 9, 1: 142, 2: 100, 3: 9}` → N≥2 retains 109/260 OPP but kills **3/3 historical PAPER_TRADE** (all sit in N=1).
+  - source-INSTANCE distribution: `{0: 9, 1: 251}` — source-instance ≥ 2 **never happens** in the archive. N≥2 retains 0/260.
+- **All three framings dead:**
+  - source-INSTANCE N≥2: structurally infeasible (pipeline always joins ≤ 1 source per blend).
+  - source-CLASS N≥2 without fast-lane exemption: trade-rate killer (zero historical paper trades retained).
+  - source-CLASS N≥2 with fast-lane exemption: redundant with G2 (`tasks/trade_readiness_gate.py:192`).
+- **Verdict: CLOSED — out of EDGE-004 closure path.** See `docs/superpowers/specs/2026-05-03-edge-004-lever-e-multi-source-corroboration-design.md` §0 for the closure note.
+- **Closure consequence:** EDGE-004 closure path shrinks from A → B → E → C → D to **A → B → C → D** (D outside the closure path per its own demotion). Realistic edge-production lever is just Lever A; B is attribution-only; C is cross-series risk-control. If A stalls, escalation to PROFIT-LLM-001 or P4-GATE Appendix A is the honest next step.
 
 ### Lever F — Market-mix specificity (P4-GATE territory)
 
@@ -102,19 +105,27 @@ EDGE-004 closes OPEN → COMPLETE when:
 
 Closure does **not** require all levers to land. EDGE-004 closes when *one* lever produces the lift; remaining levers either re-open as their own debt entries or get filed as future follow-ups.
 
-## 5. Sequencing recommendation (revised 2026-05-03 post-Lever-A audit + post-Lever-D audit)
+## 5. Sequencing recommendation (revised 2026-05-03 — Lever E closed)
 
-The original sequence had A → D → B → E → C. Codex's 2026-05-03 source-class audit already revised Lever A from "weight tweak" to "intake diversification" (see `2026-05-03-edge-004-lever-a-source-class-diversification-design.md`). Codex's 2026-05-03 Lever D audit demotes D from secondary to tertiary (see §3-D). The updated sequence is **A → B → E → C → D**:
+The sequence has gone through three revisions on 2026-05-03 as Codex's empirics landed:
+
+1. Original (drafted): A → D → B → E → C
+2. Post-Lever-D audit: A → B → E → C → D (D demoted to tertiary)
+3. **Current — post-Lever-E sizing audit: A → B → C → D (E closed as out-of-scope)**
+
+The current sequence:
 
 1. **Wait for Lever A intake-diversification verdict.** Stage A.0 calibration check is cheap; Stage A.1 first-feed sizing happens during the post-soak base-stack validation windows.
 2. **If Lever A's first feed lifts conversion to ≥ 5 % over 14 d:** EDGE-004 closes. Stop here.
-3. **If Lever A stalls (after 2 feeds, no rate lift):** evaluate Lever B (G1 calibration tightening) using the post-OBS-003 attribution dataset. Land B post-MATCH-001 + post-OBS-003 + post-Lever-A-stall confirmation.
-4. **If A and B both stall:** evaluate Lever E (multi-source corroboration). E's HIGH risk shape means it lands only with explicit operator sign-off and a tight-loop validation plan.
-5. **If A + B + E stall on edge production:** Lever C (cross-series headline correlation, EXEC-002 Approach 2) becomes the next investigation. Codex must first size cross-series-single-headline overlap rate; if < 5 %, skip C entirely.
-6. **Lever D (pre-LLM gate re-enablement)** sits outside this sequence. Land D only if the Wave-1 stack + a successful Lever A/B/E lift creates LLM call-budget pressure. D doesn't produce edge; it only compresses volume to control cost. Apply as needed, not as part of the closure path.
+3. **If Lever A stalls (after 2 feeds, no rate lift):** evaluate Lever B (G1 calibration tightening) using the post-OBS-003 attribution dataset. Land B post-MATCH-001 + post-OBS-003 + post-Lever-A-stall confirmation. Per Codex's G1 admittance counterfactual, B is an attribution lever, not an edge lever — predicted lift 1-2 trades / 14 d.
+4. **If A and B both stall on edge production:** Lever C (cross-series headline correlation, EXEC-002 Approach 2) becomes the next investigation. Codex's audit already confirmed 49.2 % cross-series overlap (commit `ed3c57d`); spec at `2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md`. Land if A + B both fail to close EDGE-004.
+5. **Lever D (pre-LLM gate re-enablement)** sits outside this sequence. Land D only if the Wave-1 stack + a successful Lever A/B/C lift creates LLM call-budget pressure. D doesn't produce edge.
+6. **Lever E (multi-source corroboration)** is **CLOSED** as of 2026-05-03 per Codex's sizing audit (`docs/governance/2026-05-03-lever-e-source-corroboration-sizing.md`). Source-INSTANCE distribution `{0: 9, 1: 251}` makes the lever structurally infeasible; source-CLASS without fast-lane exemption kills 3/3 historical paper trades; source-CLASS with fast-lane exemption is redundant with G2. See `2026-05-03-edge-004-lever-e-multi-source-corroboration-design.md` §0 for the closure note.
 7. **Lever F (P4-GATE / Appendix A market-mix)** stays out of EDGE-004 scope. ROADMAP-tracked, separate decision.
 
 This is a probabilistic sequence. Each step's verdict modifies the prior on the next; abandon a lever after 2 honest attempts rather than burn unbounded calendar time on a hypothesis the data didn't support.
+
+**Honest read post-2026-05-03 empirics:** the realistic edge-production lever is just Lever A. B and C are risk-control / attribution levers. If A's intake-diversification (classifier fix + new feeds) doesn't lift conversion to ≥ 5 %, EDGE-004 closure honestly requires escalation to a wider-scope program (PROFIT-LLM-001 or P4-GATE Appendix A) — both already tracked outside EDGE-004 scope.
 
 ## 6. Risk
 
