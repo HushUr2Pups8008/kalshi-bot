@@ -15,6 +15,7 @@ from scripts.botcheck import (
     ProcessInfo,
     _bot_pids,
     _caffeinate_pids,
+    _default_repo_root,
     human_duration,
     parse_sessions,
     print_bot_section,
@@ -333,3 +334,46 @@ def test_caffeinate_section_shown_when_bot_and_caffeinate_both_present(capsys):
     assert "Caffeinate PID: 74107" in out
     assert "not related" not in out
     assert "not running" not in out
+
+
+# ---------------------------------------------------------------------------
+# _default_repo_root — portability helper
+# ---------------------------------------------------------------------------
+
+def test_default_repo_root_respects_kalshi_home_env(monkeypatch, tmp_path):
+    """KALSHI_HOME env var beats every detection heuristic."""
+    monkeypatch.setenv("KALSHI_HOME", str(tmp_path / "explicit"))
+    assert _default_repo_root() == tmp_path / "explicit"
+
+
+def test_default_repo_root_prefers_hyphen_when_both_exist(monkeypatch, tmp_path):
+    """When KALSHI_HOME is unset, kalshi-bot (hyphen) wins over kalshi_bot."""
+    monkeypatch.delenv("KALSHI_HOME", raising=False)
+    fake_home = tmp_path / "home"
+    (fake_home / "vscode" / "kalshi-bot").mkdir(parents=True)
+    (fake_home / "vscode" / "kalshi_bot").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+
+    assert _default_repo_root() == fake_home / "vscode" / "kalshi-bot"
+
+
+def test_default_repo_root_falls_back_to_underscore_when_only_legacy_exists(
+    monkeypatch, tmp_path
+):
+    """MacBook legacy layout (kalshi_bot) is detected when hyphen path absent."""
+    monkeypatch.delenv("KALSHI_HOME", raising=False)
+    fake_home = tmp_path / "home"
+    (fake_home / "vscode" / "kalshi_bot").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+
+    assert _default_repo_root() == fake_home / "vscode" / "kalshi_bot"
+
+
+def test_default_repo_root_default_when_neither_dir_exists(monkeypatch, tmp_path):
+    """Final fallback is the canonical hyphen path even if no directory exists."""
+    monkeypatch.delenv("KALSHI_HOME", raising=False)
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+
+    assert _default_repo_root() == fake_home / "vscode" / "kalshi-bot"
