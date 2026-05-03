@@ -54,9 +54,14 @@ class FakeStore:
 class SpyLogger:
     def __init__(self) -> None:
         self.records: list[dict] = []
+        self.skipped_records: list[dict] = []
 
     def log_blend_decision(self, **kwargs) -> None:
         self.records.append(kwargs)
+
+    def log_skipped(self, **kwargs) -> None:
+        # Captures BlendTask-emitted SKIPPED records per PROFIT-OBS-003 (post-soak).
+        self.skipped_records.append(kwargs)
 
 
 class FailingQueue(asyncio.Queue):
@@ -467,3 +472,227 @@ async def test_dossier_with_no_estimate_uses_fast_lane_exemptions():
     result = await task.process_fast_lane_result(_analysis())
 
     assert result.readiness_decision.applied_conditions == ("G1", "G3", "G4")
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-OBS-003 harness — BlendTask SKIPPED-emission for blocked-reason path.
+#
+# Spec: docs/superpowers/specs/2026-05-03-obs-003-blendtask-skipped-emission-design.md
+# Status: pre-loaded during PROFIT-PHASE2-001 soak; do not implement before
+# 2026-05-09. Until BlendTask._emit_skipped lands these tests xfail strictly,
+# so xpass on the day prod code lands forces removal of the markers in CI.
+# ---------------------------------------------------------------------------
+
+from feeds import NewsItem  # noqa: E402  (imported here to keep harness self-contained)
+
+_OBS003_XFAIL_REASON = (
+    "PROFIT-OBS-003: BlendTask._emit_skipped not yet implemented. "
+    "Lands post-soak per docs/superpowers/specs/2026-05-03-obs-003-blendtask-skipped-emission-design.md."
+)
+
+
+def _news_item_for_obs003() -> NewsItem:
+    return NewsItem(
+        headline="Iran-deal headline used by OBS-003 payload-shape pin test",
+        url="https://example.test/obs003",
+        source="Reuters",
+        body="",
+        item_id="obs003-1",
+    )
+
+
+def _analysis_with_news() -> SignalAnalysis:
+    """SignalAnalysis with a populated news_item — required for the payload-shape pin test."""
+    market = _market()
+    return SignalAnalysis(
+        news_item=_news_item_for_obs003(),
+        market=market,
+        estimated_probability=0.72,
+        market_yes_price=market.yes_price,
+        edge=0.72 - market.yes_prob,
+        side="yes",
+        kelly_fraction=0.0,
+        kelly_dollars=0.0,
+        capped_dollars=0.0,
+        reasoning="OBS-003 pin",
+        confidence=0.90,
+        match_score=0.8,
+        llm_direction="up",
+        llm_magnitude="moderate",
+    )
+
+
+def _blocked_blender_factory(reason: str):
+    def _blender(**kwargs):  # noqa: ANN003
+        return BlendResult(
+            blended_p=0.70,
+            blended_confidence=0.04,  # below G1 floor for the G1 case; immaterial otherwise
+            disagreement_score=0.0,
+            blend_mode="blocked_for_test",
+            readiness_gate_min_edge_override=None,
+            trade_blocked_reason=reason,
+            fast_lane_p=0.72,
+            fast_lane_confidence=0.90,
+            accumulation_p=None,
+            accumulation_confidence=None,
+            structural_p=0.20,
+            structural_confidence=0.80,
+        )
+
+    return _blender
+
+
+@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "trade_blocked_reason",
+    [
+        "G1_blended_confidence",
+        "G2_evidence_source_class_diversity",
+        "G3_disagreement_score",
+        "G4_recency_floor",
+        "G5_structural_tier",
+        "G6_recency_score",
+        "structural_tier2_veto: synthetic test",
+    ],
+    ids=["G1", "G2", "G3", "G4", "G5", "G6", "blender_side"],
+)
+async def test_blocked_blend_emits_skipped_record(trade_blocked_reason: str) -> None:
+    """Each blocked-reason path MUST emit exactly one SKIPPED record carrying the reason."""
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        blender=_blocked_blender_factory(trade_blocked_reason),
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(_analysis())
+
+    assert result.candidate is None
+    assert result.trade_blocked_reason == trade_blocked_reason
+    assert queue.empty()
+    # BLEND_DECISION still emits exactly once (existing behaviour).
+    assert len(logger.records) == 1
+    assert logger.records[0]["trade_blocked_reason"] == trade_blocked_reason
+    # NEW: SKIPPED also emits exactly once with the same reason.
+    assert len(logger.skipped_records) == 1, (
+        f"expected one BlendTask-emitted SKIPPED record for {trade_blocked_reason}; "
+        f"got {len(logger.skipped_records)}"
+    )
+    assert logger.skipped_records[0]["reason"] == trade_blocked_reason
+    assert logger.skipped_records[0]["ticker"] == "KXBLEND-1"
+
+
+@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
+@pytest.mark.asyncio
+async def test_unblocked_blend_does_not_emit_blendtask_skipped_record() -> None:
+    """Happy path: candidate enqueued → BlendTask emits zero SKIPPED records.
+
+    Executor-side SKIPPED emission for `_validate()` rejections is a separate
+    codepath and is not exercised here.
+    """
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(
+            dossier=_dossier(),
+            structural_prior=_structural_prior(),
+            evidence=[
+                _evidence("ev-news-1", source_class="news"),
+                _evidence("ev-news-2", source_class="news", source="AP"),
+                _evidence("ev-court-1", source_class="court", source="VitalLaw.com"),
+            ],
+        ),
+        logger=logger,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(_analysis())
+
+    assert result.candidate is not None
+    assert result.trade_blocked_reason is None
+    assert queue.qsize() == 1
+    assert len(logger.records) == 1  # BLEND_DECISION still fires
+    assert logger.skipped_records == [], (
+        "BlendTask must not emit SKIPPED on the happy path"
+    )
+
+
+@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
+@pytest.mark.asyncio
+async def test_skipped_payload_carries_blended_edge_not_fast_lane_edge() -> None:
+    """Pin spec §5: BlendTask-emitted SKIPPED records carry the *post-blend*
+    `model_probability` and `edge`, not the fast-lane raw values.
+
+    This is the load-bearing payload-shape decision that audit consumers
+    (bothealth.sh, governance Phase 2 reasoning, future readiness-gate
+    calibration) depend on. Regressing this re-introduces the discontinuity
+    between OPPORTUNITY's raw-edge and SKIPPED's reported edge.
+    """
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+
+    fast_lane = _analysis_with_news()  # estimated_probability=0.72, market_yes_price=50
+    # Blender pushes a different blended_p so we can distinguish post-blend vs fast-lane.
+    blended_p_value = 0.61
+
+    def _blender(**kwargs):  # noqa: ANN003
+        return BlendResult(
+            blended_p=blended_p_value,
+            blended_confidence=0.04,
+            disagreement_score=0.0,
+            blend_mode="blocked_for_payload_pin",
+            readiness_gate_min_edge_override=None,
+            trade_blocked_reason="G1_blended_confidence",
+            fast_lane_p=fast_lane.estimated_probability,
+            fast_lane_confidence=fast_lane.confidence,
+            accumulation_p=None,
+            accumulation_confidence=None,
+            structural_p=0.20,
+            structural_confidence=0.80,
+        )
+
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        blender=_blender,
+        is_paper_mode=True,
+    )
+
+    await task.process_fast_lane_result(fast_lane)
+
+    assert len(logger.skipped_records) == 1
+    record = logger.skipped_records[0]
+
+    # The post-blend probability rides the SKIPPED record, not the fast-lane raw.
+    assert record["model_probability"] == pytest.approx(blended_p_value), (
+        "BlendTask SKIPPED.model_probability must be blended_p, not fast_lane.estimated_probability"
+    )
+    assert record["model_probability"] != pytest.approx(fast_lane.estimated_probability), (
+        "regression guard: model_probability must not equal fast-lane raw"
+    )
+
+    # market_price is sourced from the fast-lane analysis (it does not change at blend time).
+    assert record["market_price"] == pytest.approx(fast_lane.market_yes_price)
+
+    # edge is the post-blend edge: blended_p - market_yes_price/100.0 (executor convention).
+    expected_edge = blended_p_value - fast_lane.market_yes_price / 100.0
+    assert record["edge"] == pytest.approx(expected_edge, abs=1e-6)
+
+    # Reason mirrors the trade_blocked_reason.
+    assert record["reason"] == "G1_blended_confidence"
+
+    # Method = "llm" because the fast-lane analysis carries llm_* fields.
+    assert record["method"] == "llm"
+    assert record["llm_direction"] == "up"
+    assert record["llm_magnitude"] == "moderate"
+
+    # Headline / source forwarded from the news_item.
+    assert record["ticker"] == fast_lane.market.ticker
+    assert record["source"] == "Reuters"
+    assert record["headline"].startswith("Iran-deal headline")
