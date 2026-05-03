@@ -139,6 +139,84 @@ _PROBES: tuple[Probe, ...] = (
             ],
         },
     ),
+    Probe(
+        probe_id="POS_zenlesszonezeroleaks",
+        description=(
+            "Production reproducer: promotional/beta leak subreddit, 25 ingestion, "
+            "zero fresh-pass/matches. Expect: disable_source."
+        ),
+        expected_action="disable_source",
+        evidence={
+            "target": "r/zenlesszonezeroleaks_",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 25,
+            "fresh_pass_count": 0,
+            "match_count": 0,
+            "anchor_rate": None,
+            "recent_headline_sample": [
+                "Version 2.0 beta signup opens with new character animations",
+                "Upcoming banner leak: limited S-rank agent kit and splash art",
+                "Preload package references new event shop rewards",
+                "Closed beta gameplay clip shows unreleased combat challenge",
+                "Promotional livestream code and patch-note speculation thread",
+            ],
+        },
+    ),
+    Probe(
+        probe_id="POS_tradewithcongress",
+        description=(
+            "Production reproducer: political-trading commentary source, 22 ingestion, "
+            "zero fresh-pass/matches. Expect: disable_source."
+        ),
+        expected_action="disable_source",
+        evidence={
+            "target": "r/tradewithcongress",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 22,
+            "fresh_pass_count": 0,
+            "match_count": 0,
+            "anchor_rate": None,
+            "recent_headline_sample": [
+                "Weekly congressional portfolio tracker: unusual options volume",
+                "Member disclosure shows routine fund purchase after filing delay",
+                "Discussion: best broker for tracking politician trades",
+                "House member sells tech ETF before committee hearing",
+                "Spreadsheet update: congressional trading leaderboard for April",
+            ],
+        },
+    ),
+    Probe(
+        probe_id="POS_allthingsjenna",
+        description=(
+            "Production reproducer: personality/entertainment subreddit, no useful "
+            "signal in the window. Expect: disable_source."
+        ),
+        expected_action="disable_source",
+        evidence={
+            "target": "r/allthingsjenna",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 21,
+            "fresh_pass_count": 0,
+            "match_count": 0,
+            "anchor_rate": None,
+            "recent_headline_sample": [
+                "New red carpet photos from last night's premiere",
+                "Interview clip sparks fan debate about upcoming role",
+                "Throwback magazine cover appreciation thread",
+                "Behind-the-scenes video from commercial shoot",
+                "Fan edit roundup: favorite recent press moments",
+            ],
+        },
+    ),
 
     # ── NEG_A: high-signal source — should NOT be disabled ───────────────────
     # Realistic high-signal Reddit-style source: high ingestion, high
@@ -178,6 +256,78 @@ _PROBES: tuple[Probe, ...] = (
             ],
         },
     ),
+    Probe(
+        probe_id="NEG_A_anchor_rate_020",
+        description=(
+            "Clear keep: high fresh-pass/match volume with anchor_rate=0.20. "
+            "Expect: no_action."
+        ),
+        expected_action="no_action",
+        evidence={
+            "target": "r/geopolitics_anchor020",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 44,
+            "fresh_pass_count": 16,
+            "match_count": 12,
+            "anchor_rate": 0.20,
+            "recent_headline_sample": [
+                "Trump said dispatching Witkoff, Kushner for talks with Iran FM in Pakistan in coming days",
+                "US Senate passes ICE funding resolution after vote-a-rama: What's next?",
+                "US-Iran Peace Talks Stall as Trump Scraps Diplomatic Visit",
+                "FISA Section 702 renewal moves to floor as deadline approaches",
+                "Vance lands in Pakistan as Trump-Iran diplomacy intensifies",
+            ],
+        },
+    ),
+    Probe(
+        probe_id="NEG_A_low_volume_high_fidelity",
+        description=(
+            "Clear keep: low-volume source with 8 ingestion, 5 fresh-pass, "
+            "4 matches. Expect: no_action."
+        ),
+        expected_action="no_action",
+        evidence={
+            "target": "r/policywire_low_volume",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 8,
+            "fresh_pass_count": 5,
+            "match_count": 4,
+            "anchor_rate": 0.25,
+            "recent_headline_sample": [
+                "Senate leadership schedules final vote on budget resolution",
+                "White House confirms Pakistan stop remains under discussion",
+                "FOMC officials signal no rate hike before next meeting",
+                "China trade negotiators prepare draft signing timetable",
+                "FISA renewal language added to must-pass floor package",
+            ],
+        },
+    ),
+    Probe(
+        probe_id="NEG_A_zero_ingestion_no_action",
+        description=(
+            "No current-window data: high historical anchor rate but zero ingestion. "
+            "Neither disable nor keep is justified. Expect: no_action."
+        ),
+        expected_action="no_action",
+        evidence={
+            "target": "r/dormant_geo_source",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 0,
+            "fresh_pass_count": 0,
+            "match_count": 0,
+            "anchor_rate": 0.98,
+            "recent_headline_sample": [],
+        },
+    ),
 
     # ── NEG_B: borderline source — calibration probe ─────────────────────────
     # Mid-range metrics: some ingestion, a couple of fresh-passes and one
@@ -207,6 +357,58 @@ _PROBES: tuple[Probe, ...] = (
                 "Trump weighs Pakistan visit amid Iran diplomacy push",
                 "Off-topic headline 1: market rumours about gaming releases",
                 "Off-topic headline 2: celebrity gossip column",
+            ],
+        },
+    ),
+    Probe(
+        probe_id="NEG_B_sparse_mixed_source",
+        description=(
+            "Borderline: sparse but not empty (18 ingestion, 3 fresh-pass, "
+            "1 match, anchor_rate=0.60). Either action defensible."
+        ),
+        expected_action="ambiguous",
+        evidence={
+            "target": "r/mixed_policy_chatter",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 18,
+            "fresh_pass_count": 3,
+            "match_count": 1,
+            "anchor_rate": 0.60,
+            "recent_headline_sample": [
+                "Senators float alternate path for surveillance renewal",
+                "Off-topic thread: campaign merch and rally photos",
+                "Trump adviser hints at trade timeline in TV interview",
+                "Off-topic thread: celebrity podcast reaction roundup",
+                "Pakistan visit speculation resurfaces after regional summit",
+            ],
+        },
+    ),
+    Probe(
+        probe_id="NEG_B_high_anchor_some_signal",
+        description=(
+            "Borderline: enough signal to hesitate, but high anchoring "
+            "(30 ingestion, 5 fresh-pass, 2 matches, anchor_rate=0.80)."
+        ),
+        expected_action="ambiguous",
+        evidence={
+            "target": "r/high_anchor_some_signal",
+            "window_hours": 168,
+            "active_market_count": len(_ACTIVE_MARKET_TITLES_TOP),
+            "active_source_count": 1250,
+            "active_market_titles_top": _ACTIVE_MARKET_TITLES_TOP,
+            "ingestion_events": 30,
+            "fresh_pass_count": 5,
+            "match_count": 2,
+            "anchor_rate": 0.80,
+            "recent_headline_sample": [
+                "Budget resolution whip count tightens ahead of Senate deadline",
+                "Off-topic thread: market memes after prediction miss",
+                "Iran talks headline recirculates without new confirmation",
+                "FOMC preview mostly repeats consensus expectations",
+                "Trade-deal deadline watch: negotiators remain in contact",
             ],
         },
     ),
