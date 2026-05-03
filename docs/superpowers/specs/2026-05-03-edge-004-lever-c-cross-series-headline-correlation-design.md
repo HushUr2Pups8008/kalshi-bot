@@ -105,7 +105,7 @@ If Codex's audit greenlights the lever, implementation is:
 
 - `tasks/blend_task.py`:
   - New instance attribute `self._recent_headline_enqueues: dict[str, float]` (mirroring EXEC-002's `_recent_series_enqueues`).
-  - New helper `_headline_hash(headline: str) -> str` (per §3.1 v1).
+  - New helper `_headline_hash(headline: str) -> str` (per §3.2 normalized-string v1 — this is the surface Codex's 49.2 % overlap audit validated).
   - Cross-series check inserted *after* EXEC-002's same-series check, *before* `_emit_blend_decision`.
   - On successful enqueue, update both `_recent_series_enqueues` and `_recent_headline_enqueues`.
 - `config.py`:
@@ -122,7 +122,7 @@ If Codex's audit greenlights the lever, implementation is:
 ## 6. Risk
 
 - **Composition with EXEC-002 (same-series guard).** EXEC-002 fires first; for FISA-shape bursts (same series + same headline), EXEC-002 already catches them. Lever C only adds value for *different-series + same-headline* bursts. Composition is straightforward — both checks are instance-state-mutation-on-enqueue patterns that don't interact.
-- **False-positive risk on identical generic headlines.** Wire services can emit a single short headline on multiple distinct topics ("Trump signs order"). v1 §3.1 exact-string would collapse them — but they're typically routed to different series prefixes anyway, and EXEC-002's 1 h window means a short coincidental collision is bounded. Mitigation: keep the conservative 1 h window default; don't tighten without empirical justification.
+- **False-positive risk on identical generic headlines.** Wire services can emit a single short headline on multiple distinct topics ("Trump signs order"). v1 §3.2 normalized-string would collapse them — but they're typically routed to different series prefixes anyway, and EXEC-002's 1 h window means a short coincidental collision is bounded. Mitigation: keep the conservative 1 h window default; don't tighten without empirical justification.
 - **Restart resets the tracker.** Same shape as EXEC-002 §6 — `_recent_headline_enqueues` is in-memory; bot restart clears it. EXEC-002's mitigation pattern (seed from `paper_trades.db` on construction) extends naturally; seed `_recent_headline_enqueues` from `paper_trades.headline` (joined with `_headline_hash` post-fact) for entries newer than `now - window`. If the table doesn't carry headline columns, fall back to a no-seed strategy and accept the post-restart blind window.
 - **Soak invariant.** Lever C is a decision-path edit on `tasks/blend_task.py`. Cannot land mid-soak. Must wait until base stack stabilises + Lever A/B verdicts.
 
@@ -155,7 +155,7 @@ If after Lever B's verdict (~2026-06-13) Lever C becomes the chosen path, draft 
 
 ## 11. Out of scope
 
-- **§3.2 / §3.3 hash functions.** Land §3.1 first; revisit only if needed.
+- **§3.1 / §3.3 hash functions.** §3.2 normalized-string is v1 (per the post-Codex-audit recommendation in §3 and §5). §3.1 raw-exact stays documented as the fallback if §3.2's regex over-collapses in production. §3.3 token-Jaccard remains out of scope until/unless §3.2 is insufficient.
 - **Combined headline + same-series logic.** EXEC-002 already handles same-series; Lever C is strictly the cross-series complement. No interaction logic beyond ordering the two checks.
 - **`_headline_hash` reuse for upstream dedup.** Different concern (upstream feed dedup is in `feeds/dedup.py`); don't conflate decision-path correlation with intake-path dedup.
 - **Per-source headline-correlation windows.** Single global window is sufficient. Per-source windows are over-engineering.

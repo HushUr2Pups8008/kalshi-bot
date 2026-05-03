@@ -68,9 +68,9 @@ Each lever lists: target mechanism, expected impact direction, blast radius, siz
 - **Blast radius:** two config flags; no code change.
 - **Sizing cost:** LOW — Codex's `scripts/simulations/pre_llm_gate_reenable_audit.py` (commit `e1eccd6`) already swept the 13-day archive at floors `{0.04, 0.05, 0.06, 0.08}`.
 - **Codex 2026-05-03 audit verdict (`docs/governance/2026-05-03-edge004-lever-d-pre-llm-gate-audit.md`):** Lever D is **volume-destructive**. Floors 0.04–0.06 retain only **67/260 OPPORTUNITY records** (-74 %); floor 0.08 retains **56/260** (-78 %). All 3 PAPER_TRADE records are preserved at every floor; 4/5 nonzero-edge records are preserved. The lever lifts average match quality by killing volume — but the 67/260 retention is *worse than MATCH-001 (B') at 87/260* without delivering MATCH-001's edge-production lift. Codex's recommendation: **secondary noise/budget knob, not a primary EDGE-004 lever.** Stack atop MATCH-001 only if LLM call budget becomes the binding operational constraint after Wave 1 lands.
-- **Risk shape:** LOW-MED on the *code* surface (two config flags). HIGH on the *strategic* surface — landing D before A / B / E forecloses experimentation room because D's compression compounds with everything downstream.
+- **Risk shape:** LOW-MED on the *code* surface (two config flags). HIGH on the *strategic* surface — landing D before A / B / C forecloses experimentation room because D's compression compounds with everything downstream.
 - **Dependencies:** post-MATCH-001 + post-OBS-003 + post-Lever-A landing. Don't size or land D until A's data has landed.
-- **Verdict (revised post-audit):** **demoted from secondary to tertiary.** Only consider D if Levers A + B + E all succeed at lifting edge but LLM call budget then becomes the bottleneck. If the Wave-1 stack stabilises within budget, D is unnecessary; if A/B/E stall on edge production, D doesn't help (it doesn't produce edge).
+- **Verdict (revised post-audit):** **demoted from secondary to tertiary.** Only consider D if Levers A + B + C all succeed at lifting edge but LLM call budget then becomes the bottleneck. If the Wave-1 stack stabilises within budget, D is unnecessary; if A/B/C stall on edge production, D doesn't help (it doesn't produce edge).
 
 ### Lever E — Source-quality weighting (multi-source corroboration requirement) — **CLOSED 2026-05-03**
 
@@ -130,7 +130,7 @@ This is a probabilistic sequence. Each step's verdict modifies the prior on the 
 ## 6. Risk
 
 - **Lever soak after lever soak.** EDGE-004 may need 2–3 lever attempts before closure, each requiring its own attribution window. Total wall-clock from 2026-05-09 to closure could be 30–60 days. That's the *honest* timeline; collapsing it requires accepting under-attributed lifts.
-- **Lever interaction.** B + E together may produce a non-linear interaction (admitting more candidates *and* requiring corroboration could either cancel out or compound). Land levers serially with attribution windows between them.
+- **Lever interaction.** B + C together may produce a non-linear interaction (admitting more candidates via G1 calibration *and* suppressing cross-series headline correlation could either cancel out or compound on the trade-rate axis). Land levers serially with attribution windows between them. (The original B + E interaction risk noted here pre-Lever-E-closure is moot — Lever E is closed; see §3-E.)
 - **EDGE-004 closure ambiguity.** "Measurable lift" requires a definition. Recommend: 7+ PAPER_TRADE events in a 14-day window (roughly 2.3× the 13-day baseline of 3 trades). Calibrate against Codex's source-class diversification audit results before locking the threshold.
 
 ## 7. Soak-window contract
