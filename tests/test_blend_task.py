@@ -5,6 +5,7 @@ import pytest
 
 from analysis import SignalAnalysis
 from analysis.decision_blender import BlendResult
+from config import cfg
 from kalshi import KalshiMarket
 from tasks.blend_task import (
     BlendTask,

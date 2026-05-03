@@ -1107,16 +1107,22 @@ class TestCooldownSentinelOBS005:
         the paper cooldown. This is the actual bug shape Codex flagged.
         Post-fix: sentinel becomes `float('-inf')`, `elapsed = +inf`, never
         trips. Behavior pin without depending on the literal sentinel text.
+
+        Codex review of 56d641e (F3): assertion strengthened from "no
+        cooldown string" to `_validate(...) is None` so a fully-passing
+        analysis is required — catches a regression where the cooldown
+        branch passes but a sibling branch starts blocking.
         """
         # Force monotonic small so the bug is observable under non-zero cooldown.
         monkeypatch.setattr("trading.executor.time.monotonic", lambda: 100.0)
-        ex = _make_paper_executor_for_obs005(monkeypatch, paper_cooldown_secs=14400)
+        ex, _rest, _paper = _make_paper_executor(monkeypatch)
         assert ex._last_traded == {}
+        assert ex._is_paper is True
 
-        # Build a paper-mode analysis that passes every other gate in `_validate`:
-        # capped_dollars (paper skips); edge ≥ effective_min_edge; market.status
-        # in {open, active}; price within paper [2,98]; only the cooldown branch
-        # should be exercised on a never-traded ticker.
+        # Analysis fixture passes every other gate in `_validate`:
+        # capped_dollars (paper skips); edge ≥ effective_min_edge=0.04;
+        # market.status="active"; yes_price=50 (within paper [2,98]). Only the
+        # cooldown branch decides the outcome on a never-traded ticker.
         analysis = _make_analysis(
             ticker="KXNEVERTRADED-26DEC31",
             yes_price=50.0,
@@ -1124,19 +1130,11 @@ class TestCooldownSentinelOBS005:
             estimated_prob=0.60,
             capped_dollars=10.0,
         )
-        # `_make_analysis` sets `market.status = "active"`; ensure paper-side skip-reasons exclude
-        # cooldown for our never-traded ticker.
-        from trading.executor import TradeExecutor
-        # Paper mode flag must be set on the executor instance.
-        ex._is_paper = True
         result = ex._validate(analysis)
-        # The validation must NOT return a paper-cooldown rejection for a never-traded ticker.
-        # (Other rejection reasons would be a fixture defect; pin the cooldown branch only.)
-        if isinstance(result, str):
-            assert "paper cooldown" not in result.lower(), (
-                "never-traded ticker tripped paper cooldown despite empty `_last_traded`; "
-                f"reason: {result!r}"
-            )
+        assert result is None, (
+            "never-traded ticker must fully pass _validate post-fix "
+            f"(no cooldown trip and no sibling-branch regression); got: {result!r}"
+        )
 
     @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
     def test_ci_conftest_no_longer_zeroes_cooldowns(self):

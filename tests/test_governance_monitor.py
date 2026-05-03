@@ -103,7 +103,6 @@ def test_json_output_round_trips(tmp_path, capsys):
 #     "GOVERNANCE_DECISION_VALIDATION_ERROR".
 # ---------------------------------------------------------------------------
 
-import os
 from pathlib import Path
 
 import pytest
@@ -121,19 +120,23 @@ def _expected_repo_root() -> Path:
 
 @pytest.fixture
 def _gm_module_reload_isolation(monkeypatch):
-    """F3 (Codex review): isolate module-default mutations so KALSHI_HOME-patched
-    reloads don't leak constants into later tests in the same process.
+    """Isolate module-default mutations so KALSHI_HOME-patched reloads don't
+    leak constants into later tests in the same process.
 
-    Yields the freshly reloaded module under whatever env is set by the time
-    the test reads it. After the test, restores the env (via monkeypatch's
-    own teardown) and re-imports the module a second time so subsequent tests
-    see clean module-level constants.
+    Codex review of 56d641e flagged a teardown-ordering bug in the original
+    F3 fix: pytest tears down dependent fixtures before their dependencies,
+    so `_gm_module_reload_isolation` (depends on `monkeypatch`) tore down
+    BEFORE `monkeypatch` undid the env. The reload therefore re-evaluated
+    the module under the still-patched env. Fix: explicitly call
+    `monkeypatch.undo()` *inside* the teardown before reloading. The second
+    automatic monkeypatch.undo at fixture-teardown time is then a no-op.
     """
     import importlib
     from scripts import governance_monitor as _gm
     yield _gm
-    # Teardown: monkeypatch unwinds env first, then we reload so the module's
-    # _DEFAULT_LOG / _DEFAULT_OVERRIDES re-derive against the restored env.
+    # Teardown: explicitly restore env BEFORE reloading so the module's
+    # _DEFAULT_LOG / _DEFAULT_OVERRIDES re-derive against the *restored* env.
+    monkeypatch.undo()
     importlib.reload(_gm)
 
 
