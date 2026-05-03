@@ -2400,6 +2400,35 @@ Iterate on the prompt against the negative-control harness as the regression gat
 - The harness must continue to be soak-safe across iteration. Specifically, do not have it write to `logs/governance/`, `data/`, or any path under `transfer/`. Output to stdout only; `--json` for machine-readable. Already enforced in the current implementation.
 - This finding does not affect the operational layer of `PROFIT-PHASE2-001`: cycle reliability, `applied=` invariant, KILL_SWITCH count, error rate. Those gates continue to accumulate evidence at the launchd cadence and remain valid acceptance criteria.
 
+**Iteration session log — 2026-05-03 13:19–13:33 UTC** (no production change landed; scratch-only; surfaced for the next session)
+
+A first prompt-iteration pass tested two variants against the harness's expanded 11-probe fixture set (Codex Task 1, commit `d29bb29`, landed mid-session at 13:23 UTC):
+
+- **`V_A`** — `SYSTEM_PROMPT` extended with an "Interpreting the metrics" section (anchor_rate polarity callout: HIGH ≥0.95 = no edge → DISABLE, LOW ≤0.50 = informative → KEEP) plus a "DEFAULT TO no_action" instruction; `DISABLE_SOURCE_TEMPLATE` annotated with the same polarity hint inline. Net diff: ~25 lines added.
+- **`V_A3`** — minimal-touch variant: `SYSTEM_PROMPT` untouched; `DISABLE_SOURCE_TEMPLATE` modified on the single `LLM anchor rate` line only. Net diff: ~1 line.
+
+Cross-variant results across all 11 harness probes (each row = one Ollama call against the live `qwen3:14b` daemon, `temperature=0.0`, `think=False`):
+
+| Run | Time UTC | Variant | Pass / Fail / Empty |
+|---|---|---|---|
+| 1 | 13:19:18 | PROD (3-probe baseline) | 3 valid (`disable_source` × 3) — confirms baseline reproducer |
+| 2 | 13:22:38 | V_A (full 11-probe sweep) | 5 valid / 6 empty — POS cases all empty; 3 NEG_A correctly flipped to `no_action` (conf 0.60–0.75) with sound polarity-aware reasoning ("low LLM anchor rate (25.0%), indicating it provides directional views distinct from market price, which is informative") |
+| 3 | 13:24:46 | V_A3 (full 11-probe sweep) | 0 valid / 11 empty |
+| 4 | 13:25:45 | PROD harness (control) | 0 valid / 11 empty |
+| 5 | 13:31:40 | PROD harness (clean window, post-Codex) | 0 valid / 11 empty |
+| 6 | 13:32:25 | V_A (clean window, immediately after run 5) | 5 valid / 6 empty — same shape as run 2 |
+
+Findings:
+
+1. **The polarity-fix concept is valid.** V_A's NEG_A behaviour is the load-bearing positive: 3/3 NEG_A probes with non-zero anchor_rate flipped to `no_action` with reasoning that explicitly cites the polarity ("low anchor rate ... informative ... directional views distinct from market price"). The model uses the polarity callout when given the opportunity.
+2. **V_A introduces a POS-case regression that is NOT pure prompt content.** Run 6 vs run 5 in the same Ollama state: PROD failed all 11, V_A succeeded on 5/11 — V_A is *more* robust under degraded daemon state, not less. But all 4 POS cases (anchor_rate=None, zero matches) returned empty under V_A even when NEG_A cases succeeded. The empty-response failure mode appears correlated with sparse-evidence shapes (`anchor_rate=None` + zero `match_count`) rather than V_A's prompt content per se.
+3. **Concurrency confound is real.** Codex's commits `d29bb29` (13:23:25 UTC) and `8882f4c` (13:24:33 UTC) for the parallel governance work both required harness validation runs that hit the same Ollama daemon. The exact 13:22–13:28 UTC window where this iteration session ran is also where Codex's PR-validation calls landed. Some empty-response observations in runs 3–5 are attributable to GPU contention rather than prompt content.
+4. **PROFIT-GOV-001's `think=False` fix is not fully sufficient.** Empty `{}` responses still occur under `qwen3:14b + format=json + think=False` for some combination of (a) sparse evidence shapes, (b) concurrent daemon load, (c) prompt-length thresholds. Production launchd cycles have not surfaced this since the 2026-05-02 reset (zero post-baseline PARSE_ERRORs across 74 decisions), so the trigger is something the iteration probe pattern hits more readily than the 2-hour cadence does.
+
+Decision: do **not** land V_A as the production prompt fix. The POS-case empty-response regression would invalidate every production cycle on off-topic-zero-match candidates (which is the bulk of what the heuristic selector flags). Hand the empty-response characterization to a follow-up session with a clean Ollama state and no concurrent harness runs. The polarity-fix idea remains the right starting hypothesis for the eventual fix.
+
+Decision: do **not** file a separate `PROFIT-GOV-003` for the empty-response intermittency yet. The phenomenon needs cleaner characterization (concurrency vs evidence-shape vs prompt-length axes) before it earns its own entry. Track the question inside this entry's iteration log instead.
+
 **Related**
 
 - `PROFIT-PHASE2-001` — direct dependency. The mid-soak halt note added 2026-05-03 records that the §8.5 manual-review criterion is paused pending GOV-002 resolution; the operational criteria continue.
