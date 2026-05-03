@@ -10,16 +10,16 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-05-01 |
+| Last Updated | 2026-05-02 |
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 44 |
 | Open — HIGH | 4 |
 | Open — MEDIUM | 1 |
-| Open — LOW | 3 |
+| Open — LOW | 2 |
 | Items IN_PROGRESS | 1 (PROFIT-PHASE2-001 — soak clock running, no operator action until 2026-05-15) |
-| Items COMPLETE | 33 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003) |
+| Items COMPLETE | 34 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-DOSSIER-001) |
 
 ### High-Risk Areas
 
@@ -468,7 +468,7 @@ Preserved per-record flush/fsync durability but moved async hot-path structured-
 | **Title** | No first-class harness for fast-lane baseline versus multi-lane S4.5 comparison |
 | **Category** | Validation / Testing |
 | **Severity** | HIGH |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | HIGH |
 | **Owner** | Codex |
 | **Depends On** | PROFIT-RUNTIME-001 |
@@ -494,6 +494,9 @@ Add an explicit offline/paper validation harness or documented run flag for base
 
 **Notes**  
 This should be validation tooling, not a production bypass.
+
+**Implementation Notes** (2026-05-02)  
+Added `scripts/simulations/baseline_vs_multilane.py`, an offline/paper-only harness that replays `LLM_POSITIVE_EVENTS_2026_04_26` through a fast-lane baseline and the current multi-lane `BlendTask` path under identical intake. The report includes evaluated candidates, readiness pass/block counts, executor-evaluated candidates, paper trades, acceptance rate, trade frequency per candidate, blend pass/block counts, per-event block/skip reasons, and the multi-lane/baseline trade-frequency ratio. Current fixture output: baseline 5 evaluated / 4 readiness-pass / 4 executor-evaluated / 3 paper trades; multi-lane 5 evaluated / 4 readiness-pass / 4 executor-evaluated / 3 paper trades; frequency ratio `1.0x`, within the 2x anti-overtrading constraint. Added smoke coverage in `tests/test_simulations_smoke.py` and documented the harness in `scripts/simulations/README.md`. Validation: `.venv/bin/python scripts/simulations/baseline_vs_multilane.py --json` and `.venv/bin/pytest tests/test_simulations_smoke.py -q` (39 passed).
 
 ---
 
@@ -1450,6 +1453,8 @@ Operationally, this is observability debt — every OPPORTUNITY that exits the f
 
 **Proposed Fix**
 
+> **Superseded — see the 2026-05-02 forensic addendum below.** A direct read of `trading/executor.py` confirms `_validate()` has no silent-exit branches; every rejection emits a SKIPPED at line 152. The actual silent-exit boundary is `tasks/blend_task.py:204` (BlendTask early-return when `trade_blocked_reason` is non-None). The corrected fix is to emit a SKIPPED record from BlendTask's blocked-reason path, with `reason=trade_blocked_reason` (one of the readiness-gate names `G1_blended_confidence` … `G6_recency_score`, or the blender-side reason). The original (executor-focused) text is preserved verbatim below for historical context.
+
 Audit `trading/executor.py` for early-exit branches in `_validate()` (E1–E12) and either:
 
 1. Route every executor reject through `log_skipped` with a distinct `reason` string (one per gate, e.g. `"opposing_position_guard"`, `"ticker_cooldown_active"`, `"insufficient_balance"`), so post-deploy audits can attribute the kill to a specific gate. Lower-friction; preserves the existing SKIPPED schema.
@@ -1512,6 +1517,53 @@ The silent-exit rate is consistent across the entire 13-day window (92.3% lifeti
 - A 24h paper-mode audit on the **Mac Studio** (post-cutover; the MacBook is no longer the source of new audit windows) confirms `OPPORTUNITY = paper_trades + SKIPPED` within ±N for at-the-moment in-flight (N small).
 - SKIPPED reasons are diverse enough to attribute kills to specific executor gates (E1–E12 named per the README's Executor section).
 - **The 2 historical positive-edge silent-exit candidates** (+0.06 and +0.064 in the trade-log archive) are explainable post-fix: re-running `_validate()` against the persisted candidate state should produce a SKIPPED record with a specific gate name (likely opposing-position guard, same-signal guard, or per-ticker cooldown).
+
+**Forensic addendum** (2026-05-02, soak-window read-only source-tree audit)
+
+*Prior hypothesis is wrong.* The 2026-05-01 forensic addendum below claims early-exit branches in `trading/executor.py:_validate()` bypass the SKIPPED log call site. A direct read of `trading/executor.py` (498 LOC, full read 2026-05-02) refutes this:
+
+- `_validate()` at lines 183–303 returns a non-None `skip_reason` string from **every** rejection branch: `capped_dollars=0` (live only), `edge below min_edge`, `market status`, `price near limit`, `paper cooldown`, `opposing position`, `paper duplicate skip`, `same-signal skip`, `concentration limit`, live `cooldown`, `LIVE HALTED`, `insufficient live balance`. **No silent return path exists.**
+- `execute()` at lines 121–153 unconditionally awaits `write_trade_log_async(trade_log.log_skipped, ...)` for every non-None `skip_reason`. **There is no executor-side bypass of the SKIPPED log.**
+
+The 2026-05-01 addendum's cooldown hypothesis on KXMOCTRUMP25 and time-discount hypothesis on KXTXRUNOFFENDORSE both attribute the silent exit to executor gates that *do* in fact emit SKIPPED records. Both hypotheses are therefore unsupported by the source tree.
+
+*Correct silent-exit boundary.* `OPPORTUNITY` is emitted at [`main.py:772`](../main.py) — **upstream** of BlendTask routing. The candidate then flows:
+
+```
+main.py:772  log_opportunity   →
+main.py:839  _route_analysis_through_blend(analysis)   →
+tasks/blend_task.py:148  BlendTask.process_fast_lane_result   →
+  blend → readiness gate (evaluate_readiness)
+  emit BLEND_DECISION (always; lines 195–202)
+  if trade_blocked_reason is not None → return early, enqueued=False  ← SILENT EXIT
+  else → put on trading_queue → executor → _validate → log_skipped
+```
+
+The block at [`tasks/blend_task.py:204`](../tasks/blend_task.py) is the actual silent-exit branch: when either `blend_result.trade_blocked_reason` (blender-side, e.g. structural-instability or post-blend min-edge) or `readiness.trade_blocked_reason` (G1–G6) is non-None, the candidate is dropped without producing a SKIPPED record. Only `BLEND_DECISION` carries the kill reason, and only via its `trade_blocked_reason` field.
+
+*Readiness-gate `trade_blocked_reason` enum.* From [`tasks/trade_readiness_gate.py:172–207`](../tasks/trade_readiness_gate.py):
+`G1_blended_confidence`, `G2_evidence_source_class_diversity`, `G3_disagreement_score`, `G4_regime_confidence`, `G5_dossier_drift_suspect`, `G6_recency_score`. The first non-empty `failure_reasons` entry becomes `trade_blocked_reason`. Plus blender-side reasons set inside `_blender(...)` (out of scope for this read; tracked via the same field).
+
+*Per-ticker concentration revised.* The 109 silent exits on `KXTRUMPIRAN-26MAY01` cannot be the executor's 4-hour cooldown (cooldown emits SKIPPED). The likely concentration driver is **G1** (`scaled_confidence = blended_confidence × regime_confidence < 0.05`): KXTRUMPIRAN's categorical prior gives `rc ≈ 0.27`, and a dossier-present candidate has accumulation-lane dilution against a fast-lane signal, frequently producing `blended_confidence × 0.27 < 0.05`. Confirmable post-fix by counting `BLEND_DECISION` records with `trade_blocked_reason="G1_blended_confidence"` per ticker.
+
+*Two positive-edge non-trades reframed.* The OPPORTUNITY-emitted edge at `main.py:777` is the raw fast-lane edge **before** blending. Both `+0.06` (KXMOCTRUMP25) and `+0.064` (KXTXRUNOFFENDORSE) entered BlendTask; the blender computed `blended_p` against accumulation/structural lanes (each likely ≈ 0.5 with low confidence) and produced a diluted edge that fell below either `G1` (most likely) or, less commonly, the blender's internal `default_min_edge` floor. Either way the kill is at `tasks/blend_task.py:204`, not in the executor. Confirmable from the matching `BLEND_DECISION` records' `blended_p` and `trade_blocked_reason` fields — already in the trade log; no new instrumentation required for confirmation.
+
+*Fix re-scoping.* The original Proposed Fix above ("audit `trading/executor.py` for early-exit branches in `_validate()`") targets the wrong file. The correct fix is in `tasks/blend_task.py`: at line 204, when `trade_blocked_reason is not None`, emit a SKIPPED log record carrying `reason=trade_blocked_reason` (one of the readiness-gate names or the blender-side reason). Existing `BLEND_DECISION` already carries the same field, so the SKIPPED emission is redundant for full-fidelity audit consumers — but unifies the trade-log accounting `OPPORTUNITY = SKIPPED + paper_trades + in-flight` for all consumers that key off the SKIPPED stream (governance Phase 2 reasoning, `bothealth.sh` daily aggregator, future readiness-gate calibration runs). Minor risk: the post-fix SKIPPED count will jump from 17 to ~257 over a 13-day window, which is correct behaviour but downstream tooling that assumed "SKIPPED is rare" needs review (bothealth aggregator's per-day skip-reason histogram is the obvious consumer; per recent commit `9023561` it already groups by reason, so the histogram just gets richer).
+
+*Confirmation lever.* Pre-fix audit query on the existing trade-log archive can already attribute every silent exit:
+
+```bash
+# For each OPPORTUNITY without a matching SKIPPED or PAPER_TRADE,
+# look up the matching BLEND_DECISION (joined on ticker + timestamp window)
+# and read trade_blocked_reason. If null, the candidate enqueued and the
+# executor consumed it without a SKIPPED — that would be a true bug;
+# if non-null, the kill reason is already in the log just under a
+# different event type.
+```
+
+Pre-fix, the BLEND_DECISION → silent-OPPORTUNITY join is the empirical answer. The OBS-003 fix is purely a log-stream consolidation, not a new diagnostic.
+
+---
 
 **Forensic addendum** (2026-05-01, Mac Studio post-cutover session, full lifetime archive)
 
@@ -1811,6 +1863,65 @@ This entry tracks the cutover as a sequenced operation. Items already complete a
 - `PROFIT-OBS-003` + `PROFIT-OBS-004` (both open as of 2026-05-01) — both surfaced from the same audit that motivated the cutover; closing them is appropriate Studio-side work.
 - README "Mac Studio operational handoff (2026-05-01)" — operator-facing handbook; this entry tracks the engineering state, the README tracks the operator-runbook state.
 
+**Verification addendum** (2026-05-02, soak-window read-only host audit on `Jacobs-Mac-Studio.local`)
+
+Read-only verification of all four migration layers run against the live Studio state (host confirmed via `hostname` = `Jacobs-Mac-Studio.local`, `uname -m` = `arm64`, kernel `25.4.0` distinguishing Studio T6041 from MacBook T6030). Read-only access used `?immutable=1` URI for SQLite; bot was not stopped.
+
+*Layer 1 — runtime state (`paper_trades.db`):*
+
+| Manifest expectation | Observed | Drift | Verdict |
+|---|---|---|---|
+| `paper_trades` rows = 3 | 3 | 0 | ✅ exact |
+| `source_credibility` VitalLaw.com | `0W / 3L / 0.5x` | 0 | ✅ exact (auto-suppression preserved) |
+| `source_stats` rows ≈ 405 | 414 | +9 | ✅ within tolerance (post-cutover source-stat growth is expected) |
+| `subreddit_candidates` rows ≈ 2,508 | 2,887 | +379 | ✅ within tolerance (Reddit discovery is continually adding rows; this is correct behaviour) |
+| `bot_state.notional_bankroll` = 42.50 | 42.5 | 0 | ✅ exact |
+| `bot_state.paper_start_time` | `2026-04-18T02:11:24.442824+00:00` | 0 | ✅ exact (preserves the full 13-day MacBook lifetime window — this is what makes lifetime-aggregate audits joinable across the cutover) |
+
+The 3 paper_trades themselves: all KXFISAEXTEND-26APR-MAY0{1,2,3}, all NO side, all `resolved=1, resolved_yes=1, pnl_dollars=-2.5, resolved_ts=2026-05-01T03:31:04Z`. Exact match against the entry's "3 actual paper trades... all losses" claim. Zero new Studio-side paper_trades exist as of 2026-05-02.
+
+*Layer 1 — runtime state (`evidence_store.db`):*
+
+| Manifest expectation | Observed | Drift | Verdict |
+|---|---|---|---|
+| `dossiers` rows = 32 | 33 | +1 | ✅ within tolerance (one new dossier created post-cutover, consistent with eager-creation per PROFIT-DOSSIER-001) |
+| `dossier_updates` rows = 248 | 249 | +1 | ✅ same (matches the +1 dossier) |
+| `structural_priors` rows = 32 | 33 | +1 | ✅ same |
+| `evidence` rows | 249 | n/a | (manifest gave `dossier_update_evidence = 7,510`; not directly comparable to the `evidence` table count, but the +1 increment family is internally consistent across dossiers/updates/priors) |
+
+Note on read-only access: the `?mode=ro` URI form failed with SQLITE_CANTOPEN (code 14) on `evidence_store.db` because no `-wal`/`-shm` files were present at probe time and `mode=ro` cannot create them. Switched to `?immutable=1` which never opens a journal — the empirically safer option for live-process probes. No write occurred.
+
+*Layer 2 — bulk log archive (`mac_archive/macbook_2026-05-01_import/logs/`):*
+
+`find mac_archive/macbook_2026-05-01_import/logs -type f | wc -l` = **47**. Exact match against the entry's "47 files total" expectation. `logs/app/` and `logs/trades/` subdirectories both present. The Layer 2 archive is therefore intact and joinable for any post-cutover audit that needs the pre-cutover JSONL record stream.
+
+*Layer 3 — plaintext reports / `transfer/` source bundle:*
+
+`transfer/macbook_handoff_2026-05-01/` is no longer present on disk. Per recent commit `1e13c36` ("docs(readme): sync to v0.29.59 + flag transfer/ as historical post-rewrite"), the source bundle was deliberately removed after the restore-and-extract step succeeded. CUTOVER-001's checklist did not require `transfer/` to remain; the canonical state now lives in `data/*.db` (Layer 1) and `mac_archive/.../logs/` (Layer 2). Deletion is consistent with the README's post-handoff hygiene step.
+
+*Phase 2 governance soak liveness:*
+
+`logs/governance/decisions.jsonl` (101.1 KB single file, no `.<DATE>` rotation in this archive layout):
+
+- `GOVERNANCE_CYCLE_START` = 18, `GOVERNANCE_CYCLE_END` = 18 — every cycle closed cleanly, zero orphans across the soak window so far. Cycle ID range: `gc_2026-05-01_190127` → `gc_2026-05-03_010440` (so the file already contains decisions through ~T+22h after the post-fix reset baseline of `gc_2026-05-02_041248`).
+- `GOVERNANCE_DECISION` = 57 — already above the §8.5 floor of 30 in the first 22 hours of the post-fix soak. The acceptance criterion's "earliest organic close" target of 2026-05-09 is volume-feasible by a wide margin.
+- `GOVERNANCE_DECISION_PARSE_ERROR` = 7 — all confined to cycles `gc_2026-05-01_210127` → `gc_2026-05-02_030140`, exactly the 5 pre-fix cycles documented in PROFIT-GOV-001's closure note. Zero PARSE_ERROR records appear after the reset baseline `gc_2026-05-02_041248`. The qwen3 + `format=json` + `think=False` fix is empirically holding.
+- `KILL_SWITCH` / `VALIDATION_ERROR` / `BATCH_ABORTED` events: **0**. Shadow-mode invariant intact.
+
+*Acceptance-criteria status as of 2026-05-02:*
+
+| Criterion | Status | Note |
+|---|---|---|
+| Studio's first paper trade resolves; bankroll arithmetic continuity | ❌ NOT YET | Zero Studio paper_trades exist. Severity-downgrade trigger ("emits cleanly") and closure trigger ("resolves") both pending. Given OBS-003's 240/260 silent-exit rate, paper-trade emission cadence is ~1 per ~4 days; closure feasible within the soak window but not deterministic. |
+| `source_credibility` shows VitalLaw 0W/3L | ✅ | Verified above. |
+| `logs/governance/` has ≥1 START → END pair | ✅ | 18/18 verified above. |
+| MacBook `data/bot_runtime.lock` deleted; no bot running | ⏳ unverified | Operator-side check; not visible from the Studio host. |
+| Closure note recorded | ⏳ pending | Cannot be written until the first criterion lands. |
+
+*Recommendation:* hold CUTOVER-001 at OPEN/HIGH until a real Studio trade emits. Migration completeness itself is now empirically established and documented; the remaining risk is purely "does the running bot actually produce a trade that round-trips through the migrated state". When the first Studio paper trade emits, severity downgrades HIGH → MEDIUM per the entry's own rule. When it resolves, closure note can be written.
+
+*Risk-review note (per `~/.claude/rules/risk_review.md`):* this verification touched no code, no DB writes, no production state. The only operations were `sqlite3 ?immutable=1` reads and filesystem `find` / `ls`. Soak-safe by construction.
+
 ---
 
 ### PROFIT-PHASE2-001
@@ -1921,7 +2032,7 @@ The original spec §8.5 floor was a single time-based gate (≥14 days). After t
 | **Title** | Dossier coverage is LLM-output-bound, not matcher-bound — re-frame the "1.4% of active markets had dossiers" metric and identify the actionable lever |
 | **Category** | Observability / Diagnostics Framing |
 | **Severity** | LOW (framing fix, not a runtime bug) |
-| **Status** | OPEN |
+| **Status** | COMPLETE (2026-05-02) |
 | **Priority** | LATER (post-Phase 2) |
 | **Owner** | Claude |
 | **Depends On** | — |
@@ -1968,9 +2079,13 @@ Documentation-only.
 
 **Acceptance Criteria**
 
-- PROFIT-EDGE-002 entry updated with the corrected framing.
-- This entry cross-linked from `dossier_creation.py` docstring.
-- No code changes — runtime behavior is correct.
+- PROFIT-EDGE-002 entry updated with the corrected framing — **MET** (Related-section bullet at line ~1113 carries the 2026-05-02 framing-update note rewriting the "12/847 active markets" claim into the matcher-quality / LLM-signal-density frame).
+- This entry cross-linked from `dossier_creation.py` docstring — **MET** (lines 18–23 of `scripts/simulations/dossier_creation.py` cite PROFIT-DOSSIER-001 directly and reference the empirical 100% OPPORTUNITY → dossier alignment as of 2026-05-02).
+- No code changes — runtime behavior is correct — **MET** (vacuously; this entry is documentation-only by design).
+
+**Closure (2026-05-02)**
+
+All three Acceptance Criteria are substantively satisfied as of the v0.29.59 release window. Verified during the soak-window triage on 2026-05-02 (within the soak-safe scope: documentation-only, zero runtime touch, zero impact on the Phase 2 shadow-mode invariant). Closing OPEN → COMPLETE so the framing fix does not get re-litigated by future-Claude. The actionable lever — matcher quality + LLM signal density — remains tracked under PROFIT-EDGE-004 (closed 2026-05-02 with sequenced investigation evidence) and PROFIT-MATCH-001 (open, MEDIUM, the matcher long-tail surface area).
 
 **Notes**
 
@@ -2128,6 +2243,8 @@ The 2026-05-02 read-only audit of `MATCH_DIAGNOSTIC` events across the full 16-f
 
 **Option B (medium-term, this entry):** widen the suppression predicate. Drop the `near_threshold_score` requirement so `single_named_entity_only + minimal_overlap` alone triggers suppression for ticker-name-overlap matches. Empirical impact: ~1,705 records suppressed instead of ~498. Requires a 24-hour observation window post-flip to confirm no canonical events are killed (the EDGE-001 5-event regression set is the canonical anchor and is captured by `scripts/simulations/match_score_audit.py`).
 
+> **Partially superseded — see the 2026-05-02 forensic addendum below.** The "drop `near_threshold_score`" half of Option B already shipped in commit `825a065` (2026-04-16) as `_pure_single_entity` Path B in `analysis/market_matcher.py:641–649`. The remaining open work is the `_token_not_in_ticker` guard refinement, restated as Option (B′) in the addendum. The empirical "~1,705 → ~498" figure above conflates these; the post-Path-B working number is closer to ~1,207 single-entity matches still surviving the suppressor because the entity *is* in the ticker prefix.
+
 **Option C (long-term, separate entry):** series-aware token weighting — `trump` in `KXTRUMPENDORSE` should NOT count as a meaningful match unless additional context tokens align (endorsement, candidate name, state). Matcher would need to peel the entity out of the ticker prefix and require non-entity overlap with the rest of the title. Larger refactor; file as `PROFIT-MATCH-002` if Option B's empirical results are insufficient.
 
 **Acceptance Criteria** (Option B path)
@@ -2149,6 +2266,61 @@ The 2026-05-02 read-only audit of `MATCH_DIAGNOSTIC` events across the full 16-f
 - `PROFIT-EDGE-002` "P2.5 enforcement" — Option A above.
 - `PROFIT-DOSSIER-001` — companion finding; raising matcher quality is *the* lever for raising real (not nominal) dossier coverage.
 - `scripts/simulations/match_score_audit.py` — the regression-anchor harness that validates Option B's safety on the 5 canonical events.
+
+**Forensic addendum** (2026-05-02, soak-window read-only source-tree audit)
+
+*Option B as described has already shipped.* A direct read of `analysis/market_matcher.py:626–649` shows the suppression predicate is now a *disjunction* over two paths:
+
+```python
+_near_threshold_weak = (
+    "near_threshold_score" in flag_set
+    and ("minimal_overlap" in flag_set or "single_named_entity_only" in flag_set)
+)
+_pure_single_entity = (
+    "single_named_entity_only" in flag_set
+    and "minimal_overlap" in flag_set
+)
+_meets_suppression_criteria = (
+    bool(heuristic_flags)
+    and _token_not_in_ticker
+    and (_near_threshold_weak or _pure_single_entity)
+)
+```
+
+`_pure_single_entity` is exactly the score-independent `single_named_entity_only + minimal_overlap` predicate this entry's Option B proposes to add. It landed in commit `825a065` on 2026-04-16 — three weeks before this entry was filed. Commit message confirms intent verbatim: *"Add Path B: suppress when single_named_entity_only AND minimal_overlap are both present, regardless of score."*
+
+The 2026-05-02 audit (2,880 MATCH_DIAGNOSTIC, 1,705 with `single_named_entity_only + minimal_overlap`, 498 MATCH_SUPPRESSED) was therefore measured *with* Path B already active. The 1,207 single-entity matches that survive into the LLM stage are the ones where `_token_not_in_ticker = False` — i.e., the entity *is* embedded in the ticker prefix. The ticker guard preserves them by design.
+
+*Where the actual remaining lever lives.* The entry's "Option B" wording conflates two separate changes: (1) drop the `near_threshold_score` requirement — *already done*; and (2) refine the `_token_not_in_ticker` guard so entity-prefix tickers stop being a free pass. Only (2) is still open work, and it is materially different in risk shape.
+
+*Direct risk to the regression-anchor set.* The 5 canonical events in `scripts/simulations/_common.py:LLM_POSITIVE_EVENTS_2026_04_26` split as follows on the entity-in-ticker dimension:
+
+| Event | Ticker | Token-in-ticker? | Survives if guard kept? | Survives if guard dropped? |
+|---|---|---|---|---|
+| 1 — KXSBUDGETRES-APR28 (ICE funding) | KXSBUDGETRES-26APR-APR28 | likely no (no `senate`/`ICE`/`resolution` substring) | yes | likely yes (low-quality flags would not all fire on a multi-token semantic match) |
+| 2 — KXSBUDGETRES-APR25 (same) | KXSBUDGETRES-26APR-APR25 | same as #1 | yes | likely yes |
+| 3 — KXTRUMPIRAN (dispatching) | KXTRUMPIRAN-26MAY01 | **yes** (`trump`, `iran`) | yes | **at risk** if `single_named_entity_only + minimal_overlap` flags both fire |
+| 4 — KXPSL-PZA (cricket, sport-blocked) | KXPSL-26-PZA | **yes** (`psl`) | yes | not relevant — sport blocklist kills upstream |
+| 5 — KXTRUMPIRAN (talks stall) | KXTRUMPIRAN-26MAY01 | **yes** (`trump`, `iran`) | yes | **at risk** — same shape as #3 |
+
+Events 3 and 5 are exactly the case the ticker guard was designed to preserve. Both headlines pair a single in-ticker entity (`iran` / `trump`) against a market title that itself reduces to "Iran"/"Trump" + a calendar verb — a topic that *is* coherent and *should* match, but whose post-tokenization overlap can read as `single_named_entity_only + minimal_overlap`. Dropping the guard naively kills the EDGE-001 regression-anchor signal.
+
+*Constraint on the (2) refinement.* Any guard refinement must distinguish:
+
+- **Coherent entity-prefix match** — title body adds non-entity context that aligns with headline. Example: headline "Trump dispatching Witkoff, Kushner for Iran talks" against title "Will Donald Trump visit Iran before May 1, 2026?" — multiple semantic tokens (`trump`, `iran`, plus implicit `talks/visit`) align even before the ticker prefix is considered.
+- **Free-pass entity-prefix noise** — title body shares no non-entity context with headline. Example: headline "King Charles Visits US as Britain Seeks to Steady Ties With Trump" against title "Will Trump fire Powell before…" — the only meaningful token in common is `trump`, and `trump` is in the ticker, so the current guard preserves it.
+
+The discriminator is the *non-ticker-token* overlap count: keep the guard only when the matched-tokens-not-in-ticker set is non-empty, or when token-overlap-count exceeds 1. This is materially narrower than the entry's current "drop the guard" framing and preserves Events 3 + 5.
+
+*Updated proposed-fix scoping.* Reframe the open work as:
+
+- **(B′) Refine `_token_not_in_ticker` guard, do not remove it.** Replace the current binary check with a stricter predicate: pass the guard only when *at least one* matched token is *not* in the ticker (i.e. `len(overlap - ticker_tokens) ≥ 1`). Currently the guard fails (i.e. suppression fires) only when *all* overlap tokens are not in the ticker — the asymmetry is the bug. Empirical impact: the 1,207 single-entity matches with token-in-ticker now suppress unless they have at least one supporting non-ticker token. Events 3 + 5 retain the supporting non-ticker tokens (`witkoff`, `kushner`, `talks`, `visit`) and survive.
+- **Acceptance criteria revision:** the existing MATCH-001 acceptance list still applies, with one clarification — the harness in `scripts/simulations/match_score_audit.py` must show all 5 canonical events still surface their anchor in the post-fix top-3, *and* a fresh ad-hoc archive replay must confirm the MATCH_SUPPRESSED count rises from ~498 toward the 1,207 figure (not the 1,705 the original framing suggested).
+- **Soak window:** unchanged — do not land any matcher edit during PROFIT-PHASE2-001. This refinement is targeted but still touches a decision-path predicate, so it must wait until the soak window closes per the same CLAUDE.md "decision consistency = high-risk" rule that defers PROFIT-OBS-005 and PROFIT-EXEC-002.
+
+*Pre-fix audit lever.* The existing `MATCH_DIAGNOSTIC` records carry both `matched_tokens` and `ticker` — every claim above is verifiable from the existing trade-log archive without code change. A read-only count of `len(set(matched_tokens) - tokenize(ticker))` per `MATCH_DIAGNOSTIC` is the immediate empirical answer to "how many records would (B′) suppress vs. preserve". That count is *not* run in this addendum — running it requires invoking the matcher's tokenizer or replaying the harness, which we are deferring to the post-soak fix window so that the empirical baseline and the fix land against the same code state.
+
+*Severity unchanged.* MEDIUM is correct. The (B′) refinement is the right scope; severity stays where the entry placed it because the lever is the same and the stale-Option-B framing did not understate the upside.
 
 ---
 
