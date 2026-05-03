@@ -2399,6 +2399,7 @@ Iterate on the prompt against the negative-control harness as the regression gat
 - The 74 pre-fix `disable_source` proposals in `logs/governance/decisions.jsonl` are NOT applied (`applied=False`, shadow mode) and `data/runtime_overrides.yaml` does not exist. Production safety is intact. This entry is purely about Phase 2 *acceptance evidence quality*, not production behaviour.
 - The harness must continue to be soak-safe across iteration. Specifically, do not have it write to `logs/governance/`, `data/`, or any path under `transfer/`. Output to stdout only; `--json` for machine-readable. Already enforced in the current implementation.
 - This finding does not affect the operational layer of `PROFIT-PHASE2-001`: cycle reliability, `applied=` invariant, KILL_SWITCH count, error rate. Those gates continue to accumulate evidence at the launchd cadence and remain valid acceptance criteria.
+- Empty-response follow-up: `docs/governance/2026-05-03-empty-response-audit.md` ran 110 clean-window `qwen3:14b + format=json + think=False` calls across concurrency, evidence-shape, prompt-length, and sequential-accumulation axes with 0 empty responses. Treat the 13:19-13:33 UTC iteration failures as transient daemon/session-state evidence until a reproducible H1-H4 axis appears.
 
 **Iteration session log — 2026-05-03 13:19–13:33 UTC** (no production change landed; scratch-only; surfaced for the next session)
 
