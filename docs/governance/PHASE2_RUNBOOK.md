@@ -136,19 +136,19 @@ reasonable on manual review.
 Daily monitoring checklist:
 
 ```bash
-# Yesterday's cycle count + decision count
-DATE=$(date -u -v-1d +%Y-%m-%d)
-grep -c "GOVERNANCE_CYCLE_START" "logs/governance/decisions.jsonl.${DATE}"
-grep -c "GOVERNANCE_DECISION" "logs/governance/decisions.jsonl.${DATE}"
+python scripts/governance_monitor.py
 
-# Any error events?
-grep -E "PARSE_ERROR|VALIDATION_ERROR|BATCH_ABORTED|KILL_SWITCH" \
-  "logs/governance/decisions.jsonl.${DATE}"
-
-# Confirm shadow mode invariant — applied list in overrides should
-# never grow during Phase 2.
+# Confirm shadow mode invariant independently — applied list in overrides
+# should never grow during Phase 2.
 python -m utils.runtime_overrides --status | grep "applied="
 ```
+
+`scripts/governance_monitor.py` is the canonical daily aggregator for
+the single live `logs/governance/decisions.jsonl` file. It reports
+per-day cycle/error counts, action distribution, target diversity,
+effective `(target, reasoning)` sample size, repeated reasoning n-grams,
+and the current §8.5 status header. Use `--since YYYY-MM-DD` to scope a
+review window and `--json` when attaching machine-readable artifacts.
 
 If `applied=` shows nonzero source/keyword/threshold counts, **stop
 the soak and investigate** — that is the load-bearing safety bug for
