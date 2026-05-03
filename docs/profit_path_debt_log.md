@@ -2520,6 +2520,8 @@ Pre-fix decisions in `decisions.jsonl` (~103 records spanning 2026-05-02 → pre
 
 The cumulative-session-call instability hypothesis remains pending one more clean-window confirmation in a future iteration session. Production is unaffected (each launchd cycle is a fresh Python process; ~5 calls/cycle stays well below the apparent threshold). If confirmed, that becomes a separate `PROFIT-GOV-003` filing at LOW severity tracking iteration ergonomics, not production behaviour.
 
+**2026-05-03 cumulative-call falsification:** `docs/governance/2026-05-03-cumulative-call-audit.md` forced an Ollama unload/cold-load, then ran 1 warmup + 200 sequential PROD prompt calls + 10 recovery calls against `POS_unresolvedmysteries`. Result: 211/211 valid, 0 empty responses, no 10-call trailing window crossed 25%/50%/75%, and recovery was 0/10 empty. This rejects H_CUMUL for the tested cold-window conditions and weakens the candidate `PROFIT-GOV-003` filing unless a later session reproduces daemon-state poisoning by another mechanism.
+
 **Related**
 
 - `PROFIT-PHASE2-001` — direct dependency. The mid-soak halt note added 2026-05-03 records that the §8.5 manual-review criterion is paused pending GOV-002 resolution; the operational criteria continue.
