@@ -1563,6 +1563,20 @@ The block at [`tasks/blend_task.py:204`](../tasks/blend_task.py) is the actual s
 
 Pre-fix, the BLEND_DECISION → silent-OPPORTUNITY join is the empirical answer. The OBS-003 fix is purely a log-stream consolidation, not a new diagnostic.
 
+**Closure-track attribution addendum** (2026-05-03, read-only full-archive join)
+
+`scripts/obs003_kill_attribution.py` now performs the confirmation-lever join over `mac_archive/macbook_2026-05-01_import/logs/trades/` plus Studio `logs/trades/`; markdown output is committed at `docs/governance/2026-05-03-obs003-kill-attribution.md`. Current full-archive totals are `OPPORTUNITY=264`, accounted exits `=23` (`SKIPPED=20`, `PAPER_TRADE=3`), silent exits `=240`, unattributed `=1`, and the accounting validation balances.
+
+Silent-exit kill attribution from matching `BLEND_DECISION.trade_blocked_reason`:
+
+| trade_blocked_reason | Silent exits | Share |
+|---|---:|---:|
+| `G1_blended_confidence` | 197 | 82.1% |
+| `G6_recency_score` | 31 | 12.9% |
+| `G2_evidence_source_class_diversity` | 12 | 5.0% |
+
+Dominant concentration: `KXTRUMPIRAN-26MAY01` drives 77/197 G1 kills and all 31 G6 kills; `KXMOCTRUMP25-26-MAY01` contributes another 52 G1 kills. No blender-side non-G1–G6 reason appears in the archive. Post-soak OBS-003 fix priority should therefore target the BlendTask blocked-reason SKIPPED emission first and verify G1/G6-rich histograms; lower-volume G2 follow-up can ride the same log-stream consolidation.
+
 ---
 
 **Forensic addendum** (2026-05-01, Mac Studio post-cutover session, full lifetime archive)
