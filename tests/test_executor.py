@@ -1098,6 +1098,47 @@ class TestCooldownSentinelOBS005:
         pytest.fail("could not locate live-mode `_last_traded.get(...)` call site")
 
     @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
+    def test_paper_never_traded_runtime_behavior_under_small_monotonic(self, monkeypatch):
+        """F1 (Codex review): runtime-behavior pin to complement the source-inspection pins.
+
+        Pre-fix: with `_last_traded.get(ticker, 0.0)` and `time.monotonic()`
+        forced small (early process), `elapsed = monotonic() - 0.0` is far
+        below `paper_ticker_cooldown=14400`, so a never-traded ticker trips
+        the paper cooldown. This is the actual bug shape Codex flagged.
+        Post-fix: sentinel becomes `float('-inf')`, `elapsed = +inf`, never
+        trips. Behavior pin without depending on the literal sentinel text.
+        """
+        # Force monotonic small so the bug is observable under non-zero cooldown.
+        monkeypatch.setattr("trading.executor.time.monotonic", lambda: 100.0)
+        ex = _make_paper_executor_for_obs005(monkeypatch, paper_cooldown_secs=14400)
+        assert ex._last_traded == {}
+
+        # Build a paper-mode analysis that passes every other gate in `_validate`:
+        # capped_dollars (paper skips); edge ≥ effective_min_edge; market.status
+        # in {open, active}; price within paper [2,98]; only the cooldown branch
+        # should be exercised on a never-traded ticker.
+        analysis = _make_analysis(
+            ticker="KXNEVERTRADED-26DEC31",
+            yes_price=50.0,
+            edge=0.10,
+            estimated_prob=0.60,
+            capped_dollars=10.0,
+        )
+        # `_make_analysis` sets `market.status = "active"`; ensure paper-side skip-reasons exclude
+        # cooldown for our never-traded ticker.
+        from trading.executor import TradeExecutor
+        # Paper mode flag must be set on the executor instance.
+        ex._is_paper = True
+        result = ex._validate(analysis)
+        # The validation must NOT return a paper-cooldown rejection for a never-traded ticker.
+        # (Other rejection reasons would be a fixture defect; pin the cooldown branch only.)
+        if isinstance(result, str):
+            assert "paper cooldown" not in result.lower(), (
+                "never-traded ticker tripped paper cooldown despite empty `_last_traded`; "
+                f"reason: {result!r}"
+            )
+
+    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
     def test_ci_conftest_no_longer_zeroes_cooldowns(self):
         """Spec §7 acceptance: tests/conftest.py:_ci_stub_env must drop the
         PAPER_TICKER_COOLDOWN=0 / LIVE_TICKER_COOLDOWN=0 stubs once the fix lands.

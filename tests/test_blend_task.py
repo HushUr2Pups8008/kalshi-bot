@@ -982,14 +982,23 @@ async def test_cross_series_burst_does_not_interfere() -> None:
 @pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_window_expiry_allows_second_same_series_candidate(monkeypatch) -> None:
-    """Same series, second candidate arriving after the window has expired."""
-    import time as _t
+    """Same series, second candidate arriving after the window has expired.
 
+    Per Codex review F2: pure behavior — does not poke at any private guard
+    state. Time-travel via `time.monotonic` monkeypatch so the second
+    candidate appears past the window without depending on the implementation
+    being a `dict[str, float]`.
+    """
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     logger = SpyLogger()
     monkeypatch.setattr(
         cfg, "series_correlation_window_seconds", 60, raising=False,
     )
+
+    # Fake monotonic clock that the test can advance.
+    clock = {"now": 1_000_000.0}
+    monkeypatch.setattr("tasks.blend_task.time.monotonic", lambda: clock["now"])
+
     task = BlendTask(
         trading_queue=queue,
         store=FakeStore(
@@ -1006,10 +1015,8 @@ async def test_window_expiry_allows_second_same_series_candidate(monkeypatch) ->
     )
 
     await task.process_fast_lane_result(_analysis_for_series("KXFISAEXTEND-26APR-MAY01"))
-    # Forward-shift the recorded enqueue timestamp so it sits past the window.
-    series_state = getattr(task, "_recent_series_enqueues", None)
-    assert series_state is not None, "_recent_series_enqueues must exist on BlendTask"
-    series_state["KXFISAEXTEND"] = _t.monotonic() - 120  # 2 minutes ago, > 60s window
+    # Advance fake monotonic past the 60s window.
+    clock["now"] += 120.0
 
     await task.process_fast_lane_result(_analysis_for_series("KXFISAEXTEND-26APR-MAY02"))
 
@@ -1053,23 +1060,8 @@ async def test_window_override_zero_disables_guard(monkeypatch) -> None:
     ), "window=0 must fully bypass the guard"
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
-def test_blend_task_carries_recent_series_enqueues_state() -> None:
-    """`BlendTask.__init__` must initialize `_recent_series_enqueues: dict[str, float]`.
-
-    Pinned independently from the runtime tests so the spec §3 component
-    contract is observable even if a code-path test regresses.
-    """
-    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
-    task = BlendTask(
-        trading_queue=queue,
-        store=FakeStore(),
-        logger=SpyLogger(),
-        is_paper_mode=True,
-    )
-
-    assert hasattr(task, "_recent_series_enqueues"), (
-        "BlendTask.__init__ must initialise `_recent_series_enqueues`"
-    )
-    assert isinstance(task._recent_series_enqueues, dict)
-    assert task._recent_series_enqueues == {}
+# Removed `test_blend_task_carries_recent_series_enqueues_state` per Codex review F2:
+# the dict-shape pin over-constrained the implementation. A correct bounded LRU,
+# deque, injected guard object, or module-level helper would have failed even with
+# correct FISA-replay behavior. Behavior is already pinned by the runtime tests
+# above (FISA replay + cross-series + window-expiry + window-override).

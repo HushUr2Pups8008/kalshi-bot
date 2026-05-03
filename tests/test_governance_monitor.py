@@ -119,15 +119,33 @@ def _expected_repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+@pytest.fixture
+def _gm_module_reload_isolation(monkeypatch):
+    """F3 (Codex review): isolate module-default mutations so KALSHI_HOME-patched
+    reloads don't leak constants into later tests in the same process.
+
+    Yields the freshly reloaded module under whatever env is set by the time
+    the test reads it. After the test, restores the env (via monkeypatch's
+    own teardown) and re-imports the module a second time so subsequent tests
+    see clean module-level constants.
+    """
+    import importlib
+    from scripts import governance_monitor as _gm
+    yield _gm
+    # Teardown: monkeypatch unwinds env first, then we reload so the module's
+    # _DEFAULT_LOG / _DEFAULT_OVERRIDES re-derive against the restored env.
+    importlib.reload(_gm)
+
+
 @pytest.mark.xfail(reason=_GOV_MONITOR_XFAIL_REASON, strict=True)
-def test_default_logfile_resolves_to_repo_root_regardless_of_kalshi_home(monkeypatch):
+def test_default_logfile_resolves_to_repo_root_regardless_of_kalshi_home(
+    monkeypatch, _gm_module_reload_isolation,
+):
     """`_DEFAULT_LOG` must point at <repo>/logs/governance/decisions.jsonl
     even when KALSHI_HOME is set to an unrelated path."""
     monkeypatch.setenv("KALSHI_HOME", "/tmp/nonexistent/kalshi_home_override")
-    # Re-import to force the module-level constants to re-evaluate against the
-    # patched env. importlib.reload preserves type identity for downstream use.
     import importlib
-    from scripts import governance_monitor as _gm
+    _gm = _gm_module_reload_isolation
     importlib.reload(_gm)
 
     expected = _expected_repo_root() / "logs" / "governance" / "decisions.jsonl"
@@ -138,12 +156,14 @@ def test_default_logfile_resolves_to_repo_root_regardless_of_kalshi_home(monkeyp
 
 
 @pytest.mark.xfail(reason=_GOV_MONITOR_XFAIL_REASON, strict=True)
-def test_default_overrides_resolves_to_repo_root_regardless_of_kalshi_home(monkeypatch):
+def test_default_overrides_resolves_to_repo_root_regardless_of_kalshi_home(
+    monkeypatch, _gm_module_reload_isolation,
+):
     """`_DEFAULT_OVERRIDES` must point at <repo>/data/runtime_overrides.yaml
     even when KALSHI_HOME is set to an unrelated path."""
     monkeypatch.setenv("KALSHI_HOME", "/tmp/nonexistent/kalshi_home_override")
     import importlib
-    from scripts import governance_monitor as _gm
+    _gm = _gm_module_reload_isolation
     importlib.reload(_gm)
 
     expected = _expected_repo_root() / "data" / "runtime_overrides.yaml"
