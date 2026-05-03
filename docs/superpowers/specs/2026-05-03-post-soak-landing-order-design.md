@@ -37,6 +37,25 @@ OBS-005, MATCH-001 (B'), and OBS-003 are mutually independent.
 
 Lowest-risk → highest-risk, with attribution windows between each step. Total wall-clock: **~13 days from soak close to last-item closed**.
 
+### Pre-deploy expected-state ladder (Codex simulation, 2026-05-03)
+
+The post-soak trajectory below is the strict-counterfactual archive replay from `docs/governance/2026-05-03-post-soak-landing-simulation.md`. Each row reflects the cumulative state after the named step lands.
+
+| state | OPP | SKIP | PAPER | trade_rate | note |
+|---|---:|---:|---:|---:|---|
+| baseline (current archive) | 260 | 17 | 3 | 1.2 % | observed pre-soak baseline |
+| after OBS-005 | 260 | 17 | 3 | 1.2 % | sentinel fix has no archive-visible effect |
+| after MATCH-001 (B') | 87 | 9 | 3 | **3.4 %** | 1,076 match keys suppressed; canonical events protected |
+| after OBS-003 | 87 | 87 | 3 | 3.4 % | +78 BlendTask blocked-reason SKIPPED records (additive only) |
+| after EXEC-002 | 87 | 89 | **1** | 1.1 % | 2 FISA-series trades suppressed; both were historical losses |
+
+Two implications for acceptance criteria:
+
+1. **MATCH-001 is the trade-rate lift.** A 67 % OPP cut combined with full-protection of canonical events triples the conversion rate (1.2 % → 3.4 %). The downstream items don't add to the rate; they add observability and risk control.
+2. **EXEC-002's lower raw trade count is *good*.** All three historical FISA trades were losses; suppressing 2 of them improves realized P&L. **Optimizing for raw trade-rate at the EXEC-002 step is the wrong target — optimize for realized P&L instead.**
+
+These numbers are sized estimates, not guarantees; the simulation cannot model below-threshold matches that were never logged, late-arriving signals not in the archive, or shifts in the market mix between archive and post-deploy. Treat them as planning anchors, not strict bounds.
+
 ### Step 1 — OBS-005 (one-line sentinel fix)
 
 - **When:** Day 0 post-soak (the moment `PROFIT-PHASE2-001` closes ≥ 2026-05-09).
@@ -48,20 +67,22 @@ Lowest-risk → highest-risk, with attribution windows between each step. Total 
 ### Step 2 — MATCH-001 (B') token-guard refinement
 
 - **When:** Day 1 post-soak (24 h after Step 1 deploys clean).
-- **Why second (not first, despite spec §9 self-ranking):** MATCH-001's archive-replay impact is large (~600–1,300 records flip survived → suppressed per spec §5). Wanting OBS-005's smoke window to clear first lets us attribute any post-MATCH-001 anomaly to the matcher edit alone. Also: MATCH-001's `MATCH_SUPPRESSED` volume jump and OBS-003's SKIPPED volume jump should not stack into a single attribution-confusing window.
-- **Pre-deploy validation:** re-run `scripts/simulations/match_score_audit.py` against the 13-day MacBook archive — confirm zero canonical-event tickers in the survived → suppressed flip set. (This is the 5-event regression-anchor check. Codex's MATCH-001 adversarial review should pre-cover this.)
+- **Why second (not first, despite spec §9 self-ranking):** Wanting OBS-005's smoke window to clear first lets us attribute any post-MATCH-001 anomaly to the matcher edit alone. Also: MATCH-001's `MATCH_SUPPRESSED` volume jump and OBS-003's SKIPPED volume jump should not stack into a single attribution-confusing window.
+- **Pre-deploy archive sizing (Codex 2026-05-03 simulation, `docs/governance/2026-05-03-post-soak-landing-simulation.md`):** the strict counterfactual replay over the 13-day MacBook archive suppresses **1,076 distinct match keys** under B' and reduces retained OPPORTUNITY events from **260 → 87 (-67 %)**. The historical 3 PAPER_TRADE events all survive (canonical-event tickers protected). Net trade rate moves from 1.2 % (3/260) to **3.4 % (3/87)** — the 67 % OPP cut is the *intended* compression of low-quality candidates, not a regression. This sizing supersedes the original MATCH-001 spec §5 estimate of 600–1,300 records (which was the records *count*, presented before Codex's match-key replay).
+- **Pre-deploy validation:** the Codex simulation already confirmed zero canonical-event tickers (the 5 in `scripts/simulations/_common.py:LLM_POSITIVE_EVENTS_2026_04_26`) flip into the suppressed set. Re-run `scripts/simulations/match_score_audit.py` against the live archive immediately before deploy to confirm no drift since 2026-05-03.
 - **Validation window:** 72 h paper-mode runtime post-deploy.
-- **Acceptance:** post-deploy 24 h `MATCH_SUPPRESSED` count rises proportionally to the pre-deploy archive estimate (within ±20 %); no canonical-event ticker appears in `MATCH_SUPPRESSED`; OPPORTUNITY rate stays within the 13-day pre-deploy band.
-- **Restart trigger:** OPPORTUNITY rate drops > 50 % vs pre-deploy 13-day baseline (matcher regression), OR any of the 5 canonical-event tickers appears in the post-deploy `MATCH_SUPPRESSED` stream within the validation window.
+- **Acceptance:** post-deploy 7-day OPPORTUNITY count lands in **[20 %, 50 %]** of the pre-deploy 13-day baseline (i.e., 87 ± stochastic noise → ~30 % retention; allow ±20 percentage points); no canonical-event ticker in `MATCH_SUPPRESSED`; `MATCH_SUPPRESSED` count rises by ≥ 80 % of the simulation-estimated 1,076 keys, prorated for the validation window's elapsed time.
+- **Restart trigger:** OPPORTUNITY retention drops below **15 %** of baseline (the simulation's −67 % is at the strict end; sub-15 % means the suppression is more aggressive than modelled and likely indicates a `_tokenize` mismatch); OR any of the 5 canonical-event tickers appears in the post-deploy `MATCH_SUPPRESSED` stream within the validation window.
 - **Rollback:** revert the predicate hunk in `analysis/market_matcher.py`; redeploy. Spec §8 documents the exact diff. Trivial.
 
 ### Step 3 — OBS-003 (BlendTask SKIPPED emission)
 
 - **When:** Day 4 post-soak (after Step 2's 72 h MATCH-001 validation closes clean).
-- **Why third:** OBS-003 is additive-only (no control-flow change), but the spec's own §10 cites the conservative reading of "decision consistency = high-risk during soak" because the file (`tasks/blend_task.py`) is decision-path. Landing OBS-003 *after* MATCH-001 means the post-OBS-003 SKIPPED stream already reflects the post-MATCH-001 OPPORTUNITY rate, so the 24 h `OPPORTUNITY = SKIPPED + PAPER_TRADE` accounting check (OBS-003 §8) is a clean post-fix baseline rather than a moving target.
-- **Pre-deploy validation:** the 9 xfail-strict tests in `tests/test_blend_task.py` (the OBS-003 harness, landed pre-soak per task #2 of this work-stream) flip to xpass automatically. Remove the `pytest.mark.xfail` markers in the same commit as the implementation. CI will refuse the merge if the markers stay.
+- **Why third:** OBS-003 is additive-only (no control-flow change), but the spec's own §10 cites the conservative reading of "decision consistency = high-risk during soak" because the file (`tasks/blend_task.py`) is decision-path. Landing OBS-003 *after* MATCH-001 means the post-OBS-003 SKIPPED stream already reflects the post-MATCH-001 OPPORTUNITY rate, so the `OPPORTUNITY = SKIPPED + PAPER_TRADE` accounting check is a clean post-fix baseline rather than a moving target.
+- **Pre-deploy archive sizing (Codex simulation):** OBS-003 is additive-logging-only; on the post-MATCH-001 archive (87 retained OPP, 9 SKIP, 3 PAPER) it adds **78 BlendTask blocked-reason SKIPPED records**, lifting visible-skip share from 75 % → 96.7 %. Top reasons distribution from the simulation: `G1_blended_confidence` × 59, `G6_recency_score` × 14, `G2_evidence_source_class_diversity` × 5. The remaining 3.3 % unaccounted gap is in-flight tolerance.
+- **Pre-deploy validation:** the **22 xfail-strict tests** in `tests/test_blend_task.py` (the OBS-003 harness — 9 original parametrized + 11 EXEC-002 + 2 Codex-F1/F3 follow-up; the 9 OBS-003-specific) flip to xpass automatically. Remove the `pytest.mark.xfail` markers in the same commit as the implementation. CI will refuse the merge if the markers stay.
 - **Validation window:** 48 h paper-mode runtime post-deploy.
-- **Acceptance:** `OPPORTUNITY = SKIPPED + PAPER_TRADE` accounting within ±5 in-flight; SKIPPED stream contains G1–G6 + blender-side reasons in addition to the executor's pre-existing reason set; `bothealth.sh` aggregator renders correctly with the new high-volume reasons.
+- **Acceptance:** `OPPORTUNITY = SKIPPED + PAPER_TRADE` accounting within **±3 % in-flight** (the simulation predicted 96.7 % closure on the strict counterfactual; allow 3 percentage points of slop for at-the-moment in-flight candidates); SKIPPED stream contains G1–G6 + blender-side reasons in addition to the executor's pre-existing reason set; `bothealth.sh` aggregator renders correctly with the new high-volume reasons; `G1_blended_confidence` is the dominant reason (matches the 59/78 simulation distribution).
 - **Restart trigger:** SKIPPED double-emit (i.e., OPPORTUNITY > SKIPPED + PAPER_TRADE accounting drifts negative), OR `bothealth.sh` chokes on a new reason value, OR `BLEND_DECISION` count regresses (would imply the new emission is replacing rather than adding to existing logging).
 - **Rollback:** spec §9 covers this — revert the `_emit_skipped` method addition + the call-site insertion. Trivial.
 
@@ -69,10 +90,11 @@ Lowest-risk → highest-risk, with attribution windows between each step. Total 
 
 - **When:** Day 6 post-soak (after Step 3's 48 h OBS-003 validation closes clean).
 - **Why last:** highest-risk item — the only one of the four that actually changes trade volume (suppresses real candidates that previously enqueued). Landing it after OBS-003 means its SKIPPED accounting is already in the consolidated stream from day 0, so the `series_correlation_in_window` reason audit lever exists as soon as the gate fires.
-- **Pre-deploy validation:** the 2026-05-01 FISA replay test passes (1 of 3 enqueues); cross-series + window-expiry + window-override tests all pass; `cfg.series_correlation_window_seconds=0` env override disables the guard cleanly.
+- **Pre-deploy archive sizing (Codex simulation):** the strict counterfactual replay suppresses **2 of the 3 historical paper trades** (the FISA-MAY02 + FISA-MAY03 entries inside the 1 h window after FISA-MAY01). Trade count drops from 3 → 1; SKIPPED count rises from 87 → 89; trade rate falls from 3.4 % (post-MATCH-001) → **1.1 %**. **Crucially: the 2 suppressed trades are both from the FISA series, which has a 100 % loss rate in the historical archive (3/3 paper losses).** Net realized P&L *improves* despite the lower trade count. Optimizing for raw trade rate would be the wrong success criterion.
+- **Pre-deploy validation:** the 2026-05-01 FISA replay test passes (1 of 3 enqueues); cross-series + window-expiry + window-override tests all pass; `cfg.series_correlation_window_seconds=0` env override disables the guard cleanly. (All 11 xfail-strict harness invocations land in the same commit as the implementation.)
 - **Validation window:** **7 d paper-mode runtime post-deploy.** Longer than the others because trade-rate impact is the primary signal and trade-rate is sparse — fewer than 1 trade per day historically, so a shorter window has insufficient statistical basis.
-- **Acceptance:** 24 h post-deploy SQL audit returns zero rows from `SELECT series_ticker, COUNT(*) FROM paper_trades WHERE ts >= datetime('now', '-1 day') GROUP BY series_ticker HAVING COUNT(*) > 1 AND (MAX(ts) - MIN(ts)) < <window>;` (per EXEC-002 §8); 7 d trade-volume comparison vs the 13-day MacBook baseline shows a measurable but bounded reduction (expected: −1 to −3 trades on the FISA replay path; net trade volume should not drop > 50 %).
-- **Restart trigger:** trade volume drops to zero across the 7 d window (`_series_prefix` extraction too aggressive — grouping unrelated tickers), OR `series_correlation_in_window` SKIPPED records fire for tickers that share no actual series prefix.
+- **Acceptance:** 24 h post-deploy SQL audit returns zero rows from `SELECT series_ticker, COUNT(*) FROM paper_trades WHERE ts >= datetime('now', '-1 day') GROUP BY series_ticker HAVING COUNT(*) > 1 AND (MAX(ts) - MIN(ts)) < <window>;` (per EXEC-002 §8); 7 d realized-P&L comparison vs the 13-day MacBook baseline is **flat or improved** (the simulation says the suppressed 2 FISA trades would have been losses; the operator should verify on actual post-deploy data); `series_correlation_in_window` SKIPPED count is non-zero only on cycles where a same-series candidate fires within the window.
+- **Restart trigger:** trade volume drops to zero across the 7 d window (`_series_prefix` extraction too aggressive — grouping unrelated tickers), OR `series_correlation_in_window` SKIPPED records fire for tickers that share no actual series prefix, OR realized P&L is *worse* than the matched-window pre-deploy baseline (would mean the gate is suppressing wins, not losses — opposite of the simulation prediction).
 - **Rollback:** primary fast revert is operator-side — `SERIES_CORRELATION_WINDOW_SECONDS=0` in env + restart. Disables the guard with zero code change. Code revert is the BlendTask + config diff per EXEC-002 §9.
 
 ## 4. Combined timeline
