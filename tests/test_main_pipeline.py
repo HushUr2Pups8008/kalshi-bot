@@ -1641,3 +1641,85 @@ class TestSourceClassClassifierLeverA1:
         `"white house"` token while the classifier fix is being implemented.
         """
         assert _source_class_for_evidence("News – The White House") == "official"
+
+
+# ---------------------------------------------------------------------------
+# A.1+ companion harness — `analysis`-class classifier branch
+#
+# Spec: docs/superpowers/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md §3.2
+# Status: pre-loaded during PROFIT-PHASE2-001 soak; lands as part of
+# A.1+1 deploy (Wave 2, post-soak day 14+). Adds a new `analysis` branch
+# to `_source_class_for_evidence` that buckets specialist-analyst feed
+# titles (War on the Rocks / CSIS / ISW / CFR / Atlantic Council) as
+# `analysis` rather than `other`.
+#
+# `evidence_scorer._SOURCE_CLASS_QUALITY` already defines `analysis=0.60`
+# but no source-string maps to it today — A.1+ lights up the class.
+# ---------------------------------------------------------------------------
+
+_LEVER_A1PLUS_ANALYSIS_BRANCH_XFAIL_REASON = (
+    "PROFIT-EDGE-004 Lever A.1+ analysis-class branch not yet landed. "
+    "The post-A.1 classifier expansion adds tokens for specialist analyst "
+    "feed titles (War on the Rocks / CSIS / ISW / CFR / Atlantic Council). "
+    "Lands together with the A.1+1 first-feed deploy per "
+    "docs/superpowers/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md."
+)
+
+
+class TestSourceClassClassifierLeverA1PlusAnalysisBranch:
+    """Pin the `analysis`-class branch behaviour. Each xfail-strict test
+    corresponds to one specialist-analyst source string the A.1+1 deploy
+    needs to bucket as `analysis`. Today every one buckets as `other`.
+    """
+
+    @pytest.mark.xfail(reason=_LEVER_A1PLUS_ANALYSIS_BRANCH_XFAIL_REASON, strict=True)
+    def test_war_on_the_rocks_classifies_as_analysis(self):
+        """`War on the Rocks` (defense / national security commentary) → `analysis`."""
+        assert _source_class_for_evidence("War on the Rocks") == "analysis"
+
+    @pytest.mark.xfail(reason=_LEVER_A1PLUS_ANALYSIS_BRANCH_XFAIL_REASON, strict=True)
+    def test_csis_classifies_as_analysis(self):
+        """Center for Strategic and International Studies → `analysis`."""
+        assert (
+            _source_class_for_evidence("Center for Strategic and International Studies")
+            == "analysis"
+        )
+
+    @pytest.mark.xfail(reason=_LEVER_A1PLUS_ANALYSIS_BRANCH_XFAIL_REASON, strict=True)
+    def test_csis_short_form_classifies_as_analysis(self):
+        """`CSIS` (short form often appears in feed titles) → `analysis`."""
+        assert _source_class_for_evidence("CSIS Analysis") == "analysis"
+
+    @pytest.mark.xfail(reason=_LEVER_A1PLUS_ANALYSIS_BRANCH_XFAIL_REASON, strict=True)
+    def test_isw_classifies_as_analysis(self):
+        """Institute for the Study of War → `analysis`."""
+        assert (
+            _source_class_for_evidence("Institute for the Study of War")
+            == "analysis"
+        )
+
+    @pytest.mark.xfail(reason=_LEVER_A1PLUS_ANALYSIS_BRANCH_XFAIL_REASON, strict=True)
+    def test_cfr_classifies_as_analysis(self):
+        """Council on Foreign Relations → `analysis`."""
+        assert (
+            _source_class_for_evidence("Council on Foreign Relations")
+            == "analysis"
+        )
+
+    @pytest.mark.xfail(reason=_LEVER_A1PLUS_ANALYSIS_BRANCH_XFAIL_REASON, strict=True)
+    def test_atlantic_council_classifies_as_analysis(self):
+        """Atlantic Council → `analysis`."""
+        assert _source_class_for_evidence("Atlantic Council") == "analysis"
+
+    def test_kyiv_post_already_lands_in_known_class_today(self):
+        """Positive control: Kyiv Post (currently in RSS_FEEDS) is one of
+        the specialist analyst sources Codex's audit credited with 3/3
+        historical PAPER_TRADE. It currently buckets as `other` (no token
+        match). The A.1+ analysis-branch addition should bucket it as
+        `analysis` too — but that's not pinned here because Kyiv Post is
+        in the news-adjacent ambiguous zone (some operators may classify
+        as `news` instead). Pinned looser to avoid over-constraining."""
+        result = _source_class_for_evidence("Kyiv Post")
+        assert result in {"other", "analysis", "news"}, (
+            f"Kyiv Post must bucket as one of other/analysis/news; got {result!r}"
+        )
