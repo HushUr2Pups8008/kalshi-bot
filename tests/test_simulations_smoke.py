@@ -19,6 +19,7 @@ import pytest
 
 from scripts.simulations import _common
 from scripts.simulations import (
+    baseline_vs_multilane,
     blend_task_integration,
     dossier_creation,
     executor_validate,
@@ -258,6 +259,35 @@ def test_blend_integration_main_runs_clean(capsys):
     assert len(lines) == len(_common.LLM_POSITIVE_EVENTS_2026_04_26)
     for ln in lines:
         json.loads(ln)
+
+
+# ── baseline_vs_multilane ------------------------------------------------------
+
+def test_baseline_vs_multilane_generates_required_metrics():
+    report = baseline_vs_multilane.run()
+    assert report.offline_paper_only is True
+    assert report.baseline.evaluated_candidates == len(_common.LLM_POSITIVE_EVENTS_2026_04_26)
+    assert report.multi_lane.evaluated_candidates == len(_common.LLM_POSITIVE_EVENTS_2026_04_26)
+    assert report.baseline.paper_trade_count >= 0
+    assert report.multi_lane.paper_trade_count >= 0
+    assert 0.0 <= report.baseline.acceptance_rate <= 1.0
+    assert 0.0 <= report.multi_lane.acceptance_rate <= 1.0
+    assert (
+        report.multi_lane.blend_pass_count + report.multi_lane.blend_block_count
+        == report.multi_lane.evaluated_candidates
+    )
+    assert report.within_2x_trade_frequency_constraint is True
+
+
+def test_baseline_vs_multilane_main_runs_clean(capsys):
+    assert baseline_vs_multilane.main([]) == 0
+    out = capsys.readouterr().out
+    assert "Baseline vs multi-lane validation" in out
+    assert "within 2x constraint" in out
+    assert baseline_vs_multilane.main(["--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["offline_paper_only"] is True
+    assert "baseline" in payload and "multi_lane" in payload
 
 
 # ── paper_trade_roundtrip ------------------------------------------------------

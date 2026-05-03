@@ -43,6 +43,7 @@ verify the harnesses themselves stay green under code changes.
 | [`executor_validate.py`](executor_validate.py) | Executor `_validate()` (E1–E12) against the same 5 canonical events, in independent + sequential passes | PROFIT-EDGE-002 (post-readiness-gate audit) |
 | [`match_score_audit.py`](match_score_audit.py) | Match-score gate (`PAPER_MIN_MATCH_SCORE` — first kill point) against the production headlines + market titles for the 5 canonical events; threshold sweep + cross-contamination guard | PROFIT-EDGE-004 (Task A of pipeline simulation buildout) |
 | [`blend_task_integration.py`](blend_task_integration.py) | Full `BlendTask.process_fast_lane_result` integration with seeded dossier + structural prior + recent evidence for KXTRUMPIRAN; surfaces accumulation-lane disagreement and any post-blend gate that wouldn't fire on the no-dossier readiness simulation | PROFIT-EDGE-004 (Task B of pipeline simulation buildout) |
+| [`baseline_vs_multilane.py`](baseline_vs_multilane.py) | Fast-lane baseline vs multi-lane S4.5 comparison over identical canonical intake; reports evaluated candidates, paper trades, frequency, acceptance rate, and blend pass/block counts | PROFIT-VALID-001 |
 | [`paper_trade_roundtrip.py`](paper_trade_roundtrip.py) | Paper-trade INSERT path against a real `PaperTrader` over a temp SQLite DB; per-event row write, bankroll debit, and source-credibility persistence | PROFIT-EDGE-004 (Task C of pipeline simulation buildout) |
 | [`trading_queue_handoff.py`](trading_queue_handoff.py) | Replicates `main._trading_queue_consumer_task` wiring against an in-memory queue + recording executor stub; FIFO drain + back-pressure (no-drop) contracts | PROFIT-EDGE-004 (Task D of pipeline simulation buildout) |
 | [`governance_fast_cycle.py`](governance_fast_cycle.py) | Drives `governance.agent.run_cycle` for one fast cadence with `FakeLLM` against a temp filesystem; pins shadow-mode invariant, audit JSONL append-only, and kill-switch (`GOVERNANCE_READONLY`) demotion of real → shadow | PROFIT-EDGE-004 (Task E of pipeline simulation buildout) |
@@ -90,6 +91,10 @@ once committed.
 # Full BlendTask integration (with seeded dossier for KXTRUMPIRAN):
 .venv/bin/python scripts/simulations/blend_task_integration.py
 .venv/bin/python scripts/simulations/blend_task_integration.py --json
+
+# Baseline-vs-multi-lane validation (offline/paper only):
+.venv/bin/python scripts/simulations/baseline_vs_multilane.py
+.venv/bin/python scripts/simulations/baseline_vs_multilane.py --json
 
 # Paper-trade INSERT path (real PaperTrader against a temp SQLite DB):
 .venv/bin/python scripts/simulations/paper_trade_roundtrip.py
