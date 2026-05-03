@@ -1569,3 +1569,75 @@ class TestRuntimeThresholdOverride:
         result = _early_max_news_age_seconds_for_source("SomeSrc")
         assert result == 7200
         assert isinstance(result, int)
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-EDGE-004 Lever A Stage A.1 — `_source_class_for_evidence` classifier fix
+#
+# Spec: docs/superpowers/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md
+# Status: pre-loaded during PROFIT-PHASE2-001 soak; post-soak Wave 2 deploy
+# (earliest 2026-05-22). Until the classifier's official-token list is
+# expanded these tests xfail strictly.
+#
+# The bug: `config.py:RSS_FEEDS` already polls 6+ official-class feeds
+# (Department of War / WhiteHouse.gov / UN News / European Commission /
+# IAEA / Defense News / Breaking Defense), but `_source_class_for_evidence`
+# only matches a narrow token list and silently demotes 5 of 6 to `"other"`.
+# The classifier fix is a 5-line token-list patch; see spec §2.1 + §2.2.
+# ---------------------------------------------------------------------------
+
+_LEVER_A_A1_XFAIL_REASON = (
+    "PROFIT-EDGE-004 Lever A.1: `_source_class_for_evidence` token list not yet expanded. "
+    "Lands post-soak per docs/superpowers/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md."
+)
+
+
+class TestSourceClassClassifierLeverA1:
+    """Pin the post-fix classifications. Each xfail-strict test corresponds
+    to one production source-string that today silently buckets as `"other"`
+    or `"news"` instead of `"official"` / `"news"` per the spec's §2 token
+    expansion.
+    """
+
+    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
+    def test_department_of_war_classifies_as_official(self):
+        """`Department of War News Feed` (defense.gov RSS) must be `official`."""
+        assert _source_class_for_evidence("Department of War News Feed") == "official"
+
+    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
+    def test_un_news_classifies_as_official(self):
+        """`UN News - Global perspective Human stories` must be `official`."""
+        assert (
+            _source_class_for_evidence("UN News - Global perspective Human stories")
+            == "official"
+        )
+
+    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
+    def test_european_commission_press_releases_classifies_as_official(self):
+        """European Commission `Press releases - RSS` must be `official`."""
+        assert _source_class_for_evidence("Press releases - RSS") == "official"
+
+    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
+    def test_iaea_classifies_as_official(self):
+        """IAEA top-stories feed must be `official`."""
+        assert (
+            _source_class_for_evidence("Top Stories From the International Atomic Energy Agency")
+            == "official"
+        )
+
+    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
+    def test_defense_news_classifies_as_news(self):
+        """Defense industry press wire must be `news` (not `other`)."""
+        assert _source_class_for_evidence("Defense News") == "news"
+
+    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
+    def test_breaking_defense_classifies_as_news(self):
+        """Breaking Defense industry wire must be `news` (not `other`)."""
+        assert _source_class_for_evidence("Breaking Defense") == "news"
+
+    def test_white_house_classifies_as_official_today_positive_control(self):
+        """Positive control: this case ALREADY classifies correctly today.
+        Not xfail — included to catch a regression that breaks the existing
+        `"white house"` token while the classifier fix is being implemented.
+        """
+        assert _source_class_for_evidence("News – The White House") == "official"
