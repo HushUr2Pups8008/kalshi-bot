@@ -699,6 +699,142 @@ async def test_skipped_payload_carries_blended_edge_not_fast_lane_edge() -> None
 
 
 # ---------------------------------------------------------------------------
+# OBS-003 harness — Codex review F1 + F3 follow-up additions
+#
+# F1 (medium): the existing `logger.skipped_records` assertion is satisfied by
+# *any* path that calls the injected logger; it does not catch an
+# implementation that bypasses the injection and calls module-level
+# `trade_log.log_skipped` directly. Pin the async-write target.
+#
+# F3 (medium): the existing payload-shape pin checks blended `model_probability`
+# / `edge` only. OBS-003's central value is unifying downstream trade-log
+# consumers; key-completeness against the executor-side payload matters as
+# much as the post-blend values. Pin the full required-key set.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
+@pytest.mark.asyncio
+async def test_obs003_blocked_path_writes_via_injected_logger_log_skipped(
+    monkeypatch,
+) -> None:
+    """F1 — pin the async-write target.
+
+    `tasks.blend_task.write_trade_log_async` must be invoked with the
+    *injected* logger's `log_skipped` method as the first positional argument
+    on the blocked-reason path. Catches an implementation that bypasses the
+    injection and reaches the module-level `trade_log.log_skipped` directly,
+    which would silently mutate production logs in tests if patching is wrong.
+    """
+    import tasks.blend_task as _bt
+
+    spy_calls: list[tuple] = []
+
+    async def _spy_writer(writer, *args, **kwargs):
+        spy_calls.append((writer, args, kwargs))
+        # Forward only when the writer is one of the legitimate logger methods
+        # so the existing log_blend_decision side effect still flows.
+        return writer(*args, **kwargs)
+
+    monkeypatch.setattr(_bt, "write_trade_log_async", _spy_writer)
+
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        blender=_blocked_blender_factory("G1_blended_confidence"),
+        is_paper_mode=True,
+    )
+
+    await task.process_fast_lane_result(_analysis())
+
+    # Find the SKIPPED-emission write among the captured calls.
+    skipped_writes = [
+        (writer, args, kwargs)
+        for writer, args, kwargs in spy_calls
+        if writer is logger.log_skipped
+    ]
+    assert len(skipped_writes) == 1, (
+        "BlendTask must call `write_trade_log_async(logger.log_skipped, ...)` "
+        f"exactly once on the blocked-reason path; got {len(skipped_writes)} "
+        f"call(s) where writer is logger.log_skipped. "
+        f"All captured writers: {[str(c[0]) for c in spy_calls]}"
+    )
+    # Bypass-detection: assert the writer is NOT the module-level
+    # `trade_log.log_skipped` (the un-injected fallback).
+    from utils.logger import trade_log as _module_trade_log
+    bypass_writes = [
+        (writer, args, kwargs)
+        for writer, args, kwargs in spy_calls
+        if writer is _module_trade_log.log_skipped
+    ]
+    assert bypass_writes == [], (
+        "BlendTask must not bypass the injected logger; "
+        f"detected {len(bypass_writes)} call(s) targeting the module-level "
+        "`trade_log.log_skipped` directly."
+    )
+
+
+@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
+@pytest.mark.asyncio
+async def test_obs003_skipped_payload_carries_required_keys() -> None:
+    """F3 — full executor-compatible key set.
+
+    OBS-003's downstream consumers (bothealth.sh, governance Phase 2 reasoning,
+    future readiness-gate calibration runs) join the BlendTask SKIPPED stream
+    against the executor's pre-existing SKIPPED stream. Both streams must
+    carry the same key set so the union is queryable as a single table. The
+    canonical key set is the executor's at `trading/executor.py:137-152`.
+    """
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        blender=_blocked_blender_factory("G1_blended_confidence"),
+        is_paper_mode=True,
+    )
+
+    await task.process_fast_lane_result(_analysis_with_news())
+
+    assert len(logger.skipped_records) == 1
+    record = logger.skipped_records[0]
+
+    required_keys = {
+        "reason",
+        "ticker",
+        "headline",
+        "source",
+        "method",
+        "llm_direction",
+        "llm_magnitude",
+        "model_probability",
+        "market_price",
+        "edge",
+        "min_edge_threshold",
+        # `signal_meta` is conditional on the upstream analysis carrying
+        # signal_meta (mirrors the executor's `if signal_meta:` guard at
+        # trading/executor.py:151). Not part of the always-required set.
+    }
+    missing = required_keys - record.keys()
+    assert missing == set(), (
+        f"BlendTask SKIPPED payload missing executor-compatible keys: {missing}. "
+        f"Got keys: {sorted(record.keys())}"
+    )
+
+    # Headline-truncation parity: the executor truncates to 80 chars at
+    # trading/executor.py:139 (`analysis.news_item.headline[:80]`). The
+    # BlendTask SKIPPED emission must follow the same convention.
+    assert len(record["headline"]) <= 80, (
+        f"BlendTask SKIPPED.headline must follow the executor's 80-char "
+        f"truncation convention; got {len(record['headline'])} chars"
+    )
+
+
+# ---------------------------------------------------------------------------
 # PROFIT-EXEC-002 harness — series-correlation guard inside BlendTask.
 #
 # Spec: docs/superpowers/specs/2026-05-03-exec-002-series-correlation-guard-design.md
