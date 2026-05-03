@@ -1518,6 +1518,36 @@ The silent-exit rate is consistent across the entire 13-day window (92.3% lifeti
 - SKIPPED reasons are diverse enough to attribute kills to specific executor gates (E1–E12 named per the README's Executor section).
 - **The 2 historical positive-edge silent-exit candidates** (+0.06 and +0.064 in the trade-log archive) are explainable post-fix: re-running `_validate()` against the persisted candidate state should produce a SKIPPED record with a specific gate name (likely opposing-position guard, same-signal guard, or per-ticker cooldown).
 
+**Per-gate kill attribution** (2026-05-03, Codex commit `e5440df`, full lifetime archive read)
+
+The 2026-05-02 forensic addendum below identified `tasks/blend_task.py:204` as the silent-exit boundary. The empirical follow-up — joining every `OPPORTUNITY` event in the full trade-log archive against its matching `BLEND_DECISION` and reading `trade_blocked_reason` — quantifies which gate accounts for what fraction of the 240 silent exits. Report at `docs/governance/2026-05-03-obs003-kill-attribution.md`.
+
+| trade_blocked_reason | count | % of silent exits |
+|---|---:|---:|
+| `G1_blended_confidence` | **197** | **82.1%** |
+| `G6_recency_score` | 31 | 12.9% |
+| `G2_evidence_source_class_diversity` | 12 | 5.0% |
+
+Total: 264 OPPORTUNITY → 23 accounted (20 SKIPPED + 3 PAPER_TRADE) + 240 silent (100% attributed) + 1 unattributed. The single unattributed case is `KXTRUMPIRAN-26MAY01` at 2026-04-21T01:52:46Z with no matching exit or blocked BLEND_DECISION — a clean-up candidate but not a systemic issue.
+
+Top ticker concentrations:
+
+| ticker | drivers |
+|---|---|
+| `KXTRUMPIRAN-26MAY01` | G1=77, **G6=31 (entire G6 set)** |
+| `KXMOCTRUMP25-26-MAY01` | G1=52 |
+| `KXMOCTRUMP25-26-APR24` | G1=20 |
+| `KXVANCEPAKISTAN-26APR21-APR30` | G1=15 |
+| `KXVANCEPAKISTAN-26APR21-APR25` | G1=8 |
+
+**Implications for the OBS-003 fix scope:**
+
+1. **G1 is the dominant target.** The post-soak fix should land the BlendTask SKIPPED-emission for G1 first; that alone closes 82% of the silent-exit gap and unblocks the EDGE-004 audit's per-gate attribution evidence.
+2. **G6 is concentrated to a single ticker.** The 31 `G6_recency_score` kills are all on `KXTRUMPIRAN-26MAY01` — likely an evidence-staleness pattern specific to that market's evidence stream rather than a general G6 calibration issue. Post-fix, this becomes a separate diagnostic question (does that ticker's evidence stop flowing well before the market closes?). Tracking inside this entry rather than spawning a new debt item until the post-fix data confirms the pattern.
+3. **G2 is small but interesting.** `G2_evidence_source_class_diversity` requires `evidence_source_classes` set diversity ≥ 2. The 12 hits are spread across `KXVANCEPAKISTAN`, `KXPARDONSTRUMP`, `KXTRUMPENDORSE`, `KXELECTIONEMERGENCY` — markets where the evidence stream collapses to a single source class. Cross-references the 2026-05-01 audit observation in PROFIT-DOSSIER-001's evidence section ("Source-class diversity gap: 202 news / 45 other / 1 official across the full corpus"). The G2 kill set is structural, not a runtime defect; raising source-class diversity is a feed-mix problem (PROFIT-EVID-002 territory) rather than a BlendTask-level fix.
+
+**Acceptance status update:** the original entry's first acceptance criterion ("Every OPPORTUNITY event in a paper-mode trade-log window has exactly one of `{paper_trade, SKIPPED, in-flight-at-audit-time}`") is the post-fix target; the 2026-05-03 attribution proves the silent-exit boundary is well-defined and BLEND_DECISION already carries the attribution data. The fix is a logging consolidation, not new instrumentation.
+
 **Forensic addendum** (2026-05-02, soak-window read-only source-tree audit)
 
 *Prior hypothesis is wrong.* The 2026-05-01 forensic addendum below claims early-exit branches in `trading/executor.py:_validate()` bypass the SKIPPED log call site. A direct read of `trading/executor.py` (498 LOC, full read 2026-05-02) refutes this:
@@ -2518,9 +2548,14 @@ Decision: **promote the cumulative-session-call instability to a candidate `PROF
 
 Pre-fix decisions in `decisions.jsonl` (~103 records spanning 2026-05-02 → pre-A5 cycles on 2026-05-03) remain audit-historical; they are not authoritative for the §8.5 "≥85% reasonable" manual-review criterion, which restarts against a post-fix window with baseline `decided_at >= 2026-05-03T15:28:40+00:00` (the first GOVERNANCE_DECISION emitted under cycle `gc_2026-05-03_152836`). Note: the bare `decision_id` field (e.g. `gd_2026-05-03_0001`) is reused per-cycle in the current logging schema, so `(cycle_id, decided_at)` is the unambiguous tuple identifier. See PHASE2-001's mid-soak halt note for the resume protocol.
 
-The cumulative-session-call instability hypothesis remains pending one more clean-window confirmation in a future iteration session. Production is unaffected (each launchd cycle is a fresh Python process; ~5 calls/cycle stays well below the apparent threshold). If confirmed, that becomes a separate `PROFIT-GOV-003` filing at LOW severity tracking iteration ergonomics, not production behaviour.
+**2026-05-03 16:09–16:21 UTC — H_CUMUL falsification (Codex commit `c987e4b`)** — the cumulative-session-call hypothesis is **rejected**. Cold-restart audit at `scripts/simulations/governance_cumulative_call_audit.py` (200 sequential identical calls + 10-call recovery batch, single Python process, single Ollama daemon session, daemon uptime 2d 2h at audit start) produced **211/211 valid responses** with consistent ~3.5s per call timing across the full 12-minute load. Per-10-call empty rate stayed at 0.00 throughout. Recovery batch empty rate: 0/10. Empirical thresholds for 25%/50%/75% empty rate: never reached. Report at `docs/governance/2026-05-03-cumulative-call-audit.md`.
 
-**2026-05-03 cumulative-call falsification:** `docs/governance/2026-05-03-cumulative-call-audit.md` forced an Ollama unload/cold-load, then ran 1 warmup + 200 sequential PROD prompt calls + 10 recovery calls against `POS_unresolvedmysteries`. Result: 211/211 valid, 0 empty responses, no 10-call trailing window crossed 25%/50%/75%, and recovery was 0/10 empty. This rejects H_CUMUL for the tested cold-window conditions and weakens the candidate `PROFIT-GOV-003` filing unless a later session reproduces daemon-state poisoning by another mechanism.
+The earlier-session empty-response observations (Claude's 9/11 deterministic empty under V_A and 0/11 under V_A3) are therefore **not driven by cumulative call count**. They were real but the underlying axis remains uncharacterized. Candidate causes Codex's H1–H5 + cumulative-call audits did not cover:
+
+- **Same-process daemon-state poisoning by V_A-specific prompt content** that resolves only on Python-process exit (not Ollama-daemon unload). Codex's audits all spawned fresh Python processes per condition; Claude's iteration shared one Python process across V_A/V_A3/V_A4 attempts.
+- **Mixed-prompt-content interaction** — running multiple distinct prompt variants in sequence within one session may stress some Ollama-internal cache or queue in a way that uniform prompt sequences don't.
+
+Neither is worth filing as `PROFIT-GOV-003` at this point. The phenomenon is observation-bias-bounded (only triggers in iterative-prompt-comparison sessions, never in production) and the working A5 fix is already shipped. **`PROFIT-GOV-003` filing is dismissed.** Future iteration sessions should follow Codex's empty-response-audit recommendation (PROD sentinel pair before each variant) plus a fresh Python process per variant; if empty responses recur under that protocol, that is a new finding worth re-opening the question.
 
 **Related**
 
