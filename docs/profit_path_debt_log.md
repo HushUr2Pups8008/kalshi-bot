@@ -2430,6 +2430,33 @@ Decision: do **not** land V_A as the production prompt fix. The POS-case empty-r
 
 Decision: do **not** file a separate `PROFIT-GOV-003` for the empty-response intermittency yet. The phenomenon needs cleaner characterization (concurrency vs evidence-shape vs prompt-length axes) before it earns its own entry. Track the question inside this entry's iteration log instead.
 
+**2026-05-03 14:00–14:32 UTC — post-audit retest** (Codex audit `092666c` complete, no production change landed)
+
+Codex's empty-response audit (`docs/governance/2026-05-03-empty-response-audit.md`, 110 calls clean window) found H1–H4 (concurrency, evidence-shape, prompt-length, sequential-accumulation) all returned 0/N empty rates. Verdict: failure mode is "transient daemon/session state outside the tested axes." Recommendation: PROD sentinel pair before each iteration variant.
+
+Post-audit V_A retest in clean window (14:27 UTC, 39 min before next launchd cycle) reproduces the **same 5/11 valid** result observed in the original 13:32 UTC iteration: 4/4 POS probes empty, 3/4 NEG_A probes correctly flip to `no_action` with polarity-aware reasoning, 2/3 NEG_B return `no_action`. The pattern is **reproducible**, not flaky. V_A's POS-empty regression is genuinely prompt-content driven, just not on any of the H1–H4 axes Codex tested.
+
+V_A4 (V_A minus the "DEFAULT TO no_action" instruction; keep the "Interpreting" polarity section): **9/11 empty** in clean window, worse than V_A. Removing the "DEFAULT TO no_action" line is not the trigger.
+
+V_A3 (single-line user-template polarity hint, no SYSTEM_PROMPT change): **0/11 empty** reproducibly in clean window. Inline polarity hint at the user-template level breaks the model entirely.
+
+Cross-variant comparison (all clean-window, post-audit):
+
+| Variant | Valid / 11 | NEG_A correct flips | Note |
+|---|---|---|---|
+| PROD | 11/11 | 0/4 (rubber-stamps) | Production baseline; rubber-stamp bias confirmed |
+| V_A | 5/11 | 3/4 | Polarity fix works when output returned; POS shapes empty |
+| V_A4 | 2/11 | 2/4 | V_A minus "DEFAULT TO no_action" — net worse |
+| V_A3 | 0/11 | n/a | User-template polarity hint alone breaks everything |
+
+**Codex's H3 prompt-length axis is null-content padding** (`prompt_variant()` at `scripts/simulations/governance_empty_response_audit.py:129–143` adds `"Diagnostic padding line {i}: evaluate metrics before choosing action."` × N — generic filler the model can ignore). That tests *raw token count* but not *semantically-loaded prompt content*. V_A's added content is the latter — actual instructions the model must integrate into its reasoning. The audit's H3 "not the driver" verdict therefore does not rule out semantic-content prompt additions as the trigger; it only rules out length-as-tokens.
+
+New axis to characterize before the next prompt-iteration session:
+
+**H5 — semantic content of prompt additions.** Bisect V_A's added SYSTEM_PROMPT content piece by piece against a known-good evidence shape (e.g. POS_unresolvedmysteries). Identify the minimum subset of added text that triggers empty responses on POS shapes. That subset is the actual prompt-content failure surface; design the working fix to avoid it.
+
+Decision: retain the prior iteration log's "do not file PROFIT-GOV-003" stance. The semantic-content failure surface is a sub-question of GOV-002 (the prompt fix is what's actually being characterized), not a separate transport-layer bug. Track via the next Codex task on H5 bisection.
+
 **Related**
 
 - `PROFIT-PHASE2-001` — direct dependency. The mid-soak halt note added 2026-05-03 records that the §8.5 manual-review criterion is paused pending GOV-002 resolution; the operational criteria continue.
