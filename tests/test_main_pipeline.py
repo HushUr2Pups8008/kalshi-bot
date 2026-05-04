@@ -1723,3 +1723,86 @@ class TestSourceClassClassifierLeverA1PlusAnalysisBranch:
         assert result in {"other", "analysis", "news"}, (
             f"Kyiv Post must bucket as one of other/analysis/news; got {result!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# A.1+1.5 companion harness — `legal`-class classifier branch (option-B)
+#
+# Spec: docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md §3.2
+# Status: pre-loaded during PROFIT-PHASE2-001 soak; lands as part of
+# A.1+1.5 deploy (Wave 2, post-soak day 14+; option-B parallel to option-A
+# specialist-analyst). Adds a new `legal` branch to
+# `_source_class_for_evidence` that buckets legal/regulatory analyst feed
+# titles (VitalLaw / Lawfare / Just Security / SCOTUSblog / Politico Legal
+# / Reuters Legal) as `legal` rather than `news` or `other`.
+#
+# `evidence_scorer._SOURCE_CLASS_QUALITY` does NOT yet define `legal`
+# today — A.1+1.5 spec §3.2 calls for `legal=0.65` (between `analysis=0.60`
+# and `official=0.75`). The weight harness is a sibling test
+# (test_evidence_scorer_legal_class_weight) that lands in the same hunk.
+# ---------------------------------------------------------------------------
+
+_LEVER_A1PLUS15_LEGAL_BRANCH_XFAIL_REASON = (
+    "PROFIT-EDGE-004 Lever A.1+1.5 legal-class branch not yet landed. "
+    "The A.1+1.5 deploy adds tokens for legal/regulatory analyst feed "
+    "titles (VitalLaw / Lawfare / Just Security / SCOTUSblog / Politico "
+    "Legal / Reuters Legal). Lands together with the A.1+1.5 first-feed "
+    "deploy per docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-"
+    "legal-analyst-design.md."
+)
+
+
+class TestSourceClassClassifierLeverA1Plus15LegalBranch:
+    """Pin the `legal`-class branch behaviour. Each xfail-strict test
+    corresponds to one legal-analyst source string the A.1+1.5 deploy
+    needs to bucket as `legal`. Today every one buckets as `news` or
+    `other` (no token match for the legal niche).
+    """
+
+    @pytest.mark.xfail(reason=_LEVER_A1PLUS15_LEGAL_BRANCH_XFAIL_REASON, strict=True)
+    def test_vitallaw_classifies_as_legal(self):
+        """`VitalLaw.com` (legal/regulatory analysis) → `legal`. The
+        load-bearing source per the per-source audit (cca3cea)."""
+        assert _source_class_for_evidence("VitalLaw.com") == "legal"
+
+    @pytest.mark.xfail(reason=_LEVER_A1PLUS15_LEGAL_BRANCH_XFAIL_REASON, strict=True)
+    def test_vital_law_hyphenated_classifies_as_legal(self):
+        """`vital-law` hyphenated form (matches the
+        scripts/simulations/lever_a1_plus_candidate_feed_sizing.py token
+        list) → `legal`."""
+        assert _source_class_for_evidence("vital-law analysis") == "legal"
+
+    @pytest.mark.xfail(reason=_LEVER_A1PLUS15_LEGAL_BRANCH_XFAIL_REASON, strict=True)
+    def test_lawfare_classifies_as_legal(self):
+        """Lawfare (national-security law analysis) → `legal`."""
+        assert _source_class_for_evidence("Lawfare") == "legal"
+
+    @pytest.mark.xfail(reason=_LEVER_A1PLUS15_LEGAL_BRANCH_XFAIL_REASON, strict=True)
+    def test_just_security_classifies_as_legal(self):
+        """Just Security (national-security law analysis) → `legal`."""
+        assert _source_class_for_evidence("Just Security") == "legal"
+
+    @pytest.mark.xfail(reason=_LEVER_A1PLUS15_LEGAL_BRANCH_XFAIL_REASON, strict=True)
+    def test_scotusblog_classifies_as_legal(self):
+        """SCOTUSblog (Supreme Court ruling analysis) → `legal`."""
+        assert _source_class_for_evidence("SCOTUSblog") == "legal"
+
+    @pytest.mark.xfail(reason=_LEVER_A1PLUS15_LEGAL_BRANCH_XFAIL_REASON, strict=True)
+    def test_politico_legal_classifies_as_legal(self):
+        """Politico legal coverage → `legal`. Distinguished from generic
+        Politico via the `legal` substring in the source label."""
+        assert _source_class_for_evidence("Politico Legal") == "legal"
+
+    @pytest.mark.xfail(reason=_LEVER_A1PLUS15_LEGAL_BRANCH_XFAIL_REASON, strict=True)
+    def test_reuters_legal_classifies_as_legal(self):
+        """Reuters Legal (wire-service legal news) → `legal`. The
+        operator-recognised distinction from the generic Reuters wire."""
+        assert _source_class_for_evidence("Reuters Legal") == "legal"
+
+    def test_generic_reuters_classifies_unchanged_today(self):
+        """Positive control: generic `Reuters` (without the `Legal`
+        qualifier) must continue to bucket as `news` after the A.1+1.5
+        legal-branch addition. Catches a regression where the `reuters`
+        token in the legal branch over-claims and shadows the generic
+        Reuters wire which currently buckets as `news`."""
+        assert _source_class_for_evidence("Reuters") == "news"
