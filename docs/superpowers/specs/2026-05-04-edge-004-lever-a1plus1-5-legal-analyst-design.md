@@ -94,7 +94,7 @@ def _source_class_for_evidence(source: str) -> str:
     # ... fall through to news / unknown ...
 ```
 
-`evidence_scorer._SOURCE_CLASS_QUALITY` then needs a weight assignment for `legal`. Recommend `0.65` (between `analysis=0.60` and `official=0.75`) — legal analysts have stronger primary-source proximity than general analysis but less than government bulletins.
+`evidence_scorer._SOURCE_CLASS_QUALITY` then needs a weight assignment for `legal`. Recommend `0.65` (between `analysis=0.60` and `news=0.70` per the actual current dict) — legal analysts have slightly stronger primary-source proximity than general analysis but less than mainstream news wires which carry primary-source statements verbatim. Pre-loaded harness (`tests/test_lever_a1plus1_5_evidence_scorer_legal_weight.py`) pins the 0.65 value plus the strict ordering invariant `analysis < legal < news`. Operator may pick any value in that interval at deploy time (e.g., 0.62 / 0.68); values outside the interval require a spec revision.
 
 ### 3.3 Optional source-mapping additions
 
