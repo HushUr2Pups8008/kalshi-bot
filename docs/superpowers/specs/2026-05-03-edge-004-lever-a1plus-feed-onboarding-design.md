@@ -9,6 +9,17 @@
 - `docs/governance/2026-05-03-source-class-diversification-audit.md` (single-source rate; `news` 238 / `other` 122 / `official` 9 of OPP joins)
 - `docs/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md` (A.1 alone produces ~0 archive lift)
 - `docs/governance/2026-05-03-edge004-wave2-expected-state-ladder.md` (Codex's Wave-2 forecast)
+- `docs/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md` **(2026-05-04 update — REVISES §2 / §3.1 candidate ordering; see §2.5 callout below)**
+
+## §2.5 — 2026-05-04 per-source revision callout (LOAD-BEARING)
+
+The 2026-05-04 per-source audit drilled into the specialist_analyst class and found a **single source carries 100 % of historical PAPER_TRADE**: `VitalLaw.com` (legal/regulatory analysis) produced 3/3 PAPER_TRADE on the 13-day Mac archive. The geopolitics-sub-niche feeds originally recommended below in §2 / §3.1 (Kyiv X / Times of Israel / Iran International / Defense News / Breaking Defense) produced **18 OPP + 0 PAPER_TRADE** at the class-internal level. The proposed A.1+1 candidates (war on the rocks / CSIS / ISW / CFR / Atlantic Council) target the same 0-PAPER_TRADE sub-niche.
+
+**Audit-of-the-audit finding:** `VitalLaw.com` is NOT in the current canonical `config.py:RSS_FEEDS`. It was polled on the Mac archive instance but silently removed from canonical config at some prior point. **Re-onboarding `VitalLaw.com` (or any vital_law-niche analogue: Politico Pro / Lawfare / Just Security / Reuters Legal / SCOTUSblog) is the highest-priority A.1+1 deploy candidate**, ahead of the geopolitics-analyst URLs in §3.1.
+
+The §3.1 RSS-feed-list below is preserved as the geopolitics-sub-niche option-A; **the operator should consider §3.1bis (vital_law-niche option-B) FIRST** at deploy time, per `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md`. The unified Wave-1+2 forecast (`docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md`) sizes both pivots: option-A's expected lift is bounded above by the existing 0/18 conversion rate; option-B has the load-bearing-source profile but the deploy is harder (paywall friction higher in legal-analyst niche).
+
+The strict-xfail harness `tests/test_lever_a1plus_feed_config.py` now covers BOTH paths: `test_at_least_one_specialist_analyst_url_in_rss_feeds` pins option-A; `test_vital_law_or_legal_analyst_feed_present_post_a1plus` pins option-B. Either xfail flipping xpass on the deploy commit forces marker removal, so the spec doesn't need to commit to one path pre-deploy.
 
 ## 1. Why this spec exists
 
