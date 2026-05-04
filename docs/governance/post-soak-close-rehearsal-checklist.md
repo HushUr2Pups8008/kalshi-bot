@@ -167,6 +167,7 @@ After Wave-1 base stack stabilises. **Lands as prerequisite hygiene only — do 
 ### 6.1 Pre-deploy check
 
 - [ ] Re-run `pytest tests/test_main_pipeline.py::TestSourceClassClassifierLeverA1 -q`. Confirm 6 strict-xfail + 1 positive control.
+- [ ] Re-run `pytest tests/test_main_pipeline.py::TestSourceClassClassifierLeverA1PlusAnalysisBranch -q`. Confirm 6 strict-xfail + 1 positive control (analysis-class branch added in commit `87c3f15`; lands in same hunk as A.1+1 deploy, not A.1).
 - [ ] Re-run `python scripts/simulations/lever_a1_classifier_counterfactual.py`. Confirm the canonical-source distribution lift is `official +4, news +2, other -6`.
 
 ### 6.2 Deploy
@@ -186,7 +187,12 @@ A.1 lands silently; the real edge-production work is A.1+ feed onboarding (next)
 
 After A.1's verification clears (a few hours; A.1 is silent in production data).
 
+**Decision point at top:** per the 2026-05-04 per-source audit (`docs/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md`), pick option-A (geopolitics-analyst per A.1+ spec §3.1) OR option-B (vital_law-niche per `2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md`). Option-B is the higher-empirical-priority pick; option-A is the lower-deploy-friction pick. Operator chooses based on probe results at deploy time.
+
+### 7.1 Pre-deploy check (both options)
+
 - [ ] Pre-deploy verify each candidate feed URL with `curl -I`. Document live URL + feed `<title>` in deploy commit.
+- [ ] Re-run `pytest tests/test_lever_a1plus_feed_config.py -q`. Confirm 1 passes (existing-domains positive control) + 2 strict-xfail (option-A specialist-analyst URL, option-B vital_law-niche URL). Whichever option deploys, the corresponding xfail flips xpass; remove that marker in the deploy commit. The OTHER xfail stays in place (it pins the option not yet deployed).
 - [ ] Run the 24 h ingestion / match-score / latency / source-class verification per the A.1+ spec §4.
 - [ ] If all 4 acceptance thresholds pass, deploy the feed. If any fail, kill the candidate and run §4 against the next candidate.
 - [ ] Post-deploy 14 d validation: target is conversion ≥ 5 % over 14 d (same as Lever A umbrella spec §4 closure criterion).
