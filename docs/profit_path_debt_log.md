@@ -2185,6 +2185,41 @@ Second pass on 2026-05-05 (commits `b44dda2` + `80932cb` + this cycle's docs). I
 
 **Honest read 2026-05-05 (cycle 2):** Day-7 close infrastructure is fully landed. Wave-3 levers (B + C) have locked v1 implementation choices. Wave-2 A.1+ branch decision is operator-discretion at Day-14. Branch-D escalation criteria spec'd. Doc index audit identifies 11 archive-able files post-close. `check_soak_invariant.sh` reports status=fail / commit_count=5 / missing_paths=[] under the §8.5.2 carve-out — gate-7 passes per the criteria runbook table + the 2 doc/script-only commits this cycle (out-of-scope-for-§8.5.2). Combined gate-6 evidence (Codex's 67/67 verdicted at 100 % reasonable + the 241/242 mechanically-uniform `disable_source` decisions) yields ≥ 99.6 % reasonable on full corpus — well above the 85 % floor.
 
+#### 2026-05-05 cycle 3 integration — nomenclature cleanup + sizing-scope specs + Branch D runbook + baselines + LOCK harnesses
+
+Third pass on 2026-05-05 (commits `a505a08` Claude + `3a400c1` Codex). Focused on operator-readiness for fire-time + post-Wave-2 escalation infrastructure.
+
+**Claude artifacts (cycle 3; commit `a505a08`):**
+
+- `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` — §8.5.2 invocation table updated with all 7 surfaced commits including this-cycle doc/script artifacts (out-of-scope-for-§8.5.2). F1 fix from cycle-2 dry-trace closed.
+- `docs/governance/2026-05-05-lever-d-nomenclature-cleanup-audit.md` — 18-occurrence audit; 1 MEDIUM finding (`wave-2-a1plus-branch-decision-table.md` "Branch D" → "option-A" for geopolitics specialist).
+- `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — 6 Edits applying nomenclature fix per F1.
+- `docs/governance/2026-05-05-wave-2-deploy-day-timing.md` — Branch A passive (no deploy) + Branch C deploy windows.
+- `docs/governance/2026-05-05-wave-3-deploy-day-timing.md` — Lever B then Lever C; 14d inter-commit cadence.
+- `docs/governance/wave-2-deploy-commit-order-decision.md` — locked 2-commit Wave-2 order.
+- `docs/superpowers/specs/2026-05-05-profit-llm-001-pre-sizing-scope-design.md` — 4-axis sizing surface (prompt template / model swap / context window / batch coherence).
+- `docs/superpowers/specs/2026-05-05-p4-gate-appendix-a-pre-sizing-scope-design.md` — 3-axis surface (market-scope filter / intake-path expansion / market-resolution cadence).
+- `docs/governance/2026-05-05-changelog-drift-check.md` — 2 MEDIUM + 1 LOW drift findings in pre-staged Wave-2/3 CHANGELOG blocks.
+- `docs/governance/2026-05-05-branch-d-fire-procedure-runbook.md` — operator playbook (~30 min wall-clock; 6-step decision tree).
+- `docs/governance/2026-05-05-doc-index-cleanup-execution-plan.md` — 3-commit plan (~15 min) for the 11-file archive recommendation; post-close trigger.
+
+**Codex artifacts (cycle 3; commit `3a400c1`):**
+
+- `tests/test_lever_b_g1_floor_lock.py` — Lever B 0.04 / 0.08 / 2× ratio strict-xfail per cycle-2 LOCK addendum.
+- `tests/test_branch_c_feed_selection_rubric.py` — Just Security primary + Lawfare secondary strict-xfail.
+- 4 baseline reports in `docs/governance/2026-05-05-PROFIT-PHASE2-001-{daily-trend,llm-throughput,source-class-evolution,parse-error-retroactive}-{baseline,findings}.md`.
+- 4 new audit scripts: `precommit_hook_health_audit.sh`, `test_coverage_audit.py`, `release_tag_inventory.sh`, `calibration_drift_wiring_audit.py`.
+- `--output` flag added to existing `llm_throughput_audit.py`, `parse_error_retroactive_audit.py`, `source_class_evolution_audit.py`.
+
+**Live empirical anchors (Codex 2026-05-05):**
+
+- LLM throughput median 1063 ms / p90 1986 ms — well under PHASE2-002's 90-min-cadence p90 < 60 s rule (>30× headroom). Cadence-tune is empirically safe.
+- Source-class distribution: 950 rows (news=603 / other=347) — pre-Wave-1 A.1 baseline.
+- Daily-trend: 164 post-A5 decisions all uniform `disable_source`; 0 anomalies.
+- PARSE_ERROR root cause: 7/7 events `missing_required_fields` — closes day-1/-2 forensics question.
+
+**Honest read 2026-05-05 (cycle 3):** Operator-readiness for fire-time + Wave-1 deploy + Branch D escalation is fully spec'd. All Wave-3 + Branch D deferred work has bounded sizing surfaces (PROFIT-LLM-001 4 axes; P4-GATE Appendix A 3 axes). Cycle 3's biggest finding: LLM throughput headroom is so large (>30× under the PHASE2-002 cadence-tune rule) that aggressive cadence experiments are empirically defensible without further audit. Memory hygiene unchanged from cycle 2.
+
 ---
 
 ### PROFIT-DOSSIER-001
