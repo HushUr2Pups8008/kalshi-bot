@@ -901,7 +901,6 @@ def _analysis_for_series(ticker: str) -> SignalAnalysis:
     )
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
 @pytest.mark.parametrize(
     "ticker,expected_prefix",
     [
@@ -923,7 +922,6 @@ def test_series_prefix_extraction(ticker: str, expected_prefix: str) -> None:
     assert helper(ticker) == expected_prefix
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_fisa_replay_three_same_series_only_one_enqueues() -> None:
     """The 2026-05-01 FISA case (3 trades within 7s) must collapse to 1."""
@@ -995,7 +993,6 @@ async def test_cross_series_burst_does_not_interfere() -> None:
     ), "no series_correlation_in_window SKIPPED expected for cross-series traffic"
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_window_expiry_allows_second_same_series_candidate(monkeypatch) -> None:
     """Same series, second candidate arriving after the window has expired.

@@ -1079,6 +1079,16 @@ class BotConfig:
         default_factory=lambda: int(os.getenv("PAPER_TICKER_COOLDOWN", "14400"))
     )  # 4h
 
+    # PROFIT-EXEC-002 series-correlation guard window. When BlendTask is
+    # about to enqueue a candidate, it checks whether another candidate
+    # from the same Kalshi series prefix enqueued within this window;
+    # if so, the new candidate is suppressed with reason
+    # `series_correlation_in_window`. Default 1h; setting `=0` disables
+    # the guard entirely (operator escape hatch).
+    series_correlation_window_seconds: int = field(
+        default_factory=lambda: int(os.getenv("SERIES_CORRELATION_WINDOW_SECONDS", "3600"))
+    )
+
     # Go-live gate thresholds -- evaluated by --go-live before allowing confirmation.
     # Set these to 0/1.0 to disable any individual gate.
     go_live_min_resolved: int = field(
