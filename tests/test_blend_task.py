@@ -568,6 +568,7 @@ async def test_blocked_blend_emits_skipped_record(trade_blocked_reason: str) -> 
         logger=logger,
         blender=_blocked_blender_factory(trade_blocked_reason),
         is_paper_mode=True,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
     result = await task.process_fast_lane_result(_analysis())
@@ -587,7 +588,6 @@ async def test_blocked_blend_emits_skipped_record(trade_blocked_reason: str) -> 
     assert logger.skipped_records[0]["ticker"] == "KXBLEND-1"
 
 
-@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_unblocked_blend_does_not_emit_blendtask_skipped_record() -> None:
     """Happy path: candidate enqueued → BlendTask emits zero SKIPPED records.
@@ -610,6 +610,7 @@ async def test_unblocked_blend_does_not_emit_blendtask_skipped_record() -> None:
         ),
         logger=logger,
         is_paper_mode=True,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
     result = await task.process_fast_lane_result(_analysis())
@@ -747,6 +748,7 @@ async def test_obs003_blocked_path_writes_via_injected_logger_log_skipped(
         logger=logger,
         blender=_blocked_blender_factory("G1_blended_confidence"),
         is_paper_mode=True,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
     await task.process_fast_lane_result(_analysis())
@@ -755,7 +757,7 @@ async def test_obs003_blocked_path_writes_via_injected_logger_log_skipped(
     skipped_writes = [
         (writer, args, kwargs)
         for writer, args, kwargs in spy_calls
-        if writer is logger.log_skipped
+        if writer == logger.log_skipped
     ]
     assert len(skipped_writes) == 1, (
         "BlendTask must call `write_trade_log_async(logger.log_skipped, ...)` "
@@ -769,7 +771,7 @@ async def test_obs003_blocked_path_writes_via_injected_logger_log_skipped(
     bypass_writes = [
         (writer, args, kwargs)
         for writer, args, kwargs in spy_calls
-        if writer is _module_trade_log.log_skipped
+        if writer == _module_trade_log.log_skipped
     ]
     assert bypass_writes == [], (
         "BlendTask must not bypass the injected logger; "
@@ -797,6 +799,7 @@ async def test_obs003_skipped_payload_carries_required_keys() -> None:
         logger=logger,
         blender=_blocked_blender_factory("G1_blended_confidence"),
         is_paper_mode=True,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
     await task.process_fast_lane_result(_analysis_with_news())
@@ -867,6 +870,8 @@ def _market_for_series(ticker: str) -> KalshiMarket:
         volume=100,
         open_interest=50,
         close_time="2026-06-01T00:00:00Z",
+        status="open",
+        regime_weights={"fast": 1.0, "interpretation": 0.0, "structural": 0.0},
     )
 
 
@@ -928,6 +933,7 @@ async def test_fisa_replay_three_same_series_only_one_enqueues() -> None:
         ),
         logger=logger,
         is_paper_mode=True,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
     tickers = [
@@ -950,7 +956,6 @@ async def test_fisa_replay_three_same_series_only_one_enqueues() -> None:
     )
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_cross_series_burst_does_not_interfere() -> None:
     """Different series prefixes within the window must both enqueue."""
@@ -969,6 +974,7 @@ async def test_cross_series_burst_does_not_interfere() -> None:
         ),
         logger=logger,
         is_paper_mode=True,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
     await task.process_fast_lane_result(_analysis_for_series("KXFISAEXTEND-26APR-MAY01"))
@@ -1013,6 +1019,7 @@ async def test_window_expiry_allows_second_same_series_candidate(monkeypatch) ->
         ),
         logger=logger,
         is_paper_mode=True,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
     await task.process_fast_lane_result(_analysis_for_series("KXFISAEXTEND-26APR-MAY01"))
@@ -1024,7 +1031,6 @@ async def test_window_expiry_allows_second_same_series_candidate(monkeypatch) ->
     assert queue.qsize() == 2, "post-window same-series candidate must enqueue"
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_window_override_zero_disables_guard(monkeypatch) -> None:
     """`cfg.series_correlation_window_seconds = 0` must disable the guard entirely."""
@@ -1046,6 +1052,7 @@ async def test_window_override_zero_disables_guard(monkeypatch) -> None:
         ),
         logger=logger,
         is_paper_mode=True,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
     for ticker in (
