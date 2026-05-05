@@ -6,9 +6,11 @@ import subprocess
 from pathlib import Path
 
 from scripts import distribution_analysis_v2 as dist
+from scripts import calibration_drift_wiring_audit as calibration_audit
 from scripts import governance_decision_review as review
 from scripts import llm_throughput_audit as llm_audit
 from scripts import parse_error_retroactive_audit as parse_audit
+from scripts import test_coverage_audit as coverage_audit
 from scripts import source_class_evolution_audit as source_audit
 
 
@@ -252,6 +254,43 @@ def test_parse_error_retroactive_audit_groups_root_causes(tmp_path: Path):
     assert report["root_causes"]["json_decode"] == 1
 
 
+def test_test_coverage_audit_summarizes_coverage_json(tmp_path: Path):
+    payload = {
+        "totals": {"covered_lines": 75, "num_statements": 100, "percent_covered": 75.0},
+        "files": {
+            "main.py": {"summary": {"covered_lines": 30, "num_statements": 60, "percent_covered": 50.0}},
+            "scripts/example.py": {"summary": {"covered_lines": 45, "num_statements": 40, "percent_covered": 100.0}},
+        },
+    }
+    coverage_json = tmp_path / "coverage.json"
+    coverage_json.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = coverage_audit.analyze_coverage_json(coverage_json)
+
+    assert report["totals"]["percent_covered"] == 75.0
+    assert report["modules"][0]["path"] == "main.py"
+    assert "Coverage Audit" in coverage_audit.render_markdown(report)
+
+
+def test_calibration_drift_wiring_audit_flags_required_paths(tmp_path: Path):
+    repo = tmp_path
+    (repo / "main.py").write_text(
+        "from tasks.calibration_task import CalibrationTask\n"
+        "self._calibration_task = CalibrationTask()\n"
+        "PaperTrader(calibration_task=self._calibration_task)\n"
+        "BlendTask(calibration=self._calibration_task)\n",
+        encoding="utf-8",
+    )
+    (repo / "tasks").mkdir()
+    (repo / "tasks/calibration_task.py").write_text("class CalibrationTask: pass\nrecord_calibration_check\n", encoding="utf-8")
+    (repo / "tasks/blend_task.py").write_text("calibration: CalibrationLike | None = None\nget_scaling_factor\n", encoding="utf-8")
+
+    report = calibration_audit.analyze(repo)
+
+    assert report["status"] == "pass"
+    assert all(check["passed"] for check in report["checks"])
+
+
 def test_bothealth_post_deploy_mode_references_wave1_smoke():
     script = (REPO_ROOT / "scripts/bothealth.sh").read_text(encoding="utf-8")
 
@@ -265,3 +304,21 @@ def test_pre_soak_close_branch_backup_dry_run_skips_dirty_tree_abort():
 
     assert "DRY-RUN WARNING: working tree has uncommitted changes" in script
     assert 'if [[ "$DRY_RUN" == "0" ]]' in script
+
+
+def test_precommit_hook_health_audit_validates_hooks_path_and_hook():
+    script = (REPO_ROOT / "scripts/precommit_hook_health_audit.sh").read_text(encoding="utf-8")
+
+    assert "core.hooksPath" in script
+    assert ".githooks/pre-commit" in script
+    assert "scripts/sync_readme_version.py" in script
+    assert "bash -n" in script
+
+
+def test_release_tag_inventory_reports_local_and_origin_tags():
+    script = (REPO_ROOT / "scripts/release_tag_inventory.sh").read_text(encoding="utf-8")
+
+    assert "git for-each-ref" in script
+    assert "refs/tags" in script
+    assert "git ls-remote --tags origin" in script
+    assert "commit subject" in script

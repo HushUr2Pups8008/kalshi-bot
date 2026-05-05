@@ -77,7 +77,23 @@ def analyze(path: Path = _DEFAULT_INPUT) -> dict[str, Any]:
 
 
 def render_markdown(report: dict[str, Any]) -> str:
-    lines = ["# Source-Class Evolution Audit", "", f"Input: `{report['input_path']}`", ""]
+    lines = [
+        "# Source-Class Evolution Audit",
+        "",
+        f"Input: `{report['input_path']}`",
+        "",
+        "## Summary",
+        "",
+        f"- Counted rows: `{report['total_rows']}`",
+        "",
+        "## Event Types",
+        "",
+    ]
+    if not report["event_type_counts"]:
+        lines.append("- None.")
+    for event_type, count in sorted(report["event_type_counts"].items()):
+        lines.append(f"- `{event_type}`: {count}")
+    lines += [""]
     lines += ["## Per-Day Distribution", ""]
     if not report["per_day"]:
         lines.append("- None.")
@@ -90,9 +106,13 @@ def render_markdown(report: dict[str, Any]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=_DEFAULT_INPUT)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     report = analyze(args.input)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(render_markdown(report), encoding="utf-8")
     if args.json:
         print(json.dumps(report, separators=(",", ":"), sort_keys=True))
     else:
