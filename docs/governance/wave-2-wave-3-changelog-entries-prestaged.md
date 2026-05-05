@@ -8,9 +8,9 @@
 
 | wave | tracker | landing day | proposed VERSION |
 |---|---|---|---|
-| 1 | OBS-005 / MATCH-001 / OBS-003 / EXEC-002 / GOV-003 / Lever A.1 | 2026-05-15 | 0.30.0 |
-| 2 | Lever A.1+ first feed (option-A or option-C-Branch-C-fallback) | 2026-05-22+ | 0.30.1 |
-| 3 | Lever B G1=0.04 + Lever C cross-series guard | 2026-06-13+ | 0.31.0 |
+| 1 | OBS-005 / MATCH-001 / OBS-003 / EXEC-002 / GOV-003 / Lever A.1 | 2026-05-08 (early-close path) or 2026-05-15 (default) | 0.30.0 |
+| 2 | Lever A.1+ first feed (option-A or option-C-Branch-C-fallback) | 2026-05-15+ (early-close) or 2026-05-22+ (default) | 0.30.1 |
+| 3 | Lever B G1=0.04 + Lever C cross-series guard | 2026-06-06+ (early-close) or 2026-06-13+ (default) | 0.31.0 |
 
 Wave-2 = patch bump (single feed onboarding; minor behavioural change). Wave-3 = minor bump (Lever B is a tunable gate change; Lever C is new functionality at the BlendTask enqueue point).
 

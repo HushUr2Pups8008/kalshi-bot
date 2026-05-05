@@ -24,12 +24,13 @@ If the operator deploys Wave-1 in stages (one per day per the rehearsal checklis
 Insert ABOVE the current `## [0.29.59] - 2026-05-02` heading in `CHANGELOG.md`:
 
 ```markdown
-## [0.30.0] - 2026-05-15
+## [0.30.0] - 2026-05-08  (or actual deploy date if §8.5.1 early-close path is taken)
 
 ### Added (PROFIT-PHASE2-001 — Wave-1 base stack post-soak deploy)
 
 Six behavioural changes shipped together at the close of the
-PROFIT-PHASE2-001 governance shadow-soak (2026-05-01 → 2026-05-15).
+PROFIT-PHASE2-001 governance shadow-soak (2026-05-01 → 2026-05-08
+under §8.5.1 early-close, per `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md`).
 Pre-deploy validation per the rehearsal checklist
 [`docs/governance/post-soak-close-rehearsal-checklist.md`](docs/governance/post-soak-close-rehearsal-checklist.md).
 
@@ -90,7 +91,7 @@ onboarding (Wave 2). Spec:
 
 ### Soak validation
 
-PROFIT-PHASE2-001 governance shadow-soak (2026-05-01 → 2026-05-15)
+PROFIT-PHASE2-001 governance shadow-soak (2026-05-01 → 2026-05-08 under §8.5.1)
 recorded:
 - ≥ ~80 fast cycles + ≥ ~12 deep cycles, cadence honoured
   throughout

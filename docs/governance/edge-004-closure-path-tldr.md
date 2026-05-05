@@ -82,7 +82,7 @@ Per-source audit (cca3cea) sized the answer empirically:
 
 Pre-deploy sizing for the specific A.1+ URL candidates is locked (Codex `2a15d55` for option-A, Codex `5e5849a` for option-B). Until Day-14 the operator should expect:
 
-- **A.1 deploy** (Wave-2 day 13 post-soak): silent, no lift, prerequisite hygiene only.
+- **A.1 deploy** (Day 7 post-soak under §8.5.1 / Day 13 default): silent, no lift, prerequisite hygiene only.
 - **A.1+ deploy** (Wave-2 day 14 post-soak): real edge production opportunity. 14 d window to verify ≥ 5 %. Operator picks option-A or option-B at deploy time.
 - **If A.1+ stalls:** A.1+2 within 7 d (the OTHER option). After 2 attempts total, escalate.
 

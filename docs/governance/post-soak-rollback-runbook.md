@@ -1,6 +1,6 @@
 # Post-soak rollback runbook
 
-**Status:** procedural (operator-facing). Pre-staged during the active `PROFIT-PHASE2-001` soak so incident response after the 2026-05-15 close is a single-document lookup, not a multi-spec scavenger hunt.
+**Status:** procedural (operator-facing). Pre-staged during the active `PROFIT-PHASE2-001` soak so incident response after the post-soak close (**2026-05-08 under §8.5.1 early-close**, OR 2026-05-15 under the default 14-day floor) is a single-document lookup, not a multi-spec scavenger hunt.
 **Audience:** the operator on call when a Wave-1 / Wave-2 deploy goes wrong.
 **Drafted:** 2026-05-03
 **Companion:** `docs/superpowers/specs/2026-05-03-post-soak-landing-order-design.md` (the deploy-side spec)
@@ -169,7 +169,7 @@ After any rollback (env or code):
 
 ## 7. When to escalate to a full rollback
 
-Reset the post-soak deploy effort entirely (full rollback to pre-2026-05-15-close `main`) if:
+Reset the post-soak deploy effort entirely (full rollback to the `pre-wave-1-deploy-${DATE}` rollback anchor created by `scripts/pre_soak_close_branch_backup.sh`) if:
 
 - Two or more Wave-1 items have failed validation back-to-back.
 - A Wave-1 revert produces unexpected secondary failures (cascading-revert §5 fails).

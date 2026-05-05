@@ -1,7 +1,9 @@
-# Post-soak-close rehearsal checklist (operator playbook for 2026-05-15 close → Wave-1 deploys)
+# Post-soak-close rehearsal checklist (operator playbook for early-close → Wave-1 deploys)
+
+**Updated 2026-05-05:** soak target shifted from 2026-05-15 (day-14) to **2026-05-08+ (day-7+)** per §8.5.1 early-close addendum (`docs/governance/PROFIT-PHASE2-001-early-close-criteria.md`). All "Day N" references below reflect days from soak start (2026-05-01), so Day 13 in the original checklist is now Day 7 (Wave-1 close 2026-05-08+); Day 14+ Wave-2 first feed is now Day 8+ (2026-05-09+); Day 28+ Wave-3 is now Day 21+ (2026-05-22+); Day 35+ Wave-3 escalation point is now Day 28+ (2026-05-29+).
 
 **Status:** procedural (operator-facing). Pre-staged during the active `PROFIT-PHASE2-001` soak so the day the soak closes the operator works from a single document, not a multi-spec tour.
-**Audience:** the operator on the day of and immediately after the 2026-05-15 organic close (or 2026-05-16 hard ceiling) of `PROFIT-PHASE2-001`.
+**Audience:** the operator on the day of and immediately after the **early-close window opens 2026-05-08** (or 2026-05-15 default if §8.5.1 gates fail and the original 14-day floor applies) for `PROFIT-PHASE2-001`.
 **Drafted:** 2026-05-03
 **Companions:**
 - `docs/superpowers/specs/2026-05-03-post-soak-landing-order-design.md` (sequencing spec; the *what* of each step)

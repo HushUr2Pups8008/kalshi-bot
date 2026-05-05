@@ -12,8 +12,8 @@
 
 Activates if the modal scenario from the unified Wave-1+2 forecast plays out:
 
-1. Wave-1 base stack lands (Day 13). Conversion drops 3.4 % → 1.1 % by design (post-MATCH-001 + EXEC-002 tightening).
-2. Wave-2 Lever A.1 lands (Day 13). Silent; no archive lift.
+1. Wave-1 base stack lands (Day 7 under §8.5.1 early-close OR Day 13 default). Conversion drops 3.4 % → 1.1 % by design (post-MATCH-001 + EXEC-002 tightening).
+2. Wave-2 Lever A.1 lands (same day as Wave-1 close). Silent; no archive lift.
 3. Wave-2 Lever A.1+ lands (Day 14+). Either:
    - Branch A (passive Google News observation): no VitalLaw / legal-niche surfacing in 14 d
    - Branch C (open-RSS legal analogues): deploy completes but conversion < 5 % over 14 d
