@@ -71,7 +71,7 @@ and the post-OBS-003 SKIPPED-stream attribution audit
 Suppresses correlated-burst trades within a single market series
 within a configurable window. Pre-deploy validation: archive replay
 showed 2 FISA-class paper-trade bursts suppressed. Spec:
-[`docs/superpowers/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md`](docs/superpowers/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md).
+[`docs/superpowers/specs/2026-05-03-exec-002-series-correlation-guard-design.md`](docs/superpowers/specs/2026-05-03-exec-002-series-correlation-guard-design.md). NOTE: this is the SAME-series guard (Wave 1 / EXEC-002), not the CROSS-series guard (Wave 3 / Lever C — separate spec).
 
 #### PROFIT-GOV-003 — governance_monitor.py fix
 

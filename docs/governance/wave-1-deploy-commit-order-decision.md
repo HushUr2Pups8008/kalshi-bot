@@ -42,7 +42,7 @@ Two commit-shape options per the rehearsal checklist §5:
 
 | commit | scope | xfail markers removed |
 |---|---|---|
-| 1 | PROFIT-OBS-005 cooldown sentinel-default | `tests/test_executor.py::TestObs005CooldownSentinelDefault` |
+| 1 | PROFIT-OBS-005 cooldown sentinel-default | `tests/test_executor.py::TestCooldownSentinelOBS005` |
 | 2 | PROFIT-MATCH-001 (B′) token-guard | `tests/test_market_matcher.py::TestMatch001TokenGuardRefinement` |
 | 3 | PROFIT-OBS-003 BlendTask SKIPPED-emission | `tests/test_blend_task.py::TestObs003SkippedEmission` |
 | 4 | PROFIT-EXEC-002 series-correlation guard | `tests/test_executor.py::TestExec002SeriesCorrelationGuard` |
