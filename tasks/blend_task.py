@@ -84,6 +84,8 @@ class BlendDecisionLogger(Protocol):
         evidence_ids_contributing: list[str],
     ) -> None: ...
 
+    def log_skipped(self, **kwargs: Any) -> None: ...
+
 
 @dataclass(frozen=True)
 class TradeCandidate:
@@ -202,6 +204,13 @@ class BlendTask:
         )
 
         if trade_blocked_reason is not None:
+            await self._emit_skipped(
+                fast_lane_result=fast_lane_result,
+                blend_result=blend_result,
+                readiness=readiness,
+                trade_blocked_reason=trade_blocked_reason,
+                default_min_edge=default_min_edge,
+            )
             return BlendTaskResult(
                 market_ticker=ticker,
                 blend_result=blend_result,
@@ -335,6 +344,64 @@ class BlendTask:
             trade_blocked_reason=trade_blocked_reason,
             evidence_ids_contributing=evidence_ids,
         )
+
+    async def _emit_skipped(
+        self,
+        *,
+        fast_lane_result: SignalAnalysis,
+        blend_result: BlendResult,
+        readiness: ReadinessDecision,
+        trade_blocked_reason: str,
+        default_min_edge: float,
+    ) -> None:
+        """PROFIT-OBS-003 — emit a SKIPPED record when BlendTask blocks a candidate.
+
+        Mirrors the executor's SKIPPED payload at `trading/executor.py:137-152`
+        so downstream consumers (bothealth.sh, governance Phase 2 reasoning,
+        readiness-gate calibration) can join the BlendTask SKIPPED stream
+        against the executor SKIPPED stream as a single attribution view.
+
+        Per spec §5: `model_probability` and `edge` carry the *post-blend*
+        values (the blender produced the verdict), `market_price` carries the
+        fast-lane raw, and `min_edge_threshold` reflects any readiness override
+        else the default min-edge.
+        """
+        news_item = fast_lane_result.news_item
+        market = fast_lane_result.market
+        method = (
+            "llm"
+            if (
+                fast_lane_result.llm_direction is not None
+                or fast_lane_result.llm_magnitude is not None
+                or fast_lane_result.llm_confidence is not None
+            )
+            else "keyword"
+        )
+        readiness_override = (
+            blend_result.readiness_gate_min_edge_override
+            if blend_result.readiness_gate_min_edge_override is not None
+            else readiness.readiness_gate_min_edge_override
+        )
+        min_edge_threshold = (
+            readiness_override if readiness_override is not None else default_min_edge
+        )
+        post_blend_edge = blend_result.blended_p - fast_lane_result.market_yes_price / 100.0
+        skipped_kwargs: dict[str, Any] = {
+            "reason": trade_blocked_reason,
+            "ticker": market.ticker,
+            "headline": (news_item.headline[:80] if news_item is not None else ""),
+            "source": (news_item.source if news_item is not None else ""),
+            "method": method,
+            "llm_direction": fast_lane_result.llm_direction,
+            "llm_magnitude": fast_lane_result.llm_magnitude,
+            "model_probability": blend_result.blended_p,
+            "market_price": fast_lane_result.market_yes_price,
+            "edge": post_blend_edge,
+            "min_edge_threshold": min_edge_threshold,
+        }
+        if fast_lane_result.signal_meta:
+            skipped_kwargs["signal_meta"] = fast_lane_result.signal_meta
+        await write_trade_log_async(self._logger.log_skipped, **skipped_kwargs)
 
 
 async def process_fast_lane_result(

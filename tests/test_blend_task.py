@@ -543,7 +543,6 @@ def _blocked_blender_factory(reason: str):
     return _blender
 
 
-@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "trade_blocked_reason",
@@ -587,7 +586,6 @@ async def test_blocked_blend_emits_skipped_record(trade_blocked_reason: str) -> 
     assert logger.skipped_records[0]["ticker"] == "KXBLEND-1"
 
 
-@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_unblocked_blend_does_not_emit_blendtask_skipped_record() -> None:
     """Happy path: candidate enqueued → BlendTask emits zero SKIPPED records.
@@ -610,6 +608,12 @@ async def test_unblocked_blend_does_not_emit_blendtask_skipped_record() -> None:
         ),
         logger=logger,
         is_paper_mode=True,
+        # Pin `now` to the evidence-fixture date so G6 recency does not block
+        # on real wall-clock drift (the fixture-loaded evidence is dated
+        # 2026-04-18; default `datetime.now(UTC)` would be days past the
+        # recency half-life and trigger G6_recency_score independent of
+        # the OBS-003 emission this test pins).
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
     result = await task.process_fast_lane_result(_analysis())
@@ -623,7 +627,6 @@ async def test_unblocked_blend_does_not_emit_blendtask_skipped_record() -> None:
     )
 
 
-@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_skipped_payload_carries_blended_edge_not_fast_lane_edge() -> None:
     """Pin spec §5: BlendTask-emitted SKIPPED records carry the *post-blend*
@@ -714,7 +717,6 @@ async def test_skipped_payload_carries_blended_edge_not_fast_lane_edge() -> None
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_obs003_blocked_path_writes_via_injected_logger_log_skipped(
     monkeypatch,
@@ -751,11 +753,19 @@ async def test_obs003_blocked_path_writes_via_injected_logger_log_skipped(
 
     await task.process_fast_lane_result(_analysis())
 
-    # Find the SKIPPED-emission write among the captured calls.
+    # Find the SKIPPED-emission write among the captured calls. Bound-method
+    # identity (`is`) is not stable in Python (each attribute access creates
+    # a fresh MethodType); compare via the underlying `__func__` + `__self__`.
+    def _same_bound_method(a, b) -> bool:
+        return (
+            getattr(a, "__func__", None) is getattr(b, "__func__", None)
+            and getattr(a, "__self__", None) is getattr(b, "__self__", None)
+        )
+
     skipped_writes = [
         (writer, args, kwargs)
         for writer, args, kwargs in spy_calls
-        if writer is logger.log_skipped
+        if _same_bound_method(writer, logger.log_skipped)
     ]
     assert len(skipped_writes) == 1, (
         "BlendTask must call `write_trade_log_async(logger.log_skipped, ...)` "
@@ -769,7 +779,7 @@ async def test_obs003_blocked_path_writes_via_injected_logger_log_skipped(
     bypass_writes = [
         (writer, args, kwargs)
         for writer, args, kwargs in spy_calls
-        if writer is _module_trade_log.log_skipped
+        if _same_bound_method(writer, _module_trade_log.log_skipped)
     ]
     assert bypass_writes == [], (
         "BlendTask must not bypass the injected logger; "
@@ -778,7 +788,6 @@ async def test_obs003_blocked_path_writes_via_injected_logger_log_skipped(
     )
 
 
-@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_obs003_skipped_payload_carries_required_keys() -> None:
     """F3 — full executor-compatible key set.

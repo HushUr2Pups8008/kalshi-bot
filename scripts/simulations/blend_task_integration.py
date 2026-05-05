@@ -108,9 +108,14 @@ class _FakeStore:
 class _SpyLogger:
     def __init__(self) -> None:
         self.records: list[dict] = []
+        self.skipped_records: list[dict] = []
 
     def log_blend_decision(self, **kwargs) -> None:
         self.records.append(kwargs)
+
+    def log_skipped(self, **kwargs) -> None:
+        # PROFIT-OBS-003: BlendTask now emits SKIPPED on blocked-reason paths.
+        self.skipped_records.append(kwargs)
 
 
 # ── Seed helpers ──────────────────────────────────────────────────────────────
