@@ -36,9 +36,18 @@ Followed by escalation to **PROFIT-LLM-001** or **P4-GATE Appendix A** if both A
 | E | multi-source corroboration | empirically infeasible (closed) | n/a |
 | F | P4-GATE Appendix A market-mix | open question; ROADMAP-tracked | out of EDGE-004 scope |
 
-## A.1+ decision point (NEW in v2)
+## A.1+ decision point (REVISED v2.1: 4-branch tree post-aggregator-forensics)
 
-At Day-14 deploy, the operator picks one of two A.1+ paths:
+The 2026-05-04 aggregator-path forensics (`docs/governance/2026-05-04-vitallaw-aggregator-path-forensics.md`) revealed that the load-bearing PAPER_TRADE-producing source (`VitalLaw.com`) came via **Google News RSS**, not a direct feed. Google News query family is **already active** in canonical config (`config.py:DISABLED_SOURCE_FAMILIES` — re-enabled 2026-04-23). Therefore A.1+ is now a 4-branch tree with the FIRST branch requiring no code change:
+
+| branch | action | when |
+|---|---|---|
+| **A** (passive) | observe Wave-1 close 14 d; Google News query family already deployed | Day-14 default |
+| **B** (active) | probe `vitallaw.com` direct RSS; add to `RSS_FEEDS` | only if A surfaces 0 legal-niche PAPER_TRADE |
+| **C** (fallback) | onboard Lawfare / Just Security / SCOTUSblog / Politico Legal | only if A + B both fail |
+| **option-A** (parallel) | specialist-geopolitics per A.1+ spec §3.1 (war on the rocks / CSIS / ISW / CFR / Atlantic Council) | parallel to B/C if operator pursues breadth |
+
+The legacy "option-A vs option-B" framing is preserved below for harness-naming compatibility. The 4-branch tree above supersedes it as the actual operator decision-point at Day-14:
 
 | dimension | option-A: specialist-geopolitics | option-B: legal-analyst (recommended) |
 |---|---|---|

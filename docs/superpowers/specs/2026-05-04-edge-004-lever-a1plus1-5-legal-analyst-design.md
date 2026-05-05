@@ -15,9 +15,20 @@
 
 The 2026-05-04 per-source audit revealed that `VitalLaw.com` (legal/regulatory analysis) produced **100 % of historical PAPER_TRADE in the specialist_analyst class** on the 13-day Mac archive (3/3). The original A.1+ spec (`2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md`) recommended a geopolitics-analyst pivot (war on the rocks / CSIS / ISW / CFR / Atlantic Council). Those candidates target a different sub-niche than `VitalLaw.com`.
 
-**Audit-of-the-audit finding:** `VitalLaw.com` is NOT in the current canonical `config.py:RSS_FEEDS`. It was polled on the Mac archive instance but silently removed from canonical config at some prior point.
+**Aggregator-path forensics (2026-05-04, `docs/governance/2026-05-04-vitallaw-aggregator-path-forensics.md`):** the Mac archive's VitalLaw records came via **Google News RSS** (`news.google.com/rss/articles/...?oc=5`), NOT a direct VitalLaw RSS feed. The Google News query family is **active in the current canonical config** (re-enabled 2026-04-23 per `config.py:DISABLED_SOURCE_FAMILIES`), and queries are derived dynamically from current market titles by `feeds/search_news_monitor.py`. Therefore the ingestion path IS already deployed — the question is not "re-onboard VitalLaw" but "why is Google News no longer surfacing VitalLaw articles for the current market mix."
 
-This spec proposes a parallel A.1+1 deploy track — **option-B: legal-analyst onboarding** — covering vital_law-niche analogues. Operator picks at deploy time whether option-A (geopolitics) or option-B (legal-analyst) lands first, based on probe-time tractability (paywall / rate-limit / robots.txt friction).
+## §1.5 — Decision-tree revision (post-aggregator-path forensics)
+
+| branch | action | when |
+|---|---|---|
+| **Branch A** (passive) | observe Wave-1 close for 14 d; watch for VitalLaw / legal-niche surfacing on Google News query family | Day-14 default; NO code change required |
+| **Branch B** (active) | probe `vitallaw.com` for a direct RSS endpoint; add to `RSS_FEEDS` if found | only if Branch A produces 0 legal-niche PAPER_TRADE in 14 d |
+| **Branch C** (fallback) | onboard open-RSS analogues (Lawfare / Just Security / SCOTUSblog / Politico Legal) | only if Branch A + B both fail |
+| **Branch D** (escalation) | PROFIT-LLM-001 / P4-GATE Appendix A | if Branch B + C both stall (≥ 2 deploy attempts) |
+
+This spec (§2 / §3) covers Branch B and Branch C. Branch A requires no code change and is the operator's first response — covered in `docs/governance/post-soak-close-rehearsal-checklist.md` §7.
+
+This spec proposes a parallel A.1+1 deploy track — **option-B: legal-analyst onboarding** — covering vital_law-niche analogues. Operator picks at deploy time whether option-A (geopolitics) or option-B (legal-analyst) lands first, based on probe-time tractability (paywall / rate-limit / robots.txt friction). Note: per Branch A above, deploy may not be required at all if Google News surfaces VitalLaw during Wave-1 close.
 
 ## 2. First-feed candidate selection: LEGAL ANALYST
 
