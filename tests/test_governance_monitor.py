@@ -140,7 +140,6 @@ def _gm_module_reload_isolation(monkeypatch):
     importlib.reload(_gm)
 
 
-@pytest.mark.xfail(reason=_GOV_MONITOR_XFAIL_REASON, strict=True)
 def test_default_logfile_resolves_to_repo_root_regardless_of_kalshi_home(
     monkeypatch, _gm_module_reload_isolation,
 ):
@@ -158,7 +157,6 @@ def test_default_logfile_resolves_to_repo_root_regardless_of_kalshi_home(
     )
 
 
-@pytest.mark.xfail(reason=_GOV_MONITOR_XFAIL_REASON, strict=True)
 def test_default_overrides_resolves_to_repo_root_regardless_of_kalshi_home(
     monkeypatch, _gm_module_reload_isolation,
 ):
@@ -176,7 +174,6 @@ def test_default_overrides_resolves_to_repo_root_regardless_of_kalshi_home(
     )
 
 
-@pytest.mark.xfail(reason=_GOV_MONITOR_XFAIL_REASON, strict=True)
 def test_aggregator_counts_governance_decision_parse_error(tmp_path):
     """Live JSONL emits `GOVERNANCE_DECISION_PARSE_ERROR`; the aggregator
     must count it under `per_day[<date>]["parse_error"]`."""
@@ -205,7 +202,6 @@ def test_aggregator_counts_governance_decision_parse_error(tmp_path):
     )
 
 
-@pytest.mark.xfail(reason=_GOV_MONITOR_XFAIL_REASON, strict=True)
 def test_aggregator_counts_governance_decision_validation_error(tmp_path):
     """`GOVERNANCE_DECISION_VALIDATION_ERROR` events must increment the
     per-day `validation_error` counter."""
@@ -232,7 +228,6 @@ def test_aggregator_counts_governance_decision_validation_error(tmp_path):
     )
 
 
-@pytest.mark.xfail(reason=_GOV_MONITOR_XFAIL_REASON, strict=True)
 def test_aggregator_counts_batch_aborted_flag_on_cycle_end(tmp_path):
     """`batch_aborted=True` on a `GOVERNANCE_CYCLE_END` record must
     increment the per-day `batch_aborted` counter."""
