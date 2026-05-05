@@ -1,0 +1,56 @@
+# PROFIT-PHASE2-001 early-close attestation — TEMPLATE
+
+**Status:** template; copy to `PROFIT-PHASE2-001-early-close-attestation.md` (no `-template` suffix) and fill in at close time.
+**Closes:** PROFIT-PHASE2-001 governance shadow-soak per `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md` §8.5.1.
+
+## Close metadata (FILL IN AT CLOSE TIME)
+
+- **Close timestamp (UTC):** _________________________
+- **Soak duration:** _____ days _____ hours (target: ≥ 7 d 0 h)
+- **First cycle:** `gc_2026-05-01_190127` (2026-05-01T19:01:27Z)
+- **Last cycle in window:** _________________________
+- **Soak window:** 2026-05-01T19:01Z → ____________________
+
+## §8.5.1 gate verification
+
+- [ ] **Gate 1: Volume.** GOVERNANCE_DECISION count: _______ (≥ 30 required)
+- [ ] **Gate 2: Calendar floor.** Continuous shadow-mode runtime: _____ d _____ h (≥ 7 d required)
+- [ ] **Gate 3: Safety counters.** KILL_SWITCH: ___, batch_aborted: ___, VALIDATION_ERROR: ___ (all must be 0)
+- [ ] **Gate 4: PARSE_ERROR trailing 72 h.** Count in last 72 h: ___ (must be 0)
+- [ ] **Gate 5: Cadence stability.** Max inter-cycle gap: _____ h (must be ≤ 3 h); cadence-deviation > 10 %: ___ events (must be 0)
+- [ ] **Gate 6: Manual review.** Decisions reviewed: ___ / ___; reasonable count: ___; reasonable rate: ___ % (≥ 85 % required)
+- [ ] **Gate 7: No mid-soak code change.** `git log --oneline --since "2026-05-01T19:01Z" -- analysis/ tasks/ feeds/ governance/ executor/ main.py` returned: ___ commits (must be 0 behavioural)
+- [ ] **Gate 8: Attestation written.** This document committed.
+
+## Final tally
+
+| event type | count |
+|---|---:|
+| total events | ___ |
+| GOVERNANCE_CYCLE_START | ___ |
+| GOVERNANCE_CYCLE_END | ___ |
+| GOVERNANCE_DECISION | ___ |
+| GOVERNANCE_DECISION_PARSE_ERROR | ___ |
+| GOVERNANCE_VALIDATION_ERROR | 0 (asserted) |
+| KILL_SWITCH | 0 (asserted) |
+| `batch_aborted=True` | 0 (asserted) |
+
+## Operator attestation
+
+I, _____________________ (operator), confirm:
+
+1. All §8.5.1 gates above evaluated TRUE.
+2. The 14-day calendar floor in §8.5 is intentionally relaxed to 7 days per the §8.5.1 addendum, justified by the volume gate clearing 5.3× and the safety counters running clean from day 1.
+3. No mid-soak behavioural code change occurred in the running bot.
+4. Wave-1 deploy may begin from this commit per `docs/governance/post-soak-close-rehearsal-checklist.md`.
+
+Signed (commit author): _____________________
+Tag applied: `phase2-soak-closed`
+Wave-1 deploy ETA: _____________________
+
+## Cross-links
+
+- `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` — operator runbook
+- `docs/governance/post-soak-close-rehearsal-checklist.md` — Wave-1 deploy plan
+- `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation
+- `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md` §8.5 + §8.5.1

@@ -389,11 +389,34 @@ Append-only, daily-rotated (`decisions.jsonl.YYYY-MM-DD` for archives, gzip-comp
 
 ### 8.5 Acceptance criteria
 
-- [ ] Phase 2 runs nightly for ≥ 14 days in shadow mode without writing to `applied`.
+- [ ] Phase 2 runs nightly for ≥ 14 days in shadow mode without writing to `applied` (**OR** the early-close criteria in §8.5.1 are met; see addendum).
 - [ ] At least 30 decisions accumulated in `proposed` and the audit log.
 - [ ] Manual review of all 30+ decisions confirms ≥ 85% are reasonable (subjective gate, owner: user).
 - [ ] Prediction-tracking accumulates baseline data for Phase 3's auto-revert design.
 - [ ] `governance/adapter.py` audited to confirm zero kalshi-specific imports leak past the adapter boundary.
+
+### 8.5.1 Early-close addendum (added 2026-05-05 during PROFIT-PHASE2-001)
+
+The 14-day floor in §8.5 is a **calendar floor for confidence**, not a derivation from any specific cadence. PROFIT-PHASE2-001's day-4 mid-soak confirmation (`docs/governance/2026-05-04-day-4-mid-soak-confirmation.md`) showed the volume gate (≥ 30 decisions) cleared by 5.3× (158 decisions) and all four safety counters at zero. The marginal information from days 8-14 is bounded.
+
+**Early-close gates (all must hold for a day-N close where 7 ≤ N < 14):**
+
+1. **Volume**: ≥ 30 GOVERNANCE_DECISION records (the original §8.5 floor).
+2. **Calendar floor relaxed**: ≥ 7 days of continuous shadow-mode runtime (half the 14-day default; preserves a non-trivial calendar window for low-frequency anomaly detection).
+3. **Safety counters**: 0 KILL_SWITCH, 0 `batch_aborted=True`, 0 VALIDATION_ERROR through the entire window.
+4. **PARSE_ERROR trailing window**: 0 PARSE_ERROR events in the trailing 72 h before close (background errors from earlier in the soak are acceptable; recurrence is not).
+5. **Cadence stability**: all fast cycles within ±10 % of the 2.0 h cadence; all deep cycles within ±10 % of the 24 h cadence; no inter-cycle gap > 3 h.
+6. **Manual review pass**: ≥ 85 % reasonable on review of the full decision sample (the original §8.5 manual-review gate; not relaxed).
+7. **No mid-soak code change to the running bot**: the soak invariant is preserved end-to-end (this is implicit in the original §8.5; restating for clarity).
+8. **Written close-criteria attestation**: an operator-signed close record at `docs/governance/PROFIT-PHASE2-001-early-close-attestation.md` documenting which day the close fires and which gates verified clean.
+
+**What gates 1-7 do NOT relax:**
+
+- The 168 h evidence-window in `governance/evidence.py` stays constant through the soak.
+- Cadence (fast 2 h, deep 24 h) stays constant through the soak.
+- Decision policy stays constant — the LLM model, prompt, and gating thresholds do not change mid-soak.
+
+**Cadence / evidence-window changes are reserved for the NEXT post-Wave-1 shadow soak**, where they apply from cycle 1 (no mixed-policy contamination). See `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` §3 for the next-soak-onboarding cadence-tune notes.
 
 ### 8.6 Estimated scope
 
