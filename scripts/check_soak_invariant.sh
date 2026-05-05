@@ -10,6 +10,7 @@
 #   bash scripts/check_soak_invariant.sh                  # default: since 2026-05-01T19:01Z
 #   bash scripts/check_soak_invariant.sh --since <ISO>    # custom window start
 #   bash scripts/check_soak_invariant.sh --verbose        # list any offending commits
+#   bash scripts/check_soak_invariant.sh --json           # machine-readable summary
 #
 # Exit codes:
 #   0  invariant holds (zero behavioural commits in the window)
@@ -25,17 +26,23 @@ set -euo pipefail
 
 SOAK_START="2026-05-01T19:01Z"
 VERBOSE=0
+JSON=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --since) SOAK_START="$2"; shift 2 ;;
     --verbose) VERBOSE=1; shift ;;
+    --json) JSON=1; shift ;;
     -h|--help)
       head -22 "$0" | tail -20
       exit 0
       ;;
     *)
-      echo "unknown arg: $1" >&2
+      if [[ "$JSON" == "1" ]]; then
+        printf '{"status":"error","error":"unknown_arg","arg":"%s"}\n' "$1"
+      else
+        echo "unknown arg: $1" >&2
+      fi
       exit 2
       ;;
   esac
@@ -51,25 +58,74 @@ BEHAVIOURAL_PATHS=(
   "tasks/"
   "feeds/"
   "governance/"
-  "executor/"
+  "trading/"
   "kalshi/"
   "main.py"
   "config.py"
 )
 
-echo "==> §8.5.1 gate-7 invariant audit"
-echo "  soak start: ${SOAK_START}"
-echo "  HEAD:       $(git rev-parse --short HEAD)"
-echo "  paths:      ${BEHAVIOURAL_PATHS[*]}"
-echo
+json_string_array() {
+  local first=1
+  printf '['
+  for item in "$@"; do
+    [[ "$first" == "1" ]] || printf ','
+    first=0
+    printf '"%s"' "${item//\"/\\\"}"
+  done
+  printf ']'
+}
+
+MISSING_PATHS=()
+for path in "${BEHAVIOURAL_PATHS[@]}"; do
+  if [[ ! -e "${path%/}" ]]; then
+    MISSING_PATHS+=("$path")
+  fi
+done
+
+HEAD_SHORT="$(git rev-parse --short HEAD)"
+
+if [[ "${#MISSING_PATHS[@]}" -gt 0 ]]; then
+  if [[ "$JSON" == "1" ]]; then
+    printf '{"status":"error","error":"missing_behavioural_paths","soak_start":"%s","head":"%s","behavioural_paths":' "$SOAK_START" "$HEAD_SHORT"
+    json_string_array "${BEHAVIOURAL_PATHS[@]}"
+    printf ',"missing_paths":'
+    json_string_array "${MISSING_PATHS[@]}"
+    printf '}\n'
+  else
+    echo "ERROR — behavioural path-set sanity failed."
+    echo "Missing path(s): ${MISSING_PATHS[*]}"
+  fi
+  exit 2
+fi
+
+if [[ "$JSON" != "1" ]]; then
+  echo "==> §8.5.1 gate-7 invariant audit"
+  echo "  soak start: ${SOAK_START}"
+  echo "  HEAD:       ${HEAD_SHORT}"
+  echo "  paths:      ${BEHAVIOURAL_PATHS[*]}"
+  echo
+fi
 
 # Capture commits touching any behavioural path since soak start.
 COMMITS="$(git log --format='%H %h %s' --since "${SOAK_START}" -- "${BEHAVIOURAL_PATHS[@]}")"
 COMMIT_COUNT="$(echo -n "$COMMITS" | grep -c "^" || true)"
 
 if [[ "$COMMIT_COUNT" == "0" ]]; then
-  echo "PASS — invariant holds. 0 behavioural commits since ${SOAK_START}."
+  if [[ "$JSON" == "1" ]]; then
+    printf '{"status":"pass","soak_start":"%s","head":"%s","commit_count":0,"behavioural_paths":' "$SOAK_START" "$HEAD_SHORT"
+    json_string_array "${BEHAVIOURAL_PATHS[@]}"
+    printf ',"missing_paths":[]}\n'
+  else
+    echo "PASS — invariant holds. 0 behavioural commits since ${SOAK_START}."
+  fi
   exit 0
+fi
+
+if [[ "$JSON" == "1" ]]; then
+  printf '{"status":"fail","soak_start":"%s","head":"%s","commit_count":%s,"behavioural_paths":' "$SOAK_START" "$HEAD_SHORT" "$COMMIT_COUNT"
+  json_string_array "${BEHAVIOURAL_PATHS[@]}"
+  printf ',"missing_paths":[]}\n'
+  exit 1
 fi
 
 echo "FAIL — invariant violated. ${COMMIT_COUNT} behavioural commit(s) found:"
