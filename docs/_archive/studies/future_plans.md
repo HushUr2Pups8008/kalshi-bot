@@ -128,6 +128,8 @@ Signal Assessment escalates highest-conviction calls to Claude API for second-op
 
 ## Phase 4: OpenClaw Personal Assistant 🦞 Future
 
+> **2026-05-05 update:** The original Phase 4 below was written as a cross-project personal-assistant idea and remains archived as historical context. A narrower `kalshi-bot`-specific use case is now captured in `docs/governance/2026-05-05-openclaw-orchestrator-integration-note.md`: OpenClaw as a multi-agent operator interface / workflow orchestrator over repo-local scripts, docs, tests, and reports. That use case is an ops control plane, not a trading-loop component, and should wait until after Day-7 close plus a green Wave-1 24 h watch before any daemon/channel installation.
+
 ### What It Is
 Open-source personal AI assistant. Runs locally on Mac Studio, interfaces via Telegram on phone.
 Jarvis-style: "AI that actually does things" — email, calendar, reminders, task automation.
