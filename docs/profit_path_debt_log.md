@@ -1425,6 +1425,43 @@ This evidence does not require revising EDGE-004's investigation plan (matcher a
 
 Cutover note: this entry's "Evidence / Source" + this Follow-up section together represent the entire MacBook paper-era evidence base for EDGE-004. Post-cutover, future EDGE-004 evidence accumulates on the **Mac Studio** against the same `data/paper_trades.db` and `data/evidence_store.db` (restored from `transfer/macbook_handoff_2026-05-01/` per PROFIT-CUTOVER-001) plus its own fresh `logs/trades/` JSONL stream. The MacBook will not produce new EDGE-004 evidence; treat the lifetime totals above as the closed v0.29.58 MacBook-era baseline against which Studio progress is compared.
 
+#### 2026-05-04 cycle integration (during PROFIT-PHASE2-001 shadow-soak)
+
+The EDGE-004 lever menu's 2026-05-04 cycle produced four findings that change the operator-facing closure path:
+
+1. **Per-source audit** (`docs/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md`, commit `cca3cea`; Codex re-derivation `2bb0b09`): of the 21 OPP + 3 PAPER_TRADE in the specialist_analyst class, **all 3 PAPER_TRADE came from VitalLaw.com**. The geopolitics sub-niche feeds (Kyiv X / Times of Israel / Iran International / bellingcat / Defense News / Breaking Defense) produced 18 OPP + 0 PAPER_TRADE — 0 % conversion at the class-internal level. The proposed A.1+1 candidates (war on the rocks / CSIS / ISW / CFR / Atlantic Council) target the same 0 %-conversion sub-niche.
+
+2. **Aggregator-path forensics** (`docs/governance/2026-05-04-vitallaw-aggregator-path-forensics.md`, commit `37063d8`; Codex coverage audit `bb015a5`): the 83 VitalLaw records in the Mac archive came via **Google News RSS** (`news.google.com/rss/articles/...`), NOT a direct VitalLaw RSS feed. Google News query family is **active in current canonical config** (re-enabled 2026-04-23). Therefore Branch A of the A.1+1.5 decision tree requires no code change: passive observation of whether VitalLaw / legal-niche surfaces under the current market-mix queries.
+
+3. **MATCH-001 (B′) orthogonality** (`docs/governance/2026-05-03-match001-bprime-false-suppression-audit.md`, commit `83a9477`; Codex spec-parity `b56c261`): the post-fix B′ predicate is orthogonal to the existing pre-fix `MATCH_SUPPRESSED` logic (100 % flip rate). B′ deploy is empirically clean w.r.t. un-suppression of existing noise; combined with the 0-likely-false-negative finding from Codex's earlier audit, both directions of B′ deploy risk are sized at 0.
+
+4. **VitalLaw direct-RSS infeasible** (Codex `a45c06c`, 2026-05-05): probed `vitallaw.com` for a public RSS endpoint; all obvious paths return SSO-redirect / 403 / 404 / RSS-error-HTML / connection failure. Branch B (direct VitalLaw RSS) is empirically dropped from the A.1+1.5 decision tree.
+
+**Revised A.1+ decision tree (3-branch, locked 2026-05-05):**
+- **Branch A (passive)**: observe Wave-1 close 14 d for legal-niche surfacing under the active Google News path. NO code change required.
+- **Branch C (active fallback)**: if Branch A produces 0 legal-niche PAPER_TRADE in 14 d, onboard open-RSS analogues (Lawfare / Just Security / SCOTUSblog / Politico Legal) per `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md`.
+- **Branch D (escalation)**: if Branch C also stalls, escalate per `docs/governance/post-edge-004-escalation-paths.md` to PROFIT-LLM-001 → P4-GATE Appendix A → strategy pivot.
+
+**Pre-loaded harnesses for Wave-1+2+3 deploys** (all strict-xfail today; flip xpass on the deploy commit forcing marker removal):
+
+- Wave 1: 6 features (OBS-005 / MATCH-001 / OBS-003 / EXEC-002 / GOV-003 / Lever A.1) — full strict-xfail net across `tests/test_executor.py`, `test_market_matcher.py`, `test_blend_task.py`, `test_governance_monitor.py`, `test_main_pipeline.py`
+- Wave 2: A.1+ option-A (geopolitics) + A.1+1.5 option-C (legal-analyst) — `tests/test_main_pipeline.py::TestSourceClassClassifierLeverA1Plus{Analysis,15Legal}Branch` + `tests/test_lever_a1plus_feed_config.py` + `tests/test_lever_a1plus1_5_evidence_scorer_legal_weight.py`
+- Wave 3: Lever B G1=0.04 + Lever C cross-series — `tests/test_lever_b_g1_calibration.py` + `tests/test_lever_c_cross_series_correlation.py`
+
+Total strict-xfail markers as of 2026-05-04: 26+ pinning the deploy lattice.
+
+**Pre-staged operator artifacts for Wave-1 deploy (Day-13 / 2026-05-15):**
+
+- `docs/governance/wave-1-changelog-entry-prestaged.md` (commit `75a3e39`) — pre-staged 0.30.0 CHANGELOG block
+- `docs/governance/wave-2-wave-3-changelog-entries-prestaged.md` — Wave-2 + Wave-3 pre-staged blocks
+- `docs/governance/wave-1-deploy-commit-order-decision.md` — locked: per-feature commits (NOT bundle)
+- `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation
+- `docs/governance/post-soak-rollback-runbook.md` — incident-response runbook
+- `docs/governance/post-soak-close-rehearsal-checklist.md` — operator deploy guide
+- `docs/governance/post-edge-004-escalation-paths.md` — Wave-3-stall escalation paths
+
+**Honest read after 2026-05-04 cycle:** EDGE-004 closure is dominantly bound by **whether the Google News query family continues to surface legal-niche headlines** (Branch A passive observe), with Branch C as a fallback. Wave-1 base stack landings reduce conversion volume by design (260 OPP / 9 PAPER_TRADE pre-Wave-1 → 87 / 1 post-Wave-1 per simulation `f671468`); the ≥ 5 % closure target is measured against the post-Wave-1 base, not the pre-Wave-1 baseline. Modal scenario per the unified Wave-1+2 forecast (`docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md`, commit `2bf3da1`): Branch A produces some legal-niche surfacing within 14 d; if 0, Branch C deploys; if still 0, escalation fires.
+
 ---
 
 ### PROFIT-OBS-003
