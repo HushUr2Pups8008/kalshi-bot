@@ -88,3 +88,4 @@ setup_service.ps1
 # IDE
 .vscode/
 .idea/
+mac_archive/db_snapshots/
