@@ -155,6 +155,9 @@ Restart trigger if trade volume drops to zero across 7 d OR realized P&L worse t
 
 ## 5. Day 13 — Wave-1 base stack closed; governance_monitor fix lands alongside
 
+**Commit-order decision (LOCKED 2026-05-04):** per `docs/governance/wave-1-deploy-commit-order-decision.md`, Wave-1 lands as **6 per-feature commits**, NOT a single bundle. Bisect-friendly rollback granularity. See that doc for the recommended commit sequence + xfail-marker removal mapping.
+
+
 The governance_monitor fix is independent of the Wave-1 base stack but lands the same day as OBS-005 (Day 0) per the landing-order spec. Document its closure here for completeness:
 
 - [ ] If governance_monitor fix landed Day 0: confirm `python scripts/governance_monitor.py` against the live `decisions.jsonl` produces the correct 19-distinct-targets histogram + per-day error breakdown.
