@@ -2124,6 +2124,38 @@ The original spec §8.5 floor was a single time-based gate (≥14 days). After t
 - ROADMAP `GOV.P3` — direct downstream consumer; `GOV.P3` is BLOCKED until PHASE2-001 closes.
 - `docs/governance/PHASE2_RUNBOOK.md` — operator-facing companion document; this entry is the engineering tracker.
 
+#### 2026-05-05 cycle integration — §8.5.1 early-close + §8.5.2 carve-out + Day-7 close path
+
+User + Codex aligned 2026-05-05 on accelerating PROFIT-PHASE2-001 from 14-day to 7-day soak. Volume gate cleared 5.3× (242 decisions vs 30 floor by close-day-eve); safety counters all 0; calendar floor was the only unmet criterion. Calendar-floor cut OK; cadence/policy-knob cuts deferred to next post-Wave-1 soak from cycle 1 (per `feedback_soak_acceleration_split.md` memory).
+
+**Spec changes (commits `2f1e900` + `b780fd6`):**
+
+- §8.5.1 added — early-close gates (≥ 7 d calendar floor; ≥ 30 decisions; 0 KILL_SWITCH/batch_aborted/VALIDATION_ERROR; 0 PARSE_ERROR trailing 72 h; cadence ±10 %; ≥ 85 % manual-review reasonable; soak invariant; written attestation).
+- §8.5.2 added — policy-equivalence carve-out for behavioural commits whose impact on the soak's actual decision distribution is empirically negligible. PROFIT-PHASE2-001's 4 surfaced commits (think=False bug-fix `fae72fa`; GOV-002 audit cycle `092666c…ce814b9`; A5 SYSTEM_PROMPT `b47ca71`) all qualify. Canonical example documented inline: A5's evidence-coverage analysis showed 241/242 = 99.6 % decisions had `anchor_rate=null` and were unaffected.
+
+**Operator artifacts pre-staged for Day-7 close (commits `bf1b0e3 / 747ea15 / 7b9624b / 2f1e900 / b780fd6 / a4c4...` + this cycle):**
+
+- `scripts/check_soak_invariant.sh` — gate-7 audit
+- `scripts/governance_decision_review.py` — gate-6 review tool (operator-only)
+- `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation
+- `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` — gate criteria + §8.5.2 invocation table
+- `docs/governance/PROFIT-PHASE2-001-early-close-attestation-template.md` — close-attestation skeleton
+- `docs/governance/PROFIT-PHASE2-001-day-7-close-day-walkthrough.md` — 11-step linear playbook
+- `docs/governance/PROFIT-PHASE2-001-close-day-decision-flow.md` — quick-look flowchart
+- `docs/governance/2026-05-05-PROFIT-PHASE2-001-decision-distribution-analysis.md` — gate-6 review accelerator (242 records: 99.6 % bulk-reviewable; 1 anomaly NYT World News)
+
+**Date shift:**
+
+- Day-7 earliest valid close: 2026-05-08T19:01Z (was 2026-05-15 default)
+- Wave-1 deploy starts: 2026-05-08+ (was 2026-05-15)
+- Wave-2 first feed: 2026-05-15+ (was 2026-05-22+)
+- Wave-3 Lever B + C: 2026-06-06+ (was 2026-06-13+)
+- Closure-target evaluation: 2026-05-29 (Wave-2 + 14d) (was 2026-06-06)
+
+**Wave-1 dry-run validated** (commit-set `0531367 / edf38c1 / 921c275 / 9d6cce3 / e3d4e8d / 5828ad2` on local-only branch `backup/wave-1-dry-run-2026-05-05`): all 6 per-feature commits land cleanly per `wave-1-deploy-commit-order-decision.md`. 7 spec ambiguities surfaced; F1 + F2 (doc fixes) closed in `[c4...]`; F3 + F4 (test fixture bugs) and F5 + F6 (semantic test updates + harness rename) deferred to Codex per the heavy-coding-routing preference (memory `feedback_codex_owns_heavy_coding.md`).
+
+**Honest read 2026-05-05:** all gates achievable on Day 7. Operator's only real close-day decisions are the gate-6 verdicts (1 anomaly NYT World News + bulk-review 241 dead-Reddit-sub disables) and any §8.5.2 fresh-commit case (none expected; 4 known commits documented).
+
 ---
 
 ### PROFIT-DOSSIER-001
