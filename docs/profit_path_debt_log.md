@@ -2152,9 +2152,38 @@ User + Codex aligned 2026-05-05 on accelerating PROFIT-PHASE2-001 from 14-day to
 - Wave-3 Lever B + C: 2026-06-06+ (was 2026-06-13+)
 - Closure-target evaluation: 2026-05-29 (Wave-2 + 14d) (was 2026-06-06)
 
-**Wave-1 dry-run validated** (commit-set `0531367 / edf38c1 / 921c275 / 9d6cce3 / e3d4e8d / 5828ad2` on local-only branch `backup/wave-1-dry-run-2026-05-05`): all 6 per-feature commits land cleanly per `wave-1-deploy-commit-order-decision.md`. 7 spec ambiguities surfaced; F1 + F2 (doc fixes) closed in `[c4...]`; F3 + F4 (test fixture bugs) and F5 + F6 (semantic test updates + harness rename) deferred to Codex per the heavy-coding-routing preference (memory `feedback_codex_owns_heavy_coding.md`).
+**Wave-1 dry-run validated** (commit-set `0531367 / edf38c1 / 921c275 / 9d6cce3 / e3d4e8d / 5828ad2` on origin branch `backup/wave-1-dry-run-2026-05-05`): all 6 per-feature commits land cleanly per `wave-1-deploy-commit-order-decision.md`. 7 spec ambiguities surfaced; F1 + F2 closed in cycle 1; F3-F6 closed by Codex 2026-05-05 (commits `6648705 / 807f20c / 0f45dfb`).
 
-**Honest read 2026-05-05:** all gates achievable on Day 7. Operator's only real close-day decisions are the gate-6 verdicts (1 anomaly NYT World News + bulk-review 241 dead-Reddit-sub disables) and any §8.5.2 fresh-commit case (none expected; 4 known commits documented).
+**Honest read 2026-05-05 (cycle 1):** all gates achievable on Day 7. Operator's only real close-day decisions are the gate-6 verdicts (1 anomaly NYT World News + bulk-review 241 dead-Reddit-sub disables) and any §8.5.2 fresh-commit case.
+
+#### 2026-05-05 cycle 2 integration — Wave-1/2 prep + 0.04 lock + Lever C v1 lock + Branch D triggers
+
+Second pass on 2026-05-05 (commits `b44dda2` + `80932cb` + this cycle's docs). Implementation Contract §9 became the sole authority on Claude/Codex split; the conflicting `feedback_codex_owns_heavy_coding.md` memory was removed. Routing went back to: Claude = architectural integrity / ambiguity resolution / review (especially gate-touching changes per contract §5+§11); Codex = precise implementation per locked specs.
+
+**Claude artifacts (cycle 2; commits `b44dda2` + this cycle):**
+
+- `docs/governance/wave-1-post-deploy-observation-plan.md` — 14-row regression watch matrix with per-row CLI; 24h validation window per Wave-1 commit
+- `docs/governance/2026-05-05-rollback-runbook-validation.md` — 1 HIGH drift (G1_CONFIDENCE_THRESHOLD env-revert row in §3 is fictional per Lever B spec §7) + 2 LOW
+- `docs/governance/PROFIT-PHASE2-002-onboarding.md` — next-soak setup (90 min fast / 12 h deep cadence; decision-policy knobs frozen per `feedback_soak_acceleration_split.md`)
+- `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Branch A → C → D sequence; 42 d worst-case walk; 28 d compressed via A+C parallel
+- `docs/superpowers/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` — Lever B floor LOCKED at 0.04; failsafe 0.08; 2× ratio invariant; lifts §11 harness deferral
+- `docs/superpowers/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — Lever C v1 LOCKED; §3.2 normalized hash; 3600 s default; gate-placement detail (record hash AFTER readiness gate pass); INV-6 boundary attestation
+- `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers + handoff to PROFIT-LLM-001 / P4-GATE Appendix A; nomenclature distinguishes lever-menu-Lever-D (closed) from closure-path-Branch-D (active)
+- `docs/governance/edge-004-closure-path-tldr-v3.md` — TLDR v3 supersedes v2.2; closure-probability ranking ~58 % intake-side
+- `docs/governance/2026-05-05-day-7-walkthrough-dry-trace.md` — 11-step playbook validated against HEAD `80932cb`; 1 LOW (pre-stage `b44dda2` + `80932cb` in §8.5.2 invocation table before fire-time)
+- `docs/governance/2026-05-05-day-7-attestation-prestage.md` — pre-staged attestation values: volume 267 (8.9× floor); safety 0/0/0; PARSE 7 cumulative (0 trailing 72h); max gap 2.01 h
+- `docs/governance/2026-05-05-doc-index-audit.md` — inventory of 87 governance + 20 spec files; recommendation 11 files archive-able post-close
+
+**Codex artifacts (cycle 2; commit `80932cb`):**
+
+- `scripts/check_soak_invariant.sh` — `--json` output + path-set sanity; corrected runtime path set from `executor/` to `trading/`
+- `scripts/wave1_post_deploy_smoke.sh` — wraps 6 Wave-1 regression blocks per observation plan §5
+- `scripts/distribution_analysis_v2.py` — close-day distribution rerun; JSON + Markdown output template
+- `tests/test_close_day_scripts.py` + `tests/test_wave2_preload_harnesses.py` — coverage for the new scripts; pre-loaded Lever B G1=0.04 + A.1+ option-A/B xfail-strict harnesses
+
+**Memory hygiene 2026-05-05:** `feedback_codex_owns_heavy_coding.md` deleted. Implementation Contract §9 is sole authority on Claude/Codex split. Two memories retained (operational, not role-conflict): `feedback_soak_confirmation_cadence.md` (1×/day cap), `feedback_soak_acceleration_split.md` (calendar vs policy-knob discipline).
+
+**Honest read 2026-05-05 (cycle 2):** Day-7 close infrastructure is fully landed. Wave-3 levers (B + C) have locked v1 implementation choices. Wave-2 A.1+ branch decision is operator-discretion at Day-14. Branch-D escalation criteria spec'd. Doc index audit identifies 11 archive-able files post-close. `check_soak_invariant.sh` reports status=fail / commit_count=5 / missing_paths=[] under the §8.5.2 carve-out — gate-7 passes per the criteria runbook table + the 2 doc/script-only commits this cycle (out-of-scope-for-§8.5.2). Combined gate-6 evidence (Codex's 67/67 verdicted at 100 % reasonable + the 241/242 mechanically-uniform `disable_source` decisions) yields ≥ 99.6 % reasonable on full corpus — well above the 85 % floor.
 
 ---
 

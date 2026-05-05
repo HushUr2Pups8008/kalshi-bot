@@ -130,6 +130,25 @@ This is a probabilistic sequence. Each step's verdict modifies the prior on the 
 
 **Honest read post-2026-05-03 empirics (revised post-A.1-archive-replay):** EDGE-004's edge-production hypothesis is now solely **A.1+ feed onboarding** — adding new non-news feeds that produce new edge. A.1 alone produces ~0 archive lift (Codex archive replay); A.1+ is open-ended empirical work. B and C are risk-control / attribution levers, not edge levers. If A.1+ feed onboarding doesn't lift conversion to ≥ 5 % within ~30 days of post-soak deploy, EDGE-004 closure honestly requires escalation to a wider-scope program — PROFIT-LLM-001 (signal-analyzer LLM unification, gated behind GOV.P4) or P4-GATE Appendix A market-mix work — both already ROADMAP-tracked and out of EDGE-004 scope.
 
+## 5.1 Post-2026-05-05 lock cycle update
+
+The 2026-05-05 cycle landed three locks that supersede the post-2026-05-03 sequencing notes above where applicable:
+
+- **Lever B floor LOCKED at 0.04 / failsafe 0.08 / 2× ratio invariant** — see `2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md`. §3-B "0.04 / 0.03 / 0.025 floor candidates" is collapsed to single locked value 0.04.
+- **Lever C v1 LOCKED** — §3.2 normalized hash + 3600 s default + record-after-gate-pass placement + INV-6 boundary attestation. See `2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md`.
+- **Branch D escalation criteria SPEC'D** — see `2026-05-05-edge-004-lever-d-escalation-criteria-design.md`. Distinct from §3-D in this menu.
+
+## 5.2 Lever D nomenclature clarification (2026-05-05)
+
+The string "Lever D" has two distinct uses in this codebase. Both retained; nomenclature must be distinguished going forward:
+
+| use | meaning | status |
+|---|---|---|
+| **§3-D in this lever menu** | pre-LLM gate re-enablement (the original Lever D from 2026-05-03) | CLOSED — demoted to tertiary; volume-destructive; outside closure path |
+| **"Branch D" in `edge-004-closure-path-tldr-v3.md`** | escalation handoff to PROFIT-LLM-001 / P4-GATE Appendix A | ACTIVE — fires per `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §2 |
+
+Future readers: the lever menu §3-D and the closure-path "Branch D" are NOT the same lever. They share a letter only because EDGE-004's closure path was renumbered after Lever E's 2026-05-03 closure left a gap that "Branch D" (escalation) filled in operator-facing TLDRs. The lever menu §3-D entry stays closed; the closure-path Branch D is the active escalation criterion.
+
 ## 6. Risk
 
 - **Lever soak after lever soak.** EDGE-004 may need 2–3 lever attempts before closure, each requiring its own attribution window. Total wall-clock from 2026-05-09 to closure could be 30–60 days. That's the *honest* timeline; collapsing it requires accepting under-attributed lifts.
