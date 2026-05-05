@@ -350,7 +350,7 @@ The literal interpretation will likely block a high fraction of current Trump/Ir
 
 **P3-GATE outcome:**
 - PASS (≥ 1 non-zero edge in paper mode, trailing 14 days) → Phase 4 authorized
-- FAIL (zero non-zero edge) → escalation required; do not proceed to Phase 4
+- FAIL (zero non-zero edge) → escalation required; do not proceed to Phase 4. **FAIL escalation path** per [`docs/governance/edge-004-closure-path-tldr-v3.md`](governance/edge-004-closure-path-tldr-v3.md): Wave-2 A.1+ (Branch A passive observe → Branch C legal-analyst onboard → option-A geopolitics specialist) → Wave-3 (Lever B G1=0.04 → Lever C cross-series correlation guard) → Branch D handoff to PROFIT-LLM-001 / P4-GATE Appendix A per [`docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md`](superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md).
 
 ---
 
@@ -397,9 +397,13 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 
 5. **Phase 4 (live trading) is explicitly gated on measurable non-zero edge in paper mode.** No timeline. If edge does not form after P3 improvements, escalation is required — not more operational changes.
 
+6. **PROFIT-PHASE2-001 soak-early-close path + Wave-1/2/3 deploy infrastructure landed 2026-05-05.** §8.5.1 early-close gates documented in [`docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md`](superpowers/specs/2026-04-24-llm-governance-agent-design.md); §8.5.2 policy-equivalence carve-out admits mid-soak hot-fixes under bounded conditions. Wave-1 → Wave-3 deploy sequence consolidated in [`docs/governance/edge-004-closure-path-tldr-v3.md`](governance/edge-004-closure-path-tldr-v3.md) with locked v1 implementation choices for Lever B (G1=0.04) and Lever C (§3.2 normalized hash). Branch D escalation criteria + bounded sizing-scope specs for PROFIT-LLM-001 (4 axes) and P4-GATE Appendix A (3 axes) landed cycle 3.
+
 ---
 
 ## Appendix A — Post-OT&E News Source Options (investigated 2026-04-22; expanded 2026-04-23; integration status updated 2026-04-26)
+
+**Sizing-scope when Branch D fires:** bounded per [`docs/superpowers/specs/2026-05-05-p4-gate-appendix-a-pre-sizing-scope-design.md`](superpowers/specs/2026-05-05-p4-gate-appendix-a-pre-sizing-scope-design.md) (3 axes: market-scope filter / intake-path expansion / market-resolution cadence). The Appendix A integration below describes the source-onboarding scope; the cycle-3 sizing-scope spec defines the bounded audit surface that fires when Branch D handoff routes to P4-GATE Appendix A territory.
 
 **Status (2026-04-26):** Tiers 1 and 2 are integrated per operator confirmation. Tier 3 remains deferred indefinitely; the watch-list X/Twitter note still applies.
 

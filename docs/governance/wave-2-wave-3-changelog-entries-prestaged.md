@@ -4,17 +4,26 @@
 **Drafted:** 2026-05-04 (during PROFIT-PHASE2-001 soak); sibling to `wave-1-changelog-entry-prestaged.md`
 **Rationale:** reduces deploy-day cognitive load. Operator copies the relevant block at each Wave close, fills in the actual VERSION value, runs the pre-commit hook to sync README badges, commits.
 
-## Version sequence (planned)
+## Version sequence (planned — refreshed 2026-05-05 cycle 5 per drift-check F1)
 
-| wave | tracker | landing day | proposed VERSION |
+| step | tracker | landing day | proposed VERSION |
 |---|---|---|---|
-| 1 | OBS-005 / MATCH-001 / OBS-003 / EXEC-002 / GOV-003 / Lever A.1 | 2026-05-08 (early-close path) or 2026-05-15 (default) | 0.30.0 |
-| 2 | Lever A.1+ first feed (option-A or option-C-Branch-C-fallback) | 2026-05-15+ (early-close) or 2026-05-22+ (default) | 0.30.1 |
-| 3 | Lever B G1=0.04 + Lever C cross-series guard | 2026-06-06+ (early-close) or 2026-06-13+ (default) | 0.31.0 |
+| Wave-1 base stack | OBS-005 / MATCH-001 / OBS-003 / EXEC-002 / GOV-003 / Lever A.1 | 2026-05-08+ (§8.5.1 early-close path) or 2026-05-15+ (default) | 0.30.0 |
+| Wave-2 Branch A start | passive Google News observe (NO code change; tag only) | 2026-05-18 (Wave-1 + 48h burn-in) | n/a (no bump) |
+| Wave-2 Branch C deploy | open-RSS legal-analyst onboard (only if Branch A returns 0 PAPER_TRADE in 14d) | 2026-06-02+ | 0.31.0 |
+| Wave-2 option-A deploy | geopolitics specialist (parallel-discretion or fallback) | 2026-05-18+ (parallel) or 2026-06-16+ (fallback) | 0.31.x or 0.32.0 |
+| Wave-3 commit 1 (Lever B G1=0.04) | tunable gate change | 2026-06-17+ (only if Wave-2 stalls AND Branch D not fired) | 0.32.0 (or 0.33.0 if option-A landed) |
+| Wave-3 commit 2 (Lever C cross-series) | new BlendTask gate; suppression-only | 2026-07-01+ (14 d after Wave-3 commit 1) | 0.33.0 (or 0.34.0) |
 
-Wave-2 = patch bump (single feed onboarding; minor behavioural change). Wave-3 = minor bump (Lever B is a tunable gate change; Lever C is new functionality at the BlendTask enqueue point).
+Wave-2 Branch C = minor bump (new feed onboarding + classifier branch addition). Wave-3 = minor bump per commit (each is single-feature).
+
+**Cycle-3 LOCK references (load-bearing for Wave-3 deploy commits):**
+- Lever B floor LOCKED at 0.04 / failsafe 0.08 / 2× ratio invariant per [`docs/superpowers/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md`](../superpowers/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md).
+- Lever C v1 LOCKED: §3.2 normalized hash / 3600s default window / record-after-gate-pass placement / INV-6 boundary attestation per [`docs/superpowers/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md`](../superpowers/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md).
 
 If the operator chooses different sub-versions (e.g., 0.30.0 → 0.30.1 → 0.30.2 with Lever B and Lever C as separate patch bumps), update this doc + the actual deploy commit. The pre-staged blocks below assume the planned sequence.
+
+**Cycle-5 nomenclature note:** "option-C-Branch-C-fallback" used in earlier draft has been simplified to "Branch C" (canonical per cycle-3 nomenclature cleanup audit). Updated below.
 
 ## Wave-2 pre-staged CHANGELOG block
 

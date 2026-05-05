@@ -2220,6 +2220,46 @@ Third pass on 2026-05-05 (commits `a505a08` Claude + `3a400c1` Codex). Focused o
 
 **Honest read 2026-05-05 (cycle 3):** Operator-readiness for fire-time + Wave-1 deploy + Branch D escalation is fully spec'd. All Wave-3 + Branch D deferred work has bounded sizing surfaces (PROFIT-LLM-001 4 axes; P4-GATE Appendix A 3 axes). Cycle 3's biggest finding: LLM throughput headroom is so large (>30× under the PHASE2-002 cadence-tune rule) that aggressive cadence experiments are empirically defensible without further audit. Memory hygiene unchanged from cycle 2.
 
+#### 2026-05-05 cycle 4 integration — fire-time playbooks + drift checks + failure-mode runbooks + contract retrospective
+
+Fourth pass on 2026-05-05 (commits `6f09967` Claude + `7addfd1` Codex). Focus: operator-readiness compaction + drift surfacing + failure-mode coverage.
+
+**Claude artifacts (cycle 4; commit `6f09967`):**
+- `2026-05-05-day-7-fire-time-compact-checklist.md` — 30-45 min single-page playbook
+- `2026-05-05-wave-1-fire-time-per-commit-checklist.md` — per-commit 30 min playbook + cadence matrix
+- `2026-05-05-readme-drift-check.md` — 3 MEDIUM (status block / version cell / test count)
+- `2026-05-05-roadmap-drift-check.md` — 3 MEDIUM (P3/P4-GATE cross-links + What-Changed bullet)
+- `2026-05-05-debt-log-toc-navigation-audit.md` — TOC + per-entry status table recommendations
+- `specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` — post-Lever-B-1 secondary loosening stub
+- `2026-05-05-kill-switch-fire-procedure-runbook.md` — STOP-first; REVERT vs QUARANTINE
+- `2026-05-05-mac-studio-dead-bot-reboot-runbook.md` — 4-category triage + restart
+- `2026-05-05-cross-cycle-contract-adherence-review.md` — 4 cycles audited; 100% §9 adherence
+
+**Codex artifacts (cycle 4; commit `7addfd1`):**
+- 4 pre-Wave-1 baseline scripts + reports (SKIPPED / OPP age / cooldown / per-ticker trade-rate)
+- 3 strict-xfail harnesses (PROFIT-LLM-001 prompt-template variants A1-A4; Branch D fire procedure; failure-mode runbooks)
+- 3 operator scripts (wave1_fire_time_smoke.sh; operator_alert_routing_audit.sh; db_backup_health_audit.sh)
+- bothealth.sh expanded with VALIDATION_ERROR + batch_aborted surfacing
+
+**Live empirical capture (Codex 2026-05-05):**
+- OPP age proxy: 700 samples; median 421.945s; p90 1669.0s
+- SKIPPED-rate baseline: 0 (post-cutover Mac Studio has 0 OPPORTUNITY events; ALL pre-Wave-1 conversion is from MacBook archive)
+- Cooldown SKIPPED: 0
+- Per-ticker trade-rate: 0 PAPER_TRADE post-cutover
+
+#### 2026-05-05 cycle 4.5 — DB backup gap fix (operator action complete)
+
+Cycle 4 Codex audit `db_backup_health_audit.sh --json` returned status=fail / count=0. Resolved in commit `a59d298`:
+- `scripts/db_snapshot_backup.sh` — online-safe daily snapshot via `sqlite3 .backup`; 7-day retention; cleans WAL/SHM sidecars
+- `scripts/launchd/com.kalshi.db-backup.plist` — daily 06:00 local-time + RunAtLoad
+- `scripts/launchd/README.md` — install/verify/uninstall ops
+- `mac_archive/db_snapshots/2026-05-05T1401Z/` — seed snapshot
+- `.gitignore` — exclude binary backup artifacts
+
+Operator bootstrapped same-day: `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.kalshi.db-backup.plist` → RunAtLoad fired immediately at 2026-05-05T1402Z. Audit now status=pass / count=4. Monitor `bk4mlg1yn` armed for 2026-05-05T18:00Z next-fire.
+
+**Honest read 2026-05-05 (cycle 4):** Operator-side fire-time burden compressed to single-page playbooks for Day-7 + per-Wave-1-commit. Drift checks surfaced 9 MEDIUM findings across README + ROADMAP + CHANGELOG pre-staged blocks; doc-edits land in cycle 5. Failure-mode rehearsal docs cover KILL_SWITCH + Mac-Studio-dead-bot + Branch-D-fire (cycle 3); cycle 5 adds network/API outage. Backup gap closed; recurring backups firing under launchd. Key empirical finding from baselines: post-cutover Mac Studio has 0 OPPORTUNITY events through 4 days — Wave-1 regression-detection thresholds need rethinking against the actual baseline (covered cycle 5 baseline interpretation).
+
 ---
 
 ### PROFIT-DOSSIER-001
