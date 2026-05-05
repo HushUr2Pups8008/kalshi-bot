@@ -22,6 +22,25 @@
 
 set -uo pipefail
 
+POST_DEPLOY=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --post-deploy)
+            POST_DEPLOY=1
+            shift
+            ;;
+        -h|--help)
+            echo "usage: bash scripts/bothealth.sh [--post-deploy]"
+            exit 0
+            ;;
+        *)
+            echo "unknown arg: $1" >&2
+            exit 2
+            ;;
+    esac
+done
+
 # ── Resolve paths ─────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
@@ -209,6 +228,21 @@ else
     printf '(debt log not found)\n' >>"$REPORT"
 fi
 codeblock_end
+
+# ── 8. Wave-1 post-deploy smoke ──────────────────────────────────────────────
+if [[ "$POST_DEPLOY" == "1" ]]; then
+    section "8. Wave-1 post-deploy smoke"
+    codeblock_start
+    if [[ -x "$REPO_ROOT/scripts/wave1_post_deploy_smoke.sh" ]]; then
+        bash "$REPO_ROOT/scripts/wave1_post_deploy_smoke.sh" >>"$REPORT" 2>&1
+        SMOKE_STATUS=$?
+        printf '\nwave1_post_deploy_smoke exit_status=%s\n' "$SMOKE_STATUS" >>"$REPORT"
+    else
+        printf 'wave1_post_deploy_smoke.sh missing or not executable at %s\n' "$REPO_ROOT/scripts/wave1_post_deploy_smoke.sh" >>"$REPORT"
+        SMOKE_STATUS=127
+    fi
+    codeblock_end
+fi
 
 # ── 8. Verdict line ───────────────────────────────────────────────────────────
 section "Verdict"

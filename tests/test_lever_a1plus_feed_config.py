@@ -134,8 +134,39 @@ _LEGAL_ANALYST_DOMAINS = (
     "vitallaw.com",
     "vital-law.com",
     "politicopro.com",
+    "politico.com/rss/legal",
+    "politico.com/news/legal",
     "lawfaremedia.org",
     "justsecurity.org",
     "scotusblog.com",
     "reuters.com/legal",
+    "reutersagency.com/en/reutersbest/legal",
 )
+
+
+_BRANCH_C_PRIMARY_DOMAINS = (
+    "lawfaremedia.org",
+    "justsecurity.org",
+)
+
+
+@pytest.mark.xfail(reason=_VITAL_LAW_XFAIL_REASON, strict=True)
+def test_branch_c_primary_open_rss_legal_analyst_feed_present_post_a1plus():
+    """Pin Branch C deploy selection from the 2026-05-05 rubric:
+    when passive Google News/VitalLaw observation produces zero legal-niche
+    PAPER_TRADE, first active legal-analyst RSS deploy should choose at
+    least one open-RSS national-security-law source before narrower or
+    paywalled options."""
+    from config import RSS_FEEDS
+
+    matches = [
+        url for url in RSS_FEEDS
+        if any(domain in url.lower() for domain in _BRANCH_C_PRIMARY_DOMAINS)
+    ]
+    assert matches, (
+        "no Branch C primary legal-analyst open-RSS URL detected in "
+        "config.py:RSS_FEEDS. Per selection rubric, first active Branch C "
+        f"deploy should include at least one of {_BRANCH_C_PRIMARY_DOMAINS}; "
+        "extend `_BRANCH_C_PRIMARY_DOMAINS` only if Claude's rubric selects "
+        "a different first-tier legal-analyst source."
+    )

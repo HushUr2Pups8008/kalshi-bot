@@ -260,3 +260,53 @@ def test_aggregator_counts_batch_aborted_flag_on_cycle_end(tmp_path):
     assert day.get("batch_aborted") == 1, (
         f"batch_aborted=True on CYCLE_END must increment batch_aborted; got per_day={day}"
     )
+
+
+@pytest.mark.xfail(reason=_GOV_MONITOR_XFAIL_REASON, strict=True)
+def test_parse_error_budget_counts_mixed_legacy_and_governance_error_types(tmp_path):
+    """Regression net: gate-close parse-error budgeting should count both
+    legacy `PARSE_ERROR` rows and governance-agent
+    `GOVERNANCE_DECISION_PARSE_ERROR` rows under the same per-day bucket."""
+    log = tmp_path / "decisions.jsonl"
+    _write_jsonl(log, [
+        {"type": "PARSE_ERROR", "ts": "2026-05-03T01:00:00+00:00", "error": "legacy"},
+        {
+            "type": "GOVERNANCE_DECISION_PARSE_ERROR",
+            "cycle_id": "gc_2026-05-03_020000",
+            "candidate_action": "disable_source",
+            "candidate_target": "r/test",
+            "error": "missing fields",
+        },
+    ])
+
+    report = governance_monitor.analyze(
+        log,
+        overrides=tmp_path / "missing.yaml",
+        now=datetime(2026, 5, 4, tzinfo=UTC),
+    )
+
+    assert report["per_day"]["2026-05-03"]["parse_error"] == 2
+
+
+@pytest.mark.xfail(reason=_GOV_MONITOR_XFAIL_REASON, strict=True)
+def test_batch_aborted_counter_counts_event_type_and_cycle_end_flag(tmp_path):
+    """Regression net: `BATCH_ABORTED` event rows and
+    `GOVERNANCE_CYCLE_END.batch_aborted=True` both count toward the same
+    close-day safety counter."""
+    log = tmp_path / "decisions.jsonl"
+    _write_jsonl(log, [
+        {"type": "BATCH_ABORTED", "ts": "2026-05-03T01:00:00+00:00", "reason": "operator"},
+        {
+            "type": "GOVERNANCE_CYCLE_END",
+            "cycle_id": "gc_2026-05-03_020000",
+            "batch_aborted": True,
+        },
+    ])
+
+    report = governance_monitor.analyze(
+        log,
+        overrides=tmp_path / "missing.yaml",
+        now=datetime(2026, 5, 4, tzinfo=UTC),
+    )
+
+    assert report["per_day"]["2026-05-03"]["batch_aborted"] == 2

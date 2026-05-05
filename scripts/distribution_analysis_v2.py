@@ -98,7 +98,40 @@ def _anomaly_reasons(row: dict[str, Any]) -> list[str]:
     return reasons
 
 
-def analyze(path: Path = _DEFAULT_INPUT, since: str | None = None) -> dict[str, Any]:
+def _day_key(row: dict[str, Any]) -> str:
+    decided_at = _parse_ts(row.get("decided_at"))
+    if decided_at:
+        return decided_at.date().isoformat()
+    raw = str(row.get("decided_at") or "unknown")
+    return raw[:10] if len(raw) >= 10 else "unknown"
+
+
+def _daily_trend(decisions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for row in decisions:
+        by_day.setdefault(_day_key(row), []).append(row)
+
+    trend: dict[str, dict[str, Any]] = {}
+    for day, rows in sorted(by_day.items()):
+        action_counts = Counter(row.get("action", "<missing>") for row in rows)
+        confidence_counts = Counter(_confidence_bucket(row.get("confidence")) for row in rows)
+        uniform_count = sum(1 for row in rows if _is_uniform_dead_source_disable(row))
+        anomaly_count = sum(1 for row in rows if _anomaly_reasons(row))
+        trend[day] = {
+            "total_decisions": len(rows),
+            "action_counts": dict(action_counts),
+            "confidence_buckets": dict(confidence_counts),
+            "uniform_disable_source_dead_count": uniform_count,
+            "anomaly_count": anomaly_count,
+        }
+    return trend
+
+
+def analyze(
+    path: Path = _DEFAULT_INPUT,
+    since: str | None = None,
+    daily_trend: bool = False,
+) -> dict[str, Any]:
     decisions = _load_decisions(path, since=since)
     action_counts = Counter(row.get("action", "<missing>") for row in decisions)
     confidence_counts = Counter(_confidence_bucket(row.get("confidence")) for row in decisions)
@@ -124,7 +157,7 @@ def analyze(path: Path = _DEFAULT_INPUT, since: str | None = None) -> dict[str, 
         if count > 1
     ]
 
-    return {
+    report = {
         "input_path": str(path),
         "since": since,
         "total_decisions": len(decisions),
@@ -145,6 +178,9 @@ def analyze(path: Path = _DEFAULT_INPUT, since: str | None = None) -> dict[str, 
             "gate_6_ready": False,
         },
     }
+    if daily_trend:
+        report["daily_trend"] = _daily_trend(decisions)
+    return report
 
 
 def _table(rows: list[tuple[str, Any]]) -> str:
@@ -165,6 +201,19 @@ def render_markdown(report: dict[str, Any]) -> str:
 
     action_rows = sorted(report["action_counts"].items())
     confidence_rows = sorted(report["confidence_buckets"].items())
+    daily = report.get("daily_trend") or {}
+    daily_lines = [
+        "| day | decisions | uniform dead-source disables | anomalies | actions |",
+        "|---|---:|---:|---:|---|",
+    ]
+    for day, row in sorted(daily.items()):
+        actions = ", ".join(f"{key}={value}" for key, value in sorted(row["action_counts"].items()))
+        daily_lines.append(
+            f"| {day} | {row['total_decisions']} | "
+            f"{row['uniform_disable_source_dead_count']} | {row['anomaly_count']} | {actions} |"
+        )
+    if not daily:
+        daily_lines.append("| none | 0 | 0 | 0 |  |")
     return "\n".join([
         "# Close-Day Decision Distribution v2",
         "",
@@ -187,6 +236,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         "## Confidence Distribution",
         "",
         _table(confidence_rows),
+        "",
+        "## Daily Trend",
+        "",
+        "\n".join(daily_lines),
         "",
         "## Bulk Review Template",
         "",
@@ -215,11 +268,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--input", type=Path, default=_DEFAULT_INPUT)
     parser.add_argument("--since")
+    parser.add_argument("--daily-trend", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--output", type=Path, nargs="?", const=_DEFAULT_OUTPUT)
     args = parser.parse_args(argv)
 
-    report = analyze(args.input, since=args.since)
+    report = analyze(args.input, since=args.since, daily_trend=args.daily_trend)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(render_markdown(report), encoding="utf-8")

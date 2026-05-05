@@ -76,8 +76,11 @@ echo "  dry-run:  ${DRY_RUN}"
 echo "  no-push:  ${NO_PUSH}"
 
 if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo "ERROR: working tree has uncommitted changes. Commit or stash before running." >&2
-  exit 1
+  if [[ "$DRY_RUN" == "0" ]]; then
+    echo "ERROR: working tree has uncommitted changes. Commit or stash before running." >&2
+    exit 1
+  fi
+  echo "DRY-RUN WARNING: working tree has uncommitted changes. Fire-time run must be clean." >&2
 fi
 
 if git rev-parse --verify "${TAG_NAME}" >/dev/null 2>&1; then

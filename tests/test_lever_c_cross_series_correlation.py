@@ -105,6 +105,70 @@ def test_normalized_headline_hash_function_exists():
     )
 
 
+@pytest.mark.xfail(reason=_LEVER_C_XFAIL_REASON, strict=True)
+def test_headline_hash_normalizes_parent_spec_section_3_2_variants():
+    """LOCK addendum §3 test 2: cosmetic variants of the same headline
+    must collide under the parent spec §3.2 normalized hash."""
+    from tasks import blend_task
+
+    helper = getattr(blend_task, "_headline_hash", None) or getattr(
+        blend_task, "_normalize_headline_hash", None
+    )
+    assert helper is not None, "Lever C deploy must expose a headline-hash helper"
+    assert helper("Trump signs bill - VitalLaw.com") == helper("trump signs bill")
+
+
+@pytest.mark.xfail(reason=_LEVER_C_XFAIL_REASON, strict=True)
+def test_cross_series_suppression_within_window_reason_path_exists():
+    """LOCK addendum §3 test 3: within-window suppression path exists and
+    emits `cross_series_headline_in_window`."""
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parent.parent / "tasks/blend_task.py").read_text(encoding="utf-8")
+    assert "_recent_headline_enqueues" in body
+    assert "cross_series_headline_in_window" in body
+    assert "cross_series_correlation_window_seconds" in body
+
+
+@pytest.mark.xfail(reason=_LEVER_C_XFAIL_REASON, strict=True)
+def test_cross_series_suppression_releases_after_window_contract_exists():
+    """LOCK addendum §3 test 4: implementation must compare elapsed time
+    against `cross_series_correlation_window_seconds`, not permanently
+    suppress a hash after first sighting."""
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parent.parent / "tasks/blend_task.py").read_text(encoding="utf-8")
+    assert "time.monotonic" in body
+    assert "cross_series_correlation_window_seconds" in body
+    assert "<" in body or "<=" in body
+
+
+@pytest.mark.xfail(reason=_LEVER_C_XFAIL_REASON, strict=True)
+def test_headline_hash_recorded_after_gate_pass_not_at_entry_contract_exists():
+    """LOCK addendum §2/§3 test 5: headline hash is recorded only after
+    a candidate passes the existing readiness path, so failed candidates
+    do not poison the suppression window."""
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parent.parent / "tasks/blend_task.py").read_text(encoding="utf-8")
+    hash_write = body.find("_recent_headline_enqueues[")
+    enqueue = body.find("trading_queue")
+    readiness = body.find("evaluate_readiness")
+    assert readiness != -1 and hash_write != -1 and enqueue != -1
+    assert readiness < hash_write < enqueue
+
+
+@pytest.mark.xfail(reason=_LEVER_C_XFAIL_REASON, strict=True)
+def test_cross_series_window_zero_disables_contract_exists():
+    """LOCK addendum §3 test 6: window=0 is the env-revert path and must
+    bypass cross-series suppression entirely."""
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parent.parent / "tasks/blend_task.py").read_text(encoding="utf-8")
+    assert "cross_series_correlation_window_seconds" in body
+    assert "<= 0" in body or "== 0" in body
+
+
 def test_existing_skipped_emission_reasons_unchanged_today():
     """Positive control: existing SKIPPED-emission reason strings
     (G1-G6 + structural_tier* + cooldown / opposing-position) continue

@@ -132,6 +132,29 @@ def _aggregate(verdicts: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _is_uniform_dead_source_disable(row: dict[str, Any]) -> bool:
+    evidence = row.get("evidence_summary") or {}
+    safety = row.get("safety_checks_passed") or {}
+    return (
+        row.get("action") == "disable_source"
+        and all(safety.values())
+        and (evidence.get("fresh_pass_count") or 0) == 0
+        and (evidence.get("match_count") or 0) == 0
+        and (evidence.get("active_market_count") or 0) == 0
+    )
+
+
+def _bulk_candidates(
+    decisions: list[dict[str, Any]],
+    resume_seen: set[str],
+) -> list[dict[str, Any]]:
+    return [
+        row for row in decisions
+        if row.get("decision_id", "<no_id>") not in resume_seen
+        and _is_uniform_dead_source_disable(row)
+    ]
+
+
 def _print_summary(agg: dict[str, Any]) -> None:
     print()
     print("=" * 78)
@@ -192,12 +215,76 @@ def _interactive_loop(
     return verdicts
 
 
+def _bulk_loop(
+    decisions: list[dict[str, Any]],
+    resume_seen: set[str],
+    output_path: Path | None,
+) -> tuple[list[dict[str, Any]], set[str]]:
+    selected = _bulk_candidates(decisions, resume_seen)
+    if not selected:
+        print("Bulk mode: no unreviewed uniform dead-source disable decisions found.")
+        return [], set()
+
+    print()
+    print("=" * 78)
+    print("Bulk mode: uniform dead-source disable class")
+    print("=" * 78)
+    print(f"  candidate decisions: {len(selected)}")
+    print("  predicate: action=disable_source, all safety checks true, fresh/match/active-market counts all zero")
+    print("  verdict applies to every candidate in this mechanical class.")
+    sample = ", ".join(str(row.get("decision_id", "<no_id>")) for row in selected[:5])
+    if len(selected) > 5:
+        sample += ", ..."
+    print(f"  sample decision_ids: {sample}")
+
+    while True:
+        try:
+            response = input("bulk verdict [y / n / s skip / q quit]> ").strip().lower()
+        except EOFError:
+            response = "q"
+        if response in {"y", "yes", "1"}:
+            verdict_value = "y"
+            break
+        if response in {"n", "no", "0"}:
+            verdict_value = "n"
+            break
+        if response in {"s", "skip"}:
+            verdict_value = "s"
+            break
+        if response in {"q", "quit"}:
+            print("[quitting before bulk verdict; emitting summary up to this point]")
+            return [], set()
+        print("  (please enter y / n / s / q)")
+
+    ts = datetime.utcnow().isoformat() + "Z"
+    verdicts = [
+        {
+            "decision_id": row.get("decision_id", "<no_id>"),
+            "verdict": verdict_value,
+            "ts": ts,
+            "bulk_mode": True,
+            "bulk_class": "uniform_dead_source_disable",
+        }
+        for row in selected
+    ]
+    if output_path:
+        with output_path.open("a", encoding="utf-8") as out_handle:
+            for verdict in verdicts:
+                out_handle.write(json.dumps(verdict) + "\n")
+    return verdicts, {verdict["decision_id"] for verdict in verdicts}
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--since", help="ISO timestamp; only review decisions decided_at >= this")
     p.add_argument("--output", help="path to write per-decision verdicts as JSONL")
     p.add_argument("--resume", help="path to existing verdicts file; skip already-reviewed decisions")
     p.add_argument("--aggregate", help="path to existing verdicts file; emit summary only, no interactive review")
+    p.add_argument(
+        "--bulk-mode",
+        action="store_true",
+        help="prompt once for the uniform dead-source disable class, then review remaining decisions",
+    )
     args = p.parse_args(argv)
 
     if args.aggregate:
@@ -231,7 +318,13 @@ def main(argv: list[str] | None = None) -> int:
         + (f"; {len(resume_seen)} already reviewed (resume mode)" if resume_seen else "")
     )
 
-    verdicts = _interactive_loop(decisions, resume_seen, output_path)
+    verdicts: list[dict[str, Any]] = []
+    if args.bulk_mode:
+        bulk_verdicts, bulk_seen = _bulk_loop(decisions, resume_seen, output_path)
+        verdicts.extend(bulk_verdicts)
+        resume_seen = resume_seen | bulk_seen
+
+    verdicts.extend(_interactive_loop(decisions, resume_seen, output_path))
     _print_summary(_aggregate(verdicts))
     return 0
 
