@@ -23,15 +23,21 @@ PROFIT-PHASE2-001's volume gate is met by 5.3× (158 decisions vs 30 floor). Saf
 
 ## §8.5.2 policy-equivalence carve-outs invoked for PROFIT-PHASE2-001
 
-Gate 7 of this soak fires on 4 behavioural commits in the soak window. The §8.5.2 carve-out applies as follows:
+Gate 7 of this soak fires on the behavioural commits in the soak window. The §8.5.2 carve-out (or out-of-scope-for-§8.5.2 status for doc/script artifacts) applies as follows:
 
 | commit | window-time | scope | affected slice | carve-out status |
 |---|---|---|---|---|
 | `fae72fa` | 2026-05-02T04:15Z | `governance/llm.py` think=False fix | 100 % (was a bug-fix; pre-fix decisions were all `{}` empty-response PARSE_ERROR) | INVOKED (effective soak start = post-fix decision time per §8.5.2) |
 | `092666c` / `5eadbff` / `d29bb29` / `8882f4c` / `051f391` / `033dc8e` / `83bf954` / `ce814b9` | 2026-05-03 morning | governance/* GOV-002 audit cycle | governance test code + audit scripts only; no prod-code change to running bot's decision pipeline | INVOKED (test-only; gate-7 over-triggers because the audit harness lives in `governance/`) |
 | `b47ca71` | 2026-05-03T15:28Z | A5 SYSTEM_PROMPT addition (anchor_rate interpretation) | 1/242 decisions (0.4 %) populated `anchor_rate`; the 1 active decision fired post-A5; 241 decisions had `anchor_rate=null` and were unaffected | **INVOKED (canonical example in §8.5.2)** |
+| `b44dda2` | 2026-05-05T~12:30Z | docs/governance/ + docs/superpowers/specs/ ONLY (Wave-1/2 operator artifacts) | 0 (docs do not run during decision cycles) | OUT-OF-SCOPE for §8.5.2 (doc artifact only) |
+| `80932cb` | 2026-05-05T~12:35Z | scripts/ + tests/ ONLY (Wave-2 prep + close-day script hardening); 0 prod-code touch in `analysis/` / `tasks/` / `feeds/` / `governance/` / `trading/` / `kalshi/` / `main.py` / `config.py` | 0 (scripts + tests do not run during decision cycles) | OUT-OF-SCOPE for §8.5.2 (script + test artifacts only) |
+| `0007c3f` | 2026-05-05T~13:30Z | docs/governance/ + docs/superpowers/specs/ ONLY (Lever B/C/D locks + Day-7 prep + closure-path TLDR v3) | 0 (docs only) | OUT-OF-SCOPE for §8.5.2 (doc artifact only) |
+| `753ec36` | 2026-05-05T~14:00Z | scripts/ + tests/ ONLY (Wave-3 harness expansion + close-day script flags + audit scripts); 0 prod-code touch in soak runtime surface | 0 (scripts + tests do not run during decision cycles) | OUT-OF-SCOPE for §8.5.2 (script + test artifacts only) |
 
-Net: gate 7 passes under §8.5.2 reading. The §8.5.2 carve-out language must be reproduced verbatim in the close attestation document.
+Net: gate 7 passes under §8.5.2 reading (3 INVOKED carve-outs + 4 OUT-OF-SCOPE doc/script artifacts). The §8.5.2 carve-out language must be reproduced verbatim in the close attestation document.
+
+**Note on additional commits between draft and fire-time:** the operator should re-run `scripts/check_soak_invariant.sh --json` immediately before fire-time and add a row to this table for any commit gate-7 surfaces that isn't already listed. Doc-only commits (`docs/` exclusively) and script-only commits (`scripts/` + `tests/` exclusively, no `analysis/` / `tasks/` / `feeds/` / `governance/` / `trading/` / `kalshi/` / `main.py` / `config.py` touch) qualify as OUT-OF-SCOPE for §8.5.2 by the same logic. Any commit that touches the soak runtime surface needs a fresh §8.5.2 evidence-coverage analysis OR fall-through to the default 14-day close.
 
 ## Operator runbook for the early close
 

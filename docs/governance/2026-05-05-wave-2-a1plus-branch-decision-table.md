@@ -26,7 +26,7 @@ This doc presents the decision table + recommended verdict per branch. **No spec
 
 ## Decision table
 
-| dimension | Branch A (passive observe) | Branch C (open-RSS legal-analyst) | Branch D (geopolitics specialist) |
+| dimension | Branch A (passive observe) | Branch C (open-RSS legal-analyst) | option-A (geopolitics specialist) |
 |---|---|---|---|
 | **Code change** | none | 1-3 lines `config.py:RSS_FEEDS` + 5-10 lines `main.py:_source_class_for_evidence` | same shape as C; different feed URLs |
 | **Deploy effort** | 0 — observation only | ~30 min: URL probe + classifier patch + xfail flip | ~30 min: URL probe + classifier patch + xfail flip |
@@ -44,7 +44,7 @@ This doc presents the decision table + recommended verdict per branch. **No spec
 
 **Branch C: recommended SECOND, if Branch A produces 0 legal-niche signal in 14 d.** The legal-analyst niche has historical evidence (3/3 PAPER_TRADE on the 13-day archive — the only proven non-mainstream PAPER_TRADE class). Onboarding 1-2 open-RSS analogues to VitalLaw is the highest-EV second-feed move.
 
-**Branch D: recommended LAST, only if A + C both produce 0 PAPER_TRADE over their 14 d windows.** The empirical case is weak (18 OPP / 0 PAPER on archive). Branch D's value is exhaustion — eliminating the geopolitics-sub-niche before declaring EDGE-004 closed via Lever B / Lever C / Lever D / Lever E.
+**option-A: recommended LAST, only if A + C both produce 0 PAPER_TRADE over their 14 d windows.** The empirical case is weak (18 OPP / 0 PAPER on archive). Branch D's value is exhaustion — eliminating the geopolitics-sub-niche before declaring EDGE-004 closed via Lever B / Lever C / Lever D / Lever E.
 
 ## Sequencing
 
@@ -66,9 +66,9 @@ Branch A: passive observe (14 d)
             └─── 0 PAPER_TRADE OR negative realized P&L
                     │
                     ▼
-                Branch D: geopolitics specialist-analyst onboard (deploy + 14 d window)
+                option-A: geopolitics specialist-analyst onboard (deploy + 14 d window)
                     │
-                    ├─── 1+ PAPER_TRADE w/ positive realized P&L? ───► EDGE-004 closes via Branch D (low-confidence; expect re-test)
+                    ├─── 1+ PAPER_TRADE w/ positive realized P&L? ───► EDGE-004 closes via option-A (low-confidence; expect re-test)
                     │
                     └─── 0 PAPER_TRADE
                             │
@@ -82,8 +82,8 @@ Branch A: passive observe (14 d)
 
 1. **Branch A acceptance threshold.** Is ≥ 1 PAPER_TRADE in 14 d a strong-enough Branch A pass, or should it be ≥ 2 (statistical confidence)? **Recommendation:** ≥ 1 is sufficient — confirms the surface is reachable; downstream Branch C / D decisions don't depend on the count.
 2. **Branch C feed selection.** A.1+1.5 spec lists candidate URLs but doesn't pick. **Recommendation:** Codex sizes 2 candidates pre-deploy (15 min audit) and picks the higher-domain-overlap one against the current Kalshi market mix.
-3. **Branch D fall-back ordering.** If Branch A produces some signal but not enough (≥ 1 OPP, 0 PAPER_TRADE), do we try Branch C or Branch D first? **Recommendation:** still C first — the legal-analyst class has historical PAPER_TRADE (the proven conversion class).
-4. **Time-pressure compression.** If operator wants to compress the 42 d walk: deploy A + C in parallel (Branch A is observation-only, so it can run concurrently with Branch C). Branch D stays serial behind C. **Compresses to 14 + 14 = 28 d.** Recommendation: defer the parallelism unless operator explicitly requests it; serial is safer for attribution clarity.
+3. **option-A fall-back ordering.** If Branch A produces some signal but not enough (≥ 1 OPP, 0 PAPER_TRADE), do we try Branch C or option-A first? **Recommendation:** still C first — the legal-analyst class has historical PAPER_TRADE (the proven conversion class).
+4. **Time-pressure compression.** If operator wants to compress the 42 d walk: deploy A + C in parallel (Branch A is observation-only, so it can run concurrently with Branch C). option-A stays serial behind C. **Compresses to 14 + 14 = 28 d.** Recommendation: defer the parallelism unless operator explicitly requests it; serial is safer for attribution clarity.
 5. **§8.5.2 implications.** Each branch deploy is a behavioural code change to evidence-pipeline surfaces. If a future governance shadow-soak overlaps with a Wave-2 deploy, the §8.5.2 carve-out criteria (`docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md` §8.5.2) need to be evaluated for the deploy commit. **Recommendation:** target Branch C / D deploys to occur OUTSIDE of any active soak window. PROFIT-PHASE2-002 is the next soak; sequence Branch C deploy either before PHASE2-002 starts (Wave-2 between Wave-1 close and PHASE2-002 start) or after PHASE2-002 closes.
 
 ## Cross-links
