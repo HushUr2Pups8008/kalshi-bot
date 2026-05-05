@@ -22,9 +22,9 @@ The 2026-05-04 per-source audit revealed that `VitalLaw.com` (legal/regulatory a
 | branch | action | when |
 |---|---|---|
 | **Branch A** (passive) | observe Wave-1 close for 14 d; watch for VitalLaw / legal-niche surfacing on Google News query family | Day-14 default; NO code change required |
-| **Branch B** (active) | probe `vitallaw.com` for a direct RSS endpoint; add to `RSS_FEEDS` if found | only if Branch A produces 0 legal-niche PAPER_TRADE in 14 d |
-| **Branch C** (fallback) | onboard open-RSS analogues (Lawfare / Just Security / SCOTUSblog / Politico Legal) | only if Branch A + B both fail |
-| **Branch D** (escalation) | PROFIT-LLM-001 / P4-GATE Appendix A | if Branch B + C both stall (≥ 2 deploy attempts) |
+| ~~**Branch B** (active)~~ | ~~probe `vitallaw.com` for a direct RSS endpoint; add to `RSS_FEEDS` if found~~ | **DROPPED 2026-05-05 — Codex direct-RSS probe found no public feed endpoint** |
+| **Branch C** (fallback) | onboard open-RSS analogues (Lawfare / Just Security / SCOTUSblog / Politico Legal) | only if Branch A produces 0 legal-niche PAPER_TRADE in 14 d |
+| **Branch D** (escalation) | PROFIT-LLM-001 / P4-GATE Appendix A | if Branch C stalls (≥ 2 deploy attempts) |
 
 This spec (§2 / §3) covers Branch B and Branch C. Branch A requires no code change and is the operator's first response — covered in `docs/governance/post-soak-close-rehearsal-checklist.md` §7.
 
@@ -161,7 +161,7 @@ If option-B's first deploy (`VitalLaw.com` probe) succeeds, the load-bearing-sou
 
 ## 9. Risks
 
-- **Paywall lockout on VitalLaw.com.** The reason VitalLaw was silently removed from canonical config may have been a paywall transition. If probe returns 401/403 the operator must fall through to analogues immediately.
+- **Paywall lockout on VitalLaw.com.** Codex's 2026-05-05 direct-RSS probe (`docs/governance/2026-05-05-vitallaw-direct-rss-probe.md`) found NO public feed-like endpoint — obvious endpoints redirect to SSO, return RSS Error HTML, 403, 404, or fail connection. **Branch B (direct VitalLaw RSS) is empirically infeasible.** The decision-tree collapses to 3 branches: A (passive Google News observe), C (open-RSS analogues), D (escalation). Operator should skip Branch B at deploy time.
 - **Sub-niche mismatch.** SCOTUSblog covers only Supreme Court rulings; Lawfare / Just Security cover national-security-law (overlap with `lawfaremedia.org` may be high). The fall-through analogues may not produce the same Kalshi-market headline coverage that VitalLaw did.
 - **Source-class weight collision.** Adding `legal=0.65` between `analysis=0.60` and `official=0.75` shifts the relative weighting. Verify the change doesn't regress `analysis`-class historical PAPER_TRADE (currently 0/0 in archive, so vacuously safe).
 - **Probe-time burn.** Codex's per-feed sizing audit is an upstream gate; deploying without it risks picking a lower-volume candidate first.

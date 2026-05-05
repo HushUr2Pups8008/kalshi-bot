@@ -18,7 +18,7 @@ Followed by escalation to **PROFIT-LLM-001** or **P4-GATE Appendix A** if both A
 ## What changed since v1 (2026-05-03)
 
 1. **Per-source audit (cca3cea, 2026-05-04)** drilled into the specialist_analyst class and found `VitalLaw.com` produced **3/3 of historical PAPER_TRADE** on the 13-day Mac archive. The geopolitics-sub-niche feeds (Kyiv X / Times of Israel / Iran International / bellingcat / Defense News / Breaking Defense) produced **0/18 PAPER_TRADE** at the class-internal level.
-2. **Audit-of-the-audit:** `VitalLaw.com` is NOT in the current canonical `config.py:RSS_FEEDS` (silently removed at some unknown prior point). The bot has lost the load-bearing PAPER_TRADE-producing source.
+2. **Audit-of-the-audit + aggregator-path forensics (37063d8):** `VitalLaw.com` is NOT in the current canonical `config.py:RSS_FEEDS` and was likely never directly polled — the Mac archive's VitalLaw records came via the Google News query family (`feeds/search_news_monitor.py`). Google News query family is **active in current canonical config** (re-enabled 2026-04-23). The "load-bearing source loss" framing is wrong: the ingestion path is still deployed; the question is whether current market-mix queries continue to surface VitalLaw articles.
 3. **A.1+1.5 spec added (2892101):** legal-analyst option-B parallel deploy path. Probe order (Codex `5e5849a`): VitalLaw > Just Security > Lawfare > SCOTUSblog > Politico Legal > Reuters Legal.
 4. **B' orthogonality finding (83a9477):** the post-fix B' predicate is orthogonal to existing pre-fix MATCH_SUPPRESSED logic (100 % flip rate). Codex's spec-parity verification (`b56c261`) confirms; B' deploy is clean w.r.t. un-suppression of existing noise.
 5. **Day-4 mid-soak confirmation (966f69e):** soak healthy at 62.7 h elapsed; 36 cycles / 158 decisions / 20 distinct targets / 0 safety counters firing.
@@ -43,9 +43,9 @@ The 2026-05-04 aggregator-path forensics (`docs/governance/2026-05-04-vitallaw-a
 | branch | action | when |
 |---|---|---|
 | **A** (passive) | observe Wave-1 close 14 d; Google News query family already deployed | Day-14 default |
-| **B** (active) | probe `vitallaw.com` direct RSS; add to `RSS_FEEDS` | only if A surfaces 0 legal-niche PAPER_TRADE |
-| **C** (fallback) | onboard Lawfare / Just Security / SCOTUSblog / Politico Legal | only if A + B both fail |
-| **option-A** (parallel) | specialist-geopolitics per A.1+ spec §3.1 (war on the rocks / CSIS / ISW / CFR / Atlantic Council) | parallel to B/C if operator pursues breadth |
+| ~~**B** (active)~~ | ~~probe `vitallaw.com` direct RSS~~ | **DROPPED 2026-05-05 — Codex direct-RSS probe found no public feed** |
+| **C** (fallback) | onboard Lawfare / Just Security / SCOTUSblog / Politico Legal | only if A surfaces 0 legal-niche PAPER_TRADE in 14 d |
+| **option-A** (parallel) | specialist-geopolitics per A.1+ spec §3.1 (war on the rocks / CSIS / ISW / CFR / Atlantic Council) | parallel to C if operator pursues breadth |
 
 The legacy "option-A vs option-B" framing is preserved below for harness-naming compatibility. The 4-branch tree above supersedes it as the actual operator decision-point at Day-14:
 
