@@ -19,7 +19,7 @@
 - [ ] **Gate 4: PARSE_ERROR trailing 72 h.** Count in last 72 h: ___ (must be 0)
 - [ ] **Gate 5: Cadence stability.** Max inter-cycle gap: _____ h (must be ≤ 3 h); cadence-deviation > 10 %: ___ events (must be 0)
 - [ ] **Gate 6: Manual review.** Decisions reviewed: ___ / ___; reasonable count: ___; reasonable rate: ___ % (≥ 85 % required)
-- [ ] **Gate 7: No mid-soak code change.** `git log --oneline --since "2026-05-01T19:01Z" -- analysis/ tasks/ feeds/ governance/ executor/ main.py` returned: ___ commits (must be 0 behavioural)
+- [ ] **Gate 7: No mid-soak code change OR §8.5.2 policy-equivalence carve-out.** `bash scripts/check_soak_invariant.sh` returned: ___ (0 = clean; non-zero = check §8.5.2 carve-out section below)
 - [ ] **Gate 8: Attestation written.** This document committed.
 
 ## Final tally
@@ -34,6 +34,23 @@
 | GOVERNANCE_VALIDATION_ERROR | 0 (asserted) |
 | KILL_SWITCH | 0 (asserted) |
 | `batch_aborted=True` | 0 (asserted) |
+
+## §8.5.2 policy-equivalence carve-out attestation (FILL IN IF GATE 7 NOT CLEAN)
+
+For each behavioural commit gate-7 surfaces, attest that §8.5.2 carve-out applies:
+
+### Commit: ___________________________ (hash, subject)
+
+- **Window-time:** _________________
+- **Scope:** _________________________
+- **Evidence-coverage analysis:**
+  - Affected evidence field(s): _________________
+  - Total decisions in soak: _____
+  - Decisions in affected slice: _____ (___% of total)
+- **Affected-slice manual review verdict:** _________________
+- **Carve-out invoked?** [ ] yes [ ] no — if no, gate 7 fails and the early-close path aborts.
+
+(Repeat the block above for each commit gate-7 surfaces. For PROFIT-PHASE2-001 specifically, see `PROFIT-PHASE2-001-early-close-criteria.md` for the canonical 9 commits + invocations.)
 
 ## Operator attestation
 

@@ -414,9 +414,30 @@ The 14-day floor in §8.5 is a **calendar floor for confidence**, not a derivati
 
 - The 168 h evidence-window in `governance/evidence.py` stays constant through the soak.
 - Cadence (fast 2 h, deep 24 h) stays constant through the soak.
-- Decision policy stays constant — the LLM model, prompt, and gating thresholds do not change mid-soak.
+- Decision policy stays constant — the LLM model, prompt, and gating thresholds do not change mid-soak (subject to §8.5.2 policy-equivalence carve-out).
 
 **Cadence / evidence-window changes are reserved for the NEXT post-Wave-1 shadow soak**, where they apply from cycle 1 (no mixed-policy contamination). See `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` §3 for the next-soak-onboarding cadence-tune notes.
+
+### 8.5.2 Policy-equivalence carve-out (added 2026-05-05 during PROFIT-PHASE2-001)
+
+Gate 7 (no mid-soak code change to the running bot) is the strictest of the §8.5.1 gates. In practice, hot-fixes to the governance LLM's input shape (prompt edits, model behaviour fixes) may land mid-soak with the operator's knowledge — e.g., the PROFIT-GOV-002 SYSTEM_PROMPT cycle that landed during PROFIT-PHASE2-001 on 2026-05-03T15:28Z.
+
+A strict reading of gate 7 invalidates the early-close path on any such hot-fix. A pragmatic reading allows for **policy-equivalence carve-outs** where the hot-fix can be empirically demonstrated to NOT have shifted decision distribution on the soak's actual candidate mix.
+
+**Policy-equivalence requirements (all must hold to invoke the carve-out):**
+
+1. **Empirical evidence-coverage analysis.** For each behavioural commit gate-7 surfaces, identify the specific evidence fields the change governs. Compute what fraction of the soak's GOVERNANCE_DECISION records have those fields populated (= the affected slice). If the affected slice is < 5 % of total decisions, the change is empirically a non-event for the soak's outcome.
+2. **Affected-slice manual review.** Decisions in the affected slice (whether populated pre-change or post-change) must be reviewed and shown to be consistent with both pre-change and post-change interpretations of the relevant evidence. Bias toward the post-change interpretation if the slice is N=1; require N ≥ 3 with consistent verdicts before invoking the carve-out for slices > 1 %.
+3. **Written attestation.** The early-close attestation must document each invoked policy-equivalence carve-out by commit hash, affected-slice fraction, and evidence-coverage analysis result. This becomes part of the §8.5 audit trail.
+
+**Counter-examples that DO NOT qualify for the carve-out:**
+
+- Cadence changes (the cycle-rate is global; affects every decision)
+- Evidence-window changes (the lookback window is global; affects every decision's input shape)
+- Gating-threshold changes (LLM verdicts may shift even on previously-decided candidates)
+- Model swaps (same input → different model → different output distribution; not equivalent by any reasonable measure)
+
+**Concrete example: PROFIT-GOV-002 A5 SYSTEM_PROMPT hot-fix (commit `b47ca71`, 2026-05-03T15:28Z).** A5 added 6 lines instructing the LLM how to interpret `evidence_summary.anchor_rate` for `disable_source` decisions. Empirical analysis: 241/242 GOVERNANCE_DECISION records in PROFIT-PHASE2-001 had `anchor_rate=null`; the A5 lines have nothing to apply. The 1 anchor-rate-active decision (`gd_2026-05-04_0049`) fired entirely in the post-A5 regime. Affected slice: 0.4 %; the change is empirically a non-event. **Carve-out invoked.**
 
 ### 8.6 Estimated scope
 

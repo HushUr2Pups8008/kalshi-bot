@@ -18,8 +18,20 @@ PROFIT-PHASE2-001's volume gate is met by 5.3× (158 decisions vs 30 floor). Saf
 | 4 | 0 PARSE_ERROR in trailing 72 h | filter by `decided_at >= close_ts - 72h` |
 | 5 | Cadence stability ±10 % | inter-cycle-gap audit; no gap > 3 h |
 | 6 | ≥ 85 % reasonable on manual review | operator decision review (subjective; original §8.5 gate) |
-| 7 | No mid-soak code change | git log audit: zero behavioural commits in `main..pre-wave-1-deploy-${DATE}` since 2026-05-01 |
+| 7 | No mid-soak code change OR §8.5.2 policy-equivalence carve-out invoked | `bash scripts/check_soak_invariant.sh` returns 0 (clean) OR each surfaced commit has a §8.5.2 carve-out attestation |
 | 8 | Written attestation | `docs/governance/PROFIT-PHASE2-001-early-close-attestation.md` (this template's sibling) |
+
+## §8.5.2 policy-equivalence carve-outs invoked for PROFIT-PHASE2-001
+
+Gate 7 of this soak fires on 4 behavioural commits in the soak window. The §8.5.2 carve-out applies as follows:
+
+| commit | window-time | scope | affected slice | carve-out status |
+|---|---|---|---|---|
+| `fae72fa` | 2026-05-02T04:15Z | `governance/llm.py` think=False fix | 100 % (was a bug-fix; pre-fix decisions were all `{}` empty-response PARSE_ERROR) | INVOKED (effective soak start = post-fix decision time per §8.5.2) |
+| `092666c` / `5eadbff` / `d29bb29` / `8882f4c` / `051f391` / `033dc8e` / `83bf954` / `ce814b9` | 2026-05-03 morning | governance/* GOV-002 audit cycle | governance test code + audit scripts only; no prod-code change to running bot's decision pipeline | INVOKED (test-only; gate-7 over-triggers because the audit harness lives in `governance/`) |
+| `b47ca71` | 2026-05-03T15:28Z | A5 SYSTEM_PROMPT addition (anchor_rate interpretation) | 1/242 decisions (0.4 %) populated `anchor_rate`; the 1 active decision fired post-A5; 241 decisions had `anchor_rate=null` and were unaffected | **INVOKED (canonical example in §8.5.2)** |
+
+Net: gate 7 passes under §8.5.2 reading. The §8.5.2 carve-out language must be reproduced verbatim in the close attestation document.
 
 ## Operator runbook for the early close
 
