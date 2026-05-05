@@ -205,7 +205,7 @@ class TradeExecutor:
         # Paper ticker cooldown (4h): prevents same ticker being spammed by a burst
         # of headlines on the same topic (e.g. 30 Iran-war articles in one poll cycle).
         if self._is_paper:
-            last    = self._last_traded.get(analysis.market.ticker, 0.0)
+            last    = self._last_traded.get(analysis.market.ticker, float("-inf"))
             elapsed = time.monotonic() - last
             if elapsed < cfg.paper_ticker_cooldown:
                 return (
@@ -273,7 +273,7 @@ class TradeExecutor:
             if self._live_halted:
                 return "LIVE HALTED: session loss limit reached -- all trading suspended"
 
-            last    = self._last_traded.get(analysis.market.ticker, 0.0)
+            last    = self._last_traded.get(analysis.market.ticker, float("-inf"))
             elapsed = time.monotonic() - last
             if elapsed < cfg.live_ticker_cooldown:
                 return (
