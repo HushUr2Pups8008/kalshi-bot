@@ -876,6 +876,8 @@ def _market_for_series(ticker: str) -> KalshiMarket:
         volume=100,
         open_interest=50,
         close_time="2026-06-01T00:00:00Z",
+        status="open",
+        regime_weights={"fast": 1.0, "interpretation": 0.0, "structural": 0.0},
     )
 
 
@@ -896,7 +898,6 @@ def _analysis_for_series(ticker: str) -> SignalAnalysis:
     )
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
 @pytest.mark.parametrize(
     "ticker,expected_prefix",
     [
@@ -918,7 +919,6 @@ def test_series_prefix_extraction(ticker: str, expected_prefix: str) -> None:
     assert helper(ticker) == expected_prefix
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_fisa_replay_three_same_series_only_one_enqueues() -> None:
     """The 2026-05-01 FISA case (3 trades within 7s) must collapse to 1."""
@@ -937,6 +937,7 @@ async def test_fisa_replay_three_same_series_only_one_enqueues() -> None:
         ),
         logger=logger,
         is_paper_mode=True,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
     tickers = [
@@ -959,7 +960,6 @@ async def test_fisa_replay_three_same_series_only_one_enqueues() -> None:
     )
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_cross_series_burst_does_not_interfere() -> None:
     """Different series prefixes within the window must both enqueue."""
@@ -978,6 +978,7 @@ async def test_cross_series_burst_does_not_interfere() -> None:
         ),
         logger=logger,
         is_paper_mode=True,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
     await task.process_fast_lane_result(_analysis_for_series("KXFISAEXTEND-26APR-MAY01"))
@@ -989,7 +990,6 @@ async def test_cross_series_burst_does_not_interfere() -> None:
     ), "no series_correlation_in_window SKIPPED expected for cross-series traffic"
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_window_expiry_allows_second_same_series_candidate(monkeypatch) -> None:
     """Same series, second candidate arriving after the window has expired.
@@ -1022,6 +1022,7 @@ async def test_window_expiry_allows_second_same_series_candidate(monkeypatch) ->
         ),
         logger=logger,
         is_paper_mode=True,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
     await task.process_fast_lane_result(_analysis_for_series("KXFISAEXTEND-26APR-MAY01"))
@@ -1033,7 +1034,6 @@ async def test_window_expiry_allows_second_same_series_candidate(monkeypatch) ->
     assert queue.qsize() == 2, "post-window same-series candidate must enqueue"
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_window_override_zero_disables_guard(monkeypatch) -> None:
     """`cfg.series_correlation_window_seconds = 0` must disable the guard entirely."""
@@ -1055,6 +1055,7 @@ async def test_window_override_zero_disables_guard(monkeypatch) -> None:
         ),
         logger=logger,
         is_paper_mode=True,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
     for ticker in (

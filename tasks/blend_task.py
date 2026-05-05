@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import math
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable, Protocol
@@ -147,6 +148,12 @@ class BlendTask:
             cfg.is_paper_trading if is_paper_mode is None else is_paper_mode
         )
         self._now = now if now is not None else lambda: datetime.now(UTC)
+        # PROFIT-EXEC-002 series-correlation guard state. Maps series prefix
+        # (e.g. "KXFISAEXTEND") to the `time.monotonic()` value at which a
+        # candidate from that series was last successfully enqueued. The
+        # guard suppresses subsequent candidates from the same prefix
+        # within `cfg.series_correlation_window_seconds`.
+        self._recent_series_enqueues: dict[str, float] = {}
 
     async def process_fast_lane_result(
         self,
@@ -189,6 +196,22 @@ class BlendTask:
             blend_result.trade_blocked_reason
             or readiness.trade_blocked_reason
         )
+
+        # PROFIT-EXEC-002 series-correlation guard. Only fires if no upstream
+        # block already exists; the first candidate in a same-series burst
+        # still trades, subsequent ones within the configured window are
+        # suppressed via the OBS-003 SKIPPED stream.
+        series_prefix = _series_prefix(ticker)
+        if trade_blocked_reason is None:
+            window = cfg.series_correlation_window_seconds
+            if window > 0:
+                last_enqueued_ts = self._recent_series_enqueues.get(series_prefix)
+                if (
+                    last_enqueued_ts is not None
+                    and time.monotonic() - last_enqueued_ts < window
+                ):
+                    trade_blocked_reason = "series_correlation_in_window"
+
         evidence_ids = _evidence_ids_for_blend(
             recent_records=recent_records,
             trigger_evidence_id=(fast_lane_result.signal_meta or {}).get("trigger_evidence_id"),
@@ -231,6 +254,11 @@ class BlendTask:
             await self._trading_queue.put(candidate)
         except Exception as exc:
             raise QueueInsertionError(f"failed to enqueue {ticker}: {exc}") from exc
+
+        # PROFIT-EXEC-002: record this enqueue as the latest for the series
+        # prefix so subsequent same-series candidates within the window
+        # are suppressed.
+        self._recent_series_enqueues[series_prefix] = time.monotonic()
 
         return BlendTaskResult(
             market_ticker=ticker,
@@ -514,6 +542,19 @@ def _trade_candidate(
         signal_meta=signal_meta,
         readiness_decision=readiness,
     )
+
+
+def _series_prefix(ticker: str) -> str:
+    """PROFIT-EXEC-002 — extract the Kalshi series prefix from a ticker.
+
+    Splits on `-` and returns the first component. Examples:
+    - `KXFISAEXTEND-26APR-MAY01` → `KXFISAEXTEND`
+    - `KXMOCTRUMP25-26-APR24` → `KXMOCTRUMP25`
+    - `KXTRUMPIRAN-26MAY01` → `KXTRUMPIRAN`
+    """
+    if not ticker:
+        return ""
+    return ticker.split("-", 1)[0]
 
 
 def _regime_weights(market: KalshiMarket) -> dict[str, float]:
