@@ -6,6 +6,98 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.30.0] - 2026-05-08
+
+### Added (PROFIT-PHASE2-001 — Wave-1 base stack post-soak deploy)
+
+Six behavioural changes shipped together at the close of the
+PROFIT-PHASE2-001 governance shadow-soak (2026-05-01 → 2026-05-08
+under §8.5.1 early-close, per [`docs/governance/PROFIT-PHASE2-001-early-close-criteria.md`](docs/governance/PROFIT-PHASE2-001-early-close-criteria.md)).
+Pre-deploy validation per the rehearsal checklist
+[`docs/governance/post-soak-close-rehearsal-checklist.md`](docs/governance/post-soak-close-rehearsal-checklist.md).
+
+#### PROFIT-OBS-005 — cooldown sentinel-default fix
+
+Bug: `Executor._validate()` `_last_traded.get(...)` returned `0.0` for
+never-traded tickers, indistinguishable from "cooldown just expired."
+On a freshly-booted host `time.monotonic()` is small and `elapsed =
+monotonic - 0.0 ≈ small`, falsely tripping the cooldown gate. Fixed:
+both call sites (paper :208, live :276) now default to `float("-inf")`,
+so `elapsed = +inf` cleanly clears the gate. Spec:
+[`docs/superpowers/specs/2026-05-03-obs-005-cooldown-sentinel-fix-design.md`](docs/superpowers/specs/2026-05-03-obs-005-cooldown-sentinel-fix-design.md).
+
+#### PROFIT-MATCH-001 (B′) — token-guard refinement
+
+Match-surface tightening: B-suppression now uses substring
+containment over `ticker_lower` rather than the binary
+`_token_not_in_ticker` predicate (per spec §5.1 option a addendum).
+Pre-deploy validation:
+- `scripts/simulations/match001_tokenization_equivalence_audit.py`
+  (Codex `e5b7213`) — pinned divergence
+- `tests/test_match001_tokenization_equivalence_regression.py`
+  (`d61da2d`) — 4 archive-size-invariant assertions
+- `scripts/simulations/match001_bprime_false_negative_audit.py`
+  (Codex `8001a16`) — 0 likely false negatives
+- `scripts/simulations/match001_bprime_false_suppression_audit.py`
+  (`83a9477`) + Codex spec-parity (`b56c261`) — orthogonal to
+  existing pre-fix suppression; clean deploy
+
+#### PROFIT-OBS-003 — BlendTask SKIPPED-emission
+
+`BlendTask` now emits `SKIPPED` records carrying the gate-killing
+`reason` (G1–G6 / blender-side) and `signal_meta`. Enables Lever B G1
+attribution and the post-OBS-003 SKIPPED-stream attribution audit
+(`scripts/simulations/post_obs003_skipped_attribution_audit.py`,
+`8bd7157`).
+
+#### PROFIT-EXEC-002 — series-correlation guard
+
+Suppresses correlated-burst trades within a single market series
+within a configurable window (default 1 h, env override
+`SERIES_CORRELATION_WINDOW_SECONDS`; `=0` disables). Pre-deploy
+validation: archive replay showed 2 FISA-class paper-trade bursts
+suppressed. Spec:
+[`docs/superpowers/specs/2026-05-03-exec-002-series-correlation-guard-design.md`](docs/superpowers/specs/2026-05-03-exec-002-series-correlation-guard-design.md).
+
+#### PROFIT-GOV-003 — governance_monitor.py fix
+
+Two bugs fixed in `scripts/governance_monitor.py` per
+[`docs/superpowers/specs/2026-05-03-governance-monitor-fix-design.md`](docs/superpowers/specs/2026-05-03-governance-monitor-fix-design.md):
+the `KALSHI_HOME` env override no longer silently routes the monitor
+to a non-existent path (default-path resolution now anchors on
+`Path(__file__)`), and the type-set membership now matches the actual
+`GOVERNANCE_DECISION_*` / `GOVERNANCE_KILL_SWITCH` event prefixes plus
+the `batch_aborted` boolean field on `GOVERNANCE_CYCLE_END`.
+
+#### PROFIT-EDGE-004 Lever A.1 — source-class classifier prerequisite
+
+Classifier-only change (no archive trade-rate lift expected; Codex
+`8001a16` archive replay confirmed). Adds tokens to
+`main.py:_source_class_for_evidence` so existing official /
+specialist sources (Department of War, UN News, European Commission
+press releases, IAEA, Defense News, Breaking Defense) classify
+correctly. Prerequisite to A.1+ feed onboarding (Wave 2). Spec:
+[`docs/superpowers/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md`](docs/superpowers/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md).
+
+### Removed `pytest.mark.xfail` markers (deploy commits)
+
+The Wave-1 commit sequence removes the strict-xfail markers from the
+following pre-loaded harnesses:
+
+- `tests/test_main_pipeline.py::TestSourceClassClassifierLeverA1` (6 markers)
+- `tests/test_executor.py::TestCooldownSentinelOBS005` (5 markers)
+- `tests/test_market_matcher.py::TestSuppressionTokenGuardMATCH001` (2 markers)
+- `tests/test_blend_task.py` OBS-003 + EXEC-002 markers (10 total)
+- `tests/test_governance_monitor.py` GOV-003 markers (5 total)
+
+The Wave-2 (A.1+) and A.1+1.5 harnesses remain xfail-strict — those
+deploy in Wave 2 (≥ Day 14), not Wave 1. The two
+`_BOTHEALTH_OBS003_XFAIL_REASON` markers in
+`tests/test_obs003_skipped_stream_synthesis.py` remain xfail-strict
+pending the bothealth.sh aggregator-update step.
+
+---
+
 ## [0.29.59] - 2026-05-02
 
 ### Added (PROFIT-EDGE-004 — pipeline simulation buildout)

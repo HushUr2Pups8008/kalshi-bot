@@ -5,13 +5,11 @@ Pre-staged during the PROFIT-PHASE2-001 soak per the Lever A Stage A.1 spec
 
   1. The canonical-source distribution under the *post-fix* classifier
      (the reference implementation `classify_post_fix` in the harness).
-  2. The pre-fix → post-fix delta — every currently-misclassified canonical
-     source flips to `official` / `news` correctly.
-  3. xfail-strict against the live production classifier: when the
-     `_source_class_for_evidence` token-list patch lands, the production
-     and reference classifiers must produce identical output on every
-     canonical source. This test xfails today (production is pre-fix) and
-     xpasses post-fix.
+  2. The historical pre-fix → post-fix delta — every previously-
+     misclassified canonical source flips to `official` / `news` correctly.
+  3. Production parity: the live `_source_class_for_evidence` matches
+     the reference `classify_post_fix` on every canonical source after
+     the Wave-1 Lever A.1 deploy.
 """
 
 from __future__ import annotations
@@ -23,16 +21,56 @@ from scripts.simulations.lever_a1_classifier_counterfactual import (
     classify_post_fix,
     distribution,
 )
-from main import _source_class_for_evidence as classify_pre_fix
+from main import _source_class_for_evidence as classify_production
 
 
-_LEVER_A1_HARNESS_XFAIL_REASON = (
-    "Lever A.1 classifier patch not yet landed. Production "
-    "`main.py:_source_class_for_evidence` still uses the pre-fix token list. "
-    "Once §2.1 + §2.2 expansions land per "
-    "docs/superpowers/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md, "
-    "production and reference classifiers must produce identical output."
-)
+def classify_pre_fix(source: str) -> str:
+    """Hardcoded reference of the *pre-Wave-1* classifier.
+
+    Mirrors `main.py:_source_class_for_evidence` as it stood before the
+    PROFIT-EDGE-004 Lever A.1 token-list expansion. Used here so the
+    historical pre-fix → post-fix delta tests remain meaningful after
+    the production classifier landed.
+    """
+    source_text = (source or "").strip()
+    lower = source_text.lower()
+    if source_text.startswith("r/"):
+        return "social"
+    if lower == "price_fade" or lower.startswith("kalshi://"):
+        return "market"
+    if any(token in lower for token in (
+        ".gov",
+        "white house",
+        "state department",
+        "defense department",
+        "federal reserve",
+        "supreme court",
+        "congress",
+        "parliament",
+        "ministry",
+        "official",
+    )):
+        return "official"
+    if source_text.endswith(" - Google News") or source_text.endswith(" - BingNews"):
+        return "news"
+    if any(token in lower for token in (
+        "reuters",
+        "associated press",
+        "ap news",
+        "bbc",
+        "nyt",
+        "guardian",
+        "al jazeera",
+        "france 24",
+        "deutsche welle",
+        "defense one",
+        "foreign policy",
+        "politico",
+        "politics",
+        "just in news",
+    )):
+        return "news"
+    return "other"
 
 
 def test_post_fix_canonical_sources_match_expected_distribution():
@@ -122,15 +160,12 @@ _MISCLASSIFIED_SOURCES_TODAY: tuple[str, ...] = (
 )
 
 
-@pytest.mark.xfail(reason=_LEVER_A1_HARNESS_XFAIL_REASON, strict=True)
 @pytest.mark.parametrize("source", _MISCLASSIFIED_SOURCES_TODAY, ids=list(_MISCLASSIFIED_SOURCES_TODAY))
 def test_production_classifier_matches_reference_post_fix_for_misclassified_sources(source: str):
-    """Once the Lever A.1 patch lands, production classifier output must
+    """Post-Wave-1 Lever A.1 deploy: production classifier output must
     equal the reference post-fix classifier output for the 6 sources whose
-    pre/post outputs diverge today. The other ~20 canonical sources already
-    classify identically pre/post and would xpass today (so they cannot be
-    strict-xfail-marked)."""
-    assert classify_pre_fix(source) == classify_post_fix(source)
+    pre/post outputs diverged before the deploy."""
+    assert classify_production(source) == classify_post_fix(source)
 
 
 def test_production_already_matches_reference_for_unchanged_sources():

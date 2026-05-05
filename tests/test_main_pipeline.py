@@ -1599,12 +1599,10 @@ class TestSourceClassClassifierLeverA1:
     expansion.
     """
 
-    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
     def test_department_of_war_classifies_as_official(self):
         """`Department of War News Feed` (defense.gov RSS) must be `official`."""
         assert _source_class_for_evidence("Department of War News Feed") == "official"
 
-    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
     def test_un_news_classifies_as_official(self):
         """`UN News - Global perspective Human stories` must be `official`."""
         assert (
@@ -1612,12 +1610,10 @@ class TestSourceClassClassifierLeverA1:
             == "official"
         )
 
-    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
     def test_european_commission_press_releases_classifies_as_official(self):
         """European Commission `Press releases - RSS` must be `official`."""
         assert _source_class_for_evidence("Press releases - RSS") == "official"
 
-    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
     def test_iaea_classifies_as_official(self):
         """IAEA top-stories feed must be `official`."""
         assert (
@@ -1625,12 +1621,10 @@ class TestSourceClassClassifierLeverA1:
             == "official"
         )
 
-    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
     def test_defense_news_classifies_as_news(self):
         """Defense industry press wire must be `news` (not `other`)."""
         assert _source_class_for_evidence("Defense News") == "news"
 
-    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
     def test_breaking_defense_classifies_as_news(self):
         """Breaking Defense industry wire must be `news` (not `other`)."""
         assert _source_class_for_evidence("Breaking Defense") == "news"
