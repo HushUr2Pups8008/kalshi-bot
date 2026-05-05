@@ -2260,6 +2260,35 @@ Operator bootstrapped same-day: `launchctl bootstrap gui/$UID ~/Library/LaunchAg
 
 **Honest read 2026-05-05 (cycle 4):** Operator-side fire-time burden compressed to single-page playbooks for Day-7 + per-Wave-1-commit. Drift checks surfaced 9 MEDIUM findings across README + ROADMAP + CHANGELOG pre-staged blocks; doc-edits land in cycle 5. Failure-mode rehearsal docs cover KILL_SWITCH + Mac-Studio-dead-bot + Branch-D-fire (cycle 3); cycle 5 adds network/API outage. Backup gap closed; recurring backups firing under launchd. Key empirical finding from baselines: post-cutover Mac Studio has 0 OPPORTUNITY events through 4 days — Wave-1 regression-detection thresholds need rethinking against the actual baseline (covered cycle 5 baseline interpretation).
 
+#### 2026-05-05 cycle 5 + 6 integration — drift fixes applied + sizing-scope harnesses + plist drift audit + OpenClaw note
+
+**Cycle 5 commit `3fb09eb` (Claude) + cycle 6 commits `fa07434` + `afa1dc9` (Codex).**
+
+**Cycle 5 Claude artifacts (10):**
+- `README.md` Edit — 2026-05-05 status block above 2026-05-01 cutover entry (drift F1 closed)
+- `docs/ROADMAP.md` Edit — P3-GATE FAIL escalation cross-link + What-Changed bullet 6 + Appendix A sizing-scope ref (drift F1+F2+F3 closed)
+- `wave-2-wave-3-changelog-entries-prestaged.md` Edit — version sequence refreshed (drift F1+F2+F3 closed)
+- `2026-05-05-pre-wave1-baseline-interpretation.md` — synthesized 4 Codex baselines; flagged 0-OPPORTUNITY-post-cutover finding
+- `2026-05-05-wave-2-fire-time-per-commit-checklist.md` + `2026-05-05-wave-3-fire-time-per-commit-checklist.md` — operator playbooks for Wave-2/3 deploys
+- `2026-05-05-launchd-plist-drift-audit.md` — found `ops/launchd/` template dir cycle 5 missed; flagged dual source-of-truth (resolved cycle 7)
+- `2026-05-05-network-api-outage-runbook.md` — 5-category triage (Internet/Kalshi-API/Ollama/RSS/Reddit-403)
+- `2026-05-05-implementation-contract-cycle-4-5-review.md` — 0 invariant violations across cycles 1-5
+
+**Cycle 6 Codex artifacts (10 + 2 deviations):**
+- `scripts/pre_wave1_llm_call_budget_projection.py` — 352 calls/day at 90-min cadence projection
+- `scripts/wave2_fire_time_smoke.sh` + `scripts/wave3_fire_time_smoke.sh` — fire-time smoke wrappers
+- `scripts/macbook_import_disposition_audit.sh` — 47 files / 156MB; recommendation `keep_through_wave1_close_then_archive`
+- `scripts/launchd_plist_drift_audit.sh` — template-render-and-compare for `ops/launchd/` governance plists; live: 3 plists pass
+- 5 strict-xfail harnesses (db_snapshot_backup, calibration_drift_detection, governance_parse_error, kill_switch_path, prompt_template A5-A8)
+- Cycle-6 deviation: `2026-05-05-openclaw-orchestrator-integration-note.md` (OpenClaw as ops cockpit; 4-phase rollout deferred to post-Wave-1) + `_archive/studies/future_plans.md` 2-line forward-pointer
+
+**Live empirical updates (Codex 2026-05-05 cycle 6):**
+- LLM call budget projection: 352.0 calls/day at 90-min cadence vs 22 calls/cycle observed (>30× headroom against PHASE2-002 envelope)
+- Plist drift: `ops/launchd/com.kalshi.governance.{fast,deep}.plist.template` matched installed; `scripts/launchd/com.kalshi.db-backup.plist` matched installed (3 of 6 plists have repo source-of-truth; 3 operator-managed)
+- MacBook import disposition: 149MB archived dir; keep through Wave-1 close, then compress + rotate
+
+**Honest read 2026-05-05 (cycle 5+6):** All cycle-4 drift findings closed. 0-OPPORTUNITY-post-cutover finding reframes Wave-1 regression detection (absolute thresholds, not ratios). Plist drift audit surfaced cycle-5 directory-discovery gap (missed pre-existing `ops/launchd/`); cycle 7 consolidates the dual source-of-truth. Operator-runnable smoke wrappers for Wave-2/3 land. OpenClaw integration note pre-stages future ops-cockpit work without committing to deployment.
+
 ---
 
 ### PROFIT-DOSSIER-001
