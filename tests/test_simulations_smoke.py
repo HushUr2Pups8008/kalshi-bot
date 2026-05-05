@@ -548,12 +548,7 @@ def test_dossier_creation_main_runs_clean(capsys, tmp_path):
 
 
 def test_match_audit_kxpsl_does_not_match_geo_news():
-    """Cross-contamination guard: ICE-funding and Iran headlines must not
-    surface KXPSL (cricket) in the top-3. Sport-blocklist filters KXPSL at
-    series-discovery in production, but the matcher's geo + named-entity
-    gates should *also* keep cricket out of geo-news top matches based on
-    semantic similarity alone — a regression in either direction is worth
-    catching here."""
+    """KXPSL can surface only for its canonical cricket anchor per MATCH-001 §8."""
     reports = match_score_audit.run()
     geo_event_names = {
         "Event 1: KXSBUDGETRES-APR28 (ICE funding)",
@@ -561,10 +556,18 @@ def test_match_audit_kxpsl_does_not_match_geo_news():
         "Event 3: KXTRUMPIRAN (Trump dispatching)",
         "Event 5: KXTRUMPIRAN (talks stall)",
     }
+    kxpsl_allowlist = {
+        "Event 4: KXPSL-PZA (cricket — should be sport-blocked)",
+    }
     for r in reports:
+        top_tickers = {t for t, _ in r.top_3_matches}
+        if r.event_name in kxpsl_allowlist:
+            assert "KXPSL-26-PZA" in top_tickers, (
+                f"{r.event_name}: canonical KXPSL anchor missing from top-3 ({top_tickers})"
+            )
+            continue
         if r.event_name not in geo_event_names:
             continue
-        top_tickers = {t for t, _ in r.top_3_matches}
         assert "KXPSL-26-PZA" not in top_tickers, (
             f"{r.event_name}: KXPSL leaked into top-3 ({top_tickers}) — "
             "cricket market scored against geo-news headline, regression"
