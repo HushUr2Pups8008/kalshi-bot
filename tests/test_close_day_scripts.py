@@ -10,6 +10,7 @@ from scripts import calibration_drift_wiring_audit as calibration_audit
 from scripts import governance_decision_review as review
 from scripts import llm_throughput_audit as llm_audit
 from scripts import parse_error_retroactive_audit as parse_audit
+from scripts import pre_wave1_llm_call_budget_projection as llm_projection
 from scripts import pre_wave1_cooldown_distribution_audit as cooldown_audit
 from scripts import pre_wave1_opportunity_age_audit as opportunity_age_audit
 from scripts import pre_wave1_skipped_rate_baseline as skipped_rate
@@ -227,6 +228,30 @@ def test_llm_throughput_audit_summarizes_latency(tmp_path: Path):
     assert report["cycles"]["c1"]["attempted_calls"] == 2
 
 
+def test_pre_wave1_llm_call_budget_projection_uses_cadence_and_budget():
+    throughput = {
+        "input_path": "fixture.jsonl",
+        "attempted_calls": 6,
+        "latency_ms": {"median": 1000, "p90": 3000},
+        "cycles": {
+            "c1": {"attempted_calls": 2, "latency_ms": {"median": 1000}},
+            "c2": {"attempted_calls": 4, "latency_ms": {"median": 3000}},
+        },
+    }
+
+    report = llm_projection.project(
+        throughput,
+        cadence_minutes=90,
+        llm_call_budget_per_day=96,
+    )
+
+    assert report["observed_calls_per_cycle"] == 3
+    assert report["projection"]["cycles_per_day"] == 16
+    assert report["projection"]["calls_per_day"] == 48
+    assert report["projection"]["budget_utilization_pct"] == 50
+    assert report["projection"]["median_wall_clock_seconds_per_day"] == 48
+
+
 def test_source_class_evolution_audit_groups_by_day(tmp_path: Path):
     log = tmp_path / "trades.jsonl"
     records = [
@@ -423,3 +448,44 @@ def test_db_backup_health_audit_checks_archive_and_database_paths():
     assert "data/evidence_store.db" in script
     assert "mac_archive" in script
     assert "--max-age-hours" in script
+
+
+def test_wave2_fire_time_smoke_bundles_branch_c_watch_checks():
+    script = (REPO_ROOT / "scripts/wave2_fire_time_smoke.sh").read_text(encoding="utf-8")
+
+    assert "tests/test_branch_c_feed_selection_rubric.py" in script
+    assert "tests/test_wave2_preload_harnesses.py" in script
+    assert "calibration_drift_wiring_audit.py" in script
+    assert "operator_alert_routing_audit.sh" in script
+    assert "24h watch" in script
+
+
+def test_wave3_fire_time_smoke_bundles_lever_b_and_c_variants():
+    script = (REPO_ROOT / "scripts/wave3_fire_time_smoke.sh").read_text(encoding="utf-8")
+
+    assert "--lever-b" in script
+    assert "--lever-c" in script
+    assert "tests/test_lever_b_g1_floor_lock.py" in script
+    assert "tests/test_lever_c_cross_series_correlation.py" in script
+    assert "CALIBRATION_CHECK" in script
+    assert "KILL_SWITCH" in script
+
+
+def test_macbook_import_disposition_audit_reports_keep_archive_inputs():
+    script = (REPO_ROOT / "scripts/macbook_import_disposition_audit.sh").read_text(encoding="utf-8")
+
+    assert "mac_archive/macbook_2026-05-01_import" in script
+    assert "repo_reference_count" in script
+    assert "db_count" in script
+    assert "jsonl_count" in script
+    assert "keep_through_wave1_close_then_archive" in script
+
+
+def test_launchd_plist_drift_audit_compares_templates_and_db_backup_plist():
+    script = (REPO_ROOT / "scripts/launchd_plist_drift_audit.sh").read_text(encoding="utf-8")
+
+    assert "ops/launchd/*.plist.template" in script
+    assert "com.kalshi.db-backup" in script
+    assert "@REPO_ROOT@" in script
+    assert "cmp -s" in script
+    assert "--install-dir" in script

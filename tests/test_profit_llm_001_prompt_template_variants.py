@@ -19,7 +19,7 @@ def _variants():
 
 @pytest.mark.xfail(reason=_XFAIL_REASON, strict=True)
 def test_profit_llm_001_prompt_variants_define_a1_to_a4_keys():
-    assert set(_variants()) == {"A1", "A2", "A3", "A4"}
+    assert {"A1", "A2", "A3", "A4"}.issubset(set(_variants()))
 
 
 @pytest.mark.xfail(reason=_XFAIL_REASON, strict=True)
@@ -49,3 +49,39 @@ def test_profit_llm_001_a4_worked_example_icl_present():
 
     assert "example" in variant
     assert "json" in variant
+
+
+@pytest.mark.xfail(reason=_XFAIL_REASON, strict=True)
+def test_profit_llm_001_a5_compact_json_only_variant_present():
+    variant = _variants()["A5"].lower()
+
+    assert "json" in variant
+    assert "compact" in variant or "concise" in variant
+    assert "no prose" in variant or "json only" in variant
+
+
+@pytest.mark.xfail(reason=_XFAIL_REASON, strict=True)
+def test_profit_llm_001_a6_resolution_criteria_variant_present():
+    variant = _variants()["A6"].lower()
+
+    assert "resolution" in variant
+    assert "criteria" in variant
+    assert "market" in variant
+
+
+@pytest.mark.xfail(reason=_XFAIL_REASON, strict=True)
+def test_profit_llm_001_a7_probability_delta_variant_present():
+    variant = _variants()["A7"].lower()
+
+    assert "probability" in variant
+    assert "delta" in variant or "movement" in variant
+    assert "confidence" in variant
+
+
+@pytest.mark.xfail(reason=_XFAIL_REASON, strict=True)
+def test_profit_llm_001_a8_no_effect_default_variant_present():
+    variant = _variants()["A8"].lower()
+
+    assert "no effect" in variant or "none" in variant
+    assert "direct" in variant
+    assert "causal" in variant or "causally" in variant
