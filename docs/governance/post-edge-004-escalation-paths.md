@@ -16,9 +16,9 @@ Activates if the modal scenario from the unified Wave-1+2 forecast plays out:
 2. Wave-2 Lever A.1 lands (Day 13). Silent; no archive lift.
 3. Wave-2 Lever A.1+ lands (Day 14+). Either:
    - Branch A (passive Google News observation): no VitalLaw / legal-niche surfacing in 14 d
-   - Branch B (active VitalLaw direct RSS): probe fails or paywall-locks
    - Branch C (open-RSS legal analogues): deploy completes but conversion < 5 % over 14 d
    - Option-A parallel (specialist-geopolitics): deploy completes but conversion < 5 % over 14 d
+   (Branch B — direct VitalLaw RSS — was dropped 2026-05-05 per Codex probe `a45c06c`; not a feasible path.)
 4. Wave-3 Lever B (G1=0.04) lands (Day 28+). Predicted lift +1-2 PAPER_TRADE / 14 d; insufficient to reach 5 %.
 5. Wave-3 Lever C (cross-series) lands (Day 35+). Risk-control only; +0 PAPER_TRADE.
 

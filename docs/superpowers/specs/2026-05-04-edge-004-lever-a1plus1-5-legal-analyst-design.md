@@ -26,7 +26,7 @@ The 2026-05-04 per-source audit revealed that `VitalLaw.com` (legal/regulatory a
 | **Branch C** (fallback) | onboard open-RSS analogues (Lawfare / Just Security / SCOTUSblog / Politico Legal) | only if Branch A produces 0 legal-niche PAPER_TRADE in 14 d |
 | **Branch D** (escalation) | PROFIT-LLM-001 / P4-GATE Appendix A | if Branch C stalls (≥ 2 deploy attempts) |
 
-This spec (§2 / §3) covers Branch B and Branch C. Branch A requires no code change and is the operator's first response — covered in `docs/governance/post-soak-close-rehearsal-checklist.md` §7.
+This spec (§2 / §3) covers Branch C only (open-RSS analogue onboarding). Branch B (direct VitalLaw RSS) was empirically dropped 2026-05-05 per Codex's RSS probe (`docs/governance/2026-05-05-vitallaw-direct-rss-probe.md`). Branch A requires no code change and is the operator's first response — covered in `docs/governance/post-soak-close-rehearsal-checklist.md` §7.
 
 This spec proposes a parallel A.1+1 deploy track — **option-B: legal-analyst onboarding** — covering vital_law-niche analogues. Operator picks at deploy time whether option-A (geopolitics) or option-B (legal-analyst) lands first, based on probe-time tractability (paywall / rate-limit / robots.txt friction). Note: per Branch A above, deploy may not be required at all if Google News surfaces VitalLaw during Wave-1 close.
 

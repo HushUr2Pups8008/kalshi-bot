@@ -1,7 +1,7 @@
-# EDGE-004 closure-path TL;DR — v2 (2026-05-04 refresh)
+# EDGE-004 closure-path TL;DR — v2.2 (2026-05-05 refresh)
 
 **Status:** operator-facing one-pager. Companion to the dense `2026-05-03-edge-004-lever-menu-design.md` lever menu and the per-lever specs.
-**Drafted:** 2026-05-03; **last refresh:** 2026-05-04 (post-per-source audit + B' orthogonality + A.1+1.5 option-B addition + day-4 confirmation)
+**Drafted:** 2026-05-03; **last refresh:** 2026-05-05 (Branch B dropped per Codex direct-RSS probe `a45c06c`; legacy option-A/B framing collapsed)
 
 The full lever menu spec is correct but dense. This is the punchline.
 
@@ -36,36 +36,28 @@ Followed by escalation to **PROFIT-LLM-001** or **P4-GATE Appendix A** if both A
 | E | multi-source corroboration | empirically infeasible (closed) | n/a |
 | F | P4-GATE Appendix A market-mix | open question; ROADMAP-tracked | out of EDGE-004 scope |
 
-## A.1+ decision point (REVISED v2.1: 4-branch tree post-aggregator-forensics)
+## A.1+ decision point (v2.2: 3-branch tree post-Codex-direct-RSS-probe)
 
-The 2026-05-04 aggregator-path forensics (`docs/governance/2026-05-04-vitallaw-aggregator-path-forensics.md`) revealed that the load-bearing PAPER_TRADE-producing source (`VitalLaw.com`) came via **Google News RSS**, not a direct feed. Google News query family is **already active** in canonical config (`config.py:DISABLED_SOURCE_FAMILIES` — re-enabled 2026-04-23). Therefore A.1+ is now a 4-branch tree with the FIRST branch requiring no code change:
+The 2026-05-04 aggregator-path forensics + Codex's 2026-05-05 direct-RSS probe (`a45c06c`) collapsed the decision tree to 3 branches: VitalLaw came via Google News RSS (active in current config), and `vitallaw.com` has no public direct-RSS endpoint.
 
 | branch | action | when |
 |---|---|---|
-| **A** (passive) | observe Wave-1 close 14 d; Google News query family already deployed | Day-14 default |
-| ~~**B** (active)~~ | ~~probe `vitallaw.com` direct RSS~~ | **DROPPED 2026-05-05 — Codex direct-RSS probe found no public feed** |
-| **C** (fallback) | onboard Lawfare / Just Security / SCOTUSblog / Politico Legal | only if A surfaces 0 legal-niche PAPER_TRADE in 14 d |
+| **A** (passive) | observe Wave-1 close 14 d; Google News query family already deployed (`config.py:DISABLED_SOURCE_FAMILIES` — re-enabled 2026-04-23) | Day-14 default; NO code change |
+| **C** (active fallback) | onboard Lawfare / Just Security / SCOTUSblog / Politico Legal | only if A surfaces 0 legal-niche PAPER_TRADE in 14 d |
 | **option-A** (parallel) | specialist-geopolitics per A.1+ spec §3.1 (war on the rocks / CSIS / ISW / CFR / Atlantic Council) | parallel to C if operator pursues breadth |
 
-The legacy "option-A vs option-B" framing is preserved below for harness-naming compatibility. The 4-branch tree above supersedes it as the actual operator decision-point at Day-14:
+(Branch B — direct VitalLaw RSS onboarding — was dropped 2026-05-05 per Codex `a45c06c`. Branch D — escalation to PROFIT-LLM-001 / P4-GATE Appendix A — fires only after A + C both stall ≥ 2 deploy attempts.)
 
-| dimension | option-A: specialist-geopolitics | option-B: legal-analyst (recommended) |
-|---|---|---|
-| empirical PAPER_TRADE record | 0/18 sub-niche conversion | 3/3 from VitalLaw on 13-d archive |
-| candidate set | war on the rocks / CSIS / ISW / CFR / Atlantic Council | VitalLaw / Lawfare / Just Security / SCOTUSblog / Politico Legal / Reuters Legal |
-| deploy friction | low (open RSS) | medium-to-high (paywall risk on VitalLaw / Politico) |
-| expected lift | bounded above by existing geopolitics-sub-niche conversion ≈ 0 | conditional on accessibility — if VitalLaw probe succeeds, **load-bearing-source restoration alone may close EDGE-004** |
-| harness | `tests/test_lever_a1plus_feed_config.py::test_at_least_one_specialist_analyst_url_in_rss_feeds` | `tests/test_lever_a1plus_feed_config.py::test_vital_law_or_legal_analyst_feed_present_post_a1plus` |
+Empirical priority within the legal-analyst class (Branch C) per Codex's 2026-05-04 probe-order audit (`5e5849a`): VitalLaw > Just Security > Lawfare > SCOTUSblog > Politico Legal > Reuters Legal — ranked by historical PAPER_TRADE concentration. VitalLaw is direct-RSS infeasible (`a45c06c`), so the deployed sub-niche order at Day-14 (if Branch A fails) is: Just Security → Lawfare → SCOTUSblog → Politico Legal.
 
-**Default recommendation: option-B first** (highest empirical EV); fall through to option-A if all option-B candidates are paywall-locked at probe time.
-
-## Sequencing-history (4 revisions tracked in lever-menu spec, now 5 with v2)
+## Sequencing-history (6 revisions in lever-menu spec)
 
 1. Original draft: A → D → B → E → C
 2. Post-Lever-D audit: A → B → E → C → D (D demoted)
 3. Post-Lever-E audit: A → B → C → D (E closed)
 4. Post-Lever-A.1 archive replay: A.1 (prerequisite) → A.1+ → B → C → D
-5. **Post-per-source audit (2026-05-04):** A.1 → A.1+ {option-A | option-B-recommended} → B → C → D
+5. Post-per-source audit (2026-05-04): A.1 → A.1+ {option-A | option-B} → B → C → D
+6. **Post-Codex-direct-RSS-probe (2026-05-05):** A.1 → A.1+ {Branch A passive | Branch C fallback | option-A parallel} → B → C → D (Branch B dropped)
 
 ## What "closure" looks like
 
