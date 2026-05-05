@@ -273,6 +273,11 @@ class TestFindCandidates:
 
     @pytest.mark.asyncio
     async def test_match_diagnostics_flags_single_named_entity_overlap_as_low_quality(self, matcher):
+        # PROFIT-MATCH-001 (B') note: under the post-fix predicate, this
+        # candidate is also SUPPRESSED — `trump` is the only matched token
+        # and it sits inside the ticker `KXTRUMP-25A` (no supporting non-
+        # ticker tokens). MATCH_DIAGNOSTIC still emits with the heuristic
+        # flags; the candidate just no longer survives into `results`.
         markets = [
             _make_market("KXTRUMP-25A", "Will Trump order military action under the 25th Amendment this year?"),
         ]
@@ -283,9 +288,8 @@ class TestFindCandidates:
             from analysis import market_matcher as mm
             calls = []
             mp.setattr(mm.trade_log, "log_match_diagnostic", lambda **kwargs: calls.append(kwargs))
-            results = await matcher.find_candidates(news)
+            await matcher.find_candidates(news)
 
-        assert results
         assert len(calls) == 1
         payload = calls[0]
         assert payload["low_match_quality"] is True
@@ -861,7 +865,6 @@ class TestSuppressionTokenGuardMATCH001:
     blocks suppression (the asymmetry fix).
     """
 
-    @pytest.mark.xfail(reason=_MATCH001_XFAIL_REASON, strict=True)
     def test_post_fix_supporting_non_ticker_token_symbol_exists(self):
         """Post-fix marker — `_has_supporting_non_ticker_token` must appear in source."""
         src = _matcher_source_text()
@@ -870,7 +873,6 @@ class TestSuppressionTokenGuardMATCH001:
             "`_has_supporting_non_ticker_token` in analysis/market_matcher.py"
         )
 
-    @pytest.mark.xfail(reason=_MATCH001_XFAIL_REASON, strict=True)
     def test_post_fix_drops_binary_token_not_in_ticker_predicate(self):
         """Pre-fix marker — `_token_not_in_ticker` must be removed once B' lands.
 
