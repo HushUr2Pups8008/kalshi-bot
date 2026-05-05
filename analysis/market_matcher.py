@@ -625,7 +625,20 @@ class MarketMatcher:
 
             flag_set = set(heuristic_flags)
             ticker_lower = market.ticker.lower()
-            _token_not_in_ticker = not any(token in ticker_lower for token in overlap)
+            # PROFIT-MATCH-001 (B') asymmetry fix: pre-fix predicate blocked
+            # suppression whenever ANY overlap token sat in the ticker — which
+            # preserved every entity-prefix-ticker match (e.g. `trump` ↔
+            # `KXMOCTRUMP25`) regardless of off-topic headlines. Post-fix:
+            # suppression is only blocked when at least ONE matched token is
+            # OUTSIDE the ticker text. Pure entity-in-ticker matches now
+            # suppress; coherent topic matches with non-ticker support tokens
+            # still survive. Substring containment over `ticker_lower` per
+            # spec §5.1 (NOT set-difference against `_tokenize(ticker)`, which
+            # fails because Kalshi tickers tokenize to a single hyphenated
+            # string).
+            _has_supporting_non_ticker_token = any(
+                token not in ticker_lower for token in overlap
+            )
             # Path A (original): near-threshold score + structural weakness.
             # Catches fragile matches that barely passed the score floor.
             _near_threshold_weak = (
@@ -644,7 +657,7 @@ class MarketMatcher:
             )
             _meets_suppression_criteria = (
                 bool(heuristic_flags)
-                and _token_not_in_ticker
+                and not _has_supporting_non_ticker_token
                 and (_near_threshold_weak or _pure_single_entity)
             )
 
