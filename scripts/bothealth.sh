@@ -179,19 +179,23 @@ if [[ -d "$GOV_LOG_DIR" ]]; then
         DEC_TOTAL=$(printf '%s\n' "$ALL_RECS" | grep -c '"GOVERNANCE_DECISION"' || true)
         APPLIED=$(printf '%s\n' "$ALL_RECS" | awk '/"GOVERNANCE_DECISION"/ && /"applied": true/' | wc -l | awk '{print $1}')
         KS=$(printf '%s\n' "$ALL_RECS" | grep -c '"KILL_SWITCH"' || true)
+        VE=$(printf '%s\n' "$ALL_RECS" | grep -c '"VALIDATION_ERROR"' || true)
+        BATCH_ABORTED=$(printf '%s\n' "$ALL_RECS" | awk '/"GOVERNANCE_CYCLE_END"/ && /"batch_aborted": true/' | wc -l | awk '{print $1}')
         PARSE_ERR=$(printf '%s\n' "$ALL_RECS" | grep -c '"GOVERNANCE_DECISION_PARSE_ERROR"' || true)
         printf 'cycles_completed     : %s\n' "$CYCLE_END_TOTAL" >>"$REPORT"
         printf 'decisions            : %s\n' "$DEC_TOTAL" >>"$REPORT"
         printf 'applied=true (must=0): %s\n' "$APPLIED" >>"$REPORT"
         printf 'KILL_SWITCH (must=0) : %s\n' "$KS" >>"$REPORT"
+        printf 'VALIDATION_ERROR (must=0): %s\n' "$VE" >>"$REPORT"
+        printf 'batch_aborted (must=0): %s\n' "$BATCH_ABORTED" >>"$REPORT"
         printf 'PARSE_ERROR          : %s\n' "$PARSE_ERR" >>"$REPORT"
     else
         printf '(no governance audit files yet)\n' >>"$REPORT"
-        APPLIED=0; KS=0
+        APPLIED=0; KS=0; VE=0; BATCH_ABORTED=0
     fi
 else
     printf '(governance log dir does not exist)\n' >>"$REPORT"
-    APPLIED=0; KS=0
+    APPLIED=0; KS=0; VE=0; BATCH_ABORTED=0
 fi
 codeblock_end
 
@@ -249,8 +253,8 @@ section "Verdict"
 {
     if (( BOT_ALIVE == 0 )); then
         VERDICT="**RED** — bot not running"
-    elif (( APPLIED > 0 || KS > 0 )); then
-        VERDICT="**RED** — governance shadow-mode invariant violated (applied=$APPLIED, KILL_SWITCH=$KS)"
+    elif (( APPLIED > 0 || KS > 0 || VE > 0 || BATCH_ABORTED > 0 )); then
+        VERDICT="**RED** — governance shadow-mode invariant violated (applied=$APPLIED, KILL_SWITCH=$KS, VALIDATION_ERROR=$VE, batch_aborted=$BATCH_ABORTED)"
     elif (( EXC_COUNT > 5 )); then
         VERDICT="**YELLOW** — $EXC_COUNT distinct exception classes; review section 6"
     else

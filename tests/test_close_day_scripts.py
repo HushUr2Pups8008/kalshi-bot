@@ -10,6 +10,10 @@ from scripts import calibration_drift_wiring_audit as calibration_audit
 from scripts import governance_decision_review as review
 from scripts import llm_throughput_audit as llm_audit
 from scripts import parse_error_retroactive_audit as parse_audit
+from scripts import pre_wave1_cooldown_distribution_audit as cooldown_audit
+from scripts import pre_wave1_opportunity_age_audit as opportunity_age_audit
+from scripts import pre_wave1_skipped_rate_baseline as skipped_rate
+from scripts import pre_wave1_trade_rate_per_ticker_baseline as ticker_rate
 from scripts import test_coverage_audit as coverage_audit
 from scripts import source_class_evolution_audit as source_audit
 
@@ -254,6 +258,73 @@ def test_parse_error_retroactive_audit_groups_root_causes(tmp_path: Path):
     assert report["root_causes"]["json_decode"] == 1
 
 
+def test_pre_wave1_skipped_rate_baseline_counts_denominator(tmp_path: Path):
+    log = tmp_path / "trades.jsonl"
+    rows = [
+        {"type": "OPPORTUNITY", "ticker": "KX1", "ts": "2026-05-05T00:00:00Z"},
+        {"type": "SKIPPED", "ticker": "KX1", "reason": "G1_blended_confidence", "ts": "2026-05-05T00:01:00Z"},
+        {"type": "PAPER_TRADE", "ticker": "KX2", "ts": "2026-05-05T00:02:00Z"},
+    ]
+    log.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    report = skipped_rate.analyze(log)
+
+    assert report["total"]["opportunity"] == 1
+    assert report["total"]["skipped"] == 1
+    assert report["total"]["paper_trade"] == 1
+    assert report["total"]["skipped_rate_pct"] == 33.3
+    assert report["skip_reasons"]["G1_blended_confidence"] == 1
+
+
+def test_pre_wave1_opportunity_age_audit_uses_available_age_fields(tmp_path: Path):
+    log = tmp_path / "trades.jsonl"
+    rows = [
+        {"type": "OPPORTUNITY", "age_seconds": 60, "ts": "2026-05-05T00:00:00Z"},
+        {"type": "MATCH_DIAGNOSTIC", "age_at_match_seconds": 3600, "ts": "2026-05-05T00:01:00Z"},
+        {"type": "EARLY_FRESH_PASS", "age_seconds": 120, "ts": "2026-05-05T00:02:00Z"},
+    ]
+    log.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    report = opportunity_age_audit.analyze(log)
+
+    assert report["event_counts"]["OPPORTUNITY"] == 1
+    assert report["age_seconds"]["count"] == 3
+    assert report["age_seconds"]["max"] == 3600
+    assert "Opportunity Age Audit" in opportunity_age_audit.render_markdown(report)
+
+
+def test_pre_wave1_cooldown_distribution_audit_extracts_cooldown_reasons(tmp_path: Path):
+    log = tmp_path / "trades.jsonl"
+    rows = [
+        {"type": "SKIPPED", "reason": "paper cooldown: last trade 0.5h ago (cooldown=4h)", "ticker": "KX1", "ts": "2026-05-05T00:00:00Z"},
+        {"type": "SKIPPED", "reason": "G1_blended_confidence", "ticker": "KX2", "ts": "2026-05-05T00:01:00Z"},
+    ]
+    log.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    report = cooldown_audit.analyze(log)
+
+    assert report["cooldown_skips"] == 1
+    assert report["by_ticker"]["KX1"] == 1
+    assert report["cooldown_reason_counts"]["paper cooldown"] == 1
+
+
+def test_pre_wave1_trade_rate_per_ticker_baseline_counts_paper_trades(tmp_path: Path):
+    log = tmp_path / "trades.jsonl"
+    rows = [
+        {"type": "PAPER_TRADE", "ticker": "KX1", "ts": "2026-05-05T00:00:00Z"},
+        {"type": "PAPER_TRADE", "ticker": "KX1", "ts": "2026-05-05T02:00:00Z"},
+        {"type": "PAPER_TRADE", "ticker": "KX2", "ts": "2026-05-06T00:00:00Z"},
+    ]
+    log.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    report = ticker_rate.analyze(log)
+
+    assert report["total_paper_trades"] == 3
+    assert report["tickers"][0]["ticker"] == "KX1"
+    assert report["tickers"][0]["trade_count"] == 2
+    assert report["tickers"][0]["trades_per_day"] == 2.0
+
+
 def test_test_coverage_audit_summarizes_coverage_json(tmp_path: Path):
     payload = {
         "totals": {"covered_lines": 75, "num_statements": 100, "percent_covered": 75.0},
@@ -297,6 +368,8 @@ def test_bothealth_post_deploy_mode_references_wave1_smoke():
     assert "--post-deploy" in script
     assert "wave1_post_deploy_smoke.sh" in script
     assert "Wave-1 post-deploy smoke" in script
+    assert "VALIDATION_ERROR" in script
+    assert "batch_aborted" in script
 
 
 def test_pre_soak_close_branch_backup_dry_run_skips_dirty_tree_abort():
@@ -322,3 +395,31 @@ def test_release_tag_inventory_reports_local_and_origin_tags():
     assert "refs/tags" in script
     assert "git ls-remote --tags origin" in script
     assert "commit subject" in script
+
+
+def test_wave1_fire_time_smoke_bundles_day7_and_commit1_checks():
+    script = (REPO_ROOT / "scripts/wave1_fire_time_smoke.sh").read_text(encoding="utf-8")
+
+    assert "check_soak_invariant.sh" in script
+    assert "wave1_post_deploy_smoke.sh" in script
+    assert "TestCooldownSentinelOBS005" in script
+    assert "--post-deploy" in script
+
+
+def test_operator_alert_routing_audit_scans_safety_events_and_surfaces_report():
+    script = (REPO_ROOT / "scripts/operator_alert_routing_audit.sh").read_text(encoding="utf-8")
+
+    assert "KILL_SWITCH" in script
+    assert "VALIDATION_ERROR" in script
+    assert "batch_aborted" in script
+    assert "osascript" in script
+    assert "operator_alert_routing_" in script
+
+
+def test_db_backup_health_audit_checks_archive_and_database_paths():
+    script = (REPO_ROOT / "scripts/db_backup_health_audit.sh").read_text(encoding="utf-8")
+
+    assert "data/paper_trades.db" in script
+    assert "data/evidence_store.db" in script
+    assert "mac_archive" in script
+    assert "--max-age-hours" in script
