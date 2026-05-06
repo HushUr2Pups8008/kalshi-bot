@@ -23,6 +23,14 @@ If the operator deploys Wave-1 in stages (one per day per the rehearsal checklis
 
 Insert ABOVE the current `## [0.29.59] - 2026-05-02` heading in `CHANGELOG.md`:
 
+> **Audit note:** the `[text](docs/...)` link forms inside the fenced block below
+> are written with **repo-root-relative** paths because they're meant to resolve
+> from `CHANGELOG.md` (which lives at repo root). The links resolve correctly
+> once the block is pasted into `CHANGELOG.md`. `scripts/doc_xref_audit.py`
+> honors the `<!-- audit-skip-block -->` markers wrapping the fenced block.
+
+<!-- audit-skip-block: prestaged CHANGELOG content; links are repo-root-relative for paste target -->
+
 ```markdown
 ## [0.30.0] - 2026-05-08  (or actual deploy date if §8.5.1 early-close path is taken)
 
@@ -149,6 +157,8 @@ git push origin main --tags
 ```
 
 ```
+
+<!-- /audit-skip-block -->
 
 ## Cross-links
 

@@ -29,6 +29,14 @@ If the operator chooses different sub-versions (e.g., 0.30.0 → 0.30.1 → 0.30
 
 Insert ABOVE `## [0.30.0] - 2026-05-15` (after Wave-1 lands) once Wave-2 is ready:
 
+> **Audit note:** `[text](docs/...)` links inside the fenced blocks below are
+> repo-root-relative for `CHANGELOG.md` paste-target context. They resolve
+> correctly once pasted into `CHANGELOG.md`. `scripts/doc_xref_audit.py` honors
+> the `<!-- audit-skip-block -->` markers wrapping the fenced blocks below.
+
+<!-- audit-skip-block: prestaged Wave-2 CHANGELOG content -->
+
+
 ```markdown
 ## [0.30.1] - 2026-05-22  (or 2026-05-23 — fill in actual deploy date)
 
@@ -93,9 +101,13 @@ git push origin main --tags
 
 ```
 
+<!-- /audit-skip-block -->
+
 ## Wave-3 pre-staged CHANGELOG block
 
 Insert ABOVE `## [0.30.1]` once Wave-3 is ready:
+
+<!-- audit-skip-block: prestaged Wave-3 CHANGELOG content -->
 
 ```markdown
 ## [0.31.0] - 2026-06-13  (fill in actual deploy date — typically 14+ d after Wave-2 close)
@@ -156,6 +168,8 @@ git push origin main --tags
 ```
 
 ```
+
+<!-- /audit-skip-block -->
 
 ## Cross-links
 
