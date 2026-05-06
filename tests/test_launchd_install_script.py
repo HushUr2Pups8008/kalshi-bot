@@ -17,6 +17,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_SH = REPO_ROOT / "ops" / "launchd" / "install.sh"
 TEMPLATES = (
+    REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-bot.plist.template",
+    REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-bothealth.plist.template",
+    REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-soak-check.plist.template",
+    REPO_ROOT / "ops" / "launchd" / "com.kalshi.db-backup.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.kalshi.governance.fast.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.kalshi.governance.deep.plist.template",
 )
@@ -54,11 +58,15 @@ def test_templates_carry_unsubstituted_placeholders():
     If this fails it usually means someone edited the template thinking they
     were editing a generated plist, which would defeat the portability story.
     """
-    placeholders = ["@REPO_ROOT@", "@VENV_PYTHON@", "@GOVERNANCE_LLM_MODEL@"]
     for tpl in TEMPLATES:
         body = tpl.read_text()
-        for ph in placeholders:
-            assert ph in body, f"{tpl.name} missing placeholder {ph}"
+        assert "@REPO_ROOT@" in body, f"{tpl.name} missing placeholder @REPO_ROOT@"
+        if "db-backup" not in tpl.name and "bothealth" not in tpl.name and "soak-check" not in tpl.name:
+            assert "@VENV_PYTHON@" in body, f"{tpl.name} missing placeholder @VENV_PYTHON@"
+        if "governance" in tpl.name:
+            assert "@GOVERNANCE_LLM_MODEL@" in body, (
+                f"{tpl.name} missing placeholder @GOVERNANCE_LLM_MODEL@"
+            )
         # Hardcoded user paths must not exist in templates.
         assert "/Users/Jake" not in body, f"{tpl.name} contains stale MacBook path"
         assert "/Users/jacobparenti" not in body, (
@@ -149,8 +157,8 @@ def test_print_output_is_valid_plist_xml(tmp_path: Path):
         )
         plists_validated += 1
 
-    assert plists_validated == 2, (
-        f"expected 2 substituted plists, validated {plists_validated}"
+    assert plists_validated == len(TEMPLATES), (
+        f"expected {len(TEMPLATES)} substituted plists, validated {plists_validated}"
     )
 
 

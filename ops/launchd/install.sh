@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install (or refresh) governance launchd plists for the local machine.
+# Install (or refresh) repo-managed launchd plists for the local machine.
 #
 # Usage:
 #   bash ops/launchd/install.sh                 # generate + install
@@ -13,8 +13,8 @@
 # GOVERNANCE_LLM_MODEL defaults to qwen3:14b. Override with the env var:
 #   GOVERNANCE_LLM_MODEL=qwen3:8b bash ops/launchd/install.sh
 #
-# This script does NOT bootstrap (load) the plists into launchd. Phase 2 ship
-# step does that explicitly. Generation only.
+# This script does NOT bootstrap (load) the plists into launchd. Ship/runbook
+# steps do that explicitly. Generation only.
 
 set -euo pipefail
 
@@ -30,6 +30,10 @@ GOVERNANCE_LLM_MODEL="${GOVERNANCE_LLM_MODEL:-qwen3:14b}"
 
 # Templates we manage. Keep this list in sync with the *.plist.template files.
 TEMPLATES=(
+    "com.jake.kalshi-bot"
+    "com.jake.kalshi-bothealth"
+    "com.jake.kalshi-soak-check"
+    "com.kalshi.db-backup"
     "com.kalshi.governance.fast"
     "com.kalshi.governance.deep"
 )
@@ -107,7 +111,7 @@ case "$MODE" in
         echo
         echo "Done. Plists are generated but NOT loaded into launchctl."
         echo "To bootstrap a service, run e.g.:"
-        echo "  launchctl bootstrap gui/\$(id -u) $INSTALL_DIR/com.kalshi.governance.fast.plist"
+        echo "  launchctl bootstrap gui/\$(id -u) $INSTALL_DIR/com.jake.kalshi-bot.plist"
         ;;
     uninstall)
         for label in "${TEMPLATES[@]}"; do

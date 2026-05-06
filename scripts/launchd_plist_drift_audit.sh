@@ -76,10 +76,6 @@ for template in "$REPO_ROOT"/ops/launchd/*.plist.template; do
   add_entry "$label" "$expected"
 done
 
-if [[ -f "$REPO_ROOT/scripts/launchd/com.kalshi.db-backup.plist" ]]; then
-  add_entry "com.kalshi.db-backup" "$REPO_ROOT/scripts/launchd/com.kalshi.db-backup.plist"
-fi
-
 STATUS="pass"
 for entry in "${ENTRIES[@]}"; do
   IFS='|' read -r _label entry_status _expected _installed <<< "$entry"

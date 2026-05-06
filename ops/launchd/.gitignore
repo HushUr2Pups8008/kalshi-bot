@@ -2,3 +2,7 @@
 # Templates (*.plist.template) are the checked-in source of truth.
 com.kalshi.governance.fast.plist
 com.kalshi.governance.deep.plist
+com.jake.kalshi-bot.plist
+com.jake.kalshi-bothealth.plist
+com.jake.kalshi-soak-check.plist
+com.kalshi.db-backup.plist
