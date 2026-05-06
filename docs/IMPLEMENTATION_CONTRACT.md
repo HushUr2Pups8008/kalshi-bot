@@ -520,6 +520,7 @@ If a candidate is blocked by the Trade Readiness Gate, `BLEND_DECISION` must be 
 - Changes to the Trade Readiness Gate conditions or thresholds (Section 5).
 - Changes to the executor contract (Section 7).
 - Any change to how live trading is activated or gated.
+- **Behavioral deploys (intake / classifier / blender / gates / sizing) without replayed-EV evidence — see §16 (added cycle 11.5 post-strategic-redirect).**
 
 ### Non-Negotiable Statement
 
@@ -855,3 +856,73 @@ These rules do NOT apply to: code modules under `/analysis`, `/tasks`, `/feeds`,
 - `docs/governance/2026-05-05-launchd-plist-consolidation-decision.md` — cycle-7 consolidation directive (the source-of-truth-policy decision that the cycle-8 incident bypassed)
 - `ops/launchd/*.template` — current canonical captures (post-`96e2995`)
 - `tests/test_launchd_plist_template_render.py` — current rendering test (Rule 3 oracle is queued for cycle-10 Codex item 1; current test is structural-only)
+
+---
+
+## 16. Replayed-EV Gate for Behavioral Deploys
+
+**Added cycle 11.5 (2026-05-06)** in response to the strategic redirect documented in `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`. Codifies the principle that deployment safety ≠ profit progress, and that behavioral changes deploy only when there is replayed-EV evidence to support them.
+
+The incident in one sentence: 11 cycles of work shipped deployment safety, observability, and operator control while the bot accumulated 3 lifetime paper trades, lost all 3, and showed 89 % `edge +0.0000` on its OBS-003 SKIPPED stream — i.e., zero-edge production. Continuing to pre-stage Wave-2 / Wave-3 deploys without replay evidence was deploying hope, not edge.
+
+### Rule 1 — Behavioral deploys require replayed-EV evidence
+
+Behavioral changes deploy only after a replayed-EV harness shows positive expected value on the relevant feature, with operator-stated confidence threshold (default: 95 % CI on per-trade EV across at least the last 30 resolved markets in the evidence window).
+
+**Behavioral changes covered:**
+- Intake (`/feeds`): new RSS sources, classifier additions, source-class additions, per-source weight changes.
+- Classifier / signal-extraction: any change that re-routes evidence into a different blender lane or alters its weight.
+- Blender (`tasks/blend_task.py`): any change to the blending formula or the lane-meeting-point logic.
+- Trade Readiness Gate (`tasks/trade_readiness_gate.py`): any threshold change (G1 confidence floor, G6 sample size, etc.) — including LOOSENING. Loosening absent replay evidence is COUNTERINDICATED because it converts "no edge" into "more low-quality trades."
+- Sizing (`trading/executor.py`): Kelly fraction adjustments, dynamic-cap formula changes.
+
+### Rule 2 — Safety / observability / governance fixes are exempt
+
+Exempt categories deploy on their own (mechanical) merits without replay evidence:
+
+- Safety fixes (kill switch logic, rollback runbook updates, env-driven revert paths).
+- Observability additions (SKIPPED-emission, logging fields, attribution surfaces).
+- Governance fixes (decision pipeline integrity, soak invariant audits, kill-switch guards).
+- Bug fixes with mechanical hypotheses (e.g., OBS-005 cooldown sentinel — pre-fix `0.0` default for never-traded tickers indistinguishable from "cooldown just expired" is a clear mechanical issue; post-deploy production data tests the hypothesis without needing replay).
+- Production config capture / launchd / install / pre-commit gates (per IC §15).
+
+The exempt path's value is mechanical (correctness of operation), not edge-based. Deploying these without replay is fine because they don't depend on edge for value.
+
+### Rule 3 — "May increase trades" is NOT enough; "would have produced positive replayed EV" is required
+
+A common rationalization: "this lever may increase trade rate." Trade rate without positive EV is faster loss. Lever B G1 0.05 → 0.04 is the canonical example: it loosens admission. Without replay evidence that the additional admitted trades would have been profitable, loosening converts the existing zero-edge floor into a thinner zero-edge floor — same expected return, more variance, faster bankroll erosion.
+
+The replayed-EV evidence requirement rejects this category of "may help" speculation.
+
+### Rule 4 — Replay evidence must be concrete + reproducible
+
+Replayed-EV evidence is a per-(source × market_family × signal_type) table with at least:
+
+- trade count (n)
+- win rate
+- per-trade EV (with 95 % CI)
+- realized P&L over the replay window
+- Sharpe (or similar risk-adjusted measure)
+- explicit replay-window definition (date range, market-resolution criteria)
+
+A spec-side narrative claim ("this feed should help because X") is NOT replayed-EV evidence. The harness output (`docs/governance/edge-replay-cycle12-report.md` + sibling) IS.
+
+### Rule 5 — Negative replayed-EV evidence is also evidence
+
+If the replay harness finds NO feature slice with positive replayed EV at the operator-stated CI threshold, that is also a valid output. It triggers strategic-pivot conversation (calibration / sample-size / information-frontier diagnosis), not "ship anyway."
+
+This is the same principle as IC §15 Rule 1 ("no source, no template"): no replay evidence, no behavioral deploy.
+
+### Scope
+
+Applies to all behavioral changes deployed to the running bot. Does NOT apply to:
+- Pre-staged harnesses (xfail-strict tests for unshipped behavior land freely; they're contract pins, not deploys).
+- Spec authoring (specs that describe a future deploy are fine; the deploy itself is gated).
+- Replay-harness construction (Cycle-12 work) — meta-level: replay infrastructure is the prerequisite, not subject to the gate.
+
+### Cross-references
+
+- `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — incident origin
+- §11 Change Control — extended to require this evidence for behavioral changes
+- §1 INV-7 (Selectivity) — strengthens its enforcement (no degradation of selectivity = no loosening without replay)
+- `docs/governance/edge-replay-cycle12-report.md` (FUTURE) — Cycle-12 deliverable; replay harness output
