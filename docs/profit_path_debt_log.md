@@ -1462,6 +1462,74 @@ Total strict-xfail markers as of 2026-05-04: 26+ pinning the deploy lattice.
 
 **Honest read after 2026-05-04 cycle:** EDGE-004 closure is dominantly bound by **whether the Google News query family continues to surface legal-niche headlines** (Branch A passive observe), with Branch C as a fallback. Wave-1 base stack landings reduce conversion volume by design (260 OPP / 9 PAPER_TRADE pre-Wave-1 → 87 / 1 post-Wave-1 per simulation `f671468`); the ≥ 5 % closure target is measured against the post-Wave-1 base, not the pre-Wave-1 baseline. Modal scenario per the unified Wave-1+2 forecast (`docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md`, commit `2bf3da1`): Branch A produces some legal-niche surfacing within 14 d; if 0, Branch C deploys; if still 0, escalation fires.
 
+**2026-05-06 cycle-11.5 strategic redirect (IC §16):** EDGE-004 lever menu (A.1+, A.1+1.5, B, C) is **BLOCKED PENDING REPLAY EVIDENCE**. The "Wave-2 deploys feed onboarding → Wave-3 deploys Lever B/C → escalation paths fire on stall" sequencing is replaced by a single new gate: each behavioral deploy requires replayed-EV evidence per IC §16. The replay harness is now the primary closure path; see `PROFIT-EDGE-005` below for the harness work, and `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` for the redirect rationale (3 lifetime trades, 0 wins, -$7.50 P&L, 89% zero-edge SKIPPEDs).
+
+---
+
+### PROFIT-EDGE-005
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EDGE-005 |
+| **Title** | Edge replay harness — verify ANY (source × market_family × signal_type) slice has positive replayed EV before deploying further behavioral changes |
+| **Category** | Profit-Path Integrity / Signal Quality / Replay Verification |
+| **Severity** | HIGH (gates all subsequent behavioral deploys per IC §16) |
+| **Status** | IN_PROGRESS (filed 2026-05-06 cycle 12; Codex implementing) |
+| **Priority** | NOW |
+| **Owner** | Codex (implementation); Claude (review + readiness inventory) |
+| **Depends On** | PROFIT-PHASE2-001 close (ships Wave-1 cleanly first); evidence_store.db ≥ 13 days populated (already true) |
+| **Blocks** | All behavioral deploys per IC §16; specifically: PROFIT-EDGE-004 lever menu (A.1+, A.1+1.5, B, C); future Wave-N feed onboarding |
+
+**Description**
+
+PROFIT-EDGE-004 surfaced that bot reaches executor with `edge = 0.0`. Wave-1-to-11 work added deployment safety, observability, and operator control on top of that core problem without resolving it. As of 2026-05-06: bot has 3 lifetime paper trades, 0 wins, -$7.50 P&L, 1-source dependence (VitalLaw), 89% of OBS-003 SKIPPED records show `edge +0.0000 below min_edge 0.02`. Continuing to pre-stage feed/lever deploys was deploying hope.
+
+This entry tracks the replay-harness deliverable that must produce edge evidence before any new behavioral deploy lands.
+
+**Why it matters to profitability / safety / reliability**
+
+1. **Direct edge verification.** Without replay, every Wave-N deploy is speculation that the new feed/lever produces edge. With replay, deploys land only when the replay shows the candidate slice would have produced positive EV at 95% CI on resolved markets.
+2. **Stops the deploying-hope cycle.** PROFIT-EDGE-004 lever menu accumulated 4+ specs (A.1+, A.1+1.5, B, C) all framed as "potential edge candidates" with no replay evidence. Replay harness gives a structural answer.
+3. **Negative result is also an answer.** If replay finds NO positive-EV slice, that's information: the bot may have a calibration problem, a sample-size problem, or an information-frontier problem. Each has a different fix; replay disambiguates.
+
+**Evidence / Source**
+
+- `data/paper_trades.db`: 3 trades / 0 wins / -$7.50 / 1 source / 1 series cluster.
+- `docs/governance/2026-05-06-post-obs003-skipped-attribution-audit-refresh.md`: 89% zero-edge SKIPPEDs.
+- `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`: redirect authority.
+- `docs/governance/2026-05-06-cycle-12-replay-readiness-inventory.md`: data + API readiness audit (24 of 36 evidence_store markets resolved; Kalshi has dual `settled`/`finalized` terminal states; no per-T historical price endpoint exposed).
+- `docs/IMPLEMENTATION_CONTRACT.md` §16: replayed-EV gate codified.
+
+**Proposed Fix (Cycle-12 Codex deliverables)**
+
+1. `scripts/edge_replay/fetch_resolved_markets.py` — Kalshi API puller; query both `status='settled'` AND `status='finalized'` (per readiness inventory).
+2. `scripts/edge_replay/build_replay_dataset.py` — per-(market, decision-time) record from evidence_store + dossier_updates joined.
+3. `scripts/edge_replay/score_counterfactual_pnl.py` — per-(source × market_family × signal_type) table with trades / wins / EV / 95% CI / Sharpe per readiness-inventory schema.
+4. `tests/test_edge_replay_*.py` — at minimum: dataset-build determinism, P&L sign on synthetic input, source-aggregation, self-test against the 3 known paper trades (must reproduce 0 wins, -$7.50).
+5. `docs/governance/edge-replay-cycle12-report.md` — interpretation: ≥1 row with `ev_ci_95_lo > 0` AND `trades ≥ 10` (success) OR explicit "no slice has positive replayed EV at our sample size" (negative-result honest report).
+
+**Acceptance Criteria**
+
+- The 5 deliverables above land + tests pass.
+- Self-test reproduces the 3-trade history.
+- Output table is concrete + reproducible per IC §16 Rule 4.
+- Either positive-EV slice identified at 95% CI with n ≥ 10, OR negative-result honest report.
+- IC §16 enforcement live: future Wave-N deploys reference this harness output.
+
+**Notes**
+
+- Replay-window scope: ~13-16 days (2026-04-20 → 2026-05-05); 24 resolved markets in evidence_store. Sample-size confidence intervals must be reported honestly per readiness-inventory class-imbalance findings (VitalLaw n=3, mainstream news ~80%).
+- Per IC §16 Rule 5: negative replay evidence triggers strategic-pivot conversation, NOT "ship anyway."
+- Lever B G1 0.05 → 0.04 is COUNTERINDICATED until replay shows the additional admitted trades produce positive EV (loosening 89%-zero-edge floor = thinner zero-edge floor = faster bankroll erosion).
+
+**Related**
+
+- `PROFIT-EDGE-004` (open) — lever menu BLOCKED pending this harness's output.
+- `PROFIT-OBS-003` (closed Wave-1 deploy) — SKIPPED-emission attribution surface required for replay.
+- `PROFIT-PHASE2-001` (closing 2026-05-08) — Wave-1 still ships per redirect; Wave-2/3 HALTED.
+- `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate.
+- `docs/governance/2026-05-06-cycle-12-replay-readiness-inventory.md` — Codex's data + API readiness map.
+
 ---
 
 ### PROFIT-OBS-003

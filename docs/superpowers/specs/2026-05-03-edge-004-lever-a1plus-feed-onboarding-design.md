@@ -1,6 +1,8 @@
 # PROFIT-EDGE-004 Lever A.1+ — feed-onboarding (the only edge-production lever in EDGE-004 scope)
 
-**Status:** design (Wave 2 of post-soak landing — first feed deploy ≥ 2026-05-22 after A.1 classifier patch lands and stabilises)
+> **🛑 BLOCKED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** Behavioral deploys require replayed-EV evidence. This lever was the canonical "deploy hope" candidate — onboarding speculative legal/geopolitics feeds without replay validation. Wave-2 deploy is HALTED pending Cycle-12 replay harness output. If the harness identifies a (source × market_family × signal_type) slice with positive replayed EV at 95 % CI, that slice — NOT the legal/geopolitics feeds spec'd below — becomes the Wave-2 candidate. See `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`.
+
+**Status:** BLOCKED PER IC §16 (was: design; Wave 2 of post-soak landing — first feed deploy ≥ 2026-05-22 after A.1 classifier patch lands and stabilises)
 **Tracker:** `PROFIT-EDGE-004` Lever A → Stage A.1+
 **Owner:** Claude (design) + Codex (per-feed candidate sizing — see §4)
 **Severity:** HIGH (only EDGE-004 edge-production lever still in scope post-Lever-E-closure + Lever-A.1-archive-replay)

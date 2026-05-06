@@ -1,6 +1,8 @@
 # PROFIT-EDGE-004 Lever B — G1 calibration tightening
 
-**Status:** design (Wave 2 of post-soak landing — earliest deploy ≥ 2026-06-06; gated on Lever A's verdict + ≥ 14 d post-OBS-003 attribution dataset)
+> **🛑 BLOCKED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06) — COUNTERINDICATED.** Loosening G1 (0.05 → 0.04) absent replay evidence converts the existing 89 %-zero-edge floor into MORE low-quality trades. Per IC §16 Rule 3: "may increase trade rate" is NOT enough; "would have produced positive replayed EV" is required. Wave-3 deploy of this lever is HALTED pending Cycle-12 replay harness output that explicitly shows the additional admitted trades have positive EV. See `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` and IC §16.
+
+**Status:** BLOCKED PER IC §16 (was: design; Wave 2 of post-soak landing — earliest deploy ≥ 2026-06-06; gated on Lever A's verdict + ≥ 14 d post-OBS-003 attribution dataset)
 **Tracker:** `PROFIT-EDGE-004` (Lever B entry from `2026-05-03-edge-004-lever-menu-design.md`)
 **Owner:** Claude (design) + Codex (sizing — see §4)
 **Severity:** HIGH (parent EDGE-004 closure path; secondary lever in the revised A → B → E → C → D sequence)

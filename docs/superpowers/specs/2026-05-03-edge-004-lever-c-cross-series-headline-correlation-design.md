@@ -1,6 +1,8 @@
 # PROFIT-EDGE-004 Lever C — cross-series headline correlation (EXEC-002 Approach 2)
 
-**Status:** design (Wave 3 of post-soak landing — earliest deploy gated on Lever A + Lever B verdicts AND on Codex's cross-series-single-headline overlap audit; earliest implementation 2026-06-20+)
+> **🛑 BLOCKED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** Wave-3 deploy is HALTED pending Cycle-12 replay harness output. Lever C is a SUPPRESSION lever (risk control, not edge production); its value preserves only IF the bot has positive-EV trading to suppress. With current data (3/3 lifetime trades lost, 89 % zero-edge SKIPPEDs), suppressing more trades reduces variance but the underlying expectation is already negative. Replay must establish a positive-EV baseline before this guard's variance reduction is meaningful. See `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` and IC §16.
+
+**Status:** BLOCKED PER IC §16 (was: design; Wave 3 of post-soak landing — earliest deploy gated on Lever A + Lever B verdicts AND on Codex's cross-series-single-headline overlap audit; earliest implementation 2026-06-20+)
 **Tracker:** `PROFIT-EDGE-004` (Lever C entry from `2026-05-03-edge-004-lever-menu-design.md`); also referenced in `PROFIT-EXEC-002` spec §11 as "Approach 2"
 **Owner:** Claude (design) + Codex (overlap-rate sizing audit — see §4)
 **Severity:** MED-HIGH (parent EDGE-004 closure path; 4th lever in the revised A → B → E → C → D sequence)

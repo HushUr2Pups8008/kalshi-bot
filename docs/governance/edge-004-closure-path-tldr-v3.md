@@ -1,6 +1,8 @@
 # EDGE-004 closure-path TL;DR — v3 (2026-05-05 refresh)
 
-**Status:** operator-facing one-pager. Supersedes v2.2.
+> **🛑 SUPERSEDED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** v3 framed Wave-2 / Wave-3 / Lever-D as the closure path. IC §16 added 2026-05-06 requires replayed-EV evidence before any behavioral deploy; Wave-2 + Wave-3 + Lever-D are HALTED pending Cycle-12 replay harness output. EDGE-004's closure path is now: Cycle-12 replay → IF positive-EV slice found, deploy that slice (NOT the speculative levers below); IF none found, strategic pivot. The lever menu in this doc is no longer authoritative for closure; Cycle-12's `docs/governance/edge-replay-cycle12-report.md` is. See `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`.
+
+**Status:** SUPERSEDED PER IC §16 (was: operator-facing one-pager. Supersedes v2.2.)
 **Drafted:** 2026-05-05.
 **Why v3:** v2.2 predated this cycle's locks: Lever B 0.04 floor (`2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md`); Lever C v1 §3.2 hash + INV-6 boundary (`2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md`); Lever D escalation criteria (`2026-05-05-edge-004-lever-d-escalation-criteria-design.md`); Wave-2 A.1+ 3-branch decision table (`2026-05-05-wave-2-a1plus-branch-decision-table.md`).
 

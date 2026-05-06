@@ -1,6 +1,8 @@
 # PROFIT-EDGE-004 Lever A.1+1.5 — legal-analyst feed onboarding (option-B for first-feed deploy)
 
-**Status:** design (Wave 2 of post-soak landing — legal-analyst alternative to A.1+1 specialist-geopolitics)
+> **🛑 BLOCKED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** Legal-analyst feed onboarding is the same speculation class as A.1+1 specialist-geopolitics — both Wave-2 candidates assume a feed-class will produce edge without replay validation. The bot's only TRADED source (VitalLaw — a legal niche) has 0/3 hit rate and -$7.50 P&L. Adding more legal-niche feeds without replay evidence would re-run that experiment at greater scale. Wave-2 deploy HALTED pending Cycle-12 replay harness. See `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`.
+
+**Status:** BLOCKED PER IC §16 (was: design; Wave 2 of post-soak landing — legal-analyst alternative to A.1+1 specialist-geopolitics)
 **Tracker:** `PROFIT-EDGE-004` Lever A → Stage A.1+ → option-B
 **Owner:** Claude (design) + Codex (per-feed candidate sizing for legal niche — Codex task #5 of 2026-05-04 cycle)
 **Severity:** HIGH (load-bearing source profile; protects 100 % of historical PAPER_TRADE)
