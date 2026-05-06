@@ -41,7 +41,7 @@ Bug: `Executor._cooldown_remaining()` returned `0.0` for keys not in
 Downstream observability could not differentiate first-time-trade
 from recently-cooled-down. Fixed: returns `None` for missing keys;
 callers updated to handle `None` semantics. Spec:
-[`docs/superpowers/specs/2026-05-03-obs-005-cooldown-sentinel-default-fix-design.md`](docs/superpowers/specs/2026-05-03-obs-005-cooldown-sentinel-default-fix-design.md).
+[`docs/superpowers/specs/2026-05-03-obs-005-cooldown-sentinel-fix-design.md`](docs/superpowers/specs/2026-05-03-obs-005-cooldown-sentinel-fix-design.md).
 
 #### PROFIT-MATCH-001 (B′) — token-guard refinement
 
@@ -104,7 +104,7 @@ recorded:
 
 Pre-deploy mid-soak reports:
 - [`docs/governance/2026-05-04-day-4-mid-soak-confirmation.md`](docs/governance/2026-05-04-day-4-mid-soak-confirmation.md)
-- [`docs/governance/2026-05-07-day-7-pending-mid-soak-confirmation.md`](docs/governance/2026-05-07-day-7-pending-mid-soak-confirmation.md) (filled at fire-time)
+- `docs/governance/2026-05-07-day-7-pending-mid-soak-confirmation.md` (created at fire-time on 2026-05-07/08; pre-Wave-1-deploy this file does not yet exist)
 - snapshot-1 through snapshot-5 (day-1 through day-3)
 
 ### Removed `pytest.mark.xfail` markers (deploy commit)

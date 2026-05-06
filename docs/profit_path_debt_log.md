@@ -2289,6 +2289,36 @@ Operator bootstrapped same-day: `launchctl bootstrap gui/$UID ~/Library/LaunchAg
 
 **Honest read 2026-05-05 (cycle 5+6):** All cycle-4 drift findings closed. 0-OPPORTUNITY-post-cutover finding reframes Wave-1 regression detection (absolute thresholds, not ratios). Plist drift audit surfaced cycle-5 directory-discovery gap (missed pre-existing `ops/launchd/`); cycle 7 consolidates the dual source-of-truth. Operator-runnable smoke wrappers for Wave-2/3 land. OpenClaw integration note pre-stages future ops-cockpit work without committing to deployment.
 
+#### 2026-05-05 cycle 7 + 8 integration — consolidation decisions + Wave-1 sentinels + pre-Day-7 dry-run
+
+Seventh + eighth pass on 2026-05-05 (commits `92b767d` Claude + `ffc54b2` Codex; cycle 8 in flight).
+
+**Cycle 7 Claude artifacts (commit `92b767d`):**
+- `IMPLEMENTATION_CONTRACT.md` Edit — §5 G1 cell 0.35→0.05→0.04 alignment (cycle 4-5 review F1)
+- `2026-05-05-launchd-plist-consolidation-decision.md` — keep `ops/launchd/`; migrate db-backup; capture 3 operator-managed plists
+- `2026-05-05-day-7-to-wave-1-handoff-procedure.md` — 5-condition transition gate; defer rules
+- `2026-05-05-wave-1-commit-by-commit-acceptance-matrix.md` — 6-commit consolidation
+- `2026-05-05-wave-2-decision-flow.md` + `2026-05-05-wave-3-decision-flow.md` — ASCII flowcharts
+- `2026-05-05-macbook-import-archive-procedure.md` — post-Wave-1-close tar.gz workflow
+- `2026-05-05-doc-cross-link-integrity-audit.md` — 39 links scanned; 2 broken in wave-1-changelog-entry-prestaged.md (closed cycle 8)
+- `2026-05-05-memory-hygiene-audit.md` — 2 memories clean
+
+**Cycle 7 Codex artifacts (commit `ffc54b2`):**
+- 4 operator scripts: `wave1_commit_chain_acceptance_audit.sh`, `doc_xref_audit.py`, `release_tag_inventory_snapshot.py`, `macbook_import_archive_migration.sh`
+- 6 strict-xfail Wave-1 per-commit post-deploy sentinels
+- 1 operator-script contract test
+
+**Empirical capture (2026-05-06T00:10Z; ≈ T-1d 19h to Day-7 close):**
+- 383 GOVERNANCE_DECISION events (12.8× the 30-floor); 57 cycles
+- 0 KILL_SWITCH / 0 VALIDATION_ERROR / 0 batch_aborted (all gates clean)
+- 7 cumulative PARSE_ERROR (all on day-1/-2 per cycle-3 retroactive findings); 0 trailing 72h
+- max inter-cycle gap 2.01h (≤ 3h floor; clean)
+- gate-7 surfaces 5 commits (4 documented §8.5.2 carve-outs + cycle-2/3 doc artifacts)
+
+**Timezone discovery (cycle 8):** Mac Studio is `America/Denver` (MDT, UTC-6). The launchd `Hour=6` in `com.kalshi.db-backup.plist` fires at 12:00 UTC daily, not 18:00 UTC as initially assumed (NZ timezone). Bootstrap snapshots at 14:01Z + 14:02Z were RunAtLoad-only; first scheduled fire = 2026-05-06T12:00Z (~12h post-bootstrap, not ~4h).
+
+**Honest read 2026-05-05 (cycle 7):** Day-7 close prep is mature. All cycle-4 + cycle-7 drift findings either closed or have applied fixes pending. Plist consolidation decision landed; execution deferred to cycle 8 (Codex). Wave-1 per-commit sentinels pre-loaded; will flip on each commit's deploy. Pre-Day-7 dry-run rehearsal (cycle 8) confirms current gates clean ~T-1d 19h to close.
+
 ---
 
 ### PROFIT-DOSSIER-001

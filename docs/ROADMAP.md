@@ -18,6 +18,21 @@ No repo-level semver policy was documented through the v0.29.x stream (patch ver
 - **v0.30.0** — *First non-neutral LLM output producing non-zero edge.* The 0.29.x stream has been diagnostic-and-plumbing-heavy against a system with an empirically universal anchor rate (`est == market_price` on 100% of LLM calls in the current window). v0.30 marks the moment that changes: the first `SIGNAL_ANALYSIS_DETAIL` event in the live trade log with a non-neutral LLM output and a resulting non-zero edge. This is the operational phase change from "architecturally complete but provably inert" to "producing signal."
 - **v1.0.0** — *P4.3 live trading authorization.* Live money changes stable-API semantics; v1.0 is reserved for that boundary.
 
+### Wave-1/2/3 deploy timeline (cycle 7 pinned 2026-05-05)
+
+Per cycle-3 `edge-004-closure-path-tldr-v3.md` + cycle-3 LOCK addenda + cycle-5 fire-time playbooks:
+
+| step | trigger | earliest UTC | VERSION |
+|---|---|---|---|
+| PROFIT-PHASE2-001 close | §8.5.1 gates pass | 2026-05-08T19:01Z | n/a |
+| Wave-1 commits 1-6 | post-close + cadence per `2026-05-05-wave-1-deploy-day-timing.md` | 2026-05-08T20:00Z+ to 2026-05-16T06:00Z+ | 0.30.0 (commit 6) |
+| Wave-1 stabilisation | 48h post-commit-6 | 2026-05-18T+ | n/a |
+| Wave-2 Branch A start | tag only; passive observe | 2026-05-18T+ | n/a (no bump) |
+| Wave-2 Branch C deploy (if Branch A stalls) | 14d after Branch A start | 2026-06-02T+ | 0.31.0 |
+| Wave-3 commit 1 (Lever B G1=0.04) | Wave-2 stalls AND Branch D not fired | 2026-06-17T+ | 0.32.0 (or 0.33.0 if option-A landed) |
+| Wave-3 commit 2 (Lever C v1) | 14d after Lever B clean | 2026-07-01T+ | 0.33.0 (or 0.34.0) |
+| Branch D fire | Wave-2+3 stall per Lever-D §2 | TBD | n/a (handoff to PROFIT-LLM-001 / P4-GATE Appendix A) |
+
 ---
 
 ## Governance Agent (Phase 2 shadow soak in progress on Mac Studio)
