@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jake.kalshi-soak-check</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>@REPO_ROOT@/scripts/soak_check.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@REPO_ROOT@</string>
+
+    <!-- Fires once at 2026-05-03 09:07 America/Denver (T+48h from soak start
+         at 2026-05-01 15:06:45Z UTC). After the script runs it self-removes
+         this plist via launchctl bootout + rm, so it will not refire next year.
+         If the script is somehow blocked from cleanup, the next match is the
+         same date+time in 2027 — a year of headroom to notice. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Year</key>
+        <integer>2026</integer>
+        <key>Month</key>
+        <integer>5</integer>
+        <key>Day</key>
+        <integer>3</integer>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>7</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>@REPO_ROOT@/logs/app/soak_check_launchd.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>@REPO_ROOT@/logs/app/soak_check_launchd.stderr.log</string>
+</dict>
+</plist>

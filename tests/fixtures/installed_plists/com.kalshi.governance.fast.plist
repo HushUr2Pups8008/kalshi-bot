@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kalshi.governance.fast</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@VENV_PYTHON@</string>
+        <string>-m</string>
+        <string>governance</string>
+        <string>--cadence</string>
+        <string>fast</string>
+        <string>--llm</string>
+        <string>qwen</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@REPO_ROOT@</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <!-- Source of truth for the governance LLM. Set per-machine via
+             install.sh (env override GOVERNANCE_LLM_MODEL). Default @GOVERNANCE_LLM_MODEL@
+             for Mac Studio (M4 Max, 128GB); set to qwen3:8b for MacBook (18GB). -->
+        <key>GOVERNANCE_LLM_MODEL</key>
+        <string>@GOVERNANCE_LLM_MODEL@</string>
+    </dict>
+
+    <key>StartInterval</key>
+    <integer>7200</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>@REPO_ROOT@/logs/governance/cycle.fast.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>@REPO_ROOT@/logs/governance/cycle.fast.stderr.log</string>
+</dict>
+</plist>
