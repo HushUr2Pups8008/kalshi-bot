@@ -86,6 +86,7 @@ run_gate "pre-soak-close branch backup dry-run" hard bash scripts/pre_soak_close
 run_gate "DB backup health audit" warn bash scripts/db_backup_health_audit.sh --json
 run_gate "DB snapshot retention audit" warn bash scripts/db_snapshot_retention_audit.sh --json
 run_gate "Wave-1 post-deploy smoke pre-deploy sentinel" warn bash scripts/wave1_post_deploy_smoke.sh
+run_gate "edge replay local sanity" warn bash scripts/edge_replay/run_full_replay.sh
 
 {
   echo

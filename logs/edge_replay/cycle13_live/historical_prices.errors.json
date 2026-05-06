@@ -1,0 +1,20 @@
+{
+  "KXELECTIONEMERGENCY-26MAY01": [
+    {
+      "error": "404 Client Error: Not Found for url: https://api.elections.kalshi.com/trade-api/v2/markets/KXELECTIONEMERGENCY-26MAY01/trades",
+      "ticker": "KXELECTIONEMERGENCY-26MAY01"
+    }
+  ],
+  "KXFISAEXTEND-26APR-APR29": [
+    {
+      "error": "404 Client Error: Not Found for url: https://api.elections.kalshi.com/trade-api/v2/markets/KXFISAEXTEND-26APR-APR29/trades",
+      "ticker": "KXFISAEXTEND-26APR-APR29"
+    }
+  ],
+  "KXFISAEXTEND-26APR-APR30": [
+    {
+      "error": "404 Client Error: Not Found for url: https://api.elections.kalshi.com/trade-api/v2/markets/KXFISAEXTEND-26APR-APR30/trades",
+      "ticker": "KXFISAEXTEND-26APR-APR30"
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import argparse
 import glob
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,16 @@ def _as_bool(value: Any) -> bool | None:
     if text in {"no", "false", "0"}:
         return False
     return None
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def load_resolved_markets(path: Path) -> dict[str, dict[str, Any]]:
@@ -109,10 +120,15 @@ def _log_rows(paths: list[Path], markets: dict[str, dict[str, Any]]) -> list[dic
             if ticker not in markets:
                 continue
             kind = str(row.get("type") or row.get("event") or "log").lower()
+            if kind in {"paper_trade", "trade", "paper_execution"}:
+                continue
+            decision_ts = row.get("ts") or row.get("created_at") or row.get("decided_at")
+            if kind == "log" and not decision_ts:
+                continue
             out.append(
                 {
                     **_market_fields(ticker, markets),
-                    "decision_ts": row.get("ts") or row.get("created_at") or row.get("decided_at"),
+                    "decision_ts": decision_ts,
                     "decision_kind": kind,
                     "side": str(row.get("side") or row.get("llm_direction") or "").lower() or None,
                     "contracts": row.get("contracts"),
@@ -192,6 +208,45 @@ def _evidence_store_rows(db_path: Path, markets: dict[str, dict[str, Any]]) -> l
     return out
 
 
+def load_historical_prices(path: Path | None) -> dict[str, list[dict[str, Any]]]:
+    if path is None or not path.exists():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    by_ticker: dict[str, list[dict[str, Any]]] = {}
+    for ticker, rows in raw.items():
+        normalized = []
+        for row in rows:
+            ts = _parse_ts(row.get("ts") or row.get("created_time") or row.get("trade_time"))
+            price = _as_float(row.get("yes_price") or row.get("price") or row.get("yes_price_cents"))
+            if ts is not None and price is not None:
+                normalized.append({"ts": ts, "yes_price": price})
+        by_ticker[ticker] = sorted(normalized, key=lambda row: row["ts"])
+    return by_ticker
+
+
+def price_at_decision(prices: dict[str, list[dict[str, Any]]], ticker: str, decision_ts: Any) -> float | None:
+    target = _parse_ts(decision_ts)
+    if target is None:
+        return None
+    candidates = [row for row in prices.get(ticker, []) if row["ts"] <= target]
+    if not candidates:
+        return None
+    return float(candidates[-1]["yes_price"])
+
+
+def apply_historical_prices(rows: list[dict[str, Any]], prices: dict[str, list[dict[str, Any]]]) -> None:
+    for row in rows:
+        if row.get("market_yes_price") is not None:
+            continue
+        price = price_at_decision(prices, str(row.get("ticker") or ""), row.get("decision_ts"))
+        if price is None:
+            continue
+        row["market_yes_price"] = price
+        model_prob = _as_float(row.get("model_prob"))
+        if model_prob is not None:
+            row["edge"] = model_prob - (price / 100.0)
+
+
 def expand_trade_logs(patterns: list[str]) -> list[Path]:
     paths: list[Path] = []
     for pattern in patterns:
@@ -205,6 +260,7 @@ def build_replay_dataset(
     paper_trades_db: Path | None,
     trade_logs: list[Path],
     evidence_store_db: Path | None = None,
+    historical_prices_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     markets = load_resolved_markets(markets_path)
     rows: list[dict[str, Any]] = []
@@ -213,6 +269,7 @@ def build_replay_dataset(
     rows.extend(_log_rows(trade_logs, markets))
     if evidence_store_db is not None:
         rows.extend(_evidence_store_rows(evidence_store_db, markets))
+    apply_historical_prices(rows, load_historical_prices(historical_prices_path))
     return sorted(rows, key=lambda row: (row.get("decision_ts") or "", row.get("ticker") or ""))
 
 
@@ -221,6 +278,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--markets", required=True, type=Path, help="Normalized resolved markets JSON.")
     parser.add_argument("--paper-trades-db", type=Path, default=Path("data/paper_trades.db"))
     parser.add_argument("--evidence-store-db", type=Path, default=Path("data/evidence_store.db"))
+    parser.add_argument("--historical-prices", type=Path, help="Optional JSON mapping ticker to decision-time YES price rows.")
     parser.add_argument("--trade-log", action="append", default=["logs/**/*.jsonl"], help="JSONL path/glob; repeatable.")
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
@@ -233,6 +291,7 @@ def main() -> int:
         paper_trades_db=args.paper_trades_db,
         trade_logs=expand_trade_logs(args.trade_log),
         evidence_store_db=args.evidence_store_db,
+        historical_prices_path=args.historical_prices,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")

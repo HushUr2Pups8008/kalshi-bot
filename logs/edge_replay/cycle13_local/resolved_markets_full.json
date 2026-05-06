@@ -1,0 +1,32 @@
+[
+  {
+    "close_time": "2026-05-01T03:31:04.530520+00:00",
+    "resolved_yes": true,
+    "result": "yes",
+    "series_ticker": "KXFISAEXTEND",
+    "status": "settled",
+    "ticker": "KXFISAEXTEND-26APR-MAY01",
+    "title": "Will legislation that reauthorizes FISA Section 702 authority become law before May 1, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T03:31:04.964577+00:00",
+    "resolved_yes": true,
+    "result": "yes",
+    "series_ticker": "KXFISAEXTEND",
+    "status": "settled",
+    "ticker": "KXFISAEXTEND-26APR-MAY03",
+    "title": "Will legislation that reauthorizes FISA Section 702 authority become law before May 3, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T03:31:05.480189+00:00",
+    "resolved_yes": true,
+    "result": "yes",
+    "series_ticker": "KXFISAEXTEND",
+    "status": "settled",
+    "ticker": "KXFISAEXTEND-26APR-MAY02",
+    "title": "Will legislation that reauthorizes FISA Section 702 authority become law before May 2, 2026?",
+    "yes_price": 50.0
+  }
+]

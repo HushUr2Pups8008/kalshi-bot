@@ -1,0 +1,242 @@
+[
+  {
+    "close_time": "2026-05-01T03:59:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXELECTIONEMERGENCY",
+    "status": "finalized",
+    "ticker": "KXELECTIONEMERGENCY-26MAY01",
+    "title": "Will Donald Trump issue any executive action on declaring a national emergency regarding the 2026 United States midterm election before May 1, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-04-29T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXFISAEXTEND",
+    "status": "finalized",
+    "ticker": "KXFISAEXTEND-26APR-APR29",
+    "title": "Will legislation that reauthorizes FISA Section 702 authority become law before Apr 29, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-04-30T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXFISAEXTEND",
+    "status": "finalized",
+    "ticker": "KXFISAEXTEND-26APR-APR30",
+    "title": "Will legislation that reauthorizes FISA Section 702 authority become law before Apr 30, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T02:51:01Z",
+    "resolved_yes": true,
+    "result": "yes",
+    "series_ticker": "KXFISAEXTEND",
+    "status": "finalized",
+    "ticker": "KXFISAEXTEND-26APR-MAY01",
+    "title": "Will legislation that reauthorizes FISA Section 702 authority become law before May 1, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T02:51:13Z",
+    "resolved_yes": true,
+    "result": "yes",
+    "series_ticker": "KXFISAEXTEND",
+    "status": "finalized",
+    "ticker": "KXFISAEXTEND-26APR-MAY02",
+    "title": "Will legislation that reauthorizes FISA Section 702 authority become law before May 2, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T02:51:23Z",
+    "resolved_yes": true,
+    "result": "yes",
+    "series_ticker": "KXFISAEXTEND",
+    "status": "finalized",
+    "ticker": "KXFISAEXTEND-26APR-MAY03",
+    "title": "Will legislation that reauthorizes FISA Section 702 authority become law before May 3, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-04-24T03:59:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXMOCTRUMP25",
+    "status": "finalized",
+    "ticker": "KXMOCTRUMP25-26-APR24",
+    "title": "Will any Republican member of Congress calls on Trump to be removed as President through the 25th amendment before Apr 24, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T03:59:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXMOCTRUMP25",
+    "status": "finalized",
+    "ticker": "KXMOCTRUMP25-26-MAY01",
+    "title": "Will any Republican member of Congress calls on Trump to be removed as President through the 25th amendment before May 1, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T03:59:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXNEWDEAL",
+    "status": "finalized",
+    "ticker": "KXNEWDEAL-MAY01",
+    "title": "When will Trump announce a new trade deal?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T14:00:00Z",
+    "resolved_yes": true,
+    "result": "yes",
+    "series_ticker": "KXPARDONSTRUMP",
+    "status": "finalized",
+    "ticker": "KXPARDONSTRUMP-26APR-0",
+    "title": "Will Donald Trump pardon exactly 0 people before May 1, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXPARDONSTRUMP",
+    "status": "finalized",
+    "ticker": "KXPARDONSTRUMP-26APR-1",
+    "title": "Will Donald Trump pardon exactly 1 people before May 1, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXPARDONSTRUMP",
+    "status": "finalized",
+    "ticker": "KXPARDONSTRUMP-26APR-12",
+    "title": "Will Donald Trump pardon between 10 and 14 people before May 1, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXPARDONSTRUMP",
+    "status": "finalized",
+    "ticker": "KXPARDONSTRUMP-26APR-22",
+    "title": "Will Donald Trump pardon between 20 and 24 people before May 1, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXPARDONSTRUMP",
+    "status": "finalized",
+    "ticker": "KXPARDONSTRUMP-26APR-24",
+    "title": "Will Donald Trump pardon above 24 people before May 1, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXPARDONSTRUMP",
+    "status": "finalized",
+    "ticker": "KXPARDONSTRUMP-26APR-6",
+    "title": "Will Donald Trump pardon between 3 and 9 people before May 1, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-04-24T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXTRUMPCHINA",
+    "status": "finalized",
+    "ticker": "KXTRUMPCHINA-26-APR24",
+    "title": "Will Donald Trump visit China before Apr 24, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXTRUMPCHINA",
+    "status": "finalized",
+    "ticker": "KXTRUMPCHINA-26-MAY01",
+    "title": "Will Donald Trump visit China before May 1, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXTRUMPIRAN",
+    "status": "finalized",
+    "ticker": "KXTRUMPIRAN-26MAY01",
+    "title": "Will Donald Trump visit Iran before May 1, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-04-24T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXVANCEPAKISTAN",
+    "status": "finalized",
+    "ticker": "KXVANCEPAKISTAN-26APR21-APR24",
+    "title": "Will JD Vance visit Pakistan before Apr 24, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-04-25T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXVANCEPAKISTAN",
+    "status": "finalized",
+    "ticker": "KXVANCEPAKISTAN-26APR21-APR25",
+    "title": "Will JD Vance visit Pakistan before Apr 25, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-04-27T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXVANCEPAKISTAN",
+    "status": "finalized",
+    "ticker": "KXVANCEPAKISTAN-26APR21-APR27",
+    "title": "Will JD Vance visit Pakistan before Apr 27, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-04-30T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXVANCEPAKISTAN",
+    "status": "finalized",
+    "ticker": "KXVANCEPAKISTAN-26APR21-APR30",
+    "title": "Will JD Vance visit Pakistan before Apr 30, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-04T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXVANCEPAKISTAN",
+    "status": "finalized",
+    "ticker": "KXVANCEPAKISTAN-26APR21-MAY04",
+    "title": "Will JD Vance visit Pakistan before May 4, 2026?",
+    "yes_price": 50.0
+  },
+  {
+    "close_time": "2026-05-01T14:00:00Z",
+    "resolved_yes": false,
+    "result": "no",
+    "series_ticker": "KXVOTESAVEAMERICA",
+    "status": "finalized",
+    "ticker": "KXVOTESAVEAMERICA-26MAR-MAY01",
+    "title": "Will the Senate vote on the SAVE America Act?",
+    "yes_price": 50.0
+  }
+]

@@ -2,6 +2,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from scripts.edge_replay.build_replay_dataset import build_replay_dataset
 from tests._helpers import write_jsonl
 
@@ -111,6 +113,32 @@ def test_build_replay_dataset_includes_skipped_trade_log_rows(tmp_path):
     assert rows[0]["trade_gate_reason"] == "edge +0.0000 below min_edge 0.02"
 
 
+def test_build_replay_dataset_excludes_trade_log_paper_trade_duplicates(tmp_path):
+    markets_path = tmp_path / "markets.json"
+    markets_path.write_text(
+        json.dumps([{"ticker": "KXTEST-26MAY02", "series_ticker": "KXTEST", "resolved_yes": False}]),
+        encoding="utf-8",
+    )
+    log_path = tmp_path / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "PAPER_TRADE",
+                "ts": "2026-05-01T00:05:00+00:00",
+                "ticker": "KXTEST-26MAY02",
+                "source": "paper-trade-roundtrip",
+                "edge": 0.20,
+                "market_yes_price": 50,
+            }
+        ],
+    )
+
+    rows = build_replay_dataset(markets_path=markets_path, paper_trades_db=None, trade_logs=[log_path])
+
+    assert rows == []
+
+
 def test_build_replay_dataset_includes_evidence_store_dossier_updates(tmp_path):
     markets_path = tmp_path / "markets.json"
     markets_path.write_text(
@@ -178,3 +206,61 @@ def test_build_replay_dataset_includes_evidence_store_dossier_updates(tmp_path):
     assert rows[0]["signal_source"] == "Reuters"
     assert rows[0]["news_class"] == "publisher_rss"
     assert rows[0]["model_prob"] == 0.62
+
+
+def test_build_replay_dataset_applies_decision_time_price_map(tmp_path):
+    markets_path = tmp_path / "markets.json"
+    markets_path.write_text(
+        json.dumps([{"ticker": "KXTEST-26MAY04", "series_ticker": "KXTEST", "resolved_yes": True}]),
+        encoding="utf-8",
+    )
+    evidence_db = tmp_path / "evidence_store.db"
+    conn = sqlite3.connect(evidence_db)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE evidence (
+                evidence_id TEXT,
+                market_ticker TEXT,
+                source TEXT,
+                source_class TEXT,
+                headline TEXT,
+                ingested_ts TEXT,
+                update_type TEXT
+            );
+            CREATE TABLE dossier_updates (
+                market_ticker TEXT,
+                dossier_version INTEGER,
+                created_ts TEXT,
+                trigger_evidence_id TEXT,
+                prior_estimate REAL,
+                new_estimate REAL,
+                update_delta REAL,
+                confidence_before REAL,
+                confidence_after REAL,
+                update_type TEXT,
+                llm_called INTEGER
+            );
+            """
+        )
+        conn.execute("INSERT INTO evidence VALUES ('ev1', 'KXTEST-26MAY04', 'Reuters', 'publisher_rss', 'Headline', '2026-05-01T00:00:00+00:00', 'state')")
+        conn.execute("INSERT INTO dossier_updates VALUES ('KXTEST-26MAY04', 1, '2026-05-01T00:01:00+00:00', 'ev1', 0.50, 0.70, 0.20, 0.20, 0.90, 'state', 1)")
+        conn.commit()
+    finally:
+        conn.close()
+    price_path = tmp_path / "prices.json"
+    price_path.write_text(
+        json.dumps({"KXTEST-26MAY04": [{"ts": "2026-05-01T00:00:30+00:00", "yes_price": 44.0}]}),
+        encoding="utf-8",
+    )
+
+    rows = build_replay_dataset(
+        markets_path=markets_path,
+        paper_trades_db=None,
+        trade_logs=[],
+        evidence_store_db=evidence_db,
+        historical_prices_path=price_path,
+    )
+
+    assert rows[0]["market_yes_price"] == 44.0
+    assert rows[0]["edge"] == pytest.approx(0.26)
