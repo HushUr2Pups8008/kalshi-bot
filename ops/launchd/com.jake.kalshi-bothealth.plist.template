@@ -15,15 +15,23 @@
     <key>WorkingDirectory</key>
     <string>@REPO_ROOT@</string>
 
-    <key>StartInterval</key>
-    <integer>900</integer>
+    <!-- Daily 08:00 America/Denver. Unlike soak-check / midsoak this plist
+         does NOT self-clean — it is meant to keep firing forever until the
+         operator removes it. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
 
     <key>RunAtLoad</key>
-    <true/>
+    <false/>
 
     <key>StandardOutPath</key>
-    <string>@REPO_ROOT@/logs/app/bothealth.stdout.log</string>
+    <string>@REPO_ROOT@/logs/app/bothealth_launchd.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>@REPO_ROOT@/logs/app/bothealth.stderr.log</string>
+    <string>@REPO_ROOT@/logs/app/bothealth_launchd.stderr.log</string>
 </dict>
 </plist>

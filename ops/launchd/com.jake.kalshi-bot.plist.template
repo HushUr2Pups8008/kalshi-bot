@@ -17,6 +17,12 @@
     <key>WorkingDirectory</key>
     <string>@REPO_ROOT@</string>
 
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
     <key>RunAtLoad</key>
     <true/>
 
@@ -27,8 +33,8 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>@REPO_ROOT@/logs/app/launchd.bot.stdout.log</string>
+    <string>@REPO_ROOT@/logs/app/launchd.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>@REPO_ROOT@/logs/app/launchd.bot.stderr.log</string>
+    <string>@REPO_ROOT@/logs/app/launchd.stderr.log</string>
 </dict>
 </plist>

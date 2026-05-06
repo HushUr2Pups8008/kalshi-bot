@@ -15,6 +15,12 @@
     <key>WorkingDirectory</key>
     <string>@REPO_ROOT@</string>
 
+    <!-- Run daily at 06:00 LOCAL time. macOS launchd uses local time for
+         StartCalendarInterval. In May NZST (UTC+12), 06:00 NZ = 18:00 UTC
+         the previous day, which is well outside the bot's high-activity
+         window (US news cycles 13:00-15:00 UTC and 21:00-23:00 UTC) and
+         after the governance deep cycle settles. Adjust Hour/Minute if
+         operator timezone differs. -->
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
@@ -23,6 +29,9 @@
         <integer>0</integer>
     </dict>
 
+    <!-- Also run once at LaunchAgent load so first install seeds the
+         archive immediately without waiting up to 24 h for the next
+         scheduled fire. -->
     <key>RunAtLoad</key>
     <true/>
 
@@ -30,5 +39,11 @@
     <string>@REPO_ROOT@/logs/app/db-backup.stdout.log</string>
     <key>StandardErrorPath</key>
     <string>@REPO_ROOT@/logs/app/db-backup.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
 </dict>
 </plist>
