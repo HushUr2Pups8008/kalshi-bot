@@ -22,19 +22,21 @@ No repo-level semver policy was documented through the v0.29.x stream (patch ver
 
 Per cycle-3 `edge-004-closure-path-tldr-v3.md` + cycle-3 LOCK addenda + cycle-5 fire-time playbooks:
 
-> **🛑 PARTIAL HALT PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** Wave-1 ships as planned (cleanup/observability release). Wave-2 + Wave-3 + Branch D are HALTED pending Cycle-12 replay harness output (`PROFIT-EDGE-005` in `docs/profit_path_debt_log.md`). The "auto-proceed Wave-2 → Wave-3" sequencing is replaced by: replay harness identifies a positive-EV slice → that slice (NOT the speculative levers below) becomes the Wave-2 candidate. See `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`.
+> **🛑 STRATEGIC PIVOT PER IC §16 (cycle-13 IC §16 Rule 5 trigger, 2026-05-06).** Cycle-12/13 replay harness returned 0 positive-EV slices on 24 resolved markets. 21/24 dossiers stuck at `current_estimate=0.5000` despite 266 evidence rows. 3/3 sized-bet trades wrong-direction. **Wave-1 ships as cleanup/observability hygiene only — does NOT claim edge.** Wave-2 / Wave-3 / Branch-D are **HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14 DIAGNOSIS**. Cycle-14 (PROFIT-EDGE-007) is calibration kill-or-fix diagnostic. Cycle-15+ scope (fix calibration / rebuild extraction / strategic redesign / continue paper-only) derived from Cycle-14 verdict. See `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md` + `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`.
 
 | step | trigger | earliest UTC | VERSION | status |
 |---|---|---|---|---|
 | PROFIT-PHASE2-001 close | §8.5.1 gates pass | 2026-05-08T19:01Z | n/a | active |
-| Wave-1 commits 1-6 | post-close + cadence per `2026-05-05-wave-1-deploy-day-timing.md` | 2026-05-08T20:00Z+ to 2026-05-16T06:00Z+ | 0.30.0 (commit 6) | active |
+| Wave-1 commits 1-6 | post-close + cadence per `2026-05-05-wave-1-deploy-day-timing.md` | 2026-05-08T20:00Z+ to 2026-05-16T06:00Z+ | 0.30.0 (commit 6) | **active (cleanup/observability hygiene only — does NOT claim edge)** |
 | Wave-1 stabilisation | 48h post-commit-6 | 2026-05-18T+ | n/a | active |
-| **Cycle-12 replay harness** | post-Wave-1-stabilisation | ≥ 2026-05-18T+ | n/a | **NEW (primary closure path)** |
-| Wave-2 Branch A start | tag only; passive observe | 2026-05-18T+ | n/a (no bump) | **HALTED PER IC §16** |
-| Wave-2 Branch C deploy (if Branch A stalls) | 14d after Branch A start | 2026-06-02T+ | 0.31.0 | **HALTED PER IC §16** |
-| Wave-3 commit 1 (Lever B G1=0.04) | Wave-2 stalls AND Branch D not fired | 2026-06-17T+ | 0.32.0 (or 0.33.0 if option-A landed) | **HALTED PER IC §16 (counterindicated)** |
-| Wave-3 commit 2 (Lever C v1) | 14d after Lever B clean | 2026-07-01T+ | 0.33.0 (or 0.34.0) | **HALTED PER IC §16** |
-| Branch D fire | Wave-2+3 stall per Lever-D §2 | TBD | n/a (handoff to PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PER IC §16** |
+| **Cycle-14 calibration diagnosis** | post-Wave-1-deploy | ≥ 2026-05-08T+ | n/a | **ACTIVE (primary closure path; PROFIT-EDGE-007)** |
+| Cycle-15+ fix scope | Cycle-14 verdict | TBD | TBD | **PENDING CYCLE-14 VERDICT** |
+| Wave-2 Branch A start | tag only; passive observe | 2026-05-18T+ | n/a (no bump) | **HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14** |
+| Wave-2 Branch C deploy (if Branch A stalls) | 14d after Branch A start | 2026-06-02T+ | 0.31.0 | **HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14** |
+| Wave-3 commit 1 (Lever B G1=0.04) | Wave-2 stalls AND Branch D not fired | 2026-06-17T+ | 0.32.0 (or 0.33.0 if option-A landed) | **HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14 (counterindicated)** |
+| Wave-3 commit 2 (Lever C v1) | 14d after Lever B clean | 2026-07-01T+ | 0.33.0 (or 0.34.0) | **HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14** |
+| Branch D fire | Wave-2+3 stall per Lever-D §2 | TBD | n/a (handoff to PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14** |
+| Capital posture | continuous | n/a | n/a | **PAPER-ONLY (paper-mode-lock guardrail required post-Wave-1 deploy per Cycle-14 charter §5)** |
 
 ---
 

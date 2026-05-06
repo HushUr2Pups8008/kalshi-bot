@@ -1604,6 +1604,82 @@ Cycle-12 ran replay against `paper_trades` scope only — 3 markets, 1 source, 1
 - `docs/governance/edge-replay-pivot-playbook.md` — IC §16 Rule 5 diagnostic playbook (fires on negative result).
 - `docs/EDGE_STATUS.md` — operator-facing dashboard; refreshed by replay verdict.
 
+**2026-05-06 cycle-13 update:** DELIVERED with negative result (commit `79e4d08`). 24 markets / 255 replay rows / 0 positive-EV slices / 0 left-on-table winners / -$7.50 P&L. IC §16 Rule 5 fires. Cycle-14 (PROFIT-EDGE-007 below) takes over as calibration kill-or-fix diagnostic.
+
+---
+
+### PROFIT-EDGE-007
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EDGE-007 |
+| **Title** | Cycle-14 calibration kill-or-fix diagnostic — does the model move belief correctly when evidence should obviously move belief? |
+| **Category** | Profit-Path Integrity / Calibration Diagnostic (continuation of PROFIT-EDGE-005/006 IC §16 Rule 5 trigger) |
+| **Severity** | HIGH (gates strategic-direction decision: fix calibration vs rebuild extraction vs strategic redesign) |
+| **Status** | ACTIVE (filed 2026-05-06 cycle 14 prep; Codex implementing per `2026-05-06-cycle-14-charter-calibration-diagnosis.md`) |
+| **Priority** | NOW |
+| **Owner** | Codex (implementation); Claude (review + diagnosis-doc co-authoring + decision-criteria lock) |
+| **Depends On** | PROFIT-EDGE-006 (Cycle-13 negative replay verdict — DONE) |
+| **Blocks** | All Wave-2/Wave-3 deploys; PROFIT-EDGE-004 lever menu; Cycle-15+ fix scope (whatever it turns out to be) |
+
+**Description**
+
+Cycle-13 returned 0 positive-EV slices on 24 resolved markets. Root cause not "no edge anywhere"; pre-bounded by calibration. 21/24 dossiers stuck at `current_estimate=0.5000` despite 266 evidence rows ingested. KXTRUMPIRAN: 107 events → still 0.5000. The 3 dossiers that DID move (FISA-MAY01/02/03) all settled at 0.432 NO-leaning, all resolved YES → 3/3 wrong-direction at the only 3 trades.
+
+Cycle-14 answers: can the model move belief correctly when evidence should obviously move belief?
+
+This is **diagnosis-only**. No behavioral fixes ship in Cycle-14. Sole exception: trivial measurement bug in the diagnostic tooling itself (NOT in the bot's calibration code).
+
+**Why it matters to profitability / safety / reliability**
+
+1. **Strategic-direction inflection point.** The verdict determines whether the bot is fixable or whether the strategy needs fundamental redesign. Without it, every subsequent cycle is speculation about which fix matters.
+2. **Capital protection.** Continuing paper-mode trading on a possibly-sign-inverted model burns synthetic bankroll testing a hypothesis the diagnostic answers in 1 cycle. Worse: live-mode after Wave-1's OBS-005 unblock could surreptitiously widen exposure on a broken model.
+3. **Prevents emotional drift.** Wave-1 hygiene ships do NOT prove edge. Cycle-14 produces structured evidence about what the bot ACTUALLY does with evidence, not what we hope it does.
+
+**Evidence / Source**
+
+- `docs/governance/edge-replay-cycle13-report.md` — replay verdict (0 positive-EV / 0 left-on-table-winners).
+- `docs/governance/2026-05-06-cycle-13-replay-harness-code-review.md` — code review (readiness-threshold finding feeds into LLM-called split diagnostic).
+- 21/24 dossiers at 0.5000 prior (cycle-13 audit).
+- 3/3 wrong-direction sized-bet trades.
+- `data/evidence_store.db` (266 rows) + `data/paper_trades.db` (3 trades) — diagnostic input.
+
+**Proposed Fix (Cycle-14 Codex deliverables — DIAGNOSIS-ONLY)**
+
+Per `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md`:
+
+1. `scripts/edge_replay/calibration_audit.py` — existing-outcome calibration audit (movement_rate, direction-correctness with [0.499, 0.501] denominator exclusion + count, Brier/log-loss with n=24 caveat, sized-bet-subset separate, moved vs unmoved EV/P&L).
+2. Per-source belief movement audit — extension of existing scorer.
+3. LLM-vs-no-LLM split — from `dossier_updates.llm_called`.
+4. Synthetic high-info evidence injection — TWO LANES (downstream-of-extraction + real-extraction-in-loop) to discriminate update-model failure from extraction failure.
+5. Hard paper-mode-lock check post-Wave-1 — guardrail that OBS-005 unblock doesn't widen exposure.
+6. ROADMAP update — Wave-2/3/Branch-D rows: "HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14 DIAGNOSIS."
+7. Written diagnosis doc — `docs/governance/edge-replay-cycle14-diagnosis.md` per the structured schema in charter.
+
+**Acceptance Criteria**
+
+- All 7 Codex deliverables land + tests pass.
+- Diagnosis-doc verdict matches one of the pre-stated decision criteria.
+- Cycle-15 scope recommendation derived FROM the verdict, not invented to fit a preferred fix.
+- No behavioral fix landed in Cycle-14 (sole exception: tooling bug).
+
+**Notes**
+
+- **Decision criteria locked BEFORE inspecting results.** Operator does not change them post-hoc. Diagnosis stands on its own evidence, not on rationalization.
+- Brier/log-loss at n=24 is statistically weak; supporting evidence only, not primary verdict.
+- Direction-correctness denominator excludes `[0.499, 0.501]` rows; reports excluded count.
+- Sized-bet subset (3 paper trades) reported separately from full corpus; sample-noise vs systematic distinguishable.
+
+**Related**
+
+- `PROFIT-EDGE-006` (delivered with negative verdict) — direct parent.
+- `PROFIT-EDGE-005` (in_progress; harness exists) — replay infrastructure used.
+- `PROFIT-EDGE-004` (open; lever menu OBSOLETE-PENDING-CYCLE-14) — closed if Cycle-14 confirms calibration broken.
+- `PROFIT-GOV-002` (closed) — same-class issue at LLM verdict layer (rubber-stamp bias); cycle-14 may surface analogous issue at update-direction layer.
+- `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md` — Cycle-14 charter.
+- `docs/governance/edge-replay-pivot-playbook.md` — IC §16 Rule 5 playbook this instantiates.
+- `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-15+ fix).
+
 ---
 
 ### PROFIT-OBS-003

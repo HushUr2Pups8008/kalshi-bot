@@ -1,24 +1,33 @@
 # EDGE_STATUS — operator-facing edge dashboard
 
 **Refresh by commit.** Single page; replaces 100+ doc index for "are we making money?" questions.
-**Last refresh:** 2026-05-06 cycle 13.
+**Last refresh:** 2026-05-06 cycle 14 prep (post-cycle-13 Rule-5 trigger).
 
 ## TL;DR (3 numbers)
 
 | metric | value |
 |---|---|
 | Lifetime P&L | **-$7.50** |
-| Lifetime trade count | **3** (all resolved, all lost, all 1 source / 1 series / 1 direction) |
-| Replay verdict | **NO positive-EV slice** at current scope (3 markets, n=3 trades). Cycle-13 expansion to 24 markets queued. |
+| Lifetime trade count | **3** (all resolved, all lost, all 1 source / 1 series / 1 direction; 3/3 wrong-direction) |
+| Replay verdict | **NO positive-EV slice at 24-market scope.** 0 left-on-table winners. IC §16 Rule 5 fires → Cycle-14 calibration diagnostic active. |
 
-## Wave deploy status (per IC §16)
+## Cycle-14 active — calibration kill-or-fix diagnostic
+
+The bot's belief model rarely exits prior (21/24 dossiers stuck at 0.5000) and when it does move, may move wrong direction (3/3 sized trades). Cycle-14 answers: **can the model move belief correctly when evidence should obviously move belief?**
+
+Diagnosis-only. NO behavioral fixes ship in Cycle-14. Sole exception: trivial measurement bug in diagnostic tooling (NOT in bot's calibration code). Per `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md`.
+
+Cycle-14 verdict drives Cycle-15+ scope (fix calibration / rebuild extraction / onboard sources / strategic redesign / continue paper-only data collection).
+
+## Wave deploy status (per IC §16 + Cycle-14)
 
 | wave | status | gate |
 |---|---|---|
-| Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **ACTIVE — ships 2026-05-08** | exempt under IC §16 Rule 2 (safety / observability / governance / mechanical bug fixes) |
-| Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED PER IC §16** | requires replayed-EV evidence for the candidate slice |
-| Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED PER IC §16 — Lever B counterindicated** | replay must show tightening produces positive EV; loosening 89%-zero-edge floor would convert it to thinner zero-edge floor |
-| Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PER IC §16** | each candidate fix needs replay evidence |
+| Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **ACTIVE — ships 2026-05-08 as cleanup/observability hygiene only; does NOT claim edge** | exempt under IC §16 Rule 2 (mechanical / observability / governance) |
+| Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14 DIAGNOSIS** | requires (a) Cycle-14 verdict that calibration is fixable AND (b) replayed-EV evidence for the candidate slice |
+| Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14 DIAGNOSIS — Lever B strongly counterindicated** | loosening admission on a sign-error-suspect model converts confidently-wrong bets into more confidently-wrong bets (worse than coin flips) |
+| Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14 DIAGNOSIS** | each candidate fix needs replay evidence |
+| **Capital posture** | **PAPER-ONLY. Hard guardrail post-Wave-1 deploy** (Cycle-14 charter §5) | live trading remains blocked until Cycle-14 verdict + Cycle-15 replay-validated fix |
 
 ## Are we near a Wave-2-eligible slice?
 
@@ -54,7 +63,8 @@
 | date | scope | verdict | report |
 |---|---|---|---|
 | 2026-05-06 | 3 paper-trade markets / 1 source / 1 series / n=3 trades | 0 positive-EV slices, P&L -$7.50, win rate 0.00, harness self-test passes | `edge-replay-cycle12-report.md` |
-| 2026-05-07+ (Cycle-13) | 24 resolved evidence_store markets / multi-source / multi-series | TBD | `edge-replay-cycle13-report.md` (FUTURE) |
+| 2026-05-06 (Cycle-13) | 24 resolved evidence_store markets / 255 replay rows | **0 positive-EV slices, 0 left-on-table winners, P&L -$7.50, IC §16 Rule 5 fires** | `edge-replay-cycle13-report.md` |
+| Cycle-14 prep | calibration diagnostic active | TBD verdict (one of: calibration_inert / sign_error / information_frontier / extraction_broken / sample_noise / model_fine) | `edge-replay-cycle14-diagnosis.md` (FUTURE) |
 
 ## What changes Wave-2 from HALTED → AUTHORIZED
 
