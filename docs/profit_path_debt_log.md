@@ -2821,6 +2821,72 @@ Neither is worth filing as `PROFIT-GOV-003` at this point. The phenomenon is obs
 
 ---
 
+### PROFIT-GOV-004
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-GOV-004 |
+| **Title** | §8.5 manual-review gate-6 sample-based review redesign for Phase-3 |
+| **Category** | Governance / Soak-Acceptance Spec |
+| **Severity** | MEDIUM (Phase 2 close-day operational risk; full impact at Phase 3+ when decision volume scales) |
+| **Status** | OPEN (filed 2026-05-06 cycle 11; deferred to Phase-3 spec work) |
+| **Priority** | DEFER (post-PROFIT-PHASE2-001 close; pre-Phase-3 real-mode flip) |
+| **Owner** | UNASSIGNED |
+| **Depends On** | PROFIT-PHASE2-001 close (data points for sample-size calibration) |
+| **Blocks** | Phase-3 governance soak runbook (will inherit gate-6 mechanism) |
+
+**Description**
+
+`PROFIT-PHASE2-001-early-close-criteria.md` §8.5.1 gate 6 reads "≥ 85 % reasonable on manual review" with body text "Manual review pass on **all** decisions for gate 6." Cycle-11 mid-soak (Day-4) `manual_review_capacity_audit.py` showed exhaustive review at default 80/day budget capped reviewable fraction at 0.747 against the 0.85 threshold (peak day-5 had 146 decisions; per-day cap math is the bottleneck).
+
+The right long-term primitive for "is the population of decisions reasonable?" is statistical sampling — not exhaustive review. Gate-6's `%reasonable` IS a population statistic; sampling answers it correctly with bounded confidence. Decisions are mostly homogeneous (`disable_source` against persistent low-engagement Reddit; few distinct reasoning tuples per day) — sampling efficiency would be very high.
+
+This entry tracks the Phase-3 spec work to redesign gate 6 as sample-based, not exhaustive.
+
+**Why it matters to profitability / safety / reliability**
+
+1. **Capacity ceiling.** Decision volume scales with the number of sources × cadence. Phase-3 real-mode flip will likely add Phase-4 placeholders (`_disable_keyword_candidates`, `_tune_threshold_candidates`) increasing per-cycle decisions. Exhaustive review becomes operationally infeasible.
+2. **Quality of review degrades at high volume.** Reviewing 200 disable_source decisions/day is mostly skim-work; quality drops. Sample-based review of 30/200 with statistical rigor produces a stronger signal than exhaustive skim.
+3. **Phase-3 governance soak runbook will inherit this gate.** Fixing it once at Phase-3 spec time avoids re-doing the calculus per soak.
+
+**Evidence / Source**
+
+- `scripts/manual_review_capacity_audit.py` — mid-soak Day-4 result: 286/383 = 0.747 reviewable at 80/day; Day-5 peak 146 the dominant pressure.
+- `docs/governance/2026-05-06-gate-6-capacity-resolution-plan.md` — close-day resolution plan (Path 3 → Path 1 sequence; Path 2 = this entry).
+- `PROFIT-PHASE2-001-early-close-criteria.md` §8.5.1 gate 6 + body wording.
+- Distribution evidence: cycle-9 manual review of 67 day-1-to-day-3 decisions (commit `9f8deef`) returned 100 % reasonable across many distinct (target, reasoning) tuples — suggests low diversity (i.e., sampling-friendly population).
+
+**Proposed Fix**
+
+Phase-3 spec work, NOT close-day patch:
+
+1. **Sample size determination.** Compute statistical power for detecting `<85 %` reasonable rate at 95 % confidence. Likely `n ≈ 30-50` per soak window given the homogeneity of decisions.
+2. **Stratification.** Stratify sample across decision types (disable_source vs Phase-4 keyword_disable vs threshold_tune) once Phase-4 selectors land, so each type's reasonable rate is bounded.
+3. **§8.5.1 amendment.** Replace gate 6 wording with sample-based protocol: "Reviewer randomly samples N decisions stratified by action type; ≥ 85 % reasonable in the sample (one-sided 95 % CI)."
+4. **Tooling.** Update `governance_decision_review.py` to support `--sample N` mode with random selection; preserve `--bulk-mode` for exhaustive option.
+5. **Spec change.** New `docs/superpowers/specs/2026-XX-XX-gate-6-sample-based-redesign.md` carrying the statistical rigor (power calculation, expected error rate, stratification scheme).
+
+**Acceptance Criteria**
+
+- Sample size formally derived (with power + confidence assumptions) and reproducible via a script.
+- §8.5.1 amendment lands BEFORE the next governance soak begins.
+- `governance_decision_review.py --sample N` mode implemented + tested.
+- Phase-3 runbook references the sample-based gate, not the exhaustive one.
+
+**Notes**
+
+- Mid-soak amendment of §8.5.1 is OUT OF SCOPE for this entry — close PROFIT-PHASE2-001 under the existing exhaustive-review wording per `2026-05-06-gate-6-capacity-resolution-plan.md`. Sample-based redesign is the NEXT-soak gate, not this-soak rescue.
+- Statistical-rigor design likely takes 4-8 hours of focused spec work + peer review. Schedule alongside Phase-3 governance runbook drafting.
+
+**Related**
+
+- `PROFIT-PHASE2-001` — current soak; closes under exhaustive-review wording (Path 3 / Path 1 per resolution plan).
+- `PROFIT-GOV-002` — closed; same gate-6 area but addresses LLM-side rubber-stamp bias, not capacity.
+- `docs/governance/2026-05-06-gate-6-capacity-resolution-plan.md` — close-day resolution plan that DEFERS Path 2 to this entry.
+- Future spec: `docs/superpowers/specs/2026-XX-XX-gate-6-sample-based-redesign.md` (to be authored at Phase-3 spec time).
+
+---
+
 ### MAC-ASYNC-001
 
 | Field | Value |

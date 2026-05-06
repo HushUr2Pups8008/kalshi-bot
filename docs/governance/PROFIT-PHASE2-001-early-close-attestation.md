@@ -20,7 +20,7 @@ Pre-stage values reflect cumulative state through Day-4 confirmation (2026-05-04
 - [ ] **Gate 3: Safety counters.** KILL_SWITCH: `<TBD>`, batch_aborted: `<TBD>`, VALIDATION_ERROR: `<TBD>` (Day-4: 0/0/0; all must remain 0)
 - [ ] **Gate 4: PARSE_ERROR trailing 72 h.** Count in last 72 h: `<TBD>` (Day-4 trailing 72 h: 0; must remain 0)
 - [ ] **Gate 5: Cadence stability.** Max inter-cycle gap: `<TBD>` h (Day-4: 2.01 h max; must be ≤ 3 h); cadence-deviation > 10 %: `<TBD>` events (Day-4: 0)
-- [ ] **Gate 6: Manual review.** Decisions reviewed: `<TBD>` / `<TBD>`; reasonable count: `<TBD>`; reasonable rate: `<TBD>` % (≥ 85 % required; cycle-9 manual review of 67 day-1-to-day-3 decisions returned 100 % reasonable per commit `9f8deef`)
+- [ ] **Gate 6: Manual review.** Decisions reviewed: `<TBD>` / `<TBD>`; reasonable count: `<TBD>`; reasonable rate: `<TBD>` % (≥ 85 % required; cycle-9 manual review of 67 day-1-to-day-3 decisions returned 100 % reasonable per commit `9f8deef`). **Capacity resolution plan**: `docs/governance/2026-05-06-gate-6-capacity-resolution-plan.md` — try Path 3 (re-eval at close-time) first; fall back to Path 1 (operator increases daily review budget) if needed. Cycle-11 mid-soak audit (286/383 = 0.747 at 80/day) was Day-5-peak punitive; close-time may pass.
 - [ ] **Gate 7: No mid-soak code change OR §8.5.2 policy-equivalence carve-out.** `bash scripts/check_soak_invariant.sh` returned: `<TBD>` (0 = clean). Pre-cycle-10 surfaced 5 commits (all docs/scripts; §8.5.2 carve-out applied per `PROFIT-PHASE2-001-early-close-criteria.md`); §8.5.2 invocation table needs cycle-10/-11 commits appended at fire-time.
 - [ ] **Gate 8: Attestation written.** This document committed.
 
