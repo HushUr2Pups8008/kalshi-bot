@@ -1,0 +1,20 @@
+diff --git a/tasks/trade_readiness_gate.py b/tasks/trade_readiness_gate.py
+--- a/tasks/trade_readiness_gate.py
++++ b/tasks/trade_readiness_gate.py
+@@
+-G1_CONFIDENCE_THRESHOLD = 0.05
+-G1_FAILSAFE_CONFIDENCE_THRESHOLD = 0.10
++G1_CONFIDENCE_THRESHOLD = 0.04
++G1_FAILSAFE_CONFIDENCE_THRESHOLD = 0.08
+diff --git a/tests/test_lever_b_g1_calibration.py b/tests/test_lever_b_g1_calibration.py
+--- a/tests/test_lever_b_g1_calibration.py
++++ b/tests/test_lever_b_g1_calibration.py
+@@
+-@pytest.mark.xfail(reason=_LEVER_B_G1_XFAIL_REASON, strict=True)
+ def test_g1_confidence_threshold_lowered_to_spec_value():
+@@
+-def test_g1_threshold_is_currently_0_05():
++def test_g1_threshold_was_0_05_pre_deploy():
+@@
+-    assert G1_CONFIDENCE_THRESHOLD == pytest.approx(0.05, abs=0.001), (
++    assert G1_CONFIDENCE_THRESHOLD != pytest.approx(0.05, abs=0.001), (

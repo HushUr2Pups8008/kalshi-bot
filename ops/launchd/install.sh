@@ -5,6 +5,7 @@
 #   bash ops/launchd/install.sh                 # generate + install
 #   bash ops/launchd/install.sh --print         # print substituted plists, do not install
 #   bash ops/launchd/install.sh --uninstall     # bootout + remove installed plists
+#   bash ops/launchd/install.sh --allow-drift   # install despite equivalence diff
 #
 # Detects the local repo root and venv from the script location (resolves through
 # symlinks). Substitutes @REPO_ROOT@, @VENV_PYTHON@, @GOVERNANCE_LLM_MODEL@ into
@@ -24,6 +25,7 @@ REPO_ROOT="$(cd "$SCRIPT_PATH/../.." && pwd -P)"
 VENV_PYTHON="$REPO_ROOT/.venv/bin/python"
 TEMPLATE_DIR="$REPO_ROOT/ops/launchd"
 INSTALL_DIR="$HOME/Library/LaunchAgents"
+EQUIVALENCE_AUDIT="$REPO_ROOT/scripts/launchd_template_equivalence_audit.py"
 
 # Default per-machine settings; override via environment.
 GOVERNANCE_LLM_MODEL="${GOVERNANCE_LLM_MODEL:-qwen3:14b}"
@@ -40,21 +42,29 @@ TEMPLATES=(
 
 # ── Mode parsing ──────────────────────────────────────────────────────────────
 MODE="install"
-case "${1:-}" in
-    --print)     MODE="print" ;;
-    --uninstall) MODE="uninstall" ;;
-    "")          MODE="install" ;;
-    *)
-        echo "unknown argument: $1" >&2
-        echo "usage: $0 [--print | --uninstall]" >&2
-        exit 2
-        ;;
-esac
+ALLOW_DRIFT=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --print)       MODE="print"; shift ;;
+        --uninstall)   MODE="uninstall"; shift ;;
+        --allow-drift) ALLOW_DRIFT=1; shift ;;
+        *)
+            echo "unknown argument: $1" >&2
+            echo "usage: $0 [--print | --uninstall | --allow-drift]" >&2
+            exit 2
+            ;;
+    esac
+done
 
 # ── Sanity checks ─────────────────────────────────────────────────────────────
 if [[ ! -x "$VENV_PYTHON" ]]; then
     echo "ERROR: venv python not found at $VENV_PYTHON" >&2
     echo "       run: python3.14 -m venv .venv && pip install -r requirements.txt" >&2
+    exit 1
+fi
+
+if [[ ! -f "$EQUIVALENCE_AUDIT" ]]; then
+    echo "ERROR: equivalence audit missing: $EQUIVALENCE_AUDIT" >&2
     exit 1
 fi
 
@@ -90,6 +100,21 @@ case "$MODE" in
         done
         ;;
     install)
+        if [[ "$ALLOW_DRIFT" != "1" ]]; then
+            if ! "$VENV_PYTHON" "$EQUIVALENCE_AUDIT" --installed; then
+                echo >&2
+                echo "ERROR: rendered templates drift from installed launchd plists." >&2
+                echo "Refusing install. Re-run with --allow-drift only after operator approval." >&2
+                exit 1
+            fi
+        elif [[ -t 0 ]]; then
+            echo "WARNING: --allow-drift bypasses production-config equivalence gate."
+            read -r -p "Type ALLOW-DRIFT to continue: " confirmation
+            if [[ "$confirmation" != "ALLOW-DRIFT" ]]; then
+                echo "aborted"
+                exit 1
+            fi
+        fi
         mkdir -p "$INSTALL_DIR"
         echo "Repo root:           $REPO_ROOT"
         echo "Venv python:         $VENV_PYTHON"

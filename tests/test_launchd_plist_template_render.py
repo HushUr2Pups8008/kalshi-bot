@@ -44,3 +44,55 @@ def test_all_launchd_templates_render_valid_plists():
         assert "@REPO_ROOT@" not in str(plist), label
         assert "@VENV_PYTHON@" not in str(plist), label
         assert "@GOVERNANCE_LLM_MODEL@" not in str(plist), label
+
+
+def test_launchd_templates_match_installed_plists_when_present():
+    installed_dir = Path.home() / "Library/LaunchAgents"
+    missing = [
+        label
+        for label in EXPECTED_LABELS
+        if not (installed_dir / f"{label}.plist").exists()
+    ]
+    if missing:
+        import pytest
+
+        pytest.skip(f"installed launchd plists absent: {', '.join(sorted(missing))}")
+
+    result = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv/bin/python"),
+            str(REPO_ROOT / "scripts/launchd_template_equivalence_audit.py"),
+            "--installed",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_launchd_templates_match_canonical_fixtures_when_present():
+    fixtures_dir = REPO_ROOT / "tests/fixtures/installed_plists"
+    missing = [
+        label
+        for label in EXPECTED_LABELS
+        if not (fixtures_dir / f"{label}.plist").exists()
+    ]
+    if missing:
+        import pytest
+
+        pytest.skip(f"canonical installed-plist fixtures absent: {', '.join(sorted(missing))}")
+
+    result = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv/bin/python"),
+            str(REPO_ROOT / "scripts/launchd_template_equivalence_audit.py"),
+            "--fixtures",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr

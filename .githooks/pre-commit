@@ -8,11 +8,22 @@
 # Bypass (for emergency commits only):  git commit --no-verify
 set -euo pipefail
 
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+LAUNCHD_AUDIT="$REPO_ROOT/scripts/launchd_template_equivalence_audit.py"
+VENV_PYTHON="$REPO_ROOT/.venv/bin/python"
+
+if git diff --cached --name-only | grep -q '^ops/launchd/.*\.plist\.template$'; then
+    if [ ! -x "$VENV_PYTHON" ]; then
+        echo "[pre-commit] ERROR: venv python not found at $VENV_PYTHON" >&2
+        exit 1
+    fi
+    "$VENV_PYTHON" "$LAUNCHD_AUDIT" --installed
+fi
+
 if ! git diff --cached --name-only | grep -qx "VERSION"; then
     exit 0
 fi
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
 SYNC_SCRIPT="$REPO_ROOT/scripts/sync_readme_version.py"
 
 if [ ! -x "$SYNC_SCRIPT" ]; then
