@@ -465,12 +465,14 @@ If a candidate is blocked by the Trade Readiness Gate, `BLEND_DECISION` must be 
 2. **No reinterpretation.** If an instruction appears ambiguous, do not resolve the ambiguity by choosing an interpretation. Surface it.
 3. **No scope expansion.** Implementing a specified task does not authorize touching adjacent code unless explicitly included in the task.
 4. **Contract conflicts are blockers.** If a task instruction appears to conflict with this contract, the task is blocked. Do not resolve the conflict by choosing which to follow.
+5. **"Capture" is byte-faithful.** If a task says "capture" production configuration into a repo template (e.g., installed launchd plist → `*.plist.template`), the only legal transformation is allowlisted token substitution (per §15). Do NOT infer behavioral content from spec docs, README, or intent. If the source artifact cannot be read (sandbox blocked, file absent), the task is blocked — escalate per §9 Claude rule 4. Authoring a template "from intent" is a contract violation, not a workaround.
 
 ### Claude Rules
 
 1. **Resolve before handoff.** Any ambiguity in task specifications must be resolved before Codex begins implementation.
 2. **Contract updates are explicit.** If architectural understanding evolves, this contract is updated in writing before affected tasks begin. Verbal or inline clarifications do not override the contract.
 3. **Invariants are not negotiable during implementation.** If an implementation requires an invariant to be relaxed, that is a design discussion, not an implementation decision.
+4. **Sandbox-blocked source reads escalate, not infer.** If the source artifact required for a capture task (production config, installed plist, live `.env`) cannot be read in the current execution sandbox, the correct response is "I cannot safely read X; approve read access or provide contents. Items dependent on this source are blocked." Do NOT proceed by inferring content from sibling docs.
 
 ---
 
@@ -772,3 +774,84 @@ The Phase Gate Review (2026-04-19) issued PROCEED WITH CONDITIONS. All condition
 | Structural recompute trigger (S3.2) | Resolved: see CL-7 |
 | `input_sources` + `token_count` semantics (S3.2) | Resolved: see CL-8 |
 | `disagreement_score` full formula (S3.3) | Resolved: see CL-9 |
+
+---
+
+## 15. Production Configuration Capture Invariants
+
+This section codifies the capture-discipline rules surfaced by the cycle-8 launchd plist consolidation incident (2026-05-05). When a task requires capturing production-machine configuration (installed launchd plists, live `.env` files, runtime config, etc.) into repo source-of-truth (templates, fixtures), the rules below are invariants — not guidelines.
+
+The incident in one sentence: Codex authored 4 launchd plist templates from spec/intent rather than from the installed plists, introducing material behavioral drift (PYTHONUNBUFFERED removed, 96× cadence increase, one-shot → recurring, etc.). The drift was caught before install via diff against installed state. Root cause: "capture" was interpreted as "create templates matching expected purpose" instead of "preserve installed behavior exactly." Rewrite landed at commit `96e2995`. Background: `docs/governance/2026-05-05-launchd-plist-consolidation-decision.md` (the cycle-7 consolidation directive that the cycle-8 incident bypassed).
+
+### Rule 1 — No source, no template
+
+If the source artifact required for capture cannot be read (sandbox blocked, file absent, permissions denied), the task is **blocked**. Do not proceed by inferring content from:
+
+- Sibling documentation (README, comments, design docs)
+- Adjacent scripts that "should" describe the artifact
+- Memory of prior conversations
+- Similarity to publicly-available examples
+
+Surface the blocker per §9 Claude rule 4. The escalation channel is asking the operator for direct read access or for the artifact's contents pasted into the conversation.
+
+### Rule 2 — Capture is behavior-preserving; only allowlisted substitutions
+
+The only legal transformations a capture task may apply are token substitutions from this finite allowlist:
+
+| token | substitutes for |
+|---|---|
+| `@REPO_ROOT@` | absolute repo-root path (machine-local) |
+| `@VENV_PYTHON@` | absolute path to `.venv/bin/python` |
+| `@GOVERNANCE_LLM_MODEL@` | governance LLM model identifier |
+
+Future allowlist additions require an IC update in the same commit that introduces them. Anything not on the allowlist must be preserved byte-faithfully — including comments, whitespace, ordering of dict keys, environment variable presence, and operational scheduling parameters.
+
+### Rule 3 — Equivalence test required
+
+Each capture artifact must have a sibling test that:
+
+1. Renders the template with concrete token substitutions for the local machine.
+2. Reverse-substitutes the rendered output back to canonical form.
+3. Diffs against either:
+   - the live source artifact (if reachable), or
+   - a captured fixture stored under `tests/fixtures/<artifact-class>/`.
+
+A non-empty diff is a test failure. The fixture, not the live artifact, is the long-term oracle — operator hand-edits to the live artifact must be re-captured into the fixture or reverted before the test re-passes.
+
+### Rule 4 — Separate capture from improvement
+
+A capture task lands one commit: byte-faithful capture only. Any intentional behavioral changes (e.g., changing `bothealth` cadence, renaming log paths, adding env vars) land in **separate, reviewed commits** with:
+
+- Explicit operator approval per change
+- A drift table documenting before / after / rationale
+- The equivalence test refreshed in the same commit
+
+Bundling capture with improvement is a contract violation — it conflates two semantically different operations and defeats the equivalence-test oracle.
+
+### Rule 5 — Drift audit is a gate, not advisory
+
+Any installer / deployer (e.g., `ops/launchd/install.sh`) that writes captured artifacts to production must refuse to proceed when the equivalence test reports drift. The legal escape hatches are:
+
+- An explicit `--allow-drift` flag (non-default; logged)
+- An interactive operator confirmation prompt in TTY mode
+
+Silent drift-tolerant installation is forbidden.
+
+### Rule 6 — Sandbox-blocked source reads escalate
+
+When the agent's execution sandbox blocks reading the live source artifact, the correct response is to say so — not to fall back on inference. This is a process answer to the root cause of the cycle-8 incident; see §9 Claude rule 4 for the escalation specification.
+
+### Scope
+
+These rules apply to capture tasks for: launchd / systemd unit files, environment files, runtime config (e.g., `config.py` snapshots), database schema captures, and any other artifact where the production-machine state is the source of truth and the repo template is a derivative.
+
+These rules do NOT apply to: code modules under `/analysis`, `/tasks`, `/feeds`, `/trading`, `/governance` — those follow §1 invariants + §2 architectural boundaries. The distinction is "is the production machine state authoritative?" — for production config, yes; for application code, the repo is authoritative.
+
+### Cross-references
+
+- §9 Codex rule 5 — capture-is-byte-faithful enforcement
+- §9 Claude rule 4 — sandbox-blocked-read escalation
+- Commit `96e2995` — byte-faithful rewrite landing the post-incident captures
+- `docs/governance/2026-05-05-launchd-plist-consolidation-decision.md` — cycle-7 consolidation directive (the source-of-truth-policy decision that the cycle-8 incident bypassed)
+- `ops/launchd/*.template` — current canonical captures (post-`96e2995`)
+- `tests/test_launchd_plist_template_render.py` — current rendering test (Rule 3 oracle is queued for cycle-10 Codex item 1; current test is structural-only)

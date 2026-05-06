@@ -38,7 +38,7 @@ Insert ABOVE `## [0.30.0] - 2026-05-15` (after Wave-1 lands) once Wave-2 is read
 
 
 ```markdown
-## [0.30.1] - 2026-05-22  (or 2026-05-23 — fill in actual deploy date)
+## [0.31.0] - 2026-05-22  (or 2026-05-23 — fill in actual deploy date)
 
 ### Added (PROFIT-EDGE-004 — Wave-2 first feed onboarding)
 
@@ -86,7 +86,7 @@ stable in production for ≥ 14 d. Pre-deploy validation:
 ### Operator deploy commands
 
 ```bash
-echo "0.30.1" > VERSION
+echo "0.31.0" > VERSION
 git add VERSION  # pre-commit hook syncs README
 
 # Apply RSS_FEEDS + classifier + (option-C only) evidence_scorer changes
@@ -95,7 +95,7 @@ git add VERSION  # pre-commit hook syncs README
 .venv/bin/python -m pytest -q
 .venv/bin/ruff check .
 
-git tag -a v0.30.1 -m "Wave-2 first feed onboarding"
+git tag -a v0.31.0 -m "Wave-2 first feed onboarding"
 git push origin main --tags
 ```
 
@@ -105,12 +105,12 @@ git push origin main --tags
 
 ## Wave-3 pre-staged CHANGELOG block
 
-Insert ABOVE `## [0.30.1]` once Wave-3 is ready:
+Insert ABOVE `## [0.31.0]` once Wave-3 is ready:
 
 <!-- audit-skip-block: prestaged Wave-3 CHANGELOG content -->
 
 ```markdown
-## [0.31.0] - 2026-06-13  (fill in actual deploy date — typically 14+ d after Wave-2 close)
+## [0.32.0] - 2026-06-13  (fill in actual deploy date — typically 14+ d after Wave-2 close)
 
 ### Added (PROFIT-EDGE-004 — Wave-3 attribution + risk-control levers)
 
@@ -152,7 +152,7 @@ pivot (Path 3, last resort).
 ### Operator deploy commands
 
 ```bash
-echo "0.31.0" > VERSION
+echo "0.32.0" > VERSION
 git add VERSION  # pre-commit hook syncs README
 
 # Apply Lever B threshold change in tasks/trade_readiness_gate.py:69-70
@@ -163,7 +163,7 @@ git add VERSION  # pre-commit hook syncs README
 .venv/bin/python -m pytest -q
 .venv/bin/ruff check .
 
-git tag -a v0.31.0 -m "Wave-3 attribution + risk-control levers"
+git tag -a v0.32.0 -m "Wave-3 attribution + risk-control levers"
 git push origin main --tags
 ```
 

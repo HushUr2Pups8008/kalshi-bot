@@ -485,7 +485,10 @@ def test_launchd_plist_drift_audit_compares_templates_and_db_backup_plist():
     script = (REPO_ROOT / "scripts/launchd_plist_drift_audit.sh").read_text(encoding="utf-8")
 
     assert "ops/launchd/*.plist.template" in script
-    assert "com.kalshi.db-backup" in script
     assert "@REPO_ROOT@" in script
     assert "cmp -s" in script
     assert "--install-dir" in script
+    # db-backup is audited via the ops/launchd/*.plist.template glob asserted
+    # above. Cycle-8 (commit 193fb9f) refactored the script to template-glob
+    # rather than literal labels; assert the template artifact exists instead.
+    assert (REPO_ROOT / "ops/launchd/com.kalshi.db-backup.plist.template").exists()

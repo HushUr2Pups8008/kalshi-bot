@@ -13,8 +13,9 @@ prestaged-changelog blocks where links are repo-root-relative for the
 PASTE-TARGET file (e.g. `CHANGELOG.md` at repo root), not for the source
 file the audit reads.
 
-Per-link skip: the link's URL portion may include `<!-- audit-skip -->`
-to skip a single link.
+Fenced code blocks (``` or ~~~) are excluded — content inside fences is
+code formatting, not hyperlink markup. Inline code spans (`...`) are
+also stripped before link match for the same reason.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from urllib.parse import unquote
 
 LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+FENCE_RE = re.compile(r"^\s*(```|~~~)")
 SKIP_BLOCK_OPEN_RE = re.compile(r"<!--\s*audit-skip-block(?::[^>]*)?\s*-->")
 SKIP_BLOCK_CLOSE_RE = re.compile(r"<!--\s*/audit-skip-block\s*-->")
 SKIP_PREFIXES = ("http://", "https://", "mailto:", "#")
@@ -58,6 +60,7 @@ def audit(repo_root: Path, include_archive: bool = False) -> list[str]:
             continue
         text = source.read_text(errors="replace")
         in_skip_block = False
+        in_fence = False
         for line_no, line in enumerate(text.splitlines(), start=1):
             if SKIP_BLOCK_OPEN_RE.search(line):
                 in_skip_block = True
@@ -66,6 +69,11 @@ def audit(repo_root: Path, include_archive: bool = False) -> list[str]:
                 in_skip_block = False
                 continue
             if in_skip_block:
+                continue
+            if FENCE_RE.match(line):
+                in_fence = not in_fence
+                continue
+            if in_fence:
                 continue
             scrubbed = INLINE_CODE_RE.sub(lambda m: " " * len(m.group(0)), line)
             for match in LINK_RE.finditer(scrubbed):
