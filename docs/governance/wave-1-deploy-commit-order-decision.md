@@ -42,12 +42,14 @@ Two commit-shape options per the rehearsal checklist §5:
 
 | commit | scope | xfail markers removed |
 |---|---|---|
-| 1 | PROFIT-OBS-005 cooldown sentinel-default | `tests/test_executor.py::TestCooldownSentinelOBS005` |
-| 2 | PROFIT-MATCH-001 (B′) token-guard | `tests/test_market_matcher.py::TestMatch001TokenGuardRefinement` |
-| 3 | PROFIT-OBS-003 BlendTask SKIPPED-emission | `tests/test_blend_task.py::TestObs003SkippedEmission` |
-| 4 | PROFIT-EXEC-002 series-correlation guard | `tests/test_executor.py::TestExec002SeriesCorrelationGuard` |
-| 5 | PROFIT-GOV-003 governance_monitor.py fix | `tests/test_governance_monitor.py::TestGov003Fix` |
-| 6 | PROFIT-EDGE-004 Lever A.1 classifier prerequisite + VERSION bump 0.30.0 + CHANGELOG entry + tag `v0.30.0` | `tests/test_main_pipeline.py::TestSourceClassClassifierLeverA1` (6 markers) |
+| 1 | PROFIT-OBS-005 cooldown sentinel-default | `tests/test_executor.py` — `_OBS005_XFAIL_REASON` declaration + 5 decorators (lines 1052, 1071, 1086, 1100, 1139) |
+| 2 | PROFIT-MATCH-001 (B′) token-guard | `tests/test_market_matcher.py` — `_MATCH001_XFAIL_REASON` declaration + 7 decorators (lines 502, 537, 605, 650, 722, 794, 803) |
+| 3 | PROFIT-OBS-003 BlendTask SKIPPED-emission | `tests/test_blend_task.py` — `_OBS003_XFAIL_REASON` declaration + 4 decorators (lines 546, 627, 718, 783) |
+| 4 | PROFIT-EXEC-002 series-correlation guard | `tests/test_blend_task.py` — `_EXEC002_XFAIL_REASON` declaration + 3 decorators (lines 895, 917, 989) |
+| 5 | PROFIT-GOV-003 governance_monitor.py fix | `tests/test_governance_monitor.py` — `_GOV_MONITOR_XFAIL_REASON` declaration + 7 decorators (lines 143, 161, 179, 208, 235, 265, 291) |
+| 6 | PROFIT-EDGE-004 Lever A.1 classifier prerequisite + VERSION bump 0.30.0 + CHANGELOG entry + tag `v0.30.0` | `tests/test_main_pipeline.py::TestSourceClassClassifierLeverA1` — `_LEVER_A_A1_XFAIL_REASON` declaration + 6 decorators (lines 1602, 1607, 1615, 1620, 1628, 1633) |
+
+**Note (2026-05-06 cycle-11 update):** earlier drafts of this table referenced test class names like `TestObs005CooldownSentinelDefault`, `TestMatch001TokenGuardRefinement`, etc. Those classes do not exist — markers are decorators on plain functions, keyed off spec-named `_<SPEC>_XFAIL_REASON` constants. Line numbers + constant names verified against tree HEAD 2026-05-06.
 
 The order above lands MATCH-001 + OBS-003 + EXEC-002 in the middle (the highest-impact features) so a regression detected at commits 7+ bisects to the most-suspect feature first. OBS-005 + GOV-003 are observability / governance fixes with low blast radius — landing first or last is interchangeable. Lever A.1 lands LAST because it bundles the VERSION bump (cheapest commit conceptually; safest to combine with the version-bump ceremony).
 

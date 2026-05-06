@@ -122,12 +122,12 @@ the following pre-loaded harnesses (each test xpasses on the deploy
 commit; the marker MUST be removed in the same hunk to keep CI
 green):
 
-- `tests/test_main_pipeline.py::TestSourceClassClassifierLeverA1` (6 markers)
-- `tests/test_executor.py::TestObs005CooldownSentinelDefault` (multiple)
-- `tests/test_market_matcher.py::TestMatch001TokenGuardRefinement` (multiple)
-- `tests/test_blend_task.py::TestObs003SkippedEmission` (multiple)
-- `tests/test_executor.py::TestExec002SeriesCorrelationGuard` (multiple)
-- `tests/test_governance_monitor.py::TestGov003Fix` (multiple)
+- `tests/test_main_pipeline.py::TestSourceClassClassifierLeverA1` — `_LEVER_A_A1_XFAIL_REASON` + 6 markers (lines 1602, 1607, 1615, 1620, 1628, 1633)
+- `tests/test_executor.py` — `_OBS005_XFAIL_REASON` + 5 markers (lines 1052, 1071, 1086, 1100, 1139)
+- `tests/test_market_matcher.py` — `_MATCH001_XFAIL_REASON` + 7 markers (lines 502, 537, 605, 650, 722, 794, 803)
+- `tests/test_blend_task.py` — `_OBS003_XFAIL_REASON` + 4 markers (lines 546, 627, 718, 783)
+- `tests/test_blend_task.py` — `_EXEC002_XFAIL_REASON` + 3 markers (lines 895, 917, 989) (NB: EXEC-002 markers live in test_blend_task.py, not test_executor.py)
+- `tests/test_governance_monitor.py` — `_GOV_MONITOR_XFAIL_REASON` + 7 markers (lines 143, 161, 179, 208, 235, 265, 291)
 
 The Wave-2 (A.1+) and A.1+1.5 harnesses remain xfail-strict —
 those deploy in Wave 2 (≥ Day 14), not Wave 1.

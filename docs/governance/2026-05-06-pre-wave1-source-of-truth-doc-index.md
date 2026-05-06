@@ -17,6 +17,8 @@
 | Compact 30-45min checklist? | `docs/governance/2026-05-05-day-7-fire-time-compact-checklist.md` |
 | Pre-staged attestation values? | `docs/governance/2026-05-05-day-7-attestation-prestage.md` |
 | Attestation template? | `docs/governance/PROFIT-PHASE2-001-early-close-attestation-template.md` |
+| Pre-stage attestation file (cycle-11) | `docs/governance/PROFIT-PHASE2-001-early-close-attestation.md` |
+| Day-7 mid-soak confirmation skeleton (cycle-10) | `docs/governance/2026-05-07-day-7-pre-soak-confirmation.md` |
 | Decision flowchart? | `docs/governance/PROFIT-PHASE2-001-close-day-decision-flow.md` |
 | Pre-fire dry-run report? | `docs/governance/2026-05-06-pre-day7-dry-run-rehearsal.md` |
 | §8.5.2 carve-out invocation table? | `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` (§"§8.5.2 policy-equivalence carve-outs invoked") |
@@ -32,6 +34,10 @@
 | Cadence + UTC windows? | `docs/governance/2026-05-05-wave-1-deploy-day-timing.md` |
 | 14-row regression watch? | `docs/governance/wave-1-post-deploy-observation-plan.md` |
 | Pre-staged CHANGELOG block? | `docs/governance/wave-1-changelog-entry-prestaged.md` |
+| Pre-staged per-commit messages (cycle-10) | `docs/governance/wave-1-commit-messages-prestaged.md` |
+| Pre-Wave-1 deploy dry-run rehearsal (cycle-10) | `docs/governance/2026-05-06-pre-wave1-deploy-dry-run-rehearsal.md` |
+| CHANGELOG drift-check refresh (cycle-10/-11) | `docs/governance/2026-05-06-changelog-drift-check-cycle-10.md` |
+| Cycle-10 blocker resolution | `docs/governance/2026-05-06-cycle-10-blocker-resolution.md` |
 | Smoke wrapper? | `scripts/wave1_post_deploy_smoke.sh` (cycle 2) |
 | Per-commit smoke? | `scripts/wave1_fire_time_smoke.sh` (cycle 4) |
 | Pre-deploy state baseline (4 reports)? | `docs/governance/2026-05-05-pre-wave1-{skipped-rate,opportunity-age,cooldown,trade-rate}-*.md` |
@@ -94,6 +100,8 @@
 |---|---|
 | Implementation Contract (binding)? | `docs/IMPLEMENTATION_CONTRACT.md` |
 | Multi-cycle contract adherence audits? | `docs/governance/2026-05-05-cross-cycle-contract-adherence-review.md` + `2026-05-05-implementation-contract-cycle-4-5-review.md` + `2026-05-06-implementation-contract-cycle-6-7-review.md` |
+| Production config capture invariants (cycle-8 incident codified)? | `docs/IMPLEMENTATION_CONTRACT.md` §15 |
+| Cycle-10 capture-incident decision + commit | `docs/governance/2026-05-05-launchd-plist-consolidation-decision.md` + commit `96e2995` (byte-faithful rewrite) |
 | Lever menu (post-2026-05-05 locks)? | `docs/superpowers/specs/2026-05-03-edge-004-lever-menu-design.md` (§5.1 + §5.2) |
 | Closure-path TLDR? | `docs/governance/edge-004-closure-path-tldr-v3.md` |
 | Unified debt log? | `docs/profit_path_debt_log.md` |
@@ -125,7 +133,9 @@
 | Pre-commit hook health audit | `scripts/precommit_hook_health_audit.sh --json` |
 | Test coverage audit | `scripts/test_coverage_audit.py` |
 | Release tag inventory | `scripts/release_tag_inventory.sh` + `scripts/release_tag_inventory_snapshot.py` |
-| launchd plist drift audit | `scripts/launchd_plist_drift_audit.sh --json` |
+| launchd plist drift audit (legacy) | `scripts/launchd_plist_drift_audit.sh --json` |
+| launchd template equivalence audit (cycle-10 IC §15 Rule 3 oracle) | `scripts/launchd_template_equivalence_audit.py [--installed \| --fixtures] [--json]` |
+| Doc xref audit (markdown link + version-drift in prestaged blocks) | `scripts/doc_xref_audit.py [--include-archive]` |
 | MacBook import disposition | `scripts/macbook_import_disposition_audit.sh` |
 | MacBook import archive migration | `scripts/macbook_import_archive_migration.sh` |
 | Doc cross-link audit | `scripts/doc_xref_audit.py` |
