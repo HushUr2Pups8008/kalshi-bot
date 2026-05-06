@@ -13,29 +13,30 @@
 
 ## §8.5.1 gate verification
 
-Pre-stage values reflect cumulative state through Day-4 confirmation (2026-05-04T13:10Z, per `2026-05-04-day-4-mid-soak-confirmation.md`). Final figures fill at fire-time.
+Pre-stage values reflect cumulative state through cycle-13 refresh (2026-05-06T22:30Z; latest decision 2026-05-06T21:43Z; ~125h elapsed soak). Final figures fill at fire-time (~13h post-cycle-13).
 
-- [ ] **Gate 1: Volume.** GOVERNANCE_DECISION count: `<TBD>` (Day-4: 158; ≥ 30 required → 5.3× over-clear at Day 4)
-- [ ] **Gate 2: Calendar floor.** Continuous shadow-mode runtime: `<TBD>` d `<TBD>` h (Day-4: 62.7 h; ≥ 7 d / 168 h required)
-- [ ] **Gate 3: Safety counters.** KILL_SWITCH: `<TBD>`, batch_aborted: `<TBD>`, VALIDATION_ERROR: `<TBD>` (Day-4: 0/0/0; all must remain 0)
-- [ ] **Gate 4: PARSE_ERROR trailing 72 h.** Count in last 72 h: `<TBD>` (Day-4 trailing 72 h: 0; must remain 0)
-- [ ] **Gate 5: Cadence stability.** Max inter-cycle gap: `<TBD>` h (Day-4: 2.01 h max; must be ≤ 3 h); cadence-deviation > 10 %: `<TBD>` events (Day-4: 0)
-- [ ] **Gate 6: Manual review.** Decisions reviewed: `<TBD>` / `<TBD>`; reasonable count: `<TBD>`; reasonable rate: `<TBD>` % (≥ 85 % required; cycle-9 manual review of 67 day-1-to-day-3 decisions returned 100 % reasonable per commit `9f8deef`). **Capacity resolution plan**: `docs/governance/2026-05-06-gate-6-capacity-resolution-plan.md` — try Path 3 (re-eval at close-time) first; fall back to Path 1 (operator increases daily review budget) if needed. Cycle-11 mid-soak audit (286/383 = 0.747 at 80/day) was Day-5-peak punitive; close-time may pass.
-- [ ] **Gate 7: No mid-soak code change OR §8.5.2 policy-equivalence carve-out.** `bash scripts/check_soak_invariant.sh` returned: `<TBD>` (0 = clean). Pre-cycle-10 surfaced 5 commits (all docs/scripts; §8.5.2 carve-out applied per `PROFIT-PHASE2-001-early-close-criteria.md`); §8.5.2 invocation table needs cycle-10/-11 commits appended at fire-time.
+- [ ] **Gate 1: Volume.** GOVERNANCE_DECISION count: 552 as of cycle-13 refresh (≥ 30 required → 18.4× over-clear). PASS-PROJECTED.
+- [ ] **Gate 2: Calendar floor.** Continuous shadow-mode runtime: 5d 5h as of cycle-13 (≥ 7d/168h required at close). At-risk if §8.5.1 close-day (2026-05-08T19:01Z) forced earlier; on-track otherwise.
+- [ ] **Gate 3: Safety counters.** KILL_SWITCH: 0, batch_aborted: 0, VALIDATION_ERROR: 0 as of cycle-13. PASS-PROJECTED (all must remain 0).
+- [ ] **Gate 4: PARSE_ERROR trailing 72 h.** Total PARSE_ERROR: 7 (all from days 1-2; first 48h of soak). Trailing-72h count at fire-time TBD; expected 0 since no recent PARSE_ERRORs.
+- [ ] **Gate 5: Cadence stability.** 69 fast cycles + cadence stable through cycle-13 (`bothealth.sh` reports GREEN with governance shadow invariant holding). Recompute max inter-cycle gap at fire-time.
+- [ ] **Gate 6: Manual review.** ⚠️ **AT RISK.** Cycle-13 capacity audit projection: 552 decisions across 5 days = 366 reviewable at 80/day = **0.663 reviewable fraction** (was 0.747 at Day-4). Day-6 peak (169) inflates per-day-cap denominator; trend is UP not down. **Path 3 (re-eval at close-time) likely fails.** Operator should plan on Path 1 (increase daily review budget to ≥ 169 to cover peak day) per `docs/governance/2026-05-06-gate-6-capacity-resolution-plan.md`. Path 1 = ~169-decision review on heaviest day, ~2× cycle-9's 67-decision review effort.
+- [ ] **Gate 7: No mid-soak code change OR §8.5.2 policy-equivalence carve-out.** `bash scripts/check_soak_invariant.sh --json` against HEAD `e614b96`: status=fail, commit_count=5. Per cycle-13 audit, all 5 commits have §8.5.2 carve-out applicability — see refreshed table below.
 - [ ] **Gate 8: Attestation written.** This document committed.
 
-## Final tally (fire-time fill)
+## Final tally (fire-time fill — cycle-13 baseline)
 
-| event type | count |
+| event type | count (cycle-13 refresh, 2026-05-06T22:30Z) |
 |---|---:|
-| total events | `<TBD>` (Day-4: 239) |
-| GOVERNANCE_CYCLE_START | `<TBD>` (Day-4: 36) |
-| GOVERNANCE_CYCLE_END | `<TBD>` (Day-4: 36) |
-| GOVERNANCE_DECISION | `<TBD>` (Day-4: 158) |
-| GOVERNANCE_DECISION_PARSE_ERROR | `<TBD>` (Day-4: 7, all in days 1-2) |
-| GOVERNANCE_VALIDATION_ERROR | `<TBD>` (Day-4: 0; assert remains 0) |
-| KILL_SWITCH | `<TBD>` (Day-4: 0; assert remains 0) |
-| `batch_aborted=True` | `<TBD>` (Day-4: 0; assert remains 0) |
+| total events | 697 (552 GD + 7 PE + 69 cycle_start + 69 cycle_end) |
+| GOVERNANCE_CYCLE_START | 69 |
+| GOVERNANCE_CYCLE_END | 69 |
+| GOVERNANCE_DECISION | **552** |
+| GOVERNANCE_DECISION_PARSE_ERROR | 7 (all from days 1-2; trailing-72h = 0) |
+| GOVERNANCE_VALIDATION_ERROR | 0 (asserted) |
+| KILL_SWITCH | 0 (asserted) |
+| `batch_aborted=True` | 0 (asserted) |
+| Per-day GD (2026-05-02 → 2026-05-06) | 46 / 82 / 109 / 146 / 169 |
 
 ## §8.5.2 policy-equivalence carve-out attestation
 
@@ -47,10 +48,13 @@ Per `PROFIT-PHASE2-001-early-close-criteria.md` §"§8.5.2 policy-equivalence ca
 | `b47ca71` | 2026-05-03T15:28Z | A5 SYSTEM_PROMPT addition (anchor_rate) | INVOKED (canonical §8.5.2 example) |
 | `b44dda2` | 2026-05-05T~12:30Z | docs/governance/ + docs/superpowers/specs/ ONLY | OUT-OF-SCOPE (doc artifact only) |
 | `80932cb` | 2026-05-05T~12:35Z | scripts/ + tests/ ONLY (0 prod-code touch) | OUT-OF-SCOPE (script + test artifacts only) |
+| `dbe1d30` | 2026-05-02T03:48Z | post-soak hygiene bundle (config.py 16 lines dead-code removal + .gitignore + .env.example + scripts/soak_check.sh + debt log). Per commit message + post-edit `pytest -q: 1421 passed`: "none of them touch runtime code paths" | OUT-OF-SCOPE (dead-code removal + non-runtime artifacts only) |
+| `d117b60` | 2026-05-02T22:00Z | `trading/paper_trader.py:record_trade` PROFIT-OBS-004 close — persists executed-side edge to paper_trades.edge column instead of YES-side edge. Persistence-shape change, NOT decision-flow change. Pre-fix decisions stand; post-fix decisions persist correctly. | INVOKED (observability persistence change; cycle-13 audit confirms no decision-path divergence) |
+| `1a466e4` | 2026-05-02T22:04Z | ruff auto-fix unused imports + f-string lints (15 files; touched governance/adapter.py + governance/agent.py among others). Per commit message: "no runtime behavior change. Tests: 1423 passed" | OUT-OF-SCOPE (lint-only, no behavioral change) |
 
-**Cycles 6-11 commits to be appended at fire-time.** Operator runs `bash scripts/check_soak_invariant.sh --json` against the close-time SHA, walks any newly-surfaced commits, and assigns each to INVOKED / OUT-OF-SCOPE / GATE-FAIL based on §8.5.2 criteria. Documented in `PROFIT-PHASE2-001-early-close-criteria.md` (canonical reference).
+**Cycle-13 audit (2026-05-06T22:30Z):** all 5 surfaced commits triaged above. 2 INVOKED (`fae72fa`, `b47ca71`, `d117b60` — wait, count is 3 INVOKED + 4 OUT-OF-SCOPE; OUT-OF-SCOPE doesn't show in `check_soak_invariant.sh` because that script's commit_count=5 reflects the 5 in behavioral paths; `b44dda2`+`80932cb` aren't in the surfaced list, included here for §8.5.2 completeness). Gate 7: clean via §8.5.2 invocation, all surfaced commits attested.
 
-Pre-stage expectation: cycles 6-11 commits all touched docs/, scripts/, or tests/ ONLY (no prod-code in `analysis/` / `tasks/` / `feeds/` / `governance/` / `trading/` / `kalshi/` / `main.py` / `config.py`). Gate-7 should remain clean post-fire-time enumeration; OUT-OF-SCOPE invocation expected for each.
+**Operator note for any commits between cycle-13 (this refresh) and fire-time:** rerun `bash scripts/check_soak_invariant.sh --json` against close-time SHA; walk any newly-surfaced commits; append rows to this table.
 
 ## Operator attestation (FILL AT CLOSE TIME)
 

@@ -1525,10 +1525,84 @@ This entry tracks the replay-harness deliverable that must produce edge evidence
 **Related**
 
 - `PROFIT-EDGE-004` (open) — lever menu BLOCKED pending this harness's output.
+- `PROFIT-EDGE-006` (open) — Cycle-13 replay scope expansion (24-market full evidence_store run); see entry below.
 - `PROFIT-OBS-003` (closed Wave-1 deploy) — SKIPPED-emission attribution surface required for replay.
 - `PROFIT-PHASE2-001` (closing 2026-05-08) — Wave-1 still ships per redirect; Wave-2/3 HALTED.
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate.
 - `docs/governance/2026-05-06-cycle-12-replay-readiness-inventory.md` — Codex's data + API readiness map.
+
+**2026-05-06 cycle-13 update:** harness PARTIALLY DELIVERED. 5 Cycle-12 deliverables landed (commit `aadd391`):
+- ✓ `scripts/edge_replay/fetch_resolved_markets.py` — paper-trades + manual-JSON sources; live-Kalshi flag pending Cycle-13.
+- ✓ `scripts/edge_replay/build_replay_dataset.py` — per-decision-time joins; historical-price reconstruction supported.
+- ✓ `scripts/edge_replay/score_counterfactual_pnl.py` — bootstrap CI; readiness-gate replay; left-on-table measure.
+- ✓ `tests/test_edge_replay_*.py` — 9 tests including synthetic +EV self-test (catches scorer-broken vs no-edge).
+- ✓ `docs/governance/edge-replay-cycle12-report.md` — first-pass result: 0 positive-EV slices; harness self-test reproduces 3-trade history.
+
+First-pass result (3-market scope): 0 positive-EV slices, P&L -$7.50, win rate 0.00. Not proof no edge anywhere; sample is single-source / single-series / single-direction.
+
+Remaining work tracked under PROFIT-EDGE-006 (next-step expansion to full 24-market evidence_store scope).
+
+---
+
+### PROFIT-EDGE-006
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EDGE-006 |
+| **Title** | Cycle-13 replay scope expansion — full 24-resolved-market evidence_store run |
+| **Category** | Profit-Path Integrity / Edge Verification (continuation of PROFIT-EDGE-005) |
+| **Severity** | HIGH (gates Wave-2 deploy authorization per IC §16) |
+| **Status** | IN_PROGRESS (filed 2026-05-06 cycle 13; Codex implementing per `2026-05-06-cycle-13-replay-scope-expansion-charter.md`) |
+| **Priority** | NOW |
+| **Owner** | Codex (implementation); Claude (review + diagnostic playbook + ancillaries) |
+| **Depends On** | PROFIT-EDGE-005 (harness exists); evidence_store has ≥24 resolved markets (verified cycle-13 readiness inventory) |
+| **Blocks** | All Wave-2/Wave-3 behavioral deploys per IC §16 |
+
+**Description**
+
+Cycle-12 ran replay against `paper_trades` scope only — 3 markets, 1 source, 1 series. evidence_store has 24 resolved markets unused. Cycle-13 expands scope to surface positive-EV slices across the full corpus.
+
+**Cycle-13 readiness inventory finding (2026-05-06):** 21 of 24 resolved-market dossiers stuck at `current_estimate = 0.5000` (the prior). Bot's belief model rarely exits the prior despite ingesting 266 evidence rows. KXTRUMPIRAN ingested 107 rows → still at 0.5000. This calibration signal pre-bounds the replay verdict: most rows will produce edge=0, would_not_have_traded.
+
+**Why it matters to profitability / safety / reliability**
+
+1. **Direct successor to PROFIT-EDGE-005.** Without scope expansion, Wave-2 stays HALTED indefinitely on insufficient sample.
+2. **Calibration diagnostic surface.** If 24-market replay still finds no positive-EV slice, IC §16 Rule 5 triggers `docs/governance/edge-replay-pivot-playbook.md` — calibration is the leading suspect per cycle-13 dossier audit.
+3. **Wave-2 candidate identification.** If positive-EV slice exists, that slice (NOT speculative legal/geopolitics feeds) becomes Wave-2.
+
+**Evidence / Source**
+
+- `docs/governance/2026-05-06-cycle-13-replay-scope-expansion-charter.md` — Codex's charter.
+- `docs/governance/edge-replay-cycle12-report.md` — Cycle-12 first-pass result.
+- Cycle-13 dossier integrity audit (this entry's parent commit): 21/24 markets at 0.5000 prior.
+- Cycle-13 capacity audit: 552 decisions, 0.663 reviewable fraction at 80/day.
+
+**Proposed Fix (Cycle-13 Codex deliverables per charter)**
+
+1. Extend `fetch_resolved_markets.py` with `--live-kalshi` flag (queries both `'settled'` + `'finalized'` per cycle-12 readiness inventory).
+2. Run end-to-end against full 24-market scope.
+3. Implement readiness-gate replay (charter path a) — replay G1-G6 admission against `model_prob` + `confidence` per evidence row. Note: cycle-13 code review found Codex's current `_readiness_admitted` uses 0.85 confidence threshold (post-Lever-B aspirational, not production 0.05). Path a should match production thresholds for fair "what would the bot as-deployed have done?" replay.
+4. Extend `edge-replay-cycle12-report.md` OR sibling `edge-replay-cycle13-report.md` per operator preference.
+
+**Acceptance Criteria**
+
+- 24-market scope replay completes.
+- Per-source × market_family × signal_type slice table covers ≥ 20 distinct slices.
+- Either ≥ 1 row with `ev_ci_95_lo > 0` AND `trades ≥ 10` (success → triggers Wave-2 spec authoring as Cycle-14), OR honest negative-result report (triggers `edge-replay-pivot-playbook.md` as Cycle-14).
+- Readiness-gate replay matches production G1 thresholds.
+
+**Notes**
+
+- Operator coordination: live API call needs no special handling; existing `kalshi/rest_client.py` 0.12s rate-limit guard sufficient. See `docs/governance/2026-05-06-cycle-13-live-api-coordination.md`.
+- Out of scope per charter: new harness features, Wave-2/3 deploy work, Lever-D escalation, more HALT markers.
+
+**Related**
+
+- `PROFIT-EDGE-005` (in_progress; partially delivered) — direct parent; harness exists.
+- `PROFIT-EDGE-004` (open) — lever menu BLOCKED pending this expansion's output.
+- `docs/governance/2026-05-06-cycle-13-replay-scope-expansion-charter.md` — Cycle-13 charter.
+- `docs/governance/edge-replay-pivot-playbook.md` — IC §16 Rule 5 diagnostic playbook (fires on negative result).
+- `docs/EDGE_STATUS.md` — operator-facing dashboard; refreshed by replay verdict.
 
 ---
 
