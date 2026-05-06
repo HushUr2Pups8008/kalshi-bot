@@ -19,7 +19,7 @@ Cycle-13 replay returned 0 positive-EV slices at 24-market scope. Cycle-13 readi
 | metric | threshold | implication if hit |
 |---|---|---|
 | `movement_rate` (fraction of evidence-row processings where dossier delta > 0.01) | < 10% | calibration inertness confirmed → fix is in extraction or update logic |
-| `direction-correctness` when moved (excluding 0.5000/no-direction rows) | < 50% | **sign-error confirmed** → fix is in dossier update math (1-line candidate but still IC §16 + replay-gated, NOT in Cycle-14) |
+| `direction-correctness` when moved (excluding rows in `[0.49, 0.51]`) | < 50% | **sign-error confirmed** → fix is in dossier update math (1-line candidate but still IC §16 + replay-gated, NOT in Cycle-14) |
 | `direction-correctness` when moved | ≥ 50% but `EV/P&L of moved > unmoved` AND `movement_rate < 10%` | bot has latent edge but undertrades (volume/sensitivity issue) → different fix scope |
 | `LLM-called` cluster vs `non-LLM-called` cluster | LLM-called movement_rate > 10× non-LLM-called | LLM path is the only signal carrier → non-LLM ingestion contributes noise; rebalance OR drop |
 | `source_class` cluster of wrong-direction movements | one class disproportionately wrong | source-quality / information-frontier signal |
@@ -42,7 +42,7 @@ Inputs: `data/evidence_store.db` + `data/paper_trades.db` + 24 finalized markets
 Outputs:
 - `movement_rate`: count(dossier_updates with |delta| > 0.01) / total
 - `direction-correctness when moved`: per moved-dossier_update, did `new_estimate > 0.5` correlate with `resolved_yes=true` (and `< 0.5` with false)?
-  - **Denominator EXCLUDES rows where `new_estimate ∈ [0.499, 0.501]`** (no-direction)
+  - **Denominator EXCLUDES rows where `new_estimate ∈ [0.49, 0.51]`** (no-direction band; matches `movement_floor=0.01` from `movement_rate` threshold so both metrics use the same noise floor)
   - Reports `excluded_count` separately
 - `EV/P&L of moved vs unmoved` decisions (rough proxy: applies `would_have_traded` from existing scorer)
 - `Brier score` and `log-loss` against resolution outcomes — supporting only at n=24, with explicit "n=24, CI bands wide; do not use as primary verdict" caveat in output
@@ -123,6 +123,40 @@ NO behavioral fix ships in this doc. Recommendation only. Cycle-15 ships fix per
 Trivial measurement bug **in the diagnostic tooling itself** (e.g., off-by-one in a SQL aggregation, denominator mistake, JSON parse bug). NOT in the bot's calibration code. NOT in the dossier update logic. NOT in extraction. NOT in any prod path.
 
 If a 1-line sign-inversion fix in the dossier update math is identified, it's still a behavioral fix → Cycle-15 + replay-gated.
+
+### Sign-inversion "1-line fix" verification gate (locked)
+
+If Cycle-14 diagnosis identifies sign-error as the root cause and proposes a "1-line fix," the fix shipping path requires ALL of:
+
+1. **Specific identification:** the diagnosis-doc names the exact `file:line` containing the inverted sign + before/after pseudocode. "Sign error suspected somewhere in dossier update math" is NOT enough.
+2. **Independent verification:** Codex AND Claude AND operator each separately confirm the named location is correct and the fix scope is genuinely 1-line. Any disagreement → treat as broader-scope (multi-line, multi-cycle).
+3. **Replay-gated deploy:** even with all three agreeing, the fix ships in Cycle-15 with replayed-EV evidence per IC §16. NOT Cycle-14.
+
+Without all 3 conditions, "sign error" diagnosis recommends Cycle-15 scope = "investigate sign convention across dossier update math + LLM prompt direction extraction + keyword polarity + yes/no conversion at ingestion + sized-bet inversion" → likely multi-line, multi-day investigation. Pre-staging this prevents emotional drift toward "we found the fix, ship it" without the rigor IC §16 requires.
+
+## Sequencing relative to Wave-1 deploy
+
+Cycle-14 audits PRE-Wave-1 dossier_updates already in `evidence_store.db`. Wave-1 deploy does NOT change pre-Wave-1 dossier history.
+
+**LOCKED:** Cycle-14 audit script runs **BEFORE Wave-1 commit 1 lands**. Verdict feeds:
+- Wave-1 deploy posture framing (cleanup-only vs deploy-with-edge-claim — already locked as cleanup-only, but verdict reinforces)
+- EDGE_STATUS dashboard refresh
+- §8.5.1 close-day operator decision (whether to proceed with Wave-1 deploy on the close-day or pause for Cycle-14 verdict review)
+
+Target: Cycle-14 audit runs 2026-05-07 (pre-close-day). Verdict landed before 2026-05-08T19:01Z soak close.
+
+## Historical price endpoint gap (Cycle-13 finding)
+
+Cycle-13's `fetch_historical_prices.py` probe of `/markets/{ticker}/trades` returned 404. Per-decision-time historical price not available via that endpoint.
+
+**Impact on Cycle-14: NONE.** Cycle-14 calibration diagnostics do not require Kalshi historical prices:
+- `dossier_updates` table has `prior_estimate`, `new_estimate`, `update_delta`, `confidence_after`, `llm_called` — sufficient for movement_rate + direction-correctness.
+- `paper_trades` has `market_yes_price` at trade time — sufficient for sized-bet subset.
+- Resolution outcomes are in Kalshi `get_market(ticker).result` — already populated.
+- Brier/log-loss compares `model_prob` (= dossier estimate) vs `resolution` — no market price needed.
+- Synthetic injection tests dossier update path against synthetic input — no market price needed.
+
+The price-endpoint gap is documented as a future-replay-refinement item (intra-market-lifetime EV reconstruction), not a Cycle-14 blocker. If Cycle-15+ revisits replay infrastructure, the gap matters; Cycle-14 proceeds without it.
 
 ## Capital posture
 

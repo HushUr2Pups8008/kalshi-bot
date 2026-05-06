@@ -56,6 +56,8 @@ Per `PROFIT-PHASE2-001-early-close-criteria.md` §"§8.5.2 policy-equivalence ca
 
 **Operator note for any commits between cycle-13 (this refresh) and fire-time:** rerun `bash scripts/check_soak_invariant.sh --json` against close-time SHA; walk any newly-surfaced commits; append rows to this table.
 
+**Wave-1 deploy commits (POST-soak-close):** §8.5.2 governs commits DURING the soak window (2026-05-01T19:01Z → close). Wave-1's 6 deploy commits land POST-soak-close, so they are OUT-OF-WINDOW for §8.5.2 and require no carve-out attestation here. Standard `git revert` rollback per `docs/governance/post-soak-rollback-runbook.md` is the recovery path for any Wave-1 commit; soak-close attestation does not extend over Wave-1 deploys.
+
 ## Operator attestation (FILL AT CLOSE TIME)
 
 I, `<TBD operator>`, confirm:
