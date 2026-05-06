@@ -77,12 +77,14 @@ run_gate() {
 } > "$REPORT"
 
 run_gate "launchd template render" hard bash ops/launchd/install.sh --print
-run_gate "launchd plist drift audit" warn bash scripts/launchd_plist_drift_audit.sh --json
+run_gate "launchd template equivalence audit" hard .venv/bin/python scripts/launchd_template_equivalence_audit.py --installed --json
 run_gate "doc cross-reference audit" warn .venv/bin/python scripts/doc_xref_audit.py
+run_gate "manual review capacity audit" hard .venv/bin/python scripts/manual_review_capacity_audit.py --json
 run_gate "Wave-1 commit chain acceptance dry-run" hard bash scripts/wave1_commit_chain_acceptance_audit.sh --dry-run
 run_gate "soak invariant gate 7" hard bash scripts/check_soak_invariant.sh --json
 run_gate "pre-soak-close branch backup dry-run" hard bash scripts/pre_soak_close_branch_backup.sh --dry-run --no-push
 run_gate "DB backup health audit" warn bash scripts/db_backup_health_audit.sh --json
+run_gate "DB snapshot retention audit" warn bash scripts/db_snapshot_retention_audit.sh --json
 run_gate "Wave-1 post-deploy smoke pre-deploy sentinel" warn bash scripts/wave1_post_deploy_smoke.sh
 
 {

@@ -5,7 +5,8 @@
 #   bash ops/launchd/install.sh                 # generate + install
 #   bash ops/launchd/install.sh --print         # print substituted plists, do not install
 #   bash ops/launchd/install.sh --uninstall     # bootout + remove installed plists
-#   bash ops/launchd/install.sh --allow-drift   # install despite equivalence diff
+#   bash ops/launchd/install.sh --allow-drift   # TTY prompt before installing despite equivalence diff
+#   bash ops/launchd/install.sh --allow-drift-confirm ALLOW-DRIFT
 #
 # Detects the local repo root and venv from the script location (resolves through
 # symlinks). Substitutes @REPO_ROOT@, @VENV_PYTHON@, @GOVERNANCE_LLM_MODEL@ into
@@ -43,14 +44,16 @@ TEMPLATES=(
 # ── Mode parsing ──────────────────────────────────────────────────────────────
 MODE="install"
 ALLOW_DRIFT=0
+ALLOW_DRIFT_CONFIRM=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --print)       MODE="print"; shift ;;
         --uninstall)   MODE="uninstall"; shift ;;
         --allow-drift) ALLOW_DRIFT=1; shift ;;
+        --allow-drift-confirm) ALLOW_DRIFT=1; ALLOW_DRIFT_CONFIRM="${2:-}"; shift 2 ;;
         *)
             echo "unknown argument: $1" >&2
-            echo "usage: $0 [--print | --uninstall | --allow-drift]" >&2
+            echo "usage: $0 [--print | --uninstall | --allow-drift | --allow-drift-confirm ALLOW-DRIFT]" >&2
             exit 2
             ;;
     esac
@@ -114,6 +117,9 @@ case "$MODE" in
                 echo "aborted"
                 exit 1
             fi
+        elif [[ "$ALLOW_DRIFT_CONFIRM" != "ALLOW-DRIFT" ]]; then
+            echo "ERROR: --allow-drift in non-TTY mode requires --allow-drift-confirm ALLOW-DRIFT" >&2
+            exit 1
         fi
         mkdir -p "$INSTALL_DIR"
         echo "Repo root:           $REPO_ROOT"

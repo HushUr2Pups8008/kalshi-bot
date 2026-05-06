@@ -492,3 +492,13 @@ def test_launchd_plist_drift_audit_compares_templates_and_db_backup_plist():
     # above. Cycle-8 (commit 193fb9f) refactored the script to template-glob
     # rather than literal labels; assert the template artifact exists instead.
     assert (REPO_ROOT / "ops/launchd/com.kalshi.db-backup.plist.template").exists()
+
+
+def test_launchd_install_and_precommit_gate_equivalence_audit():
+    install = (REPO_ROOT / "ops/launchd/install.sh").read_text(encoding="utf-8")
+    hook = (REPO_ROOT / ".githooks/pre-commit").read_text(encoding="utf-8")
+
+    assert "launchd_template_equivalence_audit.py" in install
+    assert "--allow-drift-confirm ALLOW-DRIFT" in install
+    assert "launchd_template_equivalence_audit.py" in hook
+    assert "ops/launchd/.*\\.plist\\.template" in hook

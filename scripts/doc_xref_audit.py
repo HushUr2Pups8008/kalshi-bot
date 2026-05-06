@@ -31,6 +31,9 @@ INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 SKIP_BLOCK_OPEN_RE = re.compile(r"<!--\s*audit-skip-block(?::[^>]*)?\s*-->")
 SKIP_BLOCK_CLOSE_RE = re.compile(r"<!--\s*/audit-skip-block\s*-->")
+CHANGELOG_HEADING_VERSION_RE = re.compile(r"^##\s+\[?v?(\d+\.\d+\.\d+)\]?")
+ECHO_VERSION_RE = re.compile(r'echo\s+["\'](\d+\.\d+\.\d+)["\']')
+GIT_TAG_VERSION_RE = re.compile(r"git\s+tag\s+-a\s+v(\d+\.\d+\.\d+)\b")
 SKIP_PREFIXES = ("http://", "https://", "mailto:", "#")
 PLACEHOLDER_TARGETS = {"...", "path", "*.md", "<path>", "TBD"}
 
@@ -60,15 +63,21 @@ def audit(repo_root: Path, include_archive: bool = False) -> list[str]:
             continue
         text = source.read_text(errors="replace")
         in_skip_block = False
+        skip_block_start = 0
+        skip_block_lines: list[tuple[int, str]] = []
         in_fence = False
         for line_no, line in enumerate(text.splitlines(), start=1):
             if SKIP_BLOCK_OPEN_RE.search(line):
                 in_skip_block = True
+                skip_block_start = line_no
+                skip_block_lines = []
                 continue
             if SKIP_BLOCK_CLOSE_RE.search(line):
+                failures.extend(_audit_skip_block_versions(source, repo_root, skip_block_start, skip_block_lines))
                 in_skip_block = False
                 continue
             if in_skip_block:
+                skip_block_lines.append((line_no, line))
                 continue
             if FENCE_RE.match(line):
                 in_fence = not in_fence
@@ -82,6 +91,35 @@ def audit(repo_root: Path, include_archive: bool = False) -> list[str]:
                     rel = source.relative_to(repo_root)
                     failures.append(f"{rel}:{line_no}: dead link: {target}")
     return failures
+
+
+def _audit_skip_block_versions(
+    source: Path,
+    repo_root: Path,
+    start_line: int,
+    lines: list[tuple[int, str]],
+) -> list[str]:
+    text = "\n".join(line for _line_no, line in lines)
+    if "```" not in text and "~~~" not in text:
+        return []
+
+    versions: list[tuple[str, str, int]] = []
+    for line_no, line in lines:
+        for label, regex in (
+            ("heading", CHANGELOG_HEADING_VERSION_RE),
+            ("echo", ECHO_VERSION_RE),
+            ("git_tag", GIT_TAG_VERSION_RE),
+        ):
+            match = regex.search(line)
+            if match:
+                versions.append((label, match.group(1), line_no))
+
+    if len({version for _label, version, _line_no in versions}) <= 1:
+        return []
+
+    rel = source.relative_to(repo_root)
+    detail = ", ".join(f"{label}={version}@{line_no}" for label, version, line_no in versions)
+    return [f"{rel}:{start_line}: version drift in audit-skip-block: {detail}"]
 
 
 def main() -> int:

@@ -310,3 +310,29 @@ def test_batch_aborted_counter_counts_event_type_and_cycle_end_flag(tmp_path):
     )
 
     assert report["per_day"]["2026-05-03"]["batch_aborted"] == 2
+
+
+@pytest.mark.xfail(
+    reason=(
+        "Gate-6 manual-review budget surface is not wired into governance_monitor.py yet. "
+        "scripts/manual_review_capacity_audit.py is the standalone pre-close oracle today."
+    ),
+    strict=True,
+)
+def test_gate6_manual_review_budget_summary_is_reported(tmp_path):
+    log = tmp_path / "decisions.jsonl"
+    _write_jsonl(
+        log,
+        [
+            _decision("d1", "source:a", "reasonable", action="no_action")
+            | {"type": "GOVERNANCE_DECISION", "decided_at": "2026-05-03T01:00:00Z"},
+        ],
+    )
+
+    report = governance_monitor.analyze(
+        log,
+        overrides=tmp_path / "missing.yaml",
+        now=datetime(2026, 5, 4, tzinfo=UTC),
+    )
+
+    assert report["manual_review_budget"]["reviewable_fraction"] >= 0.85

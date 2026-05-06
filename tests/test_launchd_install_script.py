@@ -172,3 +172,41 @@ def test_unknown_argument_is_rejected():
     )
     assert result.returncode != 0
     assert "unknown argument" in (result.stderr + result.stdout).lower()
+
+
+def test_install_script_exposes_explicit_allow_drift_bypass():
+    body = INSTALL_SH.read_text()
+    assert "--allow-drift" in body
+    assert "--allow-drift-confirm ALLOW-DRIFT" in body
+    assert "Type ALLOW-DRIFT to continue" in body
+
+
+def test_allow_drift_non_tty_requires_explicit_confirmation(tmp_path: Path):
+    env = os.environ.copy()
+    env["HOME"] = str(tmp_path)
+    result = subprocess.run(
+        ["bash", str(INSTALL_SH), "--allow-drift"],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "--allow-drift-confirm ALLOW-DRIFT" in result.stderr
+
+
+def test_allow_drift_confirm_allows_non_tty_install_to_temp_home(tmp_path: Path):
+    env = os.environ.copy()
+    env["HOME"] = str(tmp_path)
+    result = subprocess.run(
+        ["bash", str(INSTALL_SH), "--allow-drift-confirm", "ALLOW-DRIFT"],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    rendered = tmp_path / "Library/LaunchAgents/com.jake.kalshi-bot.plist"
+    assert rendered.exists(), result.stdout + result.stderr
