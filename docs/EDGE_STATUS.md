@@ -1,7 +1,7 @@
 # EDGE_STATUS — operator-facing edge dashboard
 
 **Refresh by commit.** Single page; replaces 100+ doc index for "are we making money?" questions.
-**Last refresh:** 2026-05-06 cycle 14 prep (post-cycle-13 Rule-5 trigger).
+**Last refresh:** 2026-05-06 cycle-14 verdict landing.
 
 ## TL;DR (3 numbers)
 
@@ -9,25 +9,25 @@
 |---|---|
 | Lifetime P&L | **-$7.50** |
 | Lifetime trade count | **3** (all resolved, all lost, all 1 source / 1 series / 1 direction; 3/3 wrong-direction) |
-| Replay verdict | **NO positive-EV slice at 24-market scope.** 0 left-on-table winners. IC §16 Rule 5 fires → Cycle-14 calibration diagnostic active. |
+| Replay verdict | **Cycle-14 verdict: `extraction_broken`. Cycle-15B active per matching skeleton.** Lane A pass + Lane B fail at `model_prob=0.500` on crystal-clear synthetic fixtures → real extraction-in-loop produces no signal. |
 
-## Cycle-14 active — calibration kill-or-fix diagnostic
+## Cycle-14 verdict landed — `extraction_broken`
 
-The bot's belief model rarely exits prior (21/24 dossiers stuck at 0.5000) and when it does move, may move wrong direction (3/3 sized trades). Cycle-14 answers: **can the model move belief correctly when evidence should obviously move belief?**
+Cycle-14 calibration diagnostic answered: **can the model move belief correctly when evidence should obviously move belief?** Answer: the downstream dossier-update math CAN (Lane A pass) but the real extraction layer CANNOT — both clear-YES and clear-NO synthetic fixtures returned `model_prob=0.500` (no movement at all).
 
-Diagnosis-only. NO behavioral fixes ship in Cycle-14. Sole exception: trivial measurement bug in diagnostic tooling (NOT in bot's calibration code). Per `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md`.
+Verdict derived strictly from charter mapping (Lane A pass + Lane B fail = `extraction_broken`). No operator improvisation. See `docs/governance/edge-replay-cycle14-diagnosis.md`.
 
-Cycle-14 verdict drives Cycle-15+ scope (fix calibration / rebuild extraction / onboard sources / strategic redesign / continue paper-only data collection).
+Cycle-15B (PROFIT-EDGE-008) instantiates `cycle-15-conditional-charter-skeletons.md` §B — extraction-layer rebuild scope. Replay-gated under IC §16.
 
-## Wave deploy status (per IC §16 + Cycle-14)
+## Wave deploy status (per IC §16 + Cycle-14 verdict)
 
 | wave | status | gate |
 |---|---|---|
 | Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **ACTIVE — ships 2026-05-08 as cleanup/observability hygiene only; does NOT claim edge** | exempt under IC §16 Rule 2 (mechanical / observability / governance) |
-| Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14 DIAGNOSIS** | requires (a) Cycle-14 verdict that calibration is fixable AND (b) replayed-EV evidence for the candidate slice |
-| Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14 DIAGNOSIS — Lever B strongly counterindicated** | loosening admission on a sign-error-suspect model converts confidently-wrong bets into more confidently-wrong bets (worse than coin flips) |
-| Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14 DIAGNOSIS** | each candidate fix needs replay evidence |
-| **Capital posture** | **PAPER-ONLY. Hard guardrail post-Wave-1 deploy** (Cycle-14 charter §5) | live trading remains blocked until Cycle-14 verdict + Cycle-15 replay-validated fix |
+| Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED PENDING CYCLE-15B EXTRACTION REBUILD + REPLAY VALIDATION** | requires (a) Cycle-15B Lane B post-rebuild pass AND (b) replayed-EV evidence for the candidate slice |
+| Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED PENDING CYCLE-15B EXTRACTION REBUILD + REPLAY VALIDATION — Lever B strongly counterindicated** | loosening admission on a model whose extraction emits zero signal converts neutral non-bets into noise-driven bets |
+| Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PENDING CYCLE-15B EXTRACTION REBUILD + REPLAY VALIDATION** | each candidate fix needs replay evidence |
+| **Capital posture** | **PAPER-ONLY. Hard guardrail post-Wave-1 deploy** (Cycle-14 charter §5) | live trading remains blocked until Cycle-15B replay-validated fix per IC §16 |
 
 ## Are we near a Wave-2-eligible slice?
 
@@ -64,7 +64,7 @@ Cycle-14 verdict drives Cycle-15+ scope (fix calibration / rebuild extraction / 
 |---|---|---|---|
 | 2026-05-06 | 3 paper-trade markets / 1 source / 1 series / n=3 trades | 0 positive-EV slices, P&L -$7.50, win rate 0.00, harness self-test passes | `edge-replay-cycle12-report.md` |
 | 2026-05-06 (Cycle-13) | 24 resolved evidence_store markets / 255 replay rows | **0 positive-EV slices, 0 left-on-table winners, P&L -$7.50, IC §16 Rule 5 fires** | `edge-replay-cycle13-report.md` |
-| Cycle-14 prep | calibration diagnostic active | TBD verdict (one of: calibration_inert / sign_error / information_frontier / extraction_broken / sample_noise / model_fine) | `edge-replay-cycle14-diagnosis.md` (FUTURE) |
+| 2026-05-06 (Cycle-14) | 24 resolved markets / 255 replay rows + synthetic Lane A/B injection | **Verdict: `extraction_broken`.** Movement_rate 1.57%, direction-correctness 0/6 when directional, sized-bet 0/3 (-$7.50), Brier 0.2599 (n=24, supporting only), Lane A PASS / Lane B FAIL at delta=0.000 on both fixtures. → Cycle-15B extraction rebuild active. | `edge-replay-cycle14-diagnosis.md` |
 
 ## What changes Wave-2 from HALTED → AUTHORIZED
 

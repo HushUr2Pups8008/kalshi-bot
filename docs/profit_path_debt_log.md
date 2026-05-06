@@ -1615,12 +1615,12 @@ Cycle-12 ran replay against `paper_trades` scope only — 3 markets, 1 source, 1
 | **ID** | PROFIT-EDGE-007 |
 | **Title** | Cycle-14 calibration kill-or-fix diagnostic — does the model move belief correctly when evidence should obviously move belief? |
 | **Category** | Profit-Path Integrity / Calibration Diagnostic (continuation of PROFIT-EDGE-005/006 IC §16 Rule 5 trigger) |
-| **Severity** | HIGH (gates strategic-direction decision: fix calibration vs rebuild extraction vs strategic redesign) |
-| **Status** | ACTIVE (filed 2026-05-06 cycle 14 prep; Codex implementing per `2026-05-06-cycle-14-charter-calibration-diagnosis.md`) |
-| **Priority** | NOW |
-| **Owner** | Codex (implementation); Claude (review + diagnosis-doc co-authoring + decision-criteria lock) |
+| **Severity** | HIGH (gated strategic-direction decision: fix calibration vs rebuild extraction vs strategic redesign) |
+| **Status** | COMPLETE (delivered 2026-05-06; verdict = `extraction_broken`; succeeded by PROFIT-EDGE-008 Cycle-15B extraction rebuild) |
+| **Priority** | n/a (closed) |
+| **Owner** | Codex (implementation — DELIVERED); Claude (verdict consumption + ROADMAP/EDGE_STATUS refresh — DELIVERED) |
 | **Depends On** | PROFIT-EDGE-006 (Cycle-13 negative replay verdict — DONE) |
-| **Blocks** | All Wave-2/Wave-3 deploys; PROFIT-EDGE-004 lever menu; Cycle-15+ fix scope (whatever it turns out to be) |
+| **Blocks** | All Wave-2/Wave-3 deploys (transferred to PROFIT-EDGE-008) |
 
 **Description**
 
@@ -1669,16 +1669,85 @@ Per `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md`:
 - Brier/log-loss at n=24 is statistically weak; supporting evidence only, not primary verdict.
 - Direction-correctness denominator excludes `[0.499, 0.501]` rows; reports excluded count.
 - Sized-bet subset (3 paper trades) reported separately from full corpus; sample-noise vs systematic distinguishable.
+- **2026-05-06 cycle-14 closure:** Diagnostic delivered. Verdict = `extraction_broken` (charter-locked criterion: Lane A pass + Lane B fail). Movement_rate 1.57%, direction-correctness 0/6 when directional, Lane B `model_prob=0.500` on both clear-YES and clear-NO synthetic fixtures (no movement at all, more severe than sign-inversion). Threshold-lock verification passed against all 7 charter-locked thresholds in `cycle-14-post-verdict-action-checklist.md`. Cycle-15 scope recommendation = §B extraction rebuild (filed as PROFIT-EDGE-008).
 
 **Related**
 
 - `PROFIT-EDGE-006` (delivered with negative verdict) — direct parent.
 - `PROFIT-EDGE-005` (in_progress; harness exists) — replay infrastructure used.
-- `PROFIT-EDGE-004` (open; lever menu OBSOLETE-PENDING-CYCLE-14) — closed if Cycle-14 confirms calibration broken.
-- `PROFIT-GOV-002` (closed) — same-class issue at LLM verdict layer (rubber-stamp bias); cycle-14 may surface analogous issue at update-direction layer.
-- `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md` — Cycle-14 charter.
-- `docs/governance/edge-replay-pivot-playbook.md` — IC §16 Rule 5 playbook this instantiates.
-- `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-15+ fix).
+- `PROFIT-EDGE-004` (open; lever menu OBSOLETE per cycle-14 verdict).
+- `PROFIT-EDGE-008` (active) — Cycle-15B extraction rebuild succeeds this entry.
+- `PROFIT-GOV-002` (closed) — same-class issue at LLM verdict layer (rubber-stamp bias); cycle-14 Lane B failure mode (zero movement on clear input) is the analogous pathology at the extraction layer.
+- `docs/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 diagnosis-doc with Claude appendix.
+- `docs/governance/cycle-15-conditional-charter-skeletons.md` §B — Cycle-15B skeleton (instantiates).
+- `docs/governance/cycle-14-post-verdict-action-checklist.md` — post-verdict execution checklist.
+- `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-15B fix).
+
+---
+
+### PROFIT-EDGE-008
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EDGE-008 |
+| **Title** | Cycle-15B extraction-layer rebuild + replay validation — extraction emits zero signal on crystal-clear synthetic input; rebuild and prove non-zero magnitude + direction-correctness via post-fix replay |
+| **Category** | Profit-Path Integrity / Extraction Rebuild (succeeds PROFIT-EDGE-007 Cycle-14 `extraction_broken` verdict) |
+| **Severity** | HIGH (gates Wave-2/Wave-3/Branch-D deploy decisions; sole path off "extraction emits no signal" for the bot to ever produce edge) |
+| **Status** | ACTIVE (filed 2026-05-06 cycle-14 verdict landing; Codex implementation per `cycle-15-conditional-charter-skeletons.md` §B) |
+| **Priority** | NOW |
+| **Owner** | Codex (implementation — Lane B per-step trace + extraction rebuild + post-fix replay); Claude (review + diagnosis-doc + verdict-vs-criteria check) |
+| **Depends On** | PROFIT-EDGE-007 (delivered with `extraction_broken` verdict) |
+| **Blocks** | All Wave-2/Wave-3/Branch-D deploys per IC §16 |
+
+**Description**
+
+Cycle-14 Lane B returned `model_prob=0.500` and `delta=0.000` on both crystal-clear-YES and crystal-clear-NO synthetic fixtures. The downstream dossier-update math is direction-correct (Lane A pass) — the bug is between `feeds.NewsItem` and `SignalAnalysis(estimated_probability, ...)`. Extraction does not emit a directional signal at all on inputs where any non-degenerate model should.
+
+This is calibration **inertness** at the extraction layer, not sign-inversion. The bot cannot have edge until extraction emits non-zero magnitude on directional input.
+
+**Why it matters to profitability / safety / reliability**
+
+1. **Sole gate on edge.** Without extraction emitting signal, no downstream change matters. Wave-2 source onboarding, Wave-3 admission loosening, Branch-D LLM unification — all assume extraction works.
+2. **Capital protection.** Live-mode flip on a model whose extraction emits nothing is harmless against directional movement but produces zero edge by definition. PAPER-ONLY guardrail per Cycle-14 charter §5 holds.
+3. **Discriminator for next-tier work.** Per-extraction-step trace on Lane B fixtures identifies whether the failure is in LLM-path (sites 2/6 of `2026-05-06-cycle-14-sign-error-candidate-trace.md`), keyword-path (sites 3/7), or suppression logic. Sub-fix shape derives from trace, not from speculation.
+
+**Evidence / Source**
+
+- `docs/governance/edge-replay-cycle14-diagnosis.md` — verdict + Lane B numbers (model_prob=0.500 on both fixtures).
+- `docs/governance/2026-05-06-cycle-14-sign-error-candidate-trace.md` — sites 2/3/6/7 NOT ruled out by Lane A; prime trace targets.
+- `tests/fixtures/cycle14_synthetic_evidence.json` — 10 synthetic fixtures available for Lane B per-step trace + post-fix Lane B verification.
+- `scripts/edge_replay/synthetic_injection_lanes.py` — Cycle-14 Lane B harness, reusable for post-fix verification.
+
+**Proposed Fix (Cycle-15B Codex deliverables — per `cycle-15-conditional-charter-skeletons.md` §B)**
+
+1. **Per-extraction-step trace on Lane B fixtures.** For each of the 10 fixtures in `cycle14_synthetic_evidence.json`, log the values at each extraction step (LLM raw output → LLM-path probability shift → keyword-path net_shift → magnitude application → final `estimated_probability`). Identify at which step magnitude collapses to zero. Output: `logs/edge_replay/cycle15b/per_step_trace.json`.
+2. **Author or refactor extraction logic** at the identified step. Likely candidates: LLM prompt rewrite (if LLM returns `magnitude="none"` on directional input), keyword-table extension (if per-keyword direction map has no entries for synthetic vocabulary), suppression-logic relaxation (if geo-coherence or magnitude-shift mapping zeroes out signal).
+3. **Re-run synthetic Lane B against new extraction.** Must match Lane A direction-correctness AND magnitude (≥ 90% direction-correct on directional fixtures, `|delta| > 0.05`).
+4. **Re-ingest 16-day evidence window through new extraction.** Re-build `dossier_updates`. Re-run replay scoring.
+5. **IC §16 evidence:** post-fix replay shows ≥ 1 positive-EV slice with `ev_ci_95_lo > 0` AND `trades ≥ 10`.
+
+**Acceptance Criteria**
+
+- Lane B post-rebuild: direction-correct + magnitude `|delta| > 0.05` on at least 6 of 10 fixtures (matches Lane A baseline).
+- Post-fix Cycle-13 replay shows ≥ 1 slice with `ev_ci_95_lo > 0` AND `trades ≥ 10` per IC §16.
+- Cycle-15B diagnosis-doc proves IC §16 evidence gate cleared with reproducible commands.
+- No live-trading flag flip; PAPER-ONLY guardrail holds until operator-explicit override post-acceptance.
+
+**Notes**
+
+- **Pre-fix paper-traded data is no longer ground truth for calibration.** Per `cycle-15-conditional-charter-skeletons.md` §A.5 (transferable to §B): post-fix re-ingestion required for any future replay validation.
+- Pre-cycle-12 "deploy hope" pattern stays prohibited. Each fix needs replay evidence, not hope.
+- Estimated scope: 1-2 weeks per `cycle-15-conditional-charter-skeletons.md` §B. Extraction-layer changes touch `analysis/` substantially; review burden higher than §A.
+
+**Related**
+
+- `PROFIT-EDGE-007` (delivered) — direct parent (Cycle-14 verdict drove this scope).
+- `PROFIT-EDGE-006` / `PROFIT-EDGE-005` — replay harness infrastructure used.
+- `PROFIT-EDGE-004` — lever menu OBSOLETE per Cycle-14 verdict; reassess only after Cycle-15B post-fix replay.
+- `PROFIT-GOV-002` (closed) — same-class pathology (rubber-stamp bias at LLM verdict layer); the Lane B zero-movement failure is the extraction-layer analogue.
+- `docs/governance/cycle-15-conditional-charter-skeletons.md` §B — scope skeleton.
+- `docs/governance/cycle-14-post-verdict-action-checklist.md` — post-verdict checklist that filed this entry.
+- `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs acceptance).
 
 ---
 
