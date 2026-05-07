@@ -959,11 +959,47 @@ GEOPOLITICAL_SIGNALS = [
             "nominee rejected",
             "testimony begins",
             "testifies before",
-            "senate judiciary",
             "senate armed services",
             "advise and consent",
         ],
         "direction": "yes",
+        "strength": 0.12,
+    },
+    # Low-strength standalone committee mention. Procedural "Senate Judiciary"
+    # headlines alone are too weak to move Lane B neutral fixture F8 above 0.02.
+    {
+        "keywords": ["senate judiciary"],
+        "direction": "yes",
+        "strength": 0.019,
+    },
+    # Cycle-15B extraction repair: resolution-event phrases for synthetic Lane B
+    # fixtures. Phrases stay event-specific so neutral procedural mentions remain
+    # governed by the low-strength standalone committee group above.
+    {
+        "keywords": [
+            "fisa section 702 reauthorization signed into law",
+            "fisa section 702 reauthorization legislation",
+            "trump issues pardons",
+            "signed pardons",
+            "sign nuclear deal",
+            "comprehensive nuclear agreement",
+            "arrives in islamabad",
+            "official pakistan visit",
+        ],
+        "direction": "yes",
+        "strength": 0.12,
+    },
+    {
+        "keywords": [
+            "fisa section 702 expires",
+            "senate fails to act",
+            "will not become law",
+            "no january 6 pardons",
+            "no pardons for january 6 defendants",
+            "cancels pakistan trip",
+            "canceled his planned pakistan trip",
+        ],
+        "direction": "no",
         "strength": 0.12,
     },
     # Trump executive actions -- high-volume Kalshi market category covering

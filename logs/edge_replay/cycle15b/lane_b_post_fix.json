@@ -1,0 +1,165 @@
+{
+  "audit": "cycle15b_lane_b_post_fix",
+  "bsr5": {
+    "criterion": "|delta_F10| < 0.5 * |delta_F1|",
+    "pass": true,
+    "rows": [
+      {
+        "after": 0.5924,
+        "before": 0.5,
+        "correlation_discount_applied": false,
+        "dossier_delta": 0.09240000000000004,
+        "extracted_probability": 0.632,
+        "fixture_id": "F1_FISA_REAUTHORIZED_YES",
+        "original_weight": 0.7,
+        "same_class_count": 0
+      },
+      {
+        "after": 0.5924,
+        "before": 0.5924,
+        "correlation_discount_applied": true,
+        "dossier_delta": 0.0,
+        "extracted_probability": 0.62,
+        "fixture_id": "F10_REPETITION_DAMPING",
+        "original_weight": 0.35,
+        "same_class_count": 1
+      }
+    ]
+  },
+  "directional_count": 8,
+  "directional_pass_count": 8,
+  "f8_pass": true,
+  "f9_pass": true,
+  "fixture_count": 10,
+  "fixtures": [
+    {
+      "expected_direction": "YES",
+      "extracted_probability": 0.632,
+      "extraction_delta": 0.132,
+      "fixture_id": "F1_FISA_REAUTHORIZED_YES",
+      "keywords": [
+        "fisa section 702 reauthorization signed into law",
+        "fisa section 702 reauthorization legislation"
+      ],
+      "lane_b_direction_magnitude_pass": true,
+      "market_ticker": "KXFISAEXTEND-26APR-MAY01",
+      "reasoning": "Keyword analysis found 2 signal(s): [fisa section 702 reauthorization signed into law, fisa section 702 reauthorization legislation]. Net shift: +0.132 (dampened: +0.132). Base prob: 0.500 -> estimated: 0.632. Edge vs market (50.0c): +0.132. Betting YES."
+    },
+    {
+      "expected_direction": "NO",
+      "extracted_probability": 0.356,
+      "extraction_delta": -0.14400000000000002,
+      "fixture_id": "F2_FISA_LAPSED_NO",
+      "keywords": [
+        "fisa section 702 expires",
+        "senate fails to act",
+        "will not become law"
+      ],
+      "lane_b_direction_magnitude_pass": true,
+      "market_ticker": "KXFISAEXTEND-26APR-MAY01",
+      "reasoning": "Keyword analysis found 3 signal(s): [fisa section 702 expires, senate fails to act, will not become law]. Net shift: -0.144 (dampened: -0.144). Base prob: 0.500 -> estimated: 0.356. Edge vs market (50.0c): -0.144. Betting NO."
+    },
+    {
+      "expected_direction": "YES",
+      "extracted_probability": 0.632,
+      "extraction_delta": 0.132,
+      "fixture_id": "F3_PARDONS_ISSUED_YES",
+      "keywords": [
+        "trump issues pardons",
+        "signed pardons"
+      ],
+      "lane_b_direction_magnitude_pass": true,
+      "market_ticker": "KXPARDONSTRUMP-26APR-1",
+      "reasoning": "Keyword analysis found 2 signal(s): [trump issues pardons, signed pardons]. Net shift: +0.132 (dampened: +0.132). Base prob: 0.500 -> estimated: 0.632. Edge vs market (50.0c): +0.132. Betting YES."
+    },
+    {
+      "expected_direction": "NO",
+      "extracted_probability": 0.368,
+      "extraction_delta": -0.132,
+      "fixture_id": "F4_PARDONS_NOT_ISSUED_NO",
+      "keywords": [
+        "no january 6 pardons",
+        "no pardons for january 6 defendants"
+      ],
+      "lane_b_direction_magnitude_pass": true,
+      "market_ticker": "KXPARDONSTRUMP-26APR-1",
+      "reasoning": "Keyword analysis found 2 signal(s): [no january 6 pardons, no pardons for january 6 defendants]. Net shift: -0.132 (dampened: -0.132). Base prob: 0.500 -> estimated: 0.368. Edge vs market (50.0c): -0.132. Betting NO."
+    },
+    {
+      "expected_direction": "YES",
+      "extracted_probability": 0.632,
+      "extraction_delta": 0.132,
+      "fixture_id": "F5_TRUMP_IRAN_DEAL_YES",
+      "keywords": [
+        "sign nuclear deal",
+        "comprehensive nuclear agreement"
+      ],
+      "lane_b_direction_magnitude_pass": true,
+      "market_ticker": "KXTRUMPIRAN-26MAY01",
+      "reasoning": "Keyword analysis found 2 signal(s): [sign nuclear deal, comprehensive nuclear agreement]. Net shift: +0.132 (dampened: +0.132). Base prob: 0.500 -> estimated: 0.632. Edge vs market (50.0c): +0.132. Betting YES."
+    },
+    {
+      "expected_direction": "YES",
+      "extracted_probability": 0.632,
+      "extraction_delta": 0.132,
+      "fixture_id": "F6_VANCE_PAKISTAN_VISIT_YES",
+      "keywords": [
+        "arrives in islamabad",
+        "official pakistan visit"
+      ],
+      "lane_b_direction_magnitude_pass": true,
+      "market_ticker": "KXVANCEPAKISTAN-26APR21-APR30",
+      "reasoning": "Keyword analysis found 2 signal(s): [arrives in islamabad, official pakistan visit]. Net shift: +0.132 (dampened: +0.132). Base prob: 0.500 -> estimated: 0.632. Edge vs market (50.0c): +0.132. Betting YES."
+    },
+    {
+      "expected_direction": "NO",
+      "extracted_probability": 0.368,
+      "extraction_delta": -0.132,
+      "fixture_id": "F7_VANCE_PAKISTAN_CANCELED_NO",
+      "keywords": [
+        "cancels pakistan trip",
+        "canceled his planned pakistan trip"
+      ],
+      "lane_b_direction_magnitude_pass": true,
+      "market_ticker": "KXVANCEPAKISTAN-26APR21-APR30",
+      "reasoning": "Keyword analysis found 2 signal(s): [cancels pakistan trip, canceled his planned pakistan trip]. Net shift: -0.132 (dampened: -0.132). Base prob: 0.500 -> estimated: 0.368. Edge vs market (50.0c): -0.132. Betting NO."
+    },
+    {
+      "expected_direction": "NEUTRAL",
+      "extracted_probability": 0.519,
+      "extraction_delta": 0.019000000000000017,
+      "fixture_id": "F8_AMBIGUOUS_NEUTRAL",
+      "keywords": [
+        "senate judiciary"
+      ],
+      "lane_b_direction_magnitude_pass": true,
+      "market_ticker": "KXFISAEXTEND-26APR-MAY01",
+      "reasoning": "Keyword analysis found 1 signal(s): [senate judiciary]. Net shift: +0.019 (dampened: +0.019). Base prob: 0.500 -> estimated: 0.519. Edge vs market (50.0c): +0.019. Betting YES."
+    },
+    {
+      "expected_direction": "NEUTRAL",
+      "extracted_probability": 0.5,
+      "extraction_delta": 0.0,
+      "fixture_id": "F9_OFF_TOPIC_NEUTRAL",
+      "keywords": [],
+      "lane_b_direction_magnitude_pass": true,
+      "market_ticker": "KXFISAEXTEND-26APR-MAY01",
+      "reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO."
+    },
+    {
+      "expected_direction": "YES",
+      "extracted_probability": 0.62,
+      "extraction_delta": 0.12,
+      "fixture_id": "F10_REPETITION_DAMPING",
+      "keywords": [
+        "fisa section 702 reauthorization signed into law"
+      ],
+      "lane_b_direction_magnitude_pass": true,
+      "market_ticker": "KXFISAEXTEND-26APR-MAY01",
+      "reasoning": "Keyword analysis found 1 signal(s): [fisa section 702 reauthorization signed into law]. Net shift: +0.120 (dampened: +0.120). Base prob: 0.500 -> estimated: 0.620. Edge vs market (50.0c): +0.120. Betting YES."
+    }
+  ],
+  "neutral_count": 2,
+  "neutral_pass_count": 2,
+  "overall_pass": true
+}
