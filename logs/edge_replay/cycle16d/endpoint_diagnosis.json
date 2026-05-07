@@ -1,0 +1,377 @@
+{
+  "audit": "cycle16d_endpoint_diagnosis",
+  "classification": "solvable_auth_or_param",
+  "classification_rationale": "legacy per-ticker path is not the documented shape; documented_live_trades returned usable /markets/trades?ticker=... shape.",
+  "docs_reference": {
+    "historical_data": {
+      "observed": [
+        "live GET /markets/trades is cutoff by trades_created_ts",
+        "older trades route to GET /historical/trades",
+        "older market candlesticks route to GET /historical/markets/{ticker}/candlesticks"
+      ],
+      "url": "https://docs.kalshi.com/getting_started/historical_data"
+    },
+    "markets_api": {
+      "observed": [
+        "get_trades documents GET /markets/trades",
+        "get_trades accepts ticker, min_ts, max_ts query parameters",
+        "get_market_candlesticks documents GET /series/{series}/markets/{market_ticker}/candlesticks"
+      ],
+      "url": "https://docs.kalshi.com/python-sdk/api/MarketsApi"
+    }
+  },
+  "probe_count": 18,
+  "probes": [
+    {
+      "body_snippet": "404 page not found",
+      "endpoint": "/markets/KXELECTIONEMERGENCY-26MAY01/trades",
+      "headers": {
+        "Content-Type": "text/plain",
+        "Date": "Thu, 07 May 2026 01:15:17 GMT"
+      },
+      "params": {},
+      "row_count": null,
+      "status_code": 404,
+      "ticker": "KXELECTIONEMERGENCY-26MAY01",
+      "ticker_source": "resolved",
+      "url_path": "/trade-api/v2/markets/KXELECTIONEMERGENCY-26MAY01/trades",
+      "usable_shape": false,
+      "variant": "legacy_per_ticker_trades"
+    },
+    {
+      "body_snippet": "{\"cursor\":\"\",\"trades\":[{\"count_fp\":\"53.00\",\"created_time\":\"2026-04-30T00:37:03.590216Z\",\"no_price_dollars\":\"0.9900\",\"taker_side\":\"yes\",\"ticker\":\"KXELECTIONEMERGENCY-26MAY01\",\"trade_id\":\"1546bd42-8174-6301-421a-c2827f3883cc\",\"yes_price_dollars\":\"0.0100\"},{\"count_fp\":\"64.00\",\"created_time\":\"2026-04-29T14:05:44.120752Z\",\"no_price_dollars\":\"0.9890\",\"taker_side\":\"no\",\"ticker\":\"KXELECTIONEMERGENCY-26MAY01\",\"trade_id\":\"cb2c4fdd-0355-4fa2-69cd-8e337955f854\",\"yes_price_dollars\":\"0.0110\"},{\"count_fp\":\"400",
+      "endpoint": "/markets/trades",
+      "headers": {
+        "Content-Type": "application/json; charset=utf-8",
+        "Date": "Thu, 07 May 2026 01:15:17 GMT"
+      },
+      "params": {
+        "limit": 1000,
+        "ticker": "KXELECTIONEMERGENCY-26MAY01"
+      },
+      "row_count": 146,
+      "status_code": 200,
+      "ticker": "KXELECTIONEMERGENCY-26MAY01",
+      "ticker_source": "resolved",
+      "url_path": "/trade-api/v2/markets/trades?ticker=KXELECTIONEMERGENCY-26MAY01&limit=1000",
+      "usable_shape": true,
+      "variant": "documented_live_trades"
+    },
+    {
+      "body_snippet": "{\"cursor\":\"\",\"trades\":[{\"count_fp\":\"174.00\",\"created_time\":\"2026-03-06T18:09:26.993023Z\",\"no_price_dollars\":\"0.7200\",\"taker_side\":\"no\",\"ticker\":\"KXELECTIONEMERGENCY-26MAY01\",\"trade_id\":\"8a3f6319-4490-68f2-9858-a154a3a8d24e\",\"yes_price_dollars\":\"0.2800\"},{\"count_fp\":\"286.00\",\"created_time\":\"2026-03-06T06:42:22.827588Z\",\"no_price_dollars\":\"0.6900\",\"taker_side\":\"no\",\"ticker\":\"KXELECTIONEMERGENCY-26MAY01\",\"trade_id\":\"850bb382-737b-640b-1463-4dd2fe89f719\",\"yes_price_dollars\":\"0.3100\"},{\"count_fp\":\"50",
+      "endpoint": "/historical/trades",
+      "headers": {
+        "Content-Type": "application/json; charset=utf-8",
+        "Date": "Thu, 07 May 2026 01:15:17 GMT"
+      },
+      "params": {
+        "limit": 1000,
+        "ticker": "KXELECTIONEMERGENCY-26MAY01"
+      },
+      "row_count": 24,
+      "status_code": 200,
+      "ticker": "KXELECTIONEMERGENCY-26MAY01",
+      "ticker_source": "resolved",
+      "url_path": "/trade-api/v2/historical/trades?ticker=KXELECTIONEMERGENCY-26MAY01&limit=1000",
+      "usable_shape": true,
+      "variant": "documented_historical_trades"
+    },
+    {
+      "body_snippet": "404 page not found",
+      "endpoint": "/markets/KXFISAEXTEND-26APR-APR29/trades",
+      "headers": {
+        "Content-Type": "text/plain",
+        "Date": "Thu, 07 May 2026 01:15:18 GMT"
+      },
+      "params": {},
+      "row_count": null,
+      "status_code": 404,
+      "ticker": "KXFISAEXTEND-26APR-APR29",
+      "ticker_source": "resolved",
+      "url_path": "/trade-api/v2/markets/KXFISAEXTEND-26APR-APR29/trades",
+      "usable_shape": false,
+      "variant": "legacy_per_ticker_trades"
+    },
+    {
+      "body_snippet": "{\"cursor\":\"\",\"trades\":[{\"count_fp\":\"10.00\",\"created_time\":\"2026-04-28T15:46:49.810322Z\",\"no_price_dollars\":\"0.9900\",\"taker_side\":\"no\",\"ticker\":\"KXFISAEXTEND-26APR-APR29\",\"trade_id\":\"9a667e3a-5eff-6a7d-a427-a9449b0bf88e\",\"yes_price_dollars\":\"0.0100\"},{\"count_fp\":\"10.00\",\"created_time\":\"2026-04-28T15:45:45.095415Z\",\"no_price_dollars\":\"0.9900\",\"taker_side\":\"yes\",\"ticker\":\"KXFISAEXTEND-26APR-APR29\",\"trade_id\":\"ec13372f-d594-6068-4ef5-1efbb16ffa07\",\"yes_price_dollars\":\"0.0100\"},{\"count_fp\":\"10.00\",\"c",
+      "endpoint": "/markets/trades",
+      "headers": {
+        "Content-Type": "application/json; charset=utf-8",
+        "Date": "Thu, 07 May 2026 01:15:18 GMT"
+      },
+      "params": {
+        "limit": 1000,
+        "ticker": "KXFISAEXTEND-26APR-APR29"
+      },
+      "row_count": 145,
+      "status_code": 200,
+      "ticker": "KXFISAEXTEND-26APR-APR29",
+      "ticker_source": "resolved",
+      "url_path": "/trade-api/v2/markets/trades?ticker=KXFISAEXTEND-26APR-APR29&limit=1000",
+      "usable_shape": true,
+      "variant": "documented_live_trades"
+    },
+    {
+      "body_snippet": "{\"cursor\":\"\",\"trades\":[]}",
+      "endpoint": "/historical/trades",
+      "headers": {
+        "Content-Type": "application/json; charset=utf-8",
+        "Date": "Thu, 07 May 2026 01:15:19 GMT"
+      },
+      "params": {
+        "limit": 1000,
+        "ticker": "KXFISAEXTEND-26APR-APR29"
+      },
+      "row_count": 0,
+      "status_code": 200,
+      "ticker": "KXFISAEXTEND-26APR-APR29",
+      "ticker_source": "resolved",
+      "url_path": "/trade-api/v2/historical/trades?ticker=KXFISAEXTEND-26APR-APR29&limit=1000",
+      "usable_shape": true,
+      "variant": "documented_historical_trades"
+    },
+    {
+      "body_snippet": "404 page not found",
+      "endpoint": "/markets/KXFISAEXTEND-26APR-APR30/trades",
+      "headers": {
+        "Content-Type": "text/plain",
+        "Date": "Thu, 07 May 2026 01:15:19 GMT"
+      },
+      "params": {},
+      "row_count": null,
+      "status_code": 404,
+      "ticker": "KXFISAEXTEND-26APR-APR30",
+      "ticker_source": "resolved",
+      "url_path": "/trade-api/v2/markets/KXFISAEXTEND-26APR-APR30/trades",
+      "usable_shape": false,
+      "variant": "legacy_per_ticker_trades"
+    },
+    {
+      "body_snippet": "{\"cursor\":\"\",\"trades\":[{\"count_fp\":\"1500.00\",\"created_time\":\"2026-04-30T13:50:33.90627Z\",\"no_price_dollars\":\"0.9900\",\"taker_side\":\"yes\",\"ticker\":\"KXFISAEXTEND-26APR-APR30\",\"trade_id\":\"39b482c6-29e9-4c04-a048-335367254e19\",\"yes_price_dollars\":\"0.0100\"},{\"count_fp\":\"100.00\",\"created_time\":\"2026-04-30T13:26:27.263572Z\",\"no_price_dollars\":\"0.9900\",\"taker_side\":\"yes\",\"ticker\":\"KXFISAEXTEND-26APR-APR30\",\"trade_id\":\"d70af42a-bef1-5200-4a16-557563dbb06c\",\"yes_price_dollars\":\"0.0100\"},{\"count_fp\":\"74.06\"",
+      "endpoint": "/markets/trades",
+      "headers": {
+        "Content-Type": "application/json; charset=utf-8",
+        "Date": "Thu, 07 May 2026 01:15:20 GMT"
+      },
+      "params": {
+        "limit": 1000,
+        "ticker": "KXFISAEXTEND-26APR-APR30"
+      },
+      "row_count": 507,
+      "status_code": 200,
+      "ticker": "KXFISAEXTEND-26APR-APR30",
+      "ticker_source": "resolved",
+      "url_path": "/trade-api/v2/markets/trades?ticker=KXFISAEXTEND-26APR-APR30&limit=1000",
+      "usable_shape": true,
+      "variant": "documented_live_trades"
+    },
+    {
+      "body_snippet": "{\"cursor\":\"\",\"trades\":[]}",
+      "endpoint": "/historical/trades",
+      "headers": {
+        "Content-Type": "application/json; charset=utf-8",
+        "Date": "Thu, 07 May 2026 01:15:20 GMT"
+      },
+      "params": {
+        "limit": 1000,
+        "ticker": "KXFISAEXTEND-26APR-APR30"
+      },
+      "row_count": 0,
+      "status_code": 200,
+      "ticker": "KXFISAEXTEND-26APR-APR30",
+      "ticker_source": "resolved",
+      "url_path": "/trade-api/v2/historical/trades?ticker=KXFISAEXTEND-26APR-APR30&limit=1000",
+      "usable_shape": true,
+      "variant": "documented_historical_trades"
+    },
+    {
+      "body_snippet": "404 page not found",
+      "endpoint": "/markets/KXMVECROSSCATEGORY-S2026C67B2FF9E98-D53BD973ECC/trades",
+      "headers": {
+        "Content-Type": "text/plain",
+        "Date": "Thu, 07 May 2026 01:15:21 GMT"
+      },
+      "params": {},
+      "row_count": null,
+      "status_code": 404,
+      "ticker": "KXMVECROSSCATEGORY-S2026C67B2FF9E98-D53BD973ECC",
+      "ticker_source": "open",
+      "url_path": "/trade-api/v2/markets/KXMVECROSSCATEGORY-S2026C67B2FF9E98-D53BD973ECC/trades",
+      "usable_shape": false,
+      "variant": "legacy_per_ticker_trades"
+    },
+    {
+      "body_snippet": "{\"cursor\":\"\",\"trades\":[]}",
+      "endpoint": "/markets/trades",
+      "headers": {
+        "Content-Type": "application/json; charset=utf-8",
+        "Date": "Thu, 07 May 2026 01:15:21 GMT"
+      },
+      "params": {
+        "limit": 1000,
+        "ticker": "KXMVECROSSCATEGORY-S2026C67B2FF9E98-D53BD973ECC"
+      },
+      "row_count": 0,
+      "status_code": 200,
+      "ticker": "KXMVECROSSCATEGORY-S2026C67B2FF9E98-D53BD973ECC",
+      "ticker_source": "open",
+      "url_path": "/trade-api/v2/markets/trades?ticker=KXMVECROSSCATEGORY-S2026C67B2FF9E98-D53BD973ECC&limit=1000",
+      "usable_shape": true,
+      "variant": "documented_live_trades"
+    },
+    {
+      "body_snippet": "{\"cursor\":\"\",\"trades\":[]}",
+      "endpoint": "/historical/trades",
+      "headers": {
+        "Content-Type": "application/json; charset=utf-8",
+        "Date": "Thu, 07 May 2026 01:15:21 GMT"
+      },
+      "params": {
+        "limit": 1000,
+        "ticker": "KXMVECROSSCATEGORY-S2026C67B2FF9E98-D53BD973ECC"
+      },
+      "row_count": 0,
+      "status_code": 200,
+      "ticker": "KXMVECROSSCATEGORY-S2026C67B2FF9E98-D53BD973ECC",
+      "ticker_source": "open",
+      "url_path": "/trade-api/v2/historical/trades?ticker=KXMVECROSSCATEGORY-S2026C67B2FF9E98-D53BD973ECC&limit=1000",
+      "usable_shape": true,
+      "variant": "documented_historical_trades"
+    },
+    {
+      "body_snippet": "404 page not found",
+      "endpoint": "/markets/KXMVESPORTSMULTIGAMEEXTENDED-S20266B1B56C2580-DB1467B6181/trades",
+      "headers": {
+        "Content-Type": "text/plain",
+        "Date": "Thu, 07 May 2026 01:15:22 GMT"
+      },
+      "params": {},
+      "row_count": null,
+      "status_code": 404,
+      "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20266B1B56C2580-DB1467B6181",
+      "ticker_source": "open",
+      "url_path": "/trade-api/v2/markets/KXMVESPORTSMULTIGAMEEXTENDED-S20266B1B56C2580-DB1467B6181/trades",
+      "usable_shape": false,
+      "variant": "legacy_per_ticker_trades"
+    },
+    {
+      "body_snippet": "{\"cursor\":\"\",\"trades\":[]}",
+      "endpoint": "/markets/trades",
+      "headers": {
+        "Content-Type": "application/json; charset=utf-8",
+        "Date": "Thu, 07 May 2026 01:15:22 GMT"
+      },
+      "params": {
+        "limit": 1000,
+        "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20266B1B56C2580-DB1467B6181"
+      },
+      "row_count": 0,
+      "status_code": 200,
+      "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20266B1B56C2580-DB1467B6181",
+      "ticker_source": "open",
+      "url_path": "/trade-api/v2/markets/trades?ticker=KXMVESPORTSMULTIGAMEEXTENDED-S20266B1B56C2580-DB1467B6181&limit=1000",
+      "usable_shape": true,
+      "variant": "documented_live_trades"
+    },
+    {
+      "body_snippet": "{\"cursor\":\"\",\"trades\":[]}",
+      "endpoint": "/historical/trades",
+      "headers": {
+        "Content-Type": "application/json; charset=utf-8",
+        "Date": "Thu, 07 May 2026 01:15:23 GMT"
+      },
+      "params": {
+        "limit": 1000,
+        "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20266B1B56C2580-DB1467B6181"
+      },
+      "row_count": 0,
+      "status_code": 200,
+      "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20266B1B56C2580-DB1467B6181",
+      "ticker_source": "open",
+      "url_path": "/trade-api/v2/historical/trades?ticker=KXMVESPORTSMULTIGAMEEXTENDED-S20266B1B56C2580-DB1467B6181&limit=1000",
+      "usable_shape": true,
+      "variant": "documented_historical_trades"
+    },
+    {
+      "body_snippet": "404 page not found",
+      "endpoint": "/markets/KXMVESPORTSMULTIGAMEEXTENDED-S20269B6CDCFBA3E-4A2233790D1/trades",
+      "headers": {
+        "Content-Type": "text/plain",
+        "Date": "Thu, 07 May 2026 01:15:23 GMT"
+      },
+      "params": {},
+      "row_count": null,
+      "status_code": 404,
+      "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20269B6CDCFBA3E-4A2233790D1",
+      "ticker_source": "open",
+      "url_path": "/trade-api/v2/markets/KXMVESPORTSMULTIGAMEEXTENDED-S20269B6CDCFBA3E-4A2233790D1/trades",
+      "usable_shape": false,
+      "variant": "legacy_per_ticker_trades"
+    },
+    {
+      "body_snippet": "{\"cursor\":\"\",\"trades\":[]}",
+      "endpoint": "/markets/trades",
+      "headers": {
+        "Content-Type": "application/json; charset=utf-8",
+        "Date": "Thu, 07 May 2026 01:15:24 GMT"
+      },
+      "params": {
+        "limit": 1000,
+        "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20269B6CDCFBA3E-4A2233790D1"
+      },
+      "row_count": 0,
+      "status_code": 200,
+      "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20269B6CDCFBA3E-4A2233790D1",
+      "ticker_source": "open",
+      "url_path": "/trade-api/v2/markets/trades?ticker=KXMVESPORTSMULTIGAMEEXTENDED-S20269B6CDCFBA3E-4A2233790D1&limit=1000",
+      "usable_shape": true,
+      "variant": "documented_live_trades"
+    },
+    {
+      "body_snippet": "{\"cursor\":\"\",\"trades\":[]}",
+      "endpoint": "/historical/trades",
+      "headers": {
+        "Content-Type": "application/json; charset=utf-8",
+        "Date": "Thu, 07 May 2026 01:15:24 GMT"
+      },
+      "params": {
+        "limit": 1000,
+        "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20269B6CDCFBA3E-4A2233790D1"
+      },
+      "row_count": 0,
+      "status_code": 200,
+      "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20269B6CDCFBA3E-4A2233790D1",
+      "ticker_source": "open",
+      "url_path": "/trade-api/v2/historical/trades?ticker=KXMVESPORTSMULTIGAMEEXTENDED-S20269B6CDCFBA3E-4A2233790D1&limit=1000",
+      "usable_shape": true,
+      "variant": "documented_historical_trades"
+    }
+  ],
+  "ticker_count": 6,
+  "tickers": [
+    {
+      "source": "resolved",
+      "ticker": "KXELECTIONEMERGENCY-26MAY01"
+    },
+    {
+      "source": "resolved",
+      "ticker": "KXFISAEXTEND-26APR-APR29"
+    },
+    {
+      "source": "resolved",
+      "ticker": "KXFISAEXTEND-26APR-APR30"
+    },
+    {
+      "source": "open",
+      "ticker": "KXMVECROSSCATEGORY-S2026C67B2FF9E98-D53BD973ECC"
+    },
+    {
+      "source": "open",
+      "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20266B1B56C2580-DB1467B6181"
+    },
+    {
+      "source": "open",
+      "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20269B6CDCFBA3E-4A2233790D1"
+    }
+  ]
+}
