@@ -144,3 +144,46 @@ Sites 3 (per-keyword `net_shift` zero) and 7 (per-keyword direction assignment f
 Authorize one of (a) / (b) / (c) above. Claude recommends **(b)** if F8 over-emission can be addressed with a narrow keyword-context tightening (e.g., require co-occurrence of resolution-event vocabulary alongside `"senate judiciary"`) — that keeps the sub-fix scope adjacent to the C2-identified surface and avoids deferring a known failure mode. Claude recommends **(c)** if the F8 fix would require touching extraction logic outside `GEOPOLITICAL_SIGNALS` (e.g., context-windowing in `keyword_estimate`), since that crosses into multi-surface scope that warrants a fresh charter cycle.
 
 Operator decides. C7 implementation does not proceed until decision lands.
+
+---
+
+## Operator decision (2026-05-06)
+
+**Path (b) authorized: multi-step scope-extension.**
+
+C7 implementation now covers BOTH:
+1. **GEOPOLITICAL_SIGNALS extension** per Codex C6 proposal (8 directional fixtures repaired).
+2. **F8 NEUTRAL over-emission constraint** to keep `"senate judiciary"` (and any analogous procedural-only keywords surfaced post-fix) within `expected_magnitude_max=0.02` on F8.
+
+Implementation choice for (2) left to Codex. Recommended approaches (non-binding):
+- **Option (b.i):** tighten `"senate judiciary"` keyword to require co-occurrence with resolution-event vocabulary (e.g., split into `"senate judiciary committee approves"`, `"senate judiciary committee votes"`, removing the bare `"senate judiciary"` standalone match). Stays inside `GEOPOLITICAL_SIGNALS`.
+- **Option (b.ii):** lower the strength of `"senate judiciary"` standalone to ≤0.02 so procedural mentions stay within F8 charter ceiling, while resolution-event keyword groups continue to dominate net_shift on directional fixtures. Stays inside `GEOPOLITICAL_SIGNALS`.
+- **Option (b.iii):** add a short procedural-only suppression rule. NOT preferred — crosses into `keyword_estimate` logic, which would push the sub-fix into multi-surface territory beyond what (b) authorizes.
+
+Codex picks (b.i) or (b.ii). If Codex believes (b.iii) is the only viable path, halt C7 and report — that becomes a fresh-charter scope conversation.
+
+### Updated acceptance criteria (unchanged from charter, restated for clarity)
+
+- ≥ 6/10 Lane B fixtures (F1-F7 + F10) pass `|Δ| > 0.05` with direction matching `expected_direction`.
+- F8 stays within `|Δ| ≤ 0.02`.
+- F9 stays within `|Δ| ≤ 0.005`.
+- F10 BSR-5 damping holds: `|delta_F10| < 0.5 × |delta_F1|` (evidence-store layer; C8 verifies).
+- IC §16 final: post-C9 re-ingestion + C10 replay shows ≥ 1 slice with `ev_ci_95_lo > 0` AND `trades ≥ 10`.
+
+### Scope-extension authorization counts as
+
+- Operator scope-extension per Cycle-15B charter §"Pre-stated decision criteria" — explicit, recorded here, not retroactive.
+- Single fix attempt (not two) toward `superpowers:systematic-debugging` "3+ fixes failed → architectural conversation" rule. The scope-extension is a single coordinated sub-fix at a single surface (`GEOPOLITICAL_SIGNALS`), even though it touches two concerns (vocabulary gap + over-emission).
+
+### What this authorization does NOT cover
+
+- Touching `keyword_estimate` logic, `signal_analyzer` extraction flow, suppression layer, or LLM prompt convention. Those remain out of scope.
+- Adding new keyword groups beyond what is needed to repair F1-F7 + F10 vocabulary gap and constrain F8 over-emission.
+- Modifying any other part of the keyword direction map outside the targeted change.
+
+### Codex C7 next steps
+
+1. Implement chosen sub-fix path (b.i) or (b.ii) — single PR / commit modifying `config.py` only.
+2. Run C8 Lane B post-fix verification: 10 fixtures, report direction + magnitude per fixture, confirm acceptance criteria.
+3. If C8 fails on any directional fixture OR F8 / F9 NEUTRAL clauses, halt + flag — that triggers fresh-charter conversation, not silent acceptance.
+4. If C8 passes, proceed to C9 re-ingestion. Claude L7 atomicity review fires post-C9.
