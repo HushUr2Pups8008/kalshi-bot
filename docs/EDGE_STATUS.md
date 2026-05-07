@@ -9,9 +9,9 @@
 |---|---|
 | Lifetime P&L | **-$7.50** (live, n=3 paper trades) |
 | Lifetime trade count | **3** (all resolved, all lost, all 1 source / 1 series / 1 direction; 3/3 wrong-direction) |
-| Replay verdict | **Cycle-16E scorer forensics delivered. Cycle-16D raw `237 trades / 2 wins` reading was scorer-overadmission, not production-like trade count.** Price units cents-consistent; 50% random baseline invalid for low-cent longshots; production-proxy replay = 12 trades / 0 wins / -1.005 P&L / 0 IC §16 slices. Cycle-17 §B/§C operator decision remains DEFERRED pending Claude review of Cycle-16E. |
+| Replay verdict | **Cycle-16E verdict: `scorer_fixed_no_signal_confirmed`. Cycle-17 §B/§C operator decision RESTORED (un-deferred).** Cycle-16D raw `237 trades / 2 wins` was scorer-overadmission. Production-proxy = 12 trades / 0 wins / -$1.005 P&L / 0 IC §16 slices. Production gates ported faithfully line-by-line. Market-implied baseline ≈ 1.005 expected wins on 12 trades (NOT 50% coin-flip); 0 actual wins is statistically uninformative at n=12. Anti-correlation framing withdrawn. |
 
-## Cycle-16D verdict landed — operational reading WITHDRAWN pending Cycle-16E scorer forensics
+## Cycle-16E verdict landed — `scorer_fixed_no_signal_confirmed`; Cycle-17 RESTORED
 
 Cycle-16D charter-locked verdict label `extraction_fixed_but_information_frontier_holds` matches the locked criterion (D5 coverage ≥90% AND D8 0 IC §16 slices). **Operator override 2026-05-07 withdraws the operational reading** because three load-bearing scorer concerns invalidate the underlying trade-and-win counts:
 
@@ -19,21 +19,22 @@ Cycle-16D charter-locked verdict label `extraction_fixed_but_information_frontie
 2. **Replay is massively YES-biased.** 231 YES / 6 NO trades; 0/231 YES wins; 2/6 NO wins. Bot systematically buying YES on markets that resolve NO. Selection effect, scorer sign error, OR Cycle-15B C7 keyword-extension over-emits YES on production text.
 3. **Price-unit / longshot calibration uncertain.** 102 trades had `market_yes_price < 1`; 100 had `market_yes_price` between 1 and 9. Cents vs dollars consistency end-to-end unaudited. 100x unit error possibility.
 
-**Cycle-16E scorer forensics delivered by Codex** per amended PROFIT-EDGE-010; Claude review still pending. Cycle-17 §B/§C operator decision remains DEFERRED until the Cycle-16E review consumes the corrected D6 re-run.
+**Cycle-16E delivered by Codex (`c913ffd`); Claude N3+N4+N5+N6+N7+N9+N10 review complete.** Production-proxy gates ported faithfully line-by-line vs `executor.py:200-244`. Verdict per locked task-split outcome 2: `scorer_fixed_no_signal_confirmed`. **Cycle-17 §B/§C operator decision RESTORED (un-deferred).**
 
-Per cycle-17 skeletons, Cycle-17 routing remains TBD pending Cycle-16E re-run output:
-- Post-correction D6 result: 0 IC §16 slices; raw 237-trade count reduced to 12 production-proxy trades.
-- The anti-correlation interpretation is withdrawn; the corrected issue is scorer overadmission plus no positive-EV deploy slice.
-- Claude review determines whether Cycle-17 §B vs §C operator decision returns to the table or whether another scorer/extraction audit is required.
+Per cycle-17 skeletons, Cycle-17 routing:
+- §B source onboarding (2-4 weeks; mandatory pre-onboarding re-trace requirement RELAXED since anti-correlation hypothesis withdrawn)
+- §C strategic redesign / pause / paper-only research
+
+Operator picks. PROFIT-EDGE-011 active.
 
 ## Wave deploy status (per IC §16 + Cycle-16D verdict)
 
 | wave | status | gate |
 |---|---|---|
 | Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **ACTIVE — ships 2026-05-08 as cleanup/observability hygiene only; does NOT claim edge** | exempt under IC §16 Rule 2 (mechanical / observability / governance) |
-| Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED PENDING CYCLE-16E SCORER FORENSICS + CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | requires (a) Cycle-16E scorer audit + D6 re-run AND (b) operator picks §B AND (c) post-onboarding replay produces ≥1 slice with `ev_ci_95_lo>0` AND `trades≥10` |
-| Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED PENDING CYCLE-16E SCORER FORENSICS + CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT — Lever B counterindicated** | loosening admission on a model whose IC §16 status is unverified under audited scorer widens losses; current 0.84% win rate may be scorer artifact, not bot signal |
-| Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PENDING CYCLE-16E SCORER FORENSICS + CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | each candidate fix needs replay evidence under audited scorer |
+| Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | requires (a) operator picks §B AND (b) post-onboarding replay produces ≥1 slice with `ev_ci_95_lo>0` AND `trades≥10` |
+| Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT — Lever B counterindicated** | loosening admission on a model with 0 IC §16-eligible slices on audited scorer widens losses without expected gain |
+| Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | each candidate fix needs replay evidence under audited scorer |
 | **Capital posture** | **PAPER-ONLY. Hard guardrail** (Cycle-14 charter §5) | live trading remains blocked until ≥1 positive-EV slice surfaces under audited scorer per IC §16 |
 
 ## Are we near a Wave-2-eligible slice?
@@ -73,7 +74,8 @@ Per cycle-17 skeletons, Cycle-17 routing remains TBD pending Cycle-16E re-run ou
 | 2026-05-06 (Cycle-13) | 24 resolved evidence_store markets / 255 replay rows | **0 positive-EV slices, 0 left-on-table winners, P&L -$7.50, IC §16 Rule 5 fires** | `edge-replay-cycle13-report.md` |
 | 2026-05-06 (Cycle-14) | 24 resolved markets / 255 replay rows + synthetic Lane A/B injection | **Verdict: `extraction_broken`.** Movement_rate 1.57%, direction-correctness 0/6 when directional, sized-bet 0/3 (-$7.50), Brier 0.2599 (n=24, supporting only), Lane A PASS / Lane B FAIL at delta=0.000 on both fixtures. → Cycle-15B extraction rebuild active. | `edge-replay-cycle14-diagnosis.md` |
 | 2026-05-07 (Cycle-15B) | 24 resolved markets / 272 replay rows + post-fix re-ingestion + 10 Lane B fixtures | **Verdict: `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`.** C8 Lane B 8/8 directional + 2/2 NEUTRAL ✓; C9 idempotent re-ingestion (SHA256 stable); C10 IC §16 0 slices BUT 0/272 rows had decision-time executable price; 183/272 readiness-admitted; 7/272 nonzero post-fix model delta. Scorer-blocked, NOT negative-EV proven. → Cycle-16D price reconstruction active. | `edge-replay-cycle15b-report.md` |
-| 2026-05-07 (Cycle-16D) | 24 resolved markets / 272 replay rows + restored prices via documented Kalshi endpoints | **Verdict: `extraction_fixed_but_information_frontier_holds`.** D5 coverage 99.6324% (271/272 priced) ✓; D6 237 counterfactual trades / 2 wins / -7.46 P&L; overall ev_ci_95_lo = -0.0382; 1 raw positive-EV slice with trades=1 (below IC §16 trades≥10 floor); 0 IC §16-eligible slices; D9 sentinel POST_FIX_REBUILT cohort verified (commit 2222227). 0.84% win rate on 237 trades flagged as anomalously low (random ≈ 50%); anti-correlated signal OR keyword-overfit hypothesis. → Cycle-17 operator decision active (§B source onboarding OR §C strategic redesign). | `edge-replay-cycle16d-report.md` |
+| 2026-05-07 (Cycle-16D) | 24 resolved markets / 272 replay rows + restored prices via documented Kalshi endpoints | **Charter-locked verdict: `extraction_fixed_but_information_frontier_holds`** (operational reading WITHDRAWN per operator override; superseded by Cycle-16E). D5 coverage 99.6324% (271/272 priced) ✓; D6 237 counterfactual trades / 2 wins / -7.46 P&L; overall ev_ci_95_lo = -0.0382; 1 raw positive-EV slice with trades=1 (below IC §16 floor); 0 IC §16-eligible slices; D9 sentinel POST_FIX_REBUILT cohort verified (commit 2222227). | `edge-replay-cycle16d-report.md` |
+| 2026-05-07 (Cycle-16E) | scorer forensics audit + production-proxy replay against same 272 rows | **Verdict: `scorer_fixed_no_signal_confirmed`.** Production-proxy gates ported faithfully line-by-line vs `executor.py:200-244`: price floor/ceiling 2¢/98¢, ticker cooldown 14400s, paper-duplicate prob/price 0.07/5.0, same-signal prob/price 0.02/2.0, PAPER_MIN_EDGE 0.02. Variant comparison: baseline_abs_edge 237 trades → readiness_only 182 → paper_price_sanity 110 → readiness_plus_price_sanity 63 → production_proxy 12 trades / 0 wins / -$1.005 P&L / 0 IC §16 slices. Market-implied baseline ≈ 1.005 expected wins on 12 production-proxy trades; 0 actual wins is statistically uninformative at n=12. Price units cents-consistent end-to-end (no 100x dollars/cents inversion). Cycle-16D anti-correlation framing WITHDRAWN. → Cycle-17 §B/§C operator decision RESTORED. | `edge-replay-cycle16e-scorer-forensics.md` |
 
 ## What changes Wave-2 from HALTED → AUTHORIZED
 

@@ -19,6 +19,16 @@ The verdict comes first. The skeleton that matches the verdict instantiates. NO 
 | `cycle_16d_extension_needed` | §D-extension — second backfill attempt at Cycle-16D re-open OR §C per operator decision |
 | `escalation_required` | §E — operator scope-extension fresh-charter OR §C strategic redesign per operator decision |
 
+### 2026-05-07 amendment: Cycle-16E scorer forensics
+
+Cycle-16D operational reading was withdrawn 2026-05-07 pending Cycle-16E scorer forensics. Cycle-16E delivered (Codex commit `c913ffd`) and Cycle-16E verdict = `scorer_fixed_no_signal_confirmed` (production-proxy 12 trades / 0 wins / 0 IC §16 slices; matches market-implied baseline).
+
+**Routing impact:** Cycle-17 §B/§C operator decision is **RESTORED** (un-deferred). Cycle-16E confirmed the cycle-16D `extraction_fixed_but_information_frontier_holds` label maps to outcome 2 in this map → §B / §C.
+
+**Cycle-16F additional forensics not triggered.** The "anti-correlated signal" / "extraction overfit" hypotheses raised in cycle-16D M6 appendix are withdrawn — they were artifacts of (a) wrong baseline assumption (50% coin-flip vs market-implied 9.463 expected wins), and (b) scorer overadmission. Both addressed by Cycle-16E.
+
+If operator picks §B, the "mandatory pre-onboarding re-trace of 235 losers" requirement from cycle-16D M6 appendix is **RELAXED** — it was driven by anti-correlation hypothesis. §B can proceed against current evidence, gated only on candidate-source replay validation per IC §16 Rule 4.
+
 ## §A — Cycle-17A: Wave-2 candidate slice deploy + replay validation
 
 **Trigger:** Cycle-16D D8 verdict = `extraction_fixed_with_positive_ev_slice`. D5 coverage ≥ 90% AND D8 ≥ 1 IC §16 slice with `ev_ci_95_lo > 0` AND `trades ≥ 10`.
