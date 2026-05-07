@@ -1759,13 +1759,13 @@ This is calibration **inertness** at the extraction layer, not sign-inversion. T
 |-------|-------|
 | **ID** | PROFIT-EDGE-009 |
 | **Title** | Cycle-16D price-reconstruction prerequisite — restore per-decision-time `market_yes_price` so IC §16 acceptance gate can be evaluated against post-Cycle-15B-fix dossier corpus |
-| **Category** | Profit-Path Integrity / Replay Harness (succeeds PROFIT-EDGE-008 Cycle-15B `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap` verdict) |
-| **Severity** | HIGH (sole path to evaluating IC §16 against post-fix bot; gates all subsequent Cycle-16 §A/§B/§C routing decisions) |
-| **Status** | ACTIVE (filed 2026-05-07 cycle-15B verdict landing; Codex implementation per `cycle-16-conditional-charter-skeletons.md` §D) |
-| **Priority** | NOW |
-| **Owner** | Codex (implementation — endpoint diagnosis + price backfill + C10 re-run); Claude (review + verdict-vs-criteria check + post-verdict refresh) |
-| **Depends On** | PROFIT-EDGE-008 (delivered with `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap` verdict). C9 POST_FIX_REBUILT cohort intact; no re-ingestion needed for §D, only price-side restoration. |
-| **Blocks** | All Wave-2/Wave-3/Branch-D deploys per IC §16; Cycle-16 §A/§B/§C routing decisions. |
+| **Category** | Profit-Path Integrity / Replay Harness (succeeded PROFIT-EDGE-008 Cycle-15B `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap` verdict) |
+| **Severity** | HIGH (was sole path to evaluating IC §16 against post-fix bot; succeeded by PROFIT-EDGE-010 Cycle-17 operator decision) |
+| **Status** | COMPLETE (delivered 2026-05-07; verdict = `extraction_fixed_but_information_frontier_holds`; succeeded by PROFIT-EDGE-010 Cycle-17 operator decision) |
+| **Priority** | n/a (closed) |
+| **Owner** | Codex (implementation — DELIVERED D1-D10); Claude (governance + review + scaffolding + verdict consumption — DELIVERED M1-M9 + post-verdict refresh) |
+| **Depends On** | PROFIT-EDGE-008 (delivered with `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap` verdict). |
+| **Blocks** | All Wave-2/Wave-3/Branch-D deploys (transferred to PROFIT-EDGE-010). |
 
 **Description**
 
@@ -1803,18 +1803,102 @@ This is the same `/markets/{ticker}/trades` 404 issue surfaced in cycle-13's `fe
 
 **Notes**
 
-- Cycle-16D does NOT bypass IC §16. Restores harness's ability to evaluate IC §16. Post-§D Cycle-16 path still requires `ev_ci_95_lo > 0` AND `trades ≥ 10` for any Wave-2/3/D unblock.
-- Out of scope: bot extraction code; new Cycle-15B sub-fixes; LLM-path audit (L7.2 deferral; revisit post-§D if needed).
-- Estimated scope: 1-2 weeks endpoint-solvable; 2-4 weeks alternative source; 4+ weeks computed approximation.
+- Cycle-16D did NOT bypass IC §16. Restored harness's ability to evaluate IC §16; gate evaluated; result was 0 IC §16-eligible slices.
+- Out of scope (delivered): bot extraction code; new Cycle-15B sub-fixes; LLM-path audit (L7.2 deferral remains open for post-Cycle-17).
+- **2026-05-07 cycle-16D closure:** D1 endpoint diagnosis = `solvable_auth_or_param` (legacy `/markets/{ticker}/trades` 404; documented `/markets/trades?ticker=...` + `/historical/trades?ticker=...` 200). D3 backfill via merged-endpoint primary path (path b.i / b.ii not needed; D4 fallback unused). D5 coverage 99.6324% (271/272 priced) ≥ 90% ✓. D6 C10 re-run produced 237 counterfactual trades / 2 wins / -$7.46 P&L; overall `ev_ci_95_lo = -0.0382`; 1 raw positive-EV slice with `trades=1` (below IC §16 floor); 0 IC §16-eligible slices. D9 POST_FIX_REBUILT sentinel verified (commit `2222227`). Verdict = `extraction_fixed_but_information_frontier_holds`. Anti-correlated signal OR Cycle-15B keyword-overfit hypothesis flagged in Claude appendix; 99.16% wrong-direction trade rate is anomalously low for "no signal" (random ≈ 50%). Cycle-17 = operator decision: §B source onboarding OR §C strategic redesign.
 
 **Related**
 
 - `PROFIT-EDGE-008` (delivered) — direct parent (Cycle-15B verdict drove this scope).
-- `PROFIT-EDGE-005` / `PROFIT-EDGE-006` — replay harness infrastructure (Cycle-16D extends pricing layer).
+- `PROFIT-EDGE-005` / `PROFIT-EDGE-006` — replay harness infrastructure (Cycle-16D extended pricing layer).
+- `PROFIT-EDGE-010` (active) — Cycle-17 operator decision succeeds this entry.
 - `docs/governance/cycle-16-conditional-charter-skeletons.md` §D — scope skeleton.
-- `docs/governance/edge-replay-cycle15b-report.md` Claude appendix — verdict consumption + Cycle-16D recommendation.
-- `docs/governance/cycle-15b-post-verdict-action-checklist.md` — post-verdict checklist filed this entry.
-- `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs §D acceptance + downstream).
+- `docs/governance/edge-replay-cycle16d-report.md` — Cycle-16D D8 report with Claude appendix + verdict.
+- `docs/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 skeletons (instantiates).
+- `docs/governance/cycle-16d-post-verdict-action-checklist.md` — post-verdict checklist driving items 5/8/9/10.
+- `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-17+ acceptance).
+
+---
+
+### PROFIT-EDGE-010
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EDGE-010 |
+| **Title** | Cycle-17 operator decision — pick §B source-onboarding OR §C strategic-redesign post-Cycle-16D `extraction_fixed_but_information_frontier_holds` verdict |
+| **Category** | Profit-Path Integrity / Strategic Direction (succeeds PROFIT-EDGE-009 Cycle-16D `extraction_fixed_but_information_frontier_holds` verdict) |
+| **Severity** | HIGH (gates all Wave-2/3/Branch-D deploys; gates whether bot continues active development OR pivots to redesign / paper-only research / pause) |
+| **Status** | ACTIVE (filed 2026-05-07 cycle-16D verdict landing; operator-decision-only until pick) |
+| **Priority** | NOW (operator decision blocks all subsequent cycle work) |
+| **Owner** | Operator (decision); Claude + Codex (recommendation + analysis already delivered in `edge-replay-cycle16d-report.md` Claude appendix) |
+| **Depends On** | PROFIT-EDGE-009 (delivered with `extraction_fixed_but_information_frontier_holds` verdict) |
+| **Blocks** | All Wave-2/Wave-3/Branch-D deploys per IC §16; all subsequent Cycle-17/Cycle-18+ scope decisions until operator picks. |
+
+**Description**
+
+Cycle-16D restored prices and produced 237 counterfactual trades. 2 wins / 235 losses = 0.84% win rate. `ev_ci_95_lo = -0.0382` overall. 0 IC §16-eligible slices. The cycle-13 → cycle-14 → cycle-15B → cycle-16D arc has demonstrated:
+
+1. **Extraction now emits signal** (Lane B 8/8 + 2/2 ✓ at synthetic).
+2. **Prices are reconstructable** (99.6324% coverage via documented Kalshi endpoints).
+3. **The combined system produces no positive-EV slice at the bot's current information set.**
+
+Per `cycle-17-conditional-charter-skeletons.md` verdict-to-skeleton map, this routes to operator decision between:
+
+- **§B source onboarding** (2-4 weeks): identify 3-5 alternative source classes (regulatory feeds, primary-source archives, specialist analysis); backfill evidence_store; replay against new sources; deploy if ≥1 positive-EV slice surfaces.
+- **§C strategic redesign / pause** (operator-decision-doc only initially): three sub-options — (a) pause bot indefinitely, (b) fundamental redesign of sources/model/markets/sizing, (c) continuation as paper-only research project.
+
+**Why it matters to profitability / safety / reliability**
+
+1. **Strategic-direction inflection.** Bot has 3 lifetime paper trades + -$7.50 P&L + 4 cycles of negative-or-blocked replay verdicts. Continuing without operator pick repeats the cycle-12 "deploy hope" pattern.
+2. **0.84% win rate is not "no signal"** — it's anti-correlated. Either Cycle-15B keyword-extension overfit synthetic Lane B fixtures (matching production phrases in wrong context) OR signal at this trader's information set is genuinely anti-correlated with outcomes. Distinguishing requires per-trade trace of 235 losers — work that should NOT happen until operator decides §B vs §C.
+3. **Operator time / resource allocation.** §B = 2-4 weeks Codex implementation. §C (a) = no further work. §C (b) = multi-month redesign cycle. §C (c) = paper-only operation indefinitely. Operator must weigh against alternative use of the same resources.
+
+**Evidence / Source**
+
+- `docs/governance/edge-replay-cycle16d-report.md` Claude appendix — verdict + 0.84% win rate flag + anti-correlated-vs-overfit hypothesis + §C recommendation rationale.
+- `docs/governance/edge-replay-cycle15b-report.md` — Cycle-15B verdict trail.
+- `docs/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 verdict trail.
+- `docs/governance/edge-replay-cycle13-report.md` — Cycle-13 0-positive-EV verdict.
+- `data/paper_trades.db` — 3-trade lifetime history (PRE_FIX cohort).
+- `data/dossier_updates_post_fix.db` — 272-row POST_FIX_REBUILT corpus.
+- `logs/edge_replay/cycle16d/counterfactual_scores.json` — 237 counterfactual trades; per-slice EV table.
+
+**Operator decision menu**
+
+Operator picks ONE:
+
+| pick | scope | estimated time | risk |
+|---|---|---|---|
+| §B source onboarding | Cycle-17B | 2-4 weeks Codex implementation | risks 2-4 weeks rebuilding the same anti-correlation pattern through new vocabulary; mitigated by mandatory pre-onboarding re-trace of 235 losing trades to identify overfit-vs-anti-correlation pattern |
+| §C (a) pause | Operator-decision-doc only | ~1 hour | sunk-cost effect; no further bot development |
+| §C (b) fundamental redesign | Cycle-17C-redesign | multi-month | full Wave-1/2/3-equivalent replay validation required from scratch |
+| §C (c) continuation as paper-only research | Operator-decision-doc only | ~1 hour | indefinite paper-only operation; no live capital ever |
+
+Operator picks. Subsequent debt entry filed (PROFIT-EDGE-011) per matching Cycle-17 sub-cycle.
+
+**Acceptance Criteria**
+
+- Operator decision documented in this debt entry's "Notes" + `docs/governance/cycle-17-operator-decision.md` (FUTURE).
+- ROADMAP / EDGE_STATUS refreshed per matching Cycle-17 §B/§C wording.
+- If §B picked: PROFIT-EDGE-011 filed = "Cycle-17B source onboarding scope."
+- If §C (a) / (c) picked: PROFIT-EDGE-011 filed = "Cycle-17C (a/c) operator-direction continuation."
+- If §C (b) picked: PROFIT-EDGE-011 filed = "Cycle-17C-redesign multi-month scope."
+
+**Notes**
+
+- **Capital posture remains PAPER-ONLY** regardless of operator pick. Live-trading flip requires ≥1 IC §16-eligible slice + replay-report citation + operator-explicit override commit. Cycle-16D evidence does NOT support flip; any §B/§C path also gates on subsequent positive-EV evidence.
+- **Pre-cycle-12 "deploy hope" pattern stays prohibited.** Operator picking §B is NOT permission to deploy speculative source onboarding. Each candidate source must clear backfill replay before deploy per §B charter.
+- **Three-failed-fix architectural rule.** Per `superpowers:systematic-debugging`: cycle-15B C7 was the only formal fix; cycle-13 was scope, cycle-14 was diagnosis, cycle-16D was harness restoration. Strict count = 1 fix. Cumulative evidence (4 cycles, 0 positive-EV slices) is harder to dismiss but does not formally trigger architectural conversation. Claude appendix recommends operator weigh §C heavily anyway.
+
+**Related**
+
+- `PROFIT-EDGE-009` (delivered) — direct parent (Cycle-16D verdict drove this entry).
+- `PROFIT-EDGE-008` / `PROFIT-EDGE-007` / `PROFIT-EDGE-006` / `PROFIT-EDGE-005` — full cycle trail.
+- `docs/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 skeleton set.
+- `docs/governance/edge-replay-cycle16d-report.md` Claude appendix — verdict + recommendation rationale.
+- `docs/governance/cycle-16d-post-verdict-action-checklist.md` — post-verdict checklist filed this entry.
+- `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — original strategic-redirect authority.
+- `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-17+ acceptance).
 
 ---
 

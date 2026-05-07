@@ -1,31 +1,36 @@
 # EDGE_STATUS — operator-facing edge dashboard
 
 **Refresh by commit.** Single page; replaces 100+ doc index for "are we making money?" questions.
-**Last refresh:** 2026-05-07 cycle-15B verdict landing.
+**Last refresh:** 2026-05-07 cycle-16D verdict landing.
 
 ## TL;DR (3 numbers)
 
 | metric | value |
 |---|---|
-| Lifetime P&L | **-$7.50** |
+| Lifetime P&L | **-$7.50** (live, n=3 paper trades) |
 | Lifetime trade count | **3** (all resolved, all lost, all 1 source / 1 series / 1 direction; 3/3 wrong-direction) |
-| Replay verdict | **Cycle-15B verdict: `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`. Cycle-16D active per matching skeleton.** Lane B post-fix 8/8 directional + 2/2 NEUTRAL ✓; IC §16 acceptance fails (0 slices with `ev_ci_95_lo>0` AND `trades≥10`) BUT 0 of 272 replay rows have decision-time executable price → scorer-blocked, NOT "negative EV proven." |
+| Replay verdict | **Cycle-16D verdict: `extraction_fixed_but_information_frontier_holds`. Cycle-17 operator decision active.** Coverage 99.6324%; 237 counterfactual trades / 2 wins (0.84% win rate) / -7.46 P&L; ev_ci_95_lo = -0.0382; 0 IC §16-eligible slices. Anti-correlated signal OR keyword-overfit hypothesis flagged. |
 
-## Cycle-15B verdict landed — `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`
+## Cycle-16D verdict landed — `extraction_fixed_but_information_frontier_holds`
 
-Cycle-15B answered: **does extraction now emit signal post-fix?** Answer: yes (C8 8/8 directional Lane B fixtures + 2/2 NEUTRAL pass; 7/272 replay rows have nonzero post-fix model delta). But the IC §16 acceptance gate cannot be evaluated — the replay scorer requires per-decision-time `market_yes_price` to compute counterfactual P&L, and 0/272 rows have one. This is the same `/markets/{ticker}/trades` 404 issue first surfaced in cycle-13 / noted in cycle-14 charter §"Historical price endpoint gap."
+Cycle-16D answered: **with restored prices, does any slice produce IC §16-eligible positive EV?** Answer: no. Price reconstruction succeeded (271/272 rows priced). 237 counterfactual trades materialized. **Only 2 wins (0.84% win rate)**, ev_ci_95_lo = -0.0382 overall. No (source × market_family × signal_type) slice meets `ev_ci_95_lo > 0` AND `trades ≥ 10`.
 
-Cycle-16D (PROFIT-EDGE-009) instantiates `cycle-16-conditional-charter-skeletons.md` §D — price-reconstruction prerequisite scope. Pure replay-harness work; bot extraction code untouched.
+The 0.84% win rate is anomalously low for a "no signal" reading: pure no-signal random extraction would produce ~50% win rate. 99.16% wrong-direction trade rate suggests either anti-correlated signal at this trader's information set OR Cycle-15B keyword-extension overfit synthetic Lane B fixtures (matching production phrases in wrong context). See Claude appendix in `edge-replay-cycle16d-report.md`.
 
-## Wave deploy status (per IC §16 + Cycle-15B verdict)
+**Cycle-17 = operator decision** per `cycle-17-conditional-charter-skeletons.md`:
+- §B source onboarding (2-4 weeks; new feeds with backfill replay validation)
+- §C strategic redesign / pause / paper-only-as-research
+- Claude recommends operator weigh §C heavily given 4-cycle cumulative evidence + 99.16% wrong-direction.
+
+## Wave deploy status (per IC §16 + Cycle-16D verdict)
 
 | wave | status | gate |
 |---|---|---|
 | Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **ACTIVE — ships 2026-05-08 as cleanup/observability hygiene only; does NOT claim edge** | exempt under IC §16 Rule 2 (mechanical / observability / governance) |
-| Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED PENDING CYCLE-16D PRICE-RECONSTRUCTION + POST-RECONSTRUCTION REPLAY VERDICT** | requires (a) Cycle-16D price reconstruction AND (b) post-reconstruction replay producing ≥1 slice with `ev_ci_95_lo>0` AND `trades≥10` |
-| Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED PENDING CYCLE-16D PRICE-RECONSTRUCTION + POST-RECONSTRUCTION REPLAY VERDICT — Lever B counterindicated until IC §16 evidence gate evaluable** | loosening admission on a model whose IC §16 status is unknown converts unknown-EV non-bets into unknown-EV bets |
-| Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PENDING CYCLE-16D PRICE-RECONSTRUCTION + POST-RECONSTRUCTION REPLAY VERDICT** | each candidate fix needs replay evidence; replay needs prices |
-| **Capital posture** | **PAPER-ONLY. Hard guardrail post-Wave-1 deploy** (Cycle-14 charter §5) | live trading remains blocked until Cycle-16D + post-reconstruction replay produces ≥1 IC §16 slice |
+| Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | requires (a) operator picks §B source onboarding AND (b) post-onboarding replay produces ≥1 slice with `ev_ci_95_lo>0` AND `trades≥10` |
+| Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT — Lever B counterindicated** | loosening admission on a model with 0.84% win rate at 237-trade sample widens losses, not narrows them |
+| Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | each candidate fix needs replay evidence; current evidence shows zero positive-EV slices at restored prices |
+| **Capital posture** | **PAPER-ONLY. Hard guardrail** (Cycle-14 charter §5) | live trading remains blocked until ≥1 positive-EV slice surfaces under IC §16; Cycle-16D evidence does not support flip |
 
 ## Are we near a Wave-2-eligible slice?
 
@@ -64,6 +69,7 @@ Cycle-16D (PROFIT-EDGE-009) instantiates `cycle-16-conditional-charter-skeletons
 | 2026-05-06 (Cycle-13) | 24 resolved evidence_store markets / 255 replay rows | **0 positive-EV slices, 0 left-on-table winners, P&L -$7.50, IC §16 Rule 5 fires** | `edge-replay-cycle13-report.md` |
 | 2026-05-06 (Cycle-14) | 24 resolved markets / 255 replay rows + synthetic Lane A/B injection | **Verdict: `extraction_broken`.** Movement_rate 1.57%, direction-correctness 0/6 when directional, sized-bet 0/3 (-$7.50), Brier 0.2599 (n=24, supporting only), Lane A PASS / Lane B FAIL at delta=0.000 on both fixtures. → Cycle-15B extraction rebuild active. | `edge-replay-cycle14-diagnosis.md` |
 | 2026-05-07 (Cycle-15B) | 24 resolved markets / 272 replay rows + post-fix re-ingestion + 10 Lane B fixtures | **Verdict: `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`.** C8 Lane B 8/8 directional + 2/2 NEUTRAL ✓; C9 idempotent re-ingestion (SHA256 stable); C10 IC §16 0 slices BUT 0/272 rows had decision-time executable price; 183/272 readiness-admitted; 7/272 nonzero post-fix model delta. Scorer-blocked, NOT negative-EV proven. → Cycle-16D price reconstruction active. | `edge-replay-cycle15b-report.md` |
+| 2026-05-07 (Cycle-16D) | 24 resolved markets / 272 replay rows + restored prices via documented Kalshi endpoints | **Verdict: `extraction_fixed_but_information_frontier_holds`.** D5 coverage 99.6324% (271/272 priced) ✓; D6 237 counterfactual trades / 2 wins / -7.46 P&L; overall ev_ci_95_lo = -0.0382; 1 raw positive-EV slice with trades=1 (below IC §16 trades≥10 floor); 0 IC §16-eligible slices; D9 sentinel POST_FIX_REBUILT cohort verified (commit 2222227). 0.84% win rate on 237 trades flagged as anomalously low (random ≈ 50%); anti-correlated signal OR keyword-overfit hypothesis. → Cycle-17 operator decision active (§B source onboarding OR §C strategic redesign). | `edge-replay-cycle16d-report.md` |
 
 ## What changes Wave-2 from HALTED → AUTHORIZED
 
