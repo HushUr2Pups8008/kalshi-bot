@@ -1,0 +1,288 @@
+{
+  "brier": {
+    "caveat": "n is small; use Brier/log-loss as supporting evidence only.",
+    "n": 24,
+    "score": 0.2599032727272727
+  },
+  "direction_correctness": {
+    "correct": 0,
+    "denominator": 6,
+    "direction_correctness": 0.0,
+    "excluded_no_direction": 249,
+    "incorrect": 6
+  },
+  "llm_movement_rate_ratio": 0.0,
+  "llm_split": {
+    "llm_called": {
+      "correct": 0,
+      "denominator": 0,
+      "direction_correctness": null,
+      "excluded_no_direction": 0,
+      "incorrect": 0,
+      "moved": 0,
+      "movement_rate": 0.0,
+      "n": 0
+    },
+    "non_llm_called": {
+      "correct": 0,
+      "denominator": 3,
+      "direction_correctness": 0.0,
+      "excluded_no_direction": 235,
+      "incorrect": 3,
+      "moved": 0,
+      "movement_rate": 0.0,
+      "n": 238
+    }
+  },
+  "log_loss": {
+    "caveat": "n is small; use Brier/log-loss as supporting evidence only.",
+    "n": 24,
+    "score": 0.7130811592205928
+  },
+  "moved": {
+    "candidates": 4,
+    "pnl": -7.5,
+    "trades": 3,
+    "wins": 0
+  },
+  "movement_rate": 0.01568627450980392,
+  "recommended_cycle15_scope": "rebuild extraction",
+  "sized_bet_subset": {
+    "candidates": 3,
+    "correct": 0,
+    "denominator": 3,
+    "direction_correctness": 0.0,
+    "excluded_no_direction": 0,
+    "incorrect": 3,
+    "n": 3,
+    "pnl": -7.5,
+    "trades": 3,
+    "wins": 0
+  },
+  "synthetic": {
+    "lane_a": {
+      "pass": true,
+      "rows": [
+        {
+          "after": 0.6,
+          "before": 0.5,
+          "correct_direction": true,
+          "delta": 0.09999999999999998,
+          "fixture": "clear_yes",
+          "pass": true
+        },
+        {
+          "after": 0.4,
+          "before": 0.5,
+          "correct_direction": true,
+          "delta": -0.09999999999999998,
+          "fixture": "clear_no",
+          "pass": true
+        }
+      ]
+    },
+    "lane_b": {
+      "pass": false,
+      "rows": [
+        {
+          "after": 0.5,
+          "before": 0.5,
+          "correct_direction": false,
+          "delta": 0.0,
+          "extracted_probability": 0.5,
+          "fixture": "clear_yes",
+          "pass": false
+        },
+        {
+          "after": 0.5,
+          "before": 0.5,
+          "correct_direction": true,
+          "delta": 0.0,
+          "extracted_probability": 0.5,
+          "fixture": "clear_no",
+          "pass": false
+        }
+      ]
+    },
+    "verdict": "extraction_broken"
+  },
+  "top_per_source_groups": [
+    {
+      "count": 3,
+      "direction_correct": 0,
+      "direction_correctness": 0.0,
+      "direction_denominator": 3,
+      "direction_incorrect": 3,
+      "inert_source": true,
+      "llm_called_fraction": 0.0,
+      "max_abs_move": 0.0,
+      "mean_abs_move": 0.0,
+      "movement_rate": 0.0,
+      "news_class": "other",
+      "series_ticker": "KXFISAEXTEND",
+      "signal_source": "VitalLaw.com",
+      "signal_type": "state",
+      "wrong_direction_cluster": true
+    },
+    {
+      "count": 36,
+      "direction_correct": 0,
+      "direction_correctness": null,
+      "direction_denominator": 0,
+      "direction_incorrect": 0,
+      "inert_source": true,
+      "llm_called_fraction": 0.0,
+      "max_abs_move": 0.0,
+      "mean_abs_move": 0.0,
+      "movement_rate": 0.0,
+      "news_class": "news",
+      "series_ticker": "KXTRUMPIRAN",
+      "signal_source": "Middle East and north Africa | The Guardian",
+      "signal_type": "confidence",
+      "wrong_direction_cluster": false
+    },
+    {
+      "count": 22,
+      "direction_correct": 0,
+      "direction_correctness": null,
+      "direction_denominator": 0,
+      "direction_incorrect": 0,
+      "inert_source": true,
+      "llm_called_fraction": 0.0,
+      "max_abs_move": 0.0,
+      "mean_abs_move": 0.0,
+      "movement_rate": 0.0,
+      "news_class": "news",
+      "series_ticker": "KXMOCTRUMP25",
+      "signal_source": "Middle East and north Africa | The Guardian",
+      "signal_type": "confidence",
+      "wrong_direction_cluster": false
+    },
+    {
+      "count": 21,
+      "direction_correct": 0,
+      "direction_correctness": null,
+      "direction_denominator": 0,
+      "direction_incorrect": 0,
+      "inert_source": true,
+      "llm_called_fraction": 0.0,
+      "max_abs_move": 0.0,
+      "mean_abs_move": 0.0,
+      "movement_rate": 0.0,
+      "news_class": "news",
+      "series_ticker": "KXVANCEPAKISTAN",
+      "signal_source": "Middle East and north Africa | The Guardian",
+      "signal_type": "confidence",
+      "wrong_direction_cluster": false
+    },
+    {
+      "count": 17,
+      "direction_correct": 0,
+      "direction_correctness": null,
+      "direction_denominator": 0,
+      "direction_incorrect": 0,
+      "inert_source": true,
+      "llm_called_fraction": 0.0,
+      "max_abs_move": 0.0,
+      "mean_abs_move": 0.0,
+      "movement_rate": 0.0,
+      "news_class": "news",
+      "series_ticker": "KXTRUMPIRAN",
+      "signal_source": "World news | The Guardian",
+      "signal_type": "confidence",
+      "wrong_direction_cluster": false
+    },
+    {
+      "count": 16,
+      "direction_correct": 0,
+      "direction_correctness": null,
+      "direction_denominator": 0,
+      "direction_incorrect": 0,
+      "inert_source": true,
+      "llm_called_fraction": 0.0,
+      "max_abs_move": 0.0,
+      "mean_abs_move": 0.0,
+      "movement_rate": 0.0,
+      "news_class": "news",
+      "series_ticker": "KXTRUMPIRAN",
+      "signal_source": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+      "signal_type": "confidence",
+      "wrong_direction_cluster": false
+    },
+    {
+      "count": 15,
+      "direction_correct": 0,
+      "direction_correctness": null,
+      "direction_denominator": 0,
+      "direction_incorrect": 0,
+      "inert_source": true,
+      "llm_called_fraction": 0.0,
+      "max_abs_move": 0.0,
+      "mean_abs_move": 0.0,
+      "movement_rate": 0.0,
+      "news_class": "news",
+      "series_ticker": "KXMOCTRUMP25",
+      "signal_source": "World news | The Guardian",
+      "signal_type": "confidence",
+      "wrong_direction_cluster": false
+    },
+    {
+      "count": 13,
+      "direction_correct": 0,
+      "direction_correctness": null,
+      "direction_denominator": 0,
+      "direction_incorrect": 0,
+      "inert_source": true,
+      "llm_called_fraction": 0.0,
+      "max_abs_move": 0.0,
+      "mean_abs_move": 0.0,
+      "movement_rate": 0.0,
+      "news_class": "news",
+      "series_ticker": "KXMOCTRUMP25",
+      "signal_source": "NYT > World News",
+      "signal_type": "confidence",
+      "wrong_direction_cluster": false
+    },
+    {
+      "count": 12,
+      "direction_correct": 0,
+      "direction_correctness": null,
+      "direction_denominator": 0,
+      "direction_incorrect": 0,
+      "inert_source": true,
+      "llm_called_fraction": 0.0,
+      "max_abs_move": 0.0,
+      "mean_abs_move": 0.0,
+      "movement_rate": 0.0,
+      "news_class": "news",
+      "series_ticker": "KXTRUMPIRAN",
+      "signal_source": "NYT > World News",
+      "signal_type": "confidence",
+      "wrong_direction_cluster": false
+    },
+    {
+      "count": 5,
+      "direction_correct": 0,
+      "direction_correctness": null,
+      "direction_denominator": 0,
+      "direction_incorrect": 0,
+      "inert_source": true,
+      "llm_called_fraction": 0.0,
+      "max_abs_move": 0.0,
+      "mean_abs_move": 0.0,
+      "movement_rate": 0.0,
+      "news_class": "news",
+      "series_ticker": "KXVANCEPAKISTAN",
+      "signal_source": "Middle East and north Africa | The Guardian",
+      "signal_type": "state",
+      "wrong_direction_cluster": false
+    }
+  ],
+  "unmoved": {
+    "candidates": 251,
+    "pnl": 0,
+    "trades": 0,
+    "wins": 0
+  },
+  "verdict": "extraction_broken"
+}

@@ -1,0 +1,182 @@
+{
+  "branches": {
+    "llm_called": {
+      "correct": 0,
+      "denominator": 0,
+      "direction_correctness": null,
+      "excluded_no_direction": 0,
+      "incorrect": 0,
+      "moved": 0,
+      "movement_rate": 0.0,
+      "n": 0
+    },
+    "non_llm_called": {
+      "correct": 0,
+      "denominator": 3,
+      "direction_correctness": 0.0,
+      "excluded_no_direction": 235,
+      "incorrect": 3,
+      "moved": 0,
+      "movement_rate": 0.0,
+      "n": 238
+    }
+  },
+  "llm_movement_rate_ratio": 0.0,
+  "per_source": [
+    {
+      "llm_called_fraction": 0.0,
+      "n": 86,
+      "source": "Middle East and north Africa | The Guardian"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 39,
+      "source": "World news | The Guardian"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 28,
+      "source": "NYT > World News"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 25,
+      "source": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 9,
+      "source": "France 24 - International breaking news, top stories and headlines"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 7,
+      "source": "Ukraine | The Guardian"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 6,
+      "source": "The Times of Israel"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 5,
+      "source": "The Kyiv Independent"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 3,
+      "source": "Kyiv Post"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 3,
+      "source": "The Indian Express"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 3,
+      "source": "VitalLaw.com"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 2,
+      "source": "Iran International"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 2,
+      "source": "News18"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 2,
+      "source": "News24"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 2,
+      "source": "Reuters"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "\u00a9 Mark Schiefelbein, AP"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "Breaking Defense"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "\u00a9 AFP"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "\u00a9 Ludovic Marin, AP"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "AOL.com"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "The Japan Times"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "\u00a9 Bill Frischling, CQ Roll Call via Reuters"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "seMissourian"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "\u00a9 Mandel Ngan/Michael Tran, AFP"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "News \u2013 The White House"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "\u00a9 Atta Kenare, AFP"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "\u0627\u06cc\u0631\u0627\u0646 \u0627\u06cc\u0646\u062a\u0631\u0646\u0634\u0646\u0627\u0644"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "Defense News"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "New York Post"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "The Washington Post"
+    },
+    {
+      "llm_called_fraction": 0.0,
+      "n": 1,
+      "source": "\u00a9 Vahid Salemi, AP"
+    }
+  ]
+}

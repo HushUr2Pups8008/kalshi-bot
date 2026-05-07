@@ -145,3 +145,24 @@ The next edge-producing step is not deploy. It is one of:
 - import a source of decision-time historical prices, then rerun replay with `--historical-prices`
 - widen resolved-market history beyond current evidence-store coverage
 - change the model/calibration hypothesis and require the same replay evidence before deploy
+
+## Production-Thresholds Rerun
+
+Cycle-14 pre-queue item 1 reran the Cycle-13 replay scorer against the existing live replay dataset with production readiness sensitivity:
+
+```bash
+.venv/bin/python scripts/edge_replay/score_counterfactual_pnl.py --dataset logs/edge_replay/cycle13_live/replay_dataset.jsonl --readiness-confidence 0.05 --output logs/edge_replay/cycle13_live/counterfactual_scores_readiness_005.json
+```
+
+Result:
+
+| Metric | Value |
+|---|---:|
+| Replay rows | 255 |
+| Executable trades | 3 |
+| Wins | 0 |
+| P&L | -$7.50 |
+| Positive-EV slices | 0 |
+| Left-on-table winners | 0 |
+
+Lowering the readiness confidence threshold to `0.05` does not create a positive-EV slice and does not surface missed winners.

@@ -1,0 +1,47 @@
+{
+  "lane_a": {
+    "pass": true,
+    "rows": [
+      {
+        "after": 0.6,
+        "before": 0.5,
+        "correct_direction": true,
+        "delta": 0.09999999999999998,
+        "fixture": "clear_yes",
+        "pass": true
+      },
+      {
+        "after": 0.4,
+        "before": 0.5,
+        "correct_direction": true,
+        "delta": -0.09999999999999998,
+        "fixture": "clear_no",
+        "pass": true
+      }
+    ]
+  },
+  "lane_b": {
+    "pass": false,
+    "rows": [
+      {
+        "after": 0.5,
+        "before": 0.5,
+        "correct_direction": false,
+        "delta": 0.0,
+        "extracted_probability": 0.5,
+        "fixture": "clear_yes",
+        "pass": false
+      },
+      {
+        "after": 0.5,
+        "before": 0.5,
+        "correct_direction": true,
+        "delta": 0.0,
+        "extracted_probability": 0.5,
+        "fixture": "clear_no",
+        "pass": false
+      }
+    ]
+  },
+  "verdict": "extraction_broken"
+}
