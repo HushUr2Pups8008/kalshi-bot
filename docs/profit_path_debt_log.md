@@ -1828,7 +1828,7 @@ This is the same `/markets/{ticker}/trades` 404 issue surfaced in cycle-13's `fe
 | **Title** | Cycle-16E scorer forensics — audit replay scorer for readiness-admission gating, YES-bias, price-unit consistency, and dedupe; verdict NOT FINAL on Cycle-16D until corrections re-run |
 | **Category** | Profit-Path Integrity / Replay Harness (succeeds PROFIT-EDGE-009 Cycle-16D `extraction_fixed_but_information_frontier_holds` verdict; AMENDED 2026-05-07 per operator override of M6 verdict acceptance) |
 | **Severity** | HIGH (Cycle-17 §B/§C operator decision deferred until scorer-forensics resolves; current 0.84% win rate / 231-YES-bias evidence is unreliable until corrections land) |
-| **Status** | ACTIVE (filed 2026-05-07 cycle-16D verdict; AMENDED same day per operator override; Codex implementation per Cycle-16E charter — TBD) |
+| **Status** | CODEX DELIVERED / AWAITING CLAUDE REVIEW (filed 2026-05-07 cycle-16D verdict; AMENDED same day per operator override; Codex implementation landed Cycle-16E scorer forensics report) |
 | **Priority** | NOW (blocks all subsequent cycle work AND Cycle-17 operator decision) |
 | **Owner** | Codex (implementation — scorer audit + corrections + D6 re-run); Claude (review + verdict-vs-criteria check + post-correction verdict consumption) |
 | **Depends On** | PROFIT-EDGE-009 (delivered with charter-locked `extraction_fixed_but_information_frontier_holds` label; operational interpretation withdrawn pending this audit). |
@@ -1867,8 +1867,8 @@ Cycle-17 §B vs §C operator decision is **DEFERRED** until Cycle-16E scorer for
 
 **Acceptance Criteria**
 
-- Cycle-16E charter authored with locked criteria for each of the 5 checks above.
-- Codex implementation of scorer corrections + D6 re-run produces revised counterfactual_scores.json.
+- Cycle-16E charter authored with locked criteria for each of the 5 checks above. **Delivered:** `docs/governance/2026-05-07-cycle-16e-scorer-forensics-charter.md`.
+- Codex implementation of scorer corrections + D6 re-run produces revised counterfactual_scores.json. **Delivered:** `logs/edge_replay/cycle16e/counterfactual_scores_production_proxy.json`.
 - Claude review confirms:
   - Price-unit consistency end-to-end.
   - `would_have_traded` matches production G1-G6 admission semantics.

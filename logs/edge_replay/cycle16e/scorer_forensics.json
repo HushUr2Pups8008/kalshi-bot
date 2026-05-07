@@ -1,0 +1,2157 @@
+{
+  "baseline_breakdowns": {
+    "by_admission_reason": {
+      "baseline_abs_edge": {
+        "trades": 237,
+        "win_rate": 0.008438818565400843,
+        "wins": 2
+      }
+    },
+    "by_decision_kind": {
+      "dossier_update": {
+        "trades": 236,
+        "win_rate": 0.00423728813559322,
+        "wins": 1
+      },
+      "skipped": {
+        "trades": 1,
+        "win_rate": 1.0,
+        "wins": 1
+      }
+    },
+    "by_price_bucket": {
+      "1-1.99c": {
+        "trades": 22,
+        "win_rate": 0.0,
+        "wins": 0
+      },
+      "10-49.99c": {
+        "trades": 30,
+        "win_rate": 0.0,
+        "wins": 0
+      },
+      "2-9.99c": {
+        "trades": 78,
+        "win_rate": 0.0,
+        "wins": 0
+      },
+      "50-98c": {
+        "trades": 2,
+        "win_rate": 0.5,
+        "wins": 1
+      },
+      "<1c": {
+        "trades": 102,
+        "win_rate": 0.00980392156862745,
+        "wins": 1
+      },
+      ">98c": {
+        "trades": 3,
+        "win_rate": 0.0,
+        "wins": 0
+      }
+    },
+    "by_series": {
+      "KXELECTIONEMERGENCY": {
+        "trades": 2,
+        "win_rate": 0.0,
+        "wins": 0
+      },
+      "KXFISAEXTEND": {
+        "trades": 6,
+        "win_rate": 0.16666666666666666,
+        "wins": 1
+      },
+      "KXMOCTRUMP25": {
+        "trades": 70,
+        "win_rate": 0.0,
+        "wins": 0
+      },
+      "KXNEWDEAL": {
+        "trades": 2,
+        "win_rate": 0.0,
+        "wins": 0
+      },
+      "KXPARDONSTRUMP": {
+        "trades": 10,
+        "win_rate": 0.0,
+        "wins": 0
+      },
+      "KXTRUMPCHINA": {
+        "trades": 4,
+        "win_rate": 0.0,
+        "wins": 0
+      },
+      "KXTRUMPIRAN": {
+        "trades": 108,
+        "win_rate": 0.009259259259259259,
+        "wins": 1
+      },
+      "KXVANCEPAKISTAN": {
+        "trades": 34,
+        "win_rate": 0.0,
+        "wins": 0
+      },
+      "KXVOTESAVEAMERICA": {
+        "trades": 1,
+        "win_rate": 0.0,
+        "wins": 0
+      }
+    },
+    "by_side": {
+      "no": {
+        "trades": 6,
+        "win_rate": 0.3333333333333333,
+        "wins": 2
+      },
+      "yes": {
+        "trades": 231,
+        "win_rate": 0.0,
+        "wins": 0
+      }
+    }
+  },
+  "inputs": {
+    "dataset": "logs/edge_replay/cycle16d/replay_dataset.jsonl",
+    "endpoint_diagnosis": "logs/edge_replay/cycle16d/endpoint_diagnosis.json",
+    "historical_prices": "logs/edge_replay/cycle16d/historical_prices_cycle16d.json",
+    "readiness_confidence": 0.05,
+    "readiness_no_threshold": 0.4,
+    "readiness_yes_threshold": 0.6,
+    "rows": 272
+  },
+  "price_unit_audit": {
+    "endpoint_snippet_count_with_yes_price_dollars": 4,
+    "endpoint_snippet_examples": [
+      {
+        "endpoint": "/markets/trades",
+        "has_yes_price": false,
+        "has_yes_price_cents": false,
+        "has_yes_price_dollars": true,
+        "ticker": "KXELECTIONEMERGENCY-26MAY01",
+        "variant": "documented_live_trades"
+      },
+      {
+        "endpoint": "/historical/trades",
+        "has_yes_price": false,
+        "has_yes_price_cents": false,
+        "has_yes_price_dollars": true,
+        "ticker": "KXELECTIONEMERGENCY-26MAY01",
+        "variant": "documented_historical_trades"
+      },
+      {
+        "endpoint": "/markets/trades",
+        "has_yes_price": false,
+        "has_yes_price_cents": false,
+        "has_yes_price_dollars": true,
+        "ticker": "KXFISAEXTEND-26APR-APR29",
+        "variant": "documented_live_trades"
+      },
+      {
+        "endpoint": "/markets/trades",
+        "has_yes_price": false,
+        "has_yes_price_cents": false,
+        "has_yes_price_dollars": true,
+        "ticker": "KXFISAEXTEND-26APR-APR30",
+        "variant": "documented_live_trades"
+      }
+    ],
+    "normalization_rule": "Kalshi trade endpoints expose yes_price_dollars in captured snippets; fetch_historical_prices stores yes_price as cents via yes_price_dollars * 100.",
+    "overall": {
+      "fractional_prices": 382,
+      "lt_1c": 109,
+      "max": 99.0,
+      "min": 0.1,
+      "rows": 3561
+    },
+    "source_summary": {
+      "live_trades": {
+        "fractional_prices": 382,
+        "lt_1c": 109,
+        "max": 99.0,
+        "min": 0.1,
+        "rows": 3561
+      }
+    },
+    "unit_risk_note": "Sub-2c prices are not a unit error by themselves; they are rejected by paper executor price sanity and must not be scored as production-like trades.",
+    "verdict": "cents_consistent"
+  },
+  "production_proxy": {
+    "accepted_ic16_slices": [],
+    "breakdowns": {
+      "by_admission_reason": {
+        "production_proxy": {
+          "trades": 12,
+          "win_rate": 0.0,
+          "wins": 0
+        }
+      },
+      "by_decision_kind": {
+        "dossier_update": {
+          "trades": 12,
+          "win_rate": 0.0,
+          "wins": 0
+        }
+      },
+      "by_price_bucket": {
+        "10-49.99c": {
+          "trades": 6,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        "2-9.99c": {
+          "trades": 6,
+          "win_rate": 0.0,
+          "wins": 0
+        }
+      },
+      "by_series": {
+        "KXMOCTRUMP25": {
+          "trades": 5,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        "KXNEWDEAL": {
+          "trades": 1,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        "KXPARDONSTRUMP": {
+          "trades": 3,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        "KXVANCEPAKISTAN": {
+          "trades": 2,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        "KXVOTESAVEAMERICA": {
+          "trades": 1,
+          "win_rate": 0.0,
+          "wins": 0
+        }
+      },
+      "by_side": {
+        "yes": {
+          "trades": 12,
+          "win_rate": 0.0,
+          "wins": 0
+        }
+      }
+    },
+    "summary": {
+      "groups": [
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "World news | The Guardian",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 17,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "World news | The Guardian",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 36,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "Middle East and north Africa | The Guardian",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXPARDONSTRUMP",
+            "signal_source": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 16,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 12,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "NYT > World News",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXELECTIONEMERGENCY",
+            "signal_source": "World news | The Guardian",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 4,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "Ukraine | The Guardian",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "\u00a9 Mark Schiefelbein, AP",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 4,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "France 24 - International breaking news, top stories and headlines",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXTRUMPCHINA",
+            "signal_source": "Ukraine | The Guardian",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "Ukraine | The Guardian",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "Iran International",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 3,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "France 24 - International breaking news, top stories and headlines",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 21,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXVANCEPAKISTAN",
+            "signal_source": "Middle East and north Africa | The Guardian",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXFISAEXTEND",
+            "signal_source": "World news | The Guardian",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXFISAEXTEND",
+            "signal_source": "World news | The Guardian",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "Breaking Defense",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXVANCEPAKISTAN",
+            "signal_source": "\u00a9 AFP",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "\u00a9 Ludovic Marin, AP",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 4,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "The Times of Israel",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "The Japan Times",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 3,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXVANCEPAKISTAN",
+            "signal_source": "NYT > World News",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "News18",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXTRUMPCHINA",
+            "signal_source": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXPARDONSTRUMP",
+            "signal_source": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "\u00a9 Bill Frischling, CQ Roll Call via Reuters",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "Iran International",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXELECTIONEMERGENCY",
+            "signal_source": "World news | The Guardian",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "seMissourian",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "News24",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPCHINA",
+            "signal_source": "News24",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "Kyiv Post",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "\u00a9 Mandel Ngan/Michael Tran, AFP",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "The Indian Express",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPCHINA",
+            "signal_source": "The Indian Express",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXPARDONSTRUMP",
+            "signal_source": "The Indian Express",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "official",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "News \u2013 The White House",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "Reuters",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "\u00a9 Atta Kenare, AFP",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "The Kyiv Independent",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXPARDONSTRUMP",
+            "signal_source": "The Kyiv Independent",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXPARDONSTRUMP",
+            "signal_source": "The Kyiv Independent",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "\u0627\u06cc\u0631\u0627\u0646 \u0627\u06cc\u0646\u062a\u0631\u0646\u0634\u0646\u0627\u0644",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "The Kyiv Independent",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "The Times of Israel",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXPARDONSTRUMP",
+            "signal_source": "The Times of Israel",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "Defense News",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXNEWDEAL",
+            "signal_source": "New York Post",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 3,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXFISAEXTEND",
+            "signal_source": "VitalLaw.com",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "The Washington Post",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "\u00a9 Vahid Salemi, AP",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "paper-trade-roundtrip",
+            "signal_type": "SKIPPED"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "unknown",
+            "signal_type": "PAPER_RESOLUTION"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 4,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXVANCEPAKISTAN",
+            "signal_source": "NYT > World News",
+            "signal_type": "MATCH_DIAGNOSTIC"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 4,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXVANCEPAKISTAN",
+            "signal_source": "NYT > World News",
+            "signal_type": "ANALYSIS_REJECTED"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXVANCEPAKISTAN",
+            "signal_source": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+            "signal_type": "MATCH_DIAGNOSTIC"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXVANCEPAKISTAN",
+            "signal_source": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+            "signal_type": "ANALYSIS_REJECTED"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXVANCEPAKISTAN",
+            "signal_source": "NYT > World News",
+            "signal_type": "SIGNAL_ANALYSIS_DETAIL"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 4,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXFISAEXTEND",
+            "signal_source": "AP News",
+            "signal_type": "SIGNAL_ANALYSIS_DETAIL"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXFISAEXTEND",
+            "signal_source": "Reuters",
+            "signal_type": "SIGNAL_ANALYSIS_DETAIL"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 4,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXPARDONSTRUMP",
+            "signal_source": "Politico",
+            "signal_type": "SIGNAL_ANALYSIS_DETAIL"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXTRUMPIRAN",
+            "signal_source": "Reuters",
+            "signal_type": "SIGNAL_ANALYSIS_DETAIL"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 4,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXVANCEPAKISTAN",
+            "signal_source": "AP News",
+            "signal_type": "SIGNAL_ANALYSIS_DETAIL"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXFISAEXTEND",
+            "signal_source": "The Hill",
+            "signal_type": "SIGNAL_ANALYSIS_DETAIL"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": 0.0,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            0.0,
+            0.0
+          ],
+          "ev_ci_95_hi": 0.0,
+          "ev_ci_95_lo": 0.0,
+          "group": {
+            "news_class": "unknown",
+            "series_ticker": "KXFISAEXTEND",
+            "signal_source": "DC Weather Service",
+            "signal_type": "SIGNAL_ANALYSIS_DETAIL"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": 0,
+          "sharpe_like": null,
+          "trades": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": -0.02,
+          "candidates": 15,
+          "ci95_avg_pnl": [
+            -0.02,
+            -0.02
+          ],
+          "ev_ci_95_hi": -0.02,
+          "ev_ci_95_lo": -0.02,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "World news | The Guardian",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": -0.02,
+          "sharpe_like": null,
+          "trades": 1,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": -0.05,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            -0.05,
+            -0.05
+          ],
+          "ev_ci_95_hi": -0.05,
+          "ev_ci_95_lo": -0.05,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXVOTESAVEAMERICA",
+            "signal_source": "AOL.com",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": -0.05,
+          "sharpe_like": null,
+          "trades": 1,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": -0.064,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            -0.064,
+            -0.064
+          ],
+          "ev_ci_95_hi": -0.064,
+          "ev_ci_95_lo": -0.064,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXPARDONSTRUMP",
+            "signal_source": "France 24 - International breaking news, top stories and headlines",
+            "signal_type": "state"
+          },
+          "left_on_table": 1,
+          "left_on_table_would_have_won": 0,
+          "pnl": -0.064,
+          "sharpe_like": null,
+          "trades": 1,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": -0.07,
+          "candidates": 22,
+          "ci95_avg_pnl": [
+            -0.07,
+            -0.07
+          ],
+          "ev_ci_95_hi": -0.07,
+          "ev_ci_95_lo": -0.07,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "Middle East and north Africa | The Guardian",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": -0.07,
+          "sharpe_like": null,
+          "trades": 1,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": -0.1,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            -0.1,
+            -0.1
+          ],
+          "ev_ci_95_hi": -0.1,
+          "ev_ci_95_lo": -0.1,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "Middle East and north Africa | The Guardian",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": -0.1,
+          "sharpe_like": null,
+          "trades": 1,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": -0.1,
+          "candidates": 4,
+          "ci95_avg_pnl": [
+            -0.1,
+            -0.1
+          ],
+          "ev_ci_95_hi": -0.1,
+          "ev_ci_95_lo": -0.1,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXVANCEPAKISTAN",
+            "signal_source": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": -0.1,
+          "sharpe_like": null,
+          "trades": 1,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": -0.1,
+          "candidates": 1,
+          "ci95_avg_pnl": [
+            -0.1,
+            -0.1
+          ],
+          "ev_ci_95_hi": -0.1,
+          "ev_ci_95_lo": -0.1,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXNEWDEAL",
+            "signal_source": "Reuters",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": -0.1,
+          "sharpe_like": null,
+          "trades": 1,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": -0.16,
+          "candidates": 5,
+          "ci95_avg_pnl": [
+            -0.16,
+            -0.16
+          ],
+          "ev_ci_95_hi": -0.16,
+          "ev_ci_95_lo": -0.16,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXVANCEPAKISTAN",
+            "signal_source": "Middle East and north Africa | The Guardian",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": -0.16,
+          "sharpe_like": null,
+          "trades": 1,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": -0.08499999999999999,
+          "candidates": 13,
+          "ci95_avg_pnl": [
+            -0.15,
+            -0.02
+          ],
+          "ev_ci_95_hi": -0.02,
+          "ev_ci_95_lo": -0.15,
+          "group": {
+            "news_class": "news",
+            "series_ticker": "KXMOCTRUMP25",
+            "signal_source": "NYT > World News",
+            "signal_type": "confidence"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": -0.16999999999999998,
+          "sharpe_like": -1.3076923076923075,
+          "trades": 2,
+          "win_rate": 0.0,
+          "wins": 0
+        },
+        {
+          "avg_pnl_per_trade": -0.08549999999999999,
+          "candidates": 2,
+          "ci95_avg_pnl": [
+            -0.11,
+            -0.061
+          ],
+          "ev_ci_95_hi": -0.061,
+          "ev_ci_95_lo": -0.11,
+          "group": {
+            "news_class": "other",
+            "series_ticker": "KXPARDONSTRUMP",
+            "signal_source": "Kyiv Post",
+            "signal_type": "state"
+          },
+          "left_on_table": 0,
+          "left_on_table_would_have_won": 0,
+          "pnl": -0.17099999999999999,
+          "sharpe_like": -3.4897959183673466,
+          "trades": 2,
+          "win_rate": 0.0,
+          "wins": 0
+        }
+      ],
+      "no_positive_ev_slice": true,
+      "overall": {
+        "avg_pnl_per_trade": -0.08375,
+        "candidates": 272,
+        "ci95_avg_pnl": [
+          -0.11041666666666666,
+          -0.059416666666666666
+        ],
+        "ev_ci_95_hi": -0.059416666666666666,
+        "ev_ci_95_lo": -0.11041666666666666,
+        "group": {
+          "all": "all"
+        },
+        "left_on_table": 1,
+        "left_on_table_would_have_won": 0,
+        "pnl": -1.0050000000000001,
+        "sharpe_like": -1.9538372105524042,
+        "trades": 12,
+        "win_rate": 0.0,
+        "wins": 0
+      },
+      "positive_ev_slices": []
+    }
+  },
+  "variant_summaries": [
+    {
+      "market_implied_expected_wins": 9.463000000000001,
+      "name": "baseline_abs_edge",
+      "no_trades": 6,
+      "no_wins": 2,
+      "pnl": -7.463,
+      "skipped": {},
+      "trades": 237,
+      "win_rate": 0.008438818565400843,
+      "wins": 2,
+      "wins_minus_market_expected": -7.463000000000001,
+      "yes_trades": 231,
+      "yes_wins": 0
+    },
+    {
+      "market_implied_expected_wins": 4.165,
+      "name": "readiness_only",
+      "no_trades": 0,
+      "no_wins": 0,
+      "pnl": -4.165,
+      "skipped": {
+        "baseline_not_trade": 35,
+        "readiness_not_admitted": 55
+      },
+      "trades": 182,
+      "win_rate": 0.0,
+      "wins": 0,
+      "wins_minus_market_expected": -4.165,
+      "yes_trades": 182,
+      "yes_wins": 0
+    },
+    {
+      "market_implied_expected_wins": 7.724,
+      "name": "paper_price_sanity",
+      "no_trades": 2,
+      "no_wins": 1,
+      "pnl": -6.724,
+      "skipped": {
+        "baseline_not_trade": 35,
+        "paper_price_sanity": 127
+      },
+      "trades": 110,
+      "win_rate": 0.00909090909090909,
+      "wins": 1,
+      "wins_minus_market_expected": -6.724,
+      "yes_trades": 108,
+      "yes_wins": 0
+    },
+    {
+      "market_implied_expected_wins": 3.496,
+      "name": "readiness_plus_price_sanity",
+      "no_trades": 0,
+      "no_wins": 0,
+      "pnl": -3.496,
+      "skipped": {
+        "baseline_not_trade": 35,
+        "paper_price_sanity": 119,
+        "readiness_not_admitted": 55
+      },
+      "trades": 63,
+      "win_rate": 0.0,
+      "wins": 0,
+      "wins_minus_market_expected": -3.496,
+      "yes_trades": 63,
+      "yes_wins": 0
+    },
+    {
+      "market_implied_expected_wins": 3.496,
+      "name": "readiness_price_signed_edge",
+      "no_trades": 0,
+      "no_wins": 0,
+      "pnl": -3.496,
+      "skipped": {
+        "baseline_not_trade": 35,
+        "paper_price_sanity": 119,
+        "readiness_not_admitted": 55
+      },
+      "trades": 63,
+      "win_rate": 0.0,
+      "wins": 0,
+      "wins_minus_market_expected": -3.496,
+      "yes_trades": 63,
+      "yes_wins": 0
+    },
+    {
+      "market_implied_expected_wins": 1.0050000000000001,
+      "name": "production_proxy",
+      "no_trades": 0,
+      "no_wins": 0,
+      "pnl": -1.0050000000000001,
+      "skipped": {
+        "baseline_not_trade": 35,
+        "paper_duplicate_position": 43,
+        "paper_price_sanity": 119,
+        "paper_ticker_cooldown": 8,
+        "readiness_not_admitted": 55
+      },
+      "trades": 12,
+      "win_rate": 0.0,
+      "wins": 0,
+      "wins_minus_market_expected": -1.0050000000000001,
+      "yes_trades": 12,
+      "yes_wins": 0
+    }
+  ],
+  "verdict": {
+    "baseline_237_trades_is_overcount": true,
+    "market_implied_baseline_expected_wins": 9.463000000000001,
+    "operational_read": "scorer_overadmission_confirmed_no_ic16_slice_after_production_proxy",
+    "price_units": "cents_consistent",
+    "production_proxy_ic16_accepted_slices": 0,
+    "production_proxy_trades": 12,
+    "production_proxy_wins": 0,
+    "random_50pct_baseline_invalid": true
+  }
+}

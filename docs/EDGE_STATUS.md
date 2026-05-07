@@ -1,7 +1,7 @@
 # EDGE_STATUS — operator-facing edge dashboard
 
 **Refresh by commit.** Single page; replaces 100+ doc index for "are we making money?" questions.
-**Last refresh:** 2026-05-07 cycle-16D verdict landing.
+**Last refresh:** 2026-05-07 cycle-16E scorer-forensics run.
 
 ## TL;DR (3 numbers)
 
@@ -9,7 +9,7 @@
 |---|---|
 | Lifetime P&L | **-$7.50** (live, n=3 paper trades) |
 | Lifetime trade count | **3** (all resolved, all lost, all 1 source / 1 series / 1 direction; 3/3 wrong-direction) |
-| Replay verdict | **Cycle-16D charter-locked verdict: `extraction_fixed_but_information_frontier_holds`. OPERATIONAL READING WITHDRAWN per operator override 2026-05-07. Cycle-16E scorer forensics ACTIVE.** Coverage 99.6324%; 237 counterfactual trades / 2 wins / -7.46 P&L raw; **scorer concerns flagged**: would_have_traded does not gate on G1-G6 readiness; 231-YES / 6-NO bias; price-unit cents-vs-dollars unaudited. Cycle-17 §B/§C operator decision DEFERRED. |
+| Replay verdict | **Cycle-16E scorer forensics delivered. Cycle-16D raw `237 trades / 2 wins` reading was scorer-overadmission, not production-like trade count.** Price units cents-consistent; 50% random baseline invalid for low-cent longshots; production-proxy replay = 12 trades / 0 wins / -1.005 P&L / 0 IC §16 slices. Cycle-17 §B/§C operator decision remains DEFERRED pending Claude review of Cycle-16E. |
 
 ## Cycle-16D verdict landed — operational reading WITHDRAWN pending Cycle-16E scorer forensics
 
@@ -19,12 +19,12 @@ Cycle-16D charter-locked verdict label `extraction_fixed_but_information_frontie
 2. **Replay is massively YES-biased.** 231 YES / 6 NO trades; 0/231 YES wins; 2/6 NO wins. Bot systematically buying YES on markets that resolve NO. Selection effect, scorer sign error, OR Cycle-15B C7 keyword-extension over-emits YES on production text.
 3. **Price-unit / longshot calibration uncertain.** 102 trades had `market_yes_price < 1`; 100 had `market_yes_price` between 1 and 9. Cents vs dollars consistency end-to-end unaudited. 100x unit error possibility.
 
-**Cycle-16E scorer forensics ACTIVE** per amended PROFIT-EDGE-010. Cycle-17 §B/§C operator decision DEFERRED until forensics audit completes + D6 re-runs.
+**Cycle-16E scorer forensics delivered by Codex** per amended PROFIT-EDGE-010; Claude review still pending. Cycle-17 §B/§C operator decision remains DEFERRED until the Cycle-16E review consumes the corrected D6 re-run.
 
 Per cycle-17 skeletons, Cycle-17 routing remains TBD pending Cycle-16E re-run output:
-- If post-correction D6 shows ≥1 IC §16 slice → Cycle-17A Wave-2 candidate slice authoring proceeds.
-- If post-correction D6 still shows 0 IC §16 slices BUT win rate normalizes → Cycle-17 §B vs §C operator decision returns to the table.
-- If post-correction D6 still shows anomalous YES-bias / longshot pattern → additional scorer-forensics or extraction-overfit follow-up; do NOT route to §B/§C without resolving.
+- Post-correction D6 result: 0 IC §16 slices; raw 237-trade count reduced to 12 production-proxy trades.
+- The anti-correlation interpretation is withdrawn; the corrected issue is scorer overadmission plus no positive-EV deploy slice.
+- Claude review determines whether Cycle-17 §B vs §C operator decision returns to the table or whether another scorer/extraction audit is required.
 
 ## Wave deploy status (per IC §16 + Cycle-16D verdict)
 
