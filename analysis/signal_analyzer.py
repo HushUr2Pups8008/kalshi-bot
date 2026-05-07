@@ -13,6 +13,7 @@ shift, our estimated probability is 0.45.
 
 import asyncio
 import json as _json
+import os
 import time
 from typing import Any, Optional
 
@@ -23,6 +24,32 @@ from kalshi import KalshiMarket
 from utils.logger import get_logger, trade_log, write_trade_log_async
 
 log = get_logger("signal_analyzer")
+
+
+def _emit_extraction_trace_step(
+    step_name: str,
+    *,
+    ticker: str,
+    input_signal_magnitude: float,
+    output_signal_magnitude: float,
+    intermediate_state: dict[str, Any],
+) -> None:
+    """Optional debug-only extraction trace hook for Cycle-15B diagnostics."""
+    if os.environ.get("KALSHI_EXTRACTION_TRACE") != "1":
+        return
+    log.debug(
+        _json.dumps(
+            {
+                "type": "EXTRACTION_TRACE_STEP",
+                "step_name": step_name,
+                "ticker": ticker,
+                "input_signal_magnitude": input_signal_magnitude,
+                "output_signal_magnitude": output_signal_magnitude,
+                "intermediate_state": intermediate_state,
+            },
+            sort_keys=True,
+        )
+    )
 
 # Limit concurrent LLM calls to 1. With a single Ollama process on CPU,
 # parallel calls don't improve throughput — they just spike latency.
@@ -436,6 +463,20 @@ def keyword_estimate(
         f"Base prob: {base_probability:.3f} -> estimated: {estimated_prob:.3f}. "
         f"Edge vs market ({market.yes_price:.1f}c): {edge:+.3f}. "
         f"Betting {side.upper()}."
+    )
+
+    _emit_extraction_trace_step(
+        "keyword_path",
+        ticker=market.ticker,
+        input_signal_magnitude=shift,
+        output_signal_magnitude=estimated_prob - base_probability,
+        intermediate_state={
+            "keywords": keywords,
+            "direction": direction,
+            "raw_shift": shift,
+            "adjusted_shift": adjusted_shift,
+            "estimated_probability": estimated_prob,
+        },
     )
 
     return estimated_prob, side, keywords, reasoning
@@ -1087,6 +1128,19 @@ async def estimate_probability(
             f"[LLM] {llm_reasoning} "
             f"(LLM: {llm_prob:.3f}, Keywords(ref): {kw_prob:.3f})"
         )
+        _emit_extraction_trace_step(
+            "llm_path",
+            ticker=market.ticker,
+            input_signal_magnitude=kw_prob - base_probability,
+            output_signal_magnitude=llm_prob - base_probability,
+            intermediate_state={
+                "llm_direction": llm_direction,
+                "llm_magnitude": llm_magnitude,
+                "llm_confidence": llm_confidence,
+                "llm_probability": llm_prob,
+                "keyword_probability": kw_prob,
+            },
+        )
         await write_trade_log_async(
             trade_log.log_signal_analysis_detail,
             ticker=market.ticker,
@@ -1124,6 +1178,17 @@ async def estimate_probability(
 
     if not keywords:
         # No keyword support and no LLM estimate available: stop here.
+        _emit_extraction_trace_step(
+            "final_estimate",
+            ticker=market.ticker,
+            input_signal_magnitude=kw_prob - base_probability,
+            output_signal_magnitude=0.0,
+            intermediate_state={
+                "reason": "no_keywords_no_llm_estimate",
+                "estimated_probability": market.yes_prob,
+                "llm_status": llm_meta["status"],
+            },
+        )
         await write_trade_log_async(
             trade_log.log_signal_analysis_detail,
             ticker=market.ticker,
@@ -1156,6 +1221,17 @@ async def estimate_probability(
 
     # Keyword only
     confidence = min(0.7, 0.3 + 0.05 * len(keywords))   # more keywords -> more confident
+    _emit_extraction_trace_step(
+        "final_estimate",
+        ticker=market.ticker,
+        input_signal_magnitude=kw_prob - base_probability,
+        output_signal_magnitude=kw_prob - base_probability,
+        intermediate_state={
+            "reason": "keyword_only",
+            "estimated_probability": kw_prob,
+            "confidence": confidence,
+        },
+    )
     await write_trade_log_async(
         trade_log.log_signal_analysis_detail,
         ticker=market.ticker,

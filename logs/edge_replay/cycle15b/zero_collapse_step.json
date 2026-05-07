@@ -1,0 +1,22 @@
+{
+  "count": 8,
+  "counts": {
+    "keyword_path": 8
+  },
+  "criterion": {
+    "input_abs_gt": 0.05,
+    "output_abs_lt": 0.01
+  },
+  "examples": [
+    "F1_FISA_REAUTHORIZED_YES",
+    "F2_FISA_LAPSED_NO",
+    "F3_PARDONS_ISSUED_YES",
+    "F4_PARDONS_NOT_ISSUED_NO",
+    "F5_TRUMP_IRAN_DEAL_YES",
+    "F6_VANCE_PAKISTAN_VISIT_YES",
+    "F7_VANCE_PAKISTAN_CANCELED_NO",
+    "F10_REPETITION_DAMPING"
+  ],
+  "finding_type": "single_step",
+  "zero_collapse_step": "keyword_path"
+}

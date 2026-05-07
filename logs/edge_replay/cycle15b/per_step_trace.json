@@ -1,0 +1,508 @@
+{
+  "traces": [
+    {
+      "expected_direction": "YES",
+      "fixture_id": "F1_FISA_REAUTHORIZED_YES",
+      "market_ticker": "KXFISAEXTEND-26APR-MAY01",
+      "steps": [
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "expected_direction": "YES",
+            "expected_magnitude_max": null,
+            "expected_magnitude_min": 0.05
+          },
+          "output_signal_magnitude": 0.051000000000000004,
+          "step_name": "fixture_expected_signal"
+        },
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "estimated_probability": 0.5,
+            "keywords": [],
+            "reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+            "side": "no"
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "keyword_path"
+        },
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "confidence": 0.1,
+            "keywords": [],
+            "llm_confidence": null,
+            "llm_direction": null,
+            "llm_magnitude": null,
+            "reasoning": "No relevant keywords found -- no signal."
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "llm_path"
+        },
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "delta": 0.0,
+            "estimated_probability": 0.5
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "final_estimate"
+        }
+      ]
+    },
+    {
+      "expected_direction": "NO",
+      "fixture_id": "F2_FISA_LAPSED_NO",
+      "market_ticker": "KXFISAEXTEND-26APR-MAY01",
+      "steps": [
+        {
+          "input_signal_magnitude": -0.051000000000000004,
+          "intermediate_state": {
+            "expected_direction": "NO",
+            "expected_magnitude_max": null,
+            "expected_magnitude_min": 0.05
+          },
+          "output_signal_magnitude": -0.051000000000000004,
+          "step_name": "fixture_expected_signal"
+        },
+        {
+          "input_signal_magnitude": -0.051000000000000004,
+          "intermediate_state": {
+            "estimated_probability": 0.5,
+            "keywords": [],
+            "reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+            "side": "no"
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "keyword_path"
+        },
+        {
+          "input_signal_magnitude": -0.051000000000000004,
+          "intermediate_state": {
+            "confidence": 0.1,
+            "keywords": [],
+            "llm_confidence": null,
+            "llm_direction": null,
+            "llm_magnitude": null,
+            "reasoning": "No relevant keywords found -- no signal."
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "llm_path"
+        },
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "delta": 0.0,
+            "estimated_probability": 0.5
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "final_estimate"
+        }
+      ]
+    },
+    {
+      "expected_direction": "YES",
+      "fixture_id": "F3_PARDONS_ISSUED_YES",
+      "market_ticker": "KXPARDONSTRUMP-26APR-1",
+      "steps": [
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "expected_direction": "YES",
+            "expected_magnitude_max": null,
+            "expected_magnitude_min": 0.05
+          },
+          "output_signal_magnitude": 0.051000000000000004,
+          "step_name": "fixture_expected_signal"
+        },
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "estimated_probability": 0.5,
+            "keywords": [],
+            "reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+            "side": "no"
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "keyword_path"
+        },
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "confidence": 0.1,
+            "keywords": [],
+            "llm_confidence": null,
+            "llm_direction": null,
+            "llm_magnitude": null,
+            "reasoning": "No relevant keywords found -- no signal."
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "llm_path"
+        },
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "delta": 0.0,
+            "estimated_probability": 0.5
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "final_estimate"
+        }
+      ]
+    },
+    {
+      "expected_direction": "NO",
+      "fixture_id": "F4_PARDONS_NOT_ISSUED_NO",
+      "market_ticker": "KXPARDONSTRUMP-26APR-1",
+      "steps": [
+        {
+          "input_signal_magnitude": -0.051000000000000004,
+          "intermediate_state": {
+            "expected_direction": "NO",
+            "expected_magnitude_max": null,
+            "expected_magnitude_min": 0.05
+          },
+          "output_signal_magnitude": -0.051000000000000004,
+          "step_name": "fixture_expected_signal"
+        },
+        {
+          "input_signal_magnitude": -0.051000000000000004,
+          "intermediate_state": {
+            "estimated_probability": 0.5,
+            "keywords": [],
+            "reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+            "side": "no"
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "keyword_path"
+        },
+        {
+          "input_signal_magnitude": -0.051000000000000004,
+          "intermediate_state": {
+            "confidence": 0.1,
+            "keywords": [],
+            "llm_confidence": null,
+            "llm_direction": null,
+            "llm_magnitude": null,
+            "reasoning": "No relevant keywords found -- no signal."
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "llm_path"
+        },
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "delta": 0.0,
+            "estimated_probability": 0.5
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "final_estimate"
+        }
+      ]
+    },
+    {
+      "expected_direction": "YES",
+      "fixture_id": "F5_TRUMP_IRAN_DEAL_YES",
+      "market_ticker": "KXTRUMPIRAN-26MAY01",
+      "steps": [
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "expected_direction": "YES",
+            "expected_magnitude_max": null,
+            "expected_magnitude_min": 0.05
+          },
+          "output_signal_magnitude": 0.051000000000000004,
+          "step_name": "fixture_expected_signal"
+        },
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "estimated_probability": 0.5,
+            "keywords": [],
+            "reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+            "side": "no"
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "keyword_path"
+        },
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "confidence": 0.1,
+            "keywords": [],
+            "llm_confidence": null,
+            "llm_direction": null,
+            "llm_magnitude": null,
+            "reasoning": "No relevant keywords found -- no signal."
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "llm_path"
+        },
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "delta": 0.0,
+            "estimated_probability": 0.5
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "final_estimate"
+        }
+      ]
+    },
+    {
+      "expected_direction": "YES",
+      "fixture_id": "F6_VANCE_PAKISTAN_VISIT_YES",
+      "market_ticker": "KXVANCEPAKISTAN-26APR21-APR30",
+      "steps": [
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "expected_direction": "YES",
+            "expected_magnitude_max": null,
+            "expected_magnitude_min": 0.05
+          },
+          "output_signal_magnitude": 0.051000000000000004,
+          "step_name": "fixture_expected_signal"
+        },
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "estimated_probability": 0.5,
+            "keywords": [],
+            "reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+            "side": "no"
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "keyword_path"
+        },
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "confidence": 0.1,
+            "keywords": [],
+            "llm_confidence": null,
+            "llm_direction": null,
+            "llm_magnitude": null,
+            "reasoning": "No relevant keywords found -- no signal."
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "llm_path"
+        },
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "delta": 0.0,
+            "estimated_probability": 0.5
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "final_estimate"
+        }
+      ]
+    },
+    {
+      "expected_direction": "NO",
+      "fixture_id": "F7_VANCE_PAKISTAN_CANCELED_NO",
+      "market_ticker": "KXVANCEPAKISTAN-26APR21-APR30",
+      "steps": [
+        {
+          "input_signal_magnitude": -0.051000000000000004,
+          "intermediate_state": {
+            "expected_direction": "NO",
+            "expected_magnitude_max": null,
+            "expected_magnitude_min": 0.05
+          },
+          "output_signal_magnitude": -0.051000000000000004,
+          "step_name": "fixture_expected_signal"
+        },
+        {
+          "input_signal_magnitude": -0.051000000000000004,
+          "intermediate_state": {
+            "estimated_probability": 0.5,
+            "keywords": [],
+            "reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+            "side": "no"
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "keyword_path"
+        },
+        {
+          "input_signal_magnitude": -0.051000000000000004,
+          "intermediate_state": {
+            "confidence": 0.1,
+            "keywords": [],
+            "llm_confidence": null,
+            "llm_direction": null,
+            "llm_magnitude": null,
+            "reasoning": "No relevant keywords found -- no signal."
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "llm_path"
+        },
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "delta": 0.0,
+            "estimated_probability": 0.5
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "final_estimate"
+        }
+      ]
+    },
+    {
+      "expected_direction": "NEUTRAL",
+      "fixture_id": "F8_AMBIGUOUS_NEUTRAL",
+      "market_ticker": "KXFISAEXTEND-26APR-MAY01",
+      "steps": [
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "expected_direction": "NEUTRAL",
+            "expected_magnitude_max": 0.02,
+            "expected_magnitude_min": null
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "fixture_expected_signal"
+        },
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "estimated_probability": 0.62,
+            "keywords": [
+              "senate judiciary"
+            ],
+            "reasoning": "Keyword analysis found 1 signal(s): [senate judiciary]. Net shift: +0.120 (dampened: +0.120). Base prob: 0.500 -> estimated: 0.620. Edge vs market (50.0c): +0.120. Betting YES.",
+            "side": "yes"
+          },
+          "output_signal_magnitude": 0.12,
+          "step_name": "keyword_path"
+        },
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "confidence": 0.35,
+            "keywords": [
+              "senate judiciary"
+            ],
+            "llm_confidence": null,
+            "llm_direction": null,
+            "llm_magnitude": null,
+            "reasoning": "Keyword analysis found 1 signal(s): [senate judiciary]. Net shift: +0.120 (dampened: +0.120). Base prob: 0.500 -> estimated: 0.620. Edge vs market (50.0c): +0.120. Betting YES."
+          },
+          "output_signal_magnitude": 0.12,
+          "step_name": "llm_path"
+        },
+        {
+          "input_signal_magnitude": 0.12,
+          "intermediate_state": {
+            "delta": 0.12,
+            "estimated_probability": 0.62
+          },
+          "output_signal_magnitude": 0.12,
+          "step_name": "final_estimate"
+        }
+      ]
+    },
+    {
+      "expected_direction": "NEUTRAL",
+      "fixture_id": "F9_OFF_TOPIC_NEUTRAL",
+      "market_ticker": "KXFISAEXTEND-26APR-MAY01",
+      "steps": [
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "expected_direction": "NEUTRAL",
+            "expected_magnitude_max": 0.005,
+            "expected_magnitude_min": null
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "fixture_expected_signal"
+        },
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "estimated_probability": 0.5,
+            "keywords": [],
+            "reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+            "side": "no"
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "keyword_path"
+        },
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "confidence": 0.1,
+            "keywords": [],
+            "llm_confidence": null,
+            "llm_direction": null,
+            "llm_magnitude": null,
+            "reasoning": "No relevant keywords found -- no signal."
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "llm_path"
+        },
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "delta": 0.0,
+            "estimated_probability": 0.5
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "final_estimate"
+        }
+      ]
+    },
+    {
+      "expected_direction": "YES",
+      "fixture_id": "F10_REPETITION_DAMPING",
+      "market_ticker": "KXFISAEXTEND-26APR-MAY01",
+      "steps": [
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "expected_direction": "YES",
+            "expected_magnitude_max": null,
+            "expected_magnitude_min": null
+          },
+          "output_signal_magnitude": 0.051000000000000004,
+          "step_name": "fixture_expected_signal"
+        },
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "estimated_probability": 0.5,
+            "keywords": [],
+            "reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+            "side": "no"
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "keyword_path"
+        },
+        {
+          "input_signal_magnitude": 0.051000000000000004,
+          "intermediate_state": {
+            "confidence": 0.1,
+            "keywords": [],
+            "llm_confidence": null,
+            "llm_direction": null,
+            "llm_magnitude": null,
+            "reasoning": "No relevant keywords found -- no signal."
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "llm_path"
+        },
+        {
+          "input_signal_magnitude": 0.0,
+          "intermediate_state": {
+            "delta": 0.0,
+            "estimated_probability": 0.5
+          },
+          "output_signal_magnitude": 0.0,
+          "step_name": "final_estimate"
+        }
+      ]
+    }
+  ]
+}
