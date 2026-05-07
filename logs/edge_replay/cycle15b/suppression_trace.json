@@ -1,0 +1,141 @@
+{
+  "audit": "cycle15b_suppression_trace",
+  "fixture_count": 10,
+  "fixtures": [
+    {
+      "expected_direction": "YES",
+      "fixture_id": "F1_FISA_REAUTHORIZED_YES",
+      "keyword_estimate_keywords": [],
+      "keyword_estimate_reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+      "keyword_estimate_side": "no",
+      "post_suppression_magnitude": 0.0,
+      "pre_suppression_magnitude": 0.0,
+      "raw_keyword_direction": "yes",
+      "raw_matched_keywords": [],
+      "suppression_reason": null,
+      "suppression_triggered": false
+    },
+    {
+      "expected_direction": "NO",
+      "fixture_id": "F2_FISA_LAPSED_NO",
+      "keyword_estimate_keywords": [],
+      "keyword_estimate_reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+      "keyword_estimate_side": "no",
+      "post_suppression_magnitude": 0.0,
+      "pre_suppression_magnitude": 0.0,
+      "raw_keyword_direction": "yes",
+      "raw_matched_keywords": [],
+      "suppression_reason": null,
+      "suppression_triggered": false
+    },
+    {
+      "expected_direction": "YES",
+      "fixture_id": "F3_PARDONS_ISSUED_YES",
+      "keyword_estimate_keywords": [],
+      "keyword_estimate_reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+      "keyword_estimate_side": "no",
+      "post_suppression_magnitude": 0.0,
+      "pre_suppression_magnitude": 0.0,
+      "raw_keyword_direction": "yes",
+      "raw_matched_keywords": [],
+      "suppression_reason": null,
+      "suppression_triggered": false
+    },
+    {
+      "expected_direction": "NO",
+      "fixture_id": "F4_PARDONS_NOT_ISSUED_NO",
+      "keyword_estimate_keywords": [],
+      "keyword_estimate_reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+      "keyword_estimate_side": "no",
+      "post_suppression_magnitude": 0.0,
+      "pre_suppression_magnitude": 0.0,
+      "raw_keyword_direction": "yes",
+      "raw_matched_keywords": [],
+      "suppression_reason": null,
+      "suppression_triggered": false
+    },
+    {
+      "expected_direction": "YES",
+      "fixture_id": "F5_TRUMP_IRAN_DEAL_YES",
+      "keyword_estimate_keywords": [],
+      "keyword_estimate_reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+      "keyword_estimate_side": "no",
+      "post_suppression_magnitude": 0.0,
+      "pre_suppression_magnitude": 0.0,
+      "raw_keyword_direction": "yes",
+      "raw_matched_keywords": [],
+      "suppression_reason": null,
+      "suppression_triggered": false
+    },
+    {
+      "expected_direction": "YES",
+      "fixture_id": "F6_VANCE_PAKISTAN_VISIT_YES",
+      "keyword_estimate_keywords": [],
+      "keyword_estimate_reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+      "keyword_estimate_side": "no",
+      "post_suppression_magnitude": 0.0,
+      "pre_suppression_magnitude": 0.0,
+      "raw_keyword_direction": "yes",
+      "raw_matched_keywords": [],
+      "suppression_reason": null,
+      "suppression_triggered": false
+    },
+    {
+      "expected_direction": "NO",
+      "fixture_id": "F7_VANCE_PAKISTAN_CANCELED_NO",
+      "keyword_estimate_keywords": [],
+      "keyword_estimate_reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+      "keyword_estimate_side": "no",
+      "post_suppression_magnitude": 0.0,
+      "pre_suppression_magnitude": 0.0,
+      "raw_keyword_direction": "yes",
+      "raw_matched_keywords": [],
+      "suppression_reason": null,
+      "suppression_triggered": false
+    },
+    {
+      "expected_direction": "NEUTRAL",
+      "fixture_id": "F8_AMBIGUOUS_NEUTRAL",
+      "keyword_estimate_keywords": [
+        "senate judiciary"
+      ],
+      "keyword_estimate_reasoning": "Keyword analysis found 1 signal(s): [senate judiciary]. Net shift: +0.120 (dampened: +0.120). Base prob: 0.500 -> estimated: 0.620. Edge vs market (50.0c): +0.120. Betting YES.",
+      "keyword_estimate_side": "yes",
+      "post_suppression_magnitude": 0.12,
+      "pre_suppression_magnitude": 0.12,
+      "raw_keyword_direction": "yes",
+      "raw_matched_keywords": [
+        "senate judiciary"
+      ],
+      "suppression_reason": null,
+      "suppression_triggered": false
+    },
+    {
+      "expected_direction": "NEUTRAL",
+      "fixture_id": "F9_OFF_TOPIC_NEUTRAL",
+      "keyword_estimate_keywords": [],
+      "keyword_estimate_reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+      "keyword_estimate_side": "no",
+      "post_suppression_magnitude": 0.0,
+      "pre_suppression_magnitude": 0.0,
+      "raw_keyword_direction": "yes",
+      "raw_matched_keywords": [],
+      "suppression_reason": null,
+      "suppression_triggered": false
+    },
+    {
+      "expected_direction": "YES",
+      "fixture_id": "F10_REPETITION_DAMPING",
+      "keyword_estimate_keywords": [],
+      "keyword_estimate_reasoning": "Keyword analysis found 0 signal(s): []. Net shift: +0.000 (dampened: +0.000). Base prob: 0.500 -> estimated: 0.500. Edge vs market (50.0c): +0.000. Betting NO.",
+      "keyword_estimate_side": "no",
+      "post_suppression_magnitude": 0.0,
+      "pre_suppression_magnitude": 0.0,
+      "raw_keyword_direction": "yes",
+      "raw_matched_keywords": [],
+      "suppression_reason": null,
+      "suppression_triggered": false
+    }
+  ],
+  "suppression_count": 0
+}

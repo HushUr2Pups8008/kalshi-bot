@@ -1,0 +1,141 @@
+{
+  "audit": "cycle15b_llm_prompt_convention",
+  "fixture_count": 10,
+  "fixtures": [
+    {
+      "direction": null,
+      "expected_direction": "YES",
+      "fixture_id": "F1_FISA_REAUTHORIZED_YES",
+      "flag_reasons": [],
+      "flagged": false,
+      "magnitude": null,
+      "parsed": null,
+      "prompt": null,
+      "provider": "ollama",
+      "raw_response": null,
+      "status": "ollama_unavailable"
+    },
+    {
+      "direction": null,
+      "expected_direction": "NO",
+      "fixture_id": "F2_FISA_LAPSED_NO",
+      "flag_reasons": [],
+      "flagged": false,
+      "magnitude": null,
+      "parsed": null,
+      "prompt": null,
+      "provider": "ollama",
+      "raw_response": null,
+      "status": "ollama_unavailable"
+    },
+    {
+      "direction": null,
+      "expected_direction": "YES",
+      "fixture_id": "F3_PARDONS_ISSUED_YES",
+      "flag_reasons": [],
+      "flagged": false,
+      "magnitude": null,
+      "parsed": null,
+      "prompt": null,
+      "provider": "ollama",
+      "raw_response": null,
+      "status": "ollama_unavailable"
+    },
+    {
+      "direction": null,
+      "expected_direction": "NO",
+      "fixture_id": "F4_PARDONS_NOT_ISSUED_NO",
+      "flag_reasons": [],
+      "flagged": false,
+      "magnitude": null,
+      "parsed": null,
+      "prompt": null,
+      "provider": "ollama",
+      "raw_response": null,
+      "status": "ollama_circuit_open"
+    },
+    {
+      "direction": null,
+      "expected_direction": "YES",
+      "fixture_id": "F5_TRUMP_IRAN_DEAL_YES",
+      "flag_reasons": [],
+      "flagged": false,
+      "magnitude": null,
+      "parsed": null,
+      "prompt": null,
+      "provider": "ollama",
+      "raw_response": null,
+      "status": "ollama_circuit_open"
+    },
+    {
+      "direction": null,
+      "expected_direction": "YES",
+      "fixture_id": "F6_VANCE_PAKISTAN_VISIT_YES",
+      "flag_reasons": [],
+      "flagged": false,
+      "magnitude": null,
+      "parsed": null,
+      "prompt": null,
+      "provider": "ollama",
+      "raw_response": null,
+      "status": "ollama_circuit_open"
+    },
+    {
+      "direction": null,
+      "expected_direction": "NO",
+      "fixture_id": "F7_VANCE_PAKISTAN_CANCELED_NO",
+      "flag_reasons": [],
+      "flagged": false,
+      "magnitude": null,
+      "parsed": null,
+      "prompt": null,
+      "provider": "ollama",
+      "raw_response": null,
+      "status": "ollama_circuit_open"
+    },
+    {
+      "direction": null,
+      "expected_direction": "NEUTRAL",
+      "fixture_id": "F8_AMBIGUOUS_NEUTRAL",
+      "flag_reasons": [],
+      "flagged": false,
+      "magnitude": null,
+      "parsed": null,
+      "prompt": null,
+      "provider": "ollama",
+      "raw_response": null,
+      "status": "ollama_circuit_open"
+    },
+    {
+      "direction": null,
+      "expected_direction": "NEUTRAL",
+      "fixture_id": "F9_OFF_TOPIC_NEUTRAL",
+      "flag_reasons": [],
+      "flagged": false,
+      "magnitude": null,
+      "parsed": null,
+      "prompt": null,
+      "provider": "ollama",
+      "raw_response": null,
+      "status": "ollama_circuit_open"
+    },
+    {
+      "direction": null,
+      "expected_direction": "YES",
+      "fixture_id": "F10_REPETITION_DAMPING",
+      "flag_reasons": [],
+      "flagged": false,
+      "magnitude": null,
+      "parsed": null,
+      "prompt": null,
+      "provider": "ollama",
+      "raw_response": null,
+      "status": "ollama_circuit_open"
+    }
+  ],
+  "flagged_count": 0,
+  "statuses": [
+    "ollama_circuit_open",
+    "ollama_unavailable"
+  ]
+}

@@ -1,0 +1,971 @@
+{
+  "audit": "cycle15b_keyword_direction_map",
+  "coverage_gap_count": 8,
+  "fixture_count": 10,
+  "fixtures": [
+    {
+      "coverage_ok": false,
+      "covered_expected_phrases": [
+        "reauthorization signed",
+        "signed into law"
+      ],
+      "expected_direction": "YES",
+      "expected_phrases": [
+        "reauthorization signed",
+        "signed into law"
+      ],
+      "fixture_id": "F1_FISA_REAUTHORIZED_YES",
+      "matched_directions": [],
+      "matched_keywords": [],
+      "missing_expected_phrases": [
+        "reauthorization signed",
+        "signed into law"
+      ]
+    },
+    {
+      "coverage_ok": false,
+      "covered_expected_phrases": [
+        "expires",
+        "fails to act",
+        "will not become law"
+      ],
+      "expected_direction": "NO",
+      "expected_phrases": [
+        "expires",
+        "fails to act",
+        "will not become law"
+      ],
+      "fixture_id": "F2_FISA_LAPSED_NO",
+      "matched_directions": [],
+      "matched_keywords": [],
+      "missing_expected_phrases": [
+        "expires",
+        "fails to act",
+        "will not become law"
+      ]
+    },
+    {
+      "coverage_ok": false,
+      "covered_expected_phrases": [
+        "issues pardons",
+        "signed pardons",
+        "pardons for"
+      ],
+      "expected_direction": "YES",
+      "expected_phrases": [
+        "issues pardons",
+        "signed pardons",
+        "pardons for"
+      ],
+      "fixture_id": "F3_PARDONS_ISSUED_YES",
+      "matched_directions": [],
+      "matched_keywords": [],
+      "missing_expected_phrases": [
+        "issues pardons",
+        "signed pardons",
+        "pardons for"
+      ]
+    },
+    {
+      "coverage_ok": false,
+      "covered_expected_phrases": [
+        "no january 6 pardons",
+        "no pardons",
+        "will be issued"
+      ],
+      "expected_direction": "NO",
+      "expected_phrases": [
+        "no january 6 pardons",
+        "no pardons",
+        "will be issued"
+      ],
+      "fixture_id": "F4_PARDONS_NOT_ISSUED_NO",
+      "matched_directions": [],
+      "matched_keywords": [],
+      "missing_expected_phrases": [
+        "no january 6 pardons",
+        "no pardons",
+        "will be issued"
+      ]
+    },
+    {
+      "coverage_ok": false,
+      "covered_expected_phrases": [
+        "sign nuclear deal",
+        "nuclear agreement"
+      ],
+      "expected_direction": "YES",
+      "expected_phrases": [
+        "sign nuclear deal",
+        "nuclear agreement"
+      ],
+      "fixture_id": "F5_TRUMP_IRAN_DEAL_YES",
+      "matched_directions": [],
+      "matched_keywords": [],
+      "missing_expected_phrases": [
+        "sign nuclear deal",
+        "nuclear agreement"
+      ]
+    },
+    {
+      "coverage_ok": false,
+      "covered_expected_phrases": [
+        "arrives in islamabad",
+        "official pakistan visit",
+        "landed in islamabad"
+      ],
+      "expected_direction": "YES",
+      "expected_phrases": [
+        "arrives in islamabad",
+        "official pakistan visit",
+        "landed in islamabad"
+      ],
+      "fixture_id": "F6_VANCE_PAKISTAN_VISIT_YES",
+      "matched_directions": [],
+      "matched_keywords": [],
+      "missing_expected_phrases": [
+        "arrives in islamabad",
+        "official pakistan visit",
+        "landed in islamabad"
+      ]
+    },
+    {
+      "coverage_ok": false,
+      "covered_expected_phrases": [
+        "cancels pakistan trip",
+        "canceled his planned pakistan trip"
+      ],
+      "expected_direction": "NO",
+      "expected_phrases": [
+        "cancels pakistan trip",
+        "canceled his planned pakistan trip"
+      ],
+      "fixture_id": "F7_VANCE_PAKISTAN_CANCELED_NO",
+      "matched_directions": [],
+      "matched_keywords": [],
+      "missing_expected_phrases": [
+        "cancels pakistan trip",
+        "canceled his planned pakistan trip"
+      ]
+    },
+    {
+      "coverage_ok": true,
+      "covered_expected_phrases": [],
+      "expected_direction": "NEUTRAL",
+      "expected_phrases": [],
+      "fixture_id": "F8_AMBIGUOUS_NEUTRAL",
+      "matched_directions": [
+        "yes"
+      ],
+      "matched_keywords": [
+        "senate judiciary"
+      ],
+      "missing_expected_phrases": []
+    },
+    {
+      "coverage_ok": true,
+      "covered_expected_phrases": [],
+      "expected_direction": "NEUTRAL",
+      "expected_phrases": [],
+      "fixture_id": "F9_OFF_TOPIC_NEUTRAL",
+      "matched_directions": [],
+      "matched_keywords": [],
+      "missing_expected_phrases": []
+    },
+    {
+      "coverage_ok": false,
+      "covered_expected_phrases": [
+        "reauthorization signed",
+        "signed into law"
+      ],
+      "expected_direction": "YES",
+      "expected_phrases": [
+        "reauthorization signed",
+        "signed into law"
+      ],
+      "fixture_id": "F10_REPETITION_DAMPING",
+      "matched_directions": [],
+      "matched_keywords": [],
+      "missing_expected_phrases": [
+        "reauthorization signed",
+        "signed into law"
+      ]
+    }
+  ],
+  "keyword_map": [
+    {
+      "direction": "yes",
+      "group_index": 0,
+      "keyword": "missile strike",
+      "strength": 0.15
+    },
+    {
+      "direction": "yes",
+      "group_index": 0,
+      "keyword": "bombs",
+      "strength": 0.15
+    },
+    {
+      "direction": "yes",
+      "group_index": 0,
+      "keyword": "shelling",
+      "strength": 0.15
+    },
+    {
+      "direction": "yes",
+      "group_index": 0,
+      "keyword": "invasion",
+      "strength": 0.15
+    },
+    {
+      "direction": "yes",
+      "group_index": 0,
+      "keyword": "military attack",
+      "strength": 0.15
+    },
+    {
+      "direction": "yes",
+      "group_index": 0,
+      "keyword": "war declared",
+      "strength": 0.15
+    },
+    {
+      "direction": "yes",
+      "group_index": 0,
+      "keyword": "troops deployed",
+      "strength": 0.15
+    },
+    {
+      "direction": "yes",
+      "group_index": 0,
+      "keyword": "offensive launched",
+      "strength": 0.15
+    },
+    {
+      "direction": "yes",
+      "group_index": 0,
+      "keyword": "war with",
+      "strength": 0.15
+    },
+    {
+      "direction": "yes",
+      "group_index": 0,
+      "keyword": "at war",
+      "strength": 0.15
+    },
+    {
+      "direction": "yes",
+      "group_index": 0,
+      "keyword": "airstrikes",
+      "strength": 0.15
+    },
+    {
+      "direction": "yes",
+      "group_index": 0,
+      "keyword": "strait hormuz",
+      "strength": 0.15
+    },
+    {
+      "direction": "yes",
+      "group_index": 0,
+      "keyword": "hormuz blockade",
+      "strength": 0.15
+    },
+    {
+      "direction": "no",
+      "group_index": 1,
+      "keyword": "ceasefire",
+      "strength": 0.12
+    },
+    {
+      "direction": "no",
+      "group_index": 1,
+      "keyword": "peace deal",
+      "strength": 0.12
+    },
+    {
+      "direction": "no",
+      "group_index": 1,
+      "keyword": "withdrawal",
+      "strength": 0.12
+    },
+    {
+      "direction": "no",
+      "group_index": 1,
+      "keyword": "troops pull back",
+      "strength": 0.12
+    },
+    {
+      "direction": "no",
+      "group_index": 1,
+      "keyword": "de-escalation",
+      "strength": 0.12
+    },
+    {
+      "direction": "no",
+      "group_index": 1,
+      "keyword": "peace talks success",
+      "strength": 0.12
+    },
+    {
+      "direction": "no",
+      "group_index": 1,
+      "keyword": "truce",
+      "strength": 0.12
+    },
+    {
+      "direction": "no",
+      "group_index": 1,
+      "keyword": "talks resume",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 2,
+      "keyword": "talks fail",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 2,
+      "keyword": "talks collapse",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 2,
+      "keyword": "talks break down",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 2,
+      "keyword": "without a deal",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 2,
+      "keyword": "no deal reached",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 2,
+      "keyword": "failed to agree",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 2,
+      "keyword": "negotiations collapse",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 2,
+      "keyword": "negotiations fail",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 2,
+      "keyword": "deal rejected",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 2,
+      "keyword": "ceasefire collapses",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 3,
+      "keyword": "election results",
+      "strength": 0.25
+    },
+    {
+      "direction": "yes",
+      "group_index": 3,
+      "keyword": "wins election",
+      "strength": 0.25
+    },
+    {
+      "direction": "yes",
+      "group_index": 3,
+      "keyword": "wins presidency",
+      "strength": 0.25
+    },
+    {
+      "direction": "yes",
+      "group_index": 3,
+      "keyword": "elected president",
+      "strength": 0.25
+    },
+    {
+      "direction": "yes",
+      "group_index": 3,
+      "keyword": "projected winner",
+      "strength": 0.25
+    },
+    {
+      "direction": "yes",
+      "group_index": 3,
+      "keyword": "victory declared",
+      "strength": 0.25
+    },
+    {
+      "direction": "no",
+      "group_index": 4,
+      "keyword": "concedes",
+      "strength": 0.15
+    },
+    {
+      "direction": "no",
+      "group_index": 4,
+      "keyword": "loses election",
+      "strength": 0.15
+    },
+    {
+      "direction": "no",
+      "group_index": 4,
+      "keyword": "runoff",
+      "strength": 0.15
+    },
+    {
+      "direction": "no",
+      "group_index": 4,
+      "keyword": "recount ordered",
+      "strength": 0.15
+    },
+    {
+      "direction": "yes",
+      "group_index": 5,
+      "keyword": "sanctions imposed",
+      "strength": 0.08
+    },
+    {
+      "direction": "yes",
+      "group_index": 5,
+      "keyword": "embargo",
+      "strength": 0.08
+    },
+    {
+      "direction": "yes",
+      "group_index": 5,
+      "keyword": "expelled ambassador",
+      "strength": 0.08
+    },
+    {
+      "direction": "yes",
+      "group_index": 5,
+      "keyword": "diplomatic relations severed",
+      "strength": 0.08
+    },
+    {
+      "direction": "no",
+      "group_index": 6,
+      "keyword": "sanctions lifted",
+      "strength": 0.07
+    },
+    {
+      "direction": "no",
+      "group_index": 6,
+      "keyword": "diplomatic breakthrough",
+      "strength": 0.07
+    },
+    {
+      "direction": "no",
+      "group_index": 6,
+      "keyword": "summit agreement",
+      "strength": 0.07
+    },
+    {
+      "direction": "no",
+      "group_index": 6,
+      "keyword": "deal signed",
+      "strength": 0.07
+    },
+    {
+      "direction": "no",
+      "group_index": 6,
+      "keyword": "agreement reached",
+      "strength": 0.07
+    },
+    {
+      "direction": "no",
+      "group_index": 6,
+      "keyword": "deal reached",
+      "strength": 0.07
+    },
+    {
+      "direction": "yes",
+      "group_index": 7,
+      "keyword": "nuclear test",
+      "strength": 0.2
+    },
+    {
+      "direction": "yes",
+      "group_index": 7,
+      "keyword": "nuclear weapon",
+      "strength": 0.2
+    },
+    {
+      "direction": "yes",
+      "group_index": 7,
+      "keyword": "detonation",
+      "strength": 0.2
+    },
+    {
+      "direction": "yes",
+      "group_index": 7,
+      "keyword": "icbm test",
+      "strength": 0.2
+    },
+    {
+      "direction": "yes",
+      "group_index": 7,
+      "keyword": "ballistic missile test",
+      "strength": 0.2
+    },
+    {
+      "direction": "yes",
+      "group_index": 8,
+      "keyword": "coup",
+      "strength": 0.22
+    },
+    {
+      "direction": "yes",
+      "group_index": 8,
+      "keyword": "overthrown",
+      "strength": 0.22
+    },
+    {
+      "direction": "yes",
+      "group_index": 8,
+      "keyword": "government toppled",
+      "strength": 0.22
+    },
+    {
+      "direction": "yes",
+      "group_index": 8,
+      "keyword": "military takeover",
+      "strength": 0.22
+    },
+    {
+      "direction": "yes",
+      "group_index": 8,
+      "keyword": "martial law",
+      "strength": 0.22
+    },
+    {
+      "direction": "yes",
+      "group_index": 9,
+      "keyword": "terror attack",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 9,
+      "keyword": "bombing",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 9,
+      "keyword": "assassination",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 9,
+      "keyword": "mass shooting",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 9,
+      "keyword": "hostage",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 10,
+      "keyword": "tariff imposed",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 10,
+      "keyword": "new tariff",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 10,
+      "keyword": "tariff hike",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 10,
+      "keyword": "trade war",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 10,
+      "keyword": "import ban",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 10,
+      "keyword": "export ban",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 10,
+      "keyword": "trade embargo",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 10,
+      "keyword": "reciprocal tariff",
+      "strength": 0.1
+    },
+    {
+      "direction": "no",
+      "group_index": 11,
+      "keyword": "tariff removed",
+      "strength": 0.08
+    },
+    {
+      "direction": "no",
+      "group_index": 11,
+      "keyword": "tariff reduced",
+      "strength": 0.08
+    },
+    {
+      "direction": "no",
+      "group_index": 11,
+      "keyword": "trade deal signed",
+      "strength": 0.08
+    },
+    {
+      "direction": "no",
+      "group_index": 11,
+      "keyword": "trade agreement",
+      "strength": 0.08
+    },
+    {
+      "direction": "no",
+      "group_index": 11,
+      "keyword": "free trade",
+      "strength": 0.08
+    },
+    {
+      "direction": "no",
+      "group_index": 11,
+      "keyword": "tariff exemption",
+      "strength": 0.08
+    },
+    {
+      "direction": "yes",
+      "group_index": 12,
+      "keyword": "diplomatic expulsion",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 12,
+      "keyword": "ambassador recalled",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 12,
+      "keyword": "embassy closed",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 12,
+      "keyword": "foreign aid suspended",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 12,
+      "keyword": "alliance withdrawal",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 12,
+      "keyword": "nato invoked",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 12,
+      "keyword": "security pact",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 12,
+      "keyword": "defense agreement",
+      "strength": 0.1
+    },
+    {
+      "direction": "no",
+      "group_index": 13,
+      "keyword": "diplomatic talks",
+      "strength": 0.07
+    },
+    {
+      "direction": "no",
+      "group_index": 13,
+      "keyword": "foreign aid restored",
+      "strength": 0.07
+    },
+    {
+      "direction": "no",
+      "group_index": 13,
+      "keyword": "embassy reopened",
+      "strength": 0.07
+    },
+    {
+      "direction": "no",
+      "group_index": 13,
+      "keyword": "alliance renewed",
+      "strength": 0.07
+    },
+    {
+      "direction": "no",
+      "group_index": 13,
+      "keyword": "security guarantee",
+      "strength": 0.07
+    },
+    {
+      "direction": "yes",
+      "group_index": 14,
+      "keyword": "executive order signed",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 14,
+      "keyword": "government shutdown",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 14,
+      "keyword": "debt ceiling",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 14,
+      "keyword": "impeachment vote",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 14,
+      "keyword": "cabinet fired",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 14,
+      "keyword": "attorney general fired",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 14,
+      "keyword": "special counsel appointed",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 14,
+      "keyword": "national emergency declared",
+      "strength": 0.12
+    },
+    {
+      "direction": "no",
+      "group_index": 15,
+      "keyword": "government reopened",
+      "strength": 0.08
+    },
+    {
+      "direction": "no",
+      "group_index": 15,
+      "keyword": "debt ceiling raised",
+      "strength": 0.08
+    },
+    {
+      "direction": "no",
+      "group_index": 15,
+      "keyword": "budget passed",
+      "strength": 0.08
+    },
+    {
+      "direction": "no",
+      "group_index": 15,
+      "keyword": "bipartisan deal",
+      "strength": 0.08
+    },
+    {
+      "direction": "no",
+      "group_index": 15,
+      "keyword": "confirmation vote passed",
+      "strength": 0.08
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "confirmation hearing",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "senate confirms",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "senate vote",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "confirmation vote",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "cabinet confirmed",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "filibuster",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "cloture vote",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "nominee confirmed",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "nominee rejected",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "testimony begins",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "testifies before",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "senate judiciary",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "senate armed services",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 16,
+      "keyword": "advise and consent",
+      "strength": 0.12
+    },
+    {
+      "direction": "yes",
+      "group_index": 17,
+      "keyword": "trump fires",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 17,
+      "keyword": "trump pardons",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 17,
+      "keyword": "executive order signed",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 17,
+      "keyword": "fired by trump",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 17,
+      "keyword": "dismissed by trump",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 17,
+      "keyword": "removed from office",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 17,
+      "keyword": "trump dismisses",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 17,
+      "keyword": "white house fires",
+      "strength": 0.1
+    },
+    {
+      "direction": "yes",
+      "group_index": 17,
+      "keyword": "trump terminates",
+      "strength": 0.1
+    }
+  ]
+}
