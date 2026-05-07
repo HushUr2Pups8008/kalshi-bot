@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -19,6 +20,7 @@ from scripts.edge_replay.build_replay_dataset import load_historical_prices, pri
 
 DEFAULT_DATASET = Path("logs/edge_replay/cycle15b/replay_dataset.jsonl")
 DEFAULT_PRICES = Path("logs/edge_replay/cycle16d/historical_prices_cycle16d.json")
+DEFAULT_POST_FIX_DB = Path("data/dossier_updates_post_fix.db")
 DEFAULT_OUTPUT = Path("logs/edge_replay/cycle16d/coverage_audit.json")
 
 
@@ -37,6 +39,44 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
         if line.strip():
             rows.append(json.loads(line))
     return rows
+
+
+def load_reingestion_metadata(db_path: Path) -> dict[str, str]:
+    if not db_path.exists():
+        return {}
+    conn = sqlite3.connect(db_path)
+    try:
+        tables = {
+            str(row[0])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        if "reingestion_metadata" not in tables:
+            return {}
+        return {
+            str(key): str(value)
+            for key, value in conn.execute("SELECT key, value FROM reingestion_metadata")
+        }
+    finally:
+        conn.close()
+
+
+def cohort_sentinel(db_path: Path | None) -> dict[str, Any]:
+    if db_path is None:
+        return {"status": "not_checked", "reason": "no_post_fix_db_supplied"}
+    metadata = load_reingestion_metadata(db_path)
+    expected_commit = "2222227"
+    expected_ts = "2026-05-07T00:00:00+00:00"
+    commit_ok = metadata.get("cycle_15b_c7_deploy_commit") == expected_commit
+    ts_ok = metadata.get("cycle_15b_c7_deploy_ts") == expected_ts
+    return {
+        "status": "pass" if commit_ok and ts_ok else "fail",
+        "cohort_flag": "post_fix_rebuilt" if commit_ok and ts_ok else "unknown",
+        "db_path": str(db_path),
+        "cycle_15b_c7_deploy_commit": metadata.get("cycle_15b_c7_deploy_commit"),
+        "cycle_15b_c7_deploy_ts": metadata.get("cycle_15b_c7_deploy_ts"),
+        "expected_cycle_15b_c7_deploy_commit": expected_commit,
+        "expected_cycle_15b_c7_deploy_ts": expected_ts,
+    }
 
 
 def _coverage(count: int, total: int) -> float:
@@ -60,6 +100,7 @@ def audit_price_coverage(
     rows: list[dict[str, Any]],
     prices_path: Path,
     *,
+    post_fix_db: Path | None = DEFAULT_POST_FIX_DB,
     overall_threshold: float = 0.90,
     anomaly_threshold: float = 0.80,
     escalation_threshold: float = 0.70,
@@ -145,6 +186,7 @@ def audit_price_coverage(
         "input": {
             "dataset_rows": total_rows,
             "historical_prices_path": str(prices_path),
+            "post_fix_db": str(post_fix_db) if post_fix_db is not None else None,
             "price_ticker_count": len(price_tickers),
         },
         "thresholds": {
@@ -162,6 +204,7 @@ def audit_price_coverage(
         "per_ticker": per_ticker,
         "anomalies": anomalies,
         "escalations": escalations,
+        "cohort_sentinel": cohort_sentinel(post_fix_db),
         "missing_examples": missing_examples,
     }
 
@@ -170,6 +213,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--historical-prices", type=Path, default=DEFAULT_PRICES)
+    parser.add_argument("--post-fix-db", type=Path, default=DEFAULT_POST_FIX_DB)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--overall-threshold", type=float, default=0.90)
     parser.add_argument("--anomaly-threshold", type=float, default=0.80)
@@ -182,6 +226,7 @@ def main() -> int:
     report = audit_price_coverage(
         load_jsonl(args.dataset),
         args.historical_prices,
+        post_fix_db=args.post_fix_db,
         overall_threshold=args.overall_threshold,
         anomaly_threshold=args.anomaly_threshold,
         escalation_threshold=args.escalation_threshold,

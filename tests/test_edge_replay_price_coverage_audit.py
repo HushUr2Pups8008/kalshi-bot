@@ -1,7 +1,8 @@
 import json
+import sqlite3
 from pathlib import Path
 
-from scripts.edge_replay.price_coverage_audit import audit_price_coverage, load_jsonl
+from scripts.edge_replay.price_coverage_audit import audit_price_coverage, cohort_sentinel, load_jsonl
 
 
 def _write_prices(path: Path, rows_by_ticker: dict[str, list[dict[str, object]]]) -> None:
@@ -28,7 +29,7 @@ def test_price_coverage_audit_uses_last_price_at_or_before_decision(tmp_path):
         }
     ]
 
-    report = audit_price_coverage(rows, prices_path)
+    report = audit_price_coverage(rows, prices_path, post_fix_db=None)
 
     assert report["overall"]["status"] == "pass"
     assert report["overall"]["coverage"] == 1.0
@@ -49,7 +50,7 @@ def test_price_coverage_audit_flags_per_ticker_anomaly_without_failing_overall(t
     ]
     rows.append({"ticker": "KXMISSING", "decision_ts": "2026-05-01T00:00:00+00:00", "market_yes_price": None})
 
-    report = audit_price_coverage(rows, prices_path)
+    report = audit_price_coverage(rows, prices_path, post_fix_db=None)
 
     assert report["overall"]["status"] == "pass"
     assert report["overall"]["coverage"] == 0.9
@@ -66,7 +67,7 @@ def test_price_coverage_audit_fails_below_overall_threshold(tmp_path):
         {"ticker": "KXMISSING", "decision_ts": "2026-05-01T00:01:00+00:00", "market_yes_price": None},
     ]
 
-    report = audit_price_coverage(rows, prices_path)
+    report = audit_price_coverage(rows, prices_path, post_fix_db=None)
 
     assert report["overall"]["status"] == "escalation_required"
     assert report["overall"]["passes_overall_threshold"] is False
@@ -77,3 +78,25 @@ def test_load_jsonl_skips_blank_lines(tmp_path):
     path.write_text('{"ticker":"KX1"}\n\n{"ticker":"KX2"}\n', encoding="utf-8")
 
     assert load_jsonl(path) == [{"ticker": "KX1"}, {"ticker": "KX2"}]
+
+
+def test_cohort_sentinel_passes_when_post_fix_metadata_is_present(tmp_path):
+    db_path = tmp_path / "post_fix.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("CREATE TABLE reingestion_metadata (key TEXT, value TEXT)")
+        conn.executemany(
+            "INSERT INTO reingestion_metadata VALUES (?, ?)",
+            [
+                ("cycle_15b_c7_deploy_commit", "2222227"),
+                ("cycle_15b_c7_deploy_ts", "2026-05-07T00:00:00+00:00"),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    sentinel = cohort_sentinel(db_path)
+
+    assert sentinel["status"] == "pass"
+    assert sentinel["cohort_flag"] == "post_fix_rebuilt"

@@ -13,6 +13,15 @@
       "total_rows": 1
     }
   ],
+  "cohort_sentinel": {
+    "cohort_flag": "post_fix_rebuilt",
+    "cycle_15b_c7_deploy_commit": "2222227",
+    "cycle_15b_c7_deploy_ts": "2026-05-07T00:00:00+00:00",
+    "db_path": "data/dossier_updates_post_fix.db",
+    "expected_cycle_15b_c7_deploy_commit": "2222227",
+    "expected_cycle_15b_c7_deploy_ts": "2026-05-07T00:00:00+00:00",
+    "status": "pass"
+  },
   "escalations": [
     {
       "coverage": 0.0,
@@ -30,6 +39,7 @@
   "input": {
     "dataset_rows": 272,
     "historical_prices_path": "logs/edge_replay/cycle16d/historical_prices_cycle16d.json",
+    "post_fix_db": "data/dossier_updates_post_fix.db",
     "price_ticker_count": 23
   },
   "missing_examples": [
