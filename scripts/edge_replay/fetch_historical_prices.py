@@ -25,23 +25,73 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _price_to_cents(row: dict[str, Any]) -> float | None:
+    cents = _as_float(row.get("yes_price") or row.get("yes_price_cents") or row.get("price"))
+    if cents is not None:
+        return cents
+    dollars = _as_float(row.get("yes_price_dollars"))
+    if dollars is not None:
+        return dollars * 100.0
+    return None
+
+
 def normalize_trade_prices(payload: dict[str, Any] | list[dict[str, Any]]) -> list[dict[str, Any]]:
     raw_rows = payload.get("trades", []) if isinstance(payload, dict) else payload
     rows: list[dict[str, Any]] = []
     for row in raw_rows:
         ts = row.get("created_time") or row.get("trade_time") or row.get("ts")
-        price = _as_float(row.get("yes_price") or row.get("yes_price_cents") or row.get("price"))
+        price = _price_to_cents(row)
         if ts and price is not None:
-            rows.append({"ts": str(ts), "yes_price": price})
+            rows.append({"ts": str(ts), "yes_price": round(price, 6)})
     return rows
 
 
-def fetch_trade_prices(client: Any, ticker: str) -> list[dict[str, Any]]:
+def merge_price_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_ts: dict[str, dict[str, Any]] = {}
+    priority = {"live_trades": 0, "historical_trades": 1}
+    for row in rows:
+        ts = str(row["ts"])
+        candidate = {
+            "ts": ts,
+            "yes_price": float(row["yes_price"]),
+            "source": str(row.get("source") or "unknown"),
+        }
+        existing = by_ts.get(ts)
+        if existing is None or priority.get(candidate["source"], 9) < priority.get(existing.get("source"), 9):
+            by_ts[ts] = candidate
+    return [by_ts[ts] for ts in sorted(by_ts)]
+
+
+def _fetch_endpoint_prices(client: Any, *, endpoint: str, ticker: str, source: str) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     try:
-        payload = client._request("GET", f"/markets/{ticker}/trades")  # noqa: SLF001
+        payload = client._request("GET", endpoint, params={"ticker": ticker, "limit": 1000})  # noqa: SLF001
     except Exception as exc:
-        return [{"error": str(exc), "ticker": ticker}]
-    return normalize_trade_prices(payload)
+        return [], {"endpoint": endpoint, "source": source, "ticker": ticker, "error": str(exc)}
+    rows = normalize_trade_prices(payload)
+    for row in rows:
+        row["source"] = source
+    return rows, None
+
+
+def price_rows_for_ticker(client: Any, ticker: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    merged_inputs: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for endpoint, source in (
+        ("/markets/trades", "live_trades"),
+        ("/historical/trades", "historical_trades"),
+    ):
+        rows, error = _fetch_endpoint_prices(client, endpoint=endpoint, ticker=ticker, source=source)
+        merged_inputs.extend(rows)
+        if error is not None:
+            errors.append(error)
+    return merge_price_rows(merged_inputs), errors
+
+
+def fetch_trade_prices(client: Any, ticker: str) -> list[dict[str, Any]]:
+    rows, errors = price_rows_for_ticker(client, ticker)
+    if not rows and errors:
+        return [{"error": "; ".join(str(error["error"]) for error in errors), "ticker": ticker}]
+    return rows
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,11 +113,13 @@ def main() -> int:
     errors: dict[str, list[dict[str, Any]]] = {}
     for market in markets:
         ticker = str(market["ticker"])
-        rows = fetch_trade_prices(client, ticker)
-        if rows and "error" in rows[0]:
-            errors[ticker] = rows
-        else:
+        rows, ticker_errors = price_rows_for_ticker(client, ticker)
+        if ticker_errors:
+            errors[ticker] = ticker_errors
+        if rows:
             out[ticker] = rows
+        else:
+            errors.setdefault(ticker, []).append({"ticker": ticker, "error": "no price rows returned"})
         if args.sleep_seconds > 0:
             time.sleep(args.sleep_seconds)
     args.output.parent.mkdir(parents=True, exist_ok=True)
