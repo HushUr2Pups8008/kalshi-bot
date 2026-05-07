@@ -1,7 +1,7 @@
 # EDGE_STATUS — operator-facing edge dashboard
 
 **Refresh by commit.** Single page; replaces 100+ doc index for "are we making money?" questions.
-**Last refresh:** 2026-05-06 cycle-14 verdict landing.
+**Last refresh:** 2026-05-07 cycle-15B verdict landing.
 
 ## TL;DR (3 numbers)
 
@@ -9,25 +9,23 @@
 |---|---|
 | Lifetime P&L | **-$7.50** |
 | Lifetime trade count | **3** (all resolved, all lost, all 1 source / 1 series / 1 direction; 3/3 wrong-direction) |
-| Replay verdict | **Cycle-14 verdict: `extraction_broken`. Cycle-15B active per matching skeleton.** Lane A pass + Lane B fail at `model_prob=0.500` on crystal-clear synthetic fixtures → real extraction-in-loop produces no signal. |
+| Replay verdict | **Cycle-15B verdict: `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`. Cycle-16D active per matching skeleton.** Lane B post-fix 8/8 directional + 2/2 NEUTRAL ✓; IC §16 acceptance fails (0 slices with `ev_ci_95_lo>0` AND `trades≥10`) BUT 0 of 272 replay rows have decision-time executable price → scorer-blocked, NOT "negative EV proven." |
 
-## Cycle-14 verdict landed — `extraction_broken`
+## Cycle-15B verdict landed — `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`
 
-Cycle-14 calibration diagnostic answered: **can the model move belief correctly when evidence should obviously move belief?** Answer: the downstream dossier-update math CAN (Lane A pass) but the real extraction layer CANNOT — both clear-YES and clear-NO synthetic fixtures returned `model_prob=0.500` (no movement at all).
+Cycle-15B answered: **does extraction now emit signal post-fix?** Answer: yes (C8 8/8 directional Lane B fixtures + 2/2 NEUTRAL pass; 7/272 replay rows have nonzero post-fix model delta). But the IC §16 acceptance gate cannot be evaluated — the replay scorer requires per-decision-time `market_yes_price` to compute counterfactual P&L, and 0/272 rows have one. This is the same `/markets/{ticker}/trades` 404 issue first surfaced in cycle-13 / noted in cycle-14 charter §"Historical price endpoint gap."
 
-Verdict derived strictly from charter mapping (Lane A pass + Lane B fail = `extraction_broken`). No operator improvisation. See `docs/governance/edge-replay-cycle14-diagnosis.md`.
+Cycle-16D (PROFIT-EDGE-009) instantiates `cycle-16-conditional-charter-skeletons.md` §D — price-reconstruction prerequisite scope. Pure replay-harness work; bot extraction code untouched.
 
-Cycle-15B (PROFIT-EDGE-008) instantiates `cycle-15-conditional-charter-skeletons.md` §B — extraction-layer rebuild scope. Replay-gated under IC §16.
-
-## Wave deploy status (per IC §16 + Cycle-14 verdict)
+## Wave deploy status (per IC §16 + Cycle-15B verdict)
 
 | wave | status | gate |
 |---|---|---|
 | Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **ACTIVE — ships 2026-05-08 as cleanup/observability hygiene only; does NOT claim edge** | exempt under IC §16 Rule 2 (mechanical / observability / governance) |
-| Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED PENDING CYCLE-15B EXTRACTION REBUILD + REPLAY VALIDATION** | requires (a) Cycle-15B Lane B post-rebuild pass AND (b) replayed-EV evidence for the candidate slice |
-| Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED PENDING CYCLE-15B EXTRACTION REBUILD + REPLAY VALIDATION — Lever B strongly counterindicated** | loosening admission on a model whose extraction emits zero signal converts neutral non-bets into noise-driven bets |
-| Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PENDING CYCLE-15B EXTRACTION REBUILD + REPLAY VALIDATION** | each candidate fix needs replay evidence |
-| **Capital posture** | **PAPER-ONLY. Hard guardrail post-Wave-1 deploy** (Cycle-14 charter §5) | live trading remains blocked until Cycle-15B replay-validated fix per IC §16 |
+| Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED PENDING CYCLE-16D PRICE-RECONSTRUCTION + POST-RECONSTRUCTION REPLAY VERDICT** | requires (a) Cycle-16D price reconstruction AND (b) post-reconstruction replay producing ≥1 slice with `ev_ci_95_lo>0` AND `trades≥10` |
+| Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED PENDING CYCLE-16D PRICE-RECONSTRUCTION + POST-RECONSTRUCTION REPLAY VERDICT — Lever B counterindicated until IC §16 evidence gate evaluable** | loosening admission on a model whose IC §16 status is unknown converts unknown-EV non-bets into unknown-EV bets |
+| Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PENDING CYCLE-16D PRICE-RECONSTRUCTION + POST-RECONSTRUCTION REPLAY VERDICT** | each candidate fix needs replay evidence; replay needs prices |
+| **Capital posture** | **PAPER-ONLY. Hard guardrail post-Wave-1 deploy** (Cycle-14 charter §5) | live trading remains blocked until Cycle-16D + post-reconstruction replay produces ≥1 IC §16 slice |
 
 ## Are we near a Wave-2-eligible slice?
 
@@ -65,6 +63,7 @@ Cycle-15B (PROFIT-EDGE-008) instantiates `cycle-15-conditional-charter-skeletons
 | 2026-05-06 | 3 paper-trade markets / 1 source / 1 series / n=3 trades | 0 positive-EV slices, P&L -$7.50, win rate 0.00, harness self-test passes | `edge-replay-cycle12-report.md` |
 | 2026-05-06 (Cycle-13) | 24 resolved evidence_store markets / 255 replay rows | **0 positive-EV slices, 0 left-on-table winners, P&L -$7.50, IC §16 Rule 5 fires** | `edge-replay-cycle13-report.md` |
 | 2026-05-06 (Cycle-14) | 24 resolved markets / 255 replay rows + synthetic Lane A/B injection | **Verdict: `extraction_broken`.** Movement_rate 1.57%, direction-correctness 0/6 when directional, sized-bet 0/3 (-$7.50), Brier 0.2599 (n=24, supporting only), Lane A PASS / Lane B FAIL at delta=0.000 on both fixtures. → Cycle-15B extraction rebuild active. | `edge-replay-cycle14-diagnosis.md` |
+| 2026-05-07 (Cycle-15B) | 24 resolved markets / 272 replay rows + post-fix re-ingestion + 10 Lane B fixtures | **Verdict: `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`.** C8 Lane B 8/8 directional + 2/2 NEUTRAL ✓; C9 idempotent re-ingestion (SHA256 stable); C10 IC §16 0 slices BUT 0/272 rows had decision-time executable price; 183/272 readiness-admitted; 7/272 nonzero post-fix model delta. Scorer-blocked, NOT negative-EV proven. → Cycle-16D price reconstruction active. | `edge-replay-cycle15b-report.md` |
 
 ## What changes Wave-2 from HALTED → AUTHORIZED
 

@@ -17,6 +17,7 @@ The verdict comes first. The skeleton that matches the verdict instantiates. NO 
 | `extraction_fixed_with_positive_ev_slice` | §A — Wave-2 candidate slice deploy + replay validation |
 | `extraction_fixed_but_information_frontier_holds` | §B — Source onboarding (transferable from cycle-15-skeletons §C) OR §C — strategic-pivot per operator decision |
 | `extraction_rebuild_failed` | §B-extension — second sub-fix attempt at Cycle-15B re-open OR §C — strategic-pivot per operator decision |
+| `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap` (added 2026-05-07 post-Cycle-15B C10) | §D — price-reconstruction prerequisite BEFORE §B / §C routing |
 
 ## §A — Cycle-16A: Wave-2 candidate slice deploy + replay validation
 
@@ -79,6 +80,40 @@ The verdict comes first. The skeleton that matches the verdict instantiates. NO 
 **Capital posture:** PAPER-ONLY until operator picks. (a) → no further work. (b) → Cycle-16C-redesign starts; no live-trading until full Wave-1/2/3-equivalent replay validation. (c) → indefinite paper-only.
 
 **Estimated scope:** Cycle-16C itself is operator-decision-only (~1 hour). If operator picks (b), the redesign cycle is multi-month.
+
+## §D — Cycle-16D: Price-reconstruction prerequisite
+
+**Trigger:** Cycle-15B C10 verdict = `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`. Added 2026-05-07 post-Cycle-15B C10 (`e5cfb8e`). Lane B post-fix passes ≥6/10 AND IC §16 slices = 0 BUT 0/N replay rows have decision-time executable price → scorer cannot compute counterfactual P&L → IC §16 failure is scorer-blocked, not "negative EV proven."
+
+**Goal:** restore per-decision-time price reconstruction so the IC §16 acceptance gate can be evaluated. Pure replay-harness scope; bot extraction code untouched.
+
+**Cycle-16D Codex deliverables:**
+
+1. **Diagnose `/markets/{ticker}/trades` 404.** Endpoint changed? Auth requirement added? Historical data window contracted? Per cycle-13 finding `fetch_historical_prices.py` probe returned 404 — root cause unidentified at that point.
+2. **If endpoint solvable:** restore the original fetch path; backfill `historical_prices.json` for the 24-market replay window.
+3. **If endpoint dead permanently:** identify alternative price source. Candidates:
+   - Kalshi orderbook-snapshot persistence (if archived).
+   - Third-party prediction-market data archive (e.g., Polymarket/Kalshi historical data resellers, subject to licensing review).
+   - Computed approximation: `market_yes_price` reconstructed from settlement outcome + volume curve + time-decay assumptions. Approximation introduces error bars — must be quantified and reported alongside replay output.
+4. **Backfill historical prices for 24-market replay window.** Output: refreshed `logs/edge_replay/cycle13_live/historical_prices.json` with per-decision-time `market_yes_price` populated.
+5. **Re-run Cycle-15B C10 against unchanged `data/dossier_updates_post_fix.db`.** POST_FIX_REBUILT cohort intact per L8 cohort note. No re-ingestion needed.
+6. **Land verdict** that either:
+   - Unblocks Cycle-16 §A (positive-EV slice surfaces post-price-restoration) → Wave-2 candidate authoring proceeds.
+   - Confirms `extraction_fixed_but_information_frontier_holds` with prices verified → routes to §B source onboarding or §C strategic redesign per operator decision.
+   - Surfaces a third unforeseen finding (e.g., extraction emits signal but signal is noise-distributed) → operator picks between §B / §C / fresh-charter Cycle-17 scope.
+
+**Acceptance:** Per-decision-time `market_yes_price` populated for ≥ 90% of post-fix dossier-update rows in the 24-market replay window. Cycle-15B C10 re-run produces a verdict that distinguishes "no signal" from "scorer-blocked." Verdict drives Cycle-16 §A / §B / §C routing.
+
+**Estimated scope:** 1-2 weeks if `/markets/{ticker}/trades` is solvable (auth fix, alternate endpoint, query-parameter adjustment). 2-4 weeks if alternative price source needed (orderbook archival recovery or third-party data integration). 4+ weeks if computed approximation path is the only viable route (requires independent error-quantification design).
+
+**Out of scope for Cycle-16D:**
+- Bot extraction code. C7 keyword-map extension stays in place.
+- Source onboarding. That is §B scope, blocked until §D lands.
+- Live-trading flip. PAPER-ONLY remains locked.
+- New Cycle-15B sub-fixes. Cycle-15B is closed.
+- LLM-path audit. L7.2 deferral; revisit in Cycle-16+ post-§D if needed.
+
+**Important:** §D does NOT bypass IC §16. It restores the harness's ability to evaluate IC §16. Post-§D Cycle-16 path still requires `ev_ci_95_lo > 0` AND `trades ≥ 10` for any Wave-2/3/D unblock.
 
 ## §B-extension — Cycle-15B-extension: Second sub-fix attempt
 

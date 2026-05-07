@@ -1691,13 +1691,13 @@ Per `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md`:
 |-------|-------|
 | **ID** | PROFIT-EDGE-008 |
 | **Title** | Cycle-15B extraction-layer rebuild + replay validation — extraction emits zero signal on crystal-clear synthetic input; rebuild and prove non-zero magnitude + direction-correctness via post-fix replay |
-| **Category** | Profit-Path Integrity / Extraction Rebuild (succeeds PROFIT-EDGE-007 Cycle-14 `extraction_broken` verdict) |
-| **Severity** | HIGH (gates Wave-2/Wave-3/Branch-D deploy decisions; sole path off "extraction emits no signal" for the bot to ever produce edge) |
-| **Status** | ACTIVE (filed 2026-05-06 cycle-14 verdict landing; Codex implementation per `cycle-15-conditional-charter-skeletons.md` §B) |
-| **Priority** | NOW |
-| **Owner** | Codex (implementation — Lane B per-step trace + extraction rebuild + post-fix replay); Claude (review + diagnosis-doc + verdict-vs-criteria check) |
+| **Category** | Profit-Path Integrity / Extraction Rebuild (succeeded PROFIT-EDGE-007 Cycle-14 `extraction_broken` verdict) |
+| **Severity** | HIGH (gated Wave-2/Wave-3/Branch-D deploy decisions; sole path off "extraction emits no signal" for the bot to ever produce edge) |
+| **Status** | COMPLETE (delivered 2026-05-07; verdict = `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`; succeeded by PROFIT-EDGE-009 Cycle-16D price-reconstruction prerequisite) |
+| **Priority** | n/a (closed) |
+| **Owner** | Codex (implementation — DELIVERED C1-C10); Claude (governance + review + scaffolding + verdict consumption — DELIVERED L1-L10 + post-verdict refresh) |
 | **Depends On** | PROFIT-EDGE-007 (delivered with `extraction_broken` verdict) |
-| **Blocks** | All Wave-2/Wave-3/Branch-D deploys per IC §16 |
+| **Blocks** | All Wave-2/Wave-3/Branch-D deploys (transferred to PROFIT-EDGE-009) |
 
 **Description**
 
@@ -1735,19 +1735,86 @@ This is calibration **inertness** at the extraction layer, not sign-inversion. T
 
 **Notes**
 
-- **Pre-fix paper-traded data is no longer ground truth for calibration.** Per `cycle-15-conditional-charter-skeletons.md` §A.5 (transferable to §B): post-fix re-ingestion required for any future replay validation.
+- **Pre-fix paper-traded data is no longer ground truth for calibration.** Per `cycle-15-conditional-charter-skeletons.md` §A.5 (transferable to §B): post-fix re-ingestion required for any future replay validation. C9 re-ingestion landed with PRE_FIX preservation per L8 cohort note.
 - Pre-cycle-12 "deploy hope" pattern stays prohibited. Each fix needs replay evidence, not hope.
-- Estimated scope: 1-2 weeks per `cycle-15-conditional-charter-skeletons.md` §B. Extraction-layer changes touch `analysis/` substantially; review burden higher than §A.
+- **2026-05-07 cycle-15B closure:** Cycle-15B C7 sub-fix (path b operator-authorized; `GEOPOLITICAL_SIGNALS` keyword extension + `"senate judiciary"` over-emission constraint) shipped. Lane B post-fix verification: 8/8 directional + 2/2 NEUTRAL pass. C9 idempotent re-ingestion (SHA256 `d1e1bf4ed61b28eaff2e7b10c3316121892b6c8b62237b848fcdd6446e717e1b` stable across runs; PRE_FIX preserved). C10 IC §16 acceptance: 0 slices with `ev_ci_95_lo>0` AND `trades≥10` BUT 0/272 replay rows had decision-time executable price. Verdict = `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap` (added to charter outcomes 2026-05-07; was not in original 3-verdict skeleton because the price-gap was inherited from cycle-13/14, not introduced by Cycle-15B). Extraction is repaired; IC §16 is unverifiable until Cycle-16D price reconstruction lands.
 
 **Related**
 
 - `PROFIT-EDGE-007` (delivered) — direct parent (Cycle-14 verdict drove this scope).
 - `PROFIT-EDGE-006` / `PROFIT-EDGE-005` — replay harness infrastructure used.
-- `PROFIT-EDGE-004` — lever menu OBSOLETE per Cycle-14 verdict; reassess only after Cycle-15B post-fix replay.
-- `PROFIT-GOV-002` (closed) — same-class pathology (rubber-stamp bias at LLM verdict layer); the Lane B zero-movement failure is the extraction-layer analogue.
-- `docs/governance/cycle-15-conditional-charter-skeletons.md` §B — scope skeleton.
-- `docs/governance/cycle-14-post-verdict-action-checklist.md` — post-verdict checklist that filed this entry.
-- `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs acceptance).
+- `PROFIT-EDGE-004` — lever menu OBSOLETE per Cycle-14 verdict; reassess only after Cycle-16D post-reconstruction replay.
+- `PROFIT-EDGE-009` (active) — Cycle-16D price-reconstruction prerequisite succeeds this entry.
+- `PROFIT-GOV-002` (closed) — same-class pathology (rubber-stamp bias at LLM verdict layer); orthogonal to keyword-map gap per Claude L5 cross-check.
+- `docs/governance/edge-replay-cycle15b-report.md` — Cycle-15B C10 report with Claude appendix + verdict.
+- `docs/governance/cycle-16-conditional-charter-skeletons.md` §D — Cycle-16D skeleton (instantiates).
+- `docs/governance/cycle-15b-post-verdict-action-checklist.md` — post-verdict checklist driving items 5/8/9/10.
+- `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-16D + post-reconstruction acceptance).
+
+---
+
+### PROFIT-EDGE-009
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EDGE-009 |
+| **Title** | Cycle-16D price-reconstruction prerequisite — restore per-decision-time `market_yes_price` so IC §16 acceptance gate can be evaluated against post-Cycle-15B-fix dossier corpus |
+| **Category** | Profit-Path Integrity / Replay Harness (succeeds PROFIT-EDGE-008 Cycle-15B `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap` verdict) |
+| **Severity** | HIGH (sole path to evaluating IC §16 against post-fix bot; gates all subsequent Cycle-16 §A/§B/§C routing decisions) |
+| **Status** | ACTIVE (filed 2026-05-07 cycle-15B verdict landing; Codex implementation per `cycle-16-conditional-charter-skeletons.md` §D) |
+| **Priority** | NOW |
+| **Owner** | Codex (implementation — endpoint diagnosis + price backfill + C10 re-run); Claude (review + verdict-vs-criteria check + post-verdict refresh) |
+| **Depends On** | PROFIT-EDGE-008 (delivered with `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap` verdict). C9 POST_FIX_REBUILT cohort intact; no re-ingestion needed for §D, only price-side restoration. |
+| **Blocks** | All Wave-2/Wave-3/Branch-D deploys per IC §16; Cycle-16 §A/§B/§C routing decisions. |
+
+**Description**
+
+Cycle-15B C10 IC §16 acceptance gate failed because 0/272 post-fix replay rows had decision-time `market_yes_price`. The replay scorer (`scripts/edge_replay/score_counterfactual_pnl.py`) cannot compute counterfactual P&L without prices. C10 result is "scorer-blocked," NOT "negative EV proven."
+
+This is the same `/markets/{ticker}/trades` 404 issue surfaced in cycle-13's `fetch_historical_prices.py` probe and noted in cycle-14 charter §"Historical price endpoint gap" as not-a-blocker for diagnosis-only Cycle-14. For Cycle-15B+ IC §16 acceptance, the gap IS load-bearing.
+
+**Why it matters to profitability / safety / reliability**
+
+1. **Gates IC §16 evaluability.** Without prices, replayed-EV evidence per IC §16 Rule 4 cannot be produced. Wave-2 candidate slice authoring (skeleton §A) needs IC §16; Cycle-16 §B source-onboarding tests "did the new source produce a positive-EV slice?" — also needs IC §16.
+2. **Pure replay-harness scope.** Bot extraction code untouched. C7 keyword-map extension stays in place.
+3. **Capital protection.** Live-trading flip remains blocked. PAPER-ONLY locked until Cycle-16D + post-reconstruction replay produces ≥1 IC §16 slice.
+
+**Evidence / Source**
+
+- `docs/governance/edge-replay-cycle15b-report.md` — verdict source: 0/272 rows with `market_yes_price` populated.
+- `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md` §"Historical price endpoint gap" — earlier 404 finding.
+- `data/dossier_updates_post_fix.db` — POST_FIX_REBUILT cohort intact; ready for re-run once prices land.
+- `logs/edge_replay/cycle13_live/historical_prices.json` — current price data (insufficient coverage).
+
+**Proposed Fix (Cycle-16D Codex deliverables — per `cycle-16-conditional-charter-skeletons.md` §D)**
+
+1. **Diagnose `/markets/{ticker}/trades` 404.** Endpoint changed? Auth requirement? Historical-data window contracted?
+2. **If endpoint solvable:** restore fetch path; backfill `historical_prices.json` for the 24-market replay window.
+3. **If endpoint dead permanently:** identify alternative price source (Kalshi orderbook archives, third-party data, or quantified-error computed approximation).
+4. **Backfill historical prices** for ≥ 90% of post-fix dossier-update rows in the 24-market replay window.
+5. **Re-run Cycle-15B C10** against unchanged `data/dossier_updates_post_fix.db`. POST_FIX_REBUILT cohort intact per L8 cohort note; no re-ingestion needed.
+6. **Land verdict** that distinguishes "no signal" from "scorer-blocked."
+
+**Acceptance Criteria**
+
+- ≥ 90% of 272 post-fix replay rows have `market_yes_price` populated at decision time.
+- Re-run C10 produces a verdict that EITHER unblocks Cycle-16 §A (positive-EV slice surfaces) OR confirms `extraction_fixed_but_information_frontier_holds` with prices verified (then routes to §B / §C per operator decision).
+- If approximation path used: error bars on `market_yes_price` quantified and reported alongside replay output; replay-EV CI explicitly accounts for price-imprecision.
+
+**Notes**
+
+- Cycle-16D does NOT bypass IC §16. Restores harness's ability to evaluate IC §16. Post-§D Cycle-16 path still requires `ev_ci_95_lo > 0` AND `trades ≥ 10` for any Wave-2/3/D unblock.
+- Out of scope: bot extraction code; new Cycle-15B sub-fixes; LLM-path audit (L7.2 deferral; revisit post-§D if needed).
+- Estimated scope: 1-2 weeks endpoint-solvable; 2-4 weeks alternative source; 4+ weeks computed approximation.
+
+**Related**
+
+- `PROFIT-EDGE-008` (delivered) — direct parent (Cycle-15B verdict drove this scope).
+- `PROFIT-EDGE-005` / `PROFIT-EDGE-006` — replay harness infrastructure (Cycle-16D extends pricing layer).
+- `docs/governance/cycle-16-conditional-charter-skeletons.md` §D — scope skeleton.
+- `docs/governance/edge-replay-cycle15b-report.md` Claude appendix — verdict consumption + Cycle-16D recommendation.
+- `docs/governance/cycle-15b-post-verdict-action-checklist.md` — post-verdict checklist filed this entry.
+- `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs §D acceptance + downstream).
 
 ---
 

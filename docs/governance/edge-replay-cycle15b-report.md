@@ -83,3 +83,67 @@ C10 is also not a clean "negative EV" result, because the replay scorer cannot c
 ## Next routing
 
 Per Cycle-16 skeletons, this result routes to the non-acceptance branch: no behavioral deploy, capital posture remains **PAPER-ONLY**, and any next cycle must either solve executable price reconstruction or pursue the post-verdict path Claude selects from the Cycle-16 conditional skeletons.
+
+---
+
+## Claude appendix — verdict consumption + Cycle-16 routing
+
+**Drafted:** 2026-05-07 post-Codex C10 commit `e5cfb8e`.
+**Authority:** Cycle-15B charter §"Cycle-15B success criterion" (`2026-05-06-cycle-15b-charter-extraction-rebuild.md`); post-verdict checklist (`cycle-15b-post-verdict-action-checklist.md`); Cycle-16 skeletons (`cycle-16-conditional-charter-skeletons.md`).
+
+### Verdict
+
+Per Cycle-15B charter: **`extraction_fixed_but_information_frontier_holds`** (Lane B post-fix ≥6/10 ✓ AND 0 IC §16 slices ✗).
+
+C8 Lane B verification: 8/8 directional + 2/2 NEUTRAL pass. Extraction repair confirmed.
+
+C10 IC §16 acceptance gate: 0 slices with `ev_ci_95_lo > 0` AND `trades ≥ 10`. Gate fails.
+
+### Independent voice — "frontier" qualifier
+
+The charter verdict label `information_frontier_holds` typically implies the bot's source mix doesn't carry decisive signal. **C10 does NOT support that read.** Concur with Codex's narrower conclusion:
+
+- 7/272 rows (~2.6%) have nonzero post-fix model delta — extraction is now emitting signal where cycle-14 measured 1.57%.
+- 183/272 rows (~67%) are readiness-admitted under the replay gate.
+- **0/272 rows have decision-time executable price.** Scorer cannot compute counterfactual P&L without `market_yes_price` at the decision instant.
+
+The IC §16 failure is **scorer-blocked**, not "negative EV proven." Distinguishing is load-bearing for Cycle-16 routing.
+
+This is the same `/markets/{ticker}/trades` 404 issue surfaced in cycle-13 and noted in cycle-14 charter §"Historical price endpoint gap." Cycle-14 deemed it not a blocker for diagnosis-only Cycle-14. Cycle-15B inherited the gap — it did not create it. For Cycle-15B IC §16 acceptance, the gap IS load-bearing.
+
+### Cycle-16 routing recommendation
+
+Pre-staged Cycle-16 skeletons (§A / §B / §C / §B-extension in `cycle-16-conditional-charter-skeletons.md`) all assume the IC §16 gate can be evaluated. None addresses the case where the harness lacks executable prices.
+
+**Recommended new branch: Cycle-16D — price-reconstruction prerequisite.** Solve per-decision-time price reconstruction BEFORE choosing between §B source onboarding or §C strategic redesign. Otherwise the operator chooses between paths neither of which can produce IC §16 evidence under current harness state.
+
+§D scope (high-level):
+1. Diagnose `/markets/{ticker}/trades` 404 (endpoint changed? auth required? historical data not retained?).
+2. If endpoint dead: identify alternative price source (Kalshi orderbook snapshots, third-party archives, computed from settlement + volume curve).
+3. Backfill `historical_prices.json` with per-decision-time prices for the 24-market replay window.
+4. Re-run C10 against unchanged `data/dossier_updates_post_fix.db` (POST_FIX_REBUILT cohort intact per L8 cohort note).
+5. Land verdict that EITHER unblocks Cycle-16 §A (positive-EV slice) OR confirms `extraction_fixed_but_information_frontier_holds` with prices verified (then route to §B or §C as originally designed).
+
+§D does NOT touch bot extraction code. Pure replay-harness scope. Estimated 1-2 weeks if endpoint is solvable; 2-4 weeks if alternative price source needed.
+
+Operator picks: §D first OR direct to §B/§C accepting that IC §16 gate cannot be evaluated until §D lands. Claude recommends §D first — without prices, §B source onboarding's "did the new source produce a positive-EV slice?" question is unanswerable.
+
+### What's ruled out
+
+- **`extraction_rebuild_failed`** — C8 8/8 directional + 2/2 NEUTRAL pass conclusively. Sub-fix at `GEOPOLITICAL_SIGNALS` (path b.i / b.ii operator-authorized in `61bf4c1`) succeeded.
+- **`extraction_fixed_with_positive_ev_slice`** — 0 IC §16 slices. Wave-2 candidate slice authoring NOT authorized.
+- **Sign-error candidate trace sites 1-7** — all confirmed RULED OUT or REPAIRED:
+  - Sites 1, 4, 5: ruled out by Lane A pass (cycle-14).
+  - Sites 2, 6: ruled out by C2 first-step-collapse rule (cycle-15B).
+  - Site 7: REPAIRED by C7 keyword extension.
+  - Site 3: REPAIRED by C7 keyword extension.
+
+### What this verdict does NOT settle
+
+- Whether the bot's source mix carries decisive signal at the post-fix extraction layer. C10 cannot answer because prices aren't reconstructable. Cycle-16 §D needed to reach the question.
+- Whether LLM path produces additional differentiation beyond keyword path. C9 used keyword-only path per L7.2 finding. Cycle-16+ may revisit.
+- Whether Wave-2/3/Branch-D will ever unblock. Capital posture stays PAPER-ONLY until §D + (subsequent §A/§B/§C) deliver a slice with `ev_ci_95_lo > 0` AND `trades ≥ 10`.
+
+### Capital posture
+
+PAPER-ONLY. Locked until Cycle-16 §D + replay-validated positive-EV slice. No operator-explicit live-trading flip authorized.

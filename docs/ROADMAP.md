@@ -22,20 +22,21 @@ No repo-level semver policy was documented through the v0.29.x stream (patch ver
 
 Per cycle-3 `edge-004-closure-path-tldr-v3.md` + cycle-3 LOCK addenda + cycle-5 fire-time playbooks:
 
-> **🛑 STRATEGIC PIVOT PER IC §16 (cycle-13 IC §16 Rule 5 trigger, 2026-05-06; CYCLE-14 VERDICT LANDED 2026-05-06).** Cycle-12/13 replay harness returned 0 positive-EV slices on 24 resolved markets. Cycle-14 calibration diagnostic returned verdict = **`extraction_broken`** (Lane A pass + Lane B fail at `model_prob=0.500` on crystal-clear synthetic fixtures). **Wave-1 ships as cleanup/observability hygiene only — does NOT claim edge.** Wave-2 / Wave-3 / Branch-D are **HALTED PENDING CYCLE-15B EXTRACTION REBUILD + REPLAY VALIDATION**. Cycle-15B (PROFIT-EDGE-008) instantiates `cycle-15-conditional-charter-skeletons.md` §B. See `docs/governance/edge-replay-cycle14-diagnosis.md` + `docs/governance/cycle-14-post-verdict-action-checklist.md`.
+> **🛑 STRATEGIC PIVOT PER IC §16 (cycle-13 trigger, 2026-05-06; CYCLE-14 VERDICT 2026-05-06; CYCLE-15B VERDICT 2026-05-07).** Cycle-12/13 replay harness returned 0 positive-EV slices on 24 resolved markets. Cycle-14 verdict = `extraction_broken`. Cycle-15B applied keyword-map sub-fix (path b operator-authorized); Lane B post-fix passed 8/8 directional + 2/2 NEUTRAL. **Cycle-15B C10 verdict = `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`** (0 IC §16 slices BUT 0 rows with decision-time executable price; scorer-blocked, NOT "negative EV proven"). **Wave-1 ships as cleanup/observability hygiene only — does NOT claim edge.** Wave-2 / Wave-3 / Branch-D are **HALTED PENDING CYCLE-16D PRICE-RECONSTRUCTION + POST-RECONSTRUCTION REPLAY VERDICT**. Cycle-16D (PROFIT-EDGE-009) instantiates `cycle-16-conditional-charter-skeletons.md` §D. See `docs/governance/edge-replay-cycle15b-report.md` (Claude appendix).
 
 | step | trigger | earliest UTC | VERSION | status |
 |---|---|---|---|---|
 | PROFIT-PHASE2-001 close | §8.5.1 gates pass | 2026-05-08T19:01Z | n/a | active |
 | Wave-1 commits 1-6 | post-close + cadence per `2026-05-05-wave-1-deploy-day-timing.md` | 2026-05-08T20:00Z+ to 2026-05-16T06:00Z+ | 0.30.0 (commit 6) | **active (cleanup/observability hygiene only — does NOT claim edge)** |
 | Wave-1 stabilisation | 48h post-commit-6 | 2026-05-18T+ | n/a | active |
-| **Cycle-14 calibration diagnosis** | post-Wave-1-deploy | DELIVERED 2026-05-06 | n/a | **DELIVERED 2026-05-06; verdict = `extraction_broken`; Cycle-15B active (PROFIT-EDGE-008)** |
-| **Cycle-15B extraction rebuild** | Cycle-14 verdict | TBD start; 1-2w scope | TBD | **ACTIVE (PROFIT-EDGE-008; per `cycle-15-conditional-charter-skeletons.md` §B)** |
-| Wave-2 Branch A start | tag only; passive observe | 2026-05-18T+ | n/a (no bump) | **HALTED PENDING CYCLE-15B EXTRACTION REBUILD + REPLAY VALIDATION** |
-| Wave-2 Branch C deploy (if Branch A stalls) | 14d after Branch A start | 2026-06-02T+ | 0.31.0 | **HALTED PENDING CYCLE-15B EXTRACTION REBUILD + REPLAY VALIDATION** |
-| Wave-3 commit 1 (Lever B G1=0.04) | Wave-2 stalls AND Branch D not fired | 2026-06-17T+ | 0.32.0 (or 0.33.0 if option-A landed) | **HALTED PENDING CYCLE-15B EXTRACTION REBUILD + REPLAY VALIDATION (counterindicated until extraction emits non-zero signal)** |
-| Wave-3 commit 2 (Lever C v1) | 14d after Lever B clean | 2026-07-01T+ | 0.33.0 (or 0.34.0) | **HALTED PENDING CYCLE-15B EXTRACTION REBUILD + REPLAY VALIDATION** |
-| Branch D fire | Wave-2+3 stall per Lever-D §2 | TBD | n/a (handoff to PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PENDING CYCLE-15B EXTRACTION REBUILD + REPLAY VALIDATION** |
+| **Cycle-14 calibration diagnosis** | post-Wave-1-deploy | DELIVERED 2026-05-06 | n/a | **DELIVERED 2026-05-06; verdict = `extraction_broken`** |
+| **Cycle-15B extraction rebuild** | Cycle-14 verdict | DELIVERED 2026-05-07 | n/a | **DELIVERED 2026-05-07; verdict = `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`; Lane B 8/8+2/2 ✓; IC §16 scorer-blocked (0 executable prices)** |
+| **Cycle-16D price-reconstruction prerequisite** | Cycle-15B verdict | TBD start; 1-4w scope per endpoint solvability | TBD | **ACTIVE (PROFIT-EDGE-009; per `cycle-16-conditional-charter-skeletons.md` §D)** |
+| Wave-2 Branch A start | tag only; passive observe | 2026-05-18T+ | n/a (no bump) | **HALTED PENDING CYCLE-16D PRICE-RECONSTRUCTION + POST-RECONSTRUCTION REPLAY VERDICT** |
+| Wave-2 Branch C deploy (if Branch A stalls) | 14d after Branch A start | 2026-06-02T+ | 0.31.0 | **HALTED PENDING CYCLE-16D PRICE-RECONSTRUCTION + POST-RECONSTRUCTION REPLAY VERDICT** |
+| Wave-3 commit 1 (Lever B G1=0.04) | Wave-2 stalls AND Branch D not fired | 2026-06-17T+ | 0.32.0 (or 0.33.0 if option-A landed) | **HALTED PENDING CYCLE-16D PRICE-RECONSTRUCTION + POST-RECONSTRUCTION REPLAY VERDICT (counterindicated until IC §16 evidence gate evaluable)** |
+| Wave-3 commit 2 (Lever C v1) | 14d after Lever B clean | 2026-07-01T+ | 0.33.0 (or 0.34.0) | **HALTED PENDING CYCLE-16D PRICE-RECONSTRUCTION + POST-RECONSTRUCTION REPLAY VERDICT** |
+| Branch D fire | Wave-2+3 stall per Lever-D §2 | TBD | n/a (handoff to PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PENDING CYCLE-16D PRICE-RECONSTRUCTION + POST-RECONSTRUCTION REPLAY VERDICT** |
 | Capital posture | continuous | n/a | n/a | **PAPER-ONLY (paper-mode-lock guardrail required post-Wave-1 deploy per Cycle-14 charter §5)** |
 
 ---
