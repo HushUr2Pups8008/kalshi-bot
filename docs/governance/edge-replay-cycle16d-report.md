@@ -202,3 +202,75 @@ If operator picks §B regardless, recommend §B include a **mandatory pre-onboar
 ### Capital posture
 
 PAPER-ONLY. Locked. No live-trading flip authorized regardless of operator's §B vs §C pick. If operator picks §B and a positive-EV slice surfaces post-onboarding, live-trading flip remains a separate operator action with replay-report citation per IC §16 Rule 4.
+
+---
+
+## Operator override (2026-05-07) — verdict NOT FINAL pending Cycle-16E scorer-forensics
+
+**Filed:** 2026-05-07 by operator post-Claude M6 verdict appendix above.
+**Authority:** operator review of Cycle-16D D6 counterfactual_scores.json + scorer code.
+
+### Summary
+
+Operator independent review of D6 output identified **three load-bearing scorer concerns** that the M6 appendix above missed. Until these are audited and resolved, the `extraction_fixed_but_information_frontier_holds` verdict is **WITHDRAWN as not final**. Cycle-17 §B vs §C operator decision is **deferred** pending Cycle-16E scorer-forensics cycle.
+
+### Concern 1 — `would_have_traded` does not gate on readiness
+
+Per `scripts/edge_replay/score_counterfactual_pnl.py` `score_candidate`:
+
+```python
+would_trade = price is not None and resolved_yes is not None and abs(edge) >= min_edge
+```
+
+`readiness_admitted` is computed but NOT required for `would_have_traded`. Production runtime gates trades on G1-G6 readiness admission; the scorer does not. This means D6 may be scoring almost every dossier row with a big model-vs-price gap as a trade, even rows the production bot would never have admitted.
+
+Implication: 237 counterfactual trades likely over-counts what production would have produced. The "information frontier" reading assumes 237 represents production trade volume. It does not.
+
+### Concern 2 — replay is massively YES-biased
+
+Operator probe of D6 counterfactual_scores.json:
+- 237 counterfactual trades
+- 231 YES / 6 NO
+- YES wins: 0/231
+- NO wins: 2/6
+- traded rows resolved: 233 NO, 4 YES
+
+This is not "no signal" or "random losing." The replay is systematically buying YES on markets that resolve NO. Either:
+- (a) Bot's model produces YES-leaning probabilities on YES-leaning evidence, but markets resolved NO at high rate (selection effect of which markets entered the replay corpus); OR
+- (b) Scorer is constructing edge with sign error in some path; OR
+- (c) Cycle-15B C7 keyword-extension over-emits YES direction on production text (operator-decision overfit hypothesis from M6, but with sharper YES-bias evidence).
+
+Distinguishing these requires per-trade trace by side + by series + by admission reason. Cycle-16E scope.
+
+### Concern 3 — price-unit / longshot calibration uncertain
+
+Of 237 trades:
+- 102 had `market_yes_price < 1`
+- 100 had `market_yes_price` between 1 and 9
+
+If those are cents (Kalshi convention), the scorer is buying ultra-cheap YES longshots — model probabilities like 0.38 or 0.50 look enormous vs a 0.8-cent or 8-cent market. If any are actually dollars but treated as cents, the replay is broken by 100x unit error.
+
+Kalshi REST API `yes_price_dollars` and `yes_price` fields exist (per cycle-16D D1 probes). `_price_to_cents` in `fetch_historical_prices.py` converts dollars → cents (line 28-35). But downstream scoring assumes cents. Need explicit unit audit per endpoint/source to confirm no leakage.
+
+### Required Cycle-16E checks (load-bearing)
+
+Per operator override:
+
+1. **Verify Kalshi price units** in `historical_prices_cycle16d.json` per endpoint/source. Confirm cents vs dollars consistency.
+2. **Fix or confirm `would_have_traded` semantics.** Should require G1-G6 readiness admission, not just `abs(edge) >= min_edge`.
+3. **Deduplicate / episode-gate dossier updates** so 20 repeated updates on one market don't become 20 trades unless production would actually do that.
+4. **Report win rate by side, series, price bucket, and admission reason.**
+5. **Re-run D6** after the above. Land verdict.
+
+### Verdict label correction
+
+Per operator override, Cycle-16D verdict is amended:
+
+- Locked-charter label: `extraction_fixed_but_information_frontier_holds` (per D5 coverage ✓ + D8 0 IC §16 slices). This label remains accurate to the locked criteria.
+- **Operational interpretation:** WITHDRAWN. The "information frontier" reading is unsupported until scorer-forensics audit (Cycle-16E) completes. Current evidence is consistent with scorer over-admission + YES-bias + possible price-unit error, NOT confirmed information-frontier.
+
+### Cycle-17 routing — DEFERRED
+
+§B source onboarding and §C strategic redesign options DO NOT instantiate yet. PROFIT-EDGE-010 is amended from "Cycle-17 operator decision" to "Cycle-16E scorer-forensics audit." Cycle-17 operator decision returns to the table only after Cycle-16E confirms whether the underlying signal actually is information-frontier-bound OR whether scorer corrections produce a different verdict.
+
+Capital posture: PAPER-ONLY remains locked. No change.

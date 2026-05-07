@@ -9,28 +9,32 @@
 |---|---|
 | Lifetime P&L | **-$7.50** (live, n=3 paper trades) |
 | Lifetime trade count | **3** (all resolved, all lost, all 1 source / 1 series / 1 direction; 3/3 wrong-direction) |
-| Replay verdict | **Cycle-16D verdict: `extraction_fixed_but_information_frontier_holds`. Cycle-17 operator decision active.** Coverage 99.6324%; 237 counterfactual trades / 2 wins (0.84% win rate) / -7.46 P&L; ev_ci_95_lo = -0.0382; 0 IC §16-eligible slices. Anti-correlated signal OR keyword-overfit hypothesis flagged. |
+| Replay verdict | **Cycle-16D charter-locked verdict: `extraction_fixed_but_information_frontier_holds`. OPERATIONAL READING WITHDRAWN per operator override 2026-05-07. Cycle-16E scorer forensics ACTIVE.** Coverage 99.6324%; 237 counterfactual trades / 2 wins / -7.46 P&L raw; **scorer concerns flagged**: would_have_traded does not gate on G1-G6 readiness; 231-YES / 6-NO bias; price-unit cents-vs-dollars unaudited. Cycle-17 §B/§C operator decision DEFERRED. |
 
-## Cycle-16D verdict landed — `extraction_fixed_but_information_frontier_holds`
+## Cycle-16D verdict landed — operational reading WITHDRAWN pending Cycle-16E scorer forensics
 
-Cycle-16D answered: **with restored prices, does any slice produce IC §16-eligible positive EV?** Answer: no. Price reconstruction succeeded (271/272 rows priced). 237 counterfactual trades materialized. **Only 2 wins (0.84% win rate)**, ev_ci_95_lo = -0.0382 overall. No (source × market_family × signal_type) slice meets `ev_ci_95_lo > 0` AND `trades ≥ 10`.
+Cycle-16D charter-locked verdict label `extraction_fixed_but_information_frontier_holds` matches the locked criterion (D5 coverage ≥90% AND D8 0 IC §16 slices). **Operator override 2026-05-07 withdraws the operational reading** because three load-bearing scorer concerns invalidate the underlying trade-and-win counts:
 
-The 0.84% win rate is anomalously low for a "no signal" reading: pure no-signal random extraction would produce ~50% win rate. 99.16% wrong-direction trade rate suggests either anti-correlated signal at this trader's information set OR Cycle-15B keyword-extension overfit synthetic Lane B fixtures (matching production phrases in wrong context). See Claude appendix in `edge-replay-cycle16d-report.md`.
+1. **`would_have_traded` does not gate on readiness.** Per `score_counterfactual_pnl.py:score_candidate`: `would_trade = abs(edge) >= min_edge` only. Production runtime gates trades on G1-G6 readiness; the scorer does not. 237 counterfactual trades likely over-counts production trade volume.
+2. **Replay is massively YES-biased.** 231 YES / 6 NO trades; 0/231 YES wins; 2/6 NO wins. Bot systematically buying YES on markets that resolve NO. Selection effect, scorer sign error, OR Cycle-15B C7 keyword-extension over-emits YES on production text.
+3. **Price-unit / longshot calibration uncertain.** 102 trades had `market_yes_price < 1`; 100 had `market_yes_price` between 1 and 9. Cents vs dollars consistency end-to-end unaudited. 100x unit error possibility.
 
-**Cycle-17 = operator decision** per `cycle-17-conditional-charter-skeletons.md`:
-- §B source onboarding (2-4 weeks; new feeds with backfill replay validation)
-- §C strategic redesign / pause / paper-only-as-research
-- Claude recommends operator weigh §C heavily given 4-cycle cumulative evidence + 99.16% wrong-direction.
+**Cycle-16E scorer forensics ACTIVE** per amended PROFIT-EDGE-010. Cycle-17 §B/§C operator decision DEFERRED until forensics audit completes + D6 re-runs.
+
+Per cycle-17 skeletons, Cycle-17 routing remains TBD pending Cycle-16E re-run output:
+- If post-correction D6 shows ≥1 IC §16 slice → Cycle-17A Wave-2 candidate slice authoring proceeds.
+- If post-correction D6 still shows 0 IC §16 slices BUT win rate normalizes → Cycle-17 §B vs §C operator decision returns to the table.
+- If post-correction D6 still shows anomalous YES-bias / longshot pattern → additional scorer-forensics or extraction-overfit follow-up; do NOT route to §B/§C without resolving.
 
 ## Wave deploy status (per IC §16 + Cycle-16D verdict)
 
 | wave | status | gate |
 |---|---|---|
 | Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **ACTIVE — ships 2026-05-08 as cleanup/observability hygiene only; does NOT claim edge** | exempt under IC §16 Rule 2 (mechanical / observability / governance) |
-| Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | requires (a) operator picks §B source onboarding AND (b) post-onboarding replay produces ≥1 slice with `ev_ci_95_lo>0` AND `trades≥10` |
-| Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT — Lever B counterindicated** | loosening admission on a model with 0.84% win rate at 237-trade sample widens losses, not narrows them |
-| Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | each candidate fix needs replay evidence; current evidence shows zero positive-EV slices at restored prices |
-| **Capital posture** | **PAPER-ONLY. Hard guardrail** (Cycle-14 charter §5) | live trading remains blocked until ≥1 positive-EV slice surfaces under IC §16; Cycle-16D evidence does not support flip |
+| Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED PENDING CYCLE-16E SCORER FORENSICS + CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | requires (a) Cycle-16E scorer audit + D6 re-run AND (b) operator picks §B AND (c) post-onboarding replay produces ≥1 slice with `ev_ci_95_lo>0` AND `trades≥10` |
+| Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED PENDING CYCLE-16E SCORER FORENSICS + CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT — Lever B counterindicated** | loosening admission on a model whose IC §16 status is unverified under audited scorer widens losses; current 0.84% win rate may be scorer artifact, not bot signal |
+| Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PENDING CYCLE-16E SCORER FORENSICS + CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | each candidate fix needs replay evidence under audited scorer |
+| **Capital posture** | **PAPER-ONLY. Hard guardrail** (Cycle-14 charter §5) | live trading remains blocked until ≥1 positive-EV slice surfaces under audited scorer per IC §16 |
 
 ## Are we near a Wave-2-eligible slice?
 
