@@ -1911,11 +1911,11 @@ Cycle-17 §B vs §C operator decision is **DEFERRED** until Cycle-16E scorer for
 | **Title** | Cycle-17 operator decision — pick §B source-onboarding OR §C strategic-redesign post-Cycle-16E `scorer_fixed_no_signal_confirmed` verdict |
 | **Category** | Profit-Path Integrity / Strategic Direction (succeeds PROFIT-EDGE-010 Cycle-16E `scorer_fixed_no_signal_confirmed` verdict; replaces previously-amended PROFIT-EDGE-010 "Cycle-17 operator decision" filing now that scorer is audited) |
 | **Severity** | HIGH (gates all Wave-2/3/Branch-D deploys; gates whether bot continues active development OR pivots to redesign / paper-only research / pause) |
-| **Status** | ACTIVE (filed 2026-05-07 cycle-16E verdict landing; operator-decision-only until pick) |
+| **Status** | COMPLETE (filed 2026-05-07; operator picked §C(b) fundamental redesign on 2026-05-07; cycle-17C charter landed `cd4fa2a`; succeeded by PROFIT-EDGE-012 tracking cycle-17C execution) |
 | **Priority** | NOW (operator decision blocks all subsequent cycle work) |
 | **Owner** | Operator (decision); Claude + Codex (recommendation + analysis already delivered in Cycle-16E reports) |
 | **Depends On** | PROFIT-EDGE-010 (delivered with `scorer_fixed_no_signal_confirmed` verdict). |
-| **Blocks** | All Wave-2/Wave-3/Branch-D deploys per IC §16; all subsequent Cycle-17/Cycle-18+ scope decisions until operator picks. |
+| **Blocks** | All Wave-2/Wave-3/Branch-D deploys per IC §16; all subsequent Cycle-17/Cycle-18+ scope decisions until operator picks. **(Unblocked: §C(b) picked 2026-05-07; cycle-17C single-variable redesign in progress under PROFIT-EDGE-012.)** |
 
 **Description**
 
@@ -1986,6 +1986,93 @@ Operator picks. Subsequent debt entry filed (PROFIT-EDGE-012) per matching Cycle
 - `docs/governance/edge-replay-cycle16e-scorer-forensics.md` Claude N6 appendix — verdict + recommendation rationale.
 - `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — original strategic-redirect authority.
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-17+ acceptance).
+
+---
+
+### PROFIT-EDGE-012
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EDGE-012 |
+| **Title** | Cycle-17C single-variable redesign — execute hypothesis-locked experiments per charter |
+| **Category** | Profit-Path Integrity / Strategic Direction (succeeds PROFIT-EDGE-011 §C(b) operator pick on 2026-05-07) |
+| **Severity** | HIGH (gates all Wave-2/3/Branch-D deploys; gates whether bot has deployable signal under any of six redesign axes per first-axis-pick rationale) |
+| **Status** | ACTIVE (cycle-17C charter landed `cd4fa2a` 2026-05-07; E1 reverted, E2 axis-abandoned, E3 hypothesis-sketch landed `6081475` 2026-05-08) |
+| **Priority** | NOW (active experiment cycle; one experiment at a time per single-variable rule) |
+| **Owner** | Codex (criteria-lock + implementation + replay + result report); Claude (hypothesis sketch + verdict appendix + ledger row maintenance); Operator (axis pick + criteria approval + final keep/revert call). |
+| **Depends On** | PROFIT-EDGE-011 (delivered with §C(b) pick). |
+| **Blocks** | All Wave-2/Wave-3/Branch-D deploys per IC §16; all subsequent Cycle-18+ scope decisions until cycle-17C reaches one of: (a) IC §16-eligible slice on a kept experiment, (b) 3 reverts → architectural-rethink rule trigger, (c) charter time-box exhausted (~1 week stated). |
+
+**Description**
+
+Cycle-17C is a single-variable redesign program testing six candidate axes (per first-axis-pick rationale ranking) against the frozen Cycle-16E baseline corpus.
+
+Operating rule: **One hypothesis. One code change. One replay. One written verdict. Keep only if pre-declared IC §16 bar passes; otherwise revert.**
+
+Hard constraints (per charter):
+- Fixed corpus (`logs/edge_replay/cycle16d/replay_dataset.jsonl`).
+- Fixed audited scorer (`scripts/edge_replay/scorer_forensics_audit.py` production-proxy mode).
+- Fixed replay command per cycle-16E reproducibility section.
+- One active experiment.
+- No-overlap rule (E[N+1] cannot start until E[N] has ledger row with final decision).
+- Revert default unless IC §16 passes.
+- Pre-registration commit (criteria-lock) before any replay.
+- 3 sequential reverts → architectural-rethink rule.
+- ~1 week time-box.
+
+Six axes per first-axis-pick rationale (rank 1-6):
+1. Probability update rule (E1 — TESTED, REVERTED).
+2. Market-family selection (deferred — violates fixed-corpus rule).
+3. Side inference (E3 — IN PROGRESS, hypothesis sketch landed).
+4. Readiness admission (E2 — ABANDONED via outcome-blind G1 sweep; structural finding logged in ledger row).
+5. Extraction prompt (deferred pending E3 outcome).
+6. Keyword map (already-explored; near-zero info gain).
+
+**Why it matters to profitability / safety / reliability**
+
+1. **Last gate before fundamental-pause path.** Cycle-17C is the §C(b) fundamental redesign per PROFIT-EDGE-011. Failure here without architectural-rethink trigger keeps the bot in indefinite paper-only research limbo; success surfaces ≥1 deploy-eligible slice for §A review.
+2. **Architectural-rethink trigger pre-registered.** Charter states 3 sequential reverts triggers re-examination of the cycle's framing. Currently 1 revert (E1). E2 axis-abandonment did NOT count toward this rule per pre-locked exception. Future reverts must be tracked carefully.
+3. **Structural findings worth flagging at charter level (recorded in ledger E2 row, not yet promoted):** (i) On frozen corpus, `paper_price_sanity` is the dominant filter (119 of 260 production-proxy skips). The 12-row admission ceiling is a corpus property, not a configurable gate. Lifting it requires either loosening `paper_price_sanity` (risk-mode change), different corpus (violates fixed-corpus rule), or signal axis outside readiness. (ii) Cycle-17C replay pipeline does NOT re-run `signal_analyzer.py`. Evidence rows have `side` baked in from original ingestion. Side-inference experiments must select implementation path carefully (re-extract corpus, scorer counterfactual mode, or post-processing diagnostic).
+4. **Time pressure from operator allocation.** Charter time-box is ~1 week. Started 2026-05-07. 1 day in, 1 revert + 1 axis-abandonment + 1 hypothesis-sketch landed.
+
+**Evidence / Source**
+
+- `docs/governance/2026-05-07-cycle-17c-charter-single-variable-redesign.md` — charter (operating rule + 3-revert architectural rule + ~1 week time-box).
+- `docs/governance/2026-05-07-cycle-17c-experiment-ledger-schema.md` — ledger schema + populated rows (E0 baseline / E1 revert / E2 axis-abandoned).
+- `docs/governance/2026-05-07-cycle-17c-first-axis-pick-rationale.md` — info-gain ranking authority for axis selection.
+- `docs/governance/2026-05-07-cycle-17c-e1-criteria-lock-bayesian-log-odds.md` — E1 criteria-lock.
+- `docs/governance/edge-replay-cycle17c-e1-report.md` — E1 result report (`revert_required_no_ic16_slice`).
+- `docs/governance/2026-05-07-cycle-17c-e1-claude-verdict-appendix.md` — E1 Claude verdict + amended E2 axis menu + E3 menu.
+- `docs/governance/2026-05-08-cycle-17c-e2-g1-admission-sweep.md` — E2 G1 admission-count projection (outcome-blind; sweep proved G1 inert across 0.05→0.00).
+- `docs/governance/2026-05-08-cycle-17c-e3-side-inference-hypothesis-sketch.md` — E3 hypothesis sketch with sub-axis menu A/B/C and implementation-path options.
+- `scripts/edge_replay/g1_admission_sweep.py` — E2 sweep script (reference pattern for any future outcome-blind sweep).
+
+**Acceptance Criteria**
+
+- IF cycle-17C reaches a `keep` verdict on any experiment with ≥1 IC §16-eligible slice → matching deploy-candidate review under Cycle-17 §A pattern → PROFIT-EDGE-013 filed = "Cycle-17 §A deploy-candidate review for slice {x}."
+- IF cycle-17C reaches 3 sequential reverts → architectural-rethink rule fires → PROFIT-EDGE-013 filed = "Cycle-17C architectural-rethink — six-axis ranking reconsidered or charter scope amended."
+- IF cycle-17C reaches time-box exhaustion (~1 week) without keep or 3-revert trigger → operator decides extend / pivot / pause → PROFIT-EDGE-013 filed per operator direction.
+- IF axis-abandoned-before-criteria-lock outcomes accumulate to a structural pattern (currently 1: E2) → operator + Claude evaluate whether the abandoned axes share a corpus-level constraint that warrants charter amendment.
+
+**Notes**
+
+- **Capital posture remains PAPER-ONLY.** Locked. No experiment in cycle-17C can flip live trading unilaterally; deploy-candidate review under §A is the only path.
+- **Three-revert rule clarification.** Charter says 3 sequential reverts triggers architectural rethink. Current state: 1 revert (E1 Bayesian log-odds). E2 G1 sweep produced `axis_abandoned_before_criteria_lock` decision, NOT a revert (no implementation commit landed). Per E2 ledger row decision_rationale, axis-abandoned-pre-criteria-lock outcomes do not consume revert budget.
+- **Single-variable rule strictness.** Each experiment touches exactly one configurable axis. Bundling sub-axes (e.g., E3 sub-axes A + B + C combined) violates the rule. If E3-A is ambiguous, E3-B may file separately as E4.
+- **Frozen-corpus structural finding (E2 ledger row.notes):** 12-trade admission ceiling on cycle-16D corpus is a corpus property. Future cycle scope may need to address this directly.
+- **Replay-pipeline structural finding (E3 sketch):** `signal_analyzer.py` is not re-run during replay. Evidence rows carry frozen `side` from original ingestion. Side-inference experiments require alternate implementation paths (re-extract / scorer counterfactual / post-processing diagnostic).
+- **Charter time-box pressure.** ~1 week stated. Day 1 elapsed: 1 revert + 1 axis-abandoned + 1 hypothesis-sketch landed. Sustainable cadence depends on Codex implementation throughput.
+
+**Related**
+
+- `PROFIT-EDGE-011` (delivered) — direct parent (operator §C(b) pick drove this entry).
+- `PROFIT-EDGE-010` / `PROFIT-EDGE-009` / `PROFIT-EDGE-008` / earlier — full cycle trail.
+- `docs/governance/2026-05-07-cycle-17c-charter-single-variable-redesign.md` — charter authority.
+- `docs/governance/2026-05-07-cycle-17c-experiment-ledger-schema.md` — experiment-by-experiment ledger.
+- `docs/governance/2026-05-08-cycle-17c-e3-side-inference-hypothesis-sketch.md` — most recent governance artifact (E3 in progress).
+- `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-17C acceptance).
+- Memory: `feedback_market_implied_baseline.md` — cycle-16E baseline-correction lesson; informs all cycle-17C verdicts.
+- Memory: `feedback_audit_scorer_before_verdict.md` — verdict-time audit discipline.
 
 ---
 

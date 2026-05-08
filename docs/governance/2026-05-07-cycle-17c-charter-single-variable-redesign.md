@@ -121,6 +121,39 @@ Either outcome is acceptable cycle exit. Indefinite drift is NOT.
 - **Indefinite axis-grinding.** Fix: 3-revert architectural rule.
 - **Scope creep into source onboarding / live-trading flip.** Fix: charter §"Out of scope" enumerates each.
 
+## Amendments and structural findings (chronological)
+
+This section records observations surfaced DURING cycle-17C execution that affect future experiment design but do NOT modify the locked rules above. Hard rules in §"Pre-stated decision criteria (LOCKED)" remain immutable per charter intent. Structural findings here are advisory.
+
+### 2026-05-08 — E2 G1 admission sweep: 12-trade ceiling is a corpus property
+
+Source: `docs/governance/2026-05-08-cycle-17c-e2-g1-admission-sweep.md` (`8629681`); E2 ledger row in `2026-05-07-cycle-17c-experiment-ledger-schema.md` (`89c6f4e`).
+
+Finding: outcome-blind G1 admission sweep over `{0.05, 0.04, 0.03, 0.02, 0.01, 0.00}` produced identical counts at every threshold. Production-proxy admission ceiling stays at 12 regardless of any G1 threshold change. Skip-reason analysis showed `paper_price_sanity=119` is the dominant filter (45.8% of all skips), followed by readiness non-G1 (G2-G6)=55, `paper_duplicate_position=43`, `paper_ticker_cooldown=8`, `baseline_not_trade=35`.
+
+Implications for future experiment design:
+- The 12-trade ceiling is NOT a gate calibration property. It is a corpus-mix property: the cycle-16D market sample has many extreme-priced longshots that fail `paper_price_sanity` (price ≤ 2¢ or ≥ 98¢).
+- Lifting the 12-trade ceiling under cycle-17C requires either: (a) loosening `paper_price_sanity` (risk-mode change, not signal experiment), (b) different corpus (violates fixed-corpus rule), or (c) signal axis whose effect is NOT mediated by trade count (e.g., per-trade EV improvement, side flip).
+- Sub-readiness sweeps (G2/G3/G4/G5/G6) face the same ceiling. They may shift WHICH 12 trades admit, but they will not increase the count.
+
+This finding does NOT trigger architectural-rethink. E2 was an axis-abandonment, not a revert.
+
+### 2026-05-08 — E3 hypothesis sketch: replay pipeline does not re-run signal_analyzer
+
+Source: `docs/governance/2026-05-08-cycle-17c-e3-side-inference-hypothesis-sketch.md` (`6081475`).
+
+Finding: the cycle-17C replay infrastructure path is reingest-dossiers → build-dataset → score. `signal_analyzer.py` runs only at original ingestion time. Evidence rows in `evidence_store.db` carry pre-extracted `side`, `estimated_probability`, and keyword/LLM outputs. Replay applies updated dossier_builder logic to those frozen evidence rows but does NOT re-extract signals.
+
+Implications for future experiment design:
+- Production code changes inside `signal_analyzer.py` (extraction prompt, keyword map, side inference, magnitude mapping, LLM blend logic) cannot be tested by replay alone unless the corpus is regenerated.
+- Three viable testing paths for signal_analyzer-class hypotheses:
+  - **Re-extract corpus** through modified `signal_analyzer` (LLM-availability dependent, non-deterministic, time-cost).
+  - **Counterfactual scorer mode** (modifies fixed audited scorer; possible charter-rule tension).
+  - **Post-processing diagnostic script** (clean charter compliance; not a behavioral implementation).
+- Each future signal_analyzer-class experiment must pick path explicitly at criteria-lock; the charter does not pre-prescribe.
+
+This finding affects rank-3 (side inference) and rank-5 (extraction prompt) axes especially. May affect rank-6 (keyword map) less since keyword extraction is more deterministic.
+
 ## Cross-links
 
 - `docs/governance/edge-replay-cycle16e-scorer-forensics.md` — frozen baseline source.
