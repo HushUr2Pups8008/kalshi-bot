@@ -73,26 +73,59 @@ Per first-axis-pick info-gain ranking, readiness admission was rank #4. Promote 
 
 ### Recommended hypothesis sketch
 
-E2 hypothesis (Codex + operator finalize at criteria-lock):
+E2 hypothesis (operator finalizes after sweep; Codex locks at criteria-lock):
 
-> Loosening readiness admission (G1 confidence floor and/or G6 sample-size floor) by a single calibrated step will increase production-proxy trade count materially (target n ≥ 30) so the IC §16 `trades ≥ 10` gate becomes reachable across multiple slices, producing direct evidence of whether the bot has signal at higher trade volumes.
+> Lowering `G1_CONFIDENCE_THRESHOLD` (`tasks/trade_readiness_gate.py:69`, currently `0.05`) by an explicit calibrated step will admit additional production-proxy candidates, allowing IC §16 `trades >= 10` to be reached on at least one slice.
 
-### Specific candidate changes (Codex picks one)
+This is a **diagnostic-only** experiment by construction: loosening readiness reveals whether readiness was masking a positive slice. It cannot create signal where none exists. Criteria-lock revert-default is mandatory regardless of P&L direction.
 
-| sub-axis | change | expected n shift | risk |
-|---|---|---|---|
-| (a) G1 confidence floor | lower by 0.05 | +20-50% trades | minor — established loosening direction |
-| (b) G6 sample-size floor | lower from N to N-1 | +10-30% trades | minor — also loosening |
-| (c) Combine (a) + (b) | both | +30-100% trades | violates single-variable; pick (a) OR (b) only |
+### G6 verification note (correction)
 
-Single-variable rule mandates (a) OR (b), not both. Recommend **(a) G1 confidence floor** as the first sub-experiment because:
-- E1 evidence directly implicates confidence calibration (50% readiness drop at no other change).
-- G1 is a single config value; touch is < 5 LoC.
-- Effect is predictable and bounded.
+V1 of this appendix proposed a "G6 sample-size floor" sub-axis. **Incorrect.** Source verification:
+
+- `tasks/trade_readiness_gate.py:118` defines `G6_RECENCY_THRESHOLD = 0.30`.
+- G6 predicate at lines 200-202: `recency_score < 0.30 → fail`.
+- G6 is a **recency floor**, not a sample-size floor. No sample-size gate exists in the readiness predicates (G1-G6 are: scaled-confidence, source-class diversity, disagreement, regime-confidence, dossier-drift, recency).
+
+G6 sub-axis struck. E2 reduces to G1 only.
+
+### Sub-axis: G1 explicit-threshold sweep
+
+Outcome-blind admission-count sweep over candidate G1 values **before** criteria-lock:
+
+| G1 threshold | meaning |
+|---|---|
+| 0.05 | current production value |
+| 0.04 | smallest loosening below current |
+| 0.03 | mid-loosening |
+| 0.02 | larger loosening |
+| 0.01 | near-disabled |
+| 0.00 | effectively disabled (G1 always passes) |
+
+Sweep computes admission counts only — not wins, not P&L, not market-implied expected wins, not EV, not IC §16 slices. The sweep is **not an IC §16 replay** and cannot justify keep/deploy on its own.
+
+**Outcome-blind sweep contract (Codex implements):**
+
+- Sweep script must fail if any result field, output column, intermediate variable, log line, or imported scorer module path matches `win|pnl|profit|resolution|settlement|ev|ic16` (case-insensitive substring check at startup + per-row guard).
+- Sweep stops at admission-count-per-variant. No win evaluation, no P&L computation, no slice reporting.
+- Sweep report must explicitly disclaim: "This is not an IC §16 replay. Admission counts are projection-only and cannot justify keep/deploy."
+
+**Operator picks the smallest loosening that projects production-proxy `n >= 10`.**
+
+If only `0.00` (effectively disabled) crosses `n >= 10`, readiness axis is underpowered. Abandon. Pick rank-3 (side inference) or rank-5 (extraction prompt) per first-axis info-gain ranking.
+
+### Why NOT a single-step "G1 -0.05" edit
+
+V1 proposed "lower G1 by 0.05." Arithmetic: `0.05 - 0.05 = 0.00` = functional disabling, not a calibrated step. Replaced with explicit-threshold sweep so operator picks a defensible value with admission-count evidence rather than arithmetic luck.
 
 ### Acceptance vs charter
 
-E2 (a) hypothesis projection: 12 → 18-30 production-proxy trades. Crosses IC §16 `trades ≥ 10` floor → candidate-fix eligible. If projection lands near 18-25, MDE for win-rate detection at α=0.05 ≈ 13-15pp. Detectable effect size is demanding but not impossible.
+E2 G1 sweep produces an admission-count projection. Operator either:
+
+1. **Picks threshold X** where projected production-proxy `n >= 10`. Codex commits E2 criteria-lock at G1 = X. Then E2 implementation = single-line config change. Then replay. Then verdict (full IC §16 acceptance bar applies — `>= 1 slice with ev_ci_95_lo > 0` AND `trades >= 10`).
+2. **Abandons readiness axis.** Documents axis-exhausted rationale. Picks alternate axis from rank-3 / rank-5.
+
+Either path honors single-variable + revert-default + no-overlap rules.
 
 ### Why NOT same-axis Kalman / uncapped Bayesian / exponential decay
 
@@ -111,13 +144,14 @@ If operator strongly prefers another update-rule formula, file as E2-alternative
 
 ## Operator action required
 
-Pick E2 axis:
-- **(A) Readiness admission, G1 floor -0.05** (Claude recommendation; rank-1 info gain post-E1)
-- **(B) Readiness admission, G6 floor -1** (Claude rank-2; same axis, alternate sub-axis)
-- **(C) Update rule, Kalman or uncapped Bayesian** (Codex choice; carries "tweaking same knob" risk)
-- **(D) Different axis entirely** (operator picks; document rationale)
+Pick E2 path:
+- **(A) G1 explicit-threshold sweep** (recommended). Codex runs outcome-blind admission-count sweep across `{0.05, 0.04, 0.03, 0.02, 0.01, 0.00}`. Operator picks smallest threshold projecting production-proxy `n >= 10`, OR abandons readiness axis if only `0.00` reaches `n >= 10`.
+- **(B) Update rule re-test** (Kalman / uncapped Bayesian / exponential decay). Carries "tweaking same knob" anti-pattern risk per E1 evidence — baseline_abs_edge unchanged at 237 across both update rules.
+- **(C) Different axis** (rank-3 side inference, rank-5 extraction prompt, or operator-documented rationale).
 
-Once picked, Codex commits E2 criteria-lock, then implementation, then replay, then verdict. Same locked workflow as E1.
+If (A): Codex bundles this appendix amendment + sweep script (`scripts/edge_replay/g1_admission_sweep.py` or operator-final path) + sweep report (`docs/governance/2026-05-08-cycle-17c-e2-g1-admission-sweep.md`) in **one** commit. Operator then picks threshold or abandons.
+
+If (B) or (C): Codex commits E2 criteria-lock under chosen axis. Same locked workflow as E1.
 
 ## Cross-links
 
