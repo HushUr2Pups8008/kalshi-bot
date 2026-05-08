@@ -157,7 +157,7 @@ If (B) or (C): Codex commits E2 criteria-lock under chosen axis. Same locked wor
 
 - `docs/governance/edge-replay-cycle17c-e1-report.md` — Codex E1 report (this appendix companions).
 - `docs/governance/2026-05-07-cycle-17c-charter-single-variable-redesign.md` — charter (operating rule + 3-revert architectural rule).
-- `docs/governance/2026-05-07-cycle-17c-experiment-ledger-schema.md` — E1 row populated; E2 row pending.
+- `docs/governance/2026-05-07-cycle-17c-experiment-ledger-schema.md` — E1 row populated; E2 row populated (`axis_abandoned_before_criteria_lock`); E3 row pending.
 - `docs/governance/2026-05-07-cycle-17c-first-axis-pick-rationale.md` — original info-gain ranking.
 - `docs/governance/2026-05-07-cycle-17c-e1-criteria-lock-bayesian-log-odds.md` — E1 criteria-lock.
 - `tasks/trade_readiness_gate.py` — production G1-G6 thresholds (E2 candidate touch surface for sub-axes (a) and (b)).

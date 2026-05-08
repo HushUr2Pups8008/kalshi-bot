@@ -110,6 +110,34 @@ Each experiment row contains the following fields. Pre-replay fields are committ
 | post_replay_commit | Verdict/revert commit containing `edge-replay-cycle17c-e1-report.md` and `git revert fa8e15a` |
 | notes | Semantic check locked: `EvidenceScore.implied_probability` is dossier-state independent and market-price anchored; E1 uses `original_weight * logit(implied_probability)`, not `logit(implied_probability) - logit(current_estimate)`. Tested implementation commit: `fa8e15a`. Result report: `docs/governance/edge-replay-cycle17c-e1-report.md`. |
 
+### E2 — G1 confidence-threshold admission sweep (axis abandoned before criteria-lock)
+
+| field | value |
+|---|---|
+| experiment_id | E2 |
+| axis | `readiness_admission` (G1 sub-axis only; G6 sub-axis struck per `tasks/trade_readiness_gate.py:118` verification — G6 = `recency_score >= 0.30`, not sample-size) |
+| hypothesis | Lowering `G1_CONFIDENCE_THRESHOLD` (`tasks/trade_readiness_gate.py:69`, currently `0.05`) by an explicit calibrated step will admit additional production-proxy candidates, allowing IC §16 `trades >= 10` to be reached on at least one slice. |
+| touched_file_line | n/a — no implementation commit landed (axis abandoned at outcome-blind sweep stage, before criteria-lock) |
+| before_pseudocode | `G1_CONFIDENCE_THRESHOLD = 0.05` (production value at `tasks/trade_readiness_gate.py:69`) |
+| after_pseudocode | n/a — pre-criteria-lock outcome-blind admission-count sweep across `{0.05, 0.04, 0.03, 0.02, 0.01, 0.00}` determined no candidate value would change admission count |
+| expected_directional_effect | Pre-sweep projection per `2026-05-07-cycle-17c-e1-claude-verdict-appendix.md` v2: 12 → 18-30 production-proxy trades. Sweep result: zero shift at any threshold. |
+| replay_command | n/a — sweep replaced replay. Sweep script: `scripts/edge_replay/g1_admission_sweep.py`. Sweep report: `docs/governance/2026-05-08-cycle-17c-e2-g1-admission-sweep.md`. |
+| acceptance_threshold | n/a — never reached criteria-lock |
+| revert_condition | n/a — never landed implementation commit |
+| n_disclosure_plan | n/a — pre-criteria-lock abandon |
+| pre_replay_commit | n/a — never reached criteria-lock |
+| trades | n/a |
+| wins | n/a |
+| market_implied_expected_wins | n/a |
+| pnl | n/a |
+| ic16_slices | n/a |
+| delta_vs_baseline | n/a (no implementation commit; frozen baseline `c913ffd` unchanged) |
+| n_observed_mde | n/a |
+| decision | `axis_abandoned_before_criteria_lock` |
+| decision_rationale | Outcome-blind G1 admission-count sweep over `{0.05, 0.04, 0.03, 0.02, 0.01, 0.00}` produced identical counts at every threshold (`baseline_abs_edge=237`, `readiness_only=182`, `paper_price_sanity=110`, `production_proxy=12`). Pre-locked rule in `2026-05-07-cycle-17c-e1-claude-verdict-appendix.md` (amended) said abandon readiness axis if only `0.00` crosses `n >= 10`. Here NO threshold changes any count, so the abandon trigger fires more strongly than the rule's pre-locked floor. No code change landed. **Does NOT count toward the 3-revert architectural-rethink rule** — there was no implementation commit and no revert; this is a pre-criteria-lock axis abandonment with outcome-blind evidence. |
+| post_replay_commit | `8629681` (cycle-17c codex+claude: e2 axis correction + g1 admission sweep — bundles appendix amendment + sweep script + sweep report) |
+| notes | **Structural finding (recorded in row, not yet promoted to memory):** (1) On frozen cycle-16D corpus, G1 is inert across the full sweep range 0.05 → 0.00 — every row clearing G1=0.05 also clears G1=0.00. (2) Production-proxy admission ceiling stays at 12 regardless of any G1 threshold change. (3) Main downstream drops at any G1 value: `paper_price_sanity=119`, readiness non-G1 (G2-G6 jointly)=55, `paper_duplicate_position=43`, `paper_ticker_cooldown=8`, `baseline_not_trade=35`. Total 260 / 272 rows skip; 12 admit. (4) E1 readiness drop 182→90 under Bayesian log-odds was therefore G2-G6 sensitivity to estimate-spread, not G1. (5) Three independent confirmations of 12-trade ceiling on this corpus: E1 (`baseline_abs_edge` unchanged at 237), G1 sweep (identical counts), skip-reason analysis (`paper_price_sanity=119` is corpus property — many extreme-priced longshots in cycle-16D market mix). (6) Lifting the 12-row ceiling requires loosening `paper_price_sanity` (risk-mode change, not signal experiment), different corpus (violates fixed-corpus rule), or signal axis outside readiness. (7) Next eligible axes: side inference (rank-3, single-line ablation in `analysis/signal_analyzer.py:431`, recommended), extraction prompt (rank-5), G3/G4 sub-readiness sweep (heavier, 5 separate sub-axes), or fixed-corpus-rule reconsideration at charter level. |
+
 ## Conventions
 
 - **Sequential numbering.** E1, E2, E3, ... regardless of axis. Axis is recorded per-row, not per-cycle.
