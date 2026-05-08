@@ -82,9 +82,33 @@ Each experiment row contains the following fields. Pre-replay fields are committ
 | post_replay_commit | `c913ffd` |
 | notes | Cycle-16E `scorer_fixed_no_signal_confirmed` verdict; production-proxy gates ported faithfully line-by-line vs `executor.py:200-244` |
 
-### E1 — TBD
+### E1 — Bayesian log-odds update rule (criteria locked)
 
-To be filled when first experiment runs. First-axis pick = `update_rule` per `2026-05-07-cycle-17c-first-axis-pick-rationale.md`.
+| field | value |
+|---|---|
+| experiment_id | E1 |
+| axis | `update_rule` |
+| hypothesis | Replacing additive weighted-delta updates with Bayesian log-odds updates will convert repaired extraction signal into a differentiated probability distribution and produce ≥1 IC §16 slice on the frozen corpus. |
+| touched_file_line | `analysis/dossier_builder.py:154-163` (`update_dossier` state-update estimate math only) |
+| before_pseudocode | `if current_estimate is None: new_estimate = implied_probability; else: new_estimate = current_estimate + clamp((implied_probability - current_estimate) * original_weight, -cap, +cap)` |
+| after_pseudocode | `current = current_estimate or 0.5; raw_log_lr = original_weight * logit(clamp(implied_probability, 0.001, 0.999)); capped_log_lr = clamp(raw_log_lr, -2.0, +2.0); new_estimate = sigmoid(logit(clamp(current, 0.001, 0.999)) + capped_log_lr)` |
+| expected_directional_effect | Materially changes probability distribution and trade admission; pre-replay plausible range remains 5-50 production-proxy trades, so the IC §16 `trades >= 10` gate is reachable but not guaranteed. |
+| replay_command | `.venv/bin/python scripts/edge_replay/scorer_forensics_audit.py --dataset logs/edge_replay/cycle16d/replay_dataset.jsonl --historical-prices logs/edge_replay/cycle16d/historical_prices_cycle16d.json --endpoint-diagnosis logs/edge_replay/cycle16d/endpoint_diagnosis.json --output logs/edge_replay/cycle17c/e1/scorer_forensics.json --corrected-scores logs/edge_replay/cycle17c/e1/counterfactual_scores_production_proxy.json --report docs/governance/edge-replay-cycle17c-e1-report.md` |
+| acceptance_threshold | IC §16: ≥1 slice with `ev_ci_95_lo > 0` AND `trades >= 10`. |
+| revert_condition | Revert if 0 IC §16 slices, replay cannot execute against frozen scorer/corpus, behavior changes outside the locked `update_dossier` estimate math, or every slice remains below `trades >= 10`. |
+| n_disclosure_plan | Report observed trade count, slice trade counts, market-implied expected wins, P&L, and MDE at observed n. Use market-implied expected wins, not a 50% coin-flip baseline. |
+| pre_replay_commit | Criteria-lock commit containing this row: `2026-05-07-cycle-17c-e1-criteria-lock-bayesian-log-odds.md` |
+| trades | pending E1 replay |
+| wins | pending E1 replay |
+| market_implied_expected_wins | pending E1 replay |
+| pnl | pending E1 replay |
+| ic16_slices | pending E1 replay |
+| delta_vs_baseline | pending E1 replay |
+| n_observed_mde | pending E1 replay |
+| decision | pending (`keep` / `revert` / `diagnostic-only`) |
+| decision_rationale | pending E1 verdict |
+| post_replay_commit | pending E1 verdict |
+| notes | Semantic check locked: `EvidenceScore.implied_probability` is dossier-state independent and market-price anchored; E1 uses `original_weight * logit(implied_probability)`, not `logit(implied_probability) - logit(current_estimate)`. |
 
 ## Conventions
 
