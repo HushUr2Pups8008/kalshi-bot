@@ -1,0 +1,309 @@
+{
+  "anomalies": [
+    {
+      "coverage": 0.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 0,
+      "covered_rows": 0,
+      "missing_reasons": {
+        "no_price_series_for_ticker": 1
+      },
+      "missing_rows": 1,
+      "ticker": "KXPARDONSTRUMP-26APR-22",
+      "total_rows": 1
+    }
+  ],
+  "cohort_sentinel": {
+    "cohort_flag": "post_fix_rebuilt",
+    "cycle_15b_c7_deploy_commit": "2222227",
+    "cycle_15b_c7_deploy_ts": "2026-05-07T00:00:00+00:00",
+    "db_path": "logs/edge_replay/cycle17c/e1/dossier_updates_e1.db",
+    "expected_cycle_15b_c7_deploy_commit": "2222227",
+    "expected_cycle_15b_c7_deploy_ts": "2026-05-07T00:00:00+00:00",
+    "status": "pass"
+  },
+  "escalations": [
+    {
+      "coverage": 0.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 0,
+      "covered_rows": 0,
+      "missing_reasons": {
+        "no_price_series_for_ticker": 1
+      },
+      "missing_rows": 1,
+      "ticker": "KXPARDONSTRUMP-26APR-22",
+      "total_rows": 1
+    }
+  ],
+  "input": {
+    "dataset_rows": 272,
+    "historical_prices_path": "logs/edge_replay/cycle16d/historical_prices_cycle16d.json",
+    "post_fix_db": "logs/edge_replay/cycle17c/e1/dossier_updates_e1.db",
+    "price_ticker_count": 23
+  },
+  "missing_examples": [
+    {
+      "decision_kind": "dossier_update",
+      "decision_ts": "2026-04-26T14:44:32.331129+00:00",
+      "reason": "no_price_series_for_ticker",
+      "ticker": "KXPARDONSTRUMP-26APR-22"
+    }
+  ],
+  "overall": {
+    "coverage": 0.996324,
+    "covered_rows": 271,
+    "missing_rows": 1,
+    "passes_overall_threshold": true,
+    "status": "pass"
+  },
+  "per_ticker": [
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 2,
+      "covered_rows": 2,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXELECTIONEMERGENCY-26MAY01",
+      "total_rows": 2
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 2,
+      "covered_rows": 2,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXFISAEXTEND-26APR-APR29",
+      "total_rows": 2
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 2,
+      "covered_rows": 2,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXFISAEXTEND-26APR-APR30",
+      "total_rows": 2
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 11,
+      "covered_rows": 11,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXFISAEXTEND-26APR-MAY01",
+      "total_rows": 11
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 1,
+      "covered_rows": 1,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXFISAEXTEND-26APR-MAY02",
+      "total_rows": 1
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 1,
+      "covered_rows": 1,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXFISAEXTEND-26APR-MAY03",
+      "total_rows": 1
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 19,
+      "covered_rows": 19,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXMOCTRUMP25-26-APR24",
+      "total_rows": 19
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 51,
+      "covered_rows": 51,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXMOCTRUMP25-26-MAY01",
+      "total_rows": 51
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 2,
+      "covered_rows": 2,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXNEWDEAL-MAY01",
+      "total_rows": 2
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 1,
+      "covered_rows": 1,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXPARDONSTRUMP-26APR-0",
+      "total_rows": 1
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 8,
+      "covered_rows": 8,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXPARDONSTRUMP-26APR-1",
+      "total_rows": 8
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 1,
+      "covered_rows": 1,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXPARDONSTRUMP-26APR-12",
+      "total_rows": 1
+    },
+    {
+      "coverage": 0.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 0,
+      "covered_rows": 0,
+      "missing_reasons": {
+        "no_price_series_for_ticker": 1
+      },
+      "missing_rows": 1,
+      "ticker": "KXPARDONSTRUMP-26APR-22",
+      "total_rows": 1
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 2,
+      "covered_rows": 2,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXPARDONSTRUMP-26APR-24",
+      "total_rows": 2
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 2,
+      "covered_rows": 2,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXPARDONSTRUMP-26APR-6",
+      "total_rows": 2
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 1,
+      "covered_rows": 1,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXTRUMPCHINA-26-APR24",
+      "total_rows": 1
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 3,
+      "covered_rows": 3,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXTRUMPCHINA-26-MAY01",
+      "total_rows": 3
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 112,
+      "covered_rows": 112,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXTRUMPIRAN-26MAY01",
+      "total_rows": 112
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 2,
+      "covered_rows": 2,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXVANCEPAKISTAN-26APR21-APR24",
+      "total_rows": 2
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 7,
+      "covered_rows": 7,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXVANCEPAKISTAN-26APR21-APR25",
+      "total_rows": 7
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 6,
+      "covered_rows": 6,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXVANCEPAKISTAN-26APR21-APR27",
+      "total_rows": 6
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 19,
+      "covered_rows": 19,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXVANCEPAKISTAN-26APR21-APR30",
+      "total_rows": 19
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 15,
+      "covered_rows": 15,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXVANCEPAKISTAN-26APR21-MAY04",
+      "total_rows": 15
+    },
+    {
+      "coverage": 1.0,
+      "covered_existing_rows": 0,
+      "covered_reconstructed_rows": 1,
+      "covered_rows": 1,
+      "missing_reasons": {},
+      "missing_rows": 0,
+      "ticker": "KXVOTESAVEAMERICA-26MAR-MAY01",
+      "total_rows": 1
+    }
+  ],
+  "thresholds": {
+    "escalation": 0.7,
+    "overall_pass": 0.9,
+    "per_ticker_anomaly": 0.8
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "atomic_write": true,
+  "idempotence_sha256": "7da1c85e7ebf838de6d389207e46b1b3ed9f742c4dea775a99c1c0527e428c84",
+  "markets_path": "logs/edge_replay/cycle13_live/resolved_markets_full.json",
+  "output_db": "logs/edge_replay/cycle17c/e1/dossier_updates_e1.db",
+  "post_fix_dossier_updates_rows": 295,
+  "post_fix_dossiers_rows": 39,
+  "post_fix_nonzero_extraction_rows": 139,
+  "pre_fix_dossier_updates_rows": 295,
+  "pre_fix_rows_recoverable": true,
+  "source_db": "data/evidence_store.db",
+  "source_evidence_rows": 295
+}
