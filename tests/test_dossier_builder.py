@@ -6,6 +6,7 @@ required by Definition of Done criterion 7.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta
 
 import pytest
@@ -13,8 +14,6 @@ import pytest
 from analysis.dossier_builder import (
     _CONFIDENCE_CAP,
     _CONFIDENCE_FLOOR,
-    _NORMAL_CAP,
-    _RECOVERY_CAP,
     classify_update,
     update_dossier,
 )
@@ -25,6 +24,9 @@ from analysis.evidence_types import Dossier, EvidenceScore
 
 _TS = "2026-04-19T12:00:00+00:00"
 _HALF_LIFE = 7.0
+_E1_EPSILON = 0.001
+_E1_LOG_LR_CAP = 2.0
+_E1_NEUTRAL_PRIOR = 0.5
 
 
 def _dossier(
@@ -82,6 +84,29 @@ def _now() -> datetime:
     return datetime.fromisoformat(_TS)
 
 
+def _clamp_probability(value: float) -> float:
+    return max(_E1_EPSILON, min(1.0 - _E1_EPSILON, value))
+
+
+def _logit(probability: float) -> float:
+    probability = _clamp_probability(probability)
+    return math.log(probability / (1.0 - probability))
+
+
+def _sigmoid(log_odds: float) -> float:
+    return 1.0 / (1.0 + math.exp(-log_odds))
+
+
+def _bayesian_log_odds_expected(
+    current_estimate: float | None,
+    score: EvidenceScore,
+) -> float:
+    current = _E1_NEUTRAL_PRIOR if current_estimate is None else current_estimate
+    raw_log_lr = score.original_weight * _logit(score.implied_probability)
+    capped_log_lr = max(-_E1_LOG_LR_CAP, min(_E1_LOG_LR_CAP, raw_log_lr))
+    return _sigmoid(_logit(current) + capped_log_lr)
+
+
 # ── classify_update ───────────────────────────────────────────────────────────
 
 class TestClassifyUpdate:
@@ -106,10 +131,13 @@ class TestClassifyUpdate:
 # ── update_dossier — basic state update (BSR-1, BSR-2) ───────────────────────
 
 class TestStateUpdate:
-    def test_first_state_update_seeds_estimate(self):
+    def test_first_state_update_uses_neutral_log_odds_not_direct_seed(self):
         d = _dossier()
-        result = update_dossier(d, _score(implied=0.65), "state", now=_now())
-        assert result.current_estimate == pytest.approx(0.65)
+        score = _score(implied=0.65, quality=0.70)
+        result = update_dossier(d, score, "state", now=_now())
+        expected = _bayesian_log_odds_expected(None, score)
+        assert result.current_estimate == pytest.approx(expected)
+        assert result.current_estimate != pytest.approx(0.65)
 
     def test_state_update_moves_toward_implied(self):
         d = _dossier(current_estimate=0.50, confidence=0.10, prior_estimate=0.50)
@@ -118,20 +146,29 @@ class TestStateUpdate:
         assert result.current_estimate is not None
         assert result.current_estimate > 0.50
 
-    def test_state_update_capped_at_normal_cap(self):
-        # Large movement should be capped at 0.10.
-        d = _dossier(current_estimate=0.50, confidence=0.10, prior_estimate=0.50)
-        score = _score(implied=1.0, quality=1.0)  # would try to move by 0.50
+    def test_log_lr_direction_does_not_subtract_current_estimate(self):
+        d = _dossier(current_estimate=0.80, confidence=0.10, prior_estimate=0.80)
+        score = _score(implied=0.80, quality=0.70)
         result = update_dossier(d, score, "state", now=_now())
-        delta = abs(result.current_estimate - 0.50)
-        assert delta <= _NORMAL_CAP + 1e-9
+        expected = _bayesian_log_odds_expected(0.80, score)
+        assert result.current_estimate == pytest.approx(expected)
+        # A posterior-subtraction formula would produce no movement here.
+        assert result.current_estimate > 0.80
 
-    def test_state_update_capped_at_recovery_cap(self):
+    def test_state_update_uses_per_evidence_log_lr_cap(self):
+        d = _dossier(current_estimate=0.50, confidence=0.10, prior_estimate=0.50)
+        score = _score(implied=1.0, quality=1.0)
+        result = update_dossier(d, score, "state", now=_now())
+        expected = _sigmoid(_logit(0.50) + _E1_LOG_LR_CAP)
+        assert result.current_estimate == pytest.approx(expected)
+
+    def test_state_update_preserves_recovery_state_with_log_lr_cap(self):
         d = _dossier(current_estimate=0.50, confidence=0.10, prior_estimate=0.50, in_recovery=True)
         score = _score(implied=1.0, quality=1.0)
         result = update_dossier(d, score, "state", now=_now())
-        delta = abs(result.current_estimate - 0.50)
-        assert delta <= _RECOVERY_CAP + 1e-9
+        expected = _sigmoid(_logit(0.50) + _E1_LOG_LR_CAP)
+        assert result.current_estimate == pytest.approx(expected)
+        assert result.in_recovery is True
 
     def test_estimate_never_below_zero(self):
         d = _dossier(current_estimate=0.02, confidence=0.1, prior_estimate=0.02)
@@ -348,8 +385,9 @@ class TestDriftEscapeAndRecovery:
         assert result.recovery_started_ts is not None
         assert result.recovery_until_ts is not None
 
-    def test_recovery_uses_halved_cap(self):
-        # After drift escape, recovery mode uses _RECOVERY_CAP (0.05).
+    def test_recovery_preserves_state_machine_under_log_odds_update(self):
+        # After drift escape, recovery mode remains active while estimate math
+        # uses the E1 per-evidence log-LR cap.
         freeze_ts = (_now() - timedelta(days=_HALF_LIFE)).isoformat()
         d = self._frozen_dossier(freeze_ts)
         d = update_dossier(d, _score(is_independent=True), "confidence", now=_now())
@@ -358,8 +396,8 @@ class TestDriftEscapeAndRecovery:
         big_score = _score(implied=0.25, quality=1.0, is_independent=True)
         result = update_dossier(d, big_score, "state", now=_now())
         assert result.current_estimate is not None
-        delta = abs(result.current_estimate - d.current_estimate)
-        assert delta <= _RECOVERY_CAP + 1e-9
+        assert result.current_estimate < d.current_estimate
+        assert result.in_recovery is True
 
     def test_recovery_expires_after_half_life(self):
         # Recovery started one half-life ago.
@@ -481,11 +519,12 @@ class TestSyntheticDriftSequence:
         assert d_recovery.in_recovery is True
         assert d_recovery.recovery_until_ts is not None
 
-        # Step 4: Large state update during recovery — must use halved cap (0.05).
+        # Step 4: Large state update during recovery — recovery stays active
+        # while E1 estimate math applies per-evidence log-LR.
         big_score = _score(implied=0.10, quality=1.0, is_independent=True)
         d_recovering = update_dossier(d_recovery, big_score, "state", now=now)
-        delta = abs(d_recovering.current_estimate - d_recovery.current_estimate)
-        assert delta <= _RECOVERY_CAP + 1e-9
+        assert d_recovering.current_estimate < d_recovery.current_estimate
+        assert d_recovering.in_recovery is True
 
         # Step 5: Advance time past recovery_until_ts.
         recovery_end = datetime.fromisoformat(d_recovery.recovery_until_ts)

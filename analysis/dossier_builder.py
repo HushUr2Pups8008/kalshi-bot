@@ -4,7 +4,7 @@ Pure function layer (INV-4). No I/O, no DB access, no LLM calls.
 
 Implements BSR-1 through BSR-7 from the implementation contract:
   BSR-1: State update vs confidence update classification.
-  BSR-2: Per-update displacement cap (0.10 normal; 0.05 recovery).
+  BSR-2: Per-evidence log-odds cap for state updates.
   BSR-3: Drift detection, freeze, half-life escape, and recovery mode.
   BSR-4: Decay is applied at read time; original_weight is stored undecayed.
   BSR-5: Same-class diminishing returns (baked into EvidenceScore.original_weight).
@@ -28,9 +28,10 @@ _CONFIDENCE_FLOOR: float = 0.05
 _CONFIDENCE_GROWTH_RATE: float = 0.30       # BSR-6
 _CONTRADICTION_DROP: float = 0.20           # BSR-6
 _CONTRADICTION_QUALITY_THRESHOLD: float = 0.60  # BSR-6
-_NORMAL_CAP: float = 0.10                   # BSR-2
-_RECOVERY_CAP: float = 0.05                 # BSR-2, BSR-3
 _DRIFT_THRESHOLD: float = 0.25             # BSR-3
+_LOG_ODDS_EPSILON: float = 0.001            # Cycle-17C E1
+_LOG_LR_CAP: float = 2.0                    # Cycle-17C E1
+_NEUTRAL_PRIOR: float = 0.5                 # Cycle-17C E1
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -40,6 +41,19 @@ def _utc_now() -> datetime:
 
 def _parse_ts(ts: str) -> datetime:
     return datetime.fromisoformat(ts)
+
+
+def _clamp_probability(value: float) -> float:
+    return max(_LOG_ODDS_EPSILON, min(1.0 - _LOG_ODDS_EPSILON, float(value)))
+
+
+def _logit(probability: float) -> float:
+    probability = _clamp_probability(probability)
+    return math.log(probability / (1.0 - probability))
+
+
+def _sigmoid(log_odds: float) -> float:
+    return 1.0 / (1.0 + math.exp(-log_odds))
 
 
 def _is_contradiction(
@@ -123,11 +137,6 @@ def update_dossier(
             # Cross-class signal meets BSR-7 criteria → override to state update.
             update_type = "state"
 
-    # ── Determine displacement cap (BSR-2) ────────────────────────────────────
-    entering_recovery = escaping_drift  # about to become in_recovery
-    use_recovery_cap = dossier.in_recovery or entering_recovery
-    cap = _RECOVERY_CAP if use_recovery_cap else _NORMAL_CAP
-
     # ── Working copies of mutable dossier fields ──────────────────────────────
     current_estimate = dossier.current_estimate
     confidence = dossier.confidence
@@ -153,14 +162,18 @@ def update_dossier(
 
     # ── Apply state or confidence update ──────────────────────────────────────
     if update_type == "state":
-        if current_estimate is None:
-            # First state update: seed the estimate directly (BSR-2 cap not applicable).
-            new_estimate = float(evidence_score.implied_probability)
-        else:
-            raw_delta = evidence_score.implied_probability - current_estimate
-            weighted_delta = raw_delta * evidence_score.original_weight
-            capped_delta = max(-cap, min(cap, weighted_delta))
-            new_estimate = max(0.0, min(1.0, current_estimate + capped_delta))
+        # Cycle-17C E1 criteria-lock: EvidenceScore.implied_probability is an
+        # evidence-only YES estimate, not a posterior conditioned on dossier
+        # state. The LR direction is therefore original_weight * logit(p);
+        # do not subtract logit(current_estimate).
+        prior_for_update = (
+            _NEUTRAL_PRIOR if current_estimate is None else current_estimate
+        )
+        raw_log_lr = evidence_score.original_weight * _logit(
+            evidence_score.implied_probability
+        )
+        capped_log_lr = max(-_LOG_LR_CAP, min(_LOG_LR_CAP, raw_log_lr))
+        new_estimate = _sigmoid(_logit(prior_for_update) + capped_log_lr)
 
         # BSR-6: cross-class state update increases confidence.
         confidence = min(
