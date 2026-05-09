@@ -133,8 +133,14 @@ def _update_probe_ts(db_path: Path, sub: str) -> None:
             conn.commit()
         finally:
             conn.close()
-    except Exception:
-        pass
+    except Exception as exc:
+        # Re-raise so the outer caller (select_subreddits) can fall back to core subs
+        # and the failure surfaces in logs rather than silently corrupting probe state.
+        logging.getLogger("subreddit_selector").error(
+            "[SUBREDDIT] DB write failed (table=subreddit_candidates, sub=%s): %s",
+            sub, exc,
+        )
+        raise
 
 
 def _mark_candidate_suppressed(db_path: Path, sub: str) -> None:
@@ -149,8 +155,14 @@ def _mark_candidate_suppressed(db_path: Path, sub: str) -> None:
             conn.commit()
         finally:
             conn.close()
-    except Exception:
-        pass
+    except Exception as exc:
+        # Re-raise so the outer caller (select_subreddits) can fall back to core subs
+        # and suppression writes are never silently dropped.
+        logging.getLogger("subreddit_selector").error(
+            "[SUBREDDIT] DB write failed (table=subreddit_candidates, sub=%s): %s",
+            sub, exc,
+        )
+        raise
 
 
 def select_subreddits(
