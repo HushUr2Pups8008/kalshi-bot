@@ -159,6 +159,8 @@ class Decision:
             "safety_checks_passed": dict(safety_checks_passed),
         }
 
+    # PLANNED: Task 4 governance interface. Call site at agent.py:235 currently
+    # commented out. See PROFIT-GOV-002 / Task 4 roadmap for activation criteria.
     def to_disabled_source(self):
         """Convert to a Phase-1 DisabledSource. action must be 'disable_source'."""
         from utils.runtime_overrides import DisabledSource, PredictedEffect as ROPredictedEffect
@@ -187,6 +189,8 @@ class Decision:
             ),
         )
 
+    # PLANNED: Task 4 governance interface. Call site at agent.py:235 currently
+    # commented out. See PROFIT-GOV-002 / Task 4 roadmap for activation criteria.
     def to_disabled_keyword(self):
         """Convert to a Phase-1 DisabledKeyword. action must be 'disable_keyword'."""
         from utils.runtime_overrides import DisabledKeyword, PredictedEffect as ROPredictedEffect
@@ -215,6 +219,8 @@ class Decision:
             ),
         )
 
+    # PLANNED: Task 4 governance interface. Call site at agent.py:235 currently
+    # commented out. See PROFIT-GOV-002 / Task 4 roadmap for activation criteria.
     def to_threshold_override(self):
         """Convert to a Phase-1 ThresholdOverride. action must be 'tune_threshold'.
         proposed_change.after holds the new value."""

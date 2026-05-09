@@ -271,6 +271,8 @@ def recency_score(
     return total_effective / total_original
 
 
+# UNUSED: test-only callers. Built ahead of integration. Review by 2026-06-08;
+# delete with matching tests if still untouched.
 def identify_superseded(evidence_list: list[Evidence]) -> frozenset[str]:
     """Return evidence_ids superseded by a newer same-class item with high n-gram overlap.
 
@@ -292,6 +294,8 @@ def identify_superseded(evidence_list: list[Evidence]) -> frozenset[str]:
     return frozenset(superseded)
 
 
+# UNUSED: test-only callers. Built ahead of integration. Review by 2026-06-08;
+# delete with matching tests if still untouched.
 def clear_on_resolution(dossier: Dossier, cleared_ts: str) -> Dossier:
     """Reset belief state after market resolution.
 
