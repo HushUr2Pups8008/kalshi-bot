@@ -65,10 +65,10 @@ from typing import Awaitable, Callable  # noqa: F401 — referenced in string an
 
 from analysis import SignalAnalysis
 from analysis.kelly import kelly_bet
-from analysis.keyword_stats import KeywordStats
+from tasks.stats.keyword_stats import KeywordStats
 from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
-from analysis.source_stats import SourceStats
+from tasks.stats.source_stats import SourceStats
 from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, VERSION,
                     FADE_TWEET_FEED_URLS,
                     MARKET_SERIES_BLOCKLIST_PREFIXES, MAX_NEWS_AGE_SECONDS,

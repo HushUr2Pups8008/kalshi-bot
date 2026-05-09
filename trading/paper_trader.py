@@ -28,7 +28,7 @@ from tabulate import tabulate
 
 import config as config_module
 from analysis import SignalAnalysis
-from analysis.source_credibility import SourceCredibility
+from tasks.stats.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR, PAPER_FLAT_CONTRACTS
 from trading.portfolio import Portfolio, Position
 from utils.logger import get_logger, trade_log, TRADE_LOG_FILE

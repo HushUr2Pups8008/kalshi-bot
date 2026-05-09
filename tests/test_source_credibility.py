@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from analysis.source_credibility import SourceCredibility
+from tasks.stats.source_credibility import SourceCredibility
 
 _REAL_SQLITE_CONNECT = sqlite3.connect
 
@@ -32,7 +32,7 @@ def _shared_memory_connect(name: str):
 @pytest.fixture
 def credibility():
     keeper, connect = _shared_memory_connect("source-credibility")
-    with patch("analysis.source_credibility.sqlite3.connect", side_effect=connect):
+    with patch("tasks.stats.source_credibility.sqlite3.connect", side_effect=connect):
         tracker = SourceCredibility(db_path=Path(":memory:"))
         tracker._conn.execute(
             """

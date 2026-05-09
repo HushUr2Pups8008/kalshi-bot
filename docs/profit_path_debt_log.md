@@ -4459,6 +4459,54 @@ Three coordinated edits, all documentation:
 
 ---
 
+### PROFIT-DEBT-OQ1-SHIM
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-DEBT-OQ1-SHIM |
+| **Title** | Delete `analysis/source_credibility.py`, `source_stats.py`, `keyword_stats.py` shims after one release cycle |
+| **Category** | Tech Debt / Cleanup |
+| **Severity** | LOW |
+| **Status** | OPEN |
+| **Priority** | LATER |
+| **Owner** | UNASSIGNED |
+| **Depends On** | — |
+| **Blocks** | — |
+
+**Description**
+
+Phase-3 OQ1 / P2-07 moved three operational-tracker modules from `analysis/` to `tasks/stats/` to restore INV-4 layer purity. The old paths (`analysis/source_credibility.py`, `analysis/source_stats.py`, `analysis/keyword_stats.py`) now contain three-line shims that re-export the moved class:
+
+```python
+# SHIM: this module moved to tasks/stats/<module>.py.
+# TODO: delete after one release cycle (next housekeeping pass; see PROFIT-DEBT-OQ1-SHIM).
+from tasks.stats.<module> import <Class>  # noqa: F401
+```
+
+The shims exist to allow any caller missed during the rename — including downstream `scripts/`, `tests/`, or future agent-generated code referencing the old paths — to continue working without an immediate hard break.
+
+**Why it matters**
+
+Long-lived shims become permanent imports by accident. Two paths to the same class produce inconsistent grep results, confuse codebase explorers (graph tools, `code-explorer` agent), and complicate future moves.
+
+**Acceptance Criteria**
+
+- All three shim files (`analysis/source_credibility.py`, `analysis/source_stats.py`, `analysis/keyword_stats.py`) deleted.
+- Pre-deletion: grep across the entire repo confirms zero remaining imports of `analysis.source_credibility`, `analysis.source_stats`, `analysis.keyword_stats`. Update any stragglers found.
+- Pytest passes after deletion.
+
+**Target removal date**
+
+Phase-4 housekeeping pass, or 2026-06-08 — whichever comes first. The Phase-2 OQ2 dossier_builder UNUSED markers also have a 2026-06-08 calendar review; align this with that pass for batched cleanup.
+
+**Related**
+
+- `docs/housekeeping/2026-05-09/phase-3-design/oq1-analysis-purity-rename.md` (design doc)
+- Phase-3 Stage 3b commit (the rename)
+- INV-4 in `docs/housekeeping/2026-05-08/architecture.md`
+
+---
+
 ## Execution Views
 
 ---
