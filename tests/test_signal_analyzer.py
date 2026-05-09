@@ -16,7 +16,10 @@ import pytest
 
 import analysis.signal_analyzer as signal_analyzer
 from analysis.signal_analyzer import (
+    _build_llm_meta_kwargs,
     _extract_json,
+    _llm_meta,
+    _ollama_build_payload,
     _ollama_estimate_detailed,
     _parse_llm_response,
     _keyword_score,
@@ -1355,3 +1358,112 @@ class TestRuntimeKeywordDisable:
             assert contribution["keyword"] != "ceasefire", (
                 f"disabled keyword leaked into contributions: {contribution}"
             )
+
+
+# ---------------------------------------------------------------------------
+# P1-02 Stage 3c.1 — pure-helper extraction tests
+# ---------------------------------------------------------------------------
+
+class TestOllamaBuildPayload:
+    """`_ollama_build_payload` is a pure projection of news+market into the
+    OpenAI-compatible Chat Completions request body. Tests pin the exact
+    shape and load-bearing CLAUDE.md gotchas (no `think`, no
+    `repetition_penalty` — both are Ollama-native fields that 422 the
+    /v1/chat/completions endpoint).
+    """
+
+    def _market(self):
+        return _make_full_market()
+
+    def _news(self):
+        return _make_news("Inflation reading prompts rate cut")
+
+    def test_payload_required_keys(self, monkeypatch):
+        monkeypatch.setattr(signal_analyzer.cfg, "ollama_model", "qwen2.5:7b")
+        payload = _ollama_build_payload(self._news(), self._market())
+        assert payload["model"] == "qwen2.5:7b"
+        assert payload["max_tokens"] == 256
+        assert payload["temperature"] == 0
+        assert isinstance(payload["messages"], list)
+        assert len(payload["messages"]) == 2
+        assert payload["messages"][0]["role"] == "system"
+        assert payload["messages"][1]["role"] == "user"
+
+    def test_payload_omits_ollama_native_fields(self, monkeypatch):
+        """`think` and `repetition_penalty` must NOT appear — they 422 the
+        OpenAI-compat endpoint. CLAUDE.md gotcha."""
+        monkeypatch.setattr(signal_analyzer.cfg, "ollama_model", "qwen2.5:7b")
+        payload = _ollama_build_payload(self._news(), self._market())
+        assert "think" not in payload
+        assert "repetition_penalty" not in payload
+
+    def test_payload_user_msg_contains_market_context(self, monkeypatch):
+        monkeypatch.setattr(signal_analyzer.cfg, "ollama_model", "qwen2.5:7b")
+        market = self._market()
+        news = self._news()
+        payload = _ollama_build_payload(news, market)
+        user_content = payload["messages"][1]["content"]
+        assert market.title in user_content
+        assert news.headline in user_content
+
+
+class TestBuildLlmMetaKwargs:
+    """`_build_llm_meta_kwargs` projects the 11 shared LLM-meta fields from
+    `_llm_meta()` output into SignalAnalysisDetail kwarg form.
+    """
+
+    def test_full_meta_projects_all_keys(self):
+        meta = _llm_meta(
+            attempted=True,
+            status="ollama_success",
+            provider="ollama",
+            latency_ms=2500,
+            total_stage_ms=3200,
+            queue_wait_ms=600,
+            http_round_trip_ms=2400,
+            parse_ms=80,
+            http_status=200,
+            contention_observed=False,
+            in_flight_at_entry=1,
+        )
+        kwargs = _build_llm_meta_kwargs(meta)
+        # 12 keys: llm_attempted + 11 projected
+        assert kwargs["llm_attempted"] is True
+        assert kwargs["llm_result_status"] == "ollama_success"
+        assert kwargs["llm_provider"] == "ollama"
+        assert kwargs["llm_latency_ms"] == 2500
+        assert kwargs["llm_total_stage_ms"] == 3200
+        assert kwargs["llm_queue_wait_ms"] == 600
+        assert kwargs["llm_http_round_trip_ms"] == 2400
+        assert kwargs["llm_parse_ms"] == 80
+        assert kwargs["llm_http_status"] == 200
+        assert kwargs["llm_contention_observed"] is False
+        assert kwargs["llm_in_flight_at_entry"] == 1
+        # llm_result_used is NOT projected — set per-callsite
+        assert "llm_result_used" not in kwargs
+
+    def test_partial_meta_uses_get_for_missing_keys(self):
+        """When _llm_meta is built with fewer args, missing optional fields
+        propagate as None via `.get()`."""
+        meta = _llm_meta(
+            attempted=False,
+            status="ollama_circuit_open",
+            provider="ollama",
+        )
+        kwargs = _build_llm_meta_kwargs(meta)
+        assert kwargs["llm_attempted"] is False
+        assert kwargs["llm_result_status"] == "ollama_circuit_open"
+        assert kwargs["llm_provider"] == "ollama"
+        assert kwargs["llm_latency_ms"] is None
+        assert kwargs["llm_http_status"] is None
+        assert kwargs["llm_contention_observed"] is None
+
+    def test_projection_keys_are_signal_analysis_detail_fields(self):
+        """Every key produced by the helper must be a valid kwarg on
+        SignalAnalysisDetail. Catches drift if either side adds a field."""
+        from utils.log_records import SignalAnalysisDetail
+        meta = _llm_meta(attempted=True, status="x", provider="y")
+        kwargs = _build_llm_meta_kwargs(meta)
+        sad_field_names = {f.name for f in dataclasses.fields(SignalAnalysisDetail)}
+        for k in kwargs:
+            assert k in sad_field_names, f"projection key {k!r} not in SignalAnalysisDetail"

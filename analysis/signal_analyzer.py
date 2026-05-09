@@ -124,6 +124,57 @@ def _llm_meta(
     return meta
 
 
+# Keys that `_build_llm_meta_kwargs` projects from `_llm_meta()` output into the
+# SignalAnalysisDetail constructor. These are the 11 LLM-meta fields shared by
+# all three signal-analysis-detail callsites (LLM, no-keyword, keyword paths).
+# `attempted` and `result_used` are NOT in this projection because their values
+# differ across callsites and are passed explicitly. Keep this tuple in sync
+# with the corresponding fields on SignalAnalysisDetail.
+_LLM_META_PROJECTION_KEYS: tuple[str, ...] = (
+    "status", "provider",
+    "latency_ms", "total_stage_ms", "queue_wait_ms",
+    "http_round_trip_ms", "parse_ms", "http_status",
+    "contention_observed", "in_flight_at_entry",
+)
+
+
+def _build_llm_meta_kwargs(llm_meta: dict[str, Any]) -> dict[str, Any]:
+    """Project shared LLM-meta fields into SignalAnalysisDetail kwarg form.
+
+    Returns a dict with `llm_attempted` plus the 10 `llm_<status|provider|*_ms|
+    *_status|contention_observed|in_flight_at_entry>` fields, ready to be
+    `**`-spread into a SignalAnalysisDetail constructor. Callers add
+    `llm_result_used` separately because its value varies per branch.
+    """
+    return {
+        "llm_attempted": llm_meta["attempted"],
+        **{f"llm_{k}": llm_meta.get(k) for k in _LLM_META_PROJECTION_KEYS[2:]},
+        "llm_result_status": llm_meta["status"],
+        "llm_provider": llm_meta["provider"],
+    }
+
+
+def _ollama_build_payload(news, market) -> dict[str, Any]:
+    """Construct the OpenAI-compatible /v1/chat/completions request body.
+
+    Pure: no I/O, no module-state writes. Caller must POST the dict.
+
+    NOTE: `repetition_penalty` and `think` are deliberately absent. Both are
+    Ollama-native API fields, NOT standard OpenAI Chat Completions fields, and
+    /v1/chat/completions returns 422 for unrecognized fields. See CLAUDE.md
+    gotchas about the OpenAI-compat endpoint.
+    """
+    return {
+        "model": cfg.ollama_model,
+        "messages": [
+            {"role": "system", "content": _LLM_SYSTEM_PROMPT},
+            {"role": "user",   "content": _build_user_msg(news, market)},
+        ],
+        "max_tokens": 256,
+        "temperature": 0,
+    }
+
+
 def _status_log_marker(status: str) -> str:
     if status in {"ollama_success", "anthropic_success"}:
         return "[LLM_LATENCY]"
@@ -676,22 +727,8 @@ async def _ollama_estimate_detailed(news, market):
 
     import aiohttp
 
-    user_msg = _build_user_msg(news, market)
     prompt_text = _build_prompt_text(news, market)
-    payload = {
-        "model": cfg.ollama_model,
-        "messages": [
-            {"role": "system", "content": _LLM_SYSTEM_PROMPT},
-            {"role": "user",   "content": user_msg},
-        ],
-        "max_tokens": 256,
-        "temperature": 0,
-        # NOTE: repetition_penalty is a native Ollama API field, NOT a standard OpenAI
-        # Chat Completions field.  Ollama's /v1/chat/completions endpoint returns 422 for
-        # unrecognized fields, which was the dominant ollama_http_error failure mode.
-        # If rep-penalty is needed in future, pass it via "options": {"repeat_penalty": 1.05}
-        # and only when using the native /api/generate endpoint instead.
-    }
+    payload = _ollama_build_payload(news, market)
 
     t0 = time.monotonic()
     try:
@@ -1155,22 +1192,12 @@ async def estimate_probability(
             llm_direction=llm_direction,
             llm_magnitude=llm_magnitude,
             llm_confidence=llm_confidence,
-            llm_attempted=llm_meta["attempted"],
             llm_result_used=True,
-            llm_result_status=llm_meta["status"],
-            llm_provider=llm_meta["provider"],
-            llm_latency_ms=llm_meta.get("latency_ms"),
-            llm_total_stage_ms=llm_meta.get("total_stage_ms"),
-            llm_queue_wait_ms=llm_meta.get("queue_wait_ms"),
-            llm_http_round_trip_ms=llm_meta.get("http_round_trip_ms"),
-            llm_parse_ms=llm_meta.get("parse_ms"),
-            llm_http_status=llm_meta.get("http_status"),
-            llm_contention_observed=llm_meta.get("contention_observed"),
-            llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
             llm_routing_passed=True,
             llm_probability_movement=llm_probability_movement,
             llm_useful=llm_useful,
             pre_llm_would_block_and_useful=pre_llm_would_block_and_useful,
+            **_build_llm_meta_kwargs(llm_meta),
             **probe_fields,
             **pre_llm_fields,
         )
@@ -1200,20 +1227,10 @@ async def estimate_probability(
             base_probability=base_probability,
             final_probability=market.yes_prob,
             market_price=market.yes_prob,
-            llm_attempted=llm_meta["attempted"],
             llm_result_used=False,
-            llm_result_status=llm_meta["status"],
-            llm_provider=llm_meta["provider"],
-            llm_latency_ms=llm_meta.get("latency_ms"),
-            llm_total_stage_ms=llm_meta.get("total_stage_ms"),
-            llm_queue_wait_ms=llm_meta.get("queue_wait_ms"),
-            llm_http_round_trip_ms=llm_meta.get("http_round_trip_ms"),
-            llm_parse_ms=llm_meta.get("parse_ms"),
-            llm_http_status=llm_meta.get("http_status"),
-            llm_contention_observed=llm_meta.get("contention_observed"),
-            llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
             llm_routing_passed=(routing_reason is None),
             llm_routing_reason=routing_reason,
+            **_build_llm_meta_kwargs(llm_meta),
             **probe_fields,
             **pre_llm_fields,
         )
@@ -1243,20 +1260,10 @@ async def estimate_probability(
         base_probability=base_probability,
         final_probability=kw_prob,
         market_price=market.yes_prob,
-        llm_attempted=llm_meta["attempted"],
         llm_result_used=False,
-        llm_result_status=llm_meta["status"],
-        llm_provider=llm_meta["provider"],
-        llm_latency_ms=llm_meta.get("latency_ms"),
-        llm_total_stage_ms=llm_meta.get("total_stage_ms"),
-        llm_queue_wait_ms=llm_meta.get("queue_wait_ms"),
-        llm_http_round_trip_ms=llm_meta.get("http_round_trip_ms"),
-        llm_parse_ms=llm_meta.get("parse_ms"),
-        llm_http_status=llm_meta.get("http_status"),
-        llm_contention_observed=llm_meta.get("contention_observed"),
-        llm_in_flight_at_entry=llm_meta.get("in_flight_at_entry"),
         llm_routing_passed=(routing_reason is None),
         llm_routing_reason=routing_reason,
+        **_build_llm_meta_kwargs(llm_meta),
         **probe_fields,
         **pre_llm_fields,
     )
