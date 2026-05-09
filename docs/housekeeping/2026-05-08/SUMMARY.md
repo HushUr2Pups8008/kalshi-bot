@@ -123,3 +123,49 @@ If selective remediation begins, this is the order with highest ratio of risk-re
 ---
 
 Phase 1 audit complete. Review SUMMARY.md before approving Phase 2 (selective remediation).
+
+---
+
+## Phase 2 Closure (2026-05-08)
+
+Stage-gated remediation completed across four user-approved commits.
+
+### Closed
+
+| Item | Stage | Commit | Notes |
+|------|-------|--------|-------|
+| **P1-01 / PROFIT-SEC-001** | Stage 1 | `ce70924` | Kalshi RSA-PSS signing fails fast at init + per-request. 6 regression tests. |
+| **P1-04 / PROFIT-OBS-006** | Stage 2 | `1d0714c` | `subreddit_selector` SQLite writes log + re-raise; outer caller falls back to core subs. 4 regression tests. |
+| **P1-05** | Stage 3 | `b1e1a0c` | `analysis/evidence_scorer.py:48` trigrams → bigrams. |
+| **P1-06** | Stage 3 | `b1e1a0c` | `analysis/__init__.py:19` `$50 hard cap` → dynamic-cap reference. |
+| **P1-07** | Stage 3 | `b1e1a0c` | `analysis/kelly.py:159` `max(1, int(...))` rounding behaviour clarified. |
+| **P1-08** | Stage 3 | `b1e1a0c` | CLAUDE.md gotcha for `governance/prompts.py:27–31` anchor_rate polarity block (PROFIT-GOV-002). |
+| **P1-09** | Stage 3 | `b1e1a0c` | CLAUDE.md gotcha: `think: False` is Ollama-native-API only; `signal_analyzer.py` uses OpenAI-compat endpoint. |
+| **P2-04** | Stage 3 | (n/a — pre-existing) | `.env.example` REDDIT_*/ANTHROPIC_API_KEY placeholders pre-exist since 2026-03 (commits `a4afbda4`, `b8cf7308`). Audit finding stale. |
+| **P2-05** | Stage 3 | `b1e1a0c` | `kalshi/rest_client.py:50` HMAC-SHA256 → RSA-PSS/SHA-256 class docstring. |
+| **PROFIT-DOC-001** | Stage 3 + cycle-17C OQ5 | `b1e1a0c` + `c664c08` | CLAUDE.md gotchas landed in Phase 2; `/governance` domain constraint landed earlier in cycle-17C OQ5. |
+| **OQ2 carry-overs** | Stage 4 | `24e633b` | UNUSED markers on `analysis/dossier_builder.py` `identify_superseded` + `clear_on_resolution` (calendar review 2026-06-08); PLANNED markers on `governance/decision.py` `to_disabled_*` / `to_threshold_override`; `feeds/google_news_monitor.py` deleted (zero callers). |
+
+### Deferred to Phase 3+
+
+| Item | Reason |
+|------|--------|
+| **P1-02** | `analysis/signal_analyzer.py` oversized functions — refactor risk; needs brainstorming pass before edits. |
+| **P1-03** | `utils/logger.py` 46-kwarg refactor — API design decision needed. |
+| **P2-07 / OQ1** | `analysis/` layer-purity refactor — multi-file rename; Phase 3 work pending user scheduling. |
+
+### Test surface delta
+
+Baseline (start of Phase 2): `1616 passed, 2 skipped, 116 xfailed`.
+End-of-Phase-2: `1626 passed, 2 skipped, 116 xfailed`. +10 regression tests added across Stages 1–2. No regressions.
+
+### Phase-2 commit chain
+
+```
+ce70924  fix(security): kalshi RSA-PSS signing failures fail fast (PROFIT-SEC-001)
+1d0714c  fix(observability): subreddit_selector SQLite write failures no longer silent (PROFIT-OBS-006)
+b1e1a0c  docs: phase-2 docstring + CLAUDE.md gotcha corrections
+24e633b  chore: phase-2 OQ2 carry-over markers + delete google_news_monitor
+```
+
+Branch: `housekeeping/phase-2`. Not pushed; awaiting user merge decision.

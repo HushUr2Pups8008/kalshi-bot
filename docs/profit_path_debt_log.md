@@ -4295,7 +4295,7 @@ Created `PLATFORMS.md` at repo root with four sections: Runtime/Process Manageme
 | **Title** | Silent Kalshi auth bypass on RSA-PSS sign failure (REST + WebSocket) |
 | **Category** | Security / Auth Surface |
 | **Severity** | HIGH |
-| **Status** | OPEN |
+| **Status** | RESOLVED (2026-05-08; Phase-2 commit `ce70924` — `KalshiSigningError` + `KalshiWsSigningError` raise at init on bad PEM and per-request on sign failure; 6 regression tests in `tests/test_kalshi_signing_failfast.py`) |
 | **Priority** | NOW |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
@@ -4347,7 +4347,7 @@ Re-raise the signing exception (or have `_sign()` return `None` and have `_heade
 | **Title** | Silent SQLite write failures in `subreddit_selector` probe-ts and suppression paths |
 | **Category** | Observability / Reliability |
 | **Severity** | MEDIUM |
-| **Status** | OPEN |
+| **Status** | RESOLVED (2026-05-08; Phase-2 commit `1d0714c` — `_update_probe_ts` and `_mark_candidate_suppressed` log table+row context and re-raise; outer caller in `main.py:1559–1575` already falls back to `REDDIT_CORE_SUBREDDITS`. 4 regression tests in `tests/test_subreddit_selector.py`) |
 | **Priority** | LATER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
@@ -4406,7 +4406,7 @@ except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
 | **Title** | CLAUDE.md governance gotcha gaps (PROFIT-GOV-002 anchor_rate block, PROFIT-LLM-001 endpoint nuance) + missing `/governance` domain constraint |
 | **Category** | Documentation / Governance Safety |
 | **Severity** | MEDIUM |
-| **Status** | OPEN |
+| **Status** | RESOLVED (2026-05-08; Phase-2 commit `b1e1a0c` — both gotchas landed in `kalshi-bot/CLAUDE.md` "Governance LLM" section: anchor_rate polarity block (PROFIT-GOV-002) and OpenAI-compat endpoint nuance for `analysis/signal_analyzer.py`. The `/governance` domain constraint was added separately in cycle-17C OQ5 commit `c664c08`.) |
 | **Priority** | NOW |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
