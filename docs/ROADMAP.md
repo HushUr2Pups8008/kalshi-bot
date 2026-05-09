@@ -20,7 +20,7 @@ No repo-level semver policy was documented through the v0.29.x stream (patch ver
 
 ### Wave-1/2/3 deploy timeline (cycle 7 pinned 2026-05-05)
 
-Per cycle-3 `edge-004-closure-path-tldr-v3.md` + cycle-3 LOCK addenda + cycle-5 fire-time playbooks:
+Per cycle-3 EDGE-004 closure path (lever map archived to [`docs/profit_path_debt_log.md`](profit_path_debt_log.md) §Current Status §2.3 on 2026-05-09; original `edge-004-closure-path-tldr-v3.md` archived to `docs/_archive/2026-05-09-docs-consolidation/`) + cycle-3 LOCK addenda + cycle-5 fire-time playbooks:
 
 > **🛑 STRATEGIC PIVOT PER IC §16 (cycle-13 → cycle-16E verdict trail, 2026-05-06 / 2026-05-07).** Cycle trail: Cycle-13 0 positive-EV slices → Cycle-14 `extraction_broken` → Cycle-15B `extraction_fixed_but_scorer_blocked` → Cycle-16D charter-locked `extraction_fixed_but_information_frontier_holds` → Cycle-16D operational reading withdrawn → **Cycle-16E `scorer_fixed_no_signal_confirmed`** (production-proxy 12 trades / 0 wins / -$1.005 P&L / 0 IC §16 slices; production gates ported faithfully line-by-line vs `executor.py:200-244`; market-implied baseline corrected from prior 50%-coin-flip framing). Cycle-16E withdraws prior "99.16% wrong-direction / anti-correlation" framing (artifact of wrong baseline + scorer over-admission). **Cycle-17 §B/§C operator decision RESTORED (un-deferred).** **Wave-1 ships as cleanup/observability hygiene only — does NOT claim edge.** Wave-2 / Wave-3 / Branch-D are **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT**. PROFIT-EDGE-010 closed (Cycle-16E delivered); PROFIT-EDGE-011 active (Cycle-17 operator decision). See `docs/governance/edge-replay-cycle16e-scorer-forensics.md` (Claude N6 appendix); `docs/governance/2026-05-07-cycle-16e-claude-rescope-and-review.md`; `docs/governance/cycle-17-conditional-charter-skeletons.md`.
 
@@ -373,7 +373,7 @@ The literal interpretation will likely block a high fraction of current Trump/Ir
 
 **P3-GATE outcome:**
 - PASS (≥ 1 non-zero edge in paper mode, trailing 14 days) → Phase 4 authorized
-- FAIL (zero non-zero edge) → escalation required; do not proceed to Phase 4. **FAIL escalation path** per [`docs/governance/edge-004-closure-path-tldr-v3.md`](governance/edge-004-closure-path-tldr-v3.md): Wave-2 A.1+ (Branch A passive observe → Branch C legal-analyst onboard → option-A geopolitics specialist) → Wave-3 (Lever B G1=0.04 → Lever C cross-series correlation guard) → Branch D handoff to PROFIT-LLM-001 / P4-GATE Appendix A per [`docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md`](superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md).
+- FAIL (zero non-zero edge) → escalation required; do not proceed to Phase 4. **FAIL escalation path** per [`docs/profit_path_debt_log.md`](profit_path_debt_log.md) §Current Status §2.3 (lever map; absorbed `edge-004-closure-path-tldr-v3.md` on 2026-05-09): Wave-2 A.1+ (Branch A passive observe → Branch C legal-analyst onboard → option-A geopolitics specialist) → Wave-3 (Lever B G1=0.04 → Lever C cross-series correlation guard) → Branch D handoff to PROFIT-LLM-001 / P4-GATE Appendix A per [`docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md`](superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md).
 
 ---
 
@@ -420,7 +420,7 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 
 5. **Phase 4 (live trading) is explicitly gated on measurable non-zero edge in paper mode.** No timeline. If edge does not form after P3 improvements, escalation is required — not more operational changes.
 
-6. **PROFIT-PHASE2-001 soak-early-close path + Wave-1/2/3 deploy infrastructure landed 2026-05-05.** §8.5.1 early-close gates documented in [`docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md`](superpowers/specs/2026-04-24-llm-governance-agent-design.md); §8.5.2 policy-equivalence carve-out admits mid-soak hot-fixes under bounded conditions. Wave-1 → Wave-3 deploy sequence consolidated in [`docs/governance/edge-004-closure-path-tldr-v3.md`](governance/edge-004-closure-path-tldr-v3.md) with locked v1 implementation choices for Lever B (G1=0.04) and Lever C (§3.2 normalized hash). Branch D escalation criteria + bounded sizing-scope specs for PROFIT-LLM-001 (4 axes) and P4-GATE Appendix A (3 axes) landed cycle 3.
+6. **PROFIT-PHASE2-001 soak-early-close path + Wave-1/2/3 deploy infrastructure landed 2026-05-05.** §8.5.1 early-close gates documented in [`docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md`](superpowers/specs/2026-04-24-llm-governance-agent-design.md); §8.5.2 policy-equivalence carve-out admits mid-soak hot-fixes under bounded conditions. Wave-1 → Wave-3 deploy sequence consolidated in [`docs/profit_path_debt_log.md`](profit_path_debt_log.md) §Current Status §2.3 (absorbed `edge-004-closure-path-tldr-v3.md` on 2026-05-09) with locked v1 implementation choices for Lever B (G1=0.04) and Lever C (§3.2 normalized hash). Branch D escalation criteria + bounded sizing-scope specs for PROFIT-LLM-001 (4 axes) and P4-GATE Appendix A (3 axes) landed cycle 3.
 
 ---
 
