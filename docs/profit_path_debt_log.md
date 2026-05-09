@@ -10,13 +10,13 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-05-03 |
+| Last Updated | 2026-05-08 |
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 44 |
-| Open — HIGH | 4 |
-| Open — MEDIUM | 1 |
+| Total Items | 47 |
+| Open — HIGH | 5 |
+| Open — MEDIUM | 3 |
 | Open — LOW | 2 |
 | Items IN_PROGRESS | 1 (PROFIT-PHASE2-001 — soak clock running, no operator action until 2026-05-15) |
 | Items COMPLETE | 35 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-DOSSIER-001, PROFIT-GOV-002) |
@@ -4284,6 +4284,178 @@ Add a `PLATFORMS.md` at the repo root (or a section to `README.md`) with a table
 
 **Implementation Notes** (2026-04-19)  
 Created `PLATFORMS.md` at repo root with four sections: Runtime/Process Management, Automation/Scheduling, Scripts, and Data/Persistence. All Windows-only scripts listed with macOS equivalents. Added a link to `PLATFORMS.md` from `README.md`.
+
+---
+
+### PROFIT-SEC-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-SEC-001 |
+| **Title** | Silent Kalshi auth bypass on RSA-PSS sign failure (REST + WebSocket) |
+| **Category** | Security / Auth Surface |
+| **Severity** | HIGH |
+| **Status** | OPEN |
+| **Priority** | NOW |
+| **Owner** | UNASSIGNED |
+| **Depends On** | — |
+| **Blocks** | — |
+
+**Description**
+
+Both Kalshi clients catch all exceptions raised inside the signing path and return partial or empty header dicts, allowing the request to proceed unsigned:
+
+- `kalshi/rest_client.py:98-100` — `_sign()` catches any exception (bad PEM, missing `cryptography` import, transient error) and returns a headers dict containing only `KALSHI-ACCESS-TIMESTAMP` — no key ID, no signature. `_headers()` then emits these incomplete headers and the request is sent unauthenticated. Kalshi rejects with HTTP 401, which the bot's error path treats as a transient network error rather than a fatal auth misconfiguration.
+- `kalshi/websocket_client.py:96-98` — `_build_ws_auth_headers()` catches all exceptions and returns `{}`. The WebSocket connect proceeds with no auth headers. Connection may succeed for public feeds but silently drops authenticated scope (price updates, fills) without surfacing the cause.
+
+A bad PEM at startup should be a fatal config error, not a per-request silent degradation. The current pattern masks credential misconfiguration behind 401-loop noise.
+
+**Why it matters to profitability / safety / reliability**
+
+1. **Live-trading risk surface.** In live mode (`LIVE_TRADING_ENABLED=true`), a per-request silent auth bypass means trade-placement requests that should fail loudly at startup instead fail per-attempt with 401 — operator may interpret as transient API issue and retry, masking the real problem.
+2. **Soak-evidence integrity.** Paper-mode soaks rely on REST polls for market data; if signing intermittently fails for the same root cause, the data hole is invisible in normal logs.
+3. **Defence-in-depth.** Even with current callers safe, fail-loud auth is the only correct posture for a credential-bearing client.
+
+**Evidence / Source**
+
+- `docs/housekeeping/2026-05-08/security-audit.md` §P1 (audit pass against the 4 load-bearing CLAUDE.md gotchas confirmed all 4 patterns are correct; the bypass is a separate concern in the same files).
+- `kalshi/rest_client.py:98-100`, `kalshi/websocket_client.py:96-98`.
+
+**Proposed Fix**
+
+Re-raise the signing exception (or have `_sign()` return `None` and have `_headers()` refuse to construct auth headers when signature is missing). A misconfigured PEM should surface as a startup failure or a fatal per-request `RuntimeError`, not a silent unsigned request.
+
+**Acceptance Criteria**
+
+- `_sign()` and `_build_ws_auth_headers()` propagate signing exceptions instead of swallowing them.
+- A regression test loads an intentionally malformed PEM and asserts that REST + WS attempts raise an exception rather than returning incomplete headers.
+- CLAUDE.md gotcha optionally updated to note the fail-loud expectation alongside the existing RSA-PSS / `_normalize_pem` guidance.
+
+**Related**
+
+- `docs/housekeeping/2026-05-08/security-audit.md` (Phase-1 audit source)
+- `docs/housekeeping/2026-05-08/SUMMARY.md` (P1-01)
+- CLAUDE.md gotchas: RSA-PSS signing + `_normalize_pem()` (still confirmed-current)
+
+---
+
+### PROFIT-OBS-006
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-OBS-006 |
+| **Title** | Silent SQLite write failures in `subreddit_selector` probe-ts and suppression paths |
+| **Category** | Observability / Reliability |
+| **Severity** | MEDIUM |
+| **Status** | OPEN |
+| **Priority** | LATER |
+| **Owner** | UNASSIGNED |
+| **Depends On** | — |
+| **Blocks** | — |
+
+**Description**
+
+`feeds/subreddit_selector.py` swallows all write failures in two places:
+
+- `subreddit_selector.py:136` — `_update_probe_ts()` wraps the SQLite write in `try / except Exception: pass`. Probe counts are lost without any diagnostic trace.
+- `subreddit_selector.py:152` — `_mark_candidate_suppressed()` uses the same pattern. Suppression writes can fail silently, which permits a suppressed subreddit to re-enter rotation on the next selection cycle.
+
+The right pattern here is: narrow the exception to `(sqlite3.OperationalError, sqlite3.DatabaseError)` and emit `logger.warning(...)` with `exc_info=True`. The `logger` is already imported in this file.
+
+**Why it matters to profitability / safety / reliability**
+
+1. **Suppression bypass risk.** A subreddit suppressed for credibility / rate-limit reasons can re-enter rotation if the suppression write fails — and the operator has no signal that this happened.
+2. **Probe-cadence skew.** Probe-ts is the rate limiter for subreddit_discovery; silent failures mean probes can fire faster than intended without a Reddit-403 paper trail to diagnose.
+3. **Pattern propagation.** This file is one of three places repo-wide where `except Exception: pass` is used for write paths (the other two were verified during the audit and either acceptable or already narrowed). Closing this hardens the pattern.
+
+**Evidence / Source**
+
+- `docs/housekeeping/2026-05-08/python-quality.md` §P1.
+- `docs/housekeeping/2026-05-08/SUMMARY.md` (P1-04).
+- `feeds/subreddit_selector.py:136, :152`.
+
+**Proposed Fix**
+
+Replace `except Exception: pass` with:
+
+```python
+except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
+    logger.warning("subreddit probe-ts update failed: %s", exc, exc_info=True)
+```
+
+(adapt message per call site).
+
+**Acceptance Criteria**
+
+- Both call sites narrow the exception and log with `exc_info=True`.
+- No new exception types are introduced into the call graph (the surrounding `select_subreddits()` flow continues on logged warning).
+- A test demonstrates that a forced `sqlite3.OperationalError` produces a log line and does not crash the selector.
+
+**Related**
+
+- `docs/housekeeping/2026-05-08/python-quality.md` (Phase-1 audit source)
+- `docs/housekeeping/2026-05-08/SUMMARY.md` (P1-04)
+
+---
+
+### PROFIT-DOC-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-DOC-001 |
+| **Title** | CLAUDE.md governance gotcha gaps (PROFIT-GOV-002 anchor_rate block, PROFIT-LLM-001 endpoint nuance) + missing `/governance` domain constraint |
+| **Category** | Documentation / Governance Safety |
+| **Severity** | MEDIUM |
+| **Status** | OPEN |
+| **Priority** | NOW |
+| **Owner** | UNASSIGNED |
+| **Depends On** | — |
+| **Blocks** | — |
+
+**Description**
+
+Phase-1 housekeeping audit identified three documentation gaps that together create regression risk for governance-side changes:
+
+1. **`governance/prompts.py:27-31` anchor_rate polarity block has no CLAUDE.md gotcha.** This block (HIGH `anchor_rate` ≥ 0.95 = no information edge → disable candidate; LOW ≤ 0.50 = informative → keep) was the A5 fix that closed PROFIT-GOV-002 (2026-05-03). It is empirically the minimum content that prevents qwen3:14b from rubber-stamping `disable_source` on every candidate. Removing or rewording these lines silently re-introduces the regression — snapshot tests catch prompt drift but no CLAUDE.md note flags the lines as load-bearing.
+
+2. **The `think: False` qwen3 gotcha covers `governance/llm.py` only.** If `OLLAMA_MODEL` is changed to any qwen3-family model, `analysis/signal_analyzer.py:_ollama_estimate_detailed` (line 680-693) hits the same `format=json` + thinking regression. Additional nuance: `signal_analyzer.py` uses the OpenAI-compat `/v1/chat/completions` endpoint, which does **not** accept `think: False`; `governance/llm.py` uses the native `/api/generate` endpoint. A qwen3 swap in signal_analyzer requires switching endpoints, not just adding the flag. This nuance is in PROFIT-LLM-001 in this debt log but not surfaced as a CLAUDE.md gotcha.
+
+3. **`~/.claude/rules/domain_constraints.md` has no `/governance` rule.** The file covers `/analysis`, `/trading`, `/tasks`, `/feeds`. Phase-3+ governance has real-mode flip authority (proposed_* → applied_* in `runtime_overrides.yaml`); prompt-template edits, no-trade-logic boundary, and the snapshot-test gate are not surfaced to agents editing the layer.
+
+**Why it matters to profitability / safety / reliability**
+
+1. **Future-regression prevention.** PROFIT-GOV-002 was a live-mode-blocker bug that took multiple iterations to fix. The fix exists in code (`prompts.py:27-31`) but is not protected by a CLAUDE.md note; the next agent iterating on the system prompt may remove it without knowing it carries the anti-rubber-stamp behavioral fix.
+2. **Endpoint-mismatch trap.** A qwen3 OLLAMA_MODEL swap in signal_analyzer will silently produce empty `{}` responses (governance is fine because of the existing fix). Operator would see signal LLM "working" but returning no opinions.
+3. **Phase-3 readiness.** `/governance` becomes safety-critical at Phase-3 real-mode flip; absence of a domain constraint means Phase-3 agents have no edit-safety reminder.
+
+**Evidence / Source**
+
+- `docs/housekeeping/2026-05-08/claude-md-audit.md` (M-1, M-2, M-3 in Missing section)
+- `docs/housekeeping/2026-05-08/SUMMARY.md` (P1-08, P1-09, P2-06)
+- `governance/prompts.py:27-31`, `governance/llm.py:196-212`, `analysis/signal_analyzer.py:680-700`
+- Closed entry: PROFIT-GOV-002 (2026-05-03)
+- Open entry: PROFIT-LLM-001 (LOW)
+
+**Proposed Fix**
+
+Three coordinated edits, all documentation:
+
+1. Add to `kalshi-bot/CLAUDE.md` "Governance LLM" section: gotcha for `governance/prompts.py:27-31` referencing PROFIT-GOV-002, the snapshot tests at `tests/test_governance_prompts.py`, and the negative-control harness at `scripts/simulations/governance_negative_control.py`.
+2. Extend the existing `think: False` gotcha with: "If `OLLAMA_MODEL` is changed to any qwen3 model, `analysis/signal_analyzer.py:_ollama_estimate_detailed` also needs mitigation but uses the OpenAI-compat `/v1/chat/completions` endpoint that ignores `think: False` — requires switching to native `/api/generate` as well. See PROFIT-LLM-001."
+3. Add to `~/.claude/rules/domain_constraints.md`: `Trigger: when changing /governance. Action: treat prompt-template edits as high-risk; run tests/test_governance_prompts.py + the negative-control harness before committing; do not add trade-execution logic to the governance layer.`
+
+**Acceptance Criteria**
+
+- All three edits land in a single commit.
+- `tests/test_governance_prompts.py` + the negative-control harness still pass after the docs land (sanity check, since this is a doc-only change).
+- PROFIT-LLM-001 is updated to reference this entry as the docs-side companion.
+
+**Related**
+
+- PROFIT-GOV-002 (closed) — original anchor_rate fix
+- PROFIT-LLM-001 (open, LOW) — signal_analyzer qwen3-readiness work; deferred per Phase-2 spec
+- `docs/housekeeping/2026-05-08/claude-md-audit.md`
+- `docs/housekeeping/2026-05-08/SUMMARY.md`
 
 ---
 
