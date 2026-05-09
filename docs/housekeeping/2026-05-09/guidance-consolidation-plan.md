@@ -43,9 +43,11 @@
 |---|---------|------|-------|-----------------|
 | 2 | Release Versioning T/A format in project CLAUDE.md | KEEP (resolved by #3 Trigger 4 rewrite) | 1 | — |
 | 3 | `documentation_format.md` Trigger 4 vs Trigger 5 self-contradiction | REWRITE | 1 | `~/.claude/rules/documentation_format.md` |
-| 1 | `windows_local.md` NSSM rule (deprecated Windows runtime) | DELETE | 2 | `~/.claude/rules/windows_local.md` |
-| 14 | `windows_local.md` E: drive rule (deprecated Windows runtime) | DELETE | 2 | `~/.claude/rules/windows_local.md` |
+| 1 | `windows_local.md` NSSM rule (deprecated Windows runtime) | DELETE (Option A — file deleted) | 2 | `~/.claude/rules/windows_local.md` |
+| 14 | `windows_local.md` E: drive rule (deprecated Windows runtime) | DELETE (Option A — file deleted) | 2 | `~/.claude/rules/windows_local.md` |
 | 28 | Same as #14 — E: drive duplicate angle | KEEP (covered by #14) | 2 | — |
+| (post-state) | ASCII log strings + UTF-8 encoding rules retained | MOVE | 2 | `~/.claude/rules/windows_local.md` → `~/.claude/rules/portability.md` |
+| (cross-ref) | `~/.claude/project/AGENTS.md:17` line referencing windows_local | DELETE (line removed) | 2 | `~/.claude/project/AGENTS.md` |
 | 4 | `analysis/__init__.py:19` "$50 hard cap" comment | REWRITE | 3 | `analysis/__init__.py` |
 | 5 | `analysis/evidence_scorer.py` "trigrams" docstring | REWRITE | 3 | `analysis/evidence_scorer.py` |
 | 6 | `analysis/kelly.py:159` "rounds down to stay within budget" | REWRITE | 3 | `analysis/kelly.py` |
@@ -173,9 +175,11 @@ Batch 6 (cross-ref + label cleanup) → independent; can run after Batch 3
 
 ## Batch 2 — Windows Runtime Deprecation Cleanup
 
-**Affects:** `~/.claude/rules/windows_local.md`  
-**Test invariant:** N/A (no Python source)  
-**Rationale:** PLATFORMS.md declares Windows runtime deprecated. Two rules in `windows_local.md` are dead artifacts of the deprecated runtime. Two other rules (ASCII log strings, UTF-8 encoding) retain cross-platform value and must be kept.
+**Affects:** `~/.claude/rules/windows_local.md` (deleted), `~/.claude/rules/portability.md` (extended), `~/.claude/project/AGENTS.md` (cross-ref removed)
+**Test invariant:** N/A (no Python source)
+**Rationale:** PLATFORMS.md declares Windows runtime deprecated. Three rules in `windows_local.md` are dead artifacts of the deprecated runtime. Two other rules (ASCII log strings, UTF-8 encoding) are cross-platform-applicable and were moved to `portability.md`.
+
+**Revision (2026-05-08, post-Phase-7 user review):** OQ-2 resolved as 2a (delete log-rotation rule too — full Windows purge). Then user picked post-state Option A (move retained rules to portability.md, delete windows_local.md entirely). Result: cleaner separation, no orphan file. One live cross-ref at `~/.claude/project/AGENTS.md:17` removed in same batch.
 
 ---
 
