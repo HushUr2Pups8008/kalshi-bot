@@ -239,6 +239,8 @@ The cutover preserves four bot-state pillars so the Studio's first paper run doe
 
 `.gitignore` excludes `data/*.db` and `logs/` ("too large/personal for version control"). Following the existing `windows_archive/` precedent, the cutover uses **committed SQL dumps + a logs tarball + plaintext reports + a restore script** rather than committing binary DB files or the live log directories. The handoff is structured as three layers so the Studio operator pulls **everything** from the MacBook in a single `git clone` and never returns to the MacBook physically:
 
+> *Note: the markdown links in the three Layers below point to `transfer/macbook_handoff_2026-05-01/`, which was rewritten out of git history on 2026-05-02 (see "Historical record" callout at the top of this section). The links are preserved as a structural reference; the targets resolve only against the `pre-filter-repo-2026-05-02` tag. The `scripts/restore_macbook_handoff.sh` reference at the end of Layer 3 is the only path that resolves on `main`.*
+
 **Layer 1 — Runtime state** (required before first bot launch):
 - [`transfer/macbook_handoff_2026-05-01/paper_trades.sql`](transfer/macbook_handoff_2026-05-01/paper_trades.sql) — `sqlite3 .dump` of the entire MacBook `paper_trades.db` (schema + data; 456 KB; restored to `data/paper_trades.db`).
 - [`transfer/macbook_handoff_2026-05-01/evidence_store.sql`](transfer/macbook_handoff_2026-05-01/evidence_store.sql) — `sqlite3 .dump` of `evidence_store.db` (1.2 MB; restored to `data/evidence_store.db`).
