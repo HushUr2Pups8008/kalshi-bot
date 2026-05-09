@@ -10,16 +10,16 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-05-08 |
+| Last Updated | 2026-05-08 (PROFIT-DOC-002 — guidance consolidation initiative complete) |
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 47 |
+| Total Items | 48 |
 | Open — HIGH | 5 |
 | Open — MEDIUM | 3 |
 | Open — LOW | 2 |
 | Items IN_PROGRESS | 1 (PROFIT-PHASE2-001 — soak clock running, no operator action until 2026-05-15) |
-| Items COMPLETE | 35 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-DOSSIER-001, PROFIT-GOV-002) |
+| Items COMPLETE | 36 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-DOSSIER-001, PROFIT-GOV-002, PROFIT-DOC-002) |
 
 ### High-Risk Areas
 
@@ -4504,6 +4504,76 @@ Phase-4 housekeeping pass, or 2026-06-08 — whichever comes first. The Phase-2 
 - `docs/housekeeping/2026-05-09/phase-3-design/oq1-analysis-purity-rename.md` (design doc)
 - Phase-3 Stage 3b commit (the rename)
 - INV-4 in `docs/housekeeping/2026-05-08/architecture.md`
+
+---
+
+### PROFIT-DOC-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-DOC-002 |
+| **Title** | Repo-wide guidance consolidation initiative — rules / CLAUDE.md / AGENTS.md / auto-memory |
+| **Category** | Documentation / Agent Guidance Hygiene |
+| **Severity** | LOW |
+| **Status** | COMPLETE |
+| **Priority** | NOW |
+| **Owner** | Claude (Opus 4.7) |
+| **Depends On** | PROFIT-DOC-001 (Phase-2 audit baseline) |
+| **Blocks** | — |
+
+**Description**
+
+Phase-2 foundational-docs audit (commit `d544e53`) and Phase-3 audit-remediation (commit `e0f94bb`) closed the immediate findings on the kalshi-bot project's CLAUDE.md, but the broader guidance surface (`~/.claude/rules/`, `~/.claude/CLAUDE.md`, `~/.claude/AGENTS.md`, `~/.claude/project/AGENTS.md`, project-side `AGENTS.md` + auto-memory entries under `~/.claude/projects/-Users-jacobparenti-vscode-kalshi-bot/memory/`) had accumulated drift, format mismatches, and verbatim-duplicate sections between layers. Initiative ran 2026-05-08 to inventory all 321 `.md` guidance files, detect 33 conflicts, and apply per-batch user-gated fixes on the `housekeeping/guidance-consolidation` branch.
+
+**Why it matters**
+
+Guidance drift is silent — every Claude Code session loads the global rules + the project CLAUDE.md, and stale or contradictory guidance steers agents toward wrong actions (Windows-only rules in a macOS-only runtime, format-rule self-contradiction, line-pin rot, etc.). The audit chain found zero safety-critical regressions in load-bearing project gotchas (signing alg, qwen3 think flag, market-status filter, env-var rename, transaction wrapper, `_normalize_pem` duplication, anchor_rate polarity block — all verified intact), but the surrounding guidance had accumulated noise that this initiative cleaned up.
+
+**Evidence / Source**
+
+- `docs/housekeeping/2026-05-09/guidance-discovery/{inventory,classification,auto-memory-extract}.md` — Phase 5 (3 parallel agents)
+- `docs/housekeeping/2026-05-09/guidance-conflicts/{intra-cluster-conflicts,code-vs-doc-drift,SUMMARY}.md` — Phase 6 (33 findings, 9 HIGH / 10 MEDIUM / 14 LOW)
+- `docs/housekeeping/2026-05-09/guidance-consolidation-plan.md` — Phase 7 plan with per-item dispositions
+- Commits `39fb097`, `8a80fae`, `352838a`, `90b2d18`, `0cdc67b`, `0d9323e` — Phase 8 batches 1–6
+
+**Resolution Summary**
+
+27 findings actioned across 6 user-gated batches; 6 KEEP (low-leverage). Of 33 findings, 0 required risk review or test-invariant changes — entire 1652-passed test suite held throughout.
+
+| Batch | Resolves | Mechanism |
+|------:|----------|-----------|
+| 1 | #2 KEEP, #3 | `documentation_format.md` Trigger 4 narrowed to non-CLAUDE.md (in `~/.claude/`); B1-2 MOVE rejected on user review (project-specific content does not belong in global rule file) |
+| 2 | #1, #14, #28 | DELETE `~/.claude/rules/windows_local.md`; MOVE 2 cross-platform rules to `portability.md`; remove cross-ref from `~/.claude/project/AGENTS.md` |
+| 3 | #7 (#4, #5, #6 KEEP — pre-resolved) | REWRITE `analysis/fade_signal.py` docstring (drop "WebSocket-based replacement"). Phase 6 had inherited stale Phase-2 audit findings on `__init__.py`, `evidence_scorer.py`, `kelly.py`; pre-flight verification showed 3 of 4 already fixed |
+| 4 | #8, #17, #19, #21, #30 | ANNOTATE 5 stale audit findings in `docs/housekeeping/.../foundational-docs-audit/{general-quality,gap-analysis,reference-integrity}.md` with visible RESOLVED-2026-05-08 callouts |
+| 5 | #10, #11, #12, #13, #18, #24 | DELETE 14 verbatim-duplicate lines from project `CLAUDE.md` + REWRITE step-4 wording in project `AGENTS.md` + ADD `/governance` to `~/.claude/project/AGENTS.md` |
+| 6 | #9, #15, #16, #22, #23, drift-#3 (#27 KEEP) | REWRITE `signal_analyzer.py:38` cycle label, `signal_analyzer.py:680-685` revert clause; REWRITE `regime_classifier.py:178` dead `lessons.md` ref; ANNOTATE 2 auto-memory entries (staleness caveat + symbol alias correction) |
+
+**KEPT findings (6 deliberate non-actions)**
+
+- **#25, #26**: line-pin / hybrid-format soft violations in CLAUDE.md (low rot risk)
+- **#27**: README dead links to `transfer/macbook_handoff_2026-05-01/` — README:219 + :242 already disclaim; author intent is preservation as historical reference
+- **#29**: commit SHA citation in auto-memory (stable in this repo)
+- **drift-#1**: `resolve_market()` "thin wrapper" understates calibration role (correct atomicity claim; description nuance only)
+- **drift-#2**: `executor.py:218` line pin describes data-source comment, not guard rationale (functionally correct, line cite mildly misleading)
+
+**Methodology finding (relevant to future audits)**
+
+Phase 6 Agent 1 (intra-cluster conflicts) cited several findings as "per Phase 2 comment-health audit" without re-verifying against the live tree. Three of four Batch 3 targets (`__init__.py`, `evidence_scorer.py`, `kelly.py`) had been silently fixed in unrelated commits between Phase 2 audit and Phase 6 detection. Pre-flight re-verification before each batch's edits is required when the audit chain ages or piggybacks on prior phases. Batches 5 and 6 caught additional plan/reality drift this way (line shifts due to refactor, cross-ref already deleted in Batch 2, file-location mismatch).
+
+**Acceptance Criteria** (all met)
+
+- All 33 Phase-6 findings have an explicit disposition recorded in `guidance-consolidation-plan.md`.
+- Test invariant `1652 passed, 2 skipped, 116 xfailed` held after every Python-touching batch (Batches 3, 6).
+- Cross-reference grep verified clean before each DELETE (no orphan callers introduced).
+- All 7 load-bearing safety claims in project `CLAUDE.md` Critical Gotchas verified intact pre- and post-initiative (signing algorithm, qwen3 `think: False`, market-status filter, env-var name, transaction wrapper, `_normalize_pem` duplication, anchor_rate polarity block).
+- Phase-2 / Phase-3 audit-trail documents annotated rather than deleted, preserving historical context.
+
+**Notes**
+
+- Global config repo `~/.claude/` (separate git repo) accumulated edits from Track 1 Phase-3 work plus this initiative's Batches 1, 2, 5, 6 — committed separately under that repo's branching scheme.
+- Project `AGENTS.md` is still ~95% verbatim copy of global `~/.claude/AGENTS.md`. Phase 6 only flagged step-4 wording (resolved). Full project-AGENTS.md dedup deferred — separate decision flagged in plan.
+- Out-of-scope observations surfaced: `MAX_BET_HARD_CAP` env-var fall-through behavior (would silently default rather than error if unset — gotcha says "old name silently falls back to default", but live env-var name is the new one — this is correct as documented).
 
 ---
 
