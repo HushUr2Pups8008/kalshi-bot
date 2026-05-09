@@ -71,7 +71,7 @@ Reference types: file paths (14), cross-doc refs (9), function/method refs (8), 
 | 40 | RTK.md | 17 | `rtk --version` | command | RESOLVES | "rtk 0.39.0" |
 | 41 | RTK.md | 18 | `rtk gain` (install check) | command | RESOLVES | |
 | 42 | RTK.md | 19 | `which rtk` | command | RESOLVES | |
-| 43 | RTK.md | 29 | "Refer to CLAUDE.md for full command reference." | cross-doc | **BROKEN** | global CLAUDE.md has no RTK command section. Phase 1 SR-1, still open. |
+| 43 | RTK.md | 29 | "Refer to CLAUDE.md for full command reference." | cross-doc | ~~**BROKEN**~~ **RESOLVED 2026-05-08** | RTK.md:29 was updated to "Run `rtk --help` for the full command reference." (guidance-consolidation Phase 8 Batch 4). |
 | 44 | AGENTS.md | 13 | `project/AGENTS.md` | path/label | AMBIGUOUS | no `project/` dir; project-level lives at repo root |
 | 45 | AGENTS.md | 20 | `rules/*.md` | path glob | RESOLVES | 10 rule files |
 | 46 | domain_constraints.md | 3 | `/analysis` | dir ref | RESOLVES | |
@@ -97,6 +97,9 @@ Reference types: file paths (14), cross-doc refs (9), function/method refs (8), 
 - Phase 1 overlap: not covered.
 
 ### F-2 — RTK.md:29 circular reference (P3, S)
+
+> **[RESOLVED 2026-05-08 — guidance-consolidation Phase 8 Batch 4]** Live RTK.md:29 reads `Run \`rtk --help\` for the full command reference.` Circular reference removed. F-2 / SR-1 closed.
+
 - "Refer to CLAUDE.md for full command reference." Global CLAUDE.md points back via `@RTK.md` — circular dead-end.
 - Effort: trivial. Delete line 29 or replace with "See sections above."
 - Phase 1 overlap: Phase 1 SR-1 (identical), still unresolved.
@@ -107,6 +110,9 @@ Reference types: file paths (14), cross-doc refs (9), function/method refs (8), 
 - Phase 1 overlap: not covered.
 
 ### F-4 — domain_constraints.md:19 `cycle-17C` label without path (P3, S)
+
+> **[RESOLVED 2026-05-08 — guidance-consolidation Phase 8 Batch 4]** Live `domain_constraints.md:19` already includes the full charter path: `docs/governance/2026-05-07-cycle-17c-charter-single-variable-redesign.md`. F-4 is stale.
+
 - Charter exists at `docs/governance/2026-05-07-cycle-17c-charter-single-variable-redesign.md` but label alone is not navigable.
 - Effort: trivial. Append the path inline.
 - Phase 1 overlap: not covered.

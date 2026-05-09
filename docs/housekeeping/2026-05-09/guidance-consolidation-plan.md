@@ -302,9 +302,13 @@ Only `analysis/fade_signal.py:10-13` retained the inaccurate "WebSocket-based re
 
 ## Batch 4 — Stale Audit Document Annotation
 
-**Affects:** `docs/housekeeping/2026-05-09/foundational-docs-audit/` files  
-**Test invariant:** N/A (no Python source, no rule files)  
+**Affects:** `docs/housekeeping/2026-05-09/foundational-docs-audit/{general-quality,gap-analysis,reference-integrity}.md`
+**Test invariant:** N/A (no Python source, no rule files)
 **Rationale:** Five findings are stale audit notes whose target issues were resolved in Phase 3 or earlier. These audit documents are historical — annotate rather than delete to preserve the resolution trail.
+
+**Revision (2026-05-08, executor pre-flight):** B4-4 plan said F-4 lives in `general-quality.md`. F-4 actually lives in `reference-integrity.md:109-112`. Annotation applied at correct location. Also annotated F-2 in `reference-integrity.md` (RTK.md:29 detailed entry — same finding as row 43 BROKEN, different format) for completeness, since both reference the same closed SR-1 issue.
+
+Annotation form: visible blockquote callout `> **[RESOLVED 2026-05-08 — guidance-consolidation Phase 8 Batch 4]** ...` placed immediately above each stale finding. Visible to humans and to grep'ing agents (HTML comments would be invisible to standard markdown renderers).
 
 ---
 
@@ -344,15 +348,15 @@ Only `analysis/fade_signal.py:10-13` retained the inaccurate "WebSocket-based re
 
 ---
 
-### Entry B4-4: Finding #21 — ANNOTATE `general-quality.md` F-4 cycle-17C path finding
+### Entry B4-4: Finding #21 — ANNOTATE `reference-integrity.md` F-4 cycle-17C path finding
 
 **Finding:** F-4 says `domain_constraints.md` cycle-17C label has "no path." Live file includes the full path.
 
-**Action:** ANNOTATE the F-4 entry in `general-quality.md`.
+**Action:** ANNOTATE the F-4 entry in `reference-integrity.md` (plan originally said `general-quality.md`; F-4 actually lives in `reference-integrity.md` lines 109-112).
 
-**File:** `/Users/jacobparenti/vscode/kalshi-bot/docs/housekeeping/2026-05-09/foundational-docs-audit/general-quality.md`
+**File:** `/Users/jacobparenti/vscode/kalshi-bot/docs/housekeeping/2026-05-09/foundational-docs-audit/reference-integrity.md`
 
-**Annotation:** `<!-- RESOLVED: domain_constraints.md line 19 already contains the full path: "docs/governance/2026-05-07-cycle-17c-charter-single-variable-redesign.md". F-4 finding is stale. -->`
+**Annotation applied (visible callout):** `> **[RESOLVED 2026-05-08 — guidance-consolidation Phase 8 Batch 4]** Live domain_constraints.md:19 already includes the full charter path: docs/governance/2026-05-07-cycle-17c-charter-single-variable-redesign.md. F-4 is stale.`
 
 ---
 

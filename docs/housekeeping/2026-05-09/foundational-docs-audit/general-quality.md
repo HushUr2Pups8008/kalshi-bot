@@ -98,6 +98,8 @@ All 9 rule files use Trigger/Action format consistently, per `documentation_form
 | `validation.md` | 16 | 92/100 (A−) | Strong — explicit "do not claim validation that was not performed." |
 | `windows_local.md` | 18 | 87/100 (B+) | Specific, NSSM-aware. |
 
+> **[RESOLVED 2026-05-08 — guidance-consolidation Phase 8 Batch 4]** Option (a) was implemented. Live `~/.claude/rules/domain_constraints.md:4` now reads `Action: keep it pure analysis only — no stats/aggregation modules, no API calls, no trade execution. Operational trackers (DB-owning state, source/keyword stats) belong in tasks/ (e.g. tasks/stats/).` Rule and practice are aligned. No further action.
+
 **G-7 (P2, M) — `/analysis` purity rule may not match current reality:** Commit `8acfc47` (OQ1/P2-07) moved stats modules from `/analysis` to `/tasks/stats/`. The current `domain_constraints.md` rule says `/analysis: keep it pure; do not add API calls or trade execution.` Stats are neither, but the move suggests the team is treating `/analysis` more strictly than the rule's literal wording (only "API calls or trade execution" are forbidden — stats *are* allowed by the current rule). The rule and the practice have drifted apart. Either:
 - (a) Tighten the `/analysis` rule to "pure analysis logic only — no stats/aggregation, no API calls, no execution" (matches practice, stricter).
 - (b) Loosen and document: leave the rule as-is and note that stats happen to live in `/tasks/stats/` for orchestration reasons.
@@ -122,6 +124,9 @@ Two recent fix commits introduce reusable lessons:
 Neither is currently a CLAUDE.md gotcha. They map to the same meta-pattern: *don't swallow security or observability errors*. **Recommendation:** consider one cross-cutting gotcha or rule (see gap-analysis.md output for new-rule candidates).
 
 ### G-6 (P3, S) — `documentation_format.md` is new since Phase 1; not yet referenced from CLAUDE.md
+
+> **[RESOLVED 2026-05-08 — guidance-consolidation Phase 8 Batch 4]** Project `CLAUDE.md:25` now contains `See ~/.claude/rules/documentation_format.md for documentation format rules.` G-6 is stale. No further action.
+
 The rule was added recently (line count 22; Phase 1 audit on 2026-05-08 did not include it in the file list). Project CLAUDE.md cross-references planning, validation, git_workflow, release_versioning — but not `documentation_format.md`. Adding a one-line cross-ref would make the format-by-purpose principle visible to agents that read CLAUDE.md before diving into rule files. **Optional — agents typically encounter the rule via the auto-loaded global instructions block in any case.**
 
 ---

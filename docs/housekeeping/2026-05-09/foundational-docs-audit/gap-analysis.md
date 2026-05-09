@@ -1,5 +1,7 @@
 # Gap Analysis — Cross-Cutting Rule Candidates (Phase 2)
 
+> **[RESOLVED 2026-05-08 — guidance-consolidation Phase 8 Batch 4]** All four C-1..C-4 candidates are now live in rule files: C-1 in `risk_review.md` (fail-fast on security/observability paths), C-2 in `documentation_format.md` (cite behavior or function name, not line numbers), C-3 in `portability.md` (absolute UTC at write time), C-4 in `editing_safety.md` (verify references before recommending). Phase 2 status of "all candidates are proposals requiring user approval" no longer reflects reality. No further action.
+
 > Read-only gap analysis under the `rules-distill` rubric. Identify principles that appear in 2+ skills/commits but are NOT codified in any `~/.claude/rules/` file (or are partially covered and worth tightening).
 >
 > Scope: `~/.claude/rules/` (10 files), recent project commits (`git log --oneline -50` covering cycle-14 through phase-3 closure), and skill descriptions visible in this session.
