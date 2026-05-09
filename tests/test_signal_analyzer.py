@@ -16,11 +16,15 @@ import pytest
 
 import analysis.signal_analyzer as signal_analyzer
 from analysis.signal_analyzer import (
+    _OLLAMA_FAILURE_THRESHOLD,
+    _OLLAMA_PROBE_INTERVAL,
     _build_llm_meta_kwargs,
     _extract_json,
     _llm_meta,
     _ollama_build_payload,
+    _ollama_check_circuit,
     _ollama_estimate_detailed,
+    _ollama_record_failure,
     _parse_llm_response,
     _keyword_score,
     estimate_probability,
@@ -1467,3 +1471,102 @@ class TestBuildLlmMetaKwargs:
         sad_field_names = {f.name for f in dataclasses.fields(SignalAnalysisDetail)}
         for k in kwargs:
             assert k in sad_field_names, f"projection key {k!r} not in SignalAnalysisDetail"
+
+
+class TestOllamaCheckCircuit:
+    """Circuit-breaker helper. Pure-state interactions with module globals."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_circuit(self):
+        signal_analyzer._ollama_consecutive_failures = 0
+        signal_analyzer._ollama_down_until = 0.0
+        yield
+        signal_analyzer._ollama_consecutive_failures = 0
+        signal_analyzer._ollama_down_until = 0.0
+
+    @pytest.mark.asyncio
+    async def test_circuit_closed_returns_proceed(self):
+        may_proceed, meta = await _ollama_check_circuit()
+        assert may_proceed is True
+        assert meta is None
+
+    @pytest.mark.asyncio
+    async def test_circuit_open_within_window_blocks(self, monkeypatch):
+        # Set down_until to far future
+        signal_analyzer._ollama_down_until = 9.99e18
+        may_proceed, meta = await _ollama_check_circuit()
+        assert may_proceed is False
+        assert meta["status"] == "ollama_circuit_open"
+        assert meta["attempted"] is True
+
+    @pytest.mark.asyncio
+    async def test_probe_failure_extends_window_without_counter_bump(self, monkeypatch):
+        signal_analyzer._ollama_down_until = 1.0  # past time → enter probe path
+        signal_analyzer._ollama_consecutive_failures = 5
+
+        async def _ping_fail():
+            return False
+
+        monkeypatch.setattr(signal_analyzer, "_ollama_ping", _ping_fail)
+        may_proceed, meta = await _ollama_check_circuit()
+        assert may_proceed is False
+        assert meta["status"] == "ollama_probe_failed"
+        # Counter MUST NOT increment on probe failure
+        assert signal_analyzer._ollama_consecutive_failures == 5
+        assert signal_analyzer._ollama_down_until > 0.0
+
+    @pytest.mark.asyncio
+    async def test_probe_success_resets_counter_and_window(self, monkeypatch):
+        signal_analyzer._ollama_down_until = 1.0
+        signal_analyzer._ollama_consecutive_failures = 5
+
+        async def _ping_ok():
+            return True
+
+        monkeypatch.setattr(signal_analyzer, "_ollama_ping", _ping_ok)
+        may_proceed, meta = await _ollama_check_circuit()
+        assert may_proceed is True
+        assert meta is None
+        assert signal_analyzer._ollama_consecutive_failures == 0
+        assert signal_analyzer._ollama_down_until == 0.0
+
+
+class TestOllamaRecordFailure:
+    """Failure-recording helper. Counter increment + circuit-open."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_circuit(self):
+        signal_analyzer._ollama_consecutive_failures = 0
+        signal_analyzer._ollama_down_until = 0.0
+        yield
+        signal_analyzer._ollama_consecutive_failures = 0
+        signal_analyzer._ollama_down_until = 0.0
+
+    def test_unavailable_below_threshold_increments_only(self):
+        signal_analyzer._ollama_consecutive_failures = 0
+        meta = _ollama_record_failure("unavailable", 250)
+        assert meta["status"] == "ollama_unavailable"
+        assert meta["attempted"] is True
+        assert meta["latency_ms"] == 250
+        assert signal_analyzer._ollama_consecutive_failures == 1
+        assert signal_analyzer._ollama_down_until == 0.0  # not yet open
+
+    def test_timeout_below_threshold_increments_only(self):
+        meta = _ollama_record_failure("timeout", 60000)
+        assert meta["status"] == "ollama_timeout"
+        assert signal_analyzer._ollama_consecutive_failures == 1
+        assert signal_analyzer._ollama_down_until == 0.0
+
+    def test_threshold_reached_opens_circuit(self):
+        signal_analyzer._ollama_consecutive_failures = _OLLAMA_FAILURE_THRESHOLD - 1
+        meta = _ollama_record_failure("unavailable", 100)
+        assert signal_analyzer._ollama_consecutive_failures == _OLLAMA_FAILURE_THRESHOLD
+        assert signal_analyzer._ollama_down_until > time.monotonic()
+        # Circuit-open delay is _OLLAMA_PROBE_INTERVAL seconds
+        delta = signal_analyzer._ollama_down_until - time.monotonic()
+        assert _OLLAMA_PROBE_INTERVAL - 1 < delta <= _OLLAMA_PROBE_INTERVAL
+
+
+# Need `time` for the circuit threshold test. Place at end so imports stay
+# grouped at top; helper-tests above don't otherwise need it.
+import time  # noqa: E402

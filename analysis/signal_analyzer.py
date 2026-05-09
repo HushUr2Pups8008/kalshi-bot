@@ -154,6 +154,87 @@ def _build_llm_meta_kwargs(llm_meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _ollama_check_circuit() -> tuple[bool, dict[str, Any] | None]:
+    """Circuit-breaker gate before Ollama HTTP commit.
+
+    Returns `(may_proceed, early_meta)`:
+      - `(True, None)`: circuit closed (or recovered via probe). Caller may post.
+      - `(False, meta)`: circuit open OR probe failed. Caller short-circuits with
+        the returned `_llm_meta` dict.
+
+    Side effects (preserved verbatim from prior inline block):
+      - Resets `_ollama_consecutive_failures` and `_ollama_down_until` on probe
+        success.
+      - Extends `_ollama_down_until` on probe failure WITHOUT incrementing the
+        failure counter (probes must not keep the circuit permanently open).
+      - Emits `[LLM_HEALTH]` warning + ping-success info logs.
+    """
+    global _ollama_consecutive_failures, _ollama_down_until
+
+    if _ollama_down_until <= 0.0:
+        return True, None
+
+    if time.monotonic() < _ollama_down_until:
+        return False, _llm_meta(attempted=True, status="ollama_circuit_open", provider="ollama")
+
+    # Probe window: run a cheap ping before committing to 60s inference.
+    if not await _ollama_ping():
+        _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
+        log.warning(
+            "[LLM_HEALTH] provider=ollama probe_failed=true retry_in_s=%d",
+            _OLLAMA_PROBE_INTERVAL,
+        )
+        return False, _llm_meta(attempted=True, status="ollama_probe_failed", provider="ollama")
+
+    log.info(
+        "Ollama ping succeeded after %d failures -- attempting inference",
+        _ollama_consecutive_failures,
+    )
+    _ollama_consecutive_failures = 0
+    _ollama_down_until = 0.0
+    return True, None
+
+
+def _ollama_record_failure(exc_type: str, latency_ms: int) -> dict[str, Any]:
+    """Record a per-request Ollama failure and return the failure `_llm_meta`.
+
+    Handles `exc_type in {"unavailable", "timeout"}` — both share counter-
+    increment + circuit-open logic. The generic `Exception` path is NOT
+    routed through here because it does not increment the counter (treats
+    code errors distinctly from Ollama-availability errors).
+
+    Side effects:
+      - Increments `_ollama_consecutive_failures`.
+      - Opens the circuit (`_ollama_down_until = ...`) when threshold reached.
+      - Emits `[LLM_HEALTH]` warning on circuit open, or a per-exc_type
+        debug/warning when threshold not yet reached.
+    """
+    global _ollama_consecutive_failures, _ollama_down_until
+
+    _ollama_consecutive_failures += 1
+    if _ollama_consecutive_failures >= _OLLAMA_FAILURE_THRESHOLD:
+        _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
+        log.warning(
+            "[LLM_HEALTH] provider=ollama circuit_open=true failures=%d retry_in_s=%d reason=%s",
+            _ollama_consecutive_failures, _OLLAMA_PROBE_INTERVAL, exc_type,
+        )
+    elif exc_type == "unavailable":
+        log.debug("Ollama not running -- falling back to keyword scoring")
+    elif exc_type == "timeout":
+        log.warning(
+            "Ollama estimation failed: timed out after %ss (model loading or CPU overloaded)",
+            cfg.ollama_request_timeout_seconds,
+        )
+
+    status_map = {"unavailable": "ollama_unavailable", "timeout": "ollama_timeout"}
+    return _llm_meta(
+        attempted=True,
+        status=status_map[exc_type],
+        provider="ollama",
+        latency_ms=latency_ms,
+    )
+
+
 def _ollama_build_payload(news, market) -> dict[str, Any]:
     """Construct the OpenAI-compatible /v1/chat/completions request body.
 
@@ -705,25 +786,9 @@ async def _ollama_estimate_detailed(news, market):
     """
     global _ollama_consecutive_failures, _ollama_down_until
 
-    if _ollama_down_until > 0.0:
-        if time.monotonic() < _ollama_down_until:
-            return None, _llm_meta(attempted=True, status="ollama_circuit_open", provider="ollama")
-        # Probe window: run a cheap ping before committing to 60s inference.
-        # A failed ping just extends the timer without incrementing the failure
-        # counter -- prevents probes from keeping the circuit permanently open.
-        if not await _ollama_ping():
-            _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
-            log.warning(
-                "[LLM_HEALTH] provider=ollama probe_failed=true retry_in_s=%d",
-                _OLLAMA_PROBE_INTERVAL,
-            )
-            return None, _llm_meta(attempted=True, status="ollama_probe_failed", provider="ollama")
-        log.info(
-            "Ollama ping succeeded after %d failures -- attempting inference",
-            _ollama_consecutive_failures,
-        )
-        _ollama_consecutive_failures = 0
-        _ollama_down_until = 0.0
+    may_proceed, early_meta = await _ollama_check_circuit()
+    if not may_proceed:
+        return None, early_meta
 
     import aiohttp
 
@@ -878,31 +943,10 @@ async def _ollama_estimate_detailed(news, market):
 
     except aiohttp.ClientConnectorError:
         latency_ms = int((time.monotonic() - t0) * 1000)
-        _ollama_consecutive_failures += 1
-        if _ollama_consecutive_failures >= _OLLAMA_FAILURE_THRESHOLD:
-            _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
-            log.warning(
-                "[LLM_HEALTH] provider=ollama circuit_open=true failures=%d retry_in_s=%d reason=unavailable",
-                _ollama_consecutive_failures, _OLLAMA_PROBE_INTERVAL,
-            )
-        else:
-            log.debug("Ollama not running -- falling back to keyword scoring")
-        return None, _llm_meta(attempted=True, status="ollama_unavailable", provider="ollama", latency_ms=latency_ms)
+        return None, _ollama_record_failure("unavailable", latency_ms)
     except asyncio.TimeoutError:
         latency_ms = int((time.monotonic() - t0) * 1000)
-        _ollama_consecutive_failures += 1
-        if _ollama_consecutive_failures >= _OLLAMA_FAILURE_THRESHOLD:
-            _ollama_down_until = time.monotonic() + _OLLAMA_PROBE_INTERVAL
-            log.warning(
-                "[LLM_HEALTH] provider=ollama circuit_open=true failures=%d retry_in_s=%d reason=timeout",
-                _ollama_consecutive_failures, _OLLAMA_PROBE_INTERVAL,
-            )
-        else:
-            log.warning(
-                "Ollama estimation failed: timed out after %ss (model loading or CPU overloaded)",
-                cfg.ollama_request_timeout_seconds,
-            )
-        return None, _llm_meta(attempted=True, status="ollama_timeout", provider="ollama", latency_ms=latency_ms)
+        return None, _ollama_record_failure("timeout", latency_ms)
     except Exception as exc:
         latency_ms = int((time.monotonic() - t0) * 1000)
         log.warning("Ollama estimation failed: %s (%s)", exc, type(exc).__name__)
