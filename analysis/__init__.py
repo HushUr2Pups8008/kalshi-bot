@@ -16,7 +16,7 @@ class SignalAnalysis:
     side:                   str          # "yes" | "no"
     kelly_fraction:         float        # raw Kelly fraction
     kelly_dollars:          float        # Kelly-sized bet in dollars
-    capped_dollars:         float        # after $50 hard cap
+    capped_dollars:         float        # after dynamic per-bet cap (cfg.dynamic_max_bet(notional); see MAX_BET_HARD_CAP)
     keywords_matched:       list[str]    = field(default_factory=list)
     reasoning:              str          = ""
     confidence:             float        = 0.5   # 0-1 overall confidence in the estimate

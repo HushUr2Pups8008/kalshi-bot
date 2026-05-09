@@ -53,8 +53,9 @@ class KalshiRestClient:
     """
     Thin wrapper around the Kalshi REST API.
 
-    Authentication uses HMAC-SHA256 over the canonical request string that
-    Kalshi specifies for API key auth. If the private key is not configured
+    Authentication uses RSA-PSS/SHA-256 (salt_length=DIGEST_LENGTH) over the
+    canonical request string that Kalshi specifies for API key auth — see
+    _sign() for the exact construction. If the private key is not configured
     the client still works for public endpoints (market data).
     """
 

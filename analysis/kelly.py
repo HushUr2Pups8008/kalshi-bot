@@ -156,7 +156,12 @@ def kelly_bet(
 def contracts_from_dollars(dollars: float, price_cents: float) -> int:
     """
     Convert a dollar amount to an integer number of Kalshi contracts.
-    Rounds down to stay within budget.
+
+    Rounding: int() truncates toward zero (rounds down) to stay within budget.
+    Floor of 1: when a single contract costs more than `dollars`, the result is
+    still 1 — exceeding the requested budget by up to one contract's price. The
+    caller is responsible for skipping the trade if even one contract is
+    unaffordable.
     """
     if price_cents <= 0:
         return 0

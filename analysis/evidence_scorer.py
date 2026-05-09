@@ -45,7 +45,7 @@ def _extract_ngrams(text: str, n: int = _NGRAM_SIZE) -> frozenset[str]:
 
 
 def ngram_overlap(headline_a: str, headline_b: str) -> float:
-    """Jaccard similarity over word trigrams (exported for testing and dossier_builder)."""
+    """Jaccard similarity over word bigrams (exported for testing and dossier_builder)."""
     ga = _extract_ngrams(headline_a)
     gb = _extract_ngrams(headline_b)
     if not ga or not gb:
