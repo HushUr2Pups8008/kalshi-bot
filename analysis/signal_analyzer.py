@@ -35,7 +35,7 @@ def _emit_extraction_trace_step(
     output_signal_magnitude: float,
     intermediate_state: dict[str, Any],
 ) -> None:
-    """Optional debug-only extraction trace hook for Cycle-15B diagnostics."""
+    """Debug-only extraction trace hook, gated on KALSHI_EXTRACTION_TRACE=1."""
     if os.environ.get("KALSHI_EXTRACTION_TRACE") != "1":
         return
     log.debug(
@@ -681,8 +681,9 @@ def _build_user_msg(news, market) -> str:
     # the LLM prompt to test the price-in-prompt anchoring hypothesis. See
     # ROADMAP P0.3 Verdict AMENDMENT (2026-04-24). Original line was
     #   f"CURRENT YES PRICE: {market.yes_price:.1f} cents ({market.yes_prob:.1%})\n"
-    # Revert if the 12h re-run of scripts/flag_outcome_correlation.py shows
-    # no drop from the 98.99% baseline anchor rate.
+    # P0.4 experiment closed early per ROADMAP.md:228; revert condition no
+    # longer pending. Original line preserved here for reference if anchoring
+    # behavior needs to be restored.
     resolution = market.subtitle if market.subtitle else market.title
     return (
         f"MARKET TITLE: {market.title}\n"

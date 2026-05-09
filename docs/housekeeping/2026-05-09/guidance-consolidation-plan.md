@@ -66,10 +66,10 @@
 | 25+drift-#2 | `executor.py:218` line-number pin + misdirection | REWRITE | 5 | Project `CLAUDE.md` |
 | drift-#1 | `resolve_market()` called "thin wrapper" understates calibration role | REWRITE | 5 | Project `CLAUDE.md` |
 | 9+23 | Auto-memory stale P&L metrics + FUTURE tag on existing doc | REWRITE | 6 | `~/.claude/projects/-Users-jacobparenti-vscode-kalshi-bot/memory/feedback_edge_priority_over_deploy_safety.md` |
-| 15 | `signal_analyzer.py:547-552` stale "Revert if 12h re-run" comment | REWRITE | 6 | `analysis/signal_analyzer.py` |
+| 15 | `signal_analyzer.py:680-685` (refactor moved from :547-552) stale "Revert if 12h re-run" comment | REWRITE | 6 | `analysis/signal_analyzer.py` |
 | 16 | `signal_analyzer.py:37` "Cycle-15B diagnostics" label | REWRITE | 6 | `analysis/signal_analyzer.py` |
 | 22 | `regime_classifier.py:178` references nonexistent `lessons.md` | REWRITE | 6 | `analysis/regime_classifier.py` |
-| 27 | README 9 dead links to `transfer/macbook_handoff_2026-05-01/` | DELETE | 6 | `README.md` |
+| 27 | README 9 dead links to `transfer/macbook_handoff_2026-05-01/` | KEEP (per author intent — README:219 + :242 already disclaim) | 6 | — |
 | drift-#3 | MEMORY.md `p_yes_at_decision_time` symbol not in codebase | ANNOTATE | 6 | `~/.claude/projects/-Users-jacobparenti-vscode-kalshi-bot/memory/MEMORY.md` |
 
 ---
@@ -494,6 +494,12 @@ ls -la /Users/jacobparenti/vscode/kalshi-bot/CLAUDE.md
 ---
 
 ## Batch 6 — Cross-Reference and Label Cleanup
+
+**Revision (2026-05-08, executor pre-flight + post-flight):**
+- B6-3: comment moved by refactor; live location is `signal_analyzer.py:680-685`. Edit applied at correct location. Cited ROADMAP.md:228 for "P0.4 closed early" claim.
+- B6-5: README author explicitly preserves the 9 dead links as historical reference (line 219 self-documents the rewrite; line 242 disclaims the link targets resolve only against `pre-filter-repo-2026-05-02` tag). Plan's DELETE overrides author intent. Reclassified KEEP — no edit applied.
+- Orphan auto-memory file `project_mac_studio_prep.md` referenced in earlier Batch 2 cross-ref grep was already absent from disk by Batch 6 — no action needed.
+- Verified all 5 applied Python edits hold the 1652 test invariant.
 
 **Affects:** Auto-memory files, `analysis/signal_analyzer.py`, `analysis/regime_classifier.py`, `README.md`  
 **Test invariant:** 1652 passed, 2 skipped, 116 xfailed — must hold for signal_analyzer.py and regime_classifier.py edits. Edits are comment-only.

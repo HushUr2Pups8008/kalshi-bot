@@ -175,7 +175,7 @@ def _days_to_close(close_time_str: str) -> Optional[float]:
 def _series_prior(market: KalshiMarket) -> Optional[tuple[float, float, float]]:
     """Return a regime prior tuple based on series-ticker prefix, or None."""
     # Check both series_ticker and the market's own ticker (series_ticker can be
-    # empty even when the market's ticker has a recognisable prefix — see lessons.md).
+    # empty even when the market's ticker has a recognisable prefix).
     for candidate in (market.series_ticker or "", market.ticker):
         upper = candidate.upper()
         for prefix, weights in _SERIES_PRIORS.items():
