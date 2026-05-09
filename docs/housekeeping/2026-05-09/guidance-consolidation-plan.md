@@ -48,9 +48,9 @@
 | 28 | Same as #14 — E: drive duplicate angle | KEEP (covered by #14) | 2 | — |
 | (post-state) | ASCII log strings + UTF-8 encoding rules retained | MOVE | 2 | `~/.claude/rules/windows_local.md` → `~/.claude/rules/portability.md` |
 | (cross-ref) | `~/.claude/project/AGENTS.md:17` line referencing windows_local | DELETE (line removed) | 2 | `~/.claude/project/AGENTS.md` |
-| 4 | `analysis/__init__.py:19` "$50 hard cap" comment | REWRITE | 3 | `analysis/__init__.py` |
-| 5 | `analysis/evidence_scorer.py` "trigrams" docstring | REWRITE | 3 | `analysis/evidence_scorer.py` |
-| 6 | `analysis/kelly.py:159` "rounds down to stay within budget" | REWRITE | 3 | `analysis/kelly.py` |
+| 4 | `analysis/__init__.py:19` "$50 hard cap" comment | KEEP (already fixed in tree) | 3 | — |
+| 5 | `analysis/evidence_scorer.py` "trigrams" docstring | KEEP (already fixed in tree) | 3 | — |
+| 6 | `analysis/kelly.py:159` "rounds down to stay within budget" | KEEP (already documents floor-of-1 exception) | 3 | — |
 | 7 | `analysis/fade_signal.py:10-13` "WebSocket-based replacement" | REWRITE | 3 | `analysis/fade_signal.py` |
 | 8 | `general-quality.md` G-7 stale "silent on stats" claim | ANNOTATE | 4 | `docs/housekeeping/2026-05-09/foundational-docs-audit/general-quality.md` |
 | 17 | `gap-analysis.md` C-1..C-4 listed as open proposals | ANNOTATE | 4 | `docs/housekeeping/2026-05-09/foundational-docs-audit/gap-analysis.md` |
@@ -227,8 +227,17 @@ grep -r "E: drive\|E:\\\\" /Users/jacobparenti/.claude --include="*.md" -l
 
 ## Batch 3 — Code Comment Fixes
 
-**Affects:** `analysis/__init__.py`, `analysis/evidence_scorer.py`, `analysis/kelly.py`, `analysis/fade_signal.py`  
-**Test invariant:** 1652 passed, 2 skipped, 116 xfailed — must hold after this batch. These edits are comment/docstring text only; no logic changes.
+**Affects:** `analysis/fade_signal.py` (only). Originally targeted 4 files; 3 of 4 already fixed in tree.
+**Test invariant:** 1652 passed, 2 skipped, 116 xfailed — verified intact post-edit.
+
+**Revision (2026-05-08, executor pre-flight):** Phase 6 Agent 1 cited findings #4, #5, #6 from "Phase 2 comment-health audit" without re-verifying against the live tree. Pre-flight verification revealed:
+- `analysis/__init__.py:19` already reads `# after dynamic per-bet cap (cfg.dynamic_max_bet(notional); see MAX_BET_HARD_CAP)`. Fixed prior to Batch 3.
+- `analysis/evidence_scorer.py:48` docstring already says `word bigrams`. Fixed prior to Batch 3.
+- `analysis/kelly.py:contracts_from_dollars` docstring is multi-paragraph and explicitly documents the floor-of-1 exception ("Floor of 1: when a single contract costs more than `dollars`, the result is still 1 — exceeding the requested budget by up to one contract's price"). Edge case is correctly described.
+
+Only `analysis/fade_signal.py:10-13` retained the inaccurate "WebSocket-based replacement" wording — REWRITE applied. Verified `main.py:893` (tweet fade) and `main.py:1008` (price fade) both call their respective detectors; strategies run in parallel.
+
+**Implication for downstream batches:** Phase 6 Agent 1 may have other already-resolved findings inherited from Phase 2 audit. Batch 6 entries citing `signal_analyzer.py:547-552`, `signal_analyzer.py:37`, `regime_classifier.py:178` will be re-verified against live tree before any edits.
 
 ---
 

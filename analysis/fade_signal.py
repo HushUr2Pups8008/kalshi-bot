@@ -7,10 +7,10 @@ Two fade strategies are implemented:
    When @Kalshi tweets hype/ATH language, retail attention pushes the market
    above fair value. Buy the underpriced side.
 
-2. Price fade (detect_price_fade) -- WebSocket-based replacement.
+2. Price fade (detect_price_fade) -- WebSocket-based, runs in parallel with tweet fade.
    When a geo market's mid-price crosses above 85c or below 15c, the market
    is likely over-extended. Fade the extremity directly from the live price feed,
-   no Twitter dependency required.
+   independent of the tweet feed.
 
 Detection only. Direction inversion and trade execution are in main.py.
 """
