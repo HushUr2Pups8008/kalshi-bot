@@ -169,3 +169,73 @@ b1e1a0c  docs: phase-2 docstring + CLAUDE.md gotcha corrections
 ```
 
 Branch: `housekeeping/phase-2`. Not pushed; awaiting user merge decision.
+
+---
+
+## Phase 3 Closure (2026-05-09)
+
+Stage-gated remediation completed across six user-approved commits on
+`housekeeping/phase-3`. Design pass first (Stage 3a), then OQ1 mechanical
+rename (Stage 3b), then user-approved swap of 3c.1/3c.2 ordering (P1-03
+dataclass before P1-02 decomposition).
+
+### Closed
+
+| Item | Stage | Commit | Notes |
+|------|-------|--------|-------|
+| **OQ1 / P2-07** (analysis layer purity) | Stage 3b | `8acfc47` | Moved `analysis/source_credibility.py`, `source_stats.py`, `keyword_stats.py` to `tasks/stats/`. Shims at old paths for one release cycle (`PROFIT-DEBT-OQ1-SHIM`, target removal 2026-06-08). INV-4 verified PASS. |
+| **P1-03** (logger 46-kwarg refactor) | Stage 3c.2 | `1736373` | New `utils/log_records.py` with `SignalAnalysisDetail` `@dataclass(frozen=True)`. Logger signature: 46 kwargs → 1 struct param. `**splat` from helper dicts retained but now safe (TypeError on unknown kwarg). `Literal["llm","keyword","keyword_gate"]` on `method` field. 6 new tests (struct, frozen, asdict, snapshot, rounding). |
+| **P1-02** (signal_analyzer decomposition) | Stage 3c.1 (3 micro-commits) | `bcadc7e`, `2ad8072`, `24df410` | `_ollama_estimate_detailed` shrunk from ~224 lines to ~30 lines. 6 helpers extracted: `_ollama_build_payload`, `_build_llm_meta_kwargs`, `_ollama_check_circuit`, `_ollama_record_failure`, `_ollama_post`, `_ollama_extract_and_validate`. 20 new tests across 6 helper test classes. Helper #7 (`_emit_signal_analysis_log`) skipped — substantially achieved by P1-03 dataclass + `_build_llm_meta_kwargs`. |
+
+### Deferred (out-of-scope for Phase 3)
+
+None. Phase 3 was the deferred-items catch-all from Phases 1 & 2; all 3
+designated targets closed.
+
+### Future cleanup (tracked debt)
+
+- `PROFIT-DEBT-OQ1-SHIM` (added Stage 3b): delete `analysis/{source_credibility,source_stats,keyword_stats}.py` shims at next housekeeping pass or 2026-06-08, whichever first. Aligns with Phase-2 OQ2 dossier_builder UNUSED-marker review for batched cleanup.
+
+### Test surface delta
+
+Phase-2 closure: `1626 passed, 2 skipped, 116 xfailed`.
+Phase-3 closure: `1652 passed, 2 skipped, 116 xfailed`.
+
+`+26 regression tests` across the design's helper extractions and the
+dataclass refactor. Zero regressions across Phase 3.
+
+| Stage | New tests | Cumulative pass |
+|---|---|---|
+| 3b (OQ1) | 0 (mechanical rename) | 1626 |
+| 3c.2 (P1-03) | +6 (test_log_records.py) | 1632 |
+| 3c.1/c1 (pure helpers) | +6 (TestOllamaBuildPayload, TestBuildLlmMetaKwargs) | 1638 |
+| 3c.1/c2 (circuit + failure) | +7 (TestOllamaCheckCircuit, TestOllamaRecordFailure) | 1645 |
+| 3c.1/c3 (post + extract-validate) | +7 (TestOllamaPost, TestOllamaExtractAndValidate) | 1652 |
+
+### Phase-3 commit chain
+
+```
+4061fd7  docs(phase-3-design): design pass for P1-02, P1-03, OQ1
+8acfc47  refactor: move analysis/ stats modules to tasks/stats/ (OQ1 / P2-07)
+1736373  refactor: replace log_signal_analysis_detail 46-kwargs with typed struct (P1-03)
+bcadc7e  refactor(signal_analyzer): extract pure helpers (P1-02 commit 1/4)
+2ad8072  refactor(signal_analyzer): extract circuit + failure helpers (P1-02 commit 2/4)
+24df410  refactor(signal_analyzer): extract HTTP-post + extract-validate (P1-02 commit 3/4)
+```
+
+P1-02 commit 4 of 4 (helper #7 `_emit_signal_analysis_log`) was skipped
+per user decision after re-evaluation: substantially achieved by P1-03
+landing first (cross-reference note in design doc warned of this).
+
+Branch: `housekeeping/phase-3`. Not pushed; awaiting user merge decision.
+
+### All Phase 1 audit items now addressed
+
+After Phase 3 closure, every P1 and P2 finding from the 2026-05-08 audit
+is in one of three terminal states:
+- **Closed**: code/doc fix landed (Phases 2 + 3).
+- **Closed (pre-existing)**: P2-04 stale finding (entries pre-existed).
+- **Tracked debt**: `PROFIT-DEBT-OQ1-SHIM` for future shim cleanup.
+
+P3 polish items remain open as the standing improvement queue; not
+audit-blocking.
