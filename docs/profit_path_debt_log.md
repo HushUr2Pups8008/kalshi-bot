@@ -1,8 +1,21 @@
 # Profit Path Technical Debt Log
 
-**Single system of record for technical debt that could materially reduce the bot's ability to make money through disciplined, well-educated trades.**
+> **Canonical project tracking surface.** Per `kalshi-bot/CLAUDE.md`, this is the single source of truth for "what is going on in the project." Sections below cover open debt, current status, roadmap horizon, decision log, and cycle outcomes. Any tracking content that doesn't fit a section means a new section is needed — not a new file. Last consolidated: 2026-05-09 (`docs/housekeeping/2026-05-09/docs-consolidation/`).
 
-This log supersedes the former `docs/macos_migration_debt.md` tracker. The original Windows -> macOS migration findings are preserved with their `MAC-*` IDs and completion history; the scope is now broader so platform, signal-quality, belief-system, execution-boundary, observability, validation, and documentation risks stay in one durable queue instead of fragmenting across parallel logs. Claude and Codex should continue using this renamed file as the sole technical-debt tracking mechanism going forward.
+**Single system of record for technical debt that could materially reduce the bot's ability to make money through disciplined, well-educated trades.** Scope: platform, signal-quality, belief-system, execution-boundary, observability, validation, and documentation risks. Supersedes `docs/macos_migration_debt.md` (2026-04-20); absorbed `docs/EDGE_STATUS.md` (2026-05-09 consolidation).
+
+**Trust hierarchy:** this file > active cycle ledgers in `docs/governance/` > `docs/superpowers/plans/` > `docs/superpowers/specs/` > `docs/housekeeping/` (audit records) > `docs/_archive/` (historical). On conflict: this file wins. Active cycle ledgers merge back here at cycle close.
+
+**Forward horizon:** `docs/ROADMAP.md` is canonical for multi-week strategic priorities and wave deploy timeline. The Recommended Execution Order below cross-references ROADMAP; it does not duplicate it.
+
+| # | Section | What it tracks | Update cadence |
+|---|---------|---------------|----------------|
+| 1 | Header / Metadata | Document metadata, item counts, high-risk areas, execution order | Per-event |
+| 2 | Current Status | Edge verdict, wave deploy posture, replay harness, live ops | Per-cycle |
+| 3 | Current Open Profit-Path Items | All PROFIT-* and MAC-* debt entries (open + complete) | Per-event |
+| 4 | Execution Views | Fix queue, pre-go-live gate, work streams | Per-cycle |
+| 5 | Dependency Map | Item dependency graph | Per-event |
+| 6 | Operating Rules | R-1 through R-10 governing update conventions | Amendment only |
 
 ---
 
@@ -20,6 +33,7 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 | Open — LOW | 2 |
 | Items IN_PROGRESS | 1 (PROFIT-PHASE2-001 — soak clock running, no operator action until 2026-05-15) |
 | Items COMPLETE | 36 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-DOSSIER-001, PROFIT-GOV-002, PROFIT-DOC-002) |
+| Consolidated From | `docs/EDGE_STATUS.md` (merged 2026-05-09 → §Current Status); `docs/governance/edge-004-closure-path-tldr-v3.md` (lever map + EDGE-004 closure criteria merged 2026-05-09 → §Current Status §2.3) |
 
 ### High-Risk Areas
 
@@ -42,7 +56,152 @@ This log supersedes the former `docs/macos_migration_debt.md` tracker. The origi
 
 ---
 
-## Full Technical Debt Log
+## Current Status
+
+<!-- Merged from docs/EDGE_STATUS.md on 2026-05-09 (docs/ consolidation initiative). EDGE_STATUS.md deleted post-merge. EDGE-004 closure-path TLDR v2.2 + v3 archived to docs/_archive/2026-05-09-docs-consolidation/. -->
+
+> **Operator-facing edge dashboard.** Refresh by commit. Single page; replaces 100+ doc index for "are we making money?" questions.
+> **Last refresh:** 2026-05-07 cycle-16E scorer-forensics run.
+
+### 2.1 Edge Verdict
+
+| metric | value |
+|---|---|
+| Lifetime P&L | **-$7.50** (live, n=3 paper trades) |
+| Lifetime trade count | **3** (all resolved, all lost, all 1 source / 1 series / 1 direction; 3/3 wrong-direction) |
+| Replay verdict | **Cycle-16E verdict: `scorer_fixed_no_signal_confirmed`. Cycle-17 §B/§C operator decision RESTORED (un-deferred).** Cycle-16D raw `237 trades / 2 wins` was scorer-overadmission. Production-proxy = 12 trades / 0 wins / -$1.005 P&L / 0 IC §16 slices. Production gates ported faithfully line-by-line. Market-implied baseline ≈ 1.005 expected wins on 12 trades (NOT 50% coin-flip); 0 actual wins is statistically uninformative at n=12. Anti-correlation framing withdrawn. |
+
+#### Cycle-16E verdict landed — `scorer_fixed_no_signal_confirmed`; Cycle-17 RESTORED
+
+Cycle-16D charter-locked verdict label `extraction_fixed_but_information_frontier_holds` matches the locked criterion (D5 coverage ≥90% AND D8 0 IC §16 slices). **Operator override 2026-05-07 withdraws the operational reading** because three load-bearing scorer concerns invalidate the underlying trade-and-win counts:
+
+1. **`would_have_traded` does not gate on readiness.** Per `score_counterfactual_pnl.py:score_candidate`: `would_trade = abs(edge) >= min_edge` only. Production runtime gates trades on G1-G6 readiness; the scorer does not. 237 counterfactual trades likely over-counts production trade volume.
+2. **Replay is massively YES-biased.** 231 YES / 6 NO trades; 0/231 YES wins; 2/6 NO wins. Bot systematically buying YES on markets that resolve NO. Selection effect, scorer sign error, OR Cycle-15B C7 keyword-extension over-emits YES on production text.
+3. **Price-unit / longshot calibration uncertain.** 102 trades had `market_yes_price < 1`; 100 had `market_yes_price` between 1 and 9. Cents vs dollars consistency end-to-end unaudited. 100x unit error possibility.
+
+**Cycle-16E delivered by Codex (`c913ffd`); Claude N3+N4+N5+N6+N7+N9+N10 review complete.** Production-proxy gates ported faithfully line-by-line vs `executor.py:200-244`. Verdict per locked task-split outcome 2: `scorer_fixed_no_signal_confirmed`. **Cycle-17 §B/§C operator decision RESTORED (un-deferred).**
+
+Per cycle-17 skeletons, Cycle-17 routing:
+- §B source onboarding (2-4 weeks; mandatory pre-onboarding re-trace requirement RELAXED since anti-correlation hypothesis withdrawn)
+- §C strategic redesign / pause / paper-only research
+
+Operator picks. PROFIT-EDGE-011 active.
+
+#### Replay verdict log
+
+| date | scope | verdict | report |
+|---|---|---|---|
+| 2026-05-06 | 3 paper-trade markets / 1 source / 1 series / n=3 trades | 0 positive-EV slices, P&L -$7.50, win rate 0.00, harness self-test passes | `edge-replay-cycle12-report.md` |
+| 2026-05-06 (Cycle-13) | 24 resolved evidence_store markets / 255 replay rows | **0 positive-EV slices, 0 left-on-table winners, P&L -$7.50, IC §16 Rule 5 fires** | `edge-replay-cycle13-report.md` |
+| 2026-05-06 (Cycle-14) | 24 resolved markets / 255 replay rows + synthetic Lane A/B injection | **Verdict: `extraction_broken`.** Movement_rate 1.57%, direction-correctness 0/6 when directional, sized-bet 0/3 (-$7.50), Brier 0.2599 (n=24, supporting only), Lane A PASS / Lane B FAIL at delta=0.000 on both fixtures. → Cycle-15B extraction rebuild active. | `edge-replay-cycle14-diagnosis.md` |
+| 2026-05-07 (Cycle-15B) | 24 resolved markets / 272 replay rows + post-fix re-ingestion + 10 Lane B fixtures | **Verdict: `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`.** C8 Lane B 8/8 directional + 2/2 NEUTRAL ✓; C9 idempotent re-ingestion (SHA256 stable); C10 IC §16 0 slices BUT 0/272 rows had decision-time executable price; 183/272 readiness-admitted; 7/272 nonzero post-fix model delta. Scorer-blocked, NOT negative-EV proven. → Cycle-16D price reconstruction active. | `edge-replay-cycle15b-report.md` |
+| 2026-05-07 (Cycle-16D) | 24 resolved markets / 272 replay rows + restored prices via documented Kalshi endpoints | **Charter-locked verdict: `extraction_fixed_but_information_frontier_holds`** (operational reading WITHDRAWN per operator override; superseded by Cycle-16E). D5 coverage 99.6324% (271/272 priced) ✓; D6 237 counterfactual trades / 2 wins / -7.46 P&L; overall ev_ci_95_lo = -0.0382; 1 raw positive-EV slice with trades=1 (below IC §16 floor); 0 IC §16-eligible slices; D9 sentinel POST_FIX_REBUILT cohort verified (commit 2222227). | `edge-replay-cycle16d-report.md` |
+| 2026-05-07 (Cycle-16E) | scorer forensics audit + production-proxy replay against same 272 rows | **Verdict: `scorer_fixed_no_signal_confirmed`.** Production-proxy gates ported faithfully line-by-line vs `executor.py:200-244`: price floor/ceiling 2¢/98¢, ticker cooldown 14400s, paper-duplicate prob/price 0.07/5.0, same-signal prob/price 0.02/2.0, PAPER_MIN_EDGE 0.02. Variant comparison: baseline_abs_edge 237 trades → readiness_only 182 → paper_price_sanity 110 → readiness_plus_price_sanity 63 → production_proxy 12 trades / 0 wins / -$1.005 P&L / 0 IC §16 slices. Market-implied baseline ≈ 1.005 expected wins on 12 production-proxy trades; 0 actual wins is statistically uninformative at n=12. Price units cents-consistent end-to-end (no 100x dollars/cents inversion). Cycle-16D anti-correlation framing WITHDRAWN. → Cycle-17 §B/§C operator decision RESTORED. | `edge-replay-cycle16e-scorer-forensics.md` |
+
+### 2.2 Wave Deploy Posture
+
+| wave | status | gate |
+|---|---|---|
+| Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **ACTIVE — ships 2026-05-08 as cleanup/observability hygiene only; does NOT claim edge** | exempt under IC §16 Rule 2 (mechanical / observability / governance) |
+| Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | requires (a) operator picks §B AND (b) post-onboarding replay produces ≥1 slice with `ev_ci_95_lo>0` AND `trades≥10` |
+| Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT — Lever B counterindicated** | loosening admission on a model with 0 IC §16-eligible slices on audited scorer widens losses without expected gain |
+| Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | each candidate fix needs replay evidence under audited scorer |
+| **Capital posture** | **PAPER-ONLY. Hard guardrail** (Cycle-14 charter §5) | live trading remains blocked until ≥1 positive-EV slice surfaces under audited scorer per IC §16 |
+
+#### Are we near a Wave-2-eligible slice?
+
+**No.** Cycle-12 replay (paper-trade scope only, n=3) found 0 positive-EV slices. Cycle-13 will expand to 24 resolved markets in evidence_store; if still no slice with `ev_ci_95_lo > 0` AND `trades ≥ 10`, IC §16 Rule 5 triggers strategic-pivot playbook (`docs/governance/edge-replay-pivot-playbook.md`).
+
+**Cycle-13 leading indicator (cycle-13 dossier integrity audit):** 21 of 24 resolved-market dossiers stuck at `current_estimate = 0.5000` (the prior). Bot's belief model rarely exits the prior despite ingesting evidence. This is a calibration signal — most evidence is non-informative under current update logic. Replay verdict is bounded by this calibration regardless of feed onboarding.
+
+#### What changes Wave-2 from HALTED → AUTHORIZED
+
+A row in the replay output with **all** of:
+- `ev_ci_95_lo > 0` (positive EV at 95% CI)
+- `trades ≥ 10` (not single-cluster correlated)
+- Documented in `edge-replay-cycle{N}-report.md` with reproducible commands
+
+When that row exists, the slice it identifies (e.g., "Reuters × KXTRUMPCHINA × news") becomes the Wave-2 candidate. The pre-staged Wave-2 specs (legal/geopolitics speculation) are NOT the candidate; they remain BLOCKED.
+
+#### Pre-deploy state (for fire-time operator)
+
+| metric | value (cycle-13 refresh, 2026-05-06T22:30Z) |
+|---|---|
+| Soak elapsed | ~125 h (Day 5/7 under §8.5.1 path) |
+| GOVERNANCE_DECISION count | 552 |
+| Safety counters | 0/0/0 (KILL_SWITCH / batch_aborted / VALIDATION_ERROR) |
+| PARSE_ERROR (total / trailing-72h) | 7 / 0 |
+| Latest decision | 2026-05-06T21:43Z |
+| Bot health | GREEN (`scripts/bothealth.sh` cycle-13) |
+| Gate-6 capacity | **AT RISK** — 0.663 reviewable fraction at 80/day budget; needs Path 1 (raise budget to ≥169) per `2026-05-06-gate-6-capacity-resolution-plan.md` |
+| §8.5.2 carve-out commits surfaced | 5 (3 INVOKED, 2 OUT-OF-SCOPE; gate 7 clean via attestation) |
+
+### 2.3 EDGE-004 Closure Path
+
+> **Note:** Lever map and probability ranking below pre-date Cycle-16E (2026-05-07). v3 source (`docs/governance/edge-004-closure-path-tldr-v3.md` — archived 2026-05-09 to `docs/_archive/2026-05-09-docs-consolidation/`) carried a top banner declaring SUPERSEDED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06): closure path is now Cycle-12+ replay → IF positive-EV slice found, deploy that slice (NOT speculative levers); IF none found, strategic pivot. Lever map retained as historical context for Cycle-17 §B/§C decision-input.
+
+#### Lever map at a glance (v3 — 2026-05-05)
+
+| lever | role | locked? | deploy timing |
+|---|---|---|---|
+| A.1 | prerequisite hygiene | ✅ classifier patch ready | 2026-05-08+ (Wave-1 commit 6) |
+| A.1+ Branch A | passive observe | ✅ no code change | 2026-05-15+ (Day-14 default) |
+| A.1+ Branch C | open-RSS legal-analyst | ⏳ feed selection per §A.1+1.5 selection-rubric | 2026-05-29+ if Branch A fails |
+| A.1+ option-A | geopolitics specialist | ✅ URL list locked per parent spec §3.1 | parallel-discretion or fallback |
+| **Lever B G1=0.04** | attribution; calibration | ✅ floor + failsafe + ratio LOCKED 2026-05-05 | 2026-06-06+ if A+C stall |
+| **Lever C cross-series** | risk-control | ✅ v1 §3.2 hash + 3600 s + placement LOCKED 2026-05-05 | 2026-06-20+ if A+B stall |
+| **Branch D escalation** | handoff | ✅ triggers spec'd 2026-05-05 | fires when §2 triggers met |
+| Lever D (lever-menu §3) | pre-LLM gate (closed) | ✅ closed 2026-05-03 | n/a |
+| Lever E (multi-source) | closed | ✅ closed 2026-05-03 | n/a |
+| Lever F (P4-GATE App A) | out of EDGE-004 scope | ROADMAP-tracked | post-Branch-D |
+
+#### What "closure" looks like (v3)
+
+EDGE-004 closes OPEN → COMPLETE when:
+
+1. One A.1+ branch (A or C, with option-A as parallel discretion) produces ≥ 5 % conversion lift over 14 d AND
+2. Aggregate realized P&L on the new admitted PAPER_TRADE candidates is non-negative AND
+3. Per-lane attribution (post-OBS-003 SKIPPED stream) confirms the closure is driven by the new feed, not background noise.
+
+EDGE-004 closes OPEN → DEFERRED-CEILING when Branch D fires AND PROFIT-LLM-001 + P4-GATE Appendix A sizing both return inadequate. **Real possibility, not a fail-safe abstraction.**
+
+#### Honest read (v3 — 2026-05-05; pre-Cycle-16E)
+
+The closure path now hangs on TWO empirical questions, asked in order:
+
+1. **Does Branch A (passive Google News observe) surface VitalLaw-equivalent legal-niche PAPER_TRADE in 14 d?** If yes: closure on the cheapest path; no new code. If no:
+2. **Does Branch C (open-RSS legal-analyst onboard) admit PAPER_TRADE with positive P&L?** If yes: closure on minimal-effort code change. If no: Branch D fires; intake-side experimentation exhausted.
+
+**Probability ranking (refreshed 2026-05-05):** Branch A succeeds (~30 %) > Branch C succeeds (~40 % conditional on A failing) > Branch D fires and PROFIT-LLM-001 lands within 30 d (~20 %) > Branch D fires and EDGE-004 closes DEFERRED-CEILING (~10 %).
+
+Probability of intake-side closure: ~30 % + (1 − 0.30) × 0.40 = **~58 %**. Reasonable but not high.
+
+### 2.4 Replay Harness State
+
+- Harness exists: `scripts/edge_replay/{fetch_resolved_markets,build_replay_dataset,score_counterfactual_pnl}.py`
+- Test coverage: 9 tests including synthetic +EV self-test (validates scorer can FIND edge when it exists, not just report negative)
+- Bootstrap CI implemented (cycle-12 task #5 done by Codex)
+- Per-decision-time price reconstruction implemented via `--historical-prices` (cycle-13 task #6 done by Codex)
+- "Left on the table" measure implemented (cycle-13 task #7 done by Codex)
+- Cycle-13 charter: expand scope from 3 → 24 markets via `--live-kalshi`
+- Cycle-13 status: in progress (Codex implementing)
+
+### 2.5 Live Operations
+
+- `com.jake.kalshi-bot` running (paper mode); uptime ~5d 5h
+- `com.kalshi.governance.fast` shadow-mode soak active
+- `com.kalshi.db-backup` daily 06:00 MDT (last fire 2026-05-06T1200Z confirmed)
+- 06:00 MDT db-backup monitor armed (next fire Thu 2026-05-07T1200Z)
+
+### 2.6 Cross-links
+
+- `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate
+- `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — strategic redirect
+- `docs/governance/edge-replay-pivot-playbook.md` — IC §16 Rule 5 strategic-pivot diagnostic
+- `docs/governance/edge-replay-cycle12-report.md` — Cycle-12 replay output
+- `PROFIT-EDGE-005` (this file) — replay harness debt entry
+- `data/paper_trades.db` — 3-trade lifetime history
+- `data/evidence_store.db` — 266 evidence rows / 24 resolved markets
 
 ---
 
@@ -1602,7 +1761,7 @@ Cycle-12 ran replay against `paper_trades` scope only — 3 markets, 1 source, 1
 - `PROFIT-EDGE-004` (open) — lever menu BLOCKED pending this expansion's output.
 - `docs/governance/2026-05-06-cycle-13-replay-scope-expansion-charter.md` — Cycle-13 charter.
 - `docs/governance/edge-replay-pivot-playbook.md` — IC §16 Rule 5 diagnostic playbook (fires on negative result).
-- `docs/EDGE_STATUS.md` — operator-facing dashboard; refreshed by replay verdict.
+- §Current Status (this file) — operator-facing dashboard; refreshed by replay verdict. (Was `docs/EDGE_STATUS.md` until 2026-05-09 consolidation.)
 
 **2026-05-06 cycle-13 update:** DELIVERED with negative result (commit `79e4d08`). 24 markets / 255 replay rows / 0 positive-EV slices / 0 left-on-table winners / -$7.50 P&L. IC §16 Rule 5 fires. Cycle-14 (PROFIT-EDGE-007 below) takes over as calibration kill-or-fix diagnostic.
 
@@ -1966,7 +2125,7 @@ Operator picks. Subsequent debt entry filed (PROFIT-EDGE-012) per matching Cycle
 **Acceptance Criteria**
 
 - Operator decision documented in this debt entry's "Notes" + `docs/governance/cycle-17-operator-decision.md` (FUTURE) — OR — operator picks via direct decision communication recorded in this entry's Notes.
-- ROADMAP / EDGE_STATUS refreshed per matching Cycle-17 §B/§C wording.
+- ROADMAP / §Current Status (this file) refreshed per matching Cycle-17 §B/§C wording. (Was ROADMAP / EDGE_STATUS until 2026-05-09 consolidation; EDGE_STATUS now §Current Status.)
 - If §B picked: PROFIT-EDGE-012 filed = "Cycle-17B source onboarding scope."
 - If §C (a) / (c) picked: PROFIT-EDGE-012 filed = "Cycle-17C (a/c) operator-direction continuation."
 - If §C (b) picked: PROFIT-EDGE-012 filed = "Cycle-17C-redesign multi-month scope."
@@ -4758,3 +4917,7 @@ The audit identified several items that turned out to be false positives after c
 
 ### R-9 — Single Tracker Rule
 This file is the only technical-debt tracking mechanism for profit-path, reliability, safety, observability, and platform debt. Do not create a second debt log for macOS, S4.5, logging, calibration, or execution-boundary findings; add them here with a new ID or update an existing item.
+
+### R-10 — No New Tracking Files
+
+This file is the sole tracking surface for all project state. New tracking content lands as a section or sub-section here, not a new standalone file. If content genuinely belongs in a separate lifecycle (e.g., an active cycle ledger in `docs/governance/`), it merges back here at cycle close. Per CLAUDE.md Continuous Improvement: do not create parallel status, roadmap, decision-log, or operational-dashboard files. The 2026-05-09 docs consolidation removed parallel surfaces (EDGE_STATUS.md and TLDR variants) to enforce this rule; preserving the consolidation is now a maintenance invariant.
