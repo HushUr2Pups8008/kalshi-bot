@@ -24,6 +24,8 @@ from analysis.signal_analyzer import (
     _ollama_build_payload,
     _ollama_check_circuit,
     _ollama_estimate_detailed,
+    _ollama_extract_and_validate,
+    _ollama_post,
     _ollama_record_failure,
     _parse_llm_response,
     _keyword_score,
@@ -1570,3 +1572,165 @@ class TestOllamaRecordFailure:
 # Need `time` for the circuit threshold test. Place at end so imports stay
 # grouped at top; helper-tests above don't otherwise need it.
 import time  # noqa: E402
+
+
+class TestOllamaExtractAndValidate:
+    """LLM-JSON parse + budget gate. Pure (modulo `cfg.ollama_stage_budget_seconds`)."""
+
+    def _market(self):
+        return _make_full_market()
+
+    def test_success_path_returns_result_and_success_meta(self, monkeypatch):
+        monkeypatch.setattr(signal_analyzer.cfg, "ollama_stage_budget_seconds", 60)
+        text = '{"direction":"yes","magnitude":"moderate","confidence":0.85,"reasoning":"r"}'
+        market = self._market()
+        t0 = time.monotonic() - 0.5  # half a second elapsed (well under budget)
+        result, meta = _ollama_extract_and_validate(text, market, t0, 200, "PROMPT")
+        assert result is not None
+        prob, confidence, reasoning, direction, magnitude = result
+        assert direction == "yes"
+        assert magnitude == "moderate"
+        assert confidence == 0.85
+        assert meta["status"] == "ollama_success"
+        assert meta["result_used"] is True
+        assert meta["http_round_trip_ms"] == 200
+        assert meta["raw_response"] == text
+
+    def test_parse_failure_returns_failure_meta(self, monkeypatch):
+        monkeypatch.setattr(signal_analyzer.cfg, "ollama_stage_budget_seconds", 60)
+        text = "not json at all"
+        market = self._market()
+        t0 = time.monotonic() - 0.1
+        result, meta = _ollama_extract_and_validate(text, market, t0, 100, "PROMPT")
+        assert result is None
+        assert meta["status"] == "ollama_parse_failure"
+        assert meta["raw_response"] == text
+        assert meta["parse_ms"] is not None
+
+    def test_budget_exceeded_returns_failure_meta(self, monkeypatch):
+        # 1ms budget — guaranteed to exceed
+        monkeypatch.setattr(signal_analyzer.cfg, "ollama_stage_budget_seconds", 0.001)
+        text = '{"direction":"yes","magnitude":"moderate","confidence":0.85,"reasoning":"r"}'
+        market = self._market()
+        t0 = time.monotonic() - 1.0  # 1 second elapsed
+        result, meta = _ollama_extract_and_validate(text, market, t0, 100, "PROMPT")
+        assert result is None
+        assert meta["status"] == "ollama_slow_budget_exceeded"
+
+
+class TestOllamaPost:
+    """HTTP POST + envelope-decode + content-extraction.
+
+    Covers HTTP error branches (non-200, empty body, malformed JSON,
+    response shape error, empty content). Does NOT exercise connection-level
+    exceptions — those propagate to the caller's except handlers.
+    """
+
+    @pytest.mark.asyncio
+    async def test_success_returns_text_and_no_early_meta(self, monkeypatch):
+        # Patch aiohttp.ClientSession to return a 200 with a valid envelope.
+        from contextlib import asynccontextmanager
+
+        class _Resp:
+            status = 200
+            async def text(self):
+                return '{"choices":[{"message":{"content":"INNER"}}]}'
+
+        @asynccontextmanager
+        async def _post(*args, **kwargs):
+            yield _Resp()
+
+        @asynccontextmanager
+        async def _session():
+            class _S:
+                def post(self, *a, **kw):
+                    return _post()
+            yield _S()
+
+        import aiohttp
+        monkeypatch.setattr(aiohttp, "ClientSession", lambda *a, **kw: _session())
+        text, early_meta, _rt, status = await _ollama_post({"model": "x"}, "PROMPT", time.monotonic())
+        assert text == "INNER"
+        assert early_meta is None
+        assert status == 200
+
+    @pytest.mark.asyncio
+    async def test_non_200_returns_failure_meta(self, monkeypatch):
+        from contextlib import asynccontextmanager
+
+        class _Resp:
+            status = 422
+            async def text(self):
+                return "{\"error\": \"unrecognized field\"}"
+
+        @asynccontextmanager
+        async def _post(*args, **kwargs):
+            yield _Resp()
+
+        @asynccontextmanager
+        async def _session():
+            class _S:
+                def post(self, *a, **kw):
+                    return _post()
+            yield _S()
+
+        import aiohttp
+        monkeypatch.setattr(aiohttp, "ClientSession", lambda *a, **kw: _session())
+        text, early_meta, _rt, status = await _ollama_post({}, "PROMPT", time.monotonic())
+        assert text is None
+        assert status == 422
+        assert early_meta is not None
+        # Status string comes from _ollama_http_status_category(422)
+        assert early_meta["http_status"] == 422
+
+    @pytest.mark.asyncio
+    async def test_empty_body_returns_failure_meta(self, monkeypatch):
+        from contextlib import asynccontextmanager
+
+        class _Resp:
+            status = 200
+            async def text(self):
+                return "   "
+
+        @asynccontextmanager
+        async def _post(*args, **kwargs):
+            yield _Resp()
+
+        @asynccontextmanager
+        async def _session():
+            class _S:
+                def post(self, *a, **kw):
+                    return _post()
+            yield _S()
+
+        import aiohttp
+        monkeypatch.setattr(aiohttp, "ClientSession", lambda *a, **kw: _session())
+        text, early_meta, _rt, _status = await _ollama_post({}, "PROMPT", time.monotonic())
+        assert text is None
+        assert early_meta["status"] == "ollama_empty_response"
+
+    @pytest.mark.asyncio
+    async def test_malformed_envelope_json_returns_failure_meta(self, monkeypatch):
+        from contextlib import asynccontextmanager
+
+        class _Resp:
+            status = 200
+            async def text(self):
+                return "this is not json"
+
+        @asynccontextmanager
+        async def _post(*args, **kwargs):
+            yield _Resp()
+
+        @asynccontextmanager
+        async def _session():
+            class _S:
+                def post(self, *a, **kw):
+                    return _post()
+            yield _S()
+
+        import aiohttp
+        monkeypatch.setattr(aiohttp, "ClientSession", lambda *a, **kw: _session())
+        text, early_meta, _rt, _status = await _ollama_post({}, "PROMPT", time.monotonic())
+        assert text is None
+        assert early_meta["status"] == "ollama_malformed_response"

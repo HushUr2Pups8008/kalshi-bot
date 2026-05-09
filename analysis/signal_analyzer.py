@@ -779,6 +779,183 @@ async def _ollama_ping() -> bool:
         return False
 
 
+async def _ollama_post(payload, prompt_text, t0):
+    """POST to Ollama OpenAI-compat /v1/chat/completions and extract content text.
+
+    Returns `(content_text, early_meta, http_round_trip_ms, http_status)`:
+      - On HTTP success with valid JSON envelope and non-empty content:
+        `(text, None, http_round_trip_ms, http_status)`. Caller proceeds.
+      - On any HTTP-level failure (non-200, empty body, envelope JSON
+        decode error, response shape error, empty content):
+        `(None, failure_meta, http_round_trip_ms, http_status)`. Caller
+        short-circuits with the returned `_llm_meta`.
+
+    `t0` is the wall-clock start time of the calling LLM stage; used to
+    populate `latency_ms` in failure metas (preserves prior semantic).
+
+    Connection-level exceptions (ClientConnectorError, asyncio.TimeoutError)
+    propagate to the caller's except handlers — NOT caught here.
+    """
+    import aiohttp
+
+    async with aiohttp.ClientSession() as session:
+        http_start = time.monotonic()
+        async with session.post(
+            f"{cfg.ollama_base_url}/chat/completions",
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=cfg.ollama_request_timeout_seconds),
+        ) as resp:
+            raw = await resp.text()
+            http_round_trip_ms = int((time.monotonic() - http_start) * 1000)
+            http_status = resp.status
+
+            if http_status != 200:
+                latency_ms = int((time.monotonic() - t0) * 1000)
+                body_snippet = raw[:200]
+                log.warning(
+                    "Ollama HTTP %d from /v1/chat/completions -- body: %s",
+                    http_status, body_snippet,
+                )
+                return None, _llm_meta(
+                    attempted=True,
+                    status=_ollama_http_status_category(http_status),
+                    provider="ollama",
+                    latency_ms=latency_ms,
+                    http_round_trip_ms=http_round_trip_ms,
+                    http_status=http_status,
+                    prompt=prompt_text,
+                    raw_response=raw,
+                ), http_round_trip_ms, http_status
+
+            if not raw.strip():
+                latency_ms = int((time.monotonic() - t0) * 1000)
+                log.warning("Ollama estimation failed: empty response body")
+                return None, _llm_meta(
+                    attempted=True,
+                    status="ollama_empty_response",
+                    provider="ollama",
+                    latency_ms=latency_ms,
+                    http_round_trip_ms=http_round_trip_ms,
+                    http_status=http_status,
+                    prompt=prompt_text,
+                    raw_response=raw,
+                ), http_round_trip_ms, http_status
+
+            try:
+                data = _json.loads(raw)
+            except _json.JSONDecodeError as exc:
+                latency_ms = int((time.monotonic() - t0) * 1000)
+                log.warning("Ollama estimation failed: malformed JSON body -- %s", exc)
+                return None, _llm_meta(
+                    attempted=True,
+                    status="ollama_malformed_response",
+                    provider="ollama",
+                    latency_ms=latency_ms,
+                    http_round_trip_ms=http_round_trip_ms,
+                    http_status=http_status,
+                    prompt=prompt_text,
+                    raw_response=raw,
+                ), http_round_trip_ms, http_status
+
+    try:
+        text = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        log.warning("Ollama estimation failed: malformed response shape -- %s", exc)
+        return None, _llm_meta(
+            attempted=True,
+            status="ollama_malformed_response",
+            provider="ollama",
+            latency_ms=latency_ms,
+            http_round_trip_ms=http_round_trip_ms,
+            http_status=200,
+            prompt=prompt_text,
+            raw_response=raw,
+        ), http_round_trip_ms, 200
+
+    if not isinstance(text, str) or not text.strip():
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        log.warning("Ollama estimation failed: empty choice content")
+        return None, _llm_meta(
+            attempted=True,
+            status="ollama_empty_response",
+            provider="ollama",
+            latency_ms=latency_ms,
+            http_round_trip_ms=http_round_trip_ms,
+            http_status=200,
+            prompt=prompt_text,
+            raw_response=text if isinstance(text, str) else raw,
+        ), http_round_trip_ms, 200
+
+    return text, None, http_round_trip_ms, http_status
+
+
+def _ollama_extract_and_validate(text, market, t0, http_round_trip_ms, prompt_text):
+    """Extract LLM JSON from response text, parse, and apply budget gate.
+
+    Returns `(result_tuple_or_None, meta)`:
+      - On parse failure: `(None, ollama_parse_failure_meta)`.
+      - On budget exceeded: `(None, ollama_slow_budget_exceeded_meta)`.
+      - On success: `((prob, confidence, reasoning, direction, magnitude),
+                      ollama_success_meta)`.
+
+    PRESERVES `_extract_json(text.strip())` invocation verbatim — load-bearing
+    `raw_decode`-based JSON extraction per CLAUDE.md gotcha. Do not rewrap.
+    """
+    parse_start = time.monotonic()
+    try:
+        parsed = _extract_json(text.strip())
+    except ValueError as exc:
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        log.warning("Ollama estimation failed: %s", exc)
+        return None, _llm_meta(
+            attempted=True,
+            status="ollama_parse_failure",
+            provider="ollama",
+            latency_ms=latency_ms,
+            http_round_trip_ms=http_round_trip_ms,
+            parse_ms=int((time.monotonic() - parse_start) * 1000),
+            http_status=200,
+            prompt=prompt_text,
+            raw_response=text,
+        )
+
+    parse_ms = int((time.monotonic() - parse_start) * 1000)
+    prob, confidence, reasoning, direction, magnitude = _parse_llm_response(parsed, market)
+    latency_ms = int((time.monotonic() - t0) * 1000)
+
+    if latency_ms > cfg.ollama_stage_budget_seconds * 1000:
+        log.warning(
+            "Ollama estimation exceeded stage budget: %dms > %dms",
+            latency_ms,
+            cfg.ollama_stage_budget_seconds * 1000,
+        )
+        return None, _llm_meta(
+            attempted=True,
+            status="ollama_slow_budget_exceeded",
+            provider="ollama",
+            latency_ms=latency_ms,
+            http_round_trip_ms=http_round_trip_ms,
+            parse_ms=parse_ms,
+            http_status=200,
+            prompt=prompt_text,
+            raw_response=text,
+        )
+
+    return (prob, confidence, reasoning, direction, magnitude), _llm_meta(
+        attempted=True,
+        status="ollama_success",
+        provider="ollama",
+        result_used=True,
+        latency_ms=latency_ms,
+        http_round_trip_ms=http_round_trip_ms,
+        parse_ms=parse_ms,
+        http_status=200,
+        prompt=prompt_text,
+        raw_response=text,
+    )
+
+
 async def _ollama_estimate_detailed(news, market):
     """
     Call local Ollama server (OpenAI-compatible endpoint).
@@ -797,128 +974,18 @@ async def _ollama_estimate_detailed(news, market):
 
     t0 = time.monotonic()
     try:
-        async with aiohttp.ClientSession() as session:
-            http_start = time.monotonic()
-            async with session.post(
-                f"{cfg.ollama_base_url}/chat/completions",
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=cfg.ollama_request_timeout_seconds),
-            ) as resp:
-                raw = await resp.text()
-                http_round_trip_ms = int((time.monotonic() - http_start) * 1000)
-                if resp.status != 200:
-                    latency_ms = int((time.monotonic() - t0) * 1000)
-                    body_snippet = raw[:200]
-                    log.warning(
-                        "Ollama HTTP %d from /v1/chat/completions -- body: %s",
-                        resp.status, body_snippet,
-                    )
-                    return None, _llm_meta(
-                        attempted=True,
-                        status=_ollama_http_status_category(resp.status),
-                        provider="ollama",
-                        latency_ms=latency_ms,
-                        http_round_trip_ms=http_round_trip_ms,
-                        http_status=resp.status,
-                        prompt=prompt_text,
-                        raw_response=raw,
-                    )
-                if not raw.strip():
-                    latency_ms = int((time.monotonic() - t0) * 1000)
-                    log.warning("Ollama estimation failed: empty response body")
-                    return None, _llm_meta(
-                        attempted=True,
-                        status="ollama_empty_response",
-                        provider="ollama",
-                        latency_ms=latency_ms,
-                        http_round_trip_ms=http_round_trip_ms,
-                        http_status=resp.status,
-                        prompt=prompt_text,
-                        raw_response=raw,
-                    )
-                try:
-                    data = _json.loads(raw)
-                except _json.JSONDecodeError as exc:
-                    latency_ms = int((time.monotonic() - t0) * 1000)
-                    log.warning("Ollama estimation failed: malformed JSON body -- %s", exc)
-                    return None, _llm_meta(
-                        attempted=True,
-                        status="ollama_malformed_response",
-                        provider="ollama",
-                        latency_ms=latency_ms,
-                        http_round_trip_ms=http_round_trip_ms,
-                        http_status=resp.status,
-                        prompt=prompt_text,
-                        raw_response=raw,
-                    )
+        text, early_meta, http_round_trip_ms, _http_status = await _ollama_post(
+            payload, prompt_text, t0
+        )
+        if early_meta is not None:
+            return None, early_meta
 
-        try:
-            text = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            latency_ms = int((time.monotonic() - t0) * 1000)
-            log.warning("Ollama estimation failed: malformed response shape -- %s", exc)
-            return None, _llm_meta(
-                attempted=True,
-                status="ollama_malformed_response",
-                provider="ollama",
-                latency_ms=latency_ms,
-                http_round_trip_ms=http_round_trip_ms,
-                http_status=200,
-                prompt=prompt_text,
-                raw_response=raw,
-            )
+        result, meta = _ollama_extract_and_validate(
+            text, market, t0, http_round_trip_ms, prompt_text
+        )
+        if result is None:
+            return None, meta
 
-        if not isinstance(text, str) or not text.strip():
-            latency_ms = int((time.monotonic() - t0) * 1000)
-            log.warning("Ollama estimation failed: empty choice content")
-            return None, _llm_meta(
-                attempted=True,
-                status="ollama_empty_response",
-                provider="ollama",
-                latency_ms=latency_ms,
-                http_round_trip_ms=http_round_trip_ms,
-                http_status=200,
-                prompt=prompt_text,
-                raw_response=text if isinstance(text, str) else raw,
-            )
-
-        parse_start = time.monotonic()
-        try:
-            parsed = _extract_json(text.strip())
-        except ValueError as exc:
-            latency_ms = int((time.monotonic() - t0) * 1000)
-            log.warning("Ollama estimation failed: %s", exc)
-            return None, _llm_meta(
-                attempted=True,
-                status="ollama_parse_failure",
-                provider="ollama",
-                latency_ms=latency_ms,
-                http_round_trip_ms=http_round_trip_ms,
-                parse_ms=int((time.monotonic() - parse_start) * 1000),
-                http_status=200,
-                prompt=prompt_text,
-                raw_response=text,
-            )
-        parse_ms = int((time.monotonic() - parse_start) * 1000)
-        prob, confidence, reasoning, direction, magnitude = _parse_llm_response(parsed, market)
-        latency_ms = int((time.monotonic() - t0) * 1000)
-        if latency_ms > cfg.ollama_stage_budget_seconds * 1000:
-            log.warning(
-                "Ollama estimation exceeded stage budget: %dms > %dms",
-                latency_ms,
-                cfg.ollama_stage_budget_seconds * 1000,
-            )
-            return None, _llm_meta(
-                attempted=True,
-                status="ollama_slow_budget_exceeded",
-                provider="ollama",
-                latency_ms=latency_ms,
-                http_round_trip_ms=http_round_trip_ms,
-                parse_ms=parse_ms,
-                http_status=200,
-                prompt=prompt_text,
-                raw_response=text,
-            )
         if _ollama_consecutive_failures > 0:
             log.info(
                 "[LLM_HEALTH] provider=ollama recovered=true failures=%d",
@@ -927,19 +994,8 @@ async def _ollama_estimate_detailed(news, market):
             _ollama_consecutive_failures = 0
             _ollama_down_until = 0.0
         log.debug("Ollama: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
-                  direction, magnitude, confidence, prob, market.ticker)
-        return (prob, confidence, reasoning, direction, magnitude), _llm_meta(
-            attempted=True,
-            status="ollama_success",
-            provider="ollama",
-            result_used=True,
-            latency_ms=latency_ms,
-            http_round_trip_ms=http_round_trip_ms,
-            parse_ms=parse_ms,
-            http_status=200,
-            prompt=prompt_text,
-            raw_response=text,
-        )
+                  result[3], result[4], result[1], result[0], market.ticker)
+        return result, meta
 
     except aiohttp.ClientConnectorError:
         latency_ms = int((time.monotonic() - t0) * 1000)
