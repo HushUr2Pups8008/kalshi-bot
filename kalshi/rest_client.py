@@ -45,6 +45,10 @@ def _normalize_pem(raw: str | bytes) -> bytes:
 _MIN_REQUEST_INTERVAL = 0.12   # seconds
 
 
+class KalshiSigningError(RuntimeError):
+    """Raised when RSA-PSS signing fails with credentials configured."""
+
+
 class KalshiRestClient:
     """
     Thin wrapper around the Kalshi REST API.
@@ -60,6 +64,17 @@ class KalshiRestClient:
         self._secret = cfg.api_key_secret  # raw string; may be PEM or hex
         self._token: Optional[str] = None
         self._last_req_time = 0.0
+        self._private_key = None
+
+        # Parse PEM once at startup: fail fast on bad key rather than at first trade.
+        if self._key_id and self._secret:
+            try:
+                pem = _normalize_pem(self._secret)
+                self._private_key = serialization.load_pem_private_key(pem, password=None)
+            except Exception as exc:
+                raise KalshiSigningError(
+                    f"Failed to load Kalshi private key at startup: {exc}"
+                ) from exc
 
         # Session with retry logic
         self._session = requests.Session()
@@ -84,9 +99,7 @@ class KalshiRestClient:
         ts = str(int(time.time() * 1000))
         message = (ts + method.upper() + path + body).encode()
         try:
-            pem = _normalize_pem(self._secret)
-            private_key = serialization.load_pem_private_key(pem, password=None)
-            sig = private_key.sign(
+            sig = self._private_key.sign(
                 message,
                 asym_padding.PSS(
                     mgf=asym_padding.MGF1(hashes.SHA256()),
@@ -96,8 +109,9 @@ class KalshiRestClient:
             )
             sig_b64 = base64.b64encode(sig).decode()
         except Exception as exc:
-            log.warning("Could not sign request: %s -- proceeding unsigned", exc)
-            return {"KALSHI-ACCESS-TIMESTAMP": ts}
+            raise KalshiSigningError(
+                f"RSA-PSS signing failed: {exc}"
+            ) from exc
 
         return {
             "KALSHI-ACCESS-KEY":       self._key_id,

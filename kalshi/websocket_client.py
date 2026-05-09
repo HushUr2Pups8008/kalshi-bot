@@ -64,6 +64,10 @@ def _normalize_pem(raw: str | bytes) -> bytes:
     return raw.encode()
 
 
+class KalshiWsSigningError(RuntimeError):
+    """Raised when RSA-PSS signing fails for the WebSocket handshake with credentials configured."""
+
+
 def _build_ws_auth_headers() -> dict:
     """
     Build RSA-PSS auth headers for the WebSocket HTTP upgrade.
@@ -94,8 +98,9 @@ def _build_ws_auth_headers() -> dict:
         )
         sig_b64 = base64.b64encode(sig).decode()
     except Exception as exc:
-        log.warning("Could not sign WS handshake: %s -- connecting unsigned", exc)
-        return {}
+        raise KalshiWsSigningError(
+            f"RSA-PSS signing failed for WS handshake: {exc}"
+        ) from exc
     return {
         "KALSHI-ACCESS-KEY":       cfg.api_key_id,
         "KALSHI-ACCESS-TIMESTAMP": ts,
@@ -118,6 +123,16 @@ class KalshiWebSocketClient:
         self._running   = False
         self._ws        = None
         self._cmd_seq   = 0
+
+        # Validate PEM at startup (option a): fail fast rather than at first WS connect.
+        if cfg.api_key_id and cfg.api_key_secret and _CRYPTO_AVAILABLE:
+            try:
+                pem = _normalize_pem(cfg.api_key_secret)
+                serialization.load_pem_private_key(pem, password=None)
+            except Exception as exc:
+                raise KalshiWsSigningError(
+                    f"Failed to load Kalshi private key for WebSocket at startup: {exc}"
+                ) from exc
 
     def on_price_update(self, callback: PriceCallback) -> None:
         """Register a callback: async def cb(ticker, yes_bid_cents, yes_ask_cents)."""
