@@ -17,6 +17,7 @@ from pathlib import Path
 
 
 from analysis.signal_analyzer import _llm_meta
+from utils.log_records import SignalAnalysisDetail
 from scripts.signal_edge_diagnostics import (
     _p95,
     fmt_latency_stats,
@@ -140,7 +141,7 @@ class TestLogSignalAnalysisDetail:
         log_file = tmp / "trades.jsonl"
         logger = TradeLogger(log_file)
         try:
-            logger.log_signal_analysis_detail(
+            logger.log_signal_analysis_detail(SignalAnalysisDetail(
                 ticker="KXONE",
                 source="AP",
                 headline="Test",
@@ -161,7 +162,7 @@ class TestLogSignalAnalysisDetail:
                 llm_parse_ms=80,
                 llm_contention_observed=True,
                 llm_in_flight_at_entry=1,
-            )
+            ))
             record = json.loads(log_file.read_text(encoding="utf-8").strip())
             assert record["llm_latency_ms"] == 2500
             assert record["llm_total_stage_ms"] == 3200
@@ -179,7 +180,7 @@ class TestLogSignalAnalysisDetail:
         log_file = tmp / "trades.jsonl"
         logger = TradeLogger(log_file)
         try:
-            logger.log_signal_analysis_detail(
+            logger.log_signal_analysis_detail(SignalAnalysisDetail(
                 ticker="KXONE",
                 source="AP",
                 headline="Test",
@@ -189,7 +190,7 @@ class TestLogSignalAnalysisDetail:
                 base_probability=0.5,
                 final_probability=0.55,
                 market_price=0.5,
-            )
+            ))
             record = json.loads(log_file.read_text(encoding="utf-8").strip())
             assert "llm_latency_ms" not in record
         finally:
@@ -201,7 +202,7 @@ class TestLogSignalAnalysisDetail:
         log_file = tmp / "trades.jsonl"
         logger = TradeLogger(log_file)
         try:
-            logger.log_signal_analysis_detail(
+            logger.log_signal_analysis_detail(SignalAnalysisDetail(
                 ticker="KXONE",
                 source="AP",
                 headline="Test",
@@ -217,7 +218,7 @@ class TestLogSignalAnalysisDetail:
                 pre_llm_would_block=True,
                 pre_llm_keyword_override=False,
                 pre_llm_gate_reason="weak_semantic_overlap",
-            )
+            ))
             record = json.loads(log_file.read_text(encoding="utf-8").strip())
             assert record["pre_llm_quality_pass"] is False
             assert record["pre_llm_semantic_overlap_count"] == 1

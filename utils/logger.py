@@ -28,6 +28,7 @@ Architecture:
 """
 
 import asyncio
+import dataclasses
 import json
 import logging
 import logging.handlers
@@ -42,6 +43,7 @@ from typing import Any, Callable, Optional, TypeVar
 import colorlog
 
 from config import LOGS_DIR
+from utils.log_records import SignalAnalysisDetail
 
 
 EVIDENCE_INGESTION_REQUIRED_FIELDS: tuple[str, ...] = (
@@ -786,140 +788,42 @@ class TradeLogger:
             "age_seconds": round(age_seconds, 2),
         })
 
-    def log_signal_analysis_detail(
-        self,
-        *,
-        ticker: str,
-        source: str,
-        headline: str,
-        method: str,
-        keywords: list[str],
-        keyword_contributions: list[dict[str, Any]] | None,
-        base_probability: float,
-        final_probability: float,
-        market_price: float,
-        llm_direction: str | None = None,
-        llm_magnitude: str | None = None,
-        llm_confidence: float | None = None,
-        llm_attempted: bool | None = None,
-        llm_result_used: bool | None = None,
-        llm_result_status: str | None = None,
-        llm_provider: str | None = None,
-        llm_latency_ms: int | None = None,
-        llm_total_stage_ms: int | None = None,
-        llm_queue_wait_ms: int | None = None,
-        llm_http_round_trip_ms: int | None = None,
-        llm_parse_ms: int | None = None,
-        llm_http_status: int | None = None,
-        llm_contention_observed: bool | None = None,
-        llm_in_flight_at_entry: int | None = None,
-        llm_routing_passed: bool | None = None,
-        llm_routing_reason: str | None = None,
-        pre_llm_quality_pass: bool | None = None,
-        pre_llm_semantic_overlap_count: int | None = None,
-        pre_llm_semantic_overlap_ratio: float | None = None,
-        pre_llm_would_block: bool | None = None,
-        pre_llm_keyword_override: bool | None = None,
-        pre_llm_keyword_override_mode: str | None = None,
-        pre_llm_keyword_signal_strength: float | None = None,
-        pre_llm_gate_reason: str | None = None,
-        pre_llm_gate_enforced: bool | None = None,
-        pre_llm_headline_token_count: int | None = None,
-        pre_llm_market_token_count: int | None = None,
-        pre_llm_filtered_stopword_count: int | None = None,
-        pre_llm_filtered_generic_count: int | None = None,
-        pre_llm_semantic_token_types: dict[str, int] | None = None,
-        llm_probability_movement: float | None = None,
-        llm_useful: bool | None = None,
-        pre_llm_would_block_and_useful: bool | None = None,
-        is_startup_probe: bool | None = None,
-        is_synthetic_probe: bool | None = None,
-    ) -> None:
-        record = {
-            "type": "SIGNAL_ANALYSIS_DETAIL",
-            "ticker": ticker,
-            "source": source,
-            "headline": headline,
-            "method": method,
-            "keywords": keywords,
-            "base_probability": round(base_probability, 4),
-            "final_probability": round(final_probability, 4),
-            "market_price": round(market_price, 4),
-        }
-        if keyword_contributions:
-            record["keyword_contributions"] = keyword_contributions
-        if llm_direction is not None:
-            record["llm_direction"] = llm_direction
-        if llm_magnitude is not None:
-            record["llm_magnitude"] = llm_magnitude
-        if llm_confidence is not None:
-            record["llm_confidence"] = round(llm_confidence, 4)
-        if llm_attempted is not None:
-            record["llm_attempted"] = llm_attempted
-        if llm_result_used is not None:
-            record["llm_result_used"] = llm_result_used
-        if llm_result_status is not None:
-            record["llm_result_status"] = llm_result_status
-        if llm_provider is not None:
-            record["llm_provider"] = llm_provider
-        if llm_latency_ms is not None:
-            record["llm_latency_ms"] = llm_latency_ms
-        if llm_total_stage_ms is not None:
-            record["llm_total_stage_ms"] = llm_total_stage_ms
-        if llm_queue_wait_ms is not None:
-            record["llm_queue_wait_ms"] = llm_queue_wait_ms
-        if llm_http_round_trip_ms is not None:
-            record["llm_http_round_trip_ms"] = llm_http_round_trip_ms
-        if llm_parse_ms is not None:
-            record["llm_parse_ms"] = llm_parse_ms
-        if llm_http_status is not None:
-            record["llm_http_status"] = llm_http_status
-        if llm_contention_observed is not None:
-            record["llm_contention_observed"] = llm_contention_observed
-        if llm_in_flight_at_entry is not None:
-            record["llm_in_flight_at_entry"] = llm_in_flight_at_entry
-        if llm_routing_passed is not None:
-            record["llm_routing_passed"] = llm_routing_passed
-        if llm_routing_reason is not None:
-            record["llm_routing_reason"] = llm_routing_reason
-        if pre_llm_quality_pass is not None:
-            record["pre_llm_quality_pass"] = pre_llm_quality_pass
-        if pre_llm_semantic_overlap_count is not None:
-            record["pre_llm_semantic_overlap_count"] = pre_llm_semantic_overlap_count
-        if pre_llm_semantic_overlap_ratio is not None:
-            record["pre_llm_semantic_overlap_ratio"] = round(pre_llm_semantic_overlap_ratio, 4)
-        if pre_llm_would_block is not None:
-            record["pre_llm_would_block"] = pre_llm_would_block
-        if pre_llm_keyword_override is not None:
-            record["pre_llm_keyword_override"] = pre_llm_keyword_override
-        if pre_llm_keyword_override_mode is not None:
-            record["pre_llm_keyword_override_mode"] = pre_llm_keyword_override_mode
-        if pre_llm_keyword_signal_strength is not None:
-            record["pre_llm_keyword_signal_strength"] = round(pre_llm_keyword_signal_strength, 4)
-        if pre_llm_gate_reason is not None:
-            record["pre_llm_gate_reason"] = pre_llm_gate_reason
-        if pre_llm_gate_enforced is not None:
-            record["pre_llm_gate_enforced"] = pre_llm_gate_enforced
-        if pre_llm_headline_token_count is not None:
-            record["pre_llm_headline_token_count"] = pre_llm_headline_token_count
-        if pre_llm_market_token_count is not None:
-            record["pre_llm_market_token_count"] = pre_llm_market_token_count
-        if pre_llm_filtered_stopword_count is not None:
-            record["pre_llm_filtered_stopword_count"] = pre_llm_filtered_stopword_count
-        if pre_llm_filtered_generic_count is not None:
-            record["pre_llm_filtered_generic_count"] = pre_llm_filtered_generic_count
-        if pre_llm_semantic_token_types is not None:
-            record["pre_llm_semantic_token_types"] = pre_llm_semantic_token_types
-        if llm_probability_movement is not None:
-            record["llm_probability_movement"] = round(llm_probability_movement, 4)
-        if llm_useful is not None:
-            record["llm_useful"] = llm_useful
-        if pre_llm_would_block_and_useful is not None:
-            record["pre_llm_would_block_and_useful"] = pre_llm_would_block_and_useful
-        if is_startup_probe is not None:
-            record["is_startup_probe"] = is_startup_probe
-        if is_synthetic_probe is not None:
-            record["is_synthetic_probe"] = is_synthetic_probe
+    # Fields whose value is rounded to 4 decimals when included in the record.
+    # Required-float fields are always rounded; optional-float fields are
+    # rounded only when not None.
+    _SAD_REQUIRED_ROUND = frozenset({
+        "base_probability", "final_probability", "market_price",
+    })
+    _SAD_OPTIONAL_ROUND = frozenset({
+        "llm_confidence", "pre_llm_semantic_overlap_ratio",
+        "pre_llm_keyword_signal_strength", "llm_probability_movement",
+    })
+
+    def log_signal_analysis_detail(self, detail: SignalAnalysisDetail) -> None:
+        """Write one SIGNAL_ANALYSIS_DETAIL record from a typed struct.
+
+        Emission contract preserved from the prior 46-kwarg signature:
+          - Required fields always emitted.
+          - `keyword_contributions` emitted only when truthy (matches prior
+            `if keyword_contributions:` guard).
+          - All other optional fields emitted only when not None.
+          - Float fields rounded to 4 decimals in the listed sets.
+          - JSON key order matches dataclass field declaration order, which
+            matches the prior emission cascade.
+        """
+        record: dict[str, Any] = {"type": "SIGNAL_ANALYSIS_DETAIL"}
+        for field in dataclasses.fields(detail):
+            value = getattr(detail, field.name)
+            if field.name == "keyword_contributions":
+                if not value:
+                    continue
+            elif field.name in self._SAD_REQUIRED_ROUND:
+                value = round(value, 4)
+            elif value is None:
+                continue
+            elif field.name in self._SAD_OPTIONAL_ROUND:
+                value = round(value, 4)
+            record[field.name] = value
         self._write(record)
 
     def log_llm_skipped_routing(

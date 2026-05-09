@@ -1,3 +1,4 @@
+import dataclasses
 import io
 import shutil
 import uuid
@@ -293,8 +294,8 @@ async def test_startup_observability_probe_strict_fails_when_required_fields_mis
     with patch.object(
         trade_log,
         "log_signal_analysis_detail",
-        side_effect=lambda **kwargs: original_method(
-            **{k: v for k, v in kwargs.items() if k != "pre_llm_semantic_overlap_count"}
+        side_effect=lambda detail: original_method(
+            dataclasses.replace(detail, pre_llm_semantic_overlap_count=None)
         ),
     ), caplog.at_level("ERROR", logger="main"):
         with pytest.raises(RuntimeError, match="missing required fields"):

@@ -6,6 +6,7 @@ Covers: JSON extraction edge cases, probability mapping, keyword scoring,
 """
 
 import asyncio
+import dataclasses
 import json
 import sys
 from types import SimpleNamespace
@@ -22,6 +23,20 @@ from analysis.signal_analyzer import (
     estimate_probability,
     keyword_estimate,
 )
+
+
+def _detail_to_kwargs(detail_mock):
+    """Convert a SignalAnalysisDetail-form mock call back to a kwargs-style
+    dict for assertion compatibility with tests written against the prior
+    46-kwarg signature. Includes only fields whose value is not None — matches
+    the prior semantic that absent optional kwargs were not present in `kwargs`.
+    """
+    detail = detail_mock.call_args.args[0]
+    return {
+        f.name: getattr(detail, f.name)
+        for f in dataclasses.fields(detail)
+        if getattr(detail, f.name) is not None
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -347,36 +362,36 @@ class TestEstimateProbability:
             "moderate",
             0.85,
         )
-        detail_mock.assert_called_once_with(
-            ticker=market.ticker,
-            source=news.source,
-            headline=news.headline,
-            method="llm",
-            keywords=[],
-            keyword_contributions=[],
-            base_probability=market.yes_prob,
-            final_probability=0.64,
-            market_price=market.yes_prob,
-            llm_direction="yes",
-            llm_magnitude="moderate",
-            llm_confidence=0.85,
-            llm_attempted=True,
-            llm_result_used=True,
-            llm_result_status="ollama_success",
-            llm_provider="ollama",
-            llm_latency_ms=None,
-            llm_total_stage_ms=None,
-            llm_queue_wait_ms=None,
-            llm_http_round_trip_ms=None,
-            llm_parse_ms=None,
-            llm_http_status=None,
-            llm_contention_observed=None,
-            llm_in_flight_at_entry=None,
-            llm_routing_passed=True,
-            llm_probability_movement=pytest.approx(0.14),
-            llm_useful=True,
-            pre_llm_would_block_and_useful=False,
-        )
+        detail_mock.assert_called_once()
+        detail = detail_mock.call_args.args[0]
+        assert detail.ticker == market.ticker
+        assert detail.source == news.source
+        assert detail.headline == news.headline
+        assert detail.method == "llm"
+        assert detail.keywords == []
+        assert detail.keyword_contributions == []
+        assert detail.base_probability == market.yes_prob
+        assert detail.final_probability == 0.64
+        assert detail.market_price == market.yes_prob
+        assert detail.llm_direction == "yes"
+        assert detail.llm_magnitude == "moderate"
+        assert detail.llm_confidence == 0.85
+        assert detail.llm_attempted is True
+        assert detail.llm_result_used is True
+        assert detail.llm_result_status == "ollama_success"
+        assert detail.llm_provider == "ollama"
+        assert detail.llm_latency_ms is None
+        assert detail.llm_total_stage_ms is None
+        assert detail.llm_queue_wait_ms is None
+        assert detail.llm_http_round_trip_ms is None
+        assert detail.llm_parse_ms is None
+        assert detail.llm_http_status is None
+        assert detail.llm_contention_observed is None
+        assert detail.llm_in_flight_at_entry is None
+        assert detail.llm_routing_passed is True
+        assert detail.llm_probability_movement == pytest.approx(0.14)
+        assert detail.llm_useful is True
+        assert detail.pre_llm_would_block_and_useful is False
 
     @pytest.mark.asyncio
     async def test_non_probe_llm_call_logs_prompt_and_raw_response_at_debug(self, monkeypatch, caplog):
@@ -464,31 +479,31 @@ class TestEstimateProbability:
             None,
             None,
         )
-        detail_mock.assert_called_once_with(
-            ticker=market.ticker,
-            source=news.source,
-            headline=news.headline,
-            method="keyword_gate",
-            keywords=[],
-            keyword_contributions=[],
-            base_probability=market.yes_prob,
-            final_probability=market.yes_prob,
-            market_price=market.yes_prob,
-            llm_attempted=True,
-            llm_result_used=False,
-            llm_result_status="ollama_timeout",
-            llm_provider="ollama",
-            llm_latency_ms=None,
-            llm_total_stage_ms=None,
-            llm_queue_wait_ms=None,
-            llm_http_round_trip_ms=None,
-            llm_parse_ms=None,
-            llm_http_status=None,
-            llm_contention_observed=None,
-            llm_in_flight_at_entry=None,
-            llm_routing_passed=True,
-            llm_routing_reason=None,
-        )
+        detail_mock.assert_called_once()
+        detail = detail_mock.call_args.args[0]
+        assert detail.ticker == market.ticker
+        assert detail.source == news.source
+        assert detail.headline == news.headline
+        assert detail.method == "keyword_gate"
+        assert detail.keywords == []
+        assert detail.keyword_contributions == []
+        assert detail.base_probability == market.yes_prob
+        assert detail.final_probability == market.yes_prob
+        assert detail.market_price == market.yes_prob
+        assert detail.llm_attempted is True
+        assert detail.llm_result_used is False
+        assert detail.llm_result_status == "ollama_timeout"
+        assert detail.llm_provider == "ollama"
+        assert detail.llm_latency_ms is None
+        assert detail.llm_total_stage_ms is None
+        assert detail.llm_queue_wait_ms is None
+        assert detail.llm_http_round_trip_ms is None
+        assert detail.llm_parse_ms is None
+        assert detail.llm_http_status is None
+        assert detail.llm_contention_observed is None
+        assert detail.llm_in_flight_at_entry is None
+        assert detail.llm_routing_passed is True
+        assert detail.llm_routing_reason is None
 
     @pytest.mark.asyncio
     async def test_llm_result_takes_precedence_when_available(self, monkeypatch):
@@ -514,7 +529,7 @@ class TestEstimateProbability:
         assert llm_mag == "moderate"
         assert llm_conf == pytest.approx(0.9)
         detail_mock.assert_called_once()
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["method"] == "llm"
         assert kwargs["base_probability"] == pytest.approx(market.yes_prob)
         assert kwargs["final_probability"] == pytest.approx(0.72)
@@ -555,7 +570,7 @@ class TestEstimateProbability:
         assert llm_mag is None
         assert llm_conf is None
         detail_mock.assert_called_once()
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["method"] == "keyword"
         assert kwargs["base_probability"] == pytest.approx(market.yes_prob)
         assert kwargs["final_probability"] == pytest.approx(prob)
@@ -563,9 +578,9 @@ class TestEstimateProbability:
         assert kwargs["llm_attempted"] is False
         assert kwargs["llm_result_used"] is False
         assert kwargs["llm_result_status"] == "no_provider_available"
-        assert kwargs["llm_provider"] is None
+        assert kwargs.get("llm_provider") is None
         assert kwargs["llm_routing_passed"] is True
-        assert kwargs["llm_routing_reason"] is None
+        assert kwargs.get("llm_routing_reason") is None
         assert kwargs["keywords"]
         assert kwargs["keyword_contributions"]
 
@@ -597,12 +612,12 @@ class TestEstimateProbability:
             reason="price_band_excluded",
             market_price=market.yes_prob,
         )
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["method"] == "keyword"
         assert kwargs["llm_attempted"] is False
         assert kwargs["llm_result_used"] is False
         assert kwargs["llm_result_status"] == "llm_skipped_routing_price_band_excluded"
-        assert kwargs["llm_provider"] is None
+        assert kwargs.get("llm_provider") is None
         assert kwargs["llm_routing_passed"] is False
         assert kwargs["llm_routing_reason"] == "price_band_excluded"
 
@@ -625,7 +640,7 @@ class TestEstimateProbability:
 
         assert result[0] == pytest.approx(0.64)
         skip_mock.assert_not_called()
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["method"] == "llm"
         assert kwargs["llm_routing_passed"] is True
         assert "llm_routing_reason" not in kwargs
@@ -652,7 +667,7 @@ class TestEstimateProbability:
         with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
             await estimate_probability(news, market, match_meta=match_meta)
 
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["pre_llm_quality_pass"] is False
         assert kwargs["pre_llm_semantic_overlap_count"] == 1
         assert kwargs["pre_llm_semantic_overlap_ratio"] == pytest.approx(0.2)
@@ -693,7 +708,7 @@ class TestEstimateProbability:
             None,
             None,
         )
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["method"] == "keyword_gate"
         assert kwargs["llm_attempted"] is False
         assert kwargs["llm_result_used"] is False
@@ -725,7 +740,7 @@ class TestEstimateProbability:
         with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
             await estimate_probability(news, market, match_meta=match_meta)
 
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["keywords"]
         assert kwargs["pre_llm_quality_pass"] is False
         assert kwargs["pre_llm_would_block"] is False
@@ -759,7 +774,7 @@ class TestEstimateProbability:
             result = await estimate_probability(news, market, match_meta=match_meta)
 
         assert result[0] == pytest.approx(0.64)
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["method"] == "llm"
         assert kwargs["pre_llm_keyword_override"] is True
         assert kwargs["pre_llm_would_block"] is False
@@ -797,7 +812,7 @@ class TestEstimateProbability:
             result = await estimate_probability(news, market, match_meta=match_meta)
 
         assert result[0] == pytest.approx(0.60)
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["method"] == "keyword"
         assert kwargs["pre_llm_keyword_override"] is False
         assert kwargs["pre_llm_keyword_override_mode"] == "min_signal"
@@ -839,7 +854,7 @@ class TestEstimateProbability:
             result = await estimate_probability(news, market, match_meta=match_meta)
 
         assert result[0] == pytest.approx(0.64)
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["pre_llm_keyword_override"] is True
         assert kwargs["pre_llm_keyword_override_mode"] == "min_signal"
         assert kwargs["pre_llm_keyword_signal_strength"] == pytest.approx(0.1)
@@ -876,7 +891,7 @@ class TestEstimateProbability:
             result = await estimate_probability(news, market, match_meta=match_meta)
 
         assert result[0] == pytest.approx(0.75)
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["method"] == "keyword"
         assert kwargs["pre_llm_keyword_override"] is False
         assert kwargs["pre_llm_keyword_override_mode"] == "disabled"
@@ -919,7 +934,7 @@ class TestEstimateProbability:
             result = await estimate_probability(news, market, match_meta=match_meta)
 
         assert result[0] == pytest.approx(0.55)
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["method"] == "keyword"
         assert kwargs["pre_llm_keyword_override"] is False
         assert kwargs["pre_llm_keyword_override_mode"] == "all_required"
@@ -973,7 +988,7 @@ class TestEstimateProbability:
             result = await estimate_probability(news, market, match_meta=match_meta)
 
         assert result[0] == pytest.approx(0.64)
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["pre_llm_keyword_override"] is True
         assert kwargs["pre_llm_keyword_override_mode"] == "all_required"
 
@@ -1017,7 +1032,7 @@ class TestEstimateProbability:
             result = await estimate_probability(news, market, match_meta=match_meta)
 
         assert result[0] == pytest.approx(0.64)
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["method"] == "llm"
         assert kwargs["pre_llm_would_block"] is True
         assert "pre_llm_gate_enforced" not in kwargs
@@ -1047,7 +1062,7 @@ class TestEstimateProbability:
             result = await estimate_probability(news, market, match_meta=match_meta)
 
         assert result[0] == pytest.approx(0.64)
-        kwargs = detail_mock.call_args.kwargs
+        kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["method"] == "llm"
         assert kwargs["pre_llm_would_block"] is True
         assert "pre_llm_gate_enforced" not in kwargs

@@ -21,6 +21,7 @@ from config import cfg, GEOPOLITICAL_SIGNALS
 from utils.runtime_overrides import is_keyword_disabled
 from feeds import NewsItem
 from kalshi import KalshiMarket
+from utils.log_records import SignalAnalysisDetail
 from utils.logger import get_logger, trade_log, write_trade_log_async
 
 log = get_logger("signal_analyzer")
@@ -1141,8 +1142,7 @@ async def estimate_probability(
                 "keyword_probability": kw_prob,
             },
         )
-        await write_trade_log_async(
-            trade_log.log_signal_analysis_detail,
+        detail = SignalAnalysisDetail(
             ticker=market.ticker,
             source=news.source,
             headline=news.headline,
@@ -1174,6 +1174,7 @@ async def estimate_probability(
             **probe_fields,
             **pre_llm_fields,
         )
+        await write_trade_log_async(trade_log.log_signal_analysis_detail, detail)
         return llm_prob, llm_confidence, keywords, reasoning, llm_direction, llm_magnitude, llm_confidence
 
     if not keywords:
@@ -1189,8 +1190,7 @@ async def estimate_probability(
                 "llm_status": llm_meta["status"],
             },
         )
-        await write_trade_log_async(
-            trade_log.log_signal_analysis_detail,
+        detail = SignalAnalysisDetail(
             ticker=market.ticker,
             source=news.source,
             headline=news.headline,
@@ -1217,6 +1217,7 @@ async def estimate_probability(
             **probe_fields,
             **pre_llm_fields,
         )
+        await write_trade_log_async(trade_log.log_signal_analysis_detail, detail)
         return market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", None, None, None
 
     # Keyword only
@@ -1232,8 +1233,7 @@ async def estimate_probability(
             "confidence": confidence,
         },
     )
-    await write_trade_log_async(
-        trade_log.log_signal_analysis_detail,
+    detail = SignalAnalysisDetail(
         ticker=market.ticker,
         source=news.source,
         headline=news.headline,
@@ -1260,4 +1260,5 @@ async def estimate_probability(
         **probe_fields,
         **pre_llm_fields,
     )
+    await write_trade_log_async(trade_log.log_signal_analysis_detail, detail)
     return kw_prob, confidence, keywords, kw_reasoning, None, None, None
