@@ -10,7 +10,7 @@ Apply instruction layers in this order:
 1. `AGENTS.md`: global contract
 2. `rules/*.md`: enforceable global and project-local policies
 3. `CLAUDE.md`: working-style preferences
-4. `project/AGENTS.md` and project-local rules: explicit project-specific additions or overrides
+4. project-root `AGENTS.md` (if present) and project-local rules: explicit project-specific additions or overrides
 
 ## Global Contract
 

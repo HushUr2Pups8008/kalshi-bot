@@ -374,10 +374,14 @@ Annotation form: visible blockquote callout `> **[RESOLVED 2026-05-08 — guidan
 
 ## Batch 5 — CLAUDE.md and AGENTS.md De-duplication
 
-**Affects:** Project `CLAUDE.md`, project `AGENTS.md`, `~/.claude/project/AGENTS.md`  
-**Depends on:** Batch 1 complete (format rule non-contradictory before CLAUDE.md edits)  
-**Depends on:** Batch 2 complete (`windows_local.md` changes before AGENTS.md update referencing it)  
+**Affects:** Project `CLAUDE.md`, project `AGENTS.md`, `~/.claude/project/AGENTS.md`
+**Depends on:** Batch 1 complete (format rule non-contradictory before CLAUDE.md edits)
+**Depends on:** Batch 2 complete (`windows_local.md` changes before AGENTS.md update referencing it)
 **Test invariant:** N/A (no Python source)
+
+**Revision (2026-05-08, executor pre-flight):** B5-3 plan called for two changes — add `/governance` to architecture list AND update the `windows_local.md` reference. The latter was already done in Batch 2 (line removed entirely). B5-3 reduced to single change: add `/governance` line.
+
+**Out-of-scope flag (not applied):** Project `AGENTS.md` is a near-verbatim copy of global `~/.claude/AGENTS.md` aside from line 21's "Understand and honor the intent..." Phase 6 only flagged step-4 wording (Conflict #18). Could pursue full dedup of project AGENTS.md as a separate decision; not applied here.
 
 ---
 
