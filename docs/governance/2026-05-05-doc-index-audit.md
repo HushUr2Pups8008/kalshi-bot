@@ -43,19 +43,19 @@ Doc surface is **organic but not chaotic**. 6 superseded artifacts safely consol
 
 | file | status | recommendation |
 |---|---|---|
-| `2026-05-03-claude-commit-adversarial-review.md` | superseded by later reviews | archive |
-| `2026-05-03-claude-commits-4a7cc38-fee5003-adversarial-review.md` | resolved | archive |
-| `2026-05-03-claude-commits-56d641e-9e2fffa-adversarial-review.md` | resolved | archive |
-| `2026-05-03-claude-commits-728f3bd-cfc0b60-adversarial-review.md` | resolved | archive |
-| `2026-05-03-claude-commits-c5cbc6f-90c26cf-adversarial-review.md` | resolved | archive |
-| `2026-05-03-claude-commits-cdbf6ef-f786246-adversarial-review.md` | resolved | archive |
-| `2026-05-03-claude-latest-commits-adversarial-review.md` | resolved | archive |
-| `2026-05-03-post-soak-spec-adversarial-review.md` | resolved | archive |
-| `2026-05-04-claude-commits-681ceb9-2bf3da1-adversarial-review.md` | resolved | archive |
-| `2026-05-04-claude-latest-five-commits-adversarial-review-legal-cycle.md` | resolved | archive |
-| `2026-05-05-claude-latest-six-adversarial-review.md` | resolved | archive |
-| `2026-05-05-cross-set-adversarial-review-legal-doc-cycle.md` | resolved | archive |
-| `2026-05-05-latest-5plus5-adversarial-review.md` | resolved | archive |
+| `docs/_archive/governance/2026-05-03-claude-commit-adversarial-review.md` | superseded by later reviews | ARCHIVED Stream G R3 |
+| `docs/_archive/governance/2026-05-03-claude-commits-4a7cc38-fee5003-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
+| `docs/_archive/governance/2026-05-03-claude-commits-56d641e-9e2fffa-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
+| `docs/_archive/governance/2026-05-03-claude-commits-728f3bd-cfc0b60-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
+| `2026-05-03-claude-commits-c5cbc6f-90c26cf-adversarial-review.md` | resolved | archive (HOLD: 4 active refs) |
+| `2026-05-03-claude-commits-cdbf6ef-f786246-adversarial-review.md` | resolved | archive (HOLD: 4 active refs) |
+| `2026-05-03-claude-latest-commits-adversarial-review.md` | resolved | archive (HOLD: 4 active refs) |
+| `docs/_archive/governance/2026-05-03-post-soak-spec-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
+| `docs/_archive/governance/2026-05-04-claude-commits-681ceb9-2bf3da1-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
+| `2026-05-04-claude-latest-five-commits-adversarial-review-legal-cycle.md` | resolved | archive (deferred — circular ref pair) |
+| `docs/_archive/governance/2026-05-05-claude-latest-six-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
+| `docs/_archive/governance/2026-05-05-cross-set-adversarial-review-legal-doc-cycle.md` | resolved | ARCHIVED Stream G R3 |
+| `docs/_archive/governance/2026-05-05-latest-5plus5-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
 
 13 files, all post-resolution. **Recommendation:** move all to `archive/adversarial-reviews/`. Cross-link integrity: most adversarial-review docs aren't cross-referenced from operator-facing docs.
 
