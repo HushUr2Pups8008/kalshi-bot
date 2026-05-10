@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from scripts.simulations import obs003_skipped_synthesizer_reality_check as audit
