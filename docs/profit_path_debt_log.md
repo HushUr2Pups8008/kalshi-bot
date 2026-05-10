@@ -28,11 +28,11 @@
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 48 |
-| Open — HIGH | 5 |
+| Open — HIGH | 4 |
 | Open — MEDIUM | 3 |
 | Open — LOW | 2 |
 | Items IN_PROGRESS | 1 (PROFIT-PHASE2-001 — soak clock running, no operator action until 2026-05-15) |
-| Items COMPLETE | 36 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-DOSSIER-001, PROFIT-GOV-002, PROFIT-DOC-002) |
+| Items COMPLETE | 37 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-DOSSIER-001, PROFIT-GOV-002, PROFIT-DOC-002, PROFIT-OBS-003) |
 | Consolidated From | `docs/EDGE_STATUS.md` (merged 2026-05-09 → §Current Status); `docs/governance/edge-004-closure-path-tldr-v3.md` (lever map + EDGE-004 closure criteria merged 2026-05-09 → §Current Status §2.3) |
 
 ### High-Risk Areas
@@ -1548,6 +1548,7 @@ This is a multi-step problem and should not be bundled into one fix. A reasonabl
 - **2026-05-03 Lever E source/source-class corroboration sizing:** `docs/governance/2026-05-03-lever-e-source-corroboration-sizing.md` joins OPPORTUNITY → BLEND_DECISION → EVIDENCE_INGESTION and counts distinct contributing source classes plus distinct source instances. Source-class distribution is `{0: 9, 1: 142, 2: 100, 3: 9}`; class N>=2 retains 109/260 OPPORTUNITY records and 0/3 PAPER_TRADE records. Source-instance distribution is `{0: 9, 1: 251}`; source N>=2 retains 0/260. Lever E is therefore a high-blast-radius corroboration gate, not a first-line EDGE-004 edge-lift lever without post-OBS-003 sizing.
 - **2026-05-03 Lever A.1 classifier replay + Wave-2 ladder:** `docs/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md` shows the exact EVIDENCE_INGESTION source-string replay is blocked by archive shape (0/248 rows carry raw `source`). OPPORTUNITY source-label surrogate stays at 1/260 official post-A.1, failing the ≥30/260 target; MATCH_DIAGNOSTIC feed-surface surrogate stays 63/2838 official and flips only 8 defense-feed rows from other→news. `docs/governance/2026-05-03-edge004-wave2-expected-state-ladder.md` therefore treats A.1 as a distribution/measurement fix with no archive-visible trade-rate lift; A.1+ new feeds remain the only Wave-2 edge-production lever.
 - **2026-05-03 Lever A.1+ candidate-feed sizing:** `docs/governance/2026-05-03-lever-a1-plus-candidate-feed-sizing.md` buckets archive-visible source labels into government bulletin / specialist analyst / market microstructure classes. Result: specialist analyst has the strongest non-mainstream archive surface (251 MATCH_DIAGNOSTIC, 21 OPPORTUNITY, 3 PAPER_TRADE, median age ~2240s), government bulletin is thinner (63 MATCH_DIAGNOSTIC, 1 OPPORTUNITY, 0 PAPER_TRADE), and market microstructure has no archive surface. This points A.1+ first-feed ROI toward specialist analyst feeds; live onboarding still needs per-feed freshness/auth probes.
+- OBS-003 closed 2026-05-10 — per-gate kill attribution now available via SKIPPED reason field; cycle-17C E3+ replay analyses can join SKIPPED.reason against the readiness-gate enum directly.
 
 **Related**
 
@@ -2243,7 +2244,7 @@ Six axes per first-axis-pick rationale (rank 1-6):
 | **Title** | OPPORTUNITY → SKIPPED/PAPER_TRADE arithmetic gap: 240-of-260 lifetime OPPORTUNITY events exit with no matching executor record (including 2 OPPORTUNITY at non-trivial positive edge that produced no PAPER_TRADE) |
 | **Category** | Observability / Trade-Log Fidelity |
 | **Severity** | HIGH (promoted 2026-05-01 from MEDIUM) |
-| **Status** | OPEN |
+| **Status** | COMPLETE (2026-05-10) |
 | **Priority** | NOW (promoted 2026-05-01 from LATER) |
 | **Owner** | Shared |
 | **Depends On** | — |
@@ -2459,6 +2460,14 @@ These two hypotheses imply at least **two distinct silent-exit code paths** in `
 - `PROFIT-EXEC-001` (closed) — addressed direct executor bypass risk; OBS-003 is observability of the bypass-not-bypass outcome path.
 - `PROFIT-OBS-004` (opened 2026-05-01) — companion entry for the edge-sign display bug surfaced by the same 2026-05-01 audit; PAPER_TRADE records on KXFISAEXTEND show the YES-side edge (-0.068) regardless of which side was actually traded.
 - `PROFIT-CUTOVER-001` (opened 2026-05-01) — the post-cutover Mac Studio audit window is where the 24h acceptance criterion above will run. Do not run that audit on the MacBook; the MacBook is archive-only.
+
+**Closure (2026-05-10)**
+
+Implemented per spec `docs/superpowers/specs/2026-05-03-obs-003-blendtask-skipped-emission-design.md`. `BlendTask._emit_skipped()` lands at the blocked-reason early return; payload mirrors the executor's SKIPPED shape (post-blend `model_probability` and `edge`, headline truncated to 80 chars). 4 strict-xfail OBS-003 tests in `tests/test_blend_task.py` flipped to passing (per-reason emission for G1-G6 + blender-side, async-write target pin, executor-compatible key set). Companion fixes in commit `c9df364`: `BlendDecisionLogger` Protocol widened with `log_skipped`; `_SpyLogger` in `scripts/simulations/blend_task_integration.py` mirrored; post-deploy canary at `tests/test_wave1_commit3_obs003_post_deploy.py` xfail stripped (it had been designed to flip on deploy).
+
+**24-hour paper-mode audit (early-closed at 9h by operator):** window `2026-05-10T03:43:54Z` → `2026-05-10T12:39:15Z` (8h 55min); 14,059 trade-log entries. **Invariant exact**: `OPPORTUNITY(7) = SKIPPED(5) + PAPER_TRADE(2) → delta=0` (spec §8 threshold was `delta < 5`). **SKIPPED reason monoculture broken**: 3 distinct reasons all from the new BlendTask emission path — `G2_evidence_source_class_diversity` (×2), `G1_blended_confidence` (×2), `G6_recency_score` (×1). Pre-fix lifetime monoculture was 17/17 of the executor-side string `"edge +0.0000 below min_edge 0.02"` over the 13-day MacBook archive. **PAPER_TRADE bonus signal**: 2 paper trades in 8.9h sourced from positive-edge OPPORTUNITY events (the silently-lost class OBS-003 was supposed to surface) vs 3 paper trades over 13 days pre-fix; n=2 is statistically uninformative on its own, but the throughput delta is consistent with the silent-exit gap closing. **Safety counters**: 0 `KILL_SWITCH`, 0 `VALIDATION_ERROR`, 0 `PARSE_ERROR`. Early-close justification: invariant was exact (not just `<5`); reason diversity already at the spec threshold; zero rollback conditions firing.
+
+Cross-references this closure: PROFIT-EDGE-004 audit can now quote per-gate kill counts directly from the SKIPPED stream (post-soak/post-cycle-17C).
 
 ---
 
