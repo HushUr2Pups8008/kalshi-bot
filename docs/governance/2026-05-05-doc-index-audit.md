@@ -78,12 +78,12 @@ Examples NOT to archive:
 - `2026-05-05-PROFIT-PHASE2-001-decision-distribution-analysis.md`
 - `2026-05-05-rollback-runbook-validation.md` (this cycle)
 - `2026-05-05-wave-2-a1plus-branch-decision-table.md` (this cycle)
-- `2026-05-05-wave1-commit-order-risk-audit.md`
-- `2026-05-05-wave1-six-commit-dryrun-review-status.md`
+- `docs/_archive/governance/2026-05-05-wave1-commit-order-risk-audit.md` (ARCHIVED Stream G R4)
+- `docs/_archive/governance/2026-05-05-wave1-six-commit-dryrun-review-status.md` (ARCHIVED Stream G R4)
 - `2026-05-05-pre-wave1-version-bump-dry-run.md`
 - `2026-05-05-wave-1-deploy-dry-run-report.md`
-- `2026-05-05-next-soak-readiness-audit.md`
-- `2026-05-05-edge004-tldr-doc-quality-review.md`
+- `docs/_archive/governance/2026-05-05-next-soak-readiness-audit.md` (ARCHIVED Stream G R4)
+- `docs/_archive/governance/2026-05-05-edge004-tldr-doc-quality-review.md` (ARCHIVED Stream G R4)
 
 11 active artifacts; all referenced by Day-7 close playbook or this-cycle documentation. KEEP all.
 
