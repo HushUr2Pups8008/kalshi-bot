@@ -2895,7 +2895,7 @@ The original spec §8.5 floor was a single time-based gate (≥14 days). After t
 - **2026-05-03 day-4 pending drift check:** `docs/governance/2026-05-03-day-4-pending-mid-soak-confirmation.md` repeats the date guard: still no `2026-05-04` records in the live JSONL, so day-4 evidence is not yet available. Latest available data through `2026-05-03`: 118 decisions, 19 targets, 15 post-GOV-002-fix decisions, 0 validation errors, 0 batch aborts, 0 KILL_SWITCH, and no `2026-05-03` parse errors.
 - **2026-05-03 day-4 pending drift check #2:** `docs/governance/2026-05-03-day-4-pending-mid-soak-confirmation-2.md` re-checks after the latest commits: still no `2026-05-04` records. Current tail remains 118 decisions, 19 targets, 25 distinct `(target, reasoning)` tuples, 0 validation errors, 0 batch aborts, 0 KILL_SWITCH, and no post-2026-05-02 parse errors in the monitor's per-day rows.
 - **2026-05-03 day-4 pending drift check #3:** `docs/governance/2026-05-03-day-4-pending-mid-soak-confirmation-3.md` repeats the date guard: still no `2026-05-04` governance records in the checked file. Totals remain 118 decisions, 19 targets, 25 distinct `(target, reasoning)` tuples, 0 validation errors, 0 batch aborts, and 0 KILL_SWITCH events.
-- **Per-day soak placeholder history archived 2026-05-09:** the 5 day-3 / day-4 placeholder confirmation files referenced above (and `2026-05-03-day-4-pending-mid-soak-confirmation-4.md`) were moved to `docs/_archive/2026-05-09-docs-consolidation/soak-status-history/` as part of the docs/ consolidation initiative. They were superseded by the canonical day-N confirmations (`2026-05-04-day-4-mid-soak-confirmation.md`, `2026-05-05-day-5-cycle-sanity-check-canonical.md`, etc.) which remain in `docs/governance/`. Live soak state continues to be tracked in this entry. See `docs/housekeeping/2026-05-09/docs-consolidation/SUMMARY.md` for consolidation rationale.
+- **Per-day soak placeholder history archived 2026-05-09:** the 5 day-3 / day-4 placeholder confirmation files referenced above (and `2026-05-03-day-4-pending-mid-soak-confirmation-4.md`) were moved to `docs/_archive/2026-05-09-docs-consolidation/soak-status-history/` as part of the docs/ consolidation initiative. They were superseded by the canonical day-N confirmations (`2026-05-04-day-4-mid-soak-confirmation.md`, `docs/_archive/governance/2026-05-05-day-5-cycle-sanity-check-canonical.md` ARCHIVED Stream G R45, etc.). Live soak state continues to be tracked in this entry.
 
 **Related**
 
@@ -3077,7 +3077,7 @@ Seventh + eighth pass on 2026-05-05 (commits `92b767d` Claude + `ffc54b2` Codex;
 **Cycle 7 Claude artifacts (commit `92b767d`):**
 - `IMPLEMENTATION_CONTRACT.md` Edit — §5 G1 cell 0.35→0.05→0.04 alignment (cycle 4-5 review F1)
 - `2026-05-05-launchd-plist-consolidation-decision.md` — keep `ops/launchd/`; migrate db-backup; capture 3 operator-managed plists
-- `2026-05-05-day-7-to-wave-1-handoff-procedure.md` — 5-condition transition gate; defer rules
+- `docs/_archive/governance/2026-05-05-day-7-to-wave-1-handoff-procedure.md` — 5-condition transition gate; defer rules (ARCHIVED Stream G R45)
 - `2026-05-05-wave-1-commit-by-commit-acceptance-matrix.md` — 6-commit consolidation
 - `2026-05-05-wave-2-decision-flow.md` + `2026-05-05-wave-3-decision-flow.md` — ASCII flowcharts
 - `2026-05-05-macbook-import-archive-procedure.md` — post-Wave-1-close tar.gz workflow
