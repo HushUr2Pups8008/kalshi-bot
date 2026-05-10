@@ -35,6 +35,9 @@ Each experiment row contains the following fields. Pre-replay fields are committ
 | `revert_condition` | What triggers automatic revert. E.g. "If 0 IC §16 slices OR if `ev_ci_95_lo` overall worsens vs baseline by >0.02, revert." |
 | `n_disclosure_plan` | How experiment will report resulting n + MDE. E.g. "Report trades count + computed minimum-detectable effect at observed n via 1-sided binomial test at α=0.05." |
 | `pre_replay_commit` | Commit hash of criteria-lock commit |
+| `corpus_id` | One of `cycle16d` (legacy) / `cycle17d_merged` (Cycle-17D onward). Required for every experiment row. |
+| `corpus_sha256` | SHA-256 of the locked corpus JSONL file. Pinned at criteria-lock time. |
+| `cohort_breakdown` | Pre-experiment count: `{PRE_FIX: N1, POST_FIX_REBUILT: N2, POST_FIX_NEW: N3}` for the admitted rows under the experiment's locked admission rule. Outcome-blind; computed pre-replay. |
 
 ### Post-replay (reported)
 
@@ -44,7 +47,8 @@ Each experiment row contains the following fields. Pre-replay fields are committ
 | `wins` | Count of winning trades |
 | `market_implied_expected_wins` | `Σ p_yes_at_decision_time` over trades (or NO-side equivalent) |
 | `pnl` | Net P&L in cents (per scorer convention) |
-| `ic16_slices` | Count of (source × market_family × signal_type) slices passing both gates |
+| `ic16_slices_4axis` | IC §16 slice count using 4-axis grouping. This is the acceptance metric. |
+| `ic16_slices_5axis_diagnostic` | IC §16 slice count using 5-axis grouping (4 + cohort). Diagnostic; flags cohort-drift-driven slices. |
 | `delta_vs_baseline` | Trade-count delta + wins delta + slice-count delta vs frozen baseline |
 | `n_observed_mde` | Resulting n + MDE at α=0.05 |
 | `decision` | One of: `keep` / `revert` / `diagnostic-only` |
@@ -145,6 +149,10 @@ Each experiment row contains the following fields. Pre-replay fields are committ
 - **Diagnostic-only logged.** `diagnostic-only` produces a complete ledger row. The post-replay-commit hash is the verdict commit; no baseline change occurs.
 - **Baseline pointer.** When an experiment is `keep`, update the "Frozen baseline" anchor commit at the top of this doc to the new post-replay commit. The previous baseline anchor stays referenced in the ledger row.
 - **No retroactive edits.** Once a verdict is logged, the row is immutable. Corrections go in `notes` of a NEW row referencing the corrected experiment.
+
+### Preservation rule (schema evolution — Cycle-17D onward)
+
+Existing rows E0/E1/E2/E3 (Cycle-17C) must NOT be edited. The new fields (`corpus_id`, `corpus_sha256`, `cohort_breakdown`, `ic16_slices_4axis`, `ic16_slices_5axis_diagnostic`) apply prospectively from E0' (Cycle-17D broader-corpus baseline) onward. Legacy rows can be back-filled with `corpus_id=cycle16d` if needed for reporting, but the core data (hypothesis, replay command, decision, rationale) remains immutable.
 
 ## Sample size + MDE table (for hypothesis design)
 
