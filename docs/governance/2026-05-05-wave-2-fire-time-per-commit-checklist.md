@@ -3,7 +3,7 @@
 **Type:** operator-runnable single-page playbook (per Implementation Contract §9 — operator decision input).
 **Audience:** operator at Wave-2 fire-time. Triggers ≥ 2026-05-18 (Branch A start) or ≥ 2026-06-02 (Branch C deploy).
 **Drafted:** 2026-05-05.
-**Companion:** `2026-05-05-wave-2-deploy-day-timing.md`; `wave-2-deploy-commit-order-decision.md`; `2026-05-05-wave-2-a1plus-branch-decision-table.md`; `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md`.
+**Companion:** `2026-05-05-wave-2-deploy-day-timing.md`; `wave-2-deploy-commit-order-decision.md`; `2026-05-05-wave-2-a1plus-branch-decision-table.md`; `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` (ARCHIVED Stream G R37).
 **Wall-clock target:** 5 min (Branch A start) or 30 min (Branch C deploy).
 
 ## Wave-2 commits
@@ -67,7 +67,7 @@ launchctl list | grep com.jake.kalshi-bot     # PID > 0; exit 0
 
 ### 2.2 RSS-probe candidate feeds (10 min)
 
-Per `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` §"Pre-deploy scoring":
+Per `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` §"Pre-deploy scoring" (ARCHIVED Stream G R37):
 
 ```bash
 # D1 RSS feasibility probe
@@ -184,7 +184,7 @@ If 14d window concludes with regression but post-24h smoke was clean: investigat
 ## Cross-links
 
 - `2026-05-05-wave-2-a1plus-branch-decision-table.md` — Branch A → C → option-A sequence + acceptance
-- `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — Branch C feed selection
+- `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — Branch C feed selection (ARCHIVED Stream G R37)
 - `2026-05-05-wave-2-deploy-day-timing.md` — Wave-2 timing rationale
 - `wave-2-deploy-commit-order-decision.md` — locked commit order
 - `wave-2-wave-3-changelog-entries-prestaged.md` — pre-staged CHANGELOG entries

@@ -47,7 +47,7 @@ For each cycle's commits, classify every artifact by:
 | `profit_path_debt_log.md` (cycle 2 entry) | docs (Claude scope) | Claude | ✅ |
 | `lever-menu-design.md` §5.1 + §5.2 amendment | architectural amendment | Claude | ✅ |
 | `2026-05-05-wave-1-deploy-day-timing.md` | planning spec | Claude | ✅ |
-| `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` | ambiguity resolution | Claude | ✅ |
+| `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` | ambiguity resolution | Claude | ✅ (ARCHIVED Stream G R37) |
 | Lever C cross-series xfail harness expansion | precise impl per Claude's lock spec | Codex | ✅ |
 | Branch C feed-config xfail expansion | precise impl per rubric | Codex | ✅ |
 | `governance_decision_review.py --bulk-mode` | precise impl | Codex | ✅ |

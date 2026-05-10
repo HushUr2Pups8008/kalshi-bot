@@ -54,7 +54,7 @@
 | Compact per-commit playbook? | `docs/governance/2026-05-05-wave-2-fire-time-per-commit-checklist.md` |
 | Locked commit order? | `docs/governance/wave-2-deploy-commit-order-decision.md` |
 | Cadence + UTC windows? | `docs/governance/2026-05-05-wave-2-deploy-day-timing.md` |
-| Branch C feed-selection rubric? | `docs/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` |
+| Branch C feed-selection rubric? | `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` (ARCHIVED Stream G R37) |
 | Smoke wrapper? | `scripts/wave2_fire_time_smoke.sh` (cycle 6) |
 | Pre-staged CHANGELOG block? | `docs/governance/wave-2-wave-3-changelog-entries-prestaged.md` |
 

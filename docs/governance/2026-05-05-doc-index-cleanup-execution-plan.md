@@ -139,7 +139,7 @@ Then write `docs/governance/README.md` with:
 - `wave-2-wave-3-changelog-entries-prestaged.md` — pre-staged CHANGELOG (Wave-2/3)
 - `2026-05-05-wave-2-deploy-day-timing.md` — Wave-2 UTC timing
 - `2026-05-05-wave-2-a1plus-branch-decision-table.md` — Branch A → C → option-A sequence
-- `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — Branch C feed selection
+- `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — Branch C feed selection (ARCHIVED Stream G R37)
 
 ### Wave-3 deploy + escalation
 - `2026-05-05-wave-3-deploy-day-timing.md` — Wave-3 UTC timing

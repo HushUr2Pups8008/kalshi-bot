@@ -92,7 +92,7 @@
 The operator's only real decisions during Wave-2 are:
 
 1. **Branch A start trigger.** "Is Wave-1 stable enough to start observing?" — Wave-1 commit 6 + 48h watch all clean per `2026-05-05-wave-1-commit-by-commit-acceptance-matrix.md`.
-2. **Branch C feed selection.** Per `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md`: Just Security primary + Lawfare secondary recommended. Operator confirms at fire-time after RSS-probe.
+2. **Branch C feed selection.** Per `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` (ARCHIVED Stream G R37): Just Security primary + Lawfare secondary recommended. Operator confirms at fire-time after RSS-probe.
 3. **Branch D fire vs Wave-3 deploy.** When Branch C 14-day window concludes with stall: operator chooses Wave-3 (more attribution data) OR Branch D (escalate now). See `2026-05-05-wave-3-decision-flow.md` (this cycle) for the Wave-3 trigger conditions.
 
 Everything else is mechanical execution.
@@ -118,6 +118,6 @@ Recommended: **serial walk** (no parallelism). Attribution is cleaner.
 - `2026-05-05-wave-2-a1plus-branch-decision-table.md` — decision criteria
 - `2026-05-05-wave-2-deploy-day-timing.md` — UTC timing windows
 - `2026-05-05-wave-3-decision-flow.md` — Wave-3 flowchart (sibling)
-- `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — feed selection
+- `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — feed selection (ARCHIVED Stream G R37)
 - `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers (ARCHIVED Stream G R35)
 - `wave-2-deploy-commit-order-decision.md` — locked commit order

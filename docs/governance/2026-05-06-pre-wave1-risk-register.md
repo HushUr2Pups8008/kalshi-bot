@@ -129,7 +129,7 @@
 
 ## Risks NOT in this register (out of pre-Wave-1 scope)
 
-- Wave-2 Branch C feed RSS-probe failures (deploy-time risk; covered in `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` §"Tie-breakers")
+- Wave-2 Branch C feed RSS-probe failures (deploy-time risk; covered in `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` §"Tie-breakers", ARCHIVED Stream G R37)
 - Wave-3 Lever B P&L negative outcome (post-deploy 14d window risk; covered in Lever B parent §6 acceptance)
 - Branch D PROFIT-LLM-001 sizing inadequate (post-Wave-2-stall risk; covered in `2026-05-05-profit-llm-001-pre-sizing-scope-design.md` §3)
 - DEFERRED-CEILING outcome (terminal risk; covered in TLDR v3 honest-read)

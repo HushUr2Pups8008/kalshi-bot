@@ -49,7 +49,7 @@ Codex re-runs `signal_analyzer.py` against the same headline corpus but filters 
 - US State Department press feed
 - Specific foreign MFA feeds (UK FCDO; Israeli MFA; Iranian gov press)
 
-Per-source: D1 RSS feasibility; D2 paywall friction; D3 classifier bucket; D4 Kalshi market overlap; D5 historical archive evidence (likely 0; new source); D6 operational stability (per `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` rubric pattern).
+Per-source: D1 RSS feasibility; D2 paywall friction; D3 classifier bucket; D4 Kalshi market overlap; D5 historical archive evidence (likely 0; new source); D6 operational stability (per `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` rubric pattern, ARCHIVED Stream G R37).
 
 **Sizing output:** per-source onboarding feasibility + per-source projected directional-view yield.
 

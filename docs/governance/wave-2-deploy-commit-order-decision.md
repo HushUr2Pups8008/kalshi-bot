@@ -28,7 +28,7 @@ Plus parallel-discretion option-A geopolitics specialist deploy (single commit; 
 
 **Type:** single behavioural commit.
 **Trigger:** Branch A 14 d window concludes with 0 legal-niche PAPER_TRADE (≥ 2026-06-01).
-**Action:** single commit per `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` §"Deploy procedure":
+**Action:** single commit per `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` §"Deploy procedure" (ARCHIVED Stream G R37):
 1. Edit `config.py:RSS_FEEDS` — add 1-2 selected URLs (Just Security primary + Lawfare secondary recommended).
 2. Edit `main.py:_source_class_for_evidence` — add tokens for selected sources to bucket as `analysis` class.
 3. Remove `pytest.mark.xfail` decorator from `tests/test_lever_a1plus_feed_config.py::test_vital_law_or_legal_analyst_feed_present_post_a1plus` AND from any test pinning specific URL selection per Codex's harness expansion (this cycle).
@@ -85,7 +85,7 @@ Plus parallel-discretion option-A geopolitics specialist deploy (single commit; 
 
 - `docs/governance/wave-1-deploy-commit-order-decision.md` — Wave-1 analog
 - `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — branch sequence + acceptance
-- `docs/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — Branch C feed selection
+- `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — Branch C feed selection (ARCHIVED Stream G R37)
 - `docs/governance/2026-05-05-wave-2-deploy-day-timing.md` — Wave-2 timing recommendation
 - `docs/governance/wave-2-wave-3-changelog-entries-prestaged.md` — pre-staged CHANGELOG entries
 - `docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` — Branch C parent spec (ARCHIVED Stream G R32)

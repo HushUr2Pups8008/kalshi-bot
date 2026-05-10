@@ -3,7 +3,7 @@
 **Type:** ambiguity resolution (Claude task per Implementation Contract §9 — operator decision input).
 **Drafted:** 2026-05-05.
 **Audience:** operator scheduling Wave-2 (A.1+ Branch A observation; Branch C legal-analyst onboard) at ≥ 2026-05-15 post-Wave-1 stabilisation.
-**Companion:** `docs/governance/2026-05-05-wave-1-deploy-day-timing.md` (Wave-1 timing); `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` (Branch C feed selection).
+**Companion:** `docs/governance/2026-05-05-wave-1-deploy-day-timing.md` (Wave-1 timing); `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` (Branch C feed selection, ARCHIVED Stream G R37).
 
 ## TL;DR
 
@@ -81,7 +81,7 @@ If deployed: same timing recipe as Branch C (UTC Mon-Thu 18:00-22:00; 24 h watch
 ## Operator decision points
 
 1. **Serial vs parallel.** Recommend serial Branch A → Branch C; parallelism risks attribution confusion.
-2. **Branch C feed selection.** Per `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md`: Just Security primary + Lawfare secondary. Operator confirms at fire-time.
+2. **Branch C feed selection.** Per `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` (ARCHIVED Stream G R37): Just Security primary + Lawfare secondary. Operator confirms at fire-time.
 3. **VERSION bump.** Branch C deploy lands as v0.31.0 (Wave-2 minor bump per `wave-1-changelog-entry-prestaged.md` versioning rule). Confirm CHANGELOG drift check (this cycle's task T8) is clean before bump.
 4. **option-A fire condition.** Defer unless Branch C also stalls AND operator wants exhaustion-evidence before Branch D.
 
@@ -96,7 +96,7 @@ If deployed: same timing recipe as Branch C (UTC Mon-Thu 18:00-22:00; 24 h watch
 - `docs/governance/2026-05-05-wave-1-deploy-day-timing.md` — Wave-1 timing analog
 - `docs/governance/2026-05-05-wave-3-deploy-day-timing.md` — Wave-3 timing (this cycle)
 - `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Wave-2 sequence + acceptance criteria (post nomenclature cleanup)
-- `docs/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — Branch C feed selection
+- `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — Branch C feed selection (ARCHIVED Stream G R37)
 - `docs/governance/wave-1-post-deploy-observation-plan.md` — observation plan template (Branch C deploy uses Wave-2-specific monitoring rows derived from this template)
 - `docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` — Branch C parent spec (ARCHIVED Stream G R32)
 - `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D handoff (ARCHIVED Stream G R35)

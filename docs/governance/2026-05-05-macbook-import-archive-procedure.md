@@ -15,7 +15,7 @@ After Wave-1 commit-6 + 48h watch passes clean: compress the 149MB `mac_archive/
 ## Why archive after Wave-1 close
 
 1. **Wave-1's per-commit observation plan compares to current Mac Studio state**, not MacBook archive. The MacBook data informs strategic framing (per `README.md` Status block + `profit_path_debt_log.md` PROFIT-CUTOVER-001 entry), not deploy-time decision-making.
-2. **Wave-2 Branch C selection rubric** uses Codex's `docs/_archive/governance/2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` audit (ARCHIVED Stream G R6) which itself reads the MacBook archive at audit time. Branch C operator decisions are made by reading the cycle-3 selection rubric (`2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md`), not the raw MacBook archive.
+2. **Wave-2 Branch C selection rubric** uses Codex's `docs/_archive/governance/2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` audit (ARCHIVED Stream G R6) which itself reads the MacBook archive at audit time. Branch C operator decisions are made by reading the cycle-3 selection rubric (`docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` ARCHIVED Stream G R37), not the raw MacBook archive.
 3. **149MB on local disk** isn't a space crisis but is non-zero overhead. Compressed `.tar.gz` should be 30-60MB.
 
 ## Procedure (post-Wave-1 commit 6 + 48h watch clean)

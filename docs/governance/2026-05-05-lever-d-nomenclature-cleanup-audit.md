@@ -41,7 +41,7 @@ This audit surfaces a **third**:
 | `edge-004-closure-path-tldr-v3.md:5,11,12,35,46,60,73,83,90,92,105` | meaning #2 throughout | ✅ correct |
 | `2026-05-05-doc-index-audit.md:23,96,124` | meaning #2 throughout | ✅ correct |
 | `docs/_archive/governance/2026-05-03-claude-commits-cdbf6ef-f786246-adversarial-review.md:44` | "Lever D verdict: 'Only consider D if Levers A + B + E all succeed...'" | meaning #1 | ✅ correct (adversarial review of pre-2026-05-03 framing) |
-| `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md:105,136` | "escalate to Branch D" | meaning #2 | ✅ correct |
+| `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md:105,136` | "escalate to Branch D" | meaning #2 | ✅ correct |
 | `docs/_archive/governance/2026-05-03-claude-latest-commits-adversarial-review.md:38` | "Lever D's pre-LLM gate retention curve" | meaning #1 | ✅ correct |
 | `docs/_archive/governance/2026-05-03-claude-commits-c5cbc6f-90c26cf-adversarial-review.md:35` | "Lever D demotion" | meaning #1 | ✅ correct |
 | `2026-05-03-post-soak-landing-order-design.md:17` | "Lever D demoted" | meaning #1 | ✅ correct |
