@@ -1,8 +1,8 @@
 # Plan — Safe `docs/` Work During OBS-003 24h Audit
 
-**Date:** 2026-05-09
-**Status:** DRAFT (controller plan — execution gated on user approval)
-**Audit context:** OBS-003 BlendTask SKIPPED emission deployed at commit `92b1d11` and stabilized at `c9df364`. 24h paper-mode audit running per `2026-05-09-profit-obs-003-blendtask-skipped-emission.md` Task 6 in worktree `~/vscode/kalshi-bot-obs-003`. Closure invariant: `OPPORTUNITY = SKIPPED + PAPER_TRADE ± in-flight (<5)`.
+**Date:** 2026-05-09 (drafted) → 2026-05-10 (Stream G complete)
+**Status:** COMPLETE (Streams A-G executed; 105 files archived across 55+ atomic commits; audit-frozen invariant preserved through window + post-close)
+**Audit context (resolved):** OBS-003 BlendTask SKIPPED emission deployed at commit `92b1d11`, stabilized at `c9df364`. 24h paper-mode audit early-closed at 9h on operator decision (commit `66003b4` 2026-05-10 ~07:25Z). Invariant met: `OPPORTUNITY(7) = SKIPPED(5) + PAPER_TRADE(2)`, delta=0 (spec §8 threshold delta<5). SKIPPED monoculture broken (3 distinct gates G1/G2/G6 vs pre-fix 17/17 monoculture). 0 safety-counter trips. PROFIT-OBS-003 OPEN→COMPLETE.
 
 ---
 
@@ -295,16 +295,17 @@ Final state: dated 2026-05-* files in `/governance/`: 114 (Stream G start) → 5
 - 2026-05-06-strategic-redirect-edge-replay-priority (active charter authority)
 - 2026-05-05-cross-cycle-contract-adherence-review removed; 2026-05-05-implementation-contract-cycle-4-5-review removed (cycles 4-5 closed); cycle-6-7 review intact (active cycles)
 
-### 8.5 Stream G unfinished work (defer to next session)
+### 8.5 Stream G COMPLETE — operator-call items remain
 
-**12 EDGE-004 lever specs CLOSED in this session via R24-R35.** All Wave-2/3 lever-design specs now in `_archive/specs/`. 95+ active doc ref edits handled per-spec with full context retrieval.
+**12 EDGE-004 lever specs CLOSED via R24-R35.** All Wave-2/3 lever-design specs now in `_archive/specs/`. 95+ active doc ref edits handled per-spec with full context retrieval.
 
-**Stream G effectively complete.** Remaining /governance/ files all operational/active per category breakdown above. Items not autonomously archivable:
-- ROADMAP Wave-1 row "active" → "complete" flip (operator call)
-- Cycle-12/13/14/16D/16E reports — all retained for cycle history (only cycle-15b archived as operationally superseded)
-- Wave-2/3 deploy artifacts retained pending operator decision on resume vs full archive
+**Stream G COMPLETE 2026-05-10.** Total: 105 files archived / 55+ atomic commits / `/governance/` 53% reduction in dated 2026-05-* files. Items NOT in scope for autonomous archive (operator-call required):
+- ROADMAP Wave-1 row "active" → "complete" flip (operator pacing-table call)
+- Cycle-12/13/14/16D/16E reports — retained for cycle history (only cycle-15b archived as superseded by 16E)
+- Wave-2/3 deploy artifacts retained pending operator decision on resume-vs-full-archive
 - Operational runbooks (incident-response, deploy-guide) retained for runtime use
+- network-api-outage-runbook (1 ref but operational; left in place)
 
 ---
 
-**Status:** Stream G partially executed. Audit-frozen invariant fully preserved across 13 commits this session-pair. Plan can be archived once all Stream G work clears; until then, this is the controller doc.
+**Status:** **COMPLETE.** Streams A-G executed 2026-05-09 → 2026-05-10. 105 files archived across 55+ atomic commits. Audit-frozen invariant preserved through full window + post-close. Operator-call items deferred per §8.5 (cycle-history retention, ROADMAP pacing flip, operational runbooks). This plan eligible for archive.
