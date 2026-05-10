@@ -245,23 +245,34 @@ OBS-003 audit closed at 9h (early-closed on operator decision; invariant `OPPORT
 | R21 | post-verdict-action-checklists (cycle-15b + cycle-16d) + 7 ref edits incl. debt log (first post-audit debt log edit) | `b65d579` (incl. R21 + followup) |
 | R22 | vitallaw-direct-rss-probe (HOLD downgrade, Branch B kill) + 5 ref edits | `9e3ec52` |
 | R23 | day-7-pre-soak-confirmation (HOLD downgrade) + 2 ref edits | `190986f` |
+| R24 | lever-e-multi-source-corroboration spec (CLOSED, 2 archive-bound refs only) | `a54ee59` |
+| R25 | lever-a-source-class-diversification spec (3 archive-bound refs only) | `9803ab4` |
+| R26 | lever-b-2-0.03-floor-followup-stub spec + 5 ref edits across 4 docs | `2a4187d` |
+| R27 | lever-a1plus-feed-onboarding spec + 6 ref edits across 4 docs | `c595270` |
+| R28 | lever-a-stage-a1-source-class-classifier-fix spec (Wave-1 Commit 6) + 6 ref edits | `66dce0e` |
+| R29 | lever-c-cross-series-headline-correlation parent spec + 4 ref edits | `9eb3219` |
+| R30 | lever-b-g1-calibration parent spec + 5 ref edits | `b7455e7` |
+| R31 | lever-menu-design (5-revision menu) + 6 ref edits | `677bd03` |
+| R32 | lever-a1plus1-5-legal-analyst spec + 11 ref edits across 8 docs | `c9f8331` |
+| R33 | lever-c-cross-series-v1-lock-addendum + 11 ref edits across 9 docs | `bfa1ef8` |
+| R34 | lever-b-g1-0.04-floor-lock-addendum + 13 ref edits across 10 docs (incl. IC §G1) | `bcbabed` |
+| R35 | lever-d-escalation-criteria (BIGGEST, 18+ refs across 16 docs incl. ROADMAP + IC) | `7f687cb` + `f12bb18` followup |
 
-**Stream G session moves: 59 files archived across 24 commits.**
+**12-spec EDGE-004 lever batch (R24-R35) closed: all SUPERSEDED + 1 CLOSED specs archived to `_archive/specs/`. ~95 active doc ref edits.**
+
+**Stream G session moves: 70 files archived across 36 commits.**
 
 ### 8.5 Stream G unfinished work (defer to next session)
 
-**12 EDGE-004 lever specs (§8.1) — biggest remaining batch.** Reverse-ref check (post-R23) shows 35+ active doc files reference these specs across `docs/governance/`, `docs/IMPLEMENTATION_CONTRACT.md`, `docs/profit_path_debt_log.md`, `docs/ROADMAP.md`, and other lever specs themselves. Refs use mixed formats (bare basename vs full path); bulk sed too risky without per-format scoping. Recommended approach for next session:
-- Build a structured ref-update pass (extract every ref site by path/basename) before any `git mv`
-- Atomic single commit covering all 12 mvs + all ref redirects
-- ROADMAP touch is operator-call territory — coordinate with operator
+**12 EDGE-004 lever specs CLOSED in this session via R24-R35.** All Wave-2/3 lever-design specs now in `_archive/specs/`. 95+ active doc ref edits handled per-spec with full context retrieval.
 
 **Smaller remaining items:**
 - wave-1-deploy-dry-run-report (3 active refs: rollback-runbook-validation + doc-index-audit + cross-cycle-contract-adherence-review)
-- HOLD wave-2 inputs (a1plus1-5-branch-c-feed-selection-rubric 17 refs — heavy)
+- HOLD wave-2 inputs (a1plus1-5-branch-c-feed-selection-rubric — was 17 refs; check post-R32/R35 state)
 - 2 governance files referenced by debt log (doc-index-audit, doc-index-cleanup-execution-plan) — touch debt log + 5 governance refs to archive both
 - pre-wave1-source-of-truth-doc-index, pre-wave1-risk-register (HOLD parents — fewer refs each but still active)
 - ROADMAP Wave-1 row "active" → "complete" flip (operator call)
-- ~85 files remain in `docs/governance/` — most ACTIVE cycle ledgers / runbooks / wave-1 prestaged docs / cycle-17 charter cluster / day-7-attestation cluster (per C1 v2 ACTIVE list)
+- ~80 files remain in `docs/governance/` — most ACTIVE cycle ledgers / runbooks / wave-1 prestaged docs / cycle-17 charter cluster / day-7-attestation cluster (per C1 v2 ACTIVE list)
 
 ---
 
