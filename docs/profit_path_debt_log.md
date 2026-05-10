@@ -1600,7 +1600,7 @@ The EDGE-004 lever menu's 2026-05-04 cycle produced four findings that change th
 **Revised A.1+ decision tree (3-branch, locked 2026-05-05):**
 - **Branch A (passive)**: observe Wave-1 close 14 d for legal-niche surfacing under the active Google News path. NO code change required.
 - **Branch C (active fallback)**: if Branch A produces 0 legal-niche PAPER_TRADE in 14 d, onboard open-RSS analogues (Lawfare / Just Security / SCOTUSblog / Politico Legal) per `docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` (ARCHIVED Stream G R32).
-- **Branch D (escalation)**: if Branch C also stalls, escalate per `docs/governance/post-edge-004-escalation-paths.md` to PROFIT-LLM-001 → P4-GATE Appendix A → strategy pivot.
+- **Branch D (escalation)**: if Branch C also stalls, escalate per `docs/_archive/governance/post-edge-004-escalation-paths.md` (ARCHIVED Stream G R53) to PROFIT-LLM-001 → P4-GATE Appendix A → strategy pivot.
 
 **Pre-loaded harnesses for Wave-1+2+3 deploys** (all strict-xfail today; flip xpass on the deploy commit forcing marker removal):
 
@@ -1613,12 +1613,12 @@ Total strict-xfail markers as of 2026-05-04: 26+ pinning the deploy lattice.
 **Pre-staged operator artifacts for Wave-1 deploy (Day-13 / 2026-05-15):**
 
 - `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` (commit `75a3e39`) — pre-staged 0.30.0 CHANGELOG block (ARCHIVED Stream G R49)
-- `docs/governance/wave-2-wave-3-changelog-entries-prestaged.md` — Wave-2 + Wave-3 pre-staged blocks
+- `docs/_archive/governance/wave-2-wave-3-changelog-entries-prestaged.md` — Wave-2 + Wave-3 pre-staged blocks (ARCHIVED Stream G R53)
 - `docs/governance/wave-1-deploy-commit-order-decision.md` — locked: per-feature commits (NOT bundle)
 - `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation
 - `docs/governance/post-soak-rollback-runbook.md` — incident-response runbook
 - `docs/governance/post-soak-close-rehearsal-checklist.md` — operator deploy guide
-- `docs/governance/post-edge-004-escalation-paths.md` — Wave-3-stall escalation paths
+- `docs/_archive/governance/post-edge-004-escalation-paths.md` — Wave-3-stall escalation paths (ARCHIVED Stream G R53)
 
 **Honest read after 2026-05-04 cycle:** EDGE-004 closure is dominantly bound by **whether the Google News query family continues to surface legal-niche headlines** (Branch A passive observe), with Branch C as a fallback. Wave-1 base stack landings reduce conversion volume by design (260 OPP / 9 PAPER_TRADE pre-Wave-1 → 87 / 1 post-Wave-1 per simulation `f671468`); the ≥ 5 % closure target is measured against the post-Wave-1 base, not the pre-Wave-1 baseline. Modal scenario per the unified Wave-1+2 forecast (`docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md`, commit `2bf3da1`): Branch A produces some legal-niche surfacing within 14 d; if 0, Branch C deploys; if still 0, escalation fires.
 
@@ -2975,13 +2975,13 @@ Third pass on 2026-05-05 (commits `a505a08` Claude + `3a400c1` Codex). Focused o
 - `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` — §8.5.2 invocation table updated with all 7 surfaced commits including this-cycle doc/script artifacts (out-of-scope-for-§8.5.2). F1 fix from cycle-2 dry-trace closed.
 - `docs/governance/2026-05-05-lever-d-nomenclature-cleanup-audit.md` — 18-occurrence audit; 1 MEDIUM finding (`wave-2-a1plus-branch-decision-table.md` "Branch D" → "option-A" for geopolitics specialist).
 - `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — 6 Edits applying nomenclature fix per F1.
-- `docs/governance/2026-05-05-wave-2-deploy-day-timing.md` — Branch A passive (no deploy) + Branch C deploy windows.
-- `docs/governance/2026-05-05-wave-3-deploy-day-timing.md` — Lever B then Lever C; 14d inter-commit cadence.
-- `docs/governance/wave-2-deploy-commit-order-decision.md` — locked 2-commit Wave-2 order.
+- `docs/_archive/governance/2026-05-05-wave-2-deploy-day-timing.md` — Branch A passive (no deploy) + Branch C deploy windows (ARCHIVED Stream G R53).
+- `docs/_archive/governance/2026-05-05-wave-3-deploy-day-timing.md` — Lever B then Lever C; 14d inter-commit cadence (ARCHIVED Stream G R53).
+- `docs/_archive/governance/wave-2-deploy-commit-order-decision.md` — locked 2-commit Wave-2 order (ARCHIVED Stream G R53).
 - `docs/superpowers/specs/2026-05-05-profit-llm-001-pre-sizing-scope-design.md` — 4-axis sizing surface (prompt template / model swap / context window / batch coherence).
 - `docs/superpowers/specs/2026-05-05-p4-gate-appendix-a-pre-sizing-scope-design.md` — 3-axis surface (market-scope filter / intake-path expansion / market-resolution cadence).
 - `docs/_archive/governance/2026-05-05-changelog-drift-check.md` — 2 MEDIUM + 1 LOW drift findings in pre-staged Wave-2/3 CHANGELOG blocks (ARCHIVED Stream G R51).
-- `docs/governance/2026-05-05-branch-d-fire-procedure-runbook.md` — operator playbook (~30 min wall-clock; 6-step decision tree).
+- `docs/_archive/governance/2026-05-05-branch-d-fire-procedure-runbook.md` — operator playbook (~30 min wall-clock; 6-step decision tree) (ARCHIVED Stream G R53).
 - `docs/_archive/governance/2026-05-05-doc-index-cleanup-execution-plan.md` — 3-commit plan (~15 min) for the 11-file archive recommendation; post-close trigger (ARCHIVED Stream G R38; superseded by Stream G actual archives).
 
 **Codex artifacts (cycle 3; commit `3a400c1`):**
@@ -3048,9 +3048,9 @@ Operator bootstrapped same-day: `launchctl bootstrap gui/$UID ~/Library/LaunchAg
 **Cycle 5 Claude artifacts (10):**
 - `README.md` Edit — 2026-05-05 status block above 2026-05-01 cutover entry (drift F1 closed)
 - `docs/ROADMAP.md` Edit — P3-GATE FAIL escalation cross-link + What-Changed bullet 6 + Appendix A sizing-scope ref (drift F1+F2+F3 closed)
-- `wave-2-wave-3-changelog-entries-prestaged.md` Edit — version sequence refreshed (drift F1+F2+F3 closed)
+- `docs/_archive/governance/wave-2-wave-3-changelog-entries-prestaged.md` Edit — version sequence refreshed (drift F1+F2+F3 closed) (ARCHIVED Stream G R53)
 - `2026-05-05-pre-wave1-baseline-interpretation.md` — synthesized 4 Codex baselines; flagged 0-OPPORTUNITY-post-cutover finding
-- `2026-05-05-wave-2-fire-time-per-commit-checklist.md` + `2026-05-05-wave-3-fire-time-per-commit-checklist.md` — operator playbooks for Wave-2/3 deploys
+- `docs/_archive/governance/2026-05-05-wave-2-fire-time-per-commit-checklist.md` + `docs/_archive/governance/2026-05-05-wave-3-fire-time-per-commit-checklist.md` — operator playbooks for Wave-2/3 deploys (BOTH ARCHIVED Stream G R53)
 - `2026-05-05-launchd-plist-drift-audit.md` — found `ops/launchd/` template dir cycle 5 missed; flagged dual source-of-truth (resolved cycle 7)
 - `2026-05-05-network-api-outage-runbook.md` — 5-category triage (Internet/Kalshi-API/Ollama/RSS/Reddit-403)
 - `docs/_archive/governance/2026-05-05-implementation-contract-cycle-4-5-review.md` — 0 invariant violations across cycles 1-5 (ARCHIVED Stream G R46)
@@ -3079,7 +3079,7 @@ Seventh + eighth pass on 2026-05-05 (commits `92b767d` Claude + `ffc54b2` Codex;
 - `2026-05-05-launchd-plist-consolidation-decision.md` — keep `ops/launchd/`; migrate db-backup; capture 3 operator-managed plists
 - `docs/_archive/governance/2026-05-05-day-7-to-wave-1-handoff-procedure.md` — 5-condition transition gate; defer rules (ARCHIVED Stream G R45)
 - `2026-05-05-wave-1-commit-by-commit-acceptance-matrix.md` — 6-commit consolidation
-- `2026-05-05-wave-2-decision-flow.md` + `2026-05-05-wave-3-decision-flow.md` — ASCII flowcharts
+- `docs/_archive/governance/2026-05-05-wave-2-decision-flow.md` + `docs/_archive/governance/2026-05-05-wave-3-decision-flow.md` — ASCII flowcharts (BOTH ARCHIVED Stream G R53)
 - `docs/_archive/governance/2026-05-05-macbook-import-archive-procedure.md` — post-Wave-1-close tar.gz workflow (ARCHIVED Stream G R46)
 - `docs/_archive/governance/2026-05-05-doc-cross-link-integrity-audit.md` — 39 links scanned; 2 broken in wave-1-changelog-entry-prestaged.md (closed cycle 8) (ARCHIVED Stream G R44)
 - `docs/_archive/governance/2026-05-05-memory-hygiene-audit.md` — 2 memories clean (ARCHIVED Stream G R44)

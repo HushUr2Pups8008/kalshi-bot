@@ -91,13 +91,13 @@
 | Smoke | `pytest -q tests/test_main_pipeline.py::TestSourceClassClassifierLeverA1`: 0 failed; `pytest tests/test_lever_a1_classifier_counterfactual.py`: 0 failed | spec-harness re-run |
 | **48h watch** (final commit; longer than 24h) | EVIDENCE_INGESTION source_class distribution: `analysis` class share doesn't drop below pre-deploy baseline | observation plan row 13 |
 | 48h watch | Trade-rate stays ≤ 2× pre-deploy baseline (per Codex `8001a16` archive replay confirmation that A.1 is archive-neutral); pre-deploy baseline is 0/day so any post-deploy paper-trade is a feature, not regression | observation plan row 14; **rebased rule per cycle-5 baseline interpretation** |
-| Hand-off → Wave-2 Branch A start | All watch rows clean for 48h | gate per `2026-05-05-wave-2-fire-time-per-commit-checklist.md` step 1 trigger |
+| Hand-off → Wave-2 Branch A start | All watch rows clean for 48h | gate per `docs/_archive/governance/2026-05-05-wave-2-fire-time-per-commit-checklist.md` step 1 trigger (ARCHIVED Stream G R53) |
 
 **Rollback trigger:** classifier silently fails to relabel `analysis` class evidence OR trade-rate explodes (≥ 5×). Code revert per `post-soak-rollback-runbook.md` §4.6.
 
 ## VERSION sequence
 
-Per `wave-2-wave-3-changelog-entries-prestaged.md` (refreshed cycle 5):
+Per `docs/_archive/governance/wave-2-wave-3-changelog-entries-prestaged.md` (refreshed cycle 5, ARCHIVED Stream G R53):
 
 - Pre-Wave-1: 0.29.59
 - Wave-1 commit 6: VERSION → 0.30.0; tag `v0.30.0` (per project convention; per-commit micro-tags optional)

@@ -105,7 +105,7 @@ Cross-references:
 
 ## What this means for the immediate cycle
 
-- `wave-2-wave-3-changelog-entries-prestaged.md` STAYS as documentation; the HALT is on EXECUTING those deploys, not on the prestaged content.
+- `docs/_archive/governance/wave-2-wave-3-changelog-entries-prestaged.md` (ARCHIVED Stream G R53; was: STAYS as documentation; HALT was on EXECUTING those deploys, not on prestaged content. Archived after Cycle-17 confirmed Wave-2/3 indefinitely halted.)
 - `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` (ARCHIVED Stream G R49) + `docs/_archive/governance/wave-1-commit-messages-prestaged.md` (ARCHIVED Stream G R46) — both archived post-Wave-1-deploy.
 - `wave-3-deploy-hunks/lever-b.patch` STAYS but is FROZEN pending replay evidence.
 - `tests/test_wave2_branch_a_passive_observation.py` STAYS xfail-strict; Branch A is no longer auto-active post-Wave-1.
@@ -125,5 +125,5 @@ Answer to date: **no proof.** 3 trades, 0 wins. The replay harness either finds 
 - `docs/IMPLEMENTATION_CONTRACT.md` §11 — Change Control (will be amended)
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — to be added in same cycle
 - `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` — Wave-1 shipped (ARCHIVED Stream G R49)
-- `docs/governance/wave-2-wave-3-changelog-entries-prestaged.md` — HALT pending replay
+- `docs/_archive/governance/wave-2-wave-3-changelog-entries-prestaged.md` — HALT pending replay (ARCHIVED Stream G R53)
 - Future: `docs/governance/edge-replay-cycle12-report.md` — Cycle-12 deliverable
