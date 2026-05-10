@@ -72,7 +72,7 @@ For each cycle's commits, classify every artifact by:
 | `wave-2-deploy-commit-order-decision.md` | planning | Claude | ✅ |
 | `2026-05-05-changelog-drift-check.md` | review | Claude | ✅ |
 | `2026-05-05-branch-d-fire-procedure-runbook.md` | planning | Claude | ✅ |
-| `2026-05-05-doc-index-cleanup-execution-plan.md` | planning | Claude | ✅ |
+| `docs/_archive/governance/2026-05-05-doc-index-cleanup-execution-plan.md` | planning | Claude | ✅ (ARCHIVED Stream G R38) |
 | `tests/test_lever_b_g1_floor_lock.py` | precise impl per Claude's LOCK | Codex | ✅ |
 | `tests/test_branch_c_feed_selection_rubric.py` | precise impl per rubric | Codex | ✅ |
 | 4 sizing baseline reports (auto-generated from Codex audit scripts) | data capture (Codex scope) | Codex | ✅ |

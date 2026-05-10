@@ -2982,7 +2982,7 @@ Third pass on 2026-05-05 (commits `a505a08` Claude + `3a400c1` Codex). Focused o
 - `docs/superpowers/specs/2026-05-05-p4-gate-appendix-a-pre-sizing-scope-design.md` — 3-axis surface (market-scope filter / intake-path expansion / market-resolution cadence).
 - `docs/governance/2026-05-05-changelog-drift-check.md` — 2 MEDIUM + 1 LOW drift findings in pre-staged Wave-2/3 CHANGELOG blocks.
 - `docs/governance/2026-05-05-branch-d-fire-procedure-runbook.md` — operator playbook (~30 min wall-clock; 6-step decision tree).
-- `docs/governance/2026-05-05-doc-index-cleanup-execution-plan.md` — 3-commit plan (~15 min) for the 11-file archive recommendation; post-close trigger.
+- `docs/_archive/governance/2026-05-05-doc-index-cleanup-execution-plan.md` — 3-commit plan (~15 min) for the 11-file archive recommendation; post-close trigger (ARCHIVED Stream G R38; superseded by Stream G actual archives).
 
 **Codex artifacts (cycle 3; commit `3a400c1`):**
 
