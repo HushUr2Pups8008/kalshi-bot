@@ -35,9 +35,9 @@
 | 14-row regression watch? | `docs/governance/wave-1-post-deploy-observation-plan.md` |
 | Pre-staged CHANGELOG block? | `docs/governance/wave-1-changelog-entry-prestaged.md` |
 | Pre-staged per-commit messages (cycle-10) | `docs/governance/wave-1-commit-messages-prestaged.md` |
-| Pre-Wave-1 deploy dry-run rehearsal (cycle-10) | `docs/governance/2026-05-06-pre-wave1-deploy-dry-run-rehearsal.md` |
-| CHANGELOG drift-check refresh (cycle-10/-11) | `docs/governance/2026-05-06-changelog-drift-check-cycle-10.md` |
-| Cycle-10 blocker resolution | `docs/governance/2026-05-06-cycle-10-blocker-resolution.md` |
+| Pre-Wave-1 deploy dry-run rehearsal (cycle-10) | `docs/_archive/governance/2026-05-06-pre-wave1-deploy-dry-run-rehearsal.md` (ARCHIVED Stream G R5) |
+| CHANGELOG drift-check refresh (cycle-10/-11) | `docs/_archive/governance/2026-05-06-changelog-drift-check-cycle-10.md` (ARCHIVED Stream G R5) |
+| Cycle-10 blocker resolution | `docs/_archive/governance/2026-05-06-cycle-10-blocker-resolution.md` (ARCHIVED Stream G R5) |
 | Smoke wrapper? | `scripts/wave1_post_deploy_smoke.sh` (cycle 2) |
 | Per-commit smoke? | `scripts/wave1_fire_time_smoke.sh` (cycle 4) |
 | Pre-deploy state baseline (4 reports)? | `docs/governance/2026-05-05-pre-wave1-{skipped-rate,opportunity-age,cooldown,trade-rate}-*.md` |
@@ -99,7 +99,7 @@
 | operator question | source-of-truth file |
 |---|---|
 | Implementation Contract (binding)? | `docs/IMPLEMENTATION_CONTRACT.md` |
-| Multi-cycle contract adherence audits? | `docs/governance/2026-05-05-cross-cycle-contract-adherence-review.md` + `2026-05-05-implementation-contract-cycle-4-5-review.md` + `2026-05-06-implementation-contract-cycle-6-7-review.md` |
+| Multi-cycle contract adherence audits? | `docs/governance/2026-05-05-cross-cycle-contract-adherence-review.md` + `2026-05-05-implementation-contract-cycle-4-5-review.md` + `docs/_archive/governance/2026-05-06-implementation-contract-cycle-6-7-review.md` (ARCHIVED Stream G R5) |
 | Production config capture invariants (cycle-8 incident codified)? | `docs/IMPLEMENTATION_CONTRACT.md` §15 |
 | Cycle-10 capture-incident decision + commit | `docs/governance/2026-05-05-launchd-plist-consolidation-decision.md` + commit `96e2995` (byte-faithful rewrite) |
 | Lever menu (post-2026-05-05 locks)? | `docs/superpowers/specs/2026-05-03-edge-004-lever-menu-design.md` (§5.1 + §5.2) |

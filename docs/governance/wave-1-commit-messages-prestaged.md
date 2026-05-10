@@ -239,4 +239,4 @@ If pytest fails between commits, halt and follow `post-soak-rollback-runbook.md`
 - `docs/governance/wave-1-changelog-entry-prestaged.md` — CHANGELOG content for commit 6 (same drift)
 - `docs/governance/post-soak-close-rehearsal-checklist.md` — operator checklist
 - `docs/governance/post-soak-rollback-runbook.md` — incident response
-- `docs/governance/2026-05-06-pre-wave1-deploy-dry-run-rehearsal.md` — cycle-10 dry-run audit
+- `docs/_archive/governance/2026-05-06-pre-wave1-deploy-dry-run-rehearsal.md` — cycle-10 dry-run audit (ARCHIVED Stream G R5)
