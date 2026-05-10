@@ -3008,9 +3008,9 @@ Fourth pass on 2026-05-05 (commits `6f09967` Claude + `7addfd1` Codex). Focus: o
 **Claude artifacts (cycle 4; commit `6f09967`):**
 - `2026-05-05-day-7-fire-time-compact-checklist.md` — 30-45 min single-page playbook
 - `2026-05-05-wave-1-fire-time-per-commit-checklist.md` — per-commit 30 min playbook + cadence matrix
-- `2026-05-05-readme-drift-check.md` — 3 MEDIUM (status block / version cell / test count)
-- `2026-05-05-roadmap-drift-check.md` — 3 MEDIUM (P3/P4-GATE cross-links + What-Changed bullet)
-- `2026-05-05-debt-log-toc-navigation-audit.md` — TOC + per-entry status table recommendations
+- `docs/_archive/governance/2026-05-05-readme-drift-check.md` — 3 MEDIUM (status block / version cell / test count) (ARCHIVED Stream G R44)
+- `docs/_archive/governance/2026-05-05-roadmap-drift-check.md` — 3 MEDIUM (P3/P4-GATE cross-links + What-Changed bullet) (ARCHIVED Stream G R44)
+- `docs/_archive/governance/2026-05-05-debt-log-toc-navigation-audit.md` — TOC + per-entry status table recommendations (ARCHIVED Stream G R44)
 - `docs/_archive/specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` — post-Lever-B-1 secondary loosening stub (ARCHIVED Stream G R26)
 - `2026-05-05-kill-switch-fire-procedure-runbook.md` — STOP-first; REVERT vs QUARANTINE
 - `2026-05-05-mac-studio-dead-bot-reboot-runbook.md` — 4-category triage + restart
@@ -3081,8 +3081,8 @@ Seventh + eighth pass on 2026-05-05 (commits `92b767d` Claude + `ffc54b2` Codex;
 - `2026-05-05-wave-1-commit-by-commit-acceptance-matrix.md` — 6-commit consolidation
 - `2026-05-05-wave-2-decision-flow.md` + `2026-05-05-wave-3-decision-flow.md` — ASCII flowcharts
 - `2026-05-05-macbook-import-archive-procedure.md` — post-Wave-1-close tar.gz workflow
-- `2026-05-05-doc-cross-link-integrity-audit.md` — 39 links scanned; 2 broken in wave-1-changelog-entry-prestaged.md (closed cycle 8)
-- `2026-05-05-memory-hygiene-audit.md` — 2 memories clean
+- `docs/_archive/governance/2026-05-05-doc-cross-link-integrity-audit.md` — 39 links scanned; 2 broken in wave-1-changelog-entry-prestaged.md (closed cycle 8) (ARCHIVED Stream G R44)
+- `docs/_archive/governance/2026-05-05-memory-hygiene-audit.md` — 2 memories clean (ARCHIVED Stream G R44)
 
 **Cycle 7 Codex artifacts (commit `ffc54b2`):**
 - 4 operator scripts: `wave1_commit_chain_acceptance_audit.sh`, `doc_xref_audit.py`, `release_tag_inventory_snapshot.py`, `macbook_import_archive_migration.sh`
