@@ -91,7 +91,7 @@ Branch A: passive observe (14 d)
 - `docs/superpowers/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` — A.1+ umbrella spec (§2.5 callout is the load-bearing context)
 - `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` — Branch C spec
 - `docs/governance/2026-05-05-vitallaw-direct-rss-probe.md` — Branch B kill (Codex 2026-05-05)
-- `docs/governance/2026-05-04-legal-niche-probe-order-domain-overlap.md` — Branch C feed-candidate domain-overlap audit
+- `docs/_archive/governance/2026-05-04-legal-niche-probe-order-domain-overlap.md` — Branch C feed-candidate domain-overlap audit (ARCHIVED Stream G R6)
 - `docs/governance/2026-05-03-edge004-wave2-expected-state-ladder.md` — Codex's Wave-2 expected-state forecast
 - `docs/governance/edge-004-closure-path-tldr.md` v2 — current EDGE-004 closure-path consensus
 - `tests/test_lever_a1plus_feed_config.py` — both branches' xfail-strict harnesses pre-loaded

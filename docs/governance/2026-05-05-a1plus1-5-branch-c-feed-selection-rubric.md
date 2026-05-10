@@ -3,7 +3,7 @@
 **Type:** ambiguity resolution (Claude task per Implementation Contract §9 — operator decision input).
 **Drafted:** 2026-05-05.
 **Audience:** operator picking 1-2 open-RSS legal-analyst feeds at Branch C deploy time (≥ 2026-05-29 if Branch A produces 0 legal-niche PAPER_TRADE in 14 d).
-**Companion:** `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md`; `docs/governance/2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` (Codex's probe-order audit `5e5849a`); `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md`.
+**Companion:** `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md`; `docs/_archive/governance/2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` (Codex's probe-order audit `5e5849a`, ARCHIVED Stream G R6); `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md`.
 
 ## TL;DR
 
@@ -76,13 +76,13 @@ for title in ['Just Security', 'Lawfare', 'SCOTUSblog', 'Politico Legal']:
 
 (Re-runs after the operator decides whether to extend `_source_class_for_evidence` token list at Branch C deploy time per A.1+ spec §3.2.)
 
-**Step 4: D4 + D5** — read Codex's `2026-05-04-legal-niche-probe-order-domain-overlap.md` for domain-overlap rankings; check `2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` for archive evidence.
+**Step 4: D4 + D5** — read Codex's `docs/_archive/governance/2026-05-04-legal-niche-probe-order-domain-overlap.md` for domain-overlap rankings; check `docs/_archive/governance/2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` for archive evidence (both ARCHIVED Stream G R6).
 
 **Step 5: D6** — operator judgment based on RSS feed timestamps + post-frequency observation.
 
 ## Recommended primary picks (pre-deploy, subject to fire-time validation)
 
-Based on `2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` Codex audit:
+Based on `docs/_archive/governance/2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` Codex audit:
 
 | feed | D1 | D2 | D3 | D4 | D5 | D6 | total |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -147,8 +147,8 @@ If 1+ PAPER_TRADE materializes with positive P&L: EDGE-004 closes via Branch C.
 ## Cross-links
 
 - `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` — A.1+1.5 spec
-- `docs/governance/2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` — Codex's probe-order audit `5e5849a`
-- `docs/governance/2026-05-04-legal-niche-probe-order-domain-overlap.md` — domain-overlap empirical anchor
+- `docs/_archive/governance/2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` — Codex's probe-order audit `5e5849a` (ARCHIVED Stream G R6)
+- `docs/_archive/governance/2026-05-04-legal-niche-probe-order-domain-overlap.md` — domain-overlap empirical anchor (ARCHIVED Stream G R6)
 - `docs/governance/2026-05-05-vitallaw-direct-rss-probe.md` — VitalLaw.com Branch B kill (`a45c06c`)
 - `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Branch A → C → D sequence
 - `tests/test_lever_a1plus_feed_config.py` — pre-loaded xfail harness (covers both option-A and option-B/Branch-C)
