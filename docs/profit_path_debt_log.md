@@ -27,12 +27,12 @@
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 49 |
+| Total Items | 50 |
 | Open — HIGH | 4 |
 | Open — MEDIUM | 2 |
 | Open — LOW | 1 |
 | Items IN_PROGRESS | 1 (PROFIT-PHASE2-001 — soak clock running, no operator action until 2026-05-15) |
-| Items COMPLETE | 40 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-DOSSIER-001, PROFIT-GOV-002, PROFIT-DOC-002, PROFIT-OBS-003, PROFIT-OBS-004, PROFIT-DEBT-OQ1-SHIM, PROFIT-SOURCE-001) |
+| Items COMPLETE | 41 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-DOSSIER-001, PROFIT-GOV-002, PROFIT-DOC-002, PROFIT-OBS-003, PROFIT-OBS-004, PROFIT-DEBT-OQ1-SHIM, PROFIT-SOURCE-001, PROFIT-DEBT-WAVE1-DRAFTS) |
 | Consolidated From | `docs/EDGE_STATUS.md` (merged 2026-05-09 → §Current Status); `docs/governance/edge-004-closure-path-tldr-v3.md` (lever map + EDGE-004 closure criteria merged 2026-05-09 → §Current Status §2.3) |
 
 ### High-Risk Areas
@@ -4723,7 +4723,60 @@ Phase-4 housekeeping pass, or 2026-06-08 — whichever comes first. The Phase-2 
 - Phase-3 Stage 3b commit (the rename)
 - INV-4 in `docs/housekeeping/2026-05-08/architecture.md`
 
-**CLOSED 2026-05-10 (Claude):** Three shim files deleted (`analysis/source_credibility.py`, `analysis/source_stats.py`, `analysis/keyword_stats.py`). Pre-deletion grep across repo (`.py` + `.md`) returned zero callers of `analysis.source_credibility`, `analysis.source_stats`, or `analysis.keyword_stats` — only the debt log entry itself referenced the old paths. Pytest + ruff green post-deletion. v0.30.0 shipped 2026-05-09 (Wave-1) so one release cycle elapsed since Phase-3 OQ1 Stage 3b rename.
+**CLOSED 2026-05-10 (Claude):** Three shim files deleted (`analysis/source_credibility.py`, `analysis/source_stats.py`, `analysis/keyword_stats.py`). Pre-deletion grep across repo (`.py` + `.md`) returned zero callers of `analysis.source_credibility`, `analysis.source_stats`, or `analysis.keyword_stats` — only the debt log entry itself referenced the old paths. Pytest + ruff green post-deletion. Wave-1 cleanup-only ship landed 2026-05-09 (commit `c9df364`, no VERSION bump — v0.29.59 retained per Cycle-16E descope) — exceeds the "one release cycle" threshold since Phase-3 OQ1 Stage 3b rename.
+
+---
+
+### PROFIT-DEBT-WAVE1-DRAFTS
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-DEBT-WAVE1-DRAFTS |
+| **Title** | Wave-1 original-plan draft commits retained on `origin/backup/wave-1-dry-run-2026-05-05` (reference-only mapping) |
+| **Category** | Tech Debt / Reference Mapping |
+| **Severity** | LOW |
+| **Status** | COMPLETE (reference-only — created already-closed) |
+| **Priority** | n/a |
+| **Owner** | n/a |
+| **Depends On** | — |
+| **Blocks** | — |
+
+**Description**
+
+Wave-1 was originally planned as a 6-commit deploy (`v0.30.0`). After the 2026-05-07 Cycle-16E `scorer_fixed_no_signal_confirmed` verdict the deploy was descoped to cleanup/observability only; only the OBS-003 commit shipped to main (no VERSION bump — v0.29.59 retained; v0.30.0 reserved for first non-neutral LLM / non-zero-edge phase change per `docs/ROADMAP.md` §Versioning). The remaining 5 draft commits live on the protected backup branch `origin/backup/wave-1-dry-run-2026-05-05` and represent reference implementations of features still tracked as OPEN debt items.
+
+**Backup → debt-item map** (verified 2026-05-10):
+
+| backup SHA | subject (one-line) | corresponds to |
+|------------|--------------------|----------------|
+| `5828ad2` | feat(main): PROFIT-EDGE-004 Lever A.1 source-class classifier + v0.30.0 | `PROFIT-EDGE-004` (OPEN, NOW; Sub-1 gated on Cycle-17C E3 verdict) |
+| `e3d4e8d` | fix(governance_monitor): PROFIT-GOV-003 path + type-set membership | `PROFIT-GOV-003` (open if filed; otherwise treat as latent fix awaiting registration) |
+| `9d6cce3` | feat(blend_task): PROFIT-EXEC-002 series-correlation guard | `PROFIT-EXEC-002` (OPEN, LATER; deferred post-Cycle-17C verdict) |
+| `921c275` | feat(blend_task): PROFIT-OBS-003 SKIPPED emission for blocked-reason path | `PROFIT-OBS-003` (CLOSED 2026-05-10 via different commits `b775a99` + `92b1d11` + `c9df364` — main carries an EQUIVALENT but not identical implementation) |
+| `edf38c1` | fix(market_matcher): PROFIT-MATCH-001 (B') token-guard refinement | `PROFIT-MATCH-001` (OPEN, LATER; deferred post-Cycle-17C verdict) |
+| `0531367` | fix(executor): PROFIT-OBS-005 cooldown sentinel-default → -inf | `PROFIT-OBS-005` (OPEN, LATER; deferred pending post-PHASE2-001 cycle verdict) |
+
+**Why this matters**
+
+When the post-Cycle-17C verdict resumes work on the deferred items, the operator and any future agent should know there is a pre-staged draft on the backup branch and can either cherry-pick (preferred for the load-bearing fixes if the underlying APIs haven't drifted), use as a starting reference (preferred if APIs have drifted), or discard and re-implement (preferred if Cycle-17C produces a different design). Without this mapping, the next agent has to rediscover the backup branch via git archaeology — which is exactly what just happened during the 2026-05-10 closure-cleanup sprint.
+
+**Acceptance Criteria**
+
+- This entry is COMPLETE on creation. It is a permanent reference record. It does not have a closure trigger.
+- The mapping table above is authoritative on 2026-05-10. If the backup branch is ever rewritten, retagged, or migrated, update this entry to reflect the new location/SHAs.
+
+**Notes**
+
+- The backup branch is intentionally protected. Do NOT delete `origin/backup/wave-1-dry-run-2026-05-05` without first amending this entry and confirming with the operator.
+- VERSION on main is `0.29.59`. The `v0.30.0` bump in commit `5828ad2` is for the FULL original-plan ship, not the descoped one. v0.30.0 remains reserved on main per `docs/ROADMAP.md` §Versioning policy.
+
+**Related**
+
+- `docs/ROADMAP.md` §Wave-1/2/3 deploy timeline (Wave-1 row reflects the descope).
+- `docs/superpowers/plans/2026-05-10-repo-closure-cleanup.md` (sprint that filed this mapping).
+- Each row's "corresponds to" debt entry for the actionable resumption path.
+
+**FILED 2026-05-10 (Claude)** during repo-closure-cleanup sprint after Task B verify-before-delete on the backup branch surfaced 5 unaccounted-for draft commits. Operator confirmed the descope interpretation and elected to retain the backup branch as cold-storage reference. This entry documents the rediscovery so it does not need to happen again.
 
 ---
 
