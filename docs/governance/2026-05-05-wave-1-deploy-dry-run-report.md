@@ -25,7 +25,7 @@ These are deploy-day blockers if not resolved. Severity-ordered:
 
 ### F1 (Watch) — EXEC-002 spec filename mismatch
 
-`docs/governance/wave-1-deploy-commit-order-decision.md` step 4 references `2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md` for EXEC-002 implementation, but the actual EXEC-002 same-series guard spec is `2026-05-03-exec-002-series-correlation-guard-design.md`. Lever C is the cross-series guard (Wave 3); EXEC-002 is the same-series guard (Wave 1). The dry-run agent caught this; the prompt note had flagged it. **Fix:** correct the commit-order doc reference.
+`docs/governance/wave-1-deploy-commit-order-decision.md` step 4 references `docs/_archive/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md` (ARCHIVED Stream G R29) for EXEC-002 implementation, but the actual EXEC-002 same-series guard spec is `2026-05-03-exec-002-series-correlation-guard-design.md`. Lever C is the cross-series guard (Wave 3); EXEC-002 is the same-series guard (Wave 1). The dry-run agent caught this; the prompt note had flagged it. **Fix:** correct the commit-order doc reference.
 
 ### F2 (Watch) — OBS-005 xfail class name typo
 

@@ -135,7 +135,7 @@ headline hash matches a previously-enqueued candidate within
 suppressed with reason `cross_series_headline_in_window`. Per
 Codex's 2026-05-03 cross-series overlap audit (49.2 % overlap on
 the 13-day archive). Spec:
-[`docs/superpowers/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md`](docs/superpowers/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md).
+[`docs/_archive/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md`](docs/_archive/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md) (ARCHIVED Stream G R29).
 Lever C is a **risk-control lever**: expected outcome is fewer
 correlated-burst paper trades, not higher trade count. Strict-xfail
 markers removed:
