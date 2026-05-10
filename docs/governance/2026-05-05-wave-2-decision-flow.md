@@ -119,5 +119,5 @@ Recommended: **serial walk** (no parallelism). Attribution is cleaner.
 - `2026-05-05-wave-2-deploy-day-timing.md` — UTC timing windows
 - `2026-05-05-wave-3-decision-flow.md` — Wave-3 flowchart (sibling)
 - `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — feed selection
-- `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers
+- `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers (ARCHIVED Stream G R35)
 - `wave-2-deploy-commit-order-decision.md` — locked commit order

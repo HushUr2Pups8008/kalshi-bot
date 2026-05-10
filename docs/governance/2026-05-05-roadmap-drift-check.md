@@ -54,7 +54,7 @@ ROADMAP.md is **mostly accurate** — the Phase 0/1/2/3/4 structure stands. **3 
 
 **Recommended fix:** append a bullet 6:
 
-> 6. **PHASE2-001 soak-early-close path + Wave-1/2/3 deploy infrastructure landed 2026-05-05.** §8.5.1 early-close gates documented in `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md`; Wave-1/2/3 deploy sequence in `docs/governance/edge-004-closure-path-tldr-v3.md`; Branch D escalation per `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` with sizing-scope specs for PROFIT-LLM-001 and P4-GATE Appendix A.
+> 6. **PHASE2-001 soak-early-close path + Wave-1/2/3 deploy infrastructure landed 2026-05-05.** §8.5.1 early-close gates documented in `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md`; Wave-1/2/3 deploy sequence in `docs/governance/edge-004-closure-path-tldr-v3.md`; Branch D escalation per `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` (ARCHIVED Stream G R35) with sizing-scope specs for PROFIT-LLM-001 and P4-GATE Appendix A.
 
 **Severity MEDIUM** because the "What Changed" section is the operator-facing context-update; missing cycle-3 work makes it look like the project has been static for 12 days.
 
@@ -85,6 +85,6 @@ Lower priority than the Wave-1 deploy infrastructure; can defer to post-Wave-1-c
 
 - `docs/ROADMAP.md` — under review
 - `docs/governance/edge-004-closure-path-tldr-v3.md` — closure-path-TLDR
-- `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md`
+- `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` (ARCHIVED Stream G R35)
 - `docs/superpowers/specs/2026-05-05-profit-llm-001-pre-sizing-scope-design.md`
 - `docs/superpowers/specs/2026-05-05-p4-gate-appendix-a-pre-sizing-scope-design.md`

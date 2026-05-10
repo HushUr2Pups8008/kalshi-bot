@@ -2,8 +2,8 @@
 
 **Type:** operator runbook (Claude task per Implementation Contract §9 — operator decision input).
 **Drafted:** 2026-05-05.
-**Audience:** operator when one of the Branch D fire triggers in `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §2 fires.
-**Companion:** `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §4 — high-level procedure outline expanded here into copy-pasteable operator commands.
+**Audience:** operator when one of the Branch D fire triggers in `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §2 fires.
+**Companion:** `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §4 — high-level procedure outline expanded here into copy-pasteable operator commands.
 
 ## TL;DR
 
@@ -49,7 +49,7 @@ docs(branch-d-fire): PROFIT-EDGE-004 Branch D fired — escalating to PROFIT-LLM
 
 Wave-2 intake-side levers (Branch A passive observe + Branch C
 legal-analyst onboard) both stalled. Branch D fire trigger per
-§2.1 of 2026-05-05-edge-004-lever-d-escalation-criteria-design.md.
+§2.1 of docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md.
 
 Operator escalates per the spec § 4 procedure to PROFIT-LLM-001
 sizing audit, Step A (prompt-template axis) per
@@ -155,7 +155,7 @@ If Steps A + B + C + D all return inadequate:
 
 ## What NOT to do during Branch D fire
 
-Per `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §6:
+Per `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §6:
 
 - **DO NOT roll back Wave-1 / Wave-2 deploys.** Branch D is escalation, not regression. The base-stack improvements all stand.
 - **DO NOT skip the §3 PROFIT-LLM-001 audit.** Even if operator suspects DEFERRED-CEILING, the audit produces evidence that justifies (or refutes) that suspicion.
@@ -200,7 +200,7 @@ Branch D fire trigger met?
 
 ## Cross-links
 
-- `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers + handoff structure
+- `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers + handoff structure (ARCHIVED Stream G R35)
 - `docs/superpowers/specs/2026-05-05-profit-llm-001-pre-sizing-scope-design.md` — first-handoff sizing
 - `docs/superpowers/specs/2026-05-05-p4-gate-appendix-a-pre-sizing-scope-design.md` — second-handoff sizing
 - `docs/governance/edge-004-closure-path-tldr-v3.md` — closure-path-TLDR (v4 fires post-Branch-D)

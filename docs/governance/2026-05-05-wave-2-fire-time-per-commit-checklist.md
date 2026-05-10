@@ -156,7 +156,7 @@ print(f'Branch-C PAPER_TRADE: {n}; aggregate realized P&L: {pnl}')
 
 **Acceptance (per Wave-2 branch decision table):**
 - `n ≥ 1` AND aggregate P&L ≥ 0 → EDGE-004 closes via Branch C
-- `n = 0` OR P&L < 0 → Branch D fires per `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §2
+- `n = 0` OR P&L < 0 → Branch D fires per `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §2
 
 ## Step 3: option-A deploy (parallel-discretion or fallback)
 
@@ -179,7 +179,7 @@ git push origin main
 launchctl bootout/bootstrap (per dead-bot-runbook §3 procedure)
 ```
 
-If 14d window concludes with regression but post-24h smoke was clean: investigate per `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §2.2 (negative realized P&L on Branch C admitted candidates → Branch D fires).
+If 14d window concludes with regression but post-24h smoke was clean: investigate per `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §2.2 (negative realized P&L on Branch C admitted candidates → Branch D fires).
 
 ## Cross-links
 
@@ -188,4 +188,4 @@ If 14d window concludes with regression but post-24h smoke was clean: investigat
 - `2026-05-05-wave-2-deploy-day-timing.md` — Wave-2 timing rationale
 - `wave-2-deploy-commit-order-decision.md` — locked commit order
 - `wave-2-wave-3-changelog-entries-prestaged.md` — pre-staged CHANGELOG entries
-- `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers if Wave-2 stalls
+- `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers if Wave-2 stalls
