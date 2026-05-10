@@ -3014,7 +3014,7 @@ Fourth pass on 2026-05-05 (commits `6f09967` Claude + `7addfd1` Codex). Focus: o
 - `docs/_archive/specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` — post-Lever-B-1 secondary loosening stub (ARCHIVED Stream G R26)
 - `2026-05-05-kill-switch-fire-procedure-runbook.md` — STOP-first; REVERT vs QUARANTINE
 - `2026-05-05-mac-studio-dead-bot-reboot-runbook.md` — 4-category triage + restart
-- `2026-05-05-cross-cycle-contract-adherence-review.md` — 4 cycles audited; 100% §9 adherence
+- `docs/_archive/governance/2026-05-05-cross-cycle-contract-adherence-review.md` — 4 cycles audited; 100% §9 adherence (ARCHIVED Stream G R48)
 
 **Codex artifacts (cycle 4; commit `7addfd1`):**
 - 4 pre-Wave-1 baseline scripts + reports (SKIPPED / OPP age / cooldown / per-ticker trade-rate)
