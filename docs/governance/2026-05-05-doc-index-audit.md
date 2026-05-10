@@ -81,7 +81,7 @@ Examples NOT to archive:
 - `docs/_archive/governance/2026-05-05-wave1-commit-order-risk-audit.md` (ARCHIVED Stream G R4)
 - `docs/_archive/governance/2026-05-05-wave1-six-commit-dryrun-review-status.md` (ARCHIVED Stream G R4)
 - `docs/_archive/governance/2026-05-05-pre-wave1-version-bump-dry-run.md` (ARCHIVED Stream G R14)
-- `2026-05-05-wave-1-deploy-dry-run-report.md`
+- `docs/_archive/governance/2026-05-05-wave-1-deploy-dry-run-report.md` (ARCHIVED Stream G R36)
 - `docs/_archive/governance/2026-05-05-next-soak-readiness-audit.md` (ARCHIVED Stream G R4)
 - `docs/_archive/governance/2026-05-05-edge004-tldr-doc-quality-review.md` (ARCHIVED Stream G R4)
 

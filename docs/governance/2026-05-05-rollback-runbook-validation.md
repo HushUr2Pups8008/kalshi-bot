@@ -83,7 +83,7 @@ All explicit cross-links in the runbook (§0 trigger conditions, §3 spec refs, 
 
 ## Out of scope
 
-- Re-validating the EXEC-002 / OBS-003 / MATCH-001 (B') revert hunks against future deployed state. The dry-run report (`2026-05-05-wave-1-deploy-dry-run-report.md`) already exercised these in an isolated worktree.
+- Re-validating the EXEC-002 / OBS-003 / MATCH-001 (B') revert hunks against future deployed state. The dry-run report (`docs/_archive/governance/2026-05-05-wave-1-deploy-dry-run-report.md` ARCHIVED Stream G R36) already exercised these in an isolated worktree.
 - Validating `PHASE2_RUNBOOK.md` (governance soak runbook) — separate runbook, separate validation pass.
 - Operator UI / Grafana panel references — non-runbook surface.
 
