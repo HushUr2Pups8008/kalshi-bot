@@ -2944,7 +2944,7 @@ Second pass on 2026-05-05 (commits `b44dda2` + `80932cb` + this cycle's docs). I
 **Claude artifacts (cycle 2; commits `b44dda2` + this cycle):**
 
 - `docs/governance/wave-1-post-deploy-observation-plan.md` — 14-row regression watch matrix with per-row CLI; 24h validation window per Wave-1 commit
-- `docs/governance/2026-05-05-rollback-runbook-validation.md` — 1 HIGH drift (G1_CONFIDENCE_THRESHOLD env-revert row in §3 is fictional per Lever B spec §7) + 2 LOW
+- `docs/_archive/governance/2026-05-05-rollback-runbook-validation.md` — 1 HIGH drift (G1_CONFIDENCE_THRESHOLD env-revert row in §3 is fictional per Lever B spec §7) + 2 LOW (ARCHIVED Stream G R51)
 - `docs/governance/PROFIT-PHASE2-002-onboarding.md` — next-soak setup (90 min fast / 12 h deep cadence; decision-policy knobs frozen per `feedback_soak_acceleration_split.md`)
 - `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Branch A → C → D sequence; 42 d worst-case walk; 28 d compressed via A+C parallel
 - `docs/_archive/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` — Lever B floor LOCKED at 0.04; failsafe 0.08; 2× ratio invariant; lifts §11 harness deferral (ARCHIVED Stream G R34)
@@ -2980,7 +2980,7 @@ Third pass on 2026-05-05 (commits `a505a08` Claude + `3a400c1` Codex). Focused o
 - `docs/governance/wave-2-deploy-commit-order-decision.md` — locked 2-commit Wave-2 order.
 - `docs/superpowers/specs/2026-05-05-profit-llm-001-pre-sizing-scope-design.md` — 4-axis sizing surface (prompt template / model swap / context window / batch coherence).
 - `docs/superpowers/specs/2026-05-05-p4-gate-appendix-a-pre-sizing-scope-design.md` — 3-axis surface (market-scope filter / intake-path expansion / market-resolution cadence).
-- `docs/governance/2026-05-05-changelog-drift-check.md` — 2 MEDIUM + 1 LOW drift findings in pre-staged Wave-2/3 CHANGELOG blocks.
+- `docs/_archive/governance/2026-05-05-changelog-drift-check.md` — 2 MEDIUM + 1 LOW drift findings in pre-staged Wave-2/3 CHANGELOG blocks (ARCHIVED Stream G R51).
 - `docs/governance/2026-05-05-branch-d-fire-procedure-runbook.md` — operator playbook (~30 min wall-clock; 6-step decision tree).
 - `docs/_archive/governance/2026-05-05-doc-index-cleanup-execution-plan.md` — 3-commit plan (~15 min) for the 11-file archive recommendation; post-close trigger (ARCHIVED Stream G R38; superseded by Stream G actual archives).
 
