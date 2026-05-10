@@ -40,10 +40,10 @@ This audit surfaces a **third**:
 | `edge-004-closure-path-tldr.md:49` | "Branch D — escalation to PROFIT-LLM-001 / P4-GATE Appendix A" | meaning #2 | ✅ correct |
 | `edge-004-closure-path-tldr-v3.md:5,11,12,35,46,60,73,83,90,92,105` | meaning #2 throughout | ✅ correct |
 | `2026-05-05-doc-index-audit.md:23,96,124` | meaning #2 throughout | ✅ correct |
-| `2026-05-03-claude-commits-cdbf6ef-f786246-adversarial-review.md:44` | "Lever D verdict: 'Only consider D if Levers A + B + E all succeed...'" | meaning #1 | ✅ correct (adversarial review of pre-2026-05-03 framing) |
+| `docs/_archive/governance/2026-05-03-claude-commits-cdbf6ef-f786246-adversarial-review.md:44` | "Lever D verdict: 'Only consider D if Levers A + B + E all succeed...'" | meaning #1 | ✅ correct (adversarial review of pre-2026-05-03 framing) |
 | `2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md:105,136` | "escalate to Branch D" | meaning #2 | ✅ correct |
-| `2026-05-03-claude-latest-commits-adversarial-review.md:38` | "Lever D's pre-LLM gate retention curve" | meaning #1 | ✅ correct |
-| `2026-05-03-claude-commits-c5cbc6f-90c26cf-adversarial-review.md:35` | "Lever D demotion" | meaning #1 | ✅ correct |
+| `docs/_archive/governance/2026-05-03-claude-latest-commits-adversarial-review.md:38` | "Lever D's pre-LLM gate retention curve" | meaning #1 | ✅ correct |
+| `docs/_archive/governance/2026-05-03-claude-commits-c5cbc6f-90c26cf-adversarial-review.md:35` | "Lever D demotion" | meaning #1 | ✅ correct |
 | `2026-05-03-post-soak-landing-order-design.md:17` | "Lever D demoted" | meaning #1 | ✅ correct |
 | `2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md:27` | "Branch D (escalation) | PROFIT-LLM-001 / P4-GATE Appendix A" | meaning #2 | ✅ correct |
 | `2026-05-03-edge-004-lever-menu-design.md:65,71,125` | meaning #1 (Lever D pre-LLM gate) | ✅ correct |
@@ -79,9 +79,9 @@ Same pattern for the remaining 4 occurrences. Estimated edit time: 5 min.
 ### F2 (LOW) — Adversarial-review docs reference closed Lever D framing
 
 **Sources:**
-- `2026-05-03-claude-commits-cdbf6ef-f786246-adversarial-review.md:44` — references "Lever D verdict: 'Only consider D if Levers A + B + E all succeed...'"
-- `2026-05-03-claude-latest-commits-adversarial-review.md:38` — references "Lever D's pre-LLM gate retention curve"
-- `2026-05-03-claude-commits-c5cbc6f-90c26cf-adversarial-review.md:35` — references "Lever D demotion"
+- `docs/_archive/governance/2026-05-03-claude-commits-cdbf6ef-f786246-adversarial-review.md:44` — references "Lever D verdict: 'Only consider D if Levers A + B + E all succeed...'"
+- `docs/_archive/governance/2026-05-03-claude-latest-commits-adversarial-review.md:38` — references "Lever D's pre-LLM gate retention curve"
+- `docs/_archive/governance/2026-05-03-claude-commits-c5cbc6f-90c26cf-adversarial-review.md:35` — references "Lever D demotion"
 
 These reference meaning #1 correctly, but the adversarial-review doc context predates the closure-path-TLDR-v3 / Lever-D escalation spec. **No fix needed** — these are historical record-of-thinking docs; the meaning-#1 interpretation was correct at draft time. The doc-index-audit (`2026-05-05-doc-index-audit.md` §D) recommends archiving these post-close anyway.
 
