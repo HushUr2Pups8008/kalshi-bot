@@ -277,8 +277,11 @@ OBS-003 audit closed at 9h (early-closed on operator decision; invariant `OPPORT
 | R49 | wave-1-changelog-entry-prestaged + 14 ref edits across 11 active docs | `56b4a9e` |
 | R50 | edge-replay-cycle15b-report (cycle-15b verdict superseded by 16E) + 4 ref edits in debt log | `e53d890` |
 | R51 | changelog-drift-check + rollback-runbook-validation (paired post-Wave-1 audits) | `(R51 commit)` |
+| R52 | edge-replay-cycle16d-report (operationally WITHDRAWN per operator override; agent-recommended archive) + 7 refs | `47a86ee` + `aa7aa48` followup |
+| R53 | 10 Wave-2/3 + Branch-D artifacts (Wave-2/3 HALTED per Cycle-17; agent-recommended archive); KEEP wave-2-a1plus-branch-decision-table for §B operator decision | `(R53 commit)` |
+| R54 | 7 Wave-1 deploy procedure cluster (post-soak-close-rehearsal-checklist, post-soak-rollback-runbook, wave-1-fire-time-checklist, wave-1-deploy-day-timing, wave-1-acceptance-matrix, wave-1-deploy-commit-order-decision, wave-1-post-deploy-observation-plan) + ~25 ref edits across 13 active docs | `(R54 commit + followup)` |
 
-**Stream G session moves: 105 files archived across 55+ commits.**
+**Stream G session moves: 123 files archived across 60+ commits.**
 
 Final state: dated 2026-05-* files in `/governance/`: 114 (Stream G start) → 53 (-61 = 53% reduction). Total `/governance/` .md files: ~120 → 79 (-41).
 
@@ -299,12 +302,18 @@ Final state: dated 2026-05-* files in `/governance/`: 114 (Stream G start) → 5
 
 **12 EDGE-004 lever specs CLOSED via R24-R35.** All Wave-2/3 lever-design specs now in `_archive/specs/`. 95+ active doc ref edits handled per-spec with full context retrieval.
 
-**Stream G COMPLETE 2026-05-10.** Total: 105 files archived / 55+ atomic commits / `/governance/` 53% reduction in dated 2026-05-* files. Items NOT in scope for autonomous archive (operator-call required):
-- ROADMAP Wave-1 row "active" → "complete" flip (operator pacing-table call)
-- Cycle-12/13/14/16D/16E reports — retained for cycle history (only cycle-15b archived as superseded by 16E)
-- Wave-2/3 deploy artifacts retained pending operator decision on resume-vs-full-archive
-- Operational runbooks (incident-response, deploy-guide) retained for runtime use
-- network-api-outage-runbook (1 ref but operational; left in place)
+**Stream G COMPLETE 2026-05-10.** Total: 123 files archived / 60+ atomic commits.
+
+**Operator-recommended subset executed in R52-R54** after agent-dispatched analysis confirmed safe:
+- R52: cycle-16D archived (operationally WITHDRAWN; cycle-12/13/14/16E retained as cycle-history reference)
+- R53: 10 Wave-2/3 + Branch-D artifacts archived; wave-2-a1plus-branch-decision-table KEPT (irreplaceable §B operator decision input)
+- R54: 7 Wave-1 deploy procedure cluster archived; 3 incident-response runbooks (kill-switch, dead-bot-reboot, network-outage) KEPT (recurring runtime-reactive)
+
+**Items genuinely operator-only (no autonomous archive):**
+- ROADMAP Wave-1 row "active" → "complete" flip — eligible after stabilisation window opens ~2026-05-11T21:35Z (48h post-commit-6 = OBS-003 commit `92b1d11`)
+- 3 operational runbooks (kill-switch, dead-bot-reboot, network-outage) — runtime-reactive; KEEP indefinitely
+- wave-2-a1plus-branch-decision-table (Wave-2 §B operator decision input) — KEEP for any Wave-2 resume scenario
+- cycle-12/13/14/16E reports (cycle-history reference) — KEEP per IC §16 cross-references
 
 ---
 
