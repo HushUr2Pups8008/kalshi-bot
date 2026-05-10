@@ -69,7 +69,7 @@ bash scripts/launchd_plist_drift_audit.sh --json
 ### Step 3: Update cross-references
 
 Affected docs:
-- `docs/governance/2026-05-05-db-backup-gap-resolution.md` — operator install procedure references `scripts/launchd/com.kalshi.db-backup.plist` → update to `ops/launchd/install.sh`
+- `docs/_archive/governance/2026-05-05-db-backup-gap-resolution.md` — operator install procedure references `scripts/launchd/com.kalshi.db-backup.plist` → update to `ops/launchd/install.sh` (ARCHIVED Stream G R13)
 - `docs/governance/2026-05-05-launchd-plist-drift-audit.md` — recommendations section
 - `docs/profit_path_debt_log.md` cycle 4.5 entry — install procedure
 - README.md (if any references)

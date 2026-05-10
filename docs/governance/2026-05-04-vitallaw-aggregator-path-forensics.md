@@ -84,7 +84,7 @@ This is a significant simplification of the prior 4-way tree. The honest read is
 
 ## Cross-links
 
-- `docs/governance/2026-05-04-vitallaw-archive-forensics.md` — Codex's prior forensics (the "aggregator/search ingestion" claim this audit concretises)
+- `docs/_archive/governance/2026-05-04-vitallaw-archive-forensics.md` — Codex's prior forensics (the "aggregator/search ingestion" claim this audit concretises) (ARCHIVED Stream G R12)
 - `docs/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md` — original per-source audit
 - `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` — A.1+1.5 spec (needs §2 / §3.1 + decision-tree refresh integrating this finding)
 - `docs/governance/edge-004-closure-path-tldr.md` v2 — TL;DR (needs option-B sub-decision refresh)
