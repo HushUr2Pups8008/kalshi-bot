@@ -129,7 +129,7 @@ If outage fires between Day-7 fire-time pre-flight and `phase2-soak-closed` tag 
 - **Abort the Day-7 close.** Don't tag.
 - Categorize per §1.
 - Wait or intervene per §2.
-- After bot recovers + is stable for ≥ 30 min: re-attempt Day-7 close per `2026-05-05-day-7-fire-time-compact-checklist.md`.
+- After bot recovers + is stable for ≥ 30 min: re-attempt Day-7 close per `docs/_archive/governance/2026-05-05-day-7-fire-time-compact-checklist.md` (ARCHIVED Stream G R47).
 - If gate-5 (cadence stability max gap ≤ 3h) is now violated due to outage: outage caused soak invariant breach; investigate per §8.5 spec; consider falling through to default 14-day close.
 
 ### §4.2 Outage during Wave-1 deploy

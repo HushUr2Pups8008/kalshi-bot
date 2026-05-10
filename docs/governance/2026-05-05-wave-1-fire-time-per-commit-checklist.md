@@ -110,4 +110,4 @@ Check which row(s) triggered
 - `2026-05-05-wave-1-deploy-day-timing.md` — full timing rationale
 - `post-soak-rollback-runbook.md` — incident response
 - `scripts/wave1_post_deploy_smoke.sh` — Codex cycle 2 wrapper
-- `2026-05-05-day-7-fire-time-compact-checklist.md` — Day-7 close (this cycle's companion)
+- `docs/_archive/governance/2026-05-05-day-7-fire-time-compact-checklist.md` — Day-7 close (this cycle's companion) (ARCHIVED Stream G R47)
