@@ -68,7 +68,7 @@ Examples NOT to archive:
 - `2026-05-03-g1-admittance-counterfactual.md` — Lever B sizing anchor
 - `2026-05-03-lever-a1-source-classifier-counterfactual.md` — Lever A sizing
 - `2026-05-04-vitallaw-aggregator-path-forensics.md` — A.1+ Branch B kill anchor
-- `2026-05-05-vitallaw-direct-rss-probe.md` — same
+- `docs/_archive/governance/2026-05-05-vitallaw-direct-rss-probe.md` — same (ARCHIVED Stream G R22)
 - `2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md` — Wave-1 lift forecast
 
 ### F. Day-7-prep docs (THIS-CYCLE; KEEP)

@@ -195,7 +195,7 @@ After A.1's verification clears (a few hours; A.1 is silent in production data).
 **Decision point — REVISED post-aggregator-path forensics** (`docs/governance/2026-05-04-vitallaw-aggregator-path-forensics.md`): VitalLaw came via Google News RSS, NOT direct feed. Google News query family is **already active** in canonical config (`config.py:DISABLED_SOURCE_FAMILIES` — re-enabled 2026-04-23). Therefore Day-14 is a 4-branch tree:
 
 1. **Branch A (DEFAULT, passive — no code change):** observe Wave-1 close for 14 d. Watch `trades.jsonl` for VitalLaw / legal-niche source-string surfacing. If ≥ 1 PAPER_TRADE materialises through the Google News query family, EDGE-004 closure path is intact via Branch A and no A.1+1.5 deploy required.
-2. ~~**Branch B (active deploy if A fails):** probe `vitallaw.com` for direct RSS endpoint~~ — **DROPPED 2026-05-05** (Codex direct-RSS probe `2026-05-05-vitallaw-direct-rss-probe.md` confirmed no public feed endpoint).
+2. ~~**Branch B (active deploy if A fails):** probe `vitallaw.com` for direct RSS endpoint~~ — **DROPPED 2026-05-05** (Codex direct-RSS probe `docs/_archive/governance/2026-05-05-vitallaw-direct-rss-probe.md` confirmed no public feed endpoint; ARCHIVED Stream G R22).
 3. **Branch C (fallback if A fails):** onboard open-RSS analogues per A.1+1.5 spec §2 (Lawfare / Just Security / SCOTUSblog / Politico Legal).
 4. **option-A parallel:** specialist-geopolitics per A.1+ spec §3.1 (war on the rocks / CSIS / ISW / CFR / Atlantic Council). Operator may run option-A in parallel with C for breadth.
 
