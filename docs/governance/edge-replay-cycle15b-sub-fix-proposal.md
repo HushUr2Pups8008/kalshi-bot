@@ -75,7 +75,7 @@ GEOPOLITICAL_SIGNALS = [
 ## Claude L6 verdict appendix
 
 **Drafted:** 2026-05-06 post-Codex C3-C6 (`851eb86`).
-**Authority:** Cycle-15B charter §"Sub-fix selection acceptance" + `2026-05-06-cycle-15b-claude-independent-trace-read.md` (L4 + L5).
+**Authority:** Cycle-15B charter §"Sub-fix selection acceptance" + `docs/_archive/governance/2026-05-06-cycle-15b-claude-independent-trace-read.md` (L4 + L5) (ARCHIVED Stream G R15).
 
 ### Verdict: `multi-step-needed-operator-scope-extension`
 

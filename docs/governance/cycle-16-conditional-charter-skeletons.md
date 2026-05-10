@@ -138,7 +138,7 @@ The verdict comes first. The skeleton that matches the verdict instantiates. NO 
 
 ## Cross-links
 
-- `docs/governance/2026-05-06-cycle-15b-charter-extraction-rebuild.md` — Cycle-15B charter (verdict source)
+- `docs/_archive/governance/2026-05-06-cycle-15b-charter-extraction-rebuild.md` — Cycle-15B charter (verdict source) (ARCHIVED Stream G R15)
 - `docs/governance/cycle-15-conditional-charter-skeletons.md` — Cycle-15 skeletons (origin pattern; §C/§F transferable to Cycle-16 §B/§C)
 - `docs/governance/cycle-15b-post-verdict-action-checklist.md` — Cycle-15B post-verdict checklist (filed this skeleton-set)
 - `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — strategic redirect authority

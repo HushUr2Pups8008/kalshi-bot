@@ -18,7 +18,7 @@ Pre-staging this checklist prevents improvisation when verdict lands. Verdict is
 
 ## Pre-execution: Item L2 — sub-fix-criteria-lock verification (RUN BETWEEN C2 trace AND C6 selection)
 
-Before Codex's C6 sub-fix selection runs, Claude verifies Codex's C2 zero-collapse-step identification matches the locked criterion from `2026-05-06-cycle-15b-charter-extraction-rebuild.md` §"Zero-collapse-step identification":
+Before Codex's C6 sub-fix selection runs, Claude verifies Codex's C2 zero-collapse-step identification matches the locked criterion from `docs/_archive/governance/2026-05-06-cycle-15b-charter-extraction-rebuild.md` §"Zero-collapse-step identification" (ARCHIVED Stream G R15):
 
 ```
 ✓ step input has |signal_magnitude| > 0.05
@@ -28,7 +28,7 @@ Before Codex's C6 sub-fix selection runs, Claude verifies Codex's C2 zero-collap
 ✓ multi-step finding triggers operator scope-extension conversation BEFORE C7
 ```
 
-Verification mechanism: review of `logs/edge_replay/cycle15b/zero_collapse_step.json` + `per_step_trace.json` against this checklist. Findings written to `docs/governance/2026-05-06-cycle-15b-pre-execution-criteria-verification.md` (LATER, when C2 lands).
+Verification mechanism: review of `logs/edge_replay/cycle15b/zero_collapse_step.json` + `per_step_trace.json` against this checklist. Findings written to `docs/_archive/governance/2026-05-06-cycle-15b-pre-execution-criteria-verification.md` (ARCHIVED Stream G R15) (LATER, when C2 lands).
 
 **If criterion drift:** flag to Codex. C6 sub-fix selection does NOT run until criteria match charter.
 
@@ -39,7 +39,7 @@ After Codex C2-C5 outputs land, Claude reads them WITHOUT consulting Codex's C6 
 1. Independently identifies the zero-collapse step.
 2. Cross-checks against PROFIT-GOV-001 (qwen3 thinking-consumed-by-JSON-grammar; fixed via `think=False`) and PROFIT-GOV-002 (rubber-stamp bias) pathology classes. If C3 LLM audit shows `magnitude="none"` on directional fixtures, audit whether root cause is the same LLM-layer pathology surface or a different signal-analyzer-prompt pathology.
 
-Output: `docs/governance/2026-05-06-cycle-15b-claude-independent-trace-read.md` (or §section in cycle-15B report).
+Output: `docs/_archive/governance/2026-05-06-cycle-15b-claude-independent-trace-read.md` (ARCHIVED Stream G R15) (or §section in cycle-15B report).
 
 **If Claude's identification differs from Codex's:** both perspectives recorded; operator picks before C6 commits to a sub-fix path.
 
@@ -126,8 +126,8 @@ Acceptance criteria match the matching Cycle-16<X> skeleton acceptance section.
 
 ## Cross-links
 
-- `docs/governance/2026-05-06-cycle-15b-charter-extraction-rebuild.md` — Cycle-15B charter
-- `docs/governance/2026-05-06-cycle-15b-task-split.md` — Codex C1-C10 + Claude L1-L10
+- `docs/_archive/governance/2026-05-06-cycle-15b-charter-extraction-rebuild.md` — Cycle-15B charter (ARCHIVED Stream G R15)
+- `docs/_archive/governance/2026-05-06-cycle-15b-task-split.md` — Codex C1-C10 + Claude L1-L10 (ARCHIVED Stream G R15)
 - `docs/governance/cycle-16-conditional-charter-skeletons.md` — Cycle-16 skeletons (verdict-to-skeleton map)
 - `docs/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — L8 cohort definitions
 - `docs/governance/edge-replay-cycle15b-report.md` — Cycle-15B C10 report (FUTURE)

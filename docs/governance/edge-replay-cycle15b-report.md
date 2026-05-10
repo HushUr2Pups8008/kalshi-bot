@@ -89,7 +89,7 @@ Per Cycle-16 skeletons, this result routes to the non-acceptance branch: no beha
 ## Claude appendix — verdict consumption + Cycle-16 routing
 
 **Drafted:** 2026-05-07 post-Codex C10 commit `e5cfb8e`.
-**Authority:** Cycle-15B charter §"Cycle-15B success criterion" (`2026-05-06-cycle-15b-charter-extraction-rebuild.md`); post-verdict checklist (`cycle-15b-post-verdict-action-checklist.md`); Cycle-16 skeletons (`cycle-16-conditional-charter-skeletons.md`).
+**Authority:** Cycle-15B charter §"Cycle-15B success criterion" (`docs/_archive/governance/2026-05-06-cycle-15b-charter-extraction-rebuild.md` ARCHIVED Stream G R15); post-verdict checklist (`cycle-15b-post-verdict-action-checklist.md`); Cycle-16 skeletons (`cycle-16-conditional-charter-skeletons.md`).
 
 ### Verdict
 
