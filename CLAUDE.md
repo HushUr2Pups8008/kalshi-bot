@@ -6,7 +6,7 @@
 
 ## Continuous Improvement
 
-- This project's unified tracking system is `docs/profit_path_debt_log.md`. Do not create parallel tracking surfaces (status / roadmap / debt / decision-log / dashboard / per-day stamps). New tracking content lands as a section in the debt log, not a new file. The 2026-05-09 docs consolidation removed 8 parallel surfaces (1 deleted, 7 archived; see `docs/housekeeping/2026-05-09/docs-consolidation/SUMMARY.md`); preserving the consolidation is now a maintenance invariant.
+- This project's unified tracking system is `docs/profit_path_debt_log.md`. Do not create parallel tracking surfaces (status / roadmap / debt / decision-log / dashboard / per-day stamps). New tracking content lands as a section in the debt log, not a new file. The 2026-05-09 docs consolidation removed 8 parallel surfaces (1 deleted, 7 archived; see `docs/_archive/plans/2026-05-09-docs-directory-consolidation.md` for the consolidation plan and `docs/_archive/2026-05-09-docs-consolidation/` for archived evidence); preserving the consolidation is now a maintenance invariant.
 - Top-level project docs (`docs/profit_path_debt_log.md`, `docs/ROADMAP.md`, this `CLAUDE.md`) collectively own all tracking and documentation-creation guidance. Do not author bespoke per-subdirectory tracking conventions, README dashboards, or per-cycle decision logs that duplicate what the One Document already covers. Active-cycle ledgers in `docs/governance/` are the only sanctioned exception; they merge back to the debt log at cycle close per its `R-10 — No New Tracking Files` rule.
 
 See `~/.claude/rules/documentation_format.md` for documentation format rules.
