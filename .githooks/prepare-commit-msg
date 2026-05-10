@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# prepare-commit-msg: when every staged file is in the docs-only allowlist,
+# automatically append "[skip ci]" to the commit message so CI minutes are
+# not consumed for documentation-only changes.
+#
+# Allowlist (commit must touch ONLY these paths):
+#   - docs/**
+#   - README.md
+#   - CHANGELOG.md
+#   - CLAUDE.md
+#   - AGENTS.md
+#   - .claude/commands/**
+#
+# Excluded (ANY excluded path forces full CI):
+#   - .gitlab-ci.yml, Makefile, .githooks/**, VERSION
+#   - scripts/**, tests/**, kalshi/**, analysis/**, tasks/**, feeds/**,
+#     governance/**, trading/**
+#   - requirements*.txt, *.yml, *.yaml, *.toml
+#
+# Idempotent: leaves the message untouched if it already contains [skip ci]
+# or [ci skip].
+#
+# Bypass (run CI even on docs-only commit):  git commit --no-verify
+#
+# Activate per clone:  git config core.hooksPath .githooks
+
+set -euo pipefail
+
+COMMIT_MSG_FILE="${1:-}"
+COMMIT_SOURCE="${2:-}"
+# $3 is SHA on amend; unused.
+
+if [ -z "$COMMIT_MSG_FILE" ]; then
+    exit 0
+fi
+
+# Only fire on normal commits and -m / -F supplied messages. Skip merge,
+# squash, and template sources where amending the message would be wrong.
+case "$COMMIT_SOURCE" in
+    ""|message)
+        ;;
+    merge|squash|template|commit)
+        exit 0
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+
+# Already marked? Stay idempotent.
+if grep -qE '\[skip ci\]|\[ci skip\]' "$COMMIT_MSG_FILE"; then
+    exit 0
+fi
+
+STAGED="$(git diff --cached --name-only)"
+if [ -z "$STAGED" ]; then
+    exit 0
+fi
+
+is_docs_only=1
+while IFS= read -r path; do
+    [ -z "$path" ] && continue
+
+    # Hard exclusions: any single excluded path disqualifies the whole commit.
+    case "$path" in
+        .gitlab-ci.yml|Makefile|VERSION)
+            is_docs_only=0
+            break
+            ;;
+        .githooks/*)
+            is_docs_only=0
+            break
+            ;;
+        scripts/*|tests/*|kalshi/*|analysis/*|tasks/*|feeds/*|governance/*|trading/*)
+            is_docs_only=0
+            break
+            ;;
+        requirements*.txt|*.yml|*.yaml|*.toml)
+            is_docs_only=0
+            break
+            ;;
+    esac
+
+    # Allowlist match.
+    case "$path" in
+        docs/*|README.md|CHANGELOG.md|CLAUDE.md|AGENTS.md|.claude/commands/*)
+            continue
+            ;;
+        *)
+            is_docs_only=0
+            break
+            ;;
+    esac
+done <<< "$STAGED"
+
+if [ "$is_docs_only" -eq 1 ]; then
+    # Append a blank line + [skip ci] marker. Trailing newline preserved.
+    printf '\n[skip ci]\n' >> "$COMMIT_MSG_FILE"
+fi
+
+exit 0

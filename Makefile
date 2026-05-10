@@ -1,4 +1,4 @@
-.PHONY: test-safe test-safe-detached run-history db-wal-check db-wal-checkpoint lint lint-fix coverage
+.PHONY: test-safe test-safe-detached run-history db-wal-check db-wal-checkpoint gitlab-ci-usage lint lint-fix coverage
 
 test-safe:
 	scripts/run_tests.sh
@@ -14,6 +14,9 @@ db-wal-check:
 
 db-wal-checkpoint:
 	scripts/check_sqlite_wal.sh --checkpoint
+
+gitlab-ci-usage:
+	python3 scripts/gitlab_ci_usage.py
 
 lint:
 	ruff check .
