@@ -13,7 +13,7 @@ from typing import Any
 DEFAULT_DATASET = Path("logs/edge_replay/cycle16d/replay_dataset.jsonl")
 DEFAULT_SCORES = Path("logs/edge_replay/cycle16d/counterfactual_scores.json")
 DEFAULT_COVERAGE = Path("logs/edge_replay/cycle16d/coverage_audit.json")
-DEFAULT_OUTPUT = Path("docs/governance/edge-replay-cycle16d-report.md")
+DEFAULT_OUTPUT = Path("docs/_archive/governance/edge-replay-cycle16d-report.md")
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:

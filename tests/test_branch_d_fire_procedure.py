@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-RUNBOOK = REPO_ROOT / "docs/governance/2026-05-05-branch-d-fire-procedure-runbook.md"
+RUNBOOK = REPO_ROOT / "docs/_archive/governance/2026-05-05-branch-d-fire-procedure-runbook.md"
 
 
 def test_branch_d_runbook_pins_fire_tag_pattern():

@@ -77,6 +77,6 @@ fi
   --dataset "$OUT_DIR/replay_dataset.jsonl" \
   --scores "$OUT_DIR/counterfactual_scores.json" \
   --coverage "$OUT_DIR/coverage_audit.json" \
-  --output docs/governance/edge-replay-cycle16d-report.md
+  --output docs/_archive/governance/edge-replay-cycle16d-report.md
 
 echo "cycle16d_out_dir=$OUT_DIR"

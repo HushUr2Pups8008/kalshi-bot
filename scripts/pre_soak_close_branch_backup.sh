@@ -134,4 +134,4 @@ echo "  git checkout ${TAG_NAME}              # detached HEAD at the anchor"
 echo "  git reset --hard ${TAG_NAME}          # wipe local main back to anchor (DESTRUCTIVE)"
 echo "  git push -f origin ${TAG_NAME}:main   # force-push main back to anchor (VERY DESTRUCTIVE; confirm first)"
 echo
-echo "See docs/governance/post-soak-rollback-runbook.md for the full rollback playbook."
+echo "See docs/_archive/governance/post-soak-rollback-runbook.md for the full rollback playbook."

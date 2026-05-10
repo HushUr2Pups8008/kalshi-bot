@@ -10,7 +10,7 @@ import pytest
 def test_obs005_post_deploy_24h_validation_window_evidence_exists():
     from pathlib import Path
 
-    evidence = Path("docs/governance/wave-1-post-deploy-observation-plan.md").read_text()
+    evidence = Path("docs/_archive/governance/wave-1-post-deploy-observation-plan.md").read_text()
     assert "OBS-005" in evidence
     assert "OBS-005 24h validation: PASS" in evidence
 
@@ -22,7 +22,7 @@ def test_obs005_post_deploy_24h_validation_window_evidence_exists():
 def test_match001_post_deploy_72h_validation_window_evidence_exists():
     from pathlib import Path
 
-    evidence = Path("docs/governance/wave-1-post-deploy-observation-plan.md").read_text()
+    evidence = Path("docs/_archive/governance/wave-1-post-deploy-observation-plan.md").read_text()
     assert "MATCH-001" in evidence
     assert "MATCH-001 72h validation: PASS" in evidence
 
@@ -34,7 +34,7 @@ def test_match001_post_deploy_72h_validation_window_evidence_exists():
 def test_obs003_post_deploy_48h_validation_window_evidence_exists():
     from pathlib import Path
 
-    evidence = Path("docs/governance/wave-1-post-deploy-observation-plan.md").read_text()
+    evidence = Path("docs/_archive/governance/wave-1-post-deploy-observation-plan.md").read_text()
     assert "OBS-003" in evidence
     assert "OBS-003 48h validation: PASS" in evidence
 
@@ -46,6 +46,6 @@ def test_obs003_post_deploy_48h_validation_window_evidence_exists():
 def test_exec002_post_deploy_7d_validation_window_evidence_exists():
     from pathlib import Path
 
-    evidence = Path("docs/governance/wave-1-post-deploy-observation-plan.md").read_text()
+    evidence = Path("docs/_archive/governance/wave-1-post-deploy-observation-plan.md").read_text()
     assert "EXEC-002" in evidence
     assert "EXEC-002 7d validation: PASS" in evidence
