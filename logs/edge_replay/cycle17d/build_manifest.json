@@ -1,0 +1,49 @@
+{
+  "cohort_counts": {
+    "POST_FIX_REBUILT": 272,
+    "PRE_FIX": 241
+  },
+  "dedup_key_blank_headline_count_by_source": {
+    "cycle13_live": 2,
+    "cycle15b": 2,
+    "cycle16d": 2
+  },
+  "dedup_policy": {
+    "cycle13_conflicts": "prefer cycle13_live over cycle13_local",
+    "key": [
+      "ticker",
+      "decision_ts",
+      "signal_source",
+      "headline"
+    ],
+    "other_conflicts": "prefer rows with non-null market_yes_price; if tied prefer source precedence cycle16d > cycle15b > cycle13_live > cycle13_local; if still tied keep the first input row"
+  },
+  "dropped_counts_by_source_reason": {
+    "cycle13_live": {
+      "non_cycle13_conflict_source_precedence_preferred": 14
+    },
+    "cycle13_local": {
+      "cycle13_live_preferred": 6
+    },
+    "cycle15b": {
+      "non_cycle13_conflict_priced_row_preferred": 271,
+      "non_cycle13_conflict_source_precedence_preferred": 1
+    }
+  },
+  "dropped_duplicate_count": 292,
+  "input_paths": {
+    "cycle13_live": "logs/edge_replay/cycle13_live/replay_dataset.jsonl",
+    "cycle13_local": "logs/edge_replay/cycle13_local/replay_dataset.jsonl",
+    "cycle15b": "logs/edge_replay/cycle15b/replay_dataset.jsonl",
+    "cycle16d": "logs/edge_replay/cycle16d/replay_dataset.jsonl"
+  },
+  "input_row_counts": {
+    "cycle13_live": 255,
+    "cycle13_local": 6,
+    "cycle15b": 272,
+    "cycle16d": 272
+  },
+  "output_path": "logs/edge_replay/cycle17d/replay_dataset_merged.jsonl",
+  "output_row_count": 513,
+  "sha256": "ab9ae8e9cf8f23349d7c96206c443ed1db52ebee0180a1c51f507690d958236c"
+}
