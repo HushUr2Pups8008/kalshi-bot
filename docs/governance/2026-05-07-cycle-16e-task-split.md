@@ -132,7 +132,7 @@ E10 report produced + signed by both Codex and Claude. Verdict matches one of th
 - `docs/governance/edge-replay-cycle16d-report.md` "Operator override (2026-05-07)" — origin of Cycle-16E.
 - `docs/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 routing (refreshed in N9).
 - `docs/governance/cycle-16d-post-verdict-action-checklist.md` — analogous post-verdict pattern (N8 mirrors).
-- `docs/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — L8 cohort note (POST_FIX_REBUILT intact).
+- `docs/_archive/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — L8 cohort note (POST_FIX_REBUILT intact) (ARCHIVED Stream G R18).
 - `data/dossier_updates_post_fix.db` — POST_FIX_REBUILT cohort (E6 input, unchanged).
 - `logs/edge_replay/cycle16d/historical_prices_cycle16d.json` — restored prices (E6 input, unchanged).
 - `scripts/edge_replay/score_counterfactual_pnl.py` — scorer subject of E1-E5 corrections.

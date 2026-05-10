@@ -924,7 +924,7 @@ Applies to all behavioral changes deployed to the running bot. Does NOT apply to
 
 When a behavioral fix changes the function producing `dossier_updates` or `paper_trades` rows (e.g., Cycle-15B extraction rebuild), pre-fix data is no longer ground truth for post-fix calibration validation. Future replay runs MUST distinguish PRE_FIX, POST_FIX_REBUILT, and POST_FIX_NEW cohorts via cohort flag or timestamp discriminator, and MUST preserve pre-fix rows in a separate table or backup file rather than overwriting them.
 
-See `docs/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` for the load-bearing definitions.
+See `docs/_archive/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` for the load-bearing definitions (ARCHIVED Stream G R18).
 
 ### Cross-references
 
@@ -934,4 +934,4 @@ See `docs/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` for the l
 - `docs/governance/edge-replay-cycle12-report.md` — Cycle-12 deliverable; replay harness output
 - `docs/governance/edge-replay-cycle13-report.md` — Cycle-13 0-positive-EV verdict
 - `docs/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 `extraction_broken` verdict
-- `docs/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — Rule 6 cohort definitions
+- `docs/_archive/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — Rule 6 cohort definitions (ARCHIVED Stream G R18)

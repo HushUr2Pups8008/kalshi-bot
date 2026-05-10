@@ -58,13 +58,13 @@ Claude reviews Codex C9 re-ingestion pipeline for:
 - Idempotence: re-run twice produces byte-identical `dossier_updates_post_fix.db`.
 - Determinism: no wall-clock-dependent ordering.
 - Atomicity: re-run failure does not corrupt mid-state. Reference CLAUDE.md "DB transaction atomicity in `resolve_market()`" gotcha.
-- PRE_FIX preservation: pre-fix `dossier_updates` recoverable per `2026-05-06-cycle-15b-paper-trades-cohort-note.md`.
+- PRE_FIX preservation: pre-fix `dossier_updates` recoverable per `docs/_archive/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` (ARCHIVED Stream G R18).
 
 **If atomicity review fails:** C10 replay run does NOT proceed until C9 re-shipped. C10 consuming a non-atomic re-ingestion produces non-reproducible results → IC §16 Rule 4 violation.
 
 ## Item L8 — paper_trades cohort note (FILED 2026-05-06; reference only at this point)
 
-Already landed. `docs/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` defines PRE_FIX / POST_FIX_REBUILT / POST_FIX_NEW cohorts. Cross-linked from IC §16 Rule 6.
+Already landed. `docs/_archive/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` (ARCHIVED Stream G R18) defines PRE_FIX / POST_FIX_REBUILT / POST_FIX_NEW cohorts. Cross-linked from IC §16 Rule 6.
 
 ## Items 5/8/9/10 — post-verdict refresh (POST C10)
 
@@ -129,6 +129,6 @@ Acceptance criteria match the matching Cycle-16<X> skeleton acceptance section.
 - `docs/_archive/governance/2026-05-06-cycle-15b-charter-extraction-rebuild.md` — Cycle-15B charter (ARCHIVED Stream G R15)
 - `docs/_archive/governance/2026-05-06-cycle-15b-task-split.md` — Codex C1-C10 + Claude L1-L10 (ARCHIVED Stream G R15)
 - `docs/governance/cycle-16-conditional-charter-skeletons.md` — Cycle-16 skeletons (verdict-to-skeleton map)
-- `docs/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — L8 cohort definitions
+- `docs/_archive/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — L8 cohort definitions (ARCHIVED Stream G R18)
 - `docs/governance/edge-replay-cycle15b-report.md` — Cycle-15B C10 report (FUTURE)
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-16 deploys)
