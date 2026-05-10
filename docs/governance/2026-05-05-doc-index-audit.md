@@ -47,9 +47,9 @@ Doc surface is **organic but not chaotic**. 6 superseded artifacts safely consol
 | `docs/_archive/governance/2026-05-03-claude-commits-4a7cc38-fee5003-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
 | `docs/_archive/governance/2026-05-03-claude-commits-56d641e-9e2fffa-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
 | `docs/_archive/governance/2026-05-03-claude-commits-728f3bd-cfc0b60-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
-| `2026-05-03-claude-commits-c5cbc6f-90c26cf-adversarial-review.md` | resolved | archive (HOLD: 4 active refs) |
-| `2026-05-03-claude-commits-cdbf6ef-f786246-adversarial-review.md` | resolved | archive (HOLD: 4 active refs) |
-| `2026-05-03-claude-latest-commits-adversarial-review.md` | resolved | archive (HOLD: 4 active refs) |
+| `docs/_archive/governance/2026-05-03-claude-commits-c5cbc6f-90c26cf-adversarial-review.md` | resolved | ARCHIVED Stream G R17 |
+| `docs/_archive/governance/2026-05-03-claude-commits-cdbf6ef-f786246-adversarial-review.md` | resolved | ARCHIVED Stream G R17 |
+| `docs/_archive/governance/2026-05-03-claude-latest-commits-adversarial-review.md` | resolved | ARCHIVED Stream G R17 |
 | `docs/_archive/governance/2026-05-03-post-soak-spec-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
 | `docs/_archive/governance/2026-05-04-claude-commits-681ceb9-2bf3da1-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
 | `docs/_archive/governance/2026-05-04-claude-latest-five-commits-adversarial-review-legal-cycle.md` | resolved | ARCHIVED Stream G R14 |
