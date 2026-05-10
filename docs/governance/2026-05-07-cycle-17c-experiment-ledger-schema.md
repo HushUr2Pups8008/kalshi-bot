@@ -152,7 +152,7 @@ Each experiment row contains the following fields. Pre-replay fields are committ
 
 ### Preservation rule (schema evolution — Cycle-17D onward)
 
-Existing rows E0/E1/E2/E3 (Cycle-17C) must NOT be edited. The new fields (`corpus_id`, `corpus_sha256`, `cohort_breakdown`, `ic16_slices_4axis`, `ic16_slices_5axis_diagnostic`) apply prospectively from E0' (Cycle-17D broader-corpus baseline) onward. Legacy rows can be back-filled with `corpus_id=cycle16d` if needed for reporting, but the core data (hypothesis, replay command, decision, rationale) remains immutable.
+Existing rows E0/E1/E2 (recorded in this file) and the E3 verdict (recorded externally in `docs/governance/2026-05-10-cycle-17c-e3-flip-sign-counterfactual.md`, not yet back-filled into this ledger schema) must NOT be edited. The new fields (`corpus_id`, `corpus_sha256`, `cohort_breakdown`, `ic16_slices_4axis`, `ic16_slices_5axis_diagnostic`) apply prospectively from E0' (Cycle-17D broader-corpus baseline) onward. Legacy rows can be back-filled with `corpus_id=cycle16d` if needed for reporting, but the core data (hypothesis, replay command, decision, rationale) remains immutable. Legacy rows continue to use the pre-split `ic16_slices` field name; the `ic16_slices_4axis` / `ic16_slices_5axis_diagnostic` split is prospective-only.
 
 ## Sample size + MDE table (for hypothesis design)
 
