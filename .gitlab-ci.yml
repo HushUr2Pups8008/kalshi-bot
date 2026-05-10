@@ -71,6 +71,10 @@ lint:
 tests:
   stage: test
   before_script:
+    # Tests subprocess `git` (db_snapshot, close_day audit, wave1 acceptance audit)
+    # and `node` (wave2_branch_a_invariant_check.sh JSON probe). python:3.14-slim
+    # is Debian-based and ships neither; install both before pytest collection.
+    - apt-get update -qq && apt-get install -y --no-install-recommends git nodejs
     - *install
   script:
     - .venv/bin/python -m pytest -q --tb=short --junitxml=junit.xml

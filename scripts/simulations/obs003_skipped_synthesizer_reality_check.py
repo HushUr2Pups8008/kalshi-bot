@@ -14,7 +14,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from scripts.simulations import obs003_skipped_stream_synthesis, post_soak_landing_simulation  # noqa: E402
 
-_DEFAULT_REPORT = _REPO_ROOT / "docs/governance/2026-05-03-obs003-skipped-synthesizer-reality-check.md"
+_DEFAULT_REPORT = _REPO_ROOT / "docs/_archive/governance/2026-05-03-obs003-skipped-synthesizer-reality-check.md"
 
 
 def analyze(paths: list[Path] | None = None) -> dict[str, Any]:
