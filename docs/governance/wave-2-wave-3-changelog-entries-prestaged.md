@@ -50,7 +50,7 @@ Branch chosen at deploy time per [`docs/governance/edge-004-closure-path-tldr.md
 
 - **Option-A** (specialist-geopolitics): added one of war on the rocks /
   CSIS / ISW / CFR / Atlantic Council to `config.py:RSS_FEEDS`. Spec:
-  [`docs/superpowers/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md`](docs/superpowers/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md).
+  [`docs/_archive/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md`](docs/_archive/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md) (ARCHIVED Stream G R27).
   Companion classifier branch addition (`analysis` source-class) in
   `main.py:_source_class_for_evidence`. Strict-xfail markers removed:
   - `tests/test_main_pipeline.py::TestSourceClassClassifierLeverA1PlusAnalysisBranch` (6 markers)

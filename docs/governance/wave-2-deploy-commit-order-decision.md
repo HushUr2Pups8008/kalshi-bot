@@ -46,7 +46,7 @@ Plus parallel-discretion option-A geopolitics specialist deploy (single commit; 
 
 **Type:** single behavioural commit IF operator pursues parallelism.
 **Trigger:** operator-discretion. Recommended deferred unless Branch C also stalls.
-**Action:** same shape as Branch C; different feed URLs (war on the rocks / CSIS / ISW / CFR / Atlantic Council per `2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` §3.1).
+**Action:** same shape as Branch C; different feed URLs (war on the rocks / CSIS / ISW / CFR / Atlantic Council per `docs/_archive/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` §3.1, ARCHIVED Stream G R27).
 **VERSION:** 0.31.0 if option-A first; 0.31.1 if after Branch C; 0.32.0 if part of a Branch-C-stall recovery.
 **Validation:** 14 d. Acceptance: ≥ 1 PAPER_TRADE.
 **Rollback:** code revert.
@@ -89,4 +89,4 @@ Plus parallel-discretion option-A geopolitics specialist deploy (single commit; 
 - `docs/governance/2026-05-05-wave-2-deploy-day-timing.md` — Wave-2 timing recommendation
 - `docs/governance/wave-2-wave-3-changelog-entries-prestaged.md` — pre-staged CHANGELOG entries
 - `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` — Branch C parent spec
-- `docs/superpowers/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` — option-A parent spec
+- `docs/_archive/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` — option-A parent spec (ARCHIVED Stream G R27)

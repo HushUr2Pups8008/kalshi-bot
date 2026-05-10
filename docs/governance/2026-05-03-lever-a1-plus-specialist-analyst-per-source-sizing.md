@@ -64,6 +64,6 @@ Codex's class-level audit showed `specialist_analyst` produced 21 OPP + 3 PAPER_
 - `scripts/simulations/lever_a1_plus_specialist_analyst_per_source_sizing.py` — this audit script
 - `scripts/simulations/lever_a1_plus_candidate_feed_sizing.py` — Codex's class-level audit (commit `2a15d55`)
 - `docs/governance/2026-05-03-lever-a1-plus-candidate-feed-sizing.md` — Codex's class-level report
-- `docs/superpowers/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` — A.1+ spec to update §3.1 with the load-bearing callout
+- `docs/_archive/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` — A.1+ spec to update §3.1 with the load-bearing callout (ARCHIVED Stream G R27)
 - `docs/governance/edge-004-closure-path-tldr.md` — TL;DR to update with the per-source caveat
 - `tests/test_lever_a1plus_feed_config.py` — existing-domains positive control to extend with `vital-law`

@@ -4,7 +4,7 @@
 **Drafted:** 2026-05-05.
 **Audience:** operator picking the Wave-2 A.1+ deploy branch at ≥ 2026-05-15 (Wave-2 first-feed earliest deploy under §8.5.1 path).
 **Companion specs:**
-- `docs/superpowers/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` (the umbrella spec)
+- `docs/_archive/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` (the umbrella spec) (ARCHIVED Stream G R27)
 - `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` (legal-analyst niche)
 - `docs/_archive/governance/2026-05-05-vitallaw-direct-rss-probe.md` (Codex's branch-B feasibility kill) (ARCHIVED Stream G R22)
 
@@ -88,7 +88,7 @@ Branch A: passive observe (14 d)
 
 ## Cross-links
 
-- `docs/superpowers/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` — A.1+ umbrella spec (§2.5 callout is the load-bearing context)
+- `docs/_archive/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` — A.1+ umbrella spec (§2.5 callout is the load-bearing context) (ARCHIVED Stream G R27)
 - `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` — Branch C spec
 - `docs/_archive/governance/2026-05-05-vitallaw-direct-rss-probe.md` — Branch B kill (Codex 2026-05-05) (ARCHIVED Stream G R22)
 - `docs/_archive/governance/2026-05-04-legal-niche-probe-order-domain-overlap.md` — Branch C feed-candidate domain-overlap audit (ARCHIVED Stream G R6)
