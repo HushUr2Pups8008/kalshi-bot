@@ -2,7 +2,7 @@
 
 **Type:** focused forensics + harness-correction cycle.
 **Drafted:** 2026-05-07 after operator override of Cycle-16D verdict consumption.
-**Authority:** PROFIT-EDGE-010; Cycle-16D operator override appendix in `edge-replay-cycle16d-report.md`.
+**Authority:** PROFIT-EDGE-010; Cycle-16D operator override appendix in `docs/_archive/governance/edge-replay-cycle16d-report.md` (ARCHIVED Stream G R52).
 **Owner:** Codex implementation; Claude review / verdict consumption.
 **Status:** ACTIVE until `edge-replay-cycle16e-scorer-forensics.md` is reviewed.
 
@@ -36,7 +36,7 @@ Cycle-16E passes when:
 
 ## Cross-links
 
-- `docs/governance/edge-replay-cycle16d-report.md` — withdrawn operational read and operator override.
+- `docs/_archive/governance/edge-replay-cycle16d-report.md` — withdrawn operational read and operator override (ARCHIVED Stream G R52).
 - `scripts/edge_replay/scorer_forensics_audit.py` — Cycle-16E implementation.
 - `logs/edge_replay/cycle16e/scorer_forensics.json` — audit output.
 - `docs/profit_path_debt_log.md` `PROFIT-EDGE-010` — tracker.
