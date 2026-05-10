@@ -73,7 +73,20 @@ Merge **both** `logs/edge_replay/cycle13_live/replay_dataset.jsonl` AND `logs/ed
 
 Replace the §"Hard constraints" first bullet of Cycle-17C charter ("Fixed corpus. Cycle-16E replay dataset...") with:
 
-> **Fixed corpus (Cycle-17D broader-corpus replay).** Locked merged corpus at `logs/edge_replay/cycle17d/replay_dataset_merged.jsonl` — a deduplicated concatenation of `logs/edge_replay/cycle13_live/replay_dataset.jsonl`, `logs/edge_replay/cycle13_local/replay_dataset.jsonl`, `logs/edge_replay/cycle15b/replay_dataset.jsonl`, and `logs/edge_replay/cycle16d/replay_dataset.jsonl`. Dedup key: `(ticker, decision_ts, signal_source, headline)`. On dedup conflict between cycle13_live and cycle13_local, prefer cycle13_live and record the dropped row count in the build artifact. Each row carries a `cohort` flag (`PRE_FIX` / `POST_FIX_REBUILT` / `POST_FIX_NEW`) per IC §16 Rule 6. **SHA-256 of merged file (pinned 2026-05-10 from build commit `1336fe2`): `ab9ae8e9cf8f23349d7c96206c443ed1db52ebee0180a1c51f507690d958236c`.** Build manifest at `logs/edge_replay/cycle17d/build_manifest.json` records: 513 merged rows / 292 dropped duplicates / cohort breakdown `{POST_FIX_REBUILT: 272, PRE_FIX: 241, POST_FIX_NEW: 0}` / blank-headline normalizations `{cycle13_live: 2, cycle15b: 2, cycle16d: 2}`.
+> **Fixed corpus (Cycle-17D broader-corpus replay).** Locked merged corpus at `logs/edge_replay/cycle17d/replay_dataset_merged.jsonl` — a deduplicated concatenation of `logs/edge_replay/cycle13_live/replay_dataset.jsonl`, `logs/edge_replay/cycle13_local/replay_dataset.jsonl`, `logs/edge_replay/cycle15b/replay_dataset.jsonl`, and `logs/edge_replay/cycle16d/replay_dataset.jsonl`. Dedup key: `(ticker, decision_ts, signal_source, headline)`. On dedup conflict between cycle13_live and cycle13_local, prefer cycle13_live and record the dropped row count in the build artifact. Each row carries a `cohort` flag (`PRE_FIX` / `POST_FIX_REBUILT` / `POST_FIX_NEW`) per IC §16 Rule 6. **SHA-256 of merged file (pinned 2026-05-10):** `a0f5401b65acd9592e2dcc1c34bb0b9d0c76fe4718a2d714a9bc29160244f913` — post-normalization SHA from schema-audit commit `6e626ea` (Codex added `market_family` field per the locked 4-axis sweep grouping). Supersedes the pre-normalization SHA `ab9ae8e9cf8f23349d7c96206c443ed1db52ebee0180a1c51f507690d958236c` from initial build commit `1336fe2`. Build manifest at `logs/edge_replay/cycle17d/build_manifest.json` records: 513 merged rows / 292 dropped duplicates / cohort breakdown `{POST_FIX_REBUILT: 272, PRE_FIX: 241, POST_FIX_NEW: 0}` / blank-headline normalizations `{cycle13_live: 2, cycle15b: 2, cycle16d: 2}`.
+
+**⚠️ Schema-audit blocker (step 3 finding, 2026-05-10):** Per `logs/edge_replay/cycle17d/schema_compatibility_audit.json` (`production_proxy_ready: false`), the merged corpus is missing production-proxy fields on a structurally significant fraction of rows:
+
+- `market_yes_price` missing on 239 rows (POST_FIX_REBUILT: 1, **PRE_FIX: 238 of 241**)
+- `confidence` missing on 37 rows (POST_FIX_REBUILT: 34, PRE_FIX: 3)
+- `edge` missing on 33 rows (POST_FIX_REBUILT: 33, PRE_FIX: 0)
+- `model_prob` missing on 34 rows (POST_FIX_REBUILT: 34, PRE_FIX: 0)
+
+Rows with ALL four production-proxy fields present: **POST_FIX_REBUILT 237/272; PRE_FIX 0/241; total 237.**
+
+PRE_FIX price backfill from Kalshi API is **infeasible**: `logs/edge_replay/cycle13_live/historical_prices.json` is empty (`{}`); `historical_prices.errors.json` records 404 responses on all cycle-13 tickers (Kalshi retired the trades endpoint for these settled markets). No alternate source available within the repo.
+
+**Effective admissible cohort = POST_FIX_REBUILT only (237 rows; equivalent to or slightly smaller than the original 272-row cycle-16D corpus that produced the 12-row admission ceiling in E2 + E3).** The merged-corpus approach did NOT lift the ceiling. Decision routed to operator before step 5 (GO/NO-GO sweep) — sequence HALTED at step 3.
 >
 > Cycle-16D-only baseline (12 trades / 0 wins / -$1.005 P&L / 0 IC §16 slices) remains the **frozen-baseline-on-cycle-16d-subset** reference; the broader-corpus baseline (E0') is established by re-running the locked scorer against the merged corpus and recording the result in the experiment ledger.
 
