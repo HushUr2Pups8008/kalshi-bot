@@ -193,4 +193,4 @@ Per `docs/_archive/specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.
 - `docs/_archive/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md` — Lever C parent spec (ARCHIVED Stream G R29)
 - `docs/_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — Lever C v1 LOCK (ARCHIVED Stream G R33)
 - `wave-2-wave-3-changelog-entries-prestaged.md` — pre-staged CHANGELOG (refreshed cycle 5)
-- `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers if Wave-3 stalls
+- `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers if Wave-3 stalls (ARCHIVED Stream G R35)

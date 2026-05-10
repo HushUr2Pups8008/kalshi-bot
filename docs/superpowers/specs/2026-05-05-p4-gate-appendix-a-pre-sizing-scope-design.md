@@ -4,7 +4,7 @@
 **Authority:** Implementation Contract §11 + ROADMAP P4-GATE explicit gating. This spec defines the Appendix A scope when PROFIT-LLM-001 audit returns inadequate.
 **Drafted:** 2026-05-05.
 **Audience:** operator + Codex when Branch D fires AND PROFIT-LLM-001 is also inadequate.
-**Companion:** `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.2 (Branch D handoff to P4-GATE Appendix A); `docs/superpowers/specs/2026-05-05-profit-llm-001-pre-sizing-scope-design.md`.
+**Companion:** `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.2 (Branch D handoff to P4-GATE Appendix A); `docs/superpowers/specs/2026-05-05-profit-llm-001-pre-sizing-scope-design.md`.
 
 ## TL;DR
 
@@ -115,7 +115,7 @@ When operator's PROFIT-LLM-001 audit returns inadequate per `2026-05-05-profit-l
 
 This spec is satisfied when:
 
-1. `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.2 cross-references this spec.
+1. `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.2 cross-references this spec.
 2. `2026-05-05-profit-llm-001-pre-sizing-scope-design.md` §3 cross-references this spec as the second-handoff target.
 3. The 3-axis surface is the canonical scope reference for any future P4-GATE Appendix A sizing audit.
 
@@ -127,7 +127,7 @@ This spec is satisfied when:
 
 ## 10. Cross-links
 
-- `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.2 — Branch D handoff to P4-GATE Appendix A
+- `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.2 — Branch D handoff to P4-GATE Appendix A
 - `docs/superpowers/specs/2026-05-05-profit-llm-001-pre-sizing-scope-design.md` — first-handoff (this cycle)
 - `docs/_archive/2026-05-09-docs-consolidation/edge-004-closure-path-tldr-v3.md` — closure-path-TLDR (archived 2026-05-09)
 - `docs/ROADMAP.md` Stage 4 P4-GATE Appendix A (line 402+) — original P4-GATE definition

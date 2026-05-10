@@ -138,6 +138,6 @@ If Wave-2 deployed both Branch C (v0.31.0) AND option-A (v0.32.0), Wave-3 commit
 - `docs/_archive/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` — Lever B 0.04 LOCK (ARCHIVED Stream G R34)
 - `docs/_archive/specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` — Lever B-2 stub (post-success) (ARCHIVED Stream G R26)
 - `docs/_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — Lever C v1 LOCK (ARCHIVED Stream G R33)
-- `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers (post-Wave-3-stall)
+- `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers (post-Wave-3-stall) (ARCHIVED Stream G R35)
 - `2026-05-05-branch-d-fire-procedure-runbook.md` — Branch D fire procedure
 - `2026-05-05-wave-2-decision-flow.md` — Wave-2 sibling flowchart

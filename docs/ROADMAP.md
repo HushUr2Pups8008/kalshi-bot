@@ -373,7 +373,7 @@ The literal interpretation will likely block a high fraction of current Trump/Ir
 
 **P3-GATE outcome:**
 - PASS (≥ 1 non-zero edge in paper mode, trailing 14 days) → Phase 4 authorized
-- FAIL (zero non-zero edge) → escalation required; do not proceed to Phase 4. **FAIL escalation path** per [`docs/profit_path_debt_log.md`](profit_path_debt_log.md) §Current Status §2.3 (lever map; absorbed `edge-004-closure-path-tldr-v3.md` on 2026-05-09): Wave-2 A.1+ (Branch A passive observe → Branch C legal-analyst onboard → option-A geopolitics specialist) → Wave-3 (Lever B G1=0.04 → Lever C cross-series correlation guard) → Branch D handoff to PROFIT-LLM-001 / P4-GATE Appendix A per [`docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md`](superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md).
+- FAIL (zero non-zero edge) → escalation required; do not proceed to Phase 4. **FAIL escalation path** per [`docs/profit_path_debt_log.md`](profit_path_debt_log.md) §Current Status §2.3 (lever map; absorbed `edge-004-closure-path-tldr-v3.md` on 2026-05-09): Wave-2 A.1+ (Branch A passive observe → Branch C legal-analyst onboard → option-A geopolitics specialist) → Wave-3 (Lever B G1=0.04 → Lever C cross-series correlation guard) → Branch D handoff to PROFIT-LLM-001 / P4-GATE Appendix A per [`docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md`](_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md) (ARCHIVED Stream G R35).
 
 ---
 

@@ -99,4 +99,4 @@ If deployed: same timing recipe as Branch C (UTC Mon-Thu 18:00-22:00; 24 h watch
 - `docs/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — Branch C feed selection
 - `docs/governance/wave-1-post-deploy-observation-plan.md` — observation plan template (Branch C deploy uses Wave-2-specific monitoring rows derived from this template)
 - `docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` — Branch C parent spec (ARCHIVED Stream G R32)
-- `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D handoff
+- `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D handoff (ARCHIVED Stream G R35)

@@ -3,8 +3,8 @@
 **Status:** design (defines the bounded sizing surface for Branch D first-handoff). NO code change.
 **Authority:** Implementation Contract §11 — out-of-scope-of-EDGE-004 escalation requires explicit redesign discussion. This spec defines the redesign-discussion scope.
 **Drafted:** 2026-05-05.
-**Audience:** operator + Codex when Branch D fires (per `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §2).
-**Companion:** `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.1 (Branch D handoff to PROFIT-LLM-001).
+**Audience:** operator + Codex when Branch D fires (per `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §2).
+**Companion:** `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.1 (Branch D handoff to PROFIT-LLM-001).
 
 ## TL;DR
 
@@ -127,7 +127,7 @@ When operator fires Branch D per Lever-D escalation criteria spec §2:
 
 This spec is satisfied when:
 
-1. `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.1 cross-references this spec.
+1. `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.1 cross-references this spec.
 2. `docs/profit_path_debt_log.md` PROFIT-LLM-001 entry exists (registered; not yet sized).
 3. The 4-axis surface is the canonical scope reference for any future PROFIT-LLM-001 sizing audit.
 
@@ -139,7 +139,7 @@ This spec is satisfied when:
 
 ## 10. Cross-links
 
-- `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.1 — Branch D handoff to PROFIT-LLM-001
+- `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.1 — Branch D handoff to PROFIT-LLM-001
 - `docs/superpowers/specs/2026-05-05-p4-gate-appendix-a-pre-sizing-scope-design.md` — second-handoff target (this cycle)
 - `docs/_archive/2026-05-09-docs-consolidation/edge-004-closure-path-tldr-v3.md` — closure-path-TLDR (archived 2026-05-09; v4 fires post-Branch-D)
 - `docs/profit_path_debt_log.md` PROFIT-LLM-001 entry — receives sizing-report cross-link

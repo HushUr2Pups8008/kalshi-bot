@@ -13,7 +13,7 @@ Recommend a single follow-up Edit to `wave-2-a1plus-branch-decision-table.md` to
 
 ## Three distinct uses of "Lever D" / "Branch D" in the codebase
 
-Per `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` ⚠️ Nomenclature clarification, two interpretations were spec'd:
+Per `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` ⚠️ Nomenclature clarification, two interpretations were spec'd:
 
 1. **Lever-menu §3 Lever D** = pre-LLM gate re-enablement (closed; volume-destructive)
 2. **Closure-path-TLDR-v3 Branch D** = escalation handoff to PROFIT-LLM-001 / P4-GATE Appendix A (active)
@@ -56,7 +56,7 @@ This audit surfaces a **third**:
 **Lines affected:** 29, 47, 69, 71, 85, 86 (~6 occurrences).
 **Conflict shape:** the doc uses "Branch D" to label the third A.1+ feed-onboarding option (geopolitics specialist), in a tree whose other branches are "Branch A passive observe" and "Branch C open-RSS legal-analyst." This conflicts with closure-path-TLDR-v3 + Lever-D escalation spec, both of which use "Branch D" for the escalation-to-PROFIT-LLM-001-handoff path.
 
-**Why this matters:** the Lever-D escalation spec (`2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §2) defines Branch D as fired by triggers including "Branch A + Branch C 0 PAPER_TRADE" — which the wave-2 doc then internally references as a different "Branch D." If an operator on Day-14 reads both docs, "Branch D" means two different things on the same page.
+**Why this matters:** the Lever-D escalation spec (`docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §2) defines Branch D as fired by triggers including "Branch A + Branch C 0 PAPER_TRADE" — which the wave-2 doc then internally references as a different "Branch D." If an operator on Day-14 reads both docs, "Branch D" means two different things on the same page.
 
 **Recommended fix (single Edit):** rename the wave-2 doc's Branch D → "option-A" (matching the parent A.1+ spec's terminology). Changes 6 occurrences in one file. After the fix, "option-A" = geopolitics specialist; "Branch D" = escalation handoff (consistent across all docs).
 
@@ -113,7 +113,7 @@ Other 17 occurrences are correct usage of meaning #1 or #2; no fixes needed.
 
 ## Cross-links
 
-- `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` ⚠️ Nomenclature clarification
+- `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` ⚠️ Nomenclature clarification (ARCHIVED Stream G R35)
 - `docs/_archive/specs/2026-05-03-edge-004-lever-menu-design.md` §5.2 — same clarification source (ARCHIVED Stream G R31)
 - `docs/governance/edge-004-closure-path-tldr-v3.md` — meaning #2 canonical doc
 - `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — F1 fix target

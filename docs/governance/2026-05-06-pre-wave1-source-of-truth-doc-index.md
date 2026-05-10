@@ -74,7 +74,7 @@
 
 | operator question | source-of-truth file |
 |---|---|
-| Triggers? | `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` |
+| Triggers? | `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` (ARCHIVED Stream G R35) |
 | Fire procedure runbook? | `docs/governance/2026-05-05-branch-d-fire-procedure-runbook.md` |
 | PROFIT-LLM-001 sizing scope? | `docs/superpowers/specs/2026-05-05-profit-llm-001-pre-sizing-scope-design.md` |
 | P4-GATE Appendix A sizing scope? | `docs/superpowers/specs/2026-05-05-p4-gate-appendix-a-pre-sizing-scope-design.md` |
