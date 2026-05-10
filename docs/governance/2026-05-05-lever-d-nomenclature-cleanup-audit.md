@@ -45,7 +45,7 @@ This audit surfaces a **third**:
 | `docs/_archive/governance/2026-05-03-claude-latest-commits-adversarial-review.md:38` | "Lever D's pre-LLM gate retention curve" | meaning #1 | ✅ correct |
 | `docs/_archive/governance/2026-05-03-claude-commits-c5cbc6f-90c26cf-adversarial-review.md:35` | "Lever D demotion" | meaning #1 | ✅ correct |
 | `2026-05-03-post-soak-landing-order-design.md:17` | "Lever D demoted" | meaning #1 | ✅ correct |
-| `2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md:27` | "Branch D (escalation) | PROFIT-LLM-001 / P4-GATE Appendix A" | meaning #2 | ✅ correct |
+| `docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md:27` | "Branch D (escalation) | PROFIT-LLM-001 / P4-GATE Appendix A" | meaning #2 | ✅ correct |
 | `docs/_archive/specs/2026-05-03-edge-004-lever-menu-design.md:65,71,125` | meaning #1 (Lever D pre-LLM gate) | ✅ correct |
 
 ## Findings

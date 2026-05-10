@@ -58,7 +58,7 @@ Branch chosen at deploy time per [`docs/governance/edge-004-closure-path-tldr.md
 
 - **Option-C-Branch-C** (legal-analyst fallback): added one of Lawfare /
   Just Security / SCOTUSblog / Politico Legal to `config.py:RSS_FEEDS`.
-  Spec: [`docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md`](docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md).
+  Spec: [`docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md`](docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md) (ARCHIVED Stream G R32).
   Companion `legal` source-class in `main.py:_source_class_for_evidence`
   + `_SOURCE_CLASS_QUALITY["legal"] = 0.65` in `analysis/evidence_scorer.py`.
   Strict-xfail markers removed:

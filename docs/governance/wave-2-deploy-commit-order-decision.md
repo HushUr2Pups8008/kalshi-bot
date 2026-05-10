@@ -88,5 +88,5 @@ Plus parallel-discretion option-A geopolitics specialist deploy (single commit; 
 - `docs/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — Branch C feed selection
 - `docs/governance/2026-05-05-wave-2-deploy-day-timing.md` — Wave-2 timing recommendation
 - `docs/governance/wave-2-wave-3-changelog-entries-prestaged.md` — pre-staged CHANGELOG entries
-- `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` — Branch C parent spec
+- `docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` — Branch C parent spec (ARCHIVED Stream G R32)
 - `docs/_archive/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` — option-A parent spec (ARCHIVED Stream G R27)

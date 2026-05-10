@@ -1599,7 +1599,7 @@ The EDGE-004 lever menu's 2026-05-04 cycle produced four findings that change th
 
 **Revised A.1+ decision tree (3-branch, locked 2026-05-05):**
 - **Branch A (passive)**: observe Wave-1 close 14 d for legal-niche surfacing under the active Google News path. NO code change required.
-- **Branch C (active fallback)**: if Branch A produces 0 legal-niche PAPER_TRADE in 14 d, onboard open-RSS analogues (Lawfare / Just Security / SCOTUSblog / Politico Legal) per `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md`.
+- **Branch C (active fallback)**: if Branch A produces 0 legal-niche PAPER_TRADE in 14 d, onboard open-RSS analogues (Lawfare / Just Security / SCOTUSblog / Politico Legal) per `docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` (ARCHIVED Stream G R32).
 - **Branch D (escalation)**: if Branch C also stalls, escalate per `docs/governance/post-edge-004-escalation-paths.md` to PROFIT-LLM-001 → P4-GATE Appendix A → strategy pivot.
 
 **Pre-loaded harnesses for Wave-1+2+3 deploys** (all strict-xfail today; flip xpass on the deploy commit forcing marker removal):

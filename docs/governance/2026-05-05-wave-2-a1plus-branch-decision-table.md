@@ -5,7 +5,7 @@
 **Audience:** operator picking the Wave-2 A.1+ deploy branch at ≥ 2026-05-15 (Wave-2 first-feed earliest deploy under §8.5.1 path).
 **Companion specs:**
 - `docs/_archive/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` (the umbrella spec) (ARCHIVED Stream G R27)
-- `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` (legal-analyst niche)
+- `docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` (legal-analyst niche) (ARCHIVED Stream G R32)
 - `docs/_archive/governance/2026-05-05-vitallaw-direct-rss-probe.md` (Codex's branch-B feasibility kill) (ARCHIVED Stream G R22)
 
 ## Why this doc
@@ -19,7 +19,7 @@ This doc presents the decision table + recommended verdict per branch. **No spec
 | branch | label | what it does | spec ref |
 |---|---|---|---|
 | **A** | passive Google News observe | take no action; let `feeds/search_news_monitor.py` (already active per `config.py:DISABLED_SOURCE_FAMILIES` post-2026-04-23 re-enable) keep running; observe whether VitalLaw / legal-niche surfaces under current market-mix queries over 14 d | A.1+ spec §2.5 callout; "the Mac archive's VitalLaw records came via the Google News query family" |
-| **C** | open-RSS legal-analyst onboard | deploy 1-2 open-RSS legal-analyst feeds (analogues to VitalLaw) that pass the paywall + token-classifier gates; no specialist-analyst geopolitics feeds | `2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` (the §3.1bis path; "vital_law-niche option-B"); xfail harness `tests/test_lever_a1plus_feed_config.py::test_vital_law_or_legal_analyst_feed_present_post_a1plus` |
+| **C** | open-RSS legal-analyst onboard | deploy 1-2 open-RSS legal-analyst feeds (analogues to VitalLaw) that pass the paywall + token-classifier gates; no specialist-analyst geopolitics feeds | `docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` (ARCHIVED Stream G R32; the §3.1bis path; "vital_law-niche option-B"); xfail harness `tests/test_lever_a1plus_feed_config.py::test_vital_law_or_legal_analyst_feed_present_post_a1plus` |
 | **D** | escalation — geopolitics specialist-analyst onboard | deploy 1-2 specialist-analyst feeds (war on the rocks, CSIS, ISW, CFR, Atlantic Council) per the original §3.1 list; this is the geopolitics-sub-niche path that produced 18 OPP / 0 PAPER_TRADE on the archive | A.1+ spec §3.1; xfail harness `tests/test_lever_a1plus_feed_config.py::test_at_least_one_specialist_analyst_url_in_rss_feeds` |
 
 (Branch B — direct VitalLaw RSS — was killed 2026-05-05 by Codex's direct-RSS probe. Removed from active consideration.)
@@ -89,7 +89,7 @@ Branch A: passive observe (14 d)
 ## Cross-links
 
 - `docs/_archive/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` — A.1+ umbrella spec (§2.5 callout is the load-bearing context) (ARCHIVED Stream G R27)
-- `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` — Branch C spec
+- `docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` — Branch C spec (ARCHIVED Stream G R32)
 - `docs/_archive/governance/2026-05-05-vitallaw-direct-rss-probe.md` — Branch B kill (Codex 2026-05-05) (ARCHIVED Stream G R22)
 - `docs/_archive/governance/2026-05-04-legal-niche-probe-order-domain-overlap.md` — Branch C feed-candidate domain-overlap audit (ARCHIVED Stream G R6)
 - `docs/governance/2026-05-03-edge004-wave2-expected-state-ladder.md` — Codex's Wave-2 expected-state forecast
