@@ -223,24 +223,37 @@ OBS-003 audit closed at 9h (early-closed on operator decision; invariant `OPPORT
 | G2a | Re-classify 2 UNCERTAINs: governance-monitor-fix CLOSED, next-soak-cadence-tune ACTIVE | (research only) |
 | G2b | Sub-batch 44 ARCHIVE-WITH-REF-FIX into 6 clean batches | (research only) |
 | G2c | Re-examine 15 HOLD: 1 SAFE / 2 ARCHIVE-WITH-REF-FIX / 12 HOLD | (research only) |
-| R1 | Archive `doc-xref-audit-report` (0 refs verified) | (separate commit) |
-| R2 | Archive 4 pre-wave1 baselines + 8 ref updates in baseline-interpretation | (separate commit) |
-| R3 | Archive 9 adversarial reviews + 9 entries in doc-index-audit | (separate commit) |
-| R4 | Archive 4 doc-index audit refs cluster + 4 list updates | (separate commit) |
-| R5 | Archive 4 source-of-truth cycle-10 cluster + 5 ref updates | (separate commit) |
-| R6 | Archive 2 HOLD downgrades (legal-niche probe + lever-a1-plus-1-5 sizing) + 6 ref updates | (separate commit) |
-| R7 | Archive cycle-16d m3-fetch + price-source-inventory pair + 1 ref update | (separate commit) |
+| R1 | Archive `doc-xref-audit-report` (0 refs verified) | `fe0395b` |
+| R2 | Archive 4 pre-wave1 baselines + 8 ref updates in baseline-interpretation | `367e582` |
+| R3 | Archive 9 adversarial reviews + 9 entries in doc-index-audit | `0905c37` |
+| R4 | Archive 4 doc-index audit refs cluster + 4 list updates | `d7be17f` |
+| R5 | Archive 4 source-of-truth cycle-10 cluster + 5 ref updates | `14ae2d6` |
+| R6 | Archive 2 HOLD downgrades (legal-niche probe + lever-a1-plus-1-5 sizing) + 6 ref updates | `792c9da` |
+| R7 | Archive cycle-16d m3-fetch + price-source-inventory pair + 1 ref update | `e46af55` |
+| R8 | 3 SAFE singletons (mid-soak-snapshot-4, day-4-mid-soak-sanity-check, match001-bprime-spec-parity-verification) — newly safe after R3 archived parent referencers | `89b6d6b` |
+| R9 | Mid-soak chain (health-report + snapshots 2-3); broken refs in archive-bound HOLD/spec parents acceptable | `b08d99a` |
+| R10 | snapshot-5 + active ref update in day-4-mid-soak-confirmation | `b673a94` |
+| R11 | PHASE2-001 baselines (llm-throughput + source-class-evolution) + soak-runtime-characterization-summary parent + risk-register ref update | `1ab9136` |
+| R12+13 | vitallaw-archive-forensics + db-backup-gap-resolution combined | `335f028` |
+| R14 | 4-file batch (lever-domain-normalized 0-refs + version-bump-dryrun + legal-cycle adv-review + pre-day7-dry-run-rehearsal) | `fae7f84` |
 
-**Stream G session moves: 26 files archived across 7 commits.**
+**Stream G session moves: 42 files archived across 14 commits.**
 
 ### 8.5 Stream G unfinished work (defer to next session)
 
 - 12 EDGE-004 lever specs (§8.1) — coordinated Wave-2/3-archive sweep needed
-- ~20 governance ARCHIVE-WITH-REF-FIX files still in `/governance/` (mid-soak chain, vitallaw-archive-forensics, db-backup-gap-resolution, PROFIT-PHASE2-001-llm-throughput / source-class-evolution baselines paired with soak-runtime-characterization-summary, cycle-15b cluster, cycle-16d task-split parents, etc.)
-- 12 governance HOLD files still in `/governance/` (a1plus1-5-branch-c-feed-selection-rubric, vitallaw-direct-rss-probe, claude-commits-c5cbc6f/cdbf6ef/latest, cycle-15b charter+task-split, cycle-16d charter+pre-execution-criteria-verification+task-split, cycle-16e-task-split, day-7-pre-soak-confirmation, claude-latest-five-commits-legal-cycle)
+- wave-1-deploy-dry-run-report (3 active refs: rollback-runbook-validation + doc-index-audit + cross-cycle-contract-adherence-review)
+- cycle-15b cluster (charter-extraction-rebuild, claude-independent-trace-read, paper-trades-cohort-note, pre-execution-criteria-verification, task-split) — entangled with cycle-15b-post-verdict-action-checklist (active cycle ledger); could archive together if checklist also archives
+- cycle-16d cluster (charter-price-reconstruction, pre-execution-criteria-verification, task-split parent) — refs cycle-16d-post-verdict-action-checklist
+- cycle-16e-task-split (HOLD: 4 active refs from edge-replay-cycle16e-scorer-forensics)
+- HOLD adversarial reviews (claude-commits-c5cbc6f-90c26cf, cdbf6ef-f786246, claude-latest-commits) — entangled chain
+- HOLD wave-2 inputs (a1plus1-5-branch-c-feed-selection-rubric 17 refs, vitallaw-direct-rss-probe 8 refs)
 - governance-monitor-fix-design.md spec (CLOSED but 8 wave-1 runbook refs — defer with runbook archive)
+- day-7-pre-soak-confirmation (2 weak active refs)
 - 2 governance files referenced by debt log (doc-index-audit, doc-index-cleanup-execution-plan) — touch debt log to fix; possibly archive both
+- pre-wave1-source-of-truth-doc-index, pre-wave1-risk-register (HOLD parents — fewer refs each but still active)
 - ROADMAP Wave-1 row "active" → "complete" flip (operator call)
+- ~98 files remain in `docs/governance/` — most ACTIVE cycle ledgers / runbooks / wave-1 prestaged docs / cycle-17 charter cluster / day-7-attestation cluster (per C1 v2 ACTIVE list)
 
 ---
 
