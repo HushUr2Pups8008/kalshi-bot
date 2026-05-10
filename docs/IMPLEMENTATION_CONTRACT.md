@@ -289,7 +289,7 @@ The gate is a stateless predicate. It is evaluated in `blend_task.py` before a c
 
 | # | Condition | Threshold | Applies To | Notes |
 |---|---|---|---|---|
-| G1 | Blended confidence | ≥ 0.05 (cycle-3 LOCK targets 0.04 at Wave-3 deploy) | All candidates | Confidence is regime-scaled at evaluation (see G6). G1 history: original PHASE-3 = 0.35; PROFIT-EDGE-003 G1 calibration follow-up moved to 0.05; cycle-3 Lever B 0.04 LOCK addendum (`docs/superpowers/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md`) targets 0.04 / failsafe 0.08 / 2× ratio invariant at Wave-3 deploy ≥ 2026-06-17. Implementation source-of-truth: `tasks/trade_readiness_gate.py:G1_CONFIDENCE_THRESHOLD`. |
+| G1 | Blended confidence | ≥ 0.05 (cycle-3 LOCK targets 0.04 at Wave-3 deploy) | All candidates | Confidence is regime-scaled at evaluation (see G6). G1 history: original PHASE-3 = 0.35; PROFIT-EDGE-003 G1 calibration follow-up moved to 0.05; cycle-3 Lever B 0.04 LOCK addendum (`docs/_archive/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` ARCHIVED Stream G R34) targets 0.04 / failsafe 0.08 / 2× ratio invariant at Wave-3 deploy ≥ 2026-06-17. Implementation source-of-truth: `tasks/trade_readiness_gate.py:G1_CONFIDENCE_THRESHOLD`. |
 | G2 | Evidence source class diversity | ≥ 2 distinct source classes | Dossier-sourced only | Exempt: fast-lane candidates |
 | G3 | Disagreement score | ≤ 0.20 | All candidates | 0.15–0.20: pass with `readiness_gate_min_edge_override = 1.5 × default` |
 | G4 | Regime confidence | ≥ 0.40 | All candidates | Below 0.40: fail-safe mode active; thresholds tighten (see Section 6) |

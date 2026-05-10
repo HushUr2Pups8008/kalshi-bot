@@ -26,7 +26,7 @@ For each cycle's commits, classify every artifact by:
 | `2026-05-05-rollback-runbook-validation.md` | review | Claude | ✅ |
 | `PROFIT-PHASE2-002-onboarding.md` | planning spec | Claude | ✅ |
 | `2026-05-05-wave-2-a1plus-branch-decision-table.md` | ambiguity resolution | Claude | ✅ |
-| `2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` | architectural (§5+§11 gate-threshold change) | Claude | ✅ |
+| `docs/_archive/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` | architectural (§5+§11 gate-threshold change) | Claude | ✅ (ARCHIVED Stream G R34) |
 | `scripts/check_soak_invariant.sh` (--json + path-set) | precise implementation per spec | Codex | ✅ |
 | `scripts/distribution_analysis_v2.py` | precise implementation | Codex | ✅ |
 | `scripts/wave1_post_deploy_smoke.sh` | precise implementation | Codex | ✅ |

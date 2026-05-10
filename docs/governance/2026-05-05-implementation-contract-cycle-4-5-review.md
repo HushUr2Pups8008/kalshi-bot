@@ -158,7 +158,7 @@ If operator wants pre-Wave-3 cosmetic alignment of §5 G1 threshold to current c
 ## Cross-links
 
 - `docs/IMPLEMENTATION_CONTRACT.md` §1 + §2 + §5 + §7 + §11 — under review
-- `docs/superpowers/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` — Lever B 0.04 LOCK
+- `docs/_archive/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` — Lever B 0.04 LOCK (ARCHIVED Stream G R34)
 - `docs/_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — Lever C v1 LOCK + INV-6 boundary attestation (ARCHIVED Stream G R33)
 - `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D handoff structure
 - `docs/governance/2026-05-05-cross-cycle-contract-adherence-review.md` — cycle-4 audit of Claude/Codex split (sibling)

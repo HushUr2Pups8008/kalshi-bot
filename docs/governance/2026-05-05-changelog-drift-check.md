@@ -48,7 +48,7 @@ Recommend updating `wave-2-wave-3-changelog-entries-prestaged.md` with the cycle
 
 **Reality at HEAD:**
 
-- Lever B 0.04 floor LOCKED 2026-05-05 per `2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` (pins primary 0.04 / failsafe 0.08 / 2× ratio invariant; lifts harness pre-load deferral).
+- Lever B 0.04 floor LOCKED 2026-05-05 per `docs/_archive/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` (ARCHIVED Stream G R34; pins primary 0.04 / failsafe 0.08 / 2× ratio invariant; lifts harness pre-load deferral).
 - Lever C v1 LOCKED 2026-05-05 per `docs/_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` (ARCHIVED Stream G R33; pins §3.2 normalized hash / 3600 s default / record-after-gate-pass placement / INV-6 boundary attestation).
 
 The pre-staged block should reference these addenda by name so the deploy-day operator's CHANGELOG entry includes the correct authority chain.
@@ -57,7 +57,7 @@ The pre-staged block should reference these addenda by name so the deploy-day op
 
 ```markdown
 NOTE: Lever B floor (0.04 / failsafe 0.08 / 2× ratio invariant) locked
-2026-05-05 per [`docs/superpowers/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md`](...).
+2026-05-05 per [`docs/_archive/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md`](...) (ARCHIVED Stream G R34).
 
 NOTE: Lever C v1 implementation (§3.2 normalized hash / 3600 s default
 window / record-after-gate-pass placement / INV-6 boundary attestation)
