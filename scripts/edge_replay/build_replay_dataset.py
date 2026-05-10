@@ -12,6 +12,14 @@ from pathlib import Path
 from typing import Any
 
 
+def _first_present(row: dict[str, Any], *keys: str) -> Any:
+    """Return the first value in row where the key exists and the value is not None."""
+    for k in keys:
+        if k in row and row[k] is not None:
+            return row[k]
+    return None
+
+
 def _as_float(value: Any) -> float | None:
     if value is None:
         return None
@@ -137,21 +145,28 @@ def _log_rows(paths: list[Path], markets: dict[str, dict[str, Any]]) -> list[dic
                     "contracts": row.get("contracts"),
                     # Bug 2 fix (model_prob aliases): BLEND_DECISION emits blended_p;
                     # OPPORTUNITY emits model_probability or estimated_probability.
-                    # Canonical key (model_prob / estimated_prob / probability) wins when present.
+                    # Canonical key wins; _first_present falls through on None, NOT on falsy.
                     "model_prob": _as_float(
-                        row.get("estimated_prob")
-                        or row.get("model_prob")
-                        or row.get("probability")
-                        or row.get("blended_p")
-                        or row.get("model_probability")
-                        or row.get("estimated_probability")
+                        _first_present(
+                            row,
+                            "model_prob",
+                            "estimated_prob",
+                            "probability",
+                            "blended_p",
+                            "model_probability",
+                            "estimated_probability",
+                        )
                     ),
                     # Bug 2 fix (market_yes_price alias): SKIPPED emits market_price.
+                    # _first_present used so 0.0 is not silently dropped by falsy or-chain.
                     "market_yes_price": _as_float(
-                        row.get("market_yes_price")
-                        or row.get("yes_price")
-                        or row.get("price_cents")
-                        or row.get("market_price")
+                        _first_present(
+                            row,
+                            "market_yes_price",
+                            "yes_price",
+                            "price_cents",
+                            "market_price",
+                        )
                     ),
                     "edge": _as_float(row.get("edge")),
                     "signal_source": row.get("signal_source") or row.get("source") or "unknown",

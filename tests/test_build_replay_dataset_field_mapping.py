@@ -272,3 +272,119 @@ def test_log_row_canonical_market_yes_price_beats_market_price(tmp_path):
 
     assert len(rows) == 1
     assert rows[0]["market_yes_price"] == pytest.approx(44.0)
+
+
+# ---------------------------------------------------------------------------
+# Reviewer findings (2026-05-10): canonical precedence + None-aware fallthrough
+# ---------------------------------------------------------------------------
+
+
+def test_log_row_canonical_model_prob_beats_estimated_prob(tmp_path):
+    """model_prob must win over estimated_prob when both keys are present.
+
+    Pre-fix: estimated_prob is listed first in the or-chain, so it shadows
+    model_prob. Expected failure before the fix.
+    """
+    log = tmp_path / "trades.jsonl"
+    _make_log_file(
+        log,
+        [
+            {
+                "type": "OPPORTUNITY",
+                "ts": "2026-05-10T01:00:00+00:00",
+                "ticker": TICKER,
+                "model_prob": 0.80,
+                "estimated_prob": 0.50,
+                "market_yes_price": 45.0,
+                "source": "ft",
+            }
+        ],
+    )
+
+    rows = _log_rows([log], MARKETS)
+
+    assert len(rows) == 1
+    assert rows[0]["model_prob"] == pytest.approx(0.80)
+
+
+def test_log_row_model_prob_zero_not_dropped(tmp_path):
+    """model_prob=0.0 must be preserved; or-chain falls through falsy values.
+
+    Pre-fix: 0.0 is falsy so the or-chain skips it and picks up blended_p=0.5.
+    Expected failure before the fix.
+    """
+    log = tmp_path / "trades.jsonl"
+    _make_log_file(
+        log,
+        [
+            {
+                "type": "OPPORTUNITY",
+                "ts": "2026-05-10T01:01:00+00:00",
+                "ticker": TICKER,
+                "model_prob": 0.0,
+                "blended_p": 0.5,
+                "market_yes_price": 45.0,
+                "source": "ft",
+            }
+        ],
+    )
+
+    rows = _log_rows([log], MARKETS)
+
+    assert len(rows) == 1
+    assert rows[0]["model_prob"] == pytest.approx(0.0)
+
+
+def test_log_row_market_yes_price_zero_not_dropped(tmp_path):
+    """market_yes_price=0.0 must be preserved; or-chain falls through falsy values.
+
+    Pre-fix: 0.0 is falsy so the or-chain skips it and picks up market_price=50.0.
+    Expected failure before the fix.
+    """
+    log = tmp_path / "trades.jsonl"
+    _make_log_file(
+        log,
+        [
+            {
+                "type": "SKIPPED",
+                "ts": "2026-05-10T01:02:00+00:00",
+                "ticker": TICKER,
+                "estimated_prob": 0.55,
+                "market_yes_price": 0.0,
+                "market_price": 50.0,
+                "source": "ap",
+            }
+        ],
+    )
+
+    rows = _log_rows([log], MARKETS)
+
+    assert len(rows) == 1
+    assert rows[0]["market_yes_price"] == pytest.approx(0.0)
+
+
+def test_log_row_canonical_ticker_beats_market_ticker(tmp_path):
+    """ticker must win over market_ticker when both keys are present (regression guard).
+
+    The current or-chain already has ticker first, so this should pass pre-fix.
+    """
+    log = tmp_path / "trades.jsonl"
+    _make_log_file(
+        log,
+        [
+            {
+                "type": "BLEND_DECISION",
+                "ts": "2026-05-10T01:03:00+00:00",
+                "ticker": TICKER,
+                "market_ticker": "KXALIAS-99",
+                "blended_p": 0.60,
+                "market_yes_price": 45.0,
+                "source": "nyt",
+            }
+        ],
+    )
+
+    rows = _log_rows([log], MARKETS)
+
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == TICKER
