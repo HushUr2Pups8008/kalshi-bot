@@ -102,7 +102,7 @@
 | Multi-cycle contract adherence audits? | `docs/governance/2026-05-05-cross-cycle-contract-adherence-review.md` + `2026-05-05-implementation-contract-cycle-4-5-review.md` + `docs/_archive/governance/2026-05-06-implementation-contract-cycle-6-7-review.md` (ARCHIVED Stream G R5) |
 | Production config capture invariants (cycle-8 incident codified)? | `docs/IMPLEMENTATION_CONTRACT.md` §15 |
 | Cycle-10 capture-incident decision + commit | `docs/governance/2026-05-05-launchd-plist-consolidation-decision.md` + commit `96e2995` (byte-faithful rewrite) |
-| Lever menu (post-2026-05-05 locks)? | `docs/superpowers/specs/2026-05-03-edge-004-lever-menu-design.md` (§5.1 + §5.2) |
+| Lever menu (post-2026-05-05 locks)? | `docs/_archive/specs/2026-05-03-edge-004-lever-menu-design.md` (§5.1 + §5.2) (ARCHIVED Stream G R31) |
 | Closure-path TLDR? | `docs/governance/edge-004-closure-path-tldr-v3.md` |
 | Unified debt log? | `docs/profit_path_debt_log.md` |
 | ROADMAP? | `docs/ROADMAP.md` |

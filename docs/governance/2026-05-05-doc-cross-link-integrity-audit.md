@@ -51,7 +51,7 @@ The Day-7 mid-soak confirmation hasn't been authored. Per the prestaged CHANGELO
 - **All `docs/governance/*.md` ↔ `docs/superpowers/specs/*.md` cross-references resolve** (except F1 above)
 - **`docs/governance/edge-004-closure-path-tldr-v3.md`** — 8 cross-references to 0.04 LOCK / Lever C v1 LOCK / Branch D / sizing-scope specs — all resolve
 - **`docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md`** — references PROFIT-LLM-001 + P4-GATE Appendix A sizing-scope specs — all resolve
-- **`docs/superpowers/specs/2026-05-03-edge-004-lever-menu-design.md` §5.2 + §5.1** — references LOCK addenda + closure-path TLDR — all resolve
+- **`docs/_archive/specs/2026-05-03-edge-004-lever-menu-design.md` §5.2 + §5.1** — references LOCK addenda + closure-path TLDR — all resolve (ARCHIVED Stream G R31)
 - **`docs/profit_path_debt_log.md`** — extensive cycle integration entries; all internal cross-refs scanned + clean
 
 ## Audit method

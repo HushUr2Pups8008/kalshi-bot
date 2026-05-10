@@ -112,4 +112,4 @@ This path is operator-discretion only. Claude / Codex roles in this path are lim
 - `docs/profit_path_debt_log.md` — primary ROADMAP tracker (will reference this doc when escalation fires)
 - `docs/governance/post-soak-rollback-runbook.md` — incident-response runbook (covers Wave-1/2/3 rollbacks; does NOT cover escalation)
 - `docs/governance/post-soak-close-rehearsal-checklist.md` — operator deploy guide for Wave-1/2/3
-- `docs/superpowers/specs/2026-05-03-edge-004-lever-menu-design.md` — full lever menu (5-revision history)
+- `docs/_archive/specs/2026-05-03-edge-004-lever-menu-design.md` — full lever menu (5-revision history) (ARCHIVED Stream G R31)

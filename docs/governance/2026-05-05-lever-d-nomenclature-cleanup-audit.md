@@ -46,7 +46,7 @@ This audit surfaces a **third**:
 | `docs/_archive/governance/2026-05-03-claude-commits-c5cbc6f-90c26cf-adversarial-review.md:35` | "Lever D demotion" | meaning #1 | ✅ correct |
 | `2026-05-03-post-soak-landing-order-design.md:17` | "Lever D demoted" | meaning #1 | ✅ correct |
 | `2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md:27` | "Branch D (escalation) | PROFIT-LLM-001 / P4-GATE Appendix A" | meaning #2 | ✅ correct |
-| `2026-05-03-edge-004-lever-menu-design.md:65,71,125` | meaning #1 (Lever D pre-LLM gate) | ✅ correct |
+| `docs/_archive/specs/2026-05-03-edge-004-lever-menu-design.md:65,71,125` | meaning #1 (Lever D pre-LLM gate) | ✅ correct |
 
 ## Findings
 
@@ -87,7 +87,7 @@ These reference meaning #1 correctly, but the adversarial-review doc context pre
 
 ### F3 (LOW) — `lever-menu-design.md:65,71,125` reference Lever D meaning #1
 
-**Source:** `docs/superpowers/specs/2026-05-03-edge-004-lever-menu-design.md` §3-D + §5 sequencing notes.
+**Source:** `docs/_archive/specs/2026-05-03-edge-004-lever-menu-design.md` §3-D + §5 sequencing notes (ARCHIVED Stream G R31).
 
 These are correct usage (meaning #1) AND the §5.2 nomenclature clarification (added in cycle 2) explicitly distinguishes the two interpretations. **No fix needed.**
 
@@ -114,6 +114,6 @@ Other 17 occurrences are correct usage of meaning #1 or #2; no fixes needed.
 ## Cross-links
 
 - `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` ⚠️ Nomenclature clarification
-- `docs/superpowers/specs/2026-05-03-edge-004-lever-menu-design.md` §5.2 — same clarification source
+- `docs/_archive/specs/2026-05-03-edge-004-lever-menu-design.md` §5.2 — same clarification source (ARCHIVED Stream G R31)
 - `docs/governance/edge-004-closure-path-tldr-v3.md` — meaning #2 canonical doc
 - `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — F1 fix target
