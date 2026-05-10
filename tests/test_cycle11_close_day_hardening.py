@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -14,6 +17,14 @@ def test_pre_day7_smoke_uses_launchd_equivalence_gate():
     assert "launchd_plist_drift_audit.sh --json" not in body
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason=(
+        "scripts/db_snapshot_retention_audit.sh uses BSD `date -j -u -f` for epoch "
+        "conversion; GNU date on Linux CI rejects those flags. The script is macOS-only "
+        "by design (drives the launchd db-backup retention gate)."
+    ),
+)
 def test_db_snapshot_retention_audit_reports_old_snapshot(tmp_path: Path):
     archive = tmp_path / "mac_archive/db_snapshots"
     old = archive / "2026-04-01T0000Z"

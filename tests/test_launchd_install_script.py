@@ -9,6 +9,7 @@ substitution behavior is pinned via these tests.
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -196,6 +197,15 @@ def test_allow_drift_non_tty_requires_explicit_confirmation(tmp_path: Path):
     assert "--allow-drift-confirm ALLOW-DRIFT" in result.stderr
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason=(
+        "ops/launchd/install.sh performs an actual install into "
+        "$HOME/Library/LaunchAgents/, which is a macOS-only path layout (launchd is "
+        "Darwin-only). Other tests in this file exercise --print rendering and the "
+        "explicit-confirmation gate; only this end-to-end install path requires Darwin."
+    ),
+)
 def test_allow_drift_confirm_allows_non_tty_install_to_temp_home(tmp_path: Path):
     env = os.environ.copy()
     env["HOME"] = str(tmp_path)

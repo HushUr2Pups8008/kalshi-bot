@@ -4,11 +4,23 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import time
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+_DARWIN_ONLY = pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason=(
+        "scripts/db_snapshot_backup.sh is launchd-driven (com.kalshi.db-backup.plist) "
+        "and uses BSD `stat -f` plus the `sqlite3` CLI; Linux CI lacks both. The script "
+        "is macOS-only by design — runs locally on the operator host."
+    ),
+)
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -48,6 +60,7 @@ def _integrity(path: Path) -> str:
         return str(conn.execute("PRAGMA integrity_check").fetchone()[0])
 
 
+@_DARWIN_ONLY
 def test_db_snapshot_backup_seeds_online_safe_sqlite_copies(tmp_path: Path):
     repo = _seed_repo(tmp_path)
 
@@ -68,6 +81,7 @@ def test_db_snapshot_backup_seeds_online_safe_sqlite_copies(tmp_path: Path):
     assert "snapshot ok:" in result.stdout
 
 
+@_DARWIN_ONLY
 def test_db_snapshot_backup_prunes_expired_snapshot_directories(tmp_path: Path):
     repo = _seed_repo(tmp_path)
     old_snapshot = repo / "mac_archive/db_snapshots/2000-01-01T0000Z"
