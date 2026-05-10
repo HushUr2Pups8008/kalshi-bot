@@ -486,11 +486,6 @@ async def test_dossier_with_no_estimate_uses_fast_lane_exemptions():
 
 from feeds import NewsItem  # noqa: E402  (imported here to keep harness self-contained)
 
-_OBS003_XFAIL_REASON = (
-    "PROFIT-OBS-003: BlendTask._emit_skipped not yet implemented. "
-    "Lands post-soak per docs/superpowers/specs/2026-05-03-obs-003-blendtask-skipped-emission-design.md."
-)
-
 
 def _news_item_for_obs003() -> NewsItem:
     return NewsItem(
@@ -543,7 +538,6 @@ def _blocked_blender_factory(reason: str):
     return _blender
 
 
-@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "trade_blocked_reason",
@@ -624,7 +618,6 @@ async def test_unblocked_blend_does_not_emit_blendtask_skipped_record() -> None:
     )
 
 
-@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_skipped_payload_carries_blended_edge_not_fast_lane_edge() -> None:
     """Pin spec §5: BlendTask-emitted SKIPPED records carry the *post-blend*
@@ -715,7 +708,6 @@ async def test_skipped_payload_carries_blended_edge_not_fast_lane_edge() -> None
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_obs003_blocked_path_writes_via_injected_logger_log_skipped(
     monkeypatch,
@@ -780,7 +772,6 @@ async def test_obs003_blocked_path_writes_via_injected_logger_log_skipped(
     )
 
 
-@pytest.mark.xfail(reason=_OBS003_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_obs003_skipped_payload_carries_required_keys() -> None:
     """F3 — full executor-compatible key set.

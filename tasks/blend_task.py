@@ -202,6 +202,13 @@ class BlendTask:
         )
 
         if trade_blocked_reason is not None:
+            await self._emit_skipped(
+                ticker=ticker,
+                blend_result=blend_result,
+                readiness=readiness,
+                trade_blocked_reason=trade_blocked_reason,
+                fast_lane_result=fast_lane_result,
+            )
             return BlendTaskResult(
                 market_ticker=ticker,
                 blend_result=blend_result,
