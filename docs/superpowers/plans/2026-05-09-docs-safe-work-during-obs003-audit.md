@@ -263,18 +263,30 @@ OBS-003 audit closed at 9h (early-closed on operator decision; invariant `OPPORT
 | R36 | wave-1-deploy-dry-run-report (post-Wave-1-deploy) + 2 ref edits | `269b9c9` |
 | R37 | a1plus1-5-branch-c-feed-selection-rubric (HOLD downgrade) + 17 ref edits across 11 active docs | `e7c942e` |
 | R38 | doc-index-cleanup-execution-plan (post-close trigger fulfilled) + 3 ref edits | `1708d6c` |
+| R39 | doc-index-audit (last doc-index parent) + 7 ref edits incl. debt log | `4da73e2` |
+| R40 | pre-wave1 parents (risk-register + source-of-truth-doc-index, BOTH 0 refs) | `(R40 commit)` |
+| R41 | edge-replay-cycle15b-sub-fix-proposal (0 refs post-cycle-15b cascade) | `12d13f6` |
+| R42 | wave1-acceptance-ladder-forecast + obs003-skipped-synthesizer-reality-check (paired debt log ref) | `(R42 commit)` |
+| R43 | 6 EDGE-004 investigation reports (cumulative-call, empty-response, h5-bisection, lever-e-sizing, jaccard-bisection, source-class-audit) + 8 debt log refs | `(R43 commit)` |
+| R44 | 5 meta-audit cluster (toc-nav, cross-link-integrity, memory-hygiene, readme-drift, roadmap-drift) + 5 debt log refs | `(R44 commit)` |
+| R45 | 3 day-5/day-7-handoff files + 2 debt log refs | `(R45 commit)` |
+| R46 | 4 single-ref governance (impl-contract-4-5-review, macbook-import, openclaw-note, wave-1-commit-messages-prestaged) + 4 ref edits | `(R46 commit)` |
+| R47 | day-7 cluster (3 intra-cluster: attestation-prestage, walkthrough-dry-trace, fire-time-compact-checklist) + 7 ref edits across 5 active docs | `(R47 commit + followup)` |
 
-**Stream G session moves: 73 files archived across 39 commits.**
+**Stream G session moves: 100 files archived across 50+ commits.**
+
+Major milestone: 100-archive threshold passed. /governance/ shrunk from ~120 .md files at Stream G start to 84 (-36); dated 2026-05-* files now 56 (down from 114 at session start — 58 archived).
 
 ### 8.5 Stream G unfinished work (defer to next session)
 
 **12 EDGE-004 lever specs CLOSED in this session via R24-R35.** All Wave-2/3 lever-design specs now in `_archive/specs/`. 95+ active doc ref edits handled per-spec with full context retrieval.
 
-**Smaller remaining items:**
-- doc-index-audit (still in /governance/, ~7 refs incl. debt log + 6 governance) — last doc-index parent
-- pre-wave1-source-of-truth-doc-index, pre-wave1-risk-register (HOLD parents)
+**Remaining items (post-R47, ~84 files in /governance/):**
+- wave-1-changelog-entry-prestaged (13 refs — heavy; needs paired-archive coordination with sibling wave-1-changelog-entry-prestaged-related docs)
+- edge-replay-cycle15b-report (4 active refs in debt log — could batch with cycle-15b-report archive when cycle history rolled up)
 - ROADMAP Wave-1 row "active" → "complete" flip (operator call)
-- ~78 files remain in `docs/governance/` — most ACTIVE cycle ledgers / runbooks / wave-1 prestaged docs / cycle-17 charter cluster / day-7-attestation cluster (per C1 v2 ACTIVE list)
+- Most remaining files are ACTIVE: cycle-17 charter cluster (cycle-17c-*, cycle-17-conditional-charter-skeletons), edge-replay-cycle1{2-16e}-* reports, current cycle-16e/cycle-17 verdict authority, operational runbooks (kill-switch-fire-procedure, mac-studio-dead-bot-reboot, network-api-outage, post-soak-rollback-runbook, post-soak-close-rehearsal-checklist), wave-1-* operator-facing prestaged content (changelog-entry, post-deploy-observation-plan, wave-1-deploy-commit-order-decision, wave-1-fire-time-per-commit-checklist, wave-1-deploy-day-timing), wave-2/3 deploy timing/decision/checklist files (HALTED but operator-pacing references), branch-d-fire-procedure-runbook, PROFIT-PHASE2-001-* attestation files
+- These would need operator-call-to-archive (not autonomous archive call) since they remain operational reference for any wave-2/3 resume or reverse-cycle audit
 
 ---
 
