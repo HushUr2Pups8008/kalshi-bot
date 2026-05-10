@@ -19,7 +19,7 @@ Pre-staging this checklist prevents improvisation when verdict lands. Verdict is
 
 ## Pre-execution: Item M2 — endpoint-diagnosis criteria-lock verification (RUN BETWEEN D1 and D3/D4)
 
-Verifies Codex D1 classification matches the locked charter criterion. See `2026-05-07-cycle-16d-pre-execution-criteria-verification.md` (already landed post-D1).
+Verifies Codex D1 classification matches the locked charter criterion. See `docs/_archive/governance/2026-05-07-cycle-16d-pre-execution-criteria-verification.md` (ARCHIVED Stream G R16; already landed post-D1).
 
 ## Item M4 — independent endpoint read (POST D1, parallel to M2)
 
@@ -114,9 +114,9 @@ Acceptance criteria match the matching Cycle-17<X> skeleton acceptance section.
 
 ## Cross-links
 
-- `docs/governance/2026-05-07-cycle-16d-charter-price-reconstruction.md` — Cycle-16D charter
-- `docs/governance/2026-05-07-cycle-16d-task-split.md` — Codex D1-D10 + Claude M1-M10
+- `docs/_archive/governance/2026-05-07-cycle-16d-charter-price-reconstruction.md` — Cycle-16D charter (ARCHIVED Stream G R16)
+- `docs/_archive/governance/2026-05-07-cycle-16d-task-split.md` — Codex D1-D10 + Claude M1-M10 (ARCHIVED Stream G R16)
 - `docs/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 skeletons (verdict-to-skeleton map)
-- `docs/governance/2026-05-07-cycle-16d-pre-execution-criteria-verification.md` — M2 + M4 verification (already landed)
+- `docs/_archive/governance/2026-05-07-cycle-16d-pre-execution-criteria-verification.md` — M2 + M4 verification (already landed) (ARCHIVED Stream G R16)
 - `docs/governance/edge-replay-cycle16d-report.md` — Cycle-16D D8 report (FUTURE)
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-17 deploys)

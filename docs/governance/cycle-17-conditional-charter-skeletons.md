@@ -132,7 +132,7 @@ If operator picks §B, the "mandatory pre-onboarding re-trace of 235 losers" req
 
 ## Cross-links
 
-- `docs/governance/2026-05-07-cycle-16d-charter-price-reconstruction.md` — Cycle-16D charter (verdict source)
+- `docs/_archive/governance/2026-05-07-cycle-16d-charter-price-reconstruction.md` — Cycle-16D charter (verdict source) (ARCHIVED Stream G R16)
 - `docs/governance/cycle-16-conditional-charter-skeletons.md` — Cycle-16 skeletons (origin pattern; §A/§B/§C transferable to Cycle-17 §A/§B/§C)
 - `docs/governance/cycle-16d-post-verdict-action-checklist.md` — Cycle-16D post-verdict checklist (filed this skeleton-set)
 - `docs/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — cohort definitions
