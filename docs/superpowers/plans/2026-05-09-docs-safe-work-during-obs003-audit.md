@@ -236,24 +236,28 @@ OBS-003 audit closed at 9h (early-closed on operator decision; invariant `OPPORT
 | R11 | PHASE2-001 baselines (llm-throughput + source-class-evolution) + soak-runtime-characterization-summary parent + risk-register ref update | `1ab9136` |
 | R12+13 | vitallaw-archive-forensics + db-backup-gap-resolution combined | `335f028` |
 | R14 | 4-file batch (lever-domain-normalized 0-refs + version-bump-dryrun + legal-cycle adv-review + pre-day7-dry-run-rehearsal) | `fae7f84` |
+| R15 | cycle-15b 4-file artifact cluster (charter-extraction-rebuild, claude-independent-trace-read, pre-execution-criteria-verification, task-split) + 7 ref edits | `a7b1f0f` |
+| R16 | cycle-16d 3-file artifact cluster (charter-price-reconstruction, pre-execution-criteria-verification, task-split) + 5 ref edits | `e6d2f9a` |
+| R17 | HOLD adversarial-review chain (claude-commits-c5cbc6f, cdbf6ef, claude-latest-commits) + 9 ref edits | `4757fc1` + `8bb9efb` followup |
 
-**Stream G session moves: 42 files archived across 14 commits.**
+**Stream G session moves: 52 files archived across 18 commits.**
 
 ### 8.5 Stream G unfinished work (defer to next session)
 
 - 12 EDGE-004 lever specs (§8.1) — coordinated Wave-2/3-archive sweep needed
 - wave-1-deploy-dry-run-report (3 active refs: rollback-runbook-validation + doc-index-audit + cross-cycle-contract-adherence-review)
-- cycle-15b cluster (charter-extraction-rebuild, claude-independent-trace-read, paper-trades-cohort-note, pre-execution-criteria-verification, task-split) — entangled with cycle-15b-post-verdict-action-checklist (active cycle ledger); could archive together if checklist also archives
-- cycle-16d cluster (charter-price-reconstruction, pre-execution-criteria-verification, task-split parent) — refs cycle-16d-post-verdict-action-checklist
+- cycle-15b-paper-trades-cohort-note (refs from IMPLEMENTATION_CONTRACT.md + cycle-17-conditional-charter-skeletons.md — heavier coordination needed)
+- cycle-15b-post-verdict-action-checklist (active checklist still in /governance/ post-R15; refs debt log + 5 governance docs — touch debt log to archive)
+- cycle-16d-post-verdict-action-checklist (active checklist still in /governance/ post-R16; refs debt log + cycle-17 + edge-replay-cycle16d-report — touch debt log to archive)
+- cycle-16d-report (active per debt log; archive when full cycle-16d cluster moves)
 - cycle-16e-task-split (HOLD: 4 active refs from edge-replay-cycle16e-scorer-forensics)
-- HOLD adversarial reviews (claude-commits-c5cbc6f-90c26cf, cdbf6ef-f786246, claude-latest-commits) — entangled chain
 - HOLD wave-2 inputs (a1plus1-5-branch-c-feed-selection-rubric 17 refs, vitallaw-direct-rss-probe 8 refs)
 - governance-monitor-fix-design.md spec (CLOSED but 8 wave-1 runbook refs — defer with runbook archive)
 - day-7-pre-soak-confirmation (2 weak active refs)
 - 2 governance files referenced by debt log (doc-index-audit, doc-index-cleanup-execution-plan) — touch debt log to fix; possibly archive both
 - pre-wave1-source-of-truth-doc-index, pre-wave1-risk-register (HOLD parents — fewer refs each but still active)
 - ROADMAP Wave-1 row "active" → "complete" flip (operator call)
-- ~98 files remain in `docs/governance/` — most ACTIVE cycle ledgers / runbooks / wave-1 prestaged docs / cycle-17 charter cluster / day-7-attestation cluster (per C1 v2 ACTIVE list)
+- ~88 files remain in `docs/governance/` — most ACTIVE cycle ledgers / runbooks / wave-1 prestaged docs / cycle-17 charter cluster / day-7-attestation cluster (per C1 v2 ACTIVE list)
 
 ---
 
