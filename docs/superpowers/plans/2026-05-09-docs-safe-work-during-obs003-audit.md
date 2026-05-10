@@ -239,25 +239,29 @@ OBS-003 audit closed at 9h (early-closed on operator decision; invariant `OPPORT
 | R15 | cycle-15b 4-file artifact cluster (charter-extraction-rebuild, claude-independent-trace-read, pre-execution-criteria-verification, task-split) + 7 ref edits | `a7b1f0f` |
 | R16 | cycle-16d 3-file artifact cluster (charter-price-reconstruction, pre-execution-criteria-verification, task-split) + 5 ref edits | `e6d2f9a` |
 | R17 | HOLD adversarial-review chain (claude-commits-c5cbc6f, cdbf6ef, claude-latest-commits) + 9 ref edits | `4757fc1` + `8bb9efb` followup |
+| R18 | cycle-15b-paper-trades-cohort-note + 7 ref redirects (incl. IC §16 Rule 6) | `895da41` |
+| R19 | governance-monitor-fix-design.md spec → `_archive/specs/` + 5 wave-1 runbook ref edits | `36b0c6e` |
+| R20 | cycle-16e-task-split + 4 ref redirects in cycle-16e rescope/forensics | `b884bcd` |
+| R21 | post-verdict-action-checklists (cycle-15b + cycle-16d) + 7 ref edits incl. debt log (first post-audit debt log edit) | `b65d579` (incl. R21 + followup) |
+| R22 | vitallaw-direct-rss-probe (HOLD downgrade, Branch B kill) + 5 ref edits | `9e3ec52` |
+| R23 | day-7-pre-soak-confirmation (HOLD downgrade) + 2 ref edits | `190986f` |
 
-**Stream G session moves: 52 files archived across 18 commits.**
+**Stream G session moves: 59 files archived across 24 commits.**
 
 ### 8.5 Stream G unfinished work (defer to next session)
 
-- 12 EDGE-004 lever specs (§8.1) — coordinated Wave-2/3-archive sweep needed
+**12 EDGE-004 lever specs (§8.1) — biggest remaining batch.** Reverse-ref check (post-R23) shows 35+ active doc files reference these specs across `docs/governance/`, `docs/IMPLEMENTATION_CONTRACT.md`, `docs/profit_path_debt_log.md`, `docs/ROADMAP.md`, and other lever specs themselves. Refs use mixed formats (bare basename vs full path); bulk sed too risky without per-format scoping. Recommended approach for next session:
+- Build a structured ref-update pass (extract every ref site by path/basename) before any `git mv`
+- Atomic single commit covering all 12 mvs + all ref redirects
+- ROADMAP touch is operator-call territory — coordinate with operator
+
+**Smaller remaining items:**
 - wave-1-deploy-dry-run-report (3 active refs: rollback-runbook-validation + doc-index-audit + cross-cycle-contract-adherence-review)
-- cycle-15b-paper-trades-cohort-note (refs from IMPLEMENTATION_CONTRACT.md + cycle-17-conditional-charter-skeletons.md — heavier coordination needed)
-- cycle-15b-post-verdict-action-checklist (active checklist still in /governance/ post-R15; refs debt log + 5 governance docs — touch debt log to archive)
-- cycle-16d-post-verdict-action-checklist (active checklist still in /governance/ post-R16; refs debt log + cycle-17 + edge-replay-cycle16d-report — touch debt log to archive)
-- cycle-16d-report (active per debt log; archive when full cycle-16d cluster moves)
-- cycle-16e-task-split (HOLD: 4 active refs from edge-replay-cycle16e-scorer-forensics)
-- HOLD wave-2 inputs (a1plus1-5-branch-c-feed-selection-rubric 17 refs, vitallaw-direct-rss-probe 8 refs)
-- governance-monitor-fix-design.md spec (CLOSED but 8 wave-1 runbook refs — defer with runbook archive)
-- day-7-pre-soak-confirmation (2 weak active refs)
-- 2 governance files referenced by debt log (doc-index-audit, doc-index-cleanup-execution-plan) — touch debt log to fix; possibly archive both
+- HOLD wave-2 inputs (a1plus1-5-branch-c-feed-selection-rubric 17 refs — heavy)
+- 2 governance files referenced by debt log (doc-index-audit, doc-index-cleanup-execution-plan) — touch debt log + 5 governance refs to archive both
 - pre-wave1-source-of-truth-doc-index, pre-wave1-risk-register (HOLD parents — fewer refs each but still active)
 - ROADMAP Wave-1 row "active" → "complete" flip (operator call)
-- ~88 files remain in `docs/governance/` — most ACTIVE cycle ledgers / runbooks / wave-1 prestaged docs / cycle-17 charter cluster / day-7-attestation cluster (per C1 v2 ACTIVE list)
+- ~85 files remain in `docs/governance/` — most ACTIVE cycle ledgers / runbooks / wave-1 prestaged docs / cycle-17 charter cluster / day-7-attestation cluster (per C1 v2 ACTIVE list)
 
 ---
 
