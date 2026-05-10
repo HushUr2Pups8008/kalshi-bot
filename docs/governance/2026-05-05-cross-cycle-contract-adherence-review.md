@@ -41,8 +41,8 @@ For each cycle's commits, classify every artifact by:
 | `docs/_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` | architectural (§5+§11 + INV-6 boundary) | Claude | ✅ (ARCHIVED Stream G R33) |
 | `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` | architectural | Claude | ✅ (ARCHIVED Stream G R35) |
 | `edge-004-closure-path-tldr-v3.md` | review | Claude | ✅ |
-| `2026-05-05-day-7-walkthrough-dry-trace.md` | review | Claude | ✅ |
-| `2026-05-05-day-7-attestation-prestage.md` | planning | Claude | ✅ |
+| `docs/_archive/governance/2026-05-05-day-7-walkthrough-dry-trace.md` | review | Claude | ✅ (ARCHIVED Stream G R47) |
+| `docs/_archive/governance/2026-05-05-day-7-attestation-prestage.md` | planning | Claude | ✅ (ARCHIVED Stream G R47) |
 | `docs/_archive/governance/2026-05-05-doc-index-audit.md` | review | Claude | ✅ (ARCHIVED Stream G R39) |
 | `profit_path_debt_log.md` (cycle 2 entry) | docs (Claude scope) | Claude | ✅ |
 | `lever-menu-design.md` §5.1 + §5.2 amendment | architectural amendment | Claude | ✅ |

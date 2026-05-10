@@ -78,7 +78,7 @@ Notable: **0 OPPORTUNITY / 0 SKIPPED / 0 PAPER_TRADE / 0 BLEND_DECISION events.*
 
 **Affected docs that reference the pre-Wave-1 baseline as "non-zero":**
 - `wave-1-post-deploy-observation-plan.md` (already noted; cycle-5 follow-up)
-- `2026-05-05-day-7-attestation-prestage.md` (mentions "267 decisions; 0 KILL_SWITCH/etc" — those are governance-side baselines and ARE non-zero; not affected)
+- `docs/_archive/governance/2026-05-05-day-7-attestation-prestage.md` (mentions "267 decisions; 0 KILL_SWITCH/etc" — those are governance-side baselines and ARE non-zero; not affected) (ARCHIVED Stream G R47)
 - `2026-05-05-wave-1-deploy-day-timing.md` (timing recommendations — not affected by 0-baseline; agnostic to volume)
 
 **Recommended cycle-6 follow-up:** apply the replacement rules from this doc back into `wave-1-post-deploy-observation-plan.md` as a §3.7 update. **Not blocking Wave-1 deploy** — the existing rules are not actively wrong, just degenerately satisfied.

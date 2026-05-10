@@ -2951,8 +2951,8 @@ Second pass on 2026-05-05 (commits `b44dda2` + `80932cb` + this cycle's docs). I
 - `docs/_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — Lever C v1 LOCKED; §3.2 normalized hash; 3600 s default; gate-placement detail (record hash AFTER readiness gate pass); INV-6 boundary attestation (ARCHIVED Stream G R33)
 - `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers + handoff to PROFIT-LLM-001 / P4-GATE Appendix A; nomenclature distinguishes lever-menu-Lever-D (closed) from closure-path-Branch-D (active) (ARCHIVED Stream G R35)
 - `docs/governance/edge-004-closure-path-tldr-v3.md` — TLDR v3 supersedes v2.2; closure-probability ranking ~58 % intake-side
-- `docs/governance/2026-05-05-day-7-walkthrough-dry-trace.md` — 11-step playbook validated against HEAD `80932cb`; 1 LOW (pre-stage `b44dda2` + `80932cb` in §8.5.2 invocation table before fire-time)
-- `docs/governance/2026-05-05-day-7-attestation-prestage.md` — pre-staged attestation values: volume 267 (8.9× floor); safety 0/0/0; PARSE 7 cumulative (0 trailing 72h); max gap 2.01 h
+- `docs/_archive/governance/2026-05-05-day-7-walkthrough-dry-trace.md` — 11-step playbook validated against HEAD `80932cb`; 1 LOW (pre-stage `b44dda2` + `80932cb` in §8.5.2 invocation table before fire-time) (ARCHIVED Stream G R47)
+- `docs/_archive/governance/2026-05-05-day-7-attestation-prestage.md` — pre-staged attestation values: volume 267 (8.9× floor); safety 0/0/0; PARSE 7 cumulative (0 trailing 72h); max gap 2.01 h (ARCHIVED Stream G R47)
 - `docs/_archive/governance/2026-05-05-doc-index-audit.md` — inventory of 87 governance + 20 spec files; recommendation 11 files archive-able post-close (ARCHIVED Stream G R39; superseded by 70+ Stream G archives)
 
 **Codex artifacts (cycle 2; commit `80932cb`):**
@@ -3006,7 +3006,7 @@ Third pass on 2026-05-05 (commits `a505a08` Claude + `3a400c1` Codex). Focused o
 Fourth pass on 2026-05-05 (commits `6f09967` Claude + `7addfd1` Codex). Focus: operator-readiness compaction + drift surfacing + failure-mode coverage.
 
 **Claude artifacts (cycle 4; commit `6f09967`):**
-- `2026-05-05-day-7-fire-time-compact-checklist.md` — 30-45 min single-page playbook
+- `docs/_archive/governance/2026-05-05-day-7-fire-time-compact-checklist.md` — 30-45 min single-page playbook (ARCHIVED Stream G R47)
 - `2026-05-05-wave-1-fire-time-per-commit-checklist.md` — per-commit 30 min playbook + cadence matrix
 - `docs/_archive/governance/2026-05-05-readme-drift-check.md` — 3 MEDIUM (status block / version cell / test count) (ARCHIVED Stream G R44)
 - `docs/_archive/governance/2026-05-05-roadmap-drift-check.md` — 3 MEDIUM (P3/P4-GATE cross-links + What-Changed bullet) (ARCHIVED Stream G R44)
