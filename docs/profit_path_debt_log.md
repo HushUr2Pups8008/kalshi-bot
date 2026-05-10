@@ -3011,7 +3011,7 @@ Fourth pass on 2026-05-05 (commits `6f09967` Claude + `7addfd1` Codex). Focus: o
 - `2026-05-05-readme-drift-check.md` — 3 MEDIUM (status block / version cell / test count)
 - `2026-05-05-roadmap-drift-check.md` — 3 MEDIUM (P3/P4-GATE cross-links + What-Changed bullet)
 - `2026-05-05-debt-log-toc-navigation-audit.md` — TOC + per-entry status table recommendations
-- `specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` — post-Lever-B-1 secondary loosening stub
+- `docs/_archive/specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` — post-Lever-B-1 secondary loosening stub (ARCHIVED Stream G R26)
 - `2026-05-05-kill-switch-fire-procedure-runbook.md` — STOP-first; REVERT vs QUARANTINE
 - `2026-05-05-mac-studio-dead-bot-reboot-runbook.md` — 4-category triage + restart
 - `2026-05-05-cross-cycle-contract-adherence-review.md` — 4 cycles audited; 100% §9 adherence

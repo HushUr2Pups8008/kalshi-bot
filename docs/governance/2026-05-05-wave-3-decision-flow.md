@@ -114,7 +114,7 @@
 
 1. **Wave-3 vs Branch D.** At Wave-2 Branch C stall verdict (~2026-06-16): operator chooses. Recommended: Wave-3 first; Branch D after Wave-3 stalls. Wave-3 produces attribution data; Branch D produces architectural-replan data.
 2. **Lever B revert vs Wave-3-stall declaration.** If Lever B 14-day window shows -P&L: revert is required (per Lever B parent §6 acceptance). After revert: Branch D fires per Lever-D §2.2; do NOT proceed to Lever C deploy with Lever B reverted.
-3. **Lever B-2 (0.03 floor) follow-up.** If Lever B 0.04 lands cleanly: pre-staged stub `2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` may activate. Out of Wave-3 scope; Wave-3.5 or Wave-4 territory.
+3. **Lever B-2 (0.03 floor) follow-up.** If Lever B 0.04 lands cleanly: pre-staged stub `docs/_archive/specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` (ARCHIVED Stream G R26) may activate. Out of Wave-3 scope; Wave-3.5 or Wave-4 territory.
 
 ## Special timing notes
 
@@ -136,7 +136,7 @@ If Wave-2 deployed both Branch C (v0.31.0) AND option-A (v0.32.0), Wave-3 commit
 - `2026-05-05-wave-3-fire-time-per-commit-checklist.md` — linear playbook
 - `2026-05-05-wave-3-deploy-day-timing.md` — UTC timing rationale
 - `specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` — Lever B 0.04 LOCK
-- `specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` — Lever B-2 stub (post-success)
+- `docs/_archive/specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` — Lever B-2 stub (post-success) (ARCHIVED Stream G R26)
 - `specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — Lever C v1 LOCK
 - `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers (post-Wave-3-stall)
 - `2026-05-05-branch-d-fire-procedure-runbook.md` — Branch D fire procedure

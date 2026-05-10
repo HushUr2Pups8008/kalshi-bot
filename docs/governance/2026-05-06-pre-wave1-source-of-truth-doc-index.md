@@ -68,7 +68,7 @@
 | Compact per-commit playbook? | `docs/governance/2026-05-05-wave-3-fire-time-per-commit-checklist.md` |
 | Cadence + UTC windows? | `docs/governance/2026-05-05-wave-3-deploy-day-timing.md` |
 | Smoke wrapper? | `scripts/wave3_fire_time_smoke.sh` (cycle 6) |
-| Lever B-2 (0.03 floor) follow-up stub? | `docs/superpowers/specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` |
+| Lever B-2 (0.03 floor) follow-up stub? | `docs/_archive/specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` (ARCHIVED Stream G R26) |
 
 ## Branch D escalation (if Wave-2 + Wave-3 both stall)
 
