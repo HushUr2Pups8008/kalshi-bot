@@ -260,19 +260,21 @@ OBS-003 audit closed at 9h (early-closed on operator decision; invariant `OPPORT
 
 **12-spec EDGE-004 lever batch (R24-R35) closed: all SUPERSEDED + 1 CLOSED specs archived to `_archive/specs/`. ~95 active doc ref edits.**
 
-**Stream G session moves: 70 files archived across 36 commits.**
+| R36 | wave-1-deploy-dry-run-report (post-Wave-1-deploy) + 2 ref edits | `269b9c9` |
+| R37 | a1plus1-5-branch-c-feed-selection-rubric (HOLD downgrade) + 17 ref edits across 11 active docs | `e7c942e` |
+| R38 | doc-index-cleanup-execution-plan (post-close trigger fulfilled) + 3 ref edits | `1708d6c` |
+
+**Stream G session moves: 73 files archived across 39 commits.**
 
 ### 8.5 Stream G unfinished work (defer to next session)
 
 **12 EDGE-004 lever specs CLOSED in this session via R24-R35.** All Wave-2/3 lever-design specs now in `_archive/specs/`. 95+ active doc ref edits handled per-spec with full context retrieval.
 
 **Smaller remaining items:**
-- wave-1-deploy-dry-run-report (3 active refs: rollback-runbook-validation + doc-index-audit + cross-cycle-contract-adherence-review)
-- HOLD wave-2 inputs (a1plus1-5-branch-c-feed-selection-rubric — was 17 refs; check post-R32/R35 state)
-- 2 governance files referenced by debt log (doc-index-audit, doc-index-cleanup-execution-plan) — touch debt log + 5 governance refs to archive both
-- pre-wave1-source-of-truth-doc-index, pre-wave1-risk-register (HOLD parents — fewer refs each but still active)
+- doc-index-audit (still in /governance/, ~7 refs incl. debt log + 6 governance) — last doc-index parent
+- pre-wave1-source-of-truth-doc-index, pre-wave1-risk-register (HOLD parents)
 - ROADMAP Wave-1 row "active" → "complete" flip (operator call)
-- ~80 files remain in `docs/governance/` — most ACTIVE cycle ledgers / runbooks / wave-1 prestaged docs / cycle-17 charter cluster / day-7-attestation cluster (per C1 v2 ACTIVE list)
+- ~78 files remain in `docs/governance/` — most ACTIVE cycle ledgers / runbooks / wave-1 prestaged docs / cycle-17 charter cluster / day-7-attestation cluster (per C1 v2 ACTIVE list)
 
 ---
 
