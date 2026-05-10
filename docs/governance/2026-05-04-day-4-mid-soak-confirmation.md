@@ -80,7 +80,7 @@ No criterion is at risk. Continue to 2026-05-15.
 
 ## Cross-links
 
-- `docs/governance/2026-05-03-mid-soak-snapshot-5.md` — most recent prior snapshot
+- `docs/_archive/governance/2026-05-03-mid-soak-snapshot-5.md` — most recent prior snapshot (ARCHIVED Stream G R10)
 - `docs/governance/2026-05-03-day-4-pending-mid-soak-confirmation-4.md` — placeholder this confirmation closes
 - `docs/governance/edge-004-closure-path-tldr.md` — current EDGE-004 state
 - `docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md` — pre-deploy state for Wave-1 / Wave-2 sequencing
