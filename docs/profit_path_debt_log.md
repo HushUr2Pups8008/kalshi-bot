@@ -1908,7 +1908,7 @@ This is calibration **inertness** at the extraction layer, not sign-inversion. T
 - `PROFIT-GOV-002` (closed) — same-class pathology (rubber-stamp bias at LLM verdict layer); orthogonal to keyword-map gap per Claude L5 cross-check.
 - `docs/governance/edge-replay-cycle15b-report.md` — Cycle-15B C10 report with Claude appendix + verdict.
 - `docs/governance/cycle-16-conditional-charter-skeletons.md` §D — Cycle-16D skeleton (instantiates).
-- `docs/governance/cycle-15b-post-verdict-action-checklist.md` — post-verdict checklist driving items 5/8/9/10.
+- `docs/_archive/governance/cycle-15b-post-verdict-action-checklist.md` — post-verdict checklist driving items 5/8/9/10 (ARCHIVED Stream G R21).
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-16D + post-reconstruction acceptance).
 
 ---
@@ -1975,7 +1975,7 @@ This is the same `/markets/{ticker}/trades` 404 issue surfaced in cycle-13's `fe
 - `docs/governance/cycle-16-conditional-charter-skeletons.md` §D — scope skeleton.
 - `docs/governance/edge-replay-cycle16d-report.md` — Cycle-16D D8 report with Claude appendix + verdict.
 - `docs/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 skeletons (instantiates).
-- `docs/governance/cycle-16d-post-verdict-action-checklist.md` — post-verdict checklist driving items 5/8/9/10.
+- `docs/_archive/governance/cycle-16d-post-verdict-action-checklist.md` — post-verdict checklist driving items 5/8/9/10 (ARCHIVED Stream G R21).
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-17+ acceptance).
 
 ---
@@ -2056,7 +2056,7 @@ Cycle-17 §B vs §C operator decision is **DEFERRED** until Cycle-16E scorer for
 - `docs/governance/edge-replay-cycle16e-scorer-forensics.md` — Codex E10 report with Claude N6 verdict appendix.
 - `docs/governance/2026-05-07-cycle-16e-claude-rescope-and-review.md` — N3+N4+N5+N7 consolidated review + rescope analysis.
 - `docs/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 §B/§C un-deferred per Cycle-16E delivery (2026-05-07 amendment section).
-- `docs/governance/cycle-16d-post-verdict-action-checklist.md` — checklist Item 5 + 8 + 9 + 10 amended for Cycle-16E.
+- `docs/_archive/governance/cycle-16d-post-verdict-action-checklist.md` — checklist Item 5 + 8 + 9 + 10 amended for Cycle-16E (ARCHIVED Stream G R21).
 - `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — original strategic-redirect authority.
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-17+ acceptance).
 - `trading/executor.py:200-244` — production gate single source of truth (verified faithfully ported in Cycle-16E).

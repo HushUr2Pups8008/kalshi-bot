@@ -140,7 +140,7 @@ The verdict comes first. The skeleton that matches the verdict instantiates. NO 
 
 - `docs/_archive/governance/2026-05-06-cycle-15b-charter-extraction-rebuild.md` — Cycle-15B charter (verdict source) (ARCHIVED Stream G R15)
 - `docs/governance/cycle-15-conditional-charter-skeletons.md` — Cycle-15 skeletons (origin pattern; §C/§F transferable to Cycle-16 §B/§C)
-- `docs/governance/cycle-15b-post-verdict-action-checklist.md` — Cycle-15B post-verdict checklist (filed this skeleton-set)
+- `docs/_archive/governance/cycle-15b-post-verdict-action-checklist.md` — Cycle-15B post-verdict checklist (filed this skeleton-set) (ARCHIVED Stream G R21)
 - `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — strategic redirect authority
 - `docs/governance/edge-replay-pivot-playbook.md` — IC §16 Rule 5 diagnostic playbook
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs all Cycle-16 deploys)
