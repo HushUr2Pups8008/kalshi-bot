@@ -84,7 +84,7 @@ showed 2 FISA-class paper-trade bursts suppressed. Spec:
 #### PROFIT-GOV-003 — governance_monitor.py fix
 
 Governance-side fix per
-[`docs/superpowers/specs/2026-05-03-governance-monitor-fix-design.md`](docs/superpowers/specs/2026-05-03-governance-monitor-fix-design.md).
+[`docs/_archive/specs/2026-05-03-governance-monitor-fix-design.md`](docs/_archive/specs/2026-05-03-governance-monitor-fix-design.md) (ARCHIVED Stream G R19).
 Soak-shadow-validated with 0 KILL_SWITCH / VALIDATION_ERROR /
 batch_aborted across the full 14-day window.
 

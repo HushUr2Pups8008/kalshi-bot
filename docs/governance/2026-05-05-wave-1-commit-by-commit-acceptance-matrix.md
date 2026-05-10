@@ -71,7 +71,7 @@
 
 ### Commit 5: GOV-003 governance_monitor.py fix
 
-**Spec:** `docs/superpowers/specs/2026-05-03-governance-monitor-fix-design.md`.
+**Spec:** `docs/_archive/specs/2026-05-03-governance-monitor-fix-design.md` (ARCHIVED Stream G R19; CLOSED via commit `e3d4e8d`).
 
 | stage | criterion | source |
 |---|---|---|

@@ -156,7 +156,7 @@ Soak-shadow-validated 2026-05-01 → 2026-05-08 with 0 KILL_SWITCH /
 VALIDATION_ERROR / batch_aborted across 14 d window.
 
 Spec:
-docs/superpowers/specs/2026-05-03-governance-monitor-fix-design.md
+docs/_archive/specs/2026-05-03-governance-monitor-fix-design.md (ARCHIVED Stream G R19)
 
 Removes 7 strict-xfail markers in tests/test_governance_monitor.py:
   _GOV_MONITOR_XFAIL_REASON declaration + 7 decorators (lines 143,

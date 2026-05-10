@@ -126,7 +126,7 @@ Spec: `2026-05-03-exec-002-series-correlation-guard-design.md` §9.
 
 ### 4.5 governance_monitor.py fix
 
-Spec: `2026-05-03-governance-monitor-fix-design.md` §6.
+Spec: `docs/_archive/specs/2026-05-03-governance-monitor-fix-design.md` §6 (ARCHIVED Stream G R19).
 
 ```bash
 git revert <commit-sha-of-monitor-fix-deploy>
