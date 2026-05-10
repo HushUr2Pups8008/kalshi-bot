@@ -122,6 +122,6 @@ Total Wave-1 wall-clock: 7-8 days from commit-1 fire to commit-6 watch-end.
 - `2026-05-05-wave-1-fire-time-per-commit-checklist.md` — operational steps per commit
 - `2026-05-05-wave-1-deploy-day-timing.md` — cadence rationale + UTC windows
 - `2026-05-05-pre-wave1-baseline-interpretation.md` — 0-OPPORTUNITY-post-cutover finding (rebased rules)
-- `wave-1-changelog-entry-prestaged.md` — VERSION + xfail-marker-removal table
+- `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` — VERSION + xfail-marker-removal table (ARCHIVED Stream G R49)
 - `post-soak-rollback-runbook.md` §4 — per-commit rollback procedures
 - `2026-05-05-kill-switch-fire-procedure-runbook.md` — KILL_SWITCH response

@@ -3,7 +3,7 @@
 > **🛑 HALTED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** Do NOT paste these blocks into `CHANGELOG.md`. The pre-staged content below was authored under the cycle-1-to-11 working assumption that Wave-2/3 would auto-deploy after Wave-1. That assumption no longer holds. Wave-2 (feed onboarding) and Wave-3 (Lever B/C) are blocked pending Cycle-12 replay harness output (see `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` and IC §16). The blocks remain in this file as documentation of what WAS planned, not as executable deploy artifacts. If replay evidence approves a Wave-2 candidate later, this file's headlines + version refs may need rewriting against the actual approved feature, not the speculative legal/geopolitics feeds spec'd here.
 
 **Status:** HALTED PER IC §16 (was: pre-stage; copy into `CHANGELOG.md` at each Wave's close commit. Do not insert pre-soak-close — would lock version numbers prematurely.)
-**Drafted:** 2026-05-04 (during PROFIT-PHASE2-001 soak); sibling to `wave-1-changelog-entry-prestaged.md`
+**Drafted:** 2026-05-04 (during PROFIT-PHASE2-001 soak); sibling to `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` (ARCHIVED Stream G R49)
 **Rationale:** reduces deploy-day cognitive load. Operator copies the relevant block at each Wave close, fills in the actual VERSION value, runs the pre-commit hook to sync README badges, commits.
 
 ## Version sequence (planned — refreshed 2026-05-05 cycle 5 per drift-check F1)
@@ -175,7 +175,7 @@ git push origin main --tags
 
 ## Cross-links
 
-- `docs/governance/wave-1-changelog-entry-prestaged.md` — Wave-1 sibling
+- `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` — Wave-1 sibling (ARCHIVED Stream G R49)
 - `docs/governance/post-soak-close-rehearsal-checklist.md` — operator deploy guide
 - `docs/governance/post-soak-rollback-runbook.md` — incident-response
 - `docs/governance/post-edge-004-escalation-paths.md` — Wave-3 stall escalation

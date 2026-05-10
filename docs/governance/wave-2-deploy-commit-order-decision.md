@@ -32,7 +32,7 @@ Plus parallel-discretion option-A geopolitics specialist deploy (single commit; 
 1. Edit `config.py:RSS_FEEDS` — add 1-2 selected URLs (Just Security primary + Lawfare secondary recommended).
 2. Edit `main.py:_source_class_for_evidence` — add tokens for selected sources to bucket as `analysis` class.
 3. Remove `pytest.mark.xfail` decorator from `tests/test_lever_a1plus_feed_config.py::test_vital_law_or_legal_analyst_feed_present_post_a1plus` AND from any test pinning specific URL selection per Codex's harness expansion (this cycle).
-4. Bump VERSION 0.30.0 → 0.31.0 (single-feature minor bump per `wave-1-changelog-entry-prestaged.md` versioning).
+4. Bump VERSION 0.30.0 → 0.31.0 (single-feature minor bump per `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` versioning, ARCHIVED Stream G R49).
 5. Run pre-commit hook (auto-syncs README badges).
 6. Single commit including all 5 changes.
 7. Tag: `git tag -a v0.31.0`.

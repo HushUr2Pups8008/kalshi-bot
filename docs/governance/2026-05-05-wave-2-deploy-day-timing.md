@@ -82,7 +82,7 @@ If deployed: same timing recipe as Branch C (UTC Mon-Thu 18:00-22:00; 24 h watch
 
 1. **Serial vs parallel.** Recommend serial Branch A → Branch C; parallelism risks attribution confusion.
 2. **Branch C feed selection.** Per `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` (ARCHIVED Stream G R37): Just Security primary + Lawfare secondary. Operator confirms at fire-time.
-3. **VERSION bump.** Branch C deploy lands as v0.31.0 (Wave-2 minor bump per `wave-1-changelog-entry-prestaged.md` versioning rule). Confirm CHANGELOG drift check (this cycle's task T8) is clean before bump.
+3. **VERSION bump.** Branch C deploy lands as v0.31.0 (Wave-2 minor bump per `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` versioning rule, ARCHIVED Stream G R49). Confirm CHANGELOG drift check (this cycle's task T8) is clean before bump.
 4. **option-A fire condition.** Defer unless Branch C also stalls AND operator wants exhaustion-evidence before Branch D.
 
 ## Out of scope

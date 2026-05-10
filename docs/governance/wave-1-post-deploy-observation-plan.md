@@ -28,7 +28,7 @@ tail -50 logs/app/bot.log                         # no exceptions / tracebacks i
 .venv/bin/python -m pytest -q tests/test_<spec>.py  # spec-specific harness re-run on deploy commit
 ```
 
-**Smoke pass criteria (all):** PID > 0, exit 0, no `Traceback` in last 50 log lines, spec-harness `0 failed` (xfail markers removed in same hunk per `wave-1-changelog-entry-prestaged.md` §"Removed `pytest.mark.xfail` markers"). Any failure → `post-soak-rollback-runbook.md` §2 emergency revert.
+**Smoke pass criteria (all):** PID > 0, exit 0, no `Traceback` in last 50 log lines, spec-harness `0 failed` (xfail markers removed in same hunk per `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` §"Removed `pytest.mark.xfail` markers", ARCHIVED Stream G R49). Any failure → `post-soak-rollback-runbook.md` §2 emergency revert.
 
 ## 2. 24 h regression watch matrix
 
@@ -186,5 +186,5 @@ Returns 0 on all 14 monitoring rows clean across the 24 h window; non-zero on an
 - `docs/governance/post-soak-rollback-runbook.md` — incident response if any row triggers
 - `docs/governance/wave-1-deploy-commit-order-decision.md` — locked commit order
 - `docs/governance/post-soak-close-rehearsal-checklist.md` §1-§6 — per-commit deploy procedure
-- `docs/governance/wave-1-changelog-entry-prestaged.md` — per-feature behavioural summaries (informs trigger semantics)
+- `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` — per-feature behavioural summaries (informs trigger semantics) (ARCHIVED Stream G R49)
 - `scripts/wave1_post_deploy_smoke.sh` — Codex-authored bundle wrapper (companion task)

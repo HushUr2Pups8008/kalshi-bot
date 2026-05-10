@@ -98,7 +98,7 @@ Worked example assuming Day-7 close fires 2026-05-08T19:01Z, Wave-1 commit 1 imm
 
 ## 5. Alternative — bundled deploy (NOT recommended)
 
-The `wave-1-changelog-entry-prestaged.md` §"Operator deploy commands" mentions bundled-deploy as an option. Bundled deploys land all 6 commits in one push then VERSION bump + tag.
+The `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` §"Operator deploy commands" (ARCHIVED Stream G R49) mentions bundled-deploy as an option. Bundled deploys land all 6 commits in one push then VERSION bump + tag.
 
 **Why NOT recommended for Wave-1:**
 
@@ -127,4 +127,4 @@ The `wave-1-changelog-entry-prestaged.md` §"Operator deploy commands" mentions 
 - `docs/governance/wave-1-deploy-commit-order-decision.md` — locked commit order
 - `docs/governance/wave-1-post-deploy-observation-plan.md` — 24 h regression watch (this cycle)
 - `docs/governance/post-soak-rollback-runbook.md` — incident response if a regression fires
-- `docs/governance/wave-1-changelog-entry-prestaged.md` — deploy commands per spec
+- `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` — deploy commands per spec (ARCHIVED Stream G R49)

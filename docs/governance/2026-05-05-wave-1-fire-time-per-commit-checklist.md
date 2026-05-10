@@ -26,7 +26,7 @@ launchctl list | grep com.kalshi.governance.fast | awk '{print $2}'  # confirm n
 Per `wave-1-deploy-commit-order-decision.md` for THIS commit number:
 
 1. Apply the spec's hunk (single file or two files per spec).
-2. Remove `pytest.mark.xfail` decorators in same hunk per `wave-1-changelog-entry-prestaged.md` "Removed pytest.mark.xfail markers" list.
+2. Remove `pytest.mark.xfail` decorators in same hunk per `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` "Removed pytest.mark.xfail markers" list (ARCHIVED Stream G R49).
 3. If commit 6 (final): `echo "0.30.0" > VERSION`.
 4. Run pre-commit hook (auto-syncs README badges if VERSION changed).
 5. Commit with descriptive message naming the spec.
@@ -105,7 +105,7 @@ Check which row(s) triggered
 ## Cross-links
 
 - `wave-1-deploy-commit-order-decision.md` — locked commit order
-- `wave-1-changelog-entry-prestaged.md` — VERSION + xfail-marker-removal table
+- `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` — VERSION + xfail-marker-removal table (ARCHIVED Stream G R49)
 - `wave-1-post-deploy-observation-plan.md` — 14-row regression watch (smoke wrapper basis)
 - `2026-05-05-wave-1-deploy-day-timing.md` — full timing rationale
 - `post-soak-rollback-runbook.md` — incident response

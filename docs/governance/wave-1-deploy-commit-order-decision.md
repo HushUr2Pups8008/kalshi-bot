@@ -73,7 +73,7 @@ The order above lands MATCH-001 + OBS-003 + EXEC-002 in the middle (the highest-
 ## Cross-links
 
 - `docs/governance/post-soak-close-rehearsal-checklist.md` §5 — currently says "either choice is defensible"; needs update referencing this doc
-- `docs/governance/wave-1-changelog-entry-prestaged.md` — pre-staged CHANGELOG block
+- `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` — pre-staged CHANGELOG block (ARCHIVED Stream G R49)
 - `docs/governance/post-soak-rollback-runbook.md` — incident-response runbook (assumes per-feature granularity)
 - `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation
 - `~/.claude/rules/release_versioning.md` + project CLAUDE.md — VERSION-bump conventions

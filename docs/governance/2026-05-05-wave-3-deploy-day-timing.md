@@ -86,7 +86,7 @@ Wave-3 fires within 2026-06-17 to 2026-07-15 window. Independence Day 2026-07-03
 
 ## VERSION bump
 
-Wave-1 = 0.30.0 (per `wave-1-changelog-entry-prestaged.md`).
+Wave-1 = 0.30.0 (per `docs/_archive/governance/wave-1-changelog-entry-prestaged.md`, ARCHIVED Stream G R49).
 Wave-2 (Branch C) = 0.31.0.
 Wave-3 commit 1 (Lever B) = 0.32.0 (single-feature minor bump).
 Wave-3 commit 2 (Lever C) = 0.33.0.

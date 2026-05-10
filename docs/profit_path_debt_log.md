@@ -1612,7 +1612,7 @@ Total strict-xfail markers as of 2026-05-04: 26+ pinning the deploy lattice.
 
 **Pre-staged operator artifacts for Wave-1 deploy (Day-13 / 2026-05-15):**
 
-- `docs/governance/wave-1-changelog-entry-prestaged.md` (commit `75a3e39`) — pre-staged 0.30.0 CHANGELOG block
+- `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` (commit `75a3e39`) — pre-staged 0.30.0 CHANGELOG block (ARCHIVED Stream G R49)
 - `docs/governance/wave-2-wave-3-changelog-entries-prestaged.md` — Wave-2 + Wave-3 pre-staged blocks
 - `docs/governance/wave-1-deploy-commit-order-decision.md` — locked: per-feature commits (NOT bundle)
 - `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation

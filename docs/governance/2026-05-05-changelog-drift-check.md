@@ -1,7 +1,7 @@
 # 2026-05-05 — CHANGELOG.md drift check vs pre-staged Wave-1/2/3 entries
 
 **Type:** read-only review (Claude task per Implementation Contract §9 — review).
-**Source:** `CHANGELOG.md` (HEAD `753ec36`) vs `wave-1-changelog-entry-prestaged.md` + `wave-2-wave-3-changelog-entries-prestaged.md`.
+**Source:** `CHANGELOG.md` (HEAD `753ec36`) vs `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` (ARCHIVED Stream G R49) + `wave-2-wave-3-changelog-entries-prestaged.md`.
 **Audience:** operator before Wave-1 commit 6 deploy (when 0.30.0 lands and the Wave-1 CHANGELOG block is inserted).
 **No edits applied.** Findings only.
 
@@ -85,7 +85,7 @@ The pre-staged block's "option-C-Branch-C-fallback" should simplify to "Branch C
 ## Confirmed clean
 
 - `CHANGELOG.md` HEAD = 0.29.59 - 2026-05-02; matches `VERSION` file content (0.29.59) ✅
-- Wave-1 pre-staged block (`wave-1-changelog-entry-prestaged.md`) matches the 6-commit lineup that landed in Wave-1 dry-run + spec-locked order ✅
+- Wave-1 pre-staged block (`docs/_archive/governance/wave-1-changelog-entry-prestaged.md` ARCHIVED Stream G R49) matches the 6-commit lineup that landed in Wave-1 dry-run + spec-locked order ✅
 - Removed-xfail-markers list in Wave-1 pre-staged block matches existing test files at `wave-1-deploy-commit-order-decision.md` ✅
 - README badges currently show v0.29.59 (per pre-commit hook check; not validated in this audit pass) — assume clean
 - `evidence_store_schema.md`, `IMPLEMENTATION_CONTRACT.md`, `profit_path_debt_log.md`, `ROADMAP.md` — not in CHANGELOG scope; clean
@@ -107,7 +107,7 @@ The pre-staged block's "option-C-Branch-C-fallback" should simplify to "Branch C
 ## Cross-links
 
 - `CHANGELOG.md` — current HEAD (0.29.59)
-- `docs/governance/wave-1-changelog-entry-prestaged.md` — Wave-1 block (no drift)
+- `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` — Wave-1 block (no drift) (ARCHIVED Stream G R49)
 - `docs/governance/wave-2-wave-3-changelog-entries-prestaged.md` — Wave-2/3 blocks (drift findings F1-F3 land here)
 - `docs/governance/2026-05-05-wave-2-deploy-day-timing.md` — Wave-2 timing (this cycle)
 - `docs/governance/2026-05-05-wave-3-deploy-day-timing.md` — Wave-3 timing (this cycle)
