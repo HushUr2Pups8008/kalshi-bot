@@ -77,6 +77,7 @@ def test_cycle13_sources_merge_with_live_preference_and_manifest(tmp_path):
     assert rows[0]["ticker"] == "KXALPHA"
     assert rows[0]["live_only"] is True
     assert "local_only" not in rows[0]
+    assert rows[0]["market_family"] == "KXALPHA"
     assert {row["cohort"] for row in rows} == {"PRE_FIX"}
 
     assert manifest["input_row_counts"] == {
@@ -137,6 +138,7 @@ def test_cross_vintage_duplicate_prefers_priced_later_source_and_cli_json(tmp_pa
                 "preserve post fix new",
                 0.66,
                 cohort="POST_FIX_NEW",
+                series_ticker="KXFAMILY",
             ),
         ],
     )
@@ -167,6 +169,7 @@ def test_cross_vintage_duplicate_prefers_priced_later_source_and_cli_json(tmp_pa
     assert rows[0]["cohort"] == "POST_FIX_REBUILT"
     assert rows[1]["cohort"] == "POST_FIX_REBUILT"
     assert rows[2]["cohort"] == "POST_FIX_NEW"
+    assert rows[2]["market_family"] == "KXFAMILY"
 
     assert printed["output_row_count"] == 3
     assert printed["dropped_duplicate_count"] == 1

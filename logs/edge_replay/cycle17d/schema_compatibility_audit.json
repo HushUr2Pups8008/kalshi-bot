@@ -1,0 +1,236 @@
+{
+  "compatible": false,
+  "merged": {
+    "blank_optional_fields": {
+      "contracts": 510,
+      "headline": 2,
+      "side": 508
+    },
+    "cohort_flags": {
+      "allowed": [
+        "PRE_FIX",
+        "POST_FIX_REBUILT",
+        "POST_FIX_NEW"
+      ],
+      "invalid": {},
+      "missing": 0,
+      "valid": {
+        "POST_FIX_REBUILT": 272,
+        "PRE_FIX": 241
+      }
+    },
+    "compatible": false,
+    "invalid_value_types": {},
+    "json_errors": [],
+    "missing_blocking_dedup_fields": {},
+    "missing_dedup_key_fields": {
+      "headline": 2
+    },
+    "missing_optional_fields": {
+      "contracts": 510,
+      "headline": 2,
+      "readiness_admitted": 513,
+      "side": 508
+    },
+    "missing_production_proxy_fields": {
+      "confidence": 37,
+      "edge": 33,
+      "market_yes_price": 239,
+      "model_prob": 34
+    },
+    "missing_required_fields": {},
+    "path": "logs/edge_replay/cycle17d/replay_dataset_merged.jsonl",
+    "production_proxy_ready": false,
+    "row_count": 513,
+    "structurally_compatible": true
+  },
+  "output_path": "logs/edge_replay/cycle17d/schema_compatibility_audit.json",
+  "schema_version": 1,
+  "scorer": {
+    "charter_sweep_fields": [
+      "signal_source",
+      "market_family",
+      "signal_type",
+      "news_class",
+      "cohort"
+    ],
+    "dedup_blocking_fields": [
+      "ticker",
+      "decision_ts",
+      "signal_source"
+    ],
+    "dedup_key_fields": [
+      "ticker",
+      "decision_ts",
+      "signal_source",
+      "headline"
+    ],
+    "group_fields": [
+      "signal_source",
+      "series_ticker",
+      "signal_type",
+      "news_class"
+    ],
+    "optional_reported_fields": [
+      "headline",
+      "side",
+      "contracts",
+      "decision_kind",
+      "market_family",
+      "readiness_admitted"
+    ],
+    "production_proxy_required_fields": [
+      "market_yes_price",
+      "edge",
+      "model_prob",
+      "confidence",
+      "resolved_yes"
+    ],
+    "production_proxy_tool": "scripts/edge_replay/scorer_forensics_audit.py",
+    "required_fields": [
+      "ticker",
+      "decision_ts",
+      "signal_source",
+      "series_ticker",
+      "signal_type",
+      "news_class",
+      "resolved_yes"
+    ]
+  },
+  "sources": {
+    "cycle13_live": {
+      "blank_optional_fields": {
+        "contracts": 252,
+        "headline": 2,
+        "side": 250
+      },
+      "compatible": false,
+      "invalid_value_types": {},
+      "json_errors": [],
+      "missing_blocking_dedup_fields": {},
+      "missing_dedup_key_fields": {
+        "headline": 2
+      },
+      "missing_optional_fields": {
+        "contracts": 252,
+        "headline": 2,
+        "market_family": 255,
+        "readiness_admitted": 255,
+        "side": 250
+      },
+      "missing_production_proxy_fields": {
+        "confidence": 17,
+        "edge": 13,
+        "market_yes_price": 252,
+        "model_prob": 14
+      },
+      "missing_required_fields": {},
+      "path": "logs/edge_replay/cycle13_live/replay_dataset.jsonl",
+      "production_proxy_ready": false,
+      "row_count": 255,
+      "structurally_compatible": true
+    },
+    "cycle13_local": {
+      "blank_optional_fields": {
+        "contracts": 3,
+        "side": 3
+      },
+      "compatible": false,
+      "invalid_value_types": {},
+      "json_errors": [],
+      "missing_blocking_dedup_fields": {},
+      "missing_dedup_key_fields": {},
+      "missing_optional_fields": {
+        "contracts": 3,
+        "market_family": 6,
+        "readiness_admitted": 6,
+        "side": 3
+      },
+      "missing_production_proxy_fields": {
+        "confidence": 3,
+        "market_yes_price": 3
+      },
+      "missing_required_fields": {},
+      "path": "logs/edge_replay/cycle13_local/replay_dataset.jsonl",
+      "production_proxy_ready": false,
+      "row_count": 6,
+      "structurally_compatible": true
+    },
+    "cycle15b": {
+      "blank_optional_fields": {
+        "contracts": 272,
+        "headline": 2,
+        "side": 270
+      },
+      "compatible": false,
+      "invalid_value_types": {},
+      "json_errors": [],
+      "missing_blocking_dedup_fields": {},
+      "missing_dedup_key_fields": {
+        "headline": 2
+      },
+      "missing_optional_fields": {
+        "contracts": 272,
+        "headline": 2,
+        "market_family": 272,
+        "readiness_admitted": 272,
+        "side": 270
+      },
+      "missing_production_proxy_fields": {
+        "confidence": 34,
+        "edge": 33,
+        "market_yes_price": 272,
+        "model_prob": 34
+      },
+      "missing_required_fields": {},
+      "path": "logs/edge_replay/cycle15b/replay_dataset.jsonl",
+      "production_proxy_ready": false,
+      "row_count": 272,
+      "structurally_compatible": true
+    },
+    "cycle16d": {
+      "blank_optional_fields": {
+        "contracts": 272,
+        "headline": 2,
+        "side": 270
+      },
+      "compatible": false,
+      "invalid_value_types": {},
+      "json_errors": [],
+      "missing_blocking_dedup_fields": {},
+      "missing_dedup_key_fields": {
+        "headline": 2
+      },
+      "missing_optional_fields": {
+        "contracts": 272,
+        "headline": 2,
+        "market_family": 272,
+        "readiness_admitted": 272,
+        "side": 270
+      },
+      "missing_production_proxy_fields": {
+        "confidence": 34,
+        "edge": 33,
+        "market_yes_price": 1,
+        "model_prob": 34
+      },
+      "missing_required_fields": {},
+      "path": "logs/edge_replay/cycle16d/replay_dataset.jsonl",
+      "production_proxy_ready": false,
+      "row_count": 272,
+      "structurally_compatible": true
+    }
+  },
+  "summary": {
+    "blocking_issue_count": 18,
+    "merged_row_count": 513,
+    "optional_issue_count": 37,
+    "source_count": 4,
+    "source_row_counts": {
+      "cycle13_live": 255,
+      "cycle13_local": 6,
+      "cycle15b": 272,
+      "cycle16d": 272
+    }
+  }
+}

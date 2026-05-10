@@ -49,6 +49,10 @@ class SelectedRow:
     input_index: int
 
 
+def _market_family_for(row: dict[str, Any]) -> str:
+    return str(row.get("market_family") or row.get("series_ticker") or row.get("ticker") or "unknown")
+
+
 def _display_path(path: Path) -> str:
     resolved = path.resolve()
     try:
@@ -170,6 +174,7 @@ def build_cycle17d_corpus(
                 blank_headline_counts[source] += 1
             prepared = dict(row)
             prepared["cohort"] = _cohort_for(source, row)
+            prepared["market_family"] = _market_family_for(row)
             candidate = SelectedRow(source=source, row=prepared, input_index=input_index)
             input_index += 1
 
