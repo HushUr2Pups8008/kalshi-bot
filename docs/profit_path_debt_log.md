@@ -2948,7 +2948,7 @@ Second pass on 2026-05-05 (commits `b44dda2` + `80932cb` + this cycle's docs). I
 - `docs/governance/PROFIT-PHASE2-002-onboarding.md` — next-soak setup (90 min fast / 12 h deep cadence; decision-policy knobs frozen per `feedback_soak_acceleration_split.md`)
 - `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Branch A → C → D sequence; 42 d worst-case walk; 28 d compressed via A+C parallel
 - `docs/superpowers/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` — Lever B floor LOCKED at 0.04; failsafe 0.08; 2× ratio invariant; lifts §11 harness deferral
-- `docs/superpowers/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — Lever C v1 LOCKED; §3.2 normalized hash; 3600 s default; gate-placement detail (record hash AFTER readiness gate pass); INV-6 boundary attestation
+- `docs/_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — Lever C v1 LOCKED; §3.2 normalized hash; 3600 s default; gate-placement detail (record hash AFTER readiness gate pass); INV-6 boundary attestation (ARCHIVED Stream G R33)
 - `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers + handoff to PROFIT-LLM-001 / P4-GATE Appendix A; nomenclature distinguishes lever-menu-Lever-D (closed) from closure-path-Branch-D (active)
 - `docs/governance/edge-004-closure-path-tldr-v3.md` — TLDR v3 supersedes v2.2; closure-probability ranking ~58 % intake-side
 - `docs/governance/2026-05-05-day-7-walkthrough-dry-trace.md` — 11-step playbook validated against HEAD `80932cb`; 1 LOW (pre-stage `b44dda2` + `80932cb` in §8.5.2 invocation table before fire-time)

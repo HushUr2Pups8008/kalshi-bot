@@ -3,7 +3,7 @@
 **Type:** operator-runnable single-page playbook (per Implementation Contract §9 — operator decision input).
 **Audience:** operator at Wave-3 fire-time. Triggers ≥ 2026-06-17 (Lever B) or ≥ 2026-07-01 (Lever C). FIRES ONLY IF Wave-2 stalls AND Branch D not yet fired.
 **Drafted:** 2026-05-05.
-**Companion:** `2026-05-05-wave-3-deploy-day-timing.md`; `2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md`; `2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md`.
+**Companion:** `2026-05-05-wave-3-deploy-day-timing.md`; `2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md`; `docs/_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` (ARCHIVED Stream G R33).
 **Wall-clock target:** 30 min per commit; 14 d inter-commit cadence.
 
 ## Wave-3 commits
@@ -191,6 +191,6 @@ Per `docs/_archive/specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.
 - `specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` — Lever B 0.04 LOCK
 - `docs/_archive/specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` — Lever B-2 stub (post-Lever-B success) (ARCHIVED Stream G R26)
 - `docs/_archive/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md` — Lever C parent spec (ARCHIVED Stream G R29)
-- `specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — Lever C v1 LOCK
+- `docs/_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — Lever C v1 LOCK (ARCHIVED Stream G R33)
 - `wave-2-wave-3-changelog-entries-prestaged.md` — pre-staged CHANGELOG (refreshed cycle 5)
 - `2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers if Wave-3 stalls

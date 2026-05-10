@@ -63,7 +63,7 @@
 | operator question | source-of-truth file |
 |---|---|
 | Lever B G1=0.04 lock? | `docs/superpowers/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` |
-| Lever C v1 lock? | `docs/superpowers/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` |
+| Lever C v1 lock? | `docs/_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` (ARCHIVED Stream G R33) |
 | Decision flowchart? | `docs/governance/2026-05-05-wave-3-decision-flow.md` |
 | Compact per-commit playbook? | `docs/governance/2026-05-05-wave-3-fire-time-per-commit-checklist.md` |
 | Cadence + UTC windows? | `docs/governance/2026-05-05-wave-3-deploy-day-timing.md` |

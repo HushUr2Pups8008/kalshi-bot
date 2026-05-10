@@ -21,7 +21,7 @@ Wave-2 Branch C = minor bump (new feed onboarding + classifier branch addition).
 
 **Cycle-3 LOCK references (load-bearing for Wave-3 deploy commits):**
 - Lever B floor LOCKED at 0.04 / failsafe 0.08 / 2× ratio invariant per [`docs/superpowers/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md`](../superpowers/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md).
-- Lever C v1 LOCKED: §3.2 normalized hash / 3600s default window / record-after-gate-pass placement / INV-6 boundary attestation per [`docs/superpowers/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md`](../superpowers/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md).
+- Lever C v1 LOCKED: §3.2 normalized hash / 3600s default window / record-after-gate-pass placement / INV-6 boundary attestation per [`docs/_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md`](../_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md) (ARCHIVED Stream G R33).
 
 If the operator chooses different sub-versions (e.g., 0.30.0 → 0.30.1 → 0.30.2 with Lever B and Lever C as separate patch bumps), update this doc + the actual deploy commit. The pre-staged blocks below assume the planned sequence.
 

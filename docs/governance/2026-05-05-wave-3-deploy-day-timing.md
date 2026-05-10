@@ -117,6 +117,6 @@ If a Wave-3 commit's regression watch triggers within 24 h: prefer fast revert p
 - `docs/_archive/specs/2026-05-03-edge-004-lever-b-g1-calibration-design.md` — Lever B parent spec (ARCHIVED Stream G R30)
 - `docs/superpowers/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` — Lever B 0.04 LOCK
 - `docs/_archive/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md` — Lever C parent spec (ARCHIVED Stream G R29)
-- `docs/superpowers/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — Lever C v1 LOCK
+- `docs/_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — Lever C v1 LOCK (ARCHIVED Stream G R33)
 - `docs/governance/wave-2-wave-3-changelog-entries-prestaged.md` — pre-staged CHANGELOG entries
 - `docs/governance/post-soak-rollback-runbook.md` §3+§4 — rollback paths
