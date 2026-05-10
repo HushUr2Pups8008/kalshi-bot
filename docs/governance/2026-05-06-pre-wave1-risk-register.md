@@ -149,7 +149,7 @@ Per this risk register:
 ## Cross-links
 
 - `docs/governance/2026-05-06-pre-day7-dry-run-rehearsal.md` — current gate-state evidence
-- `docs/governance/2026-05-06-soak-runtime-characterization-summary.md` — soak-state evidence
+- `docs/_archive/governance/2026-05-06-soak-runtime-characterization-summary.md` — soak-state evidence (ARCHIVED Stream G R11)
 - `docs/governance/2026-05-05-kill-switch-fire-procedure-runbook.md` (R1)
 - `docs/governance/2026-05-05-mac-studio-dead-bot-reboot-runbook.md` (R2)
 - `docs/governance/2026-05-05-network-api-outage-runbook.md` (R3)
