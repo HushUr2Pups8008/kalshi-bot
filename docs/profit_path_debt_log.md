@@ -3053,7 +3053,7 @@ Operator bootstrapped same-day: `launchctl bootstrap gui/$UID ~/Library/LaunchAg
 - `2026-05-05-wave-2-fire-time-per-commit-checklist.md` + `2026-05-05-wave-3-fire-time-per-commit-checklist.md` — operator playbooks for Wave-2/3 deploys
 - `2026-05-05-launchd-plist-drift-audit.md` — found `ops/launchd/` template dir cycle 5 missed; flagged dual source-of-truth (resolved cycle 7)
 - `2026-05-05-network-api-outage-runbook.md` — 5-category triage (Internet/Kalshi-API/Ollama/RSS/Reddit-403)
-- `2026-05-05-implementation-contract-cycle-4-5-review.md` — 0 invariant violations across cycles 1-5
+- `docs/_archive/governance/2026-05-05-implementation-contract-cycle-4-5-review.md` — 0 invariant violations across cycles 1-5 (ARCHIVED Stream G R46)
 
 **Cycle 6 Codex artifacts (10 + 2 deviations):**
 - `scripts/pre_wave1_llm_call_budget_projection.py` — 352 calls/day at 90-min cadence projection
@@ -3061,7 +3061,7 @@ Operator bootstrapped same-day: `launchctl bootstrap gui/$UID ~/Library/LaunchAg
 - `scripts/macbook_import_disposition_audit.sh` — 47 files / 156MB; recommendation `keep_through_wave1_close_then_archive`
 - `scripts/launchd_plist_drift_audit.sh` — template-render-and-compare for `ops/launchd/` governance plists; live: 3 plists pass
 - 5 strict-xfail harnesses (db_snapshot_backup, calibration_drift_detection, governance_parse_error, kill_switch_path, prompt_template A5-A8)
-- Cycle-6 deviation: `2026-05-05-openclaw-orchestrator-integration-note.md` (OpenClaw as ops cockpit; 4-phase rollout deferred to post-Wave-1) + `_archive/studies/future_plans.md` 2-line forward-pointer
+- Cycle-6 deviation: `docs/_archive/governance/2026-05-05-openclaw-orchestrator-integration-note.md` (OpenClaw as ops cockpit; 4-phase rollout deferred to post-Wave-1; ARCHIVED Stream G R46) + `_archive/studies/future_plans.md` 2-line forward-pointer
 
 **Live empirical updates (Codex 2026-05-05 cycle 6):**
 - LLM call budget projection: 352.0 calls/day at 90-min cadence vs 22 calls/cycle observed (>30× headroom against PHASE2-002 envelope)
@@ -3080,7 +3080,7 @@ Seventh + eighth pass on 2026-05-05 (commits `92b767d` Claude + `ffc54b2` Codex;
 - `docs/_archive/governance/2026-05-05-day-7-to-wave-1-handoff-procedure.md` — 5-condition transition gate; defer rules (ARCHIVED Stream G R45)
 - `2026-05-05-wave-1-commit-by-commit-acceptance-matrix.md` — 6-commit consolidation
 - `2026-05-05-wave-2-decision-flow.md` + `2026-05-05-wave-3-decision-flow.md` — ASCII flowcharts
-- `2026-05-05-macbook-import-archive-procedure.md` — post-Wave-1-close tar.gz workflow
+- `docs/_archive/governance/2026-05-05-macbook-import-archive-procedure.md` — post-Wave-1-close tar.gz workflow (ARCHIVED Stream G R46)
 - `docs/_archive/governance/2026-05-05-doc-cross-link-integrity-audit.md` — 39 links scanned; 2 broken in wave-1-changelog-entry-prestaged.md (closed cycle 8) (ARCHIVED Stream G R44)
 - `docs/_archive/governance/2026-05-05-memory-hygiene-audit.md` — 2 memories clean (ARCHIVED Stream G R44)
 

@@ -106,7 +106,7 @@ Cross-references:
 ## What this means for the immediate cycle
 
 - `wave-2-wave-3-changelog-entries-prestaged.md` STAYS as documentation; the HALT is on EXECUTING those deploys, not on the prestaged content.
-- `wave-1-changelog-entry-prestaged.md` + `wave-1-commit-messages-prestaged.md` REMAIN active; Wave-1 ships 2026-05-08.
+- `wave-1-changelog-entry-prestaged.md` + `docs/_archive/governance/wave-1-commit-messages-prestaged.md` REMAIN active; Wave-1 ships 2026-05-08. (commit-messages-prestaged ARCHIVED Stream G R46 post-Wave-1-deploy.)
 - `wave-3-deploy-hunks/lever-b.patch` STAYS but is FROZEN pending replay evidence.
 - `tests/test_wave2_branch_a_passive_observation.py` STAYS xfail-strict; Branch A is no longer auto-active post-Wave-1.
 - Pre-Wave-1 deploy artifacts (Day-7 mid-soak skeleton, attestation pre-stage, rollback runbook) all REMAIN active.
