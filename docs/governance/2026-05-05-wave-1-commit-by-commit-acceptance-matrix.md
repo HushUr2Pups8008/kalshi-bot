@@ -84,7 +84,7 @@
 
 ### Commit 6: EDGE-004 Lever A.1 classifier (FINAL — 48h watch)
 
-**Spec:** `docs/superpowers/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md`.
+**Spec:** `docs/_archive/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md` (ARCHIVED Stream G R28; Wave-1 Commit 6 SHIPPED).
 
 | stage | criterion | source |
 |---|---|---|

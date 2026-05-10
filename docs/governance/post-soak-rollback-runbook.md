@@ -136,7 +136,7 @@ The fix is two hunks in one file; revert is non-conflicting.
 
 ### 4.6 Lever A.1 classifier fix
 
-Spec: `2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md` §6.
+Spec: `docs/_archive/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md` §6 (ARCHIVED Stream G R28).
 
 Two-hunk single-file revert in `main.py:_source_class_for_evidence`. Use `git revert <sha>`.
 

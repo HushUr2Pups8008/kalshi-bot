@@ -65,7 +65,7 @@ Lever E is closed (per `docs/governance/edge-004-closure-path-tldr.md` v2.2). Th
 | §4.3 OBS-003 revert | spec exists (`2026-05-03-obs-003-blendtask-skipped-emission-design.md` 13.3 K); revert is additive removal | ✅ |
 | §4.4 EXEC-002 spec ref | spec exists (`2026-05-03-exec-002-series-correlation-guard-design.md` 13.7 K); env-var exposed per F2 | ✅ |
 | §4.5 governance_monitor revert | spec exists (`docs/_archive/specs/2026-05-03-governance-monitor-fix-design.md` 8.9 K, ARCHIVED Stream G R19); two-hunk single-file revert intact | ✅ |
-| §4.6 Lever A.1 revert | spec exists (`2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md` 17.3 K); two-hunk single-file revert intact | ✅ |
+| §4.6 Lever A.1 revert | spec exists (`docs/_archive/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md` 17.3 K, ARCHIVED Stream G R28); two-hunk single-file revert intact | ✅ |
 | §6 post-revert checklist refs `bothealth.sh` | `scripts/bothealth.sh` exists (11 K) | ✅ |
 | §7 full rollback refs `pre_soak_close_branch_backup.sh` | `scripts/pre_soak_close_branch_backup.sh` exists (4.5 K) | ✅ |
 | §7 force-push reset path | flagged in runbook as destructive; correct caution | ✅ |

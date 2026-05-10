@@ -212,7 +212,7 @@ Closes Wave-1 base stack post-soak deploy:
     1602, 1607, 1615, 1620, 1628, 1633)
 
 Spec:
-docs/superpowers/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md
+docs/_archive/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md (ARCHIVED Stream G R28)
 
 Co-Authored-By: <agent>
 EOF

@@ -95,7 +95,7 @@ Classifier-only change (no archive trade-rate lift expected; Codex
 `main.py:_source_class_for_evidence` so existing official /
 specialist sources classify correctly. Prerequisite to A.1+ feed
 onboarding (Wave 2). Spec:
-[`docs/superpowers/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md`](docs/superpowers/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md).
+[`docs/_archive/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md`](docs/_archive/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md) (ARCHIVED Stream G R28).
 
 ### Soak validation
 

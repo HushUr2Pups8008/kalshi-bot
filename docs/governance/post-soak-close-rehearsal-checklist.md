@@ -177,7 +177,7 @@ After Wave-1 base stack stabilises. **Lands as prerequisite hygiene only — do 
 
 ### 6.2 Deploy
 
-- [ ] Apply the A.1 classifier patch per `2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md` §2.1 + §2.2.
+- [ ] Apply the A.1 classifier patch per `docs/_archive/specs/2026-05-03-edge-004-lever-a-stage-a1-source-class-classifier-fix-design.md` §2.1 + §2.2 (ARCHIVED Stream G R28).
 - [ ] Remove the 6 `pytest.mark.xfail` markers from `TestSourceClassClassifierLeverA1` in the same commit.
 - [ ] Bump `VERSION`. Update `CHANGELOG.md`. Tag.
 
