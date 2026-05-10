@@ -20,7 +20,7 @@
 | Pre-stage attestation file (cycle-11) | `docs/governance/PROFIT-PHASE2-001-early-close-attestation.md` |
 | Day-7 mid-soak confirmation skeleton (cycle-10) | `docs/governance/2026-05-07-day-7-pre-soak-confirmation.md` |
 | Decision flowchart? | `docs/governance/PROFIT-PHASE2-001-close-day-decision-flow.md` |
-| Pre-fire dry-run report? | `docs/governance/2026-05-06-pre-day7-dry-run-rehearsal.md` |
+| Pre-fire dry-run report? | `docs/_archive/governance/2026-05-06-pre-day7-dry-run-rehearsal.md` (ARCHIVED Stream G R14) |
 | §8.5.2 carve-out invocation table? | `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` (§"§8.5.2 policy-equivalence carve-outs invoked") |
 | Day-7 → Wave-1-commit-1 hand-off? | `docs/governance/2026-05-05-day-7-to-wave-1-handoff-procedure.md` |
 

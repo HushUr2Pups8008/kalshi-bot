@@ -52,7 +52,7 @@ Doc surface is **organic but not chaotic**. 6 superseded artifacts safely consol
 | `2026-05-03-claude-latest-commits-adversarial-review.md` | resolved | archive (HOLD: 4 active refs) |
 | `docs/_archive/governance/2026-05-03-post-soak-spec-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
 | `docs/_archive/governance/2026-05-04-claude-commits-681ceb9-2bf3da1-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
-| `2026-05-04-claude-latest-five-commits-adversarial-review-legal-cycle.md` | resolved | archive (deferred — circular ref pair) |
+| `docs/_archive/governance/2026-05-04-claude-latest-five-commits-adversarial-review-legal-cycle.md` | resolved | ARCHIVED Stream G R14 |
 | `docs/_archive/governance/2026-05-05-claude-latest-six-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
 | `docs/_archive/governance/2026-05-05-cross-set-adversarial-review-legal-doc-cycle.md` | resolved | ARCHIVED Stream G R3 |
 | `docs/_archive/governance/2026-05-05-latest-5plus5-adversarial-review.md` | resolved | ARCHIVED Stream G R3 |
@@ -80,7 +80,7 @@ Examples NOT to archive:
 - `2026-05-05-wave-2-a1plus-branch-decision-table.md` (this cycle)
 - `docs/_archive/governance/2026-05-05-wave1-commit-order-risk-audit.md` (ARCHIVED Stream G R4)
 - `docs/_archive/governance/2026-05-05-wave1-six-commit-dryrun-review-status.md` (ARCHIVED Stream G R4)
-- `2026-05-05-pre-wave1-version-bump-dry-run.md`
+- `docs/_archive/governance/2026-05-05-pre-wave1-version-bump-dry-run.md` (ARCHIVED Stream G R14)
 - `2026-05-05-wave-1-deploy-dry-run-report.md`
 - `docs/_archive/governance/2026-05-05-next-soak-readiness-audit.md` (ARCHIVED Stream G R4)
 - `docs/_archive/governance/2026-05-05-edge004-tldr-doc-quality-review.md` (ARCHIVED Stream G R4)
