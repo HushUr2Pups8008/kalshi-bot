@@ -119,7 +119,7 @@ Routing: no Wave-2/3/D behavioral deploy. Capital posture remains PAPER-ONLY pen
 ## Claude appendix — verdict consumption + Cycle-17 routing
 
 **Drafted:** 2026-05-07 post-Codex D6/D8/D9/D10 commit `e59f4c3`.
-**Authority:** Cycle-16D charter §"Cycle-16D success criterion"; cycle-16D post-verdict checklist (`cycle-16d-post-verdict-action-checklist.md`); Cycle-17 skeletons (`cycle-17-conditional-charter-skeletons.md`).
+**Authority:** Cycle-16D charter §"Cycle-16D success criterion"; cycle-16D post-verdict checklist (`docs/_archive/governance/cycle-16d-post-verdict-action-checklist.md` ARCHIVED Stream G R21); Cycle-17 skeletons (`cycle-17-conditional-charter-skeletons.md`).
 
 ### Verdict
 
