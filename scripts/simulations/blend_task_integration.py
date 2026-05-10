@@ -108,9 +108,13 @@ class _FakeStore:
 class _SpyLogger:
     def __init__(self) -> None:
         self.records: list[dict] = []
+        self.skipped_records: list[dict] = []
 
     def log_blend_decision(self, **kwargs) -> None:
         self.records.append(kwargs)
+
+    def log_skipped(self, **kwargs) -> None:
+        self.skipped_records.append(kwargs)
 
 
 # ── Seed helpers ──────────────────────────────────────────────────────────────

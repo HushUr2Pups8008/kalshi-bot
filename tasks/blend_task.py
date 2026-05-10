@@ -84,6 +84,8 @@ class BlendDecisionLogger(Protocol):
         evidence_ids_contributing: list[str],
     ) -> None: ...
 
+    def log_skipped(self, **kwargs: Any) -> None: ...
+
 
 @dataclass(frozen=True)
 class TradeCandidate:
