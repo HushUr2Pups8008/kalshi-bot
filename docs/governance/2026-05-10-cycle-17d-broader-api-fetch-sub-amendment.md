@@ -66,13 +66,19 @@ Both are recorded in this sub-amendment §3 placeholder below, with explicit mar
 
 **Corpus immutability:** Once pinned, the corpus is frozen. Any re-fetch or schema change requires an explicit unlock commit signed by the operator.
 
-**SHA placeholder text (to be replaced in follow-up Claude commit after Codex's build lands):**
+**Pinned SHAs (2026-05-10):**
 
-> **Pre-normalization SHA-256** (raw fetch): <TBD — pinned in a follow-up Claude commit after Codex's build commit lands per §3>
+> **Pre-normalization SHA-256** (raw fetch from Codex build commit `15f3d47`): `917d04abcf8d4d45615ce2d328c164bcb98f4075a78ef26bd22c2b56fd32c102`
 >
-> **Post-normalization SHA-256** (if schema patch needed): <TBD — pinned in follow-up Claude commit after Codex's schema-audit commit lands, if remediation required per §4>
->
-> If no schema patch is needed, the two SHAs are identical.
+> **Post-normalization SHA-256:** pending — depends on whether Stage 4 formal schema audit (Codex baton) requires a normalization patch. **Pre-audit field-completeness data reported by the build script (`15f3d47` commit message)** indicates the corpus is structurally below the 95% threshold defined in §4: `confidence` 43.64% present; `model_prob` 45.94%; `edge` 45.94%; `headline` 92.76%. The formal Stage 4 schema audit will compute the canonical numbers; the pre-audit warning is high-confidence the §5 halt criterion (>5% rows missing production-proxy fields) will fire.
+
+**Build manifest summary** (per `logs/edge_replay/cycle17d-broader/build_manifest.json`):
+
+- 566 replay rows
+- 24 distinct markets with historical-price coverage
+- Single cohort: POST_FIX_REBUILT
+- Build script reused Stage-1-fixed `build_replay_dataset` (`a23d473`); field completeness is genuine historical-data sparsity, NOT a re-introduced mapping bug
+- Reviewer fix landed before commit: fallback reconciles partial list-endpoint underfetch by probing missing evidence tickers individually
 
 ---
 
