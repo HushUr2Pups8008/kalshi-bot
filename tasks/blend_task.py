@@ -336,6 +336,70 @@ class BlendTask:
             evidence_ids_contributing=evidence_ids,
         )
 
+    async def _emit_skipped(
+        self,
+        *,
+        ticker: str,
+        blend_result: BlendResult,
+        readiness: ReadinessDecision,
+        trade_blocked_reason: str,
+        fast_lane_result: SignalAnalysis,
+    ) -> None:
+        """Emit a SKIPPED record for the blocked-reason early-return path.
+
+        Mirrors the executor's SKIPPED payload shape at trading/executor.py:137-152
+        so downstream consumers (bothealth.sh, governance Phase 2 reasoning,
+        future readiness-gate calibration) can treat the union of
+        BlendTask-emitted and executor-emitted SKIPPED records as a single
+        queryable stream. The `reason` field disambiguates origin: G1-G6 /
+        blender-side reasons originate here; everything else originates at the
+        executor. See PROFIT-OBS-003 closure notes in the debt log.
+        """
+        news_item = fast_lane_result.news_item
+        headline = news_item.headline[:80] if news_item is not None else None
+        source = news_item.source if news_item is not None else None
+        method = (
+            "llm"
+            if any(
+                value is not None
+                for value in (
+                    fast_lane_result.llm_direction,
+                    fast_lane_result.llm_magnitude,
+                    fast_lane_result.llm_confidence,
+                )
+            )
+            else "keyword"
+        )
+        market_price = fast_lane_result.market_yes_price
+        blended_p = blend_result.blended_p
+        edge = blended_p - market_price / 100.0
+        if readiness.readiness_gate_min_edge_override is not None:
+            min_edge_threshold = readiness.readiness_gate_min_edge_override
+        else:
+            min_edge_threshold = (
+                PAPER_MIN_EDGE if self._is_paper_mode else cfg.min_edge
+            )
+        skipped_kwargs: dict[str, Any] = {
+            "reason": trade_blocked_reason,
+            "ticker": ticker,
+            "headline": headline,
+            "source": source,
+            "method": method,
+            "llm_direction": fast_lane_result.llm_direction,
+            "llm_magnitude": fast_lane_result.llm_magnitude,
+            "model_probability": blended_p,
+            "market_price": market_price,
+            "edge": edge,
+            "min_edge_threshold": min_edge_threshold,
+        }
+        signal_meta = fast_lane_result.signal_meta
+        if signal_meta:
+            skipped_kwargs["signal_meta"] = signal_meta
+        await write_trade_log_async(
+            self._logger.log_skipped,
+            **skipped_kwargs,
+        )
+
 
 async def process_fast_lane_result(
     fast_lane_result: SignalAnalysis,
