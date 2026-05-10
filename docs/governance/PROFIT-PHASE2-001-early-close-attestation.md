@@ -87,7 +87,7 @@ When this attestation file fires (2026-05-07/08 close commit window):
 - `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` — operator runbook + §8.5.2 invocation table
 - `docs/governance/PROFIT-PHASE2-001-early-close-attestation-template.md` — original blank template
 - `docs/governance/2026-05-04-day-4-mid-soak-confirmation.md` — Day-4 baseline
-- `docs/governance/2026-05-07-day-7-pre-soak-confirmation.md` — Day-7 fire-time skeleton
+- `docs/_archive/governance/2026-05-07-day-7-pre-soak-confirmation.md` — Day-7 fire-time skeleton (ARCHIVED Stream G R23)
 - `docs/governance/post-soak-close-rehearsal-checklist.md` — Wave-1 deploy plan
 - `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation
 - `scripts/check_soak_invariant.sh` — gate-7 mechanism
