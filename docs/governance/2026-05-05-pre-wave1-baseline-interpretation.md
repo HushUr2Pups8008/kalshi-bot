@@ -32,7 +32,7 @@ Notable: **0 OPPORTUNITY / 0 SKIPPED / 0 PAPER_TRADE / 0 BLEND_DECISION events.*
 
 ## Per-baseline interpretation
 
-### Codex baseline 1: SKIPPED-rate (`2026-05-05-pre-wave1-skipped-rate-baseline.md`)
+### Codex baseline 1: SKIPPED-rate (`docs/_archive/governance/2026-05-05-pre-wave1-skipped-rate-baseline.md`)
 
 **Reported:** OPPORTUNITY=0; SKIPPED=0; PAPER_TRADE=0; SKIPPED rate = 0.0%.
 
@@ -42,7 +42,7 @@ Notable: **0 OPPORTUNITY / 0 SKIPPED / 0 PAPER_TRADE / 0 BLEND_DECISION events.*
 
 **Recommended replacement rule:** "Within 7 d post-Wave-1 commit 6 (Lever A.1 deploy), AT LEAST ONE BLEND_DECISION event emits in trades.jsonl. If 7 d passes with 0 BLEND_DECISIONs: investigate per the cycle-5 baseline interpretation — likely an upstream pipeline issue, not a SKIPPED issue."
 
-### Codex baseline 2: OPPORTUNITY age proxy (`2026-05-05-pre-wave1-opportunity-age-distribution.md`)
+### Codex baseline 2: OPPORTUNITY age proxy (`docs/_archive/governance/2026-05-05-pre-wave1-opportunity-age-distribution.md`)
 
 **Reported:** 700 age samples; median 421.945s; p90 1669.0s; max 2610.2s. Source: 252 EARLY_FRESH_PASS + 448 MATCH_DIAGNOSTIC events.
 
@@ -52,7 +52,7 @@ Notable: **0 OPPORTUNITY / 0 SKIPPED / 0 PAPER_TRADE / 0 BLEND_DECISION events.*
 
 **Recommended replacement rule:** "Post-Wave-1, MATCH_DIAGNOSTIC + EARLY_FRESH_PASS age distribution stays within ±20% of baseline (median 422s ± 84s)."
 
-### Codex baseline 3: cooldown distribution (`2026-05-05-pre-wave1-cooldown-distribution-audit.md`)
+### Codex baseline 3: cooldown distribution (`docs/_archive/governance/2026-05-05-pre-wave1-cooldown-distribution-audit.md`)
 
 **Reported:** 0 cooldown SKIPPED rows.
 
@@ -62,7 +62,7 @@ Notable: **0 OPPORTUNITY / 0 SKIPPED / 0 PAPER_TRADE / 0 BLEND_DECISION events.*
 
 **Recommended replacement rule (per existing observation plan but enforced manually):** "First OPPORTUNITY in trades.jsonl post-OBS-005 deploy: confirm `cooldown_state` field uses None semantics, not 0.0 sentinel. If 0.0 leaks: rollback per `post-soak-rollback-runbook.md` §4.1."
 
-### Codex baseline 4: per-ticker trade-rate (`2026-05-05-pre-wave1-trade-rate-per-ticker-baseline.md`)
+### Codex baseline 4: per-ticker trade-rate (`docs/_archive/governance/2026-05-05-pre-wave1-trade-rate-per-ticker-baseline.md`)
 
 **Reported:** 0 PAPER_TRADE rows.
 
@@ -93,10 +93,10 @@ This is **consistent with the pre-soak forecast** — PROFIT-EDGE-004 was regist
 
 ## Cross-links
 
-- `2026-05-05-pre-wave1-skipped-rate-baseline.md` — Codex baseline 1
-- `2026-05-05-pre-wave1-opportunity-age-distribution.md` — Codex baseline 2
-- `2026-05-05-pre-wave1-cooldown-distribution-audit.md` — Codex baseline 3
-- `2026-05-05-pre-wave1-trade-rate-per-ticker-baseline.md` — Codex baseline 4
+- `docs/_archive/governance/2026-05-05-pre-wave1-skipped-rate-baseline.md` — Codex baseline 1
+- `docs/_archive/governance/2026-05-05-pre-wave1-opportunity-age-distribution.md` — Codex baseline 2
+- `docs/_archive/governance/2026-05-05-pre-wave1-cooldown-distribution-audit.md` — Codex baseline 3
+- `docs/_archive/governance/2026-05-05-pre-wave1-trade-rate-per-ticker-baseline.md` — Codex baseline 4
 - `wave-1-post-deploy-observation-plan.md` — affected by 0-baseline rules (cycle-6 follow-up)
 - `2026-05-05-PROFIT-PHASE2-001-decision-distribution-analysis.md` — governance-side baseline (not affected; non-zero)
 - `docs/profit_path_debt_log.md` PROFIT-EDGE-004 entry — pre-soak no-edge framing (consistent)
