@@ -81,7 +81,7 @@ Cycle-16D's `information_frontier_holds` label remains not deploy-positive, but 
 ## Claude N6 verdict appendix
 
 **Drafted:** 2026-05-07 post-Codex `c913ffd`.
-**Authority:** Cycle-16E task split N6 (`2026-05-07-cycle-16e-task-split.md`); rescope review (`2026-05-07-cycle-16e-claude-rescope-and-review.md`).
+**Authority:** Cycle-16E task split N6 (`docs/_archive/governance/2026-05-07-cycle-16e-task-split.md` ARCHIVED Stream G R20); rescope review (`2026-05-07-cycle-16e-claude-rescope-and-review.md`).
 
 ### Verdict against locked 4-outcome charter
 

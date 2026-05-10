@@ -1,6 +1,6 @@
 # Cycle-16E Claude rescope + N3 + N4 + N5 + N7 consolidated review
 
-**Type:** verification + rescope artifact. Combines N3 (code review), N4 (independent price-unit read), N5 (production-vs-scorer semantics cross-check), N7 (anti-regression review) per `2026-05-07-cycle-16e-task-split.md`. Plus rescope of remaining N tasks given Codex bundled E1-E10 in commit `c913ffd`.
+**Type:** verification + rescope artifact. Combines N3 (code review), N4 (independent price-unit read), N5 (production-vs-scorer semantics cross-check), N7 (anti-regression review) per `docs/_archive/governance/2026-05-07-cycle-16e-task-split.md`. Plus rescope of remaining N tasks given Codex bundled E1-E10 in commit `c913ffd`.
 **Drafted:** 2026-05-07 post-Codex `c913ffd` (cycle-16e codex: scorer forensics audit).
 **Authority:** Cycle-16E charter (`2026-05-07-cycle-16e-scorer-forensics-charter.md` — Codex-authored; this doc is post-hoc review of Codex's charter as well).
 **Gates:** N6 verdict appendix + N9 cycle-17 skeleton refresh + N10 debt-log closure (filed in same commit as this doc).
@@ -181,7 +181,7 @@ Codex authored `2026-05-07-cycle-16e-scorer-forensics-charter.md` (was N1; Codex
 
 ## Verdict mapping
 
-Per `2026-05-07-cycle-16e-task-split.md` §"D6 re-run verdict" 4 locked outcomes:
+Per `docs/_archive/governance/2026-05-07-cycle-16e-task-split.md` §"D6 re-run verdict" 4 locked outcomes:
 
 | outcome | Cycle-16E result against criteria |
 |---|---|
@@ -218,7 +218,7 @@ This lesson is filed to memory in `memory/feedback_market_implied_baseline.md`.
 
 ## Cross-links
 
-- `docs/governance/2026-05-07-cycle-16e-task-split.md` — original 10+10 task split.
+- `docs/_archive/governance/2026-05-07-cycle-16e-task-split.md` — original 10+10 task split (ARCHIVED Stream G R20).
 - `docs/governance/2026-05-07-cycle-16e-scorer-forensics-charter.md` — Codex-authored charter (post-hoc review above).
 - `docs/governance/edge-replay-cycle16e-scorer-forensics.md` — Codex E10 report (Claude N6 verdict appendix lands separately).
 - `docs/governance/edge-replay-cycle16d-report.md` "Operator override" — origin authority.
