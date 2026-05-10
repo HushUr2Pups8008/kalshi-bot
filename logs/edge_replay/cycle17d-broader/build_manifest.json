@@ -1,0 +1,136 @@
+{
+  "blocklist": {
+    "current_head": "473637d0207a2a270db8b218979c17936161951b",
+    "prefix_count": 74,
+    "source": "config.MARKET_SERIES_BLOCKLIST_PREFIXES",
+    "source_commit": "2222227fedfbf84f9c9423b467e19873e17966a4"
+  },
+  "cohort": "POST_FIX_REBUILT",
+  "cohort_counts": {
+    "POST_FIX_REBUILT": 566
+  },
+  "corpus_id": "cycle17d_broader_api_fetch",
+  "fetch_metadata": {
+    "max_pages_per_status": 100,
+    "mode": "live-kalshi",
+    "page_limit": 200
+  },
+  "filter_counts": {
+    "excluded_not_in_evidence_store": 19747,
+    "excluded_without_historical_price_coverage": 1,
+    "post_dataset_build_rows": 566,
+    "post_market_filters": 25,
+    "post_price_coverage": 24,
+    "pre_filter": 19772,
+    "pre_price_coverage": 25
+  },
+  "input_paths": {
+    "evidence_store_db": "data/evidence_store.db",
+    "paper_trades_db": "data/paper_trades.db",
+    "trade_logs": [
+      "logs/trades/archive/2026/05/2026-05-01.jsonl",
+      "logs/trades/archive/2026/05/2026-05-02.jsonl",
+      "logs/trades/archive/2026/05/2026-05-03.jsonl",
+      "logs/trades/archive/2026/05/2026-05-04.jsonl",
+      "logs/trades/archive/2026/05/2026-05-05.jsonl",
+      "logs/trades/archive/2026/05/2026-05-06.jsonl",
+      "logs/trades/archive/2026/05/2026-05-07.jsonl",
+      "logs/trades/archive/2026/05/2026-05-08.jsonl",
+      "logs/trades/archive/2026/05/2026-05-09.jsonl",
+      "logs/trades/live/trades.jsonl"
+    ]
+  },
+  "market_count": 24,
+  "output_paths": {
+    "dataset": "logs/edge_replay/cycle17d-broader/replay_dataset_broader.jsonl",
+    "historical_price_errors": "logs/edge_replay/cycle17d-broader/historical_price_errors.json",
+    "historical_prices": "logs/edge_replay/cycle17d-broader/historical_prices.json",
+    "manifest": "logs/edge_replay/cycle17d-broader/build_manifest.json",
+    "resolved_markets": "logs/edge_replay/cycle17d-broader/resolved_markets.json"
+  },
+  "raw_market_status_counts": {
+    "finalized": 19772
+  },
+  "required_field_completeness": {
+    "cohort": {
+      "fraction": 1.0,
+      "missing": 0,
+      "populated": 566
+    },
+    "confidence": {
+      "fraction": 0.4364,
+      "missing": 319,
+      "populated": 247
+    },
+    "decision_ts": {
+      "fraction": 1.0,
+      "missing": 0,
+      "populated": 566
+    },
+    "edge": {
+      "fraction": 0.4594,
+      "missing": 306,
+      "populated": 260
+    },
+    "headline": {
+      "fraction": 0.9276,
+      "missing": 41,
+      "populated": 525
+    },
+    "market_family": {
+      "fraction": 1.0,
+      "missing": 0,
+      "populated": 566
+    },
+    "market_yes_price": {
+      "fraction": 1.0,
+      "missing": 0,
+      "populated": 566
+    },
+    "model_prob": {
+      "fraction": 0.4594,
+      "missing": 306,
+      "populated": 260
+    },
+    "news_class": {
+      "fraction": 1.0,
+      "missing": 0,
+      "populated": 566
+    },
+    "resolved_yes": {
+      "fraction": 1.0,
+      "missing": 0,
+      "populated": 566
+    },
+    "signal_source": {
+      "fraction": 1.0,
+      "missing": 0,
+      "populated": 566
+    },
+    "signal_type": {
+      "fraction": 1.0,
+      "missing": 0,
+      "populated": 566
+    },
+    "ticker": {
+      "fraction": 1.0,
+      "missing": 0,
+      "populated": 566
+    }
+  },
+  "row_count": 566,
+  "schema_version": 1,
+  "scorer_schema_compatibility": {
+    "audit_script": "scripts/edge_replay/cycle17d_schema_audit.py",
+    "status": "ready-for-audit"
+  },
+  "sha256": "917d04abcf8d4d45615ce2d328c164bcb98f4075a78ef26bd22c2b56fd32c102",
+  "statuses": [
+    "settled"
+  ],
+  "time_window": {
+    "end": "2026-05-10T00:00:00Z",
+    "filter": "close_time IN [START, END]",
+    "start": "2026-01-01T00:00:00Z"
+  }
+}
