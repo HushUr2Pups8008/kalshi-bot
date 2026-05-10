@@ -20,7 +20,7 @@
 - `tasks/trade_readiness_gate.py:69` — `G1_CONFIDENCE_THRESHOLD = 0.05` (hardcoded module constant; not env-driven).
 - `tasks/trade_readiness_gate.py:70` — `G1_FAILSAFE_CONFIDENCE_THRESHOLD = 0.10` (same).
 - `analysis/decision_blender.py` — no G1 constants present (the spec docstring lives there per Lever B spec §2; the actual readiness gate constants are in `tasks/`).
-- Lever B spec (`2026-05-03-edge-004-lever-b-g1-calibration-design.md`) §7: "Two-line constant revert. Trivial. Operator-side fast revert: **no env-var**; revert + redeploy is the only path."
+- Lever B spec (`docs/_archive/specs/2026-05-03-edge-004-lever-b-g1-calibration-design.md` ARCHIVED Stream G R30) §7: "Two-line constant revert. Trivial. Operator-side fast revert: **no env-var**; revert + redeploy is the only path."
 
 The runbook's hedging clause "(if env-driven post-landing)" hints at this, but the row's presence in §3 (env-driven fast reverts) **misleads** the operator into looking for an env-var that doesn't and won't exist (per Lever B spec §7 + §11 explicit deferral of env-var override).
 
@@ -90,6 +90,6 @@ All explicit cross-links in the runbook (§0 trigger conditions, §3 spec refs, 
 ## Cross-links
 
 - `docs/governance/post-soak-rollback-runbook.md` — the runbook under review
-- `docs/superpowers/specs/2026-05-03-edge-004-lever-b-g1-calibration-design.md` §7 + §11 — Lever B revert path
+- `docs/_archive/specs/2026-05-03-edge-004-lever-b-g1-calibration-design.md` §7 + §11 — Lever B revert path (ARCHIVED Stream G R30)
 - `docs/superpowers/specs/2026-05-03-exec-002-series-correlation-guard-design.md` §6 — EXEC-002 env-var introduction
 - `tasks/trade_readiness_gate.py:69-70` — G1 constant location of record

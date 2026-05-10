@@ -123,7 +123,7 @@ Insert ABOVE `## [0.31.0]` once Wave-3 is ready:
 `tasks/trade_readiness_gate.py`. Per Codex's 2026-05-03 G1 admittance
 counterfactual, this is an **attribution / calibration lever**, not
 edge-production. Predicted lift: 1-2 PAPER_TRADE / 14 d. Spec:
-[`docs/superpowers/specs/2026-05-03-edge-004-lever-b-g1-calibration-design.md`](docs/superpowers/specs/2026-05-03-edge-004-lever-b-g1-calibration-design.md).
+[`docs/_archive/specs/2026-05-03-edge-004-lever-b-g1-calibration-design.md`](docs/_archive/specs/2026-05-03-edge-004-lever-b-g1-calibration-design.md) (ARCHIVED Stream G R30).
 Strict-xfail markers removed:
 - `tests/test_lever_b_g1_calibration.py::test_g1_confidence_threshold_lowered_to_spec_value` (1 marker)
 

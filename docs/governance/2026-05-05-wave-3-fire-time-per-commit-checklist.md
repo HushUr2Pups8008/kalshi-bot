@@ -187,7 +187,7 @@ Per `docs/_archive/specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.
 ## Cross-links
 
 - `2026-05-05-wave-3-deploy-day-timing.md` — Wave-3 timing rationale
-- `specs/2026-05-03-edge-004-lever-b-g1-calibration-design.md` — Lever B parent spec
+- `docs/_archive/specs/2026-05-03-edge-004-lever-b-g1-calibration-design.md` — Lever B parent spec (ARCHIVED Stream G R30)
 - `specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` — Lever B 0.04 LOCK
 - `docs/_archive/specs/2026-05-05-edge-004-lever-b-2-0.03-floor-followup-stub.md` — Lever B-2 stub (post-Lever-B success) (ARCHIVED Stream G R26)
 - `docs/_archive/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md` — Lever C parent spec (ARCHIVED Stream G R29)
