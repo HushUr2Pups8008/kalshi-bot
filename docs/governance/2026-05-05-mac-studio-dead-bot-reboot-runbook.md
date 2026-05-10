@@ -3,7 +3,7 @@
 **Type:** operator runbook (Claude task per Implementation Contract §9 — operator decision input).
 **Drafted:** 2026-05-05.
 **Audience:** operator who returns to find the bot dead — launchd job exited, OS rebooted, Mac Studio power-cycled, or `launchctl list | grep com.jake.kalshi-bot` returns empty/exit-code != 0.
-**Companion:** `post-soak-rollback-runbook.md` §0 (when to use); `kill-switch-fire-procedure-runbook.md` (related incident shape).
+**Companion:** `docs/_archive/governance/post-soak-rollback-runbook.md` §0 (when to use); `kill-switch-fire-procedure-runbook.md` (related incident shape).
 **Wall-clock target:** 10-20 min from detection to bot stable.
 
 ## Detection — operator notices the bot is dead
@@ -53,7 +53,7 @@ Symptoms: occasional 5xx / connection-refused / timeout errors that recovered on
 
 Symptoms: stack trace pointing at a specific module; reproducible on restart.
 
-**Action:** investigate the trace; if it's a recent Wave-1 commit's regression, follow `post-soak-rollback-runbook.md` §4 (code revert). If it's pre-existing: open new debt entry; decide hotfix vs revert vs quarantine.
+**Action:** investigate the trace; if it's a recent Wave-1 commit's regression, follow `docs/_archive/governance/post-soak-rollback-runbook.md` §4 (code revert). If it's pre-existing: open new debt entry; decide hotfix vs revert vs quarantine.
 
 ### Category C: Resource exhaustion
 

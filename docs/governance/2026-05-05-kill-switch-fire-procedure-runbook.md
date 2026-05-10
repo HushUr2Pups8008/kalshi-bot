@@ -3,7 +3,7 @@
 **Type:** operator runbook (Claude task per Implementation Contract §9 — operator decision input).
 **Drafted:** 2026-05-05.
 **Audience:** operator when a `KILL_SWITCH` event fires in `logs/governance/decisions.jsonl` during/post-Wave-1.
-**Companion:** `post-soak-rollback-runbook.md` §2 (emergency revert); governance spec §8.5 / §8.5.1 / §8.5.2 (KILL_SWITCH definition + triggers).
+**Companion:** `docs/_archive/governance/post-soak-rollback-runbook.md` §2 (emergency revert); governance spec §8.5 / §8.5.1 / §8.5.2 (KILL_SWITCH definition + triggers).
 **Wall-clock target:** 15-30 min from fire detection to bot stable (revert) or quarantine (preserve).
 
 ## What is KILL_SWITCH
@@ -84,7 +84,7 @@ Two paths:
 If KILL_SWITCH happened during/post-Wave-1 deploy of a specific commit AND symptoms map to that commit:
 
 1. Identify the suspect commit: `git log --since "2026-05-08" --until "now" --oneline`
-2. Per `post-soak-rollback-runbook.md` §2:
+2. Per `docs/_archive/governance/post-soak-rollback-runbook.md` §2:
    ```bash
    git revert <suspect-commit-sha>
    git push origin main
