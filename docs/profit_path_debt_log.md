@@ -27,12 +27,12 @@
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 48 |
+| Total Items | 49 |
 | Open — HIGH | 4 |
-| Open — MEDIUM | 3 |
-| Open — LOW | 2 |
+| Open — MEDIUM | 2 |
+| Open — LOW | 1 |
 | Items IN_PROGRESS | 1 (PROFIT-PHASE2-001 — soak clock running, no operator action until 2026-05-15) |
-| Items COMPLETE | 37 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-DOSSIER-001, PROFIT-GOV-002, PROFIT-DOC-002, PROFIT-OBS-003) |
+| Items COMPLETE | 40 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-STARTUP-001, PROFIT-STRUCT-001, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-DOSSIER-001, PROFIT-GOV-002, PROFIT-DOC-002, PROFIT-OBS-003, PROFIT-OBS-004, PROFIT-DEBT-OQ1-SHIM, PROFIT-SOURCE-001) |
 | Consolidated From | `docs/EDGE_STATUS.md` (merged 2026-05-09 → §Current Status); `docs/governance/edge-004-closure-path-tldr-v3.md` (lever map + EDGE-004 closure criteria merged 2026-05-09 → §Current Status §2.3) |
 
 ### High-Risk Areas
@@ -46,7 +46,7 @@
 
 1. `PROFIT-OBS-003` (now HIGH/NOW) — close the OPPORTUNITY → PAPER_TRADE silent-exit gap so the post-EDGE-003 audit can attribute every kill to a specific gate. Promoted ahead of EDGE-004 because the lifetime trade log (260 OPP / 17 SKIP / 3 PAPER = 240 silent exits, 17/17 SKIP reasons identical to `"edge +0.0000 below min_edge 0.02"`, plus 2 positive-edge OPPs that never produced trades) confirms the gap is actively losing actionable candidates, not just observability noise. Without this, every other audit (EDGE-004, CAL-001 calibration sample, governance Phase 2 reasoning) operates from a partial view of the pipeline.
 2. `PROFIT-EDGE-004` — the operationally-surfaced binding constraint after the EDGE-001/002/003 stack landed; sequenced investigation (matcher audit → pre-LLM-gate re-eval → market-mix audit → Appendix A re-eval). With OBS-003's instrumentation in hand, EDGE-004's evidence section can quote per-gate kill counts rather than the present aggregate. Until this advances, paper trades remain effectively zero (the FISAEXTEND emission notwithstanding — same source, same series, single losing pattern).
-3. `PROFIT-OBS-004` (new 2026-05-01) — fix the edge-sign display/persistence bug in `paper_trades.edge` so future post-mortems read the executed-side edge, not the YES-side perspective. Cosmetic-but-load-bearing for any audit that joins the trade record back to the executor's actual decision math.
+3. ~~`PROFIT-OBS-004`~~ — **CLOSED 2026-05-02**. Fix landed in `trading/paper_trader.py:record_trade` (executed-side edge persistence) + 3 historical KXFISAEXTEND rows backfilled. See entry for closure detail.
 4. `PROFIT-PHASE2-001` (new 2026-05-01, IN_PROGRESS) — soak clock is ticking; the only operator action is the daily monitoring checklist in [`docs/governance/PHASE2_RUNBOOK.md`](governance/PHASE2_RUNBOOK.md). No code work is appropriate inside the soak window unless a PARSE_ERROR / VALIDATION_ERROR / KILL_SWITCH event surfaces.
 5. `PROFIT-CUTOVER-001` (new 2026-05-01) — MacBook → Mac Studio operational handoff. The only operator-side dependency is verifying the Studio's Phase 2 launchd is actually firing cycles (per RUNBOOK monitoring) and confirming the SQL-dump restore on the Studio matches the manifest counts. Closes when the first Studio paper trade resolves cleanly *or* when the §8.5 acceptance milestone is reached, whichever first.
 6. `PROFIT-VALID-001` + remaining `PROFIT-OBS-*` items (validation and observability hardening; needed before P4-GATE).
@@ -969,7 +969,7 @@ Deferred until the Stage 5 Phase 2 (P2.2) 72-hour paper-mode observation window 
 | **Title** | Reddit intake is degraded-permanent; Reddit OAuth is externally blocked |
 | **Category** | Intake / Source Availability |
 | **Severity** | MEDIUM |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | NOW (mitigation is cheap; unblock is externally gated) |
 | **Owner** | Shared |
 | **Depends On** | Reddit Responsible Builder Policy review (externally blocked; app submitted, no response) |
@@ -1002,10 +1002,59 @@ Two-track strategy per `docs/_archive/studies/news_sources_evaluation.md` §7.2:
 **Acceptance Criteria**  
 - Track A mitigations deployed post-S4.5c close and observed in `bot.log` (circuit-open events drop significantly in volume; no unexpected-outage false positives in `SOURCE_HEALTH` emissions).
 - This debt-log entry transitions to COMPLETE under either (a) Track B succeeds and OAuth is active, OR (b) Reddit formally deprecated and replacement source integrated.
+- **(c) Operator-override (added 2026-05-10):** Reddit may be declared `PERMANENTLY_DEGRADED` and this entry CLOSED without replacement integration when the operator decides intake-mix simplification outweighs replacement-source velocity. Replacement-source work transfers to a successor entry (`PROFIT-SOURCE-002`).
 - `docs/_archive/studies/news_sources_evaluation.md` §7.2 steps 1-5 are executed or consciously re-deferred.
 
 **Notes**  
 Do not treat this as a go-live blocker. Per `docs/_archive/studies/news_sources_evaluation.md` §6, the operator-confirmed priority is correctness over velocity, and the Reddit-unique signal is thin enough that going live without Reddit is acceptable provided the source mix is honestly reported. The go-live blocker is `PROFIT-CAL-001`, not this item.
+
+**CLOSED 2026-05-10 (Operator override):** Reddit declared `PERMANENTLY_DEGRADED`. Reasoning: (i) `feeds/reddit_monitor.py` global circuit breaker fires on every cold-start 403 storm — Reddit contributes effectively zero signal in steady state; (ii) Reddit Responsible Builder Policy app submitted 2026-04-23, no response; 90-day patience window not yet expired (2026-07-22) but operator electing immediate deprecation under acceptance criterion (c). (iii) Track A mitigations (subreddit pool trim, log downgrade, SOURCE_HEALTH semantics) NOT executed — superseded by deprecation. Replacement-source integration deferred to `PROFIT-SOURCE-002`. No code changes in this closure.
+
+---
+
+### PROFIT-SOURCE-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-SOURCE-002 |
+| **Title** | Replacement intake source for Reddit (deprecated 2026-05-10) — candidate: Bluesky journalist timeline |
+| **Category** | Intake / Source Coverage |
+| **Severity** | LOW |
+| **Status** | OPEN |
+| **Priority** | LATER |
+| **Owner** | UNASSIGNED |
+| **Depends On** | — |
+| **Blocks** | — (Reddit deprecation already absorbed; no closure target depends on this) |
+
+**Description**
+
+Successor to `PROFIT-SOURCE-001` (Reddit `PERMANENTLY_DEGRADED` 2026-05-10 via operator override). Reddit-unique signal share is small per `docs/_archive/studies/news_sources_evaluation.md` §7; closing SOURCE-001 without a replacement is intake-mix simplification, not a coverage emergency. This entry registers the future-work stub: integrate a replacement intake source per Appendix A Tier 2 (Bluesky journalist timeline is the leading candidate).
+
+**Why it matters**
+
+Coverage-recovery item only. Not a profit, safety, or reliability blocker. Reddit was thin enough that going live without a replacement is acceptable per the news-sources evaluation. Filed so the deferred work is tracked rather than forgotten.
+
+**Proposed Fix**
+
+Out of scope until the broader intake-mix and post-Cycle-17C verdict picture is clearer. When it surfaces:
+1. Confirm Bluesky AT-Protocol journalist-list approach still matches the source-evaluation framework.
+2. Implement adapter at parity with the existing RSS + Reddit interface.
+3. Smoke-test against curated journalist set; measure source-class diversity gain.
+4. Wire into `feeds/` registry; remove or repurpose `feeds/reddit_monitor.py`.
+
+**Acceptance Criteria**
+
+- A replacement intake source is integrated and contributing non-trivial signal volume in the production source mix, OR a follow-on review explicitly defers replacement indefinitely (Reddit deprecation accepted as permanent reduction).
+
+**Notes**
+
+- Filed during the 2026-05-10 repo-closure-cleanup sprint per operator-override closure of `PROFIT-SOURCE-001`.
+- This is a tracking-only entry — no current code surface.
+
+**Related**
+
+- `PROFIT-SOURCE-001` (closed 2026-05-10) — predecessor; Reddit deprecated permanently via operator override.
+- `docs/_archive/studies/news_sources_evaluation.md` §7 + Appendix A — replacement-source evaluation context.
 
 ---
 
@@ -4636,7 +4685,7 @@ Three coordinated edits, all documentation:
 | **Title** | Delete `analysis/source_credibility.py`, `source_stats.py`, `keyword_stats.py` shims after one release cycle |
 | **Category** | Tech Debt / Cleanup |
 | **Severity** | LOW |
-| **Status** | OPEN |
+| **Status** | COMPLETE |
 | **Priority** | LATER |
 | **Owner** | UNASSIGNED |
 | **Depends On** | — |
@@ -4673,6 +4722,8 @@ Phase-4 housekeeping pass, or 2026-06-08 — whichever comes first. The Phase-2 
 - `docs/housekeeping/2026-05-09/phase-3-design/oq1-analysis-purity-rename.md` (design doc)
 - Phase-3 Stage 3b commit (the rename)
 - INV-4 in `docs/housekeeping/2026-05-08/architecture.md`
+
+**CLOSED 2026-05-10 (Claude):** Three shim files deleted (`analysis/source_credibility.py`, `analysis/source_stats.py`, `analysis/keyword_stats.py`). Pre-deletion grep across repo (`.py` + `.md`) returned zero callers of `analysis.source_credibility`, `analysis.source_stats`, or `analysis.keyword_stats` — only the debt log entry itself referenced the old paths. Pytest + ruff green post-deletion. v0.30.0 shipped 2026-05-09 (Wave-1) so one release cycle elapsed since Phase-3 OQ1 Stage 3b rename.
 
 ---
 
