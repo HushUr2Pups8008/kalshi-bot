@@ -177,7 +177,9 @@ Plan-side counterparts (where they exist in `docs/superpowers/plans/`) defer wit
 
 Two ACTIVE specs left in place this session: `2026-05-05-p4-gate-appendix-a-pre-sizing-scope-design.md`, `2026-05-05-profit-llm-001-pre-sizing-scope-design.md`. D2 fixed their TLDR-v3 cross-links.
 
-UNCERTAIN-NEEDS-MANUAL-REVIEW: `2026-05-03-governance-monitor-fix-design.md`, `2026-05-05-next-soak-cadence-tune-design.md` — no debt-log entries; classify on next pass.
+UNCERTAIN-NEEDS-MANUAL-REVIEW resolved post-audit (Stream G G2a):
+- `2026-05-03-governance-monitor-fix-design.md` — CLOSED (shipped commit `e3d4e8d`, PROFIT-GOV-003). Spec exists only in `specs/`, no plan twin. Has 8 refs spanning wave-1 runbooks → defer to runbook-archive batch (post Wave-1 stabilisation).
+- `2026-05-05-next-soak-cadence-tune-design.md` — ACTIVE (deferred to PHASE2-002 next-soak per `feedback_soak_acceleration_split.md`). Keep in place.
 
 ### 8.2 Stream C deferred — 44 ARCHIVE-WITH-REF-FIX + 15 HOLD governance files
 
@@ -201,17 +203,45 @@ D1 also flagged `2026-05-09-docs-directory-consolidation.md` line 473 (missing `
 
 ### 8.4 Session execution receipt (controller worklog)
 
+**Pre-audit-close session (2026-05-09):**
+
 | Stream | Action | Commit |
 |---|---|---|
 | A2 | Track OBS-003 plan | `bfe865b` |
 | A3 | Drop 33 housekeeping working files | `ff5f35d` |
-| D2 | Redirect 2 TLDR-v3 cross-links to `_archive/` | (separate commit) |
-| B2-narrowed | Archive 2 consolidation-initiative plans (0 refs) | (separate commit) |
-| C2-phase-1 | Archive 16 SAFE-TO-ARCHIVE governance one-offs (0 refs each) | (separate commit) |
-| E2 | Repair `CLAUDE.md` housekeeping ref → `_archive/plans/` redirect | (this commit) |
+| D2 | Redirect 2 TLDR-v3 cross-links to `_archive/` | `2225bb3` |
+| B2-narrowed | Archive 2 consolidation-initiative plans (0 refs) | `af0434f` |
+| C2-phase-1 | Archive 16 SAFE-TO-ARCHIVE governance one-offs (0 refs each) | `046bed6` |
+| E2 | Repair `CLAUDE.md` housekeeping ref → `_archive/plans/` redirect | `611dedd` |
 
-5 commits land doc cleanup; debt log + ROADMAP + IC + audit-frozen files untouched.
+OBS-003 audit closed at 9h (early-closed on operator decision; invariant `OPPORTUNITY(7) = SKIPPED(5) + PAPER_TRADE(2)`, delta=0; SKIPPED monoculture broken; 0 safety-counter trips). Closure commit `66003b4` flipped PROFIT-OBS-003 OPEN→COMPLETE; counters HIGH 5→4, COMPLETE 36→37.
+
+**Post-audit Stream G session (2026-05-10):**
+
+| Round | Action | Commit |
+|---|---|---|
+| G2a | Re-classify 2 UNCERTAINs: governance-monitor-fix CLOSED, next-soak-cadence-tune ACTIVE | (research only) |
+| G2b | Sub-batch 44 ARCHIVE-WITH-REF-FIX into 6 clean batches | (research only) |
+| G2c | Re-examine 15 HOLD: 1 SAFE / 2 ARCHIVE-WITH-REF-FIX / 12 HOLD | (research only) |
+| R1 | Archive `doc-xref-audit-report` (0 refs verified) | (separate commit) |
+| R2 | Archive 4 pre-wave1 baselines + 8 ref updates in baseline-interpretation | (separate commit) |
+| R3 | Archive 9 adversarial reviews + 9 entries in doc-index-audit | (separate commit) |
+| R4 | Archive 4 doc-index audit refs cluster + 4 list updates | (separate commit) |
+| R5 | Archive 4 source-of-truth cycle-10 cluster + 5 ref updates | (separate commit) |
+| R6 | Archive 2 HOLD downgrades (legal-niche probe + lever-a1-plus-1-5 sizing) + 6 ref updates | (separate commit) |
+| R7 | Archive cycle-16d m3-fetch + price-source-inventory pair + 1 ref update | (separate commit) |
+
+**Stream G session moves: 26 files archived across 7 commits.**
+
+### 8.5 Stream G unfinished work (defer to next session)
+
+- 12 EDGE-004 lever specs (§8.1) — coordinated Wave-2/3-archive sweep needed
+- ~20 governance ARCHIVE-WITH-REF-FIX files still in `/governance/` (mid-soak chain, vitallaw-archive-forensics, db-backup-gap-resolution, PROFIT-PHASE2-001-llm-throughput / source-class-evolution baselines paired with soak-runtime-characterization-summary, cycle-15b cluster, cycle-16d task-split parents, etc.)
+- 12 governance HOLD files still in `/governance/` (a1plus1-5-branch-c-feed-selection-rubric, vitallaw-direct-rss-probe, claude-commits-c5cbc6f/cdbf6ef/latest, cycle-15b charter+task-split, cycle-16d charter+pre-execution-criteria-verification+task-split, cycle-16e-task-split, day-7-pre-soak-confirmation, claude-latest-five-commits-legal-cycle)
+- governance-monitor-fix-design.md spec (CLOSED but 8 wave-1 runbook refs — defer with runbook archive)
+- 2 governance files referenced by debt log (doc-index-audit, doc-index-cleanup-execution-plan) — touch debt log to fix; possibly archive both
+- ROADMAP Wave-1 row "active" → "complete" flip (operator call)
 
 ---
 
-**Next step (controller):** Wait for user answers to §7 then execute per §4 ordering. Streams A–E follow Subagent-Driven Development pattern (one fresh implementer per stream, two-stage review per task).
+**Status:** Stream G partially executed. Audit-frozen invariant fully preserved across 13 commits this session-pair. Plan can be archived once all Stream G work clears; until then, this is the controller doc.
