@@ -273,20 +273,37 @@ OBS-003 audit closed at 9h (early-closed on operator decision; invariant `OPPORT
 | R46 | 4 single-ref governance (impl-contract-4-5-review, macbook-import, openclaw-note, wave-1-commit-messages-prestaged) + 4 ref edits | `(R46 commit)` |
 | R47 | day-7 cluster (3 intra-cluster: attestation-prestage, walkthrough-dry-trace, fire-time-compact-checklist) + 7 ref edits across 5 active docs | `(R47 commit + followup)` |
 
-**Stream G session moves: 100 files archived across 50+ commits.**
+| R48 | cross-cycle-contract-adherence-review (cycles 4-5 audit closed) | `179ed82` |
+| R49 | wave-1-changelog-entry-prestaged + 14 ref edits across 11 active docs | `56b4a9e` |
+| R50 | edge-replay-cycle15b-report (cycle-15b verdict superseded by 16E) + 4 ref edits in debt log | `e53d890` |
+| R51 | changelog-drift-check + rollback-runbook-validation (paired post-Wave-1 audits) | `(R51 commit)` |
 
-Major milestone: 100-archive threshold passed. /governance/ shrunk from ~120 .md files at Stream G start to 84 (-36); dated 2026-05-* files now 56 (down from 114 at session start — 58 archived).
+**Stream G session moves: 105 files archived across 55+ commits.**
+
+Final state: dated 2026-05-* files in `/governance/`: 114 (Stream G start) → 53 (-61 = 53% reduction). Total `/governance/` .md files: ~120 → 79 (-41).
+
+**Items left active in /governance/ are operational (kept by design):**
+- All cycle-17 charter cluster (active operator decision input)
+- All edge-replay-cycle1{2-16e}-* reports (cycle history reference; only cycle-15b moved)
+- network-api-outage-runbook, kill-switch-fire-procedure, mac-studio-dead-bot-reboot (operational incident response)
+- post-soak-rollback-runbook, post-soak-close-rehearsal-checklist (operator deploy guides)
+- wave-1-deploy-commit-order-decision, wave-1-fire-time-per-commit-checklist, wave-1-deploy-day-timing, wave-1-post-deploy-observation-plan (Wave-1 operational reference)
+- wave-2-* + wave-3-* deploy timing/decision/checklist files (HALTED but operator-pacing references for any resume)
+- branch-d-fire-procedure-runbook, post-edge-004-escalation-paths (Branch D operator runbooks)
+- PROFIT-PHASE2-001-* attestation files (Phase-2-001 attestation cluster)
+- 2026-05-04-day-4-mid-soak-confirmation, 2026-05-05-PROFIT-PHASE2-001-decision-distribution-analysis (active soak confirmation/analysis)
+- 2026-05-06-strategic-redirect-edge-replay-priority (active charter authority)
+- 2026-05-05-cross-cycle-contract-adherence-review removed; 2026-05-05-implementation-contract-cycle-4-5-review removed (cycles 4-5 closed); cycle-6-7 review intact (active cycles)
 
 ### 8.5 Stream G unfinished work (defer to next session)
 
 **12 EDGE-004 lever specs CLOSED in this session via R24-R35.** All Wave-2/3 lever-design specs now in `_archive/specs/`. 95+ active doc ref edits handled per-spec with full context retrieval.
 
-**Remaining items (post-R47, ~84 files in /governance/):**
-- wave-1-changelog-entry-prestaged (13 refs — heavy; needs paired-archive coordination with sibling wave-1-changelog-entry-prestaged-related docs)
-- edge-replay-cycle15b-report (4 active refs in debt log — could batch with cycle-15b-report archive when cycle history rolled up)
+**Stream G effectively complete.** Remaining /governance/ files all operational/active per category breakdown above. Items not autonomously archivable:
 - ROADMAP Wave-1 row "active" → "complete" flip (operator call)
-- Most remaining files are ACTIVE: cycle-17 charter cluster (cycle-17c-*, cycle-17-conditional-charter-skeletons), edge-replay-cycle1{2-16e}-* reports, current cycle-16e/cycle-17 verdict authority, operational runbooks (kill-switch-fire-procedure, mac-studio-dead-bot-reboot, network-api-outage, post-soak-rollback-runbook, post-soak-close-rehearsal-checklist), wave-1-* operator-facing prestaged content (changelog-entry, post-deploy-observation-plan, wave-1-deploy-commit-order-decision, wave-1-fire-time-per-commit-checklist, wave-1-deploy-day-timing), wave-2/3 deploy timing/decision/checklist files (HALTED but operator-pacing references), branch-d-fire-procedure-runbook, PROFIT-PHASE2-001-* attestation files
-- These would need operator-call-to-archive (not autonomous archive call) since they remain operational reference for any wave-2/3 resume or reverse-cycle audit
+- Cycle-12/13/14/16D/16E reports — all retained for cycle history (only cycle-15b archived as operationally superseded)
+- Wave-2/3 deploy artifacts retained pending operator decision on resume vs full archive
+- Operational runbooks (incident-response, deploy-guide) retained for runtime use
 
 ---
 
