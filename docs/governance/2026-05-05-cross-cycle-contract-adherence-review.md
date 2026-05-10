@@ -43,7 +43,7 @@ For each cycle's commits, classify every artifact by:
 | `edge-004-closure-path-tldr-v3.md` | review | Claude | ✅ |
 | `2026-05-05-day-7-walkthrough-dry-trace.md` | review | Claude | ✅ |
 | `2026-05-05-day-7-attestation-prestage.md` | planning | Claude | ✅ |
-| `2026-05-05-doc-index-audit.md` | review | Claude | ✅ |
+| `docs/_archive/governance/2026-05-05-doc-index-audit.md` | review | Claude | ✅ (ARCHIVED Stream G R39) |
 | `profit_path_debt_log.md` (cycle 2 entry) | docs (Claude scope) | Claude | ✅ |
 | `lever-menu-design.md` §5.1 + §5.2 amendment | architectural amendment | Claude | ✅ |
 | `2026-05-05-wave-1-deploy-day-timing.md` | planning spec | Claude | ✅ |

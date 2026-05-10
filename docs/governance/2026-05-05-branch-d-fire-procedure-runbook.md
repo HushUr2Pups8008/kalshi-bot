@@ -84,7 +84,7 @@ git add docs/governance/edge-004-closure-path-tldr-v4.md
 git commit -m "docs(closure-path): TLDR v4 — Branch D fired"
 ```
 
-(v3 stays in place per `2026-05-05-doc-index-audit.md` §B archiving recommendation; can be archived after PROFIT-LLM-001 sizing concludes.)
+(v3 stays in place per `docs/_archive/governance/2026-05-05-doc-index-audit.md` §B archiving recommendation, ARCHIVED Stream G R39; can be archived after PROFIT-LLM-001 sizing concludes.)
 
 ## Step 4 — Open PROFIT-LLM-001 sizing audit (delegate to Codex)
 

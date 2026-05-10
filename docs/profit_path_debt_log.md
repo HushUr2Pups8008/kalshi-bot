@@ -2953,7 +2953,7 @@ Second pass on 2026-05-05 (commits `b44dda2` + `80932cb` + this cycle's docs). I
 - `docs/governance/edge-004-closure-path-tldr-v3.md` — TLDR v3 supersedes v2.2; closure-probability ranking ~58 % intake-side
 - `docs/governance/2026-05-05-day-7-walkthrough-dry-trace.md` — 11-step playbook validated against HEAD `80932cb`; 1 LOW (pre-stage `b44dda2` + `80932cb` in §8.5.2 invocation table before fire-time)
 - `docs/governance/2026-05-05-day-7-attestation-prestage.md` — pre-staged attestation values: volume 267 (8.9× floor); safety 0/0/0; PARSE 7 cumulative (0 trailing 72h); max gap 2.01 h
-- `docs/governance/2026-05-05-doc-index-audit.md` — inventory of 87 governance + 20 spec files; recommendation 11 files archive-able post-close
+- `docs/_archive/governance/2026-05-05-doc-index-audit.md` — inventory of 87 governance + 20 spec files; recommendation 11 files archive-able post-close (ARCHIVED Stream G R39; superseded by 70+ Stream G archives)
 
 **Codex artifacts (cycle 2; commit `80932cb`):**
 

@@ -114,4 +114,4 @@ sed -i '' 's|2026-05-03-obs-005-cooldown-sentinel-default-fix-design.md|2026-05-
 
 - `docs/governance/wave-1-changelog-entry-prestaged.md` — F1 + F2 fix target
 - `scripts/doc_xref_audit.py` — Codex cycle 7 task (broader audit surface)
-- `docs/governance/2026-05-05-doc-index-audit.md` — cycle 2 sibling (categorical inventory)
+- `docs/_archive/governance/2026-05-05-doc-index-audit.md` — cycle 2 sibling (categorical inventory) (ARCHIVED Stream G R39)

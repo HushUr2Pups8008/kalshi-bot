@@ -148,6 +148,6 @@
 ## Cross-links (sibling-index purposes)
 
 - `docs/governance/README.md` — directory-level inventory
-- `docs/governance/2026-05-05-doc-index-audit.md` — cycle-2 categorical inventory
+- `docs/_archive/governance/2026-05-05-doc-index-audit.md` — cycle-2 categorical inventory (ARCHIVED Stream G R39)
 - `docs/_archive/governance/2026-05-05-doc-index-cleanup-execution-plan.md` — post-close cleanup procedure (ARCHIVED Stream G R38)
 - `docs/governance/2026-05-05-doc-cross-link-integrity-audit.md` — cycle-7 link audit

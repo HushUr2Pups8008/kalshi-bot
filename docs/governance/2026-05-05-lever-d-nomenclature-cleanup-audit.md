@@ -39,7 +39,7 @@ This audit surfaces a **third**:
 | `2026-05-05-wave-2-a1plus-branch-decision-table.md:85-86` | "Branch D fall-back ordering / serial behind C" | meaning #3 | F1 (same) |
 | `edge-004-closure-path-tldr.md:49` | "Branch D — escalation to PROFIT-LLM-001 / P4-GATE Appendix A" | meaning #2 | ✅ correct |
 | `edge-004-closure-path-tldr-v3.md:5,11,12,35,46,60,73,83,90,92,105` | meaning #2 throughout | ✅ correct |
-| `2026-05-05-doc-index-audit.md:23,96,124` | meaning #2 throughout | ✅ correct |
+| `docs/_archive/governance/2026-05-05-doc-index-audit.md:23,96,124` | meaning #2 throughout | ✅ correct |
 | `docs/_archive/governance/2026-05-03-claude-commits-cdbf6ef-f786246-adversarial-review.md:44` | "Lever D verdict: 'Only consider D if Levers A + B + E all succeed...'" | meaning #1 | ✅ correct (adversarial review of pre-2026-05-03 framing) |
 | `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md:105,136` | "escalate to Branch D" | meaning #2 | ✅ correct |
 | `docs/_archive/governance/2026-05-03-claude-latest-commits-adversarial-review.md:38` | "Lever D's pre-LLM gate retention curve" | meaning #1 | ✅ correct |
@@ -83,7 +83,7 @@ Same pattern for the remaining 4 occurrences. Estimated edit time: 5 min.
 - `docs/_archive/governance/2026-05-03-claude-latest-commits-adversarial-review.md:38` — references "Lever D's pre-LLM gate retention curve"
 - `docs/_archive/governance/2026-05-03-claude-commits-c5cbc6f-90c26cf-adversarial-review.md:35` — references "Lever D demotion"
 
-These reference meaning #1 correctly, but the adversarial-review doc context predates the closure-path-TLDR-v3 / Lever-D escalation spec. **No fix needed** — these are historical record-of-thinking docs; the meaning-#1 interpretation was correct at draft time. The doc-index-audit (`2026-05-05-doc-index-audit.md` §D) recommends archiving these post-close anyway.
+These reference meaning #1 correctly, but the adversarial-review doc context predates the closure-path-TLDR-v3 / Lever-D escalation spec. **No fix needed** — these are historical record-of-thinking docs; the meaning-#1 interpretation was correct at draft time. The doc-index-audit (`docs/_archive/governance/2026-05-05-doc-index-audit.md` §D, ARCHIVED Stream G R39) recommends archiving these post-close anyway.
 
 ### F3 (LOW) — `lever-menu-design.md:65,71,125` reference Lever D meaning #1
 
