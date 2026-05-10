@@ -129,7 +129,7 @@ This spec is satisfied when:
 
 - `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.2 — Branch D handoff to P4-GATE Appendix A
 - `docs/superpowers/specs/2026-05-05-profit-llm-001-pre-sizing-scope-design.md` — first-handoff (this cycle)
-- `docs/governance/edge-004-closure-path-tldr-v3.md` — closure-path-TLDR
+- `docs/_archive/2026-05-09-docs-consolidation/edge-004-closure-path-tldr-v3.md` — closure-path-TLDR (archived 2026-05-09)
 - `docs/ROADMAP.md` Stage 4 P4-GATE Appendix A (line 402+) — original P4-GATE definition
 - `docs/profit_path_debt_log.md` PROFIT-EDGE-004 entry — receives audit report cross-link
 - `docs/IMPLEMENTATION_CONTRACT.md` §11 — authority basis

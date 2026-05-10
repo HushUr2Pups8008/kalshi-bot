@@ -141,7 +141,7 @@ This spec is satisfied when:
 
 - `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` §3.1 — Branch D handoff to PROFIT-LLM-001
 - `docs/superpowers/specs/2026-05-05-p4-gate-appendix-a-pre-sizing-scope-design.md` — second-handoff target (this cycle)
-- `docs/governance/edge-004-closure-path-tldr-v3.md` — closure-path-TLDR (v4 fires post-Branch-D)
+- `docs/_archive/2026-05-09-docs-consolidation/edge-004-closure-path-tldr-v3.md` — closure-path-TLDR (archived 2026-05-09; v4 fires post-Branch-D)
 - `docs/profit_path_debt_log.md` PROFIT-LLM-001 entry — receives sizing-report cross-link
 - `analysis/signal_analyzer.py` — implementation surface
 - `docs/IMPLEMENTATION_CONTRACT.md` §11 — authority basis for redesign-discussion scope
