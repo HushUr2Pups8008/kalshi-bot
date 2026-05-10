@@ -99,6 +99,8 @@ def _paper_trade_rows(db_path: Path, markets: dict[str, dict[str, Any]]) -> list
             "fast_lane_p": _as_float(trade.get("fast_lane_p")),
             "accumulation_p": _as_float(trade.get("accumulation_p")),
             "structural_p": _as_float(trade.get("structural_p")),
+            # Bug 1 fix: map llm_confidence from paper_trades DB into corpus.confidence
+            "confidence": _as_float(trade.get("llm_confidence")),
         }
         out.append(item)
     return out
@@ -116,7 +118,8 @@ def _log_rows(paths: list[Path], markets: dict[str, dict[str, Any]]) -> list[dic
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            ticker = str(row.get("ticker") or "")
+            # Bug 2 fix (ticker alias): BLEND_DECISION emits market_ticker, not ticker
+            ticker = str(row.get("ticker") or row.get("market_ticker") or "")
             if ticker not in markets:
                 continue
             kind = str(row.get("type") or row.get("event") or "log").lower()
@@ -132,8 +135,24 @@ def _log_rows(paths: list[Path], markets: dict[str, dict[str, Any]]) -> list[dic
                     "decision_kind": kind,
                     "side": str(row.get("side") or row.get("llm_direction") or "").lower() or None,
                     "contracts": row.get("contracts"),
-                    "model_prob": _as_float(row.get("estimated_prob") or row.get("model_prob") or row.get("probability")),
-                    "market_yes_price": _as_float(row.get("market_yes_price") or row.get("yes_price") or row.get("price_cents")),
+                    # Bug 2 fix (model_prob aliases): BLEND_DECISION emits blended_p;
+                    # OPPORTUNITY emits model_probability or estimated_probability.
+                    # Canonical key (model_prob / estimated_prob / probability) wins when present.
+                    "model_prob": _as_float(
+                        row.get("estimated_prob")
+                        or row.get("model_prob")
+                        or row.get("probability")
+                        or row.get("blended_p")
+                        or row.get("model_probability")
+                        or row.get("estimated_probability")
+                    ),
+                    # Bug 2 fix (market_yes_price alias): SKIPPED emits market_price.
+                    "market_yes_price": _as_float(
+                        row.get("market_yes_price")
+                        or row.get("yes_price")
+                        or row.get("price_cents")
+                        or row.get("market_price")
+                    ),
                     "edge": _as_float(row.get("edge")),
                     "signal_source": row.get("signal_source") or row.get("source") or "unknown",
                     "signal_type": row.get("signal_type") or row.get("type") or "unknown",
