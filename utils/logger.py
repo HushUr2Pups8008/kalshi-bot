@@ -701,6 +701,34 @@ class TradeLogger:
         min_edge_threshold: float | None = None,
         signal_meta: dict[str, Any] | None = None,
     ) -> None:
+        """Emit a SKIPPED trade-log record.
+
+        Two emission origins share this method:
+
+        - `trading/executor.py:152` — emits when the executor's `_validate()`
+          rejects a candidate (cooldown, opposing-position guard, capped_dollars,
+          insufficient balance, etc.). Reason values come from the executor's
+          internal skip-reason vocabulary (e.g.
+          ``"edge +0.0000 below min_edge 0.02"``, ``"paper cooldown active"``).
+          `model_probability` and `edge` are the executor's pre-trade values
+          (= `analysis.estimated_probability` and `analysis.edge`, the fast-lane
+          raw values).
+
+        - `tasks/blend_task.py` — emits when the blender or readiness gate
+          produces a non-None `trade_blocked_reason` and the candidate is
+          dropped before reaching the executor. Reason values are the G1-G6
+          readiness-gate enum (``"G1_blended_confidence"`` ...
+          ``"G6_recency_score"``) or a blender-side reason. `model_probability`
+          is the *post-blend* value (`blend_result.blended_p`), and `edge` is
+          the post-blend edge (`blended_p - market_yes_price/100.0`). The
+          headline is truncated to 80 chars to match the executor convention.
+
+        Per PROFIT-OBS-003: BlendTask-emitted SKIPPED records were added on
+        2026-05-09 to close the OPPORTUNITY -> SKIPPED accounting gap. Before
+        this change, ~92% of OPPORTUNITY events exited silently with no
+        matching SKIPPED record because the BlendTask blocked-reason path
+        bypassed this emitter entirely.
+        """
         record = {
             "type": "SKIPPED",
             "reason": reason,
