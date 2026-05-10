@@ -95,7 +95,7 @@ Operator picks. PROFIT-EDGE-011 active.
 | 2026-05-06 (Cycle-13) | 24 resolved evidence_store markets / 255 replay rows | **0 positive-EV slices, 0 left-on-table winners, P&L -$7.50, IC §16 Rule 5 fires** | `edge-replay-cycle13-report.md` |
 | 2026-05-06 (Cycle-14) | 24 resolved markets / 255 replay rows + synthetic Lane A/B injection | **Verdict: `extraction_broken`.** Movement_rate 1.57%, direction-correctness 0/6 when directional, sized-bet 0/3 (-$7.50), Brier 0.2599 (n=24, supporting only), Lane A PASS / Lane B FAIL at delta=0.000 on both fixtures. → Cycle-15B extraction rebuild active. | `edge-replay-cycle14-diagnosis.md` |
 | 2026-05-07 (Cycle-15B) | 24 resolved markets / 272 replay rows + post-fix re-ingestion + 10 Lane B fixtures | **Verdict: `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`.** C8 Lane B 8/8 directional + 2/2 NEUTRAL ✓; C9 idempotent re-ingestion (SHA256 stable); C10 IC §16 0 slices BUT 0/272 rows had decision-time executable price; 183/272 readiness-admitted; 7/272 nonzero post-fix model delta. Scorer-blocked, NOT negative-EV proven. → Cycle-16D price reconstruction active. | `docs/_archive/governance/edge-replay-cycle15b-report.md` (ARCHIVED Stream G R50) |
-| 2026-05-07 (Cycle-16D) | 24 resolved markets / 272 replay rows + restored prices via documented Kalshi endpoints | **Charter-locked verdict: `extraction_fixed_but_information_frontier_holds`** (operational reading WITHDRAWN per operator override; superseded by Cycle-16E). D5 coverage 99.6324% (271/272 priced) ✓; D6 237 counterfactual trades / 2 wins / -7.46 P&L; overall ev_ci_95_lo = -0.0382; 1 raw positive-EV slice with trades=1 (below IC §16 floor); 0 IC §16-eligible slices; D9 sentinel POST_FIX_REBUILT cohort verified (commit 2222227). | `edge-replay-cycle16d-report.md` |
+| 2026-05-07 (Cycle-16D) | 24 resolved markets / 272 replay rows + restored prices via documented Kalshi endpoints | **Charter-locked verdict: `extraction_fixed_but_information_frontier_holds`** (operational reading WITHDRAWN per operator override; superseded by Cycle-16E). D5 coverage 99.6324% (271/272 priced) ✓; D6 237 counterfactual trades / 2 wins / -7.46 P&L; overall ev_ci_95_lo = -0.0382; 1 raw positive-EV slice with trades=1 (below IC §16 floor); 0 IC §16-eligible slices; D9 sentinel POST_FIX_REBUILT cohort verified (commit 2222227). | `docs/_archive/governance/edge-replay-cycle16d-report.md` (ARCHIVED Stream G R52) |
 | 2026-05-07 (Cycle-16E) | scorer forensics audit + production-proxy replay against same 272 rows | **Verdict: `scorer_fixed_no_signal_confirmed`.** Production-proxy gates ported faithfully line-by-line vs `executor.py:200-244`: price floor/ceiling 2¢/98¢, ticker cooldown 14400s, paper-duplicate prob/price 0.07/5.0, same-signal prob/price 0.02/2.0, PAPER_MIN_EDGE 0.02. Variant comparison: baseline_abs_edge 237 trades → readiness_only 182 → paper_price_sanity 110 → readiness_plus_price_sanity 63 → production_proxy 12 trades / 0 wins / -$1.005 P&L / 0 IC §16 slices. Market-implied baseline ≈ 1.005 expected wins on 12 production-proxy trades; 0 actual wins is statistically uninformative at n=12. Price units cents-consistent end-to-end (no 100x dollars/cents inversion). Cycle-16D anti-correlation framing WITHDRAWN. → Cycle-17 §B/§C operator decision RESTORED. | `edge-replay-cycle16e-scorer-forensics.md` |
 
 ### 2.2 Wave Deploy Posture
@@ -1973,7 +1973,7 @@ This is the same `/markets/{ticker}/trades` 404 issue surfaced in cycle-13's `fe
 - `PROFIT-EDGE-005` / `PROFIT-EDGE-006` — replay harness infrastructure (Cycle-16D extended pricing layer).
 - `PROFIT-EDGE-010` (active) — Cycle-17 operator decision succeeds this entry.
 - `docs/governance/cycle-16-conditional-charter-skeletons.md` §D — scope skeleton.
-- `docs/governance/edge-replay-cycle16d-report.md` — Cycle-16D D8 report with Claude appendix + verdict.
+- `docs/_archive/governance/edge-replay-cycle16d-report.md` — Cycle-16D D8 report with Claude appendix + verdict (ARCHIVED Stream G R52).
 - `docs/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 skeletons (instantiates).
 - `docs/_archive/governance/cycle-16d-post-verdict-action-checklist.md` — post-verdict checklist driving items 5/8/9/10 (ARCHIVED Stream G R21).
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-17+ acceptance).
@@ -2012,7 +2012,7 @@ Cycle-17 §B vs §C operator decision is **DEFERRED** until Cycle-16E scorer for
 
 **Evidence / Source**
 
-- `docs/governance/edge-replay-cycle16d-report.md` Operator override section — three load-bearing concerns enumerated.
+- `docs/_archive/governance/edge-replay-cycle16d-report.md` Operator override section — three load-bearing concerns enumerated (ARCHIVED Stream G R52).
 - `scripts/edge_replay/score_counterfactual_pnl.py` `score_candidate` — `would_trade` semantics.
 - `logs/edge_replay/cycle16d/counterfactual_scores.json` — 237 trades / 231 YES / 6 NO breakdown.
 - `logs/edge_replay/cycle16d/historical_prices_cycle16d.json` — price values for unit audit.
@@ -2052,7 +2052,7 @@ Cycle-17 §B vs §C operator decision is **DEFERRED** until Cycle-16E scorer for
 - `PROFIT-EDGE-009` (delivered) — direct parent (Cycle-16D D8 verdict drove this entry).
 - `PROFIT-EDGE-008` / `PROFIT-EDGE-007` / `PROFIT-EDGE-006` / `PROFIT-EDGE-005` — full cycle trail.
 - `PROFIT-EDGE-011` (active) — Cycle-17 operator decision succeeds this entry.
-- `docs/governance/edge-replay-cycle16d-report.md` Operator override section — verdict withdrawal + concerns enumeration.
+- `docs/_archive/governance/edge-replay-cycle16d-report.md` Operator override section — verdict withdrawal + concerns enumeration (ARCHIVED Stream G R52).
 - `docs/governance/edge-replay-cycle16e-scorer-forensics.md` — Codex E10 report with Claude N6 verdict appendix.
 - `docs/governance/2026-05-07-cycle-16e-claude-rescope-and-review.md` — N3+N4+N5+N7 consolidated review + rescope analysis.
 - `docs/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 §B/§C un-deferred per Cycle-16E delivery (2026-05-07 amendment section).
@@ -2102,7 +2102,7 @@ Per `cycle-17-conditional-charter-skeletons.md` verdict-to-skeleton map, this ro
 
 - `docs/governance/edge-replay-cycle16e-scorer-forensics.md` (Codex + Claude N6 appendix) — verdict source.
 - `docs/governance/2026-05-07-cycle-16e-claude-rescope-and-review.md` — N3+N4+N5+N7 verification + rescope analysis.
-- `docs/governance/edge-replay-cycle16d-report.md` — Cycle-16D charter-locked verdict + operator override.
+- `docs/_archive/governance/edge-replay-cycle16d-report.md` — Cycle-16D charter-locked verdict + operator override (ARCHIVED Stream G R52).
 - `docs/_archive/governance/edge-replay-cycle15b-report.md` — Cycle-15B verdict trail (ARCHIVED Stream G R50).
 - `docs/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 verdict trail.
 - `docs/governance/edge-replay-cycle13-report.md` — Cycle-13 verdict trail.

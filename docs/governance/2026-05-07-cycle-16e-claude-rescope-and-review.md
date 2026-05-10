@@ -221,7 +221,7 @@ This lesson is filed to memory in `memory/feedback_market_implied_baseline.md`.
 - `docs/_archive/governance/2026-05-07-cycle-16e-task-split.md` — original 10+10 task split (ARCHIVED Stream G R20).
 - `docs/governance/2026-05-07-cycle-16e-scorer-forensics-charter.md` — Codex-authored charter (post-hoc review above).
 - `docs/governance/edge-replay-cycle16e-scorer-forensics.md` — Codex E10 report (Claude N6 verdict appendix lands separately).
-- `docs/governance/edge-replay-cycle16d-report.md` "Operator override" — origin authority.
+- `docs/_archive/governance/edge-replay-cycle16d-report.md` "Operator override" — origin authority (ARCHIVED Stream G R52).
 - `docs/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 routing (§B/§C un-deferred).
 - `scripts/edge_replay/scorer_forensics_audit.py` — Codex E1-E5 implementation reviewed (598 LoC).
 - `tests/test_edge_replay_scorer_forensics_audit.py` — Codex E9 tests reviewed (135 LoC).
