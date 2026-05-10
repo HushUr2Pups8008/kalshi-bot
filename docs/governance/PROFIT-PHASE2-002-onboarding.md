@@ -23,7 +23,7 @@ All must hold before PROFIT-PHASE2-002 starts:
 1. PROFIT-PHASE2-001 closed (tag `phase2-soak-closed` on origin/main).
 2. Wave-1 deploy complete (all 6 commits landed; tag `v0.30.0` on origin/main).
 3. ≥ 48 h burn-in since the last Wave-1 commit landed (covers the §wave-1-post-deploy-observation-plan 24 h regression watch + a 24 h stability margin).
-4. Wave-1 post-deploy regression watch (per `wave-1-post-deploy-observation-plan.md`) returned 0 regressions across all 14 monitoring rows.
+4. Wave-1 post-deploy regression watch (per `docs/_archive/governance/wave-1-post-deploy-observation-plan.md`) returned 0 regressions across all 14 monitoring rows.
 5. Operator has applied the cadence-tune plist edits per §4 below.
 6. `git pull origin main` on the running Mac Studio confirms HEAD is at the soak-start commit.
 

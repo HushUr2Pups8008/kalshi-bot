@@ -92,7 +92,7 @@ When day-7 has at least one full UTC day of cycles (≥ 12 cycles for 2026-05-07
 5. **Write the close attestation:** copy `docs/governance/PROFIT-PHASE2-001-early-close-attestation-template.md` to `docs/governance/PROFIT-PHASE2-001-early-close-attestation.md`, fill in actual numbers from the checkpoint script, commit + push.
 6. **Tag the close:** `git tag -a phase2-soak-closed -m "PROFIT-PHASE2-001 early-closed day-7 per §8.5.1"`.
 
-After all 6 steps complete, Wave-1 deploy may begin per `docs/governance/post-soak-close-rehearsal-checklist.md` §1+ (which now refers to day-7 / 2026-05-08, not day-13 / 2026-05-15).
+After all 6 steps complete, Wave-1 deploy may begin per `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` §1+ (which now refers to day-7 / 2026-05-08, not day-13 / 2026-05-15) (ARCHIVED Stream G R54).
 
 ## Date-shift summary (14d → 7d)
 
@@ -123,8 +123,8 @@ Fast/deep cadence halving is a load-test (90 min fast = 60 % more LLM calls per 
 ## Cross-links
 
 - `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md` §8.5 + §8.5.1
-- `docs/governance/post-soak-close-rehearsal-checklist.md` (now references day-7 close)
-- `docs/governance/post-soak-rollback-runbook.md`
+- `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` (now references day-7 close) (ARCHIVED Stream G R54)
+- `docs/_archive/governance/post-soak-rollback-runbook.md` (ARCHIVED Stream G R54)
 - `scripts/pre_soak_close_branch_backup.sh`
 - `docs/governance/2026-05-04-day-4-mid-soak-confirmation.md` (the data point that justified §8.5.1)
 - `docs/governance/edge-004-closure-path-tldr.md` v2.2

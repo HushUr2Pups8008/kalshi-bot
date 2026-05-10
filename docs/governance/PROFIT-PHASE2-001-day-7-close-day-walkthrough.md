@@ -178,9 +178,9 @@ git push origin main --tags
 
 ## 11. Wave-1 deploy may begin
 
-After all 11 steps complete: Wave-1 deploy may begin per `docs/governance/post-soak-close-rehearsal-checklist.md` §1+ (now references day-7 / 2026-05-08 not day-13 / 2026-05-15).
+After all 11 steps complete: Wave-1 deploy may begin per `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` §1+ (now references day-7 / 2026-05-08 not day-13 / 2026-05-15) (ARCHIVED Stream G R54).
 
-Suggested next move: open the rehearsal checklist's §1 (OBS-005 deploy) and proceed top-to-bottom through Wave-1's 6 per-feature commits per the order locked in `wave-1-deploy-commit-order-decision.md`.
+Suggested next move: open the rehearsal checklist's §1 (OBS-005 deploy) and proceed top-to-bottom through Wave-1's 6 per-feature commits per the order locked in `docs/_archive/governance/wave-1-deploy-commit-order-decision.md` (ARCHIVED Stream G R54).
 
 ## Failure handling
 
@@ -200,4 +200,4 @@ If any gate fails:
 - `scripts/check_soak_invariant.sh` — gate 7 audit
 - `scripts/governance_decision_review.py` — gate 6 manual-review tool
 - `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation
-- `docs/governance/post-soak-close-rehearsal-checklist.md` — Wave-1 deploy sequence after close
+- `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` — Wave-1 deploy sequence after close (ARCHIVED Stream G R54)

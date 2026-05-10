@@ -56,7 +56,7 @@ Per `PROFIT-PHASE2-001-early-close-criteria.md` §"§8.5.2 policy-equivalence ca
 
 **Operator note for any commits between cycle-13 (this refresh) and fire-time:** rerun `bash scripts/check_soak_invariant.sh --json` against close-time SHA; walk any newly-surfaced commits; append rows to this table.
 
-**Wave-1 deploy commits (POST-soak-close):** §8.5.2 governs commits DURING the soak window (2026-05-01T19:01Z → close). Wave-1's 6 deploy commits land POST-soak-close, so they are OUT-OF-WINDOW for §8.5.2 and require no carve-out attestation here. Standard `git revert` rollback per `docs/governance/post-soak-rollback-runbook.md` is the recovery path for any Wave-1 commit; soak-close attestation does not extend over Wave-1 deploys.
+**Wave-1 deploy commits (POST-soak-close):** §8.5.2 governs commits DURING the soak window (2026-05-01T19:01Z → close). Wave-1's 6 deploy commits land POST-soak-close, so they are OUT-OF-WINDOW for §8.5.2 and require no carve-out attestation here. Standard `git revert` rollback per `docs/_archive/governance/post-soak-rollback-runbook.md` is the recovery path for any Wave-1 commit; soak-close attestation does not extend over Wave-1 deploys.
 
 ## Operator attestation (FILL AT CLOSE TIME)
 
@@ -65,7 +65,7 @@ I, `<TBD operator>`, confirm:
 1. All §8.5.1 gates above evaluated TRUE at close time.
 2. The 14-day calendar floor in §8.5 is intentionally relaxed to 7 days per the §8.5.1 addendum, justified by the volume gate clearing 5.3× at Day-4 and the safety counters running clean from day 1.
 3. No mid-soak behavioural code change occurred in the running bot. Doc / script / test commits are §8.5.2 OUT-OF-SCOPE.
-4. Wave-1 deploy may begin from this commit per `docs/governance/post-soak-close-rehearsal-checklist.md`.
+4. Wave-1 deploy may begin from this commit per `docs/_archive/governance/post-soak-close-rehearsal-checklist.md`.
 
 Signed (commit author): `<TBD>`
 Tag applied: `phase2-soak-closed`
@@ -88,6 +88,6 @@ When this attestation file fires (2026-05-07/08 close commit window):
 - `docs/governance/PROFIT-PHASE2-001-early-close-attestation-template.md` — original blank template
 - `docs/governance/2026-05-04-day-4-mid-soak-confirmation.md` — Day-4 baseline
 - `docs/_archive/governance/2026-05-07-day-7-pre-soak-confirmation.md` — Day-7 fire-time skeleton (ARCHIVED Stream G R23)
-- `docs/governance/post-soak-close-rehearsal-checklist.md` — Wave-1 deploy plan
+- `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` — Wave-1 deploy plan
 - `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation
 - `scripts/check_soak_invariant.sh` — gate-7 mechanism

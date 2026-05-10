@@ -8,7 +8,7 @@
 ## TL;DR
 
 **Critical finding:** post-cutover Mac Studio has produced **0 OPPORTUNITY / 0 SKIPPED / 0 PAPER_TRADE** events through 4 days. All Wave-1-spec regression rules that compare to a "pre-Wave-1 baseline" need rethinking — the baseline IS zero. **Affected rules:**
-- `wave-1-post-deploy-observation-plan.md` rule "trade-rate > 2× pre-deploy 24h baseline" — undefined when baseline = 0
+- `docs/_archive/governance/wave-1-post-deploy-observation-plan.md` rule "trade-rate > 2× pre-deploy 24h baseline" — undefined when baseline = 0
 - Same plan's "MATCH_DIAGNOSTIC suppression-rate falls > 30% vs pre-deploy" — suppression-rate IS measurable (Codex audit returned MATCH_DIAGNOSTIC: 450)
 - Same plan's "0 SKIPPED records emit" — rule fires by default; would NOT regress to 0 since 0 is the starting state
 
@@ -60,7 +60,7 @@ Notable: **0 OPPORTUNITY / 0 SKIPPED / 0 PAPER_TRADE / 0 BLEND_DECISION events.*
 
 **Wave-1 deploy expectation:** post-OBS-005, cooldown signals will appear in OPPORTUNITY records (as `cooldown_state` field) when first BlendTask candidate fires. The OBS-005 fix changes `_cooldown_remaining()` from returning `0.0` to returning `None` for first-time keys. **Detection rule:** post-OBS-005, first OPPORTUNITY event with `cooldown_state == "0.0"` for a never-traded ticker = sentinel-leak regression.
 
-**Recommended replacement rule (per existing observation plan but enforced manually):** "First OPPORTUNITY in trades.jsonl post-OBS-005 deploy: confirm `cooldown_state` field uses None semantics, not 0.0 sentinel. If 0.0 leaks: rollback per `post-soak-rollback-runbook.md` §4.1."
+**Recommended replacement rule (per existing observation plan but enforced manually):** "First OPPORTUNITY in trades.jsonl post-OBS-005 deploy: confirm `cooldown_state` field uses None semantics, not 0.0 sentinel. If 0.0 leaks: rollback per `docs/_archive/governance/post-soak-rollback-runbook.md` §4.1 (ARCHIVED Stream G R54)."
 
 ### Codex baseline 4: per-ticker trade-rate (`docs/_archive/governance/2026-05-05-pre-wave1-trade-rate-per-ticker-baseline.md`)
 
@@ -77,11 +77,11 @@ Notable: **0 OPPORTUNITY / 0 SKIPPED / 0 PAPER_TRADE / 0 BLEND_DECISION events.*
 **The 0-baseline reality changes the deploy posture.** Wave-1 commit 6 (Lever A.1) was already framed as "archive-neutral hygiene" per the EDGE-004 closure-path TLDR. The 0-baseline post-cutover confirms this framing: there is nothing for the classifier patch to revert because there are no trades-in-flight to disturb.
 
 **Affected docs that reference the pre-Wave-1 baseline as "non-zero":**
-- `wave-1-post-deploy-observation-plan.md` (already noted; cycle-5 follow-up)
+- `docs/_archive/governance/wave-1-post-deploy-observation-plan.md` (already noted; cycle-5 follow-up)
 - `docs/_archive/governance/2026-05-05-day-7-attestation-prestage.md` (mentions "267 decisions; 0 KILL_SWITCH/etc" — those are governance-side baselines and ARE non-zero; not affected) (ARCHIVED Stream G R47)
-- `2026-05-05-wave-1-deploy-day-timing.md` (timing recommendations — not affected by 0-baseline; agnostic to volume)
+- `docs/_archive/governance/2026-05-05-wave-1-deploy-day-timing.md` (timing recommendations — not affected by 0-baseline; agnostic to volume) (ARCHIVED Stream G R54)
 
-**Recommended cycle-6 follow-up:** apply the replacement rules from this doc back into `wave-1-post-deploy-observation-plan.md` as a §3.7 update. **Not blocking Wave-1 deploy** — the existing rules are not actively wrong, just degenerately satisfied.
+**Recommended cycle-6 follow-up:** apply the replacement rules from this doc back into `docs/_archive/governance/wave-1-post-deploy-observation-plan.md` as a §3.7 update. **Not blocking Wave-1 deploy** — the existing rules are not actively wrong, just degenerately satisfied.
 
 ## Why post-cutover has 0 OPPORTUNITY events
 
@@ -97,6 +97,6 @@ This is **consistent with the pre-soak forecast** — PROFIT-EDGE-004 was regist
 - `docs/_archive/governance/2026-05-05-pre-wave1-opportunity-age-distribution.md` — Codex baseline 2
 - `docs/_archive/governance/2026-05-05-pre-wave1-cooldown-distribution-audit.md` — Codex baseline 3
 - `docs/_archive/governance/2026-05-05-pre-wave1-trade-rate-per-ticker-baseline.md` — Codex baseline 4
-- `wave-1-post-deploy-observation-plan.md` — affected by 0-baseline rules (cycle-6 follow-up)
+- `docs/_archive/governance/wave-1-post-deploy-observation-plan.md` — affected by 0-baseline rules (cycle-6 follow-up)
 - `2026-05-05-PROFIT-PHASE2-001-decision-distribution-analysis.md` — governance-side baseline (not affected; non-zero)
 - `docs/profit_path_debt_log.md` PROFIT-EDGE-004 entry — pre-soak no-edge framing (consistent)

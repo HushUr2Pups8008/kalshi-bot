@@ -70,7 +70,7 @@ Per Codex's overlap audit: 128/260 OPP records cross-series. Lever C **suppresse
 
 ## Per-day operator routine (during validation windows)
 
-Per the rehearsal checklist `docs/governance/post-soak-close-rehearsal-checklist.md` §9:
+Per the rehearsal checklist `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` §9 (ARCHIVED Stream G R54):
 
 ```bash
 # Daily smoke
@@ -80,7 +80,7 @@ python scripts/simulations/post_obs003_skipped_attribution_audit.py \
     --since $(date -u -v-1d +%Y-%m-%d)  # post-OBS-003 only
 ```
 
-Stop-conditions per `docs/governance/post-soak-rollback-runbook.md`.
+Stop-conditions per `docs/_archive/governance/post-soak-rollback-runbook.md` (ARCHIVED Stream G R54).
 
 ## Gates / decision tree post-Day-13
 

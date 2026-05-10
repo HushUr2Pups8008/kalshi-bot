@@ -138,7 +138,7 @@ If outage fires during Wave-1 commit deploy:
 
 - **Don't restart the bot.** The current commit may be mid-deploy state.
 - Categorize per §1; wait for recovery.
-- After recovery: re-run smoke wrapper (`bash scripts/wave1_post_deploy_smoke.sh`); if clean, proceed to next commit cadence; if regression, treat as Wave-1 incident per `post-soak-rollback-runbook.md`.
+- After recovery: re-run smoke wrapper (`bash scripts/wave1_post_deploy_smoke.sh`); if clean, proceed to next commit cadence; if regression, treat as Wave-1 incident per `docs/_archive/governance/post-soak-rollback-runbook.md` (ARCHIVED Stream G R54).
 
 ### §4.3 Outage during Wave-2 14-day acceptance window
 

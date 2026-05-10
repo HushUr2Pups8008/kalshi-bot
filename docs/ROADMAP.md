@@ -27,7 +27,7 @@ Per cycle-3 EDGE-004 closure path (lever map archived to [`docs/profit_path_debt
 | step | trigger | earliest UTC | VERSION | status |
 |---|---|---|---|---|
 | PROFIT-PHASE2-001 close | §8.5.1 gates pass | 2026-05-08T19:01Z | n/a | active |
-| Wave-1 commits 1-6 | post-close + cadence per `2026-05-05-wave-1-deploy-day-timing.md` | 2026-05-08T20:00Z+ to 2026-05-16T06:00Z+ | 0.30.0 (commit 6) | **active (cleanup/observability hygiene only — does NOT claim edge)** |
+| Wave-1 commits 1-6 | post-close + cadence per `docs/_archive/governance/2026-05-05-wave-1-deploy-day-timing.md` (ARCHIVED Stream G R54) | 2026-05-08T20:00Z+ to 2026-05-16T06:00Z+ | 0.30.0 (commit 6) | **active (cleanup/observability hygiene only — does NOT claim edge)** |
 | Wave-1 stabilisation | 48h post-commit-6 | 2026-05-18T+ | n/a | active |
 | **Cycle-14 calibration diagnosis** | post-Wave-1-deploy | DELIVERED 2026-05-06 | n/a | **DELIVERED 2026-05-06; verdict = `extraction_broken`** |
 | **Cycle-15B extraction rebuild** | Cycle-14 verdict | DELIVERED 2026-05-07 | n/a | **DELIVERED 2026-05-07; verdict = `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap`; Lane B 8/8+2/2 ✓** |

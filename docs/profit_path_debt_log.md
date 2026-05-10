@@ -1614,10 +1614,10 @@ Total strict-xfail markers as of 2026-05-04: 26+ pinning the deploy lattice.
 
 - `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` (commit `75a3e39`) — pre-staged 0.30.0 CHANGELOG block (ARCHIVED Stream G R49)
 - `docs/_archive/governance/wave-2-wave-3-changelog-entries-prestaged.md` — Wave-2 + Wave-3 pre-staged blocks (ARCHIVED Stream G R53)
-- `docs/governance/wave-1-deploy-commit-order-decision.md` — locked: per-feature commits (NOT bundle)
+- `docs/_archive/governance/wave-1-deploy-commit-order-decision.md` — locked: per-feature commits (NOT bundle) (ARCHIVED Stream G R54)
 - `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation
-- `docs/governance/post-soak-rollback-runbook.md` — incident-response runbook
-- `docs/governance/post-soak-close-rehearsal-checklist.md` — operator deploy guide
+- `docs/_archive/governance/post-soak-rollback-runbook.md` — incident-response runbook (ARCHIVED Stream G R54; Wave-2/3 HALTED makes contingency procedures historical)
+- `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` — operator deploy guide (ARCHIVED Stream G R54; Wave-1 deploy + soak close complete)
 - `docs/_archive/governance/post-edge-004-escalation-paths.md` — Wave-3-stall escalation paths (ARCHIVED Stream G R53)
 
 **Honest read after 2026-05-04 cycle:** EDGE-004 closure is dominantly bound by **whether the Google News query family continues to surface legal-niche headlines** (Branch A passive observe), with Branch C as a fallback. Wave-1 base stack landings reduce conversion volume by design (260 OPP / 9 PAPER_TRADE pre-Wave-1 → 87 / 1 post-Wave-1 per simulation `f671468`); the ≥ 5 % closure target is measured against the post-Wave-1 base, not the pre-Wave-1 baseline. Modal scenario per the unified Wave-1+2 forecast (`docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md`, commit `2bf3da1`): Branch A produces some legal-niche surfacing within 14 d; if 0, Branch C deploys; if still 0, escalation fires.
@@ -2933,7 +2933,7 @@ User + Codex aligned 2026-05-05 on accelerating PROFIT-PHASE2-001 from 14-day to
 - Wave-3 Lever B + C: 2026-06-06+ (was 2026-06-13+)
 - Closure-target evaluation: 2026-05-29 (Wave-2 + 14d) (was 2026-06-06)
 
-**Wave-1 dry-run validated** (commit-set `0531367 / edf38c1 / 921c275 / 9d6cce3 / e3d4e8d / 5828ad2` on origin branch `backup/wave-1-dry-run-2026-05-05`): all 6 per-feature commits land cleanly per `wave-1-deploy-commit-order-decision.md`. 7 spec ambiguities surfaced; F1 + F2 closed in cycle 1; F3-F6 closed by Codex 2026-05-05 (commits `6648705 / 807f20c / 0f45dfb`).
+**Wave-1 dry-run validated** (commit-set `0531367 / edf38c1 / 921c275 / 9d6cce3 / e3d4e8d / 5828ad2` on origin branch `backup/wave-1-dry-run-2026-05-05`): all 6 per-feature commits land cleanly per `docs/_archive/governance/wave-1-deploy-commit-order-decision.md` (ARCHIVED Stream G R54). 7 spec ambiguities surfaced; F1 + F2 closed in cycle 1; F3-F6 closed by Codex 2026-05-05 (commits `6648705 / 807f20c / 0f45dfb`).
 
 **Honest read 2026-05-05 (cycle 1):** all gates achievable on Day 7. Operator's only real close-day decisions are the gate-6 verdicts (1 anomaly NYT World News + bulk-review 241 dead-Reddit-sub disables) and any §8.5.2 fresh-commit case.
 
@@ -2943,7 +2943,7 @@ Second pass on 2026-05-05 (commits `b44dda2` + `80932cb` + this cycle's docs). I
 
 **Claude artifacts (cycle 2; commits `b44dda2` + this cycle):**
 
-- `docs/governance/wave-1-post-deploy-observation-plan.md` — 14-row regression watch matrix with per-row CLI; 24h validation window per Wave-1 commit
+- `docs/_archive/governance/wave-1-post-deploy-observation-plan.md` — 14-row regression watch matrix with per-row CLI; 24h validation window per Wave-1 commit (ARCHIVED Stream G R54)
 - `docs/_archive/governance/2026-05-05-rollback-runbook-validation.md` — 1 HIGH drift (G1_CONFIDENCE_THRESHOLD env-revert row in §3 is fictional per Lever B spec §7) + 2 LOW (ARCHIVED Stream G R51)
 - `docs/governance/PROFIT-PHASE2-002-onboarding.md` — next-soak setup (90 min fast / 12 h deep cadence; decision-policy knobs frozen per `feedback_soak_acceleration_split.md`)
 - `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Branch A → C → D sequence; 42 d worst-case walk; 28 d compressed via A+C parallel
@@ -3007,7 +3007,7 @@ Fourth pass on 2026-05-05 (commits `6f09967` Claude + `7addfd1` Codex). Focus: o
 
 **Claude artifacts (cycle 4; commit `6f09967`):**
 - `docs/_archive/governance/2026-05-05-day-7-fire-time-compact-checklist.md` — 30-45 min single-page playbook (ARCHIVED Stream G R47)
-- `2026-05-05-wave-1-fire-time-per-commit-checklist.md` — per-commit 30 min playbook + cadence matrix
+- `docs/_archive/governance/2026-05-05-wave-1-fire-time-per-commit-checklist.md` — per-commit 30 min playbook + cadence matrix (ARCHIVED Stream G R54)
 - `docs/_archive/governance/2026-05-05-readme-drift-check.md` — 3 MEDIUM (status block / version cell / test count) (ARCHIVED Stream G R44)
 - `docs/_archive/governance/2026-05-05-roadmap-drift-check.md` — 3 MEDIUM (P3/P4-GATE cross-links + What-Changed bullet) (ARCHIVED Stream G R44)
 - `docs/_archive/governance/2026-05-05-debt-log-toc-navigation-audit.md` — TOC + per-entry status table recommendations (ARCHIVED Stream G R44)
@@ -3078,7 +3078,7 @@ Seventh + eighth pass on 2026-05-05 (commits `92b767d` Claude + `ffc54b2` Codex;
 - `IMPLEMENTATION_CONTRACT.md` Edit — §5 G1 cell 0.35→0.05→0.04 alignment (cycle 4-5 review F1)
 - `2026-05-05-launchd-plist-consolidation-decision.md` — keep `ops/launchd/`; migrate db-backup; capture 3 operator-managed plists
 - `docs/_archive/governance/2026-05-05-day-7-to-wave-1-handoff-procedure.md` — 5-condition transition gate; defer rules (ARCHIVED Stream G R45)
-- `2026-05-05-wave-1-commit-by-commit-acceptance-matrix.md` — 6-commit consolidation
+- `docs/_archive/governance/2026-05-05-wave-1-commit-by-commit-acceptance-matrix.md` — 6-commit consolidation (ARCHIVED Stream G R54)
 - `docs/_archive/governance/2026-05-05-wave-2-decision-flow.md` + `docs/_archive/governance/2026-05-05-wave-3-decision-flow.md` — ASCII flowcharts (BOTH ARCHIVED Stream G R53)
 - `docs/_archive/governance/2026-05-05-macbook-import-archive-procedure.md` — post-Wave-1-close tar.gz workflow (ARCHIVED Stream G R46)
 - `docs/_archive/governance/2026-05-05-doc-cross-link-integrity-audit.md` — 39 links scanned; 2 broken in wave-1-changelog-entry-prestaged.md (closed cycle 8) (ARCHIVED Stream G R44)

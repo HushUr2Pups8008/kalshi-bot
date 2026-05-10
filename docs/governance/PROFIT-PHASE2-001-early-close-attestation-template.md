@@ -59,7 +59,7 @@ I, _____________________ (operator), confirm:
 1. All §8.5.1 gates above evaluated TRUE.
 2. The 14-day calendar floor in §8.5 is intentionally relaxed to 7 days per the §8.5.1 addendum, justified by the volume gate clearing 5.3× and the safety counters running clean from day 1.
 3. No mid-soak behavioural code change occurred in the running bot.
-4. Wave-1 deploy may begin from this commit per `docs/governance/post-soak-close-rehearsal-checklist.md`.
+4. Wave-1 deploy may begin from this commit per `docs/_archive/governance/post-soak-close-rehearsal-checklist.md`.
 
 Signed (commit author): _____________________
 Tag applied: `phase2-soak-closed`
@@ -68,6 +68,6 @@ Wave-1 deploy ETA: _____________________
 ## Cross-links
 
 - `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` — operator runbook
-- `docs/governance/post-soak-close-rehearsal-checklist.md` — Wave-1 deploy plan
+- `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` — Wave-1 deploy plan
 - `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation
 - `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md` §8.5 + §8.5.1
