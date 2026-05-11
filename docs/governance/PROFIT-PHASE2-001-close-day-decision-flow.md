@@ -9,7 +9,8 @@
 ```
                                     ┌─────────────────────┐
                                     │   START close-day   │
-                                    │   (>= 2026-05-08    │
+                                    │   (target           │
+                                    │    2026-05-15       │
                                     │      19:01Z)        │
                                     └──────────┬──────────┘
                                                │
@@ -31,7 +32,7 @@
                                           ▼
                                 ┌──────────────────────┐
                                 │  Gate 2: calendar    │
-                                │  >= 7 d since start  │
+                                │  active close target │
                                 └─────────┬────────────┘
                                   PASS    │  FAIL
                                           │   └──────► (reschedule; wait until threshold)

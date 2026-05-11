@@ -1,12 +1,12 @@
 # PROFIT-PHASE2-001 early-close attestation
 
-**Status:** PRE-STAGE — populated 2026-05-06 cycle 11 from current soak counters; placeholders denote fire-time fields. Operator finalizes at close commit (target 2026-05-08 under §8.5.1).
-**Closes:** PROFIT-PHASE2-001 governance shadow-soak per `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md` §8.5.1.
+**Status:** ACTIVE CLOSE ARTIFACT — populated 2026-05-06 cycle 11 from current soak counters; placeholders denote fire-time fields. Operator finalizes at close commit (active target 2026-05-15; day-7 close path preserved as historical context only).
+**Closes:** PROFIT-PHASE2-001 governance shadow-soak per `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md` §8.5, with Gate 7 resolved through §8.5.2 attestation where applicable.
 
 ## Close metadata (FINAL FILL AT CLOSE TIME)
 
-- **Close timestamp (UTC):** `<TBD at fire time>` (target: 2026-05-08T19:01Z early-close, or default 2026-05-15T19:01Z)
-- **Soak duration:** `<TBD>` days `<TBD>` hours (target: ≥ 7 d 0 h)
+- **Close timestamp (UTC):** `<TBD at fire time>` (active target: 2026-05-15T19:01Z)
+- **Soak duration:** `<TBD>` days `<TBD>` hours (target: active close window per `PHASE2_RUNBOOK.md`)
 - **First cycle:** `gc_2026-05-01_190127` (2026-05-01T19:01:27Z)
 - **Last cycle in window:** `<TBD at fire time>`
 - **Soak window:** 2026-05-01T19:01Z → `<TBD>`
@@ -16,7 +16,7 @@
 Pre-stage values reflect cumulative state through cycle-13 refresh (2026-05-06T22:30Z; latest decision 2026-05-06T21:43Z; ~125h elapsed soak). Final figures fill at fire-time (~13h post-cycle-13).
 
 - [ ] **Gate 1: Volume.** GOVERNANCE_DECISION count: 552 as of cycle-13 refresh (≥ 30 required → 18.4× over-clear). PASS-PROJECTED.
-- [ ] **Gate 2: Calendar floor.** Continuous shadow-mode runtime: 5d 5h as of cycle-13 (≥ 7d/168h required at close). At-risk if §8.5.1 close-day (2026-05-08T19:01Z) forced earlier; on-track otherwise.
+- [ ] **Gate 2: Calendar floor.** Continuous shadow-mode runtime: 5d 5h as of cycle-13; active target is the 2026-05-15 close window per `PHASE2_RUNBOOK.md`.
 - [ ] **Gate 3: Safety counters.** KILL_SWITCH: 0, batch_aborted: 0, VALIDATION_ERROR: 0 as of cycle-13. PASS-PROJECTED (all must remain 0).
 - [ ] **Gate 4: PARSE_ERROR trailing 72 h.** Total PARSE_ERROR: 7 (all from days 1-2; first 48h of soak). Trailing-72h count at fire-time TBD; expected 0 since no recent PARSE_ERRORs.
 - [ ] **Gate 5: Cadence stability.** 69 fast cycles + cadence stable through cycle-13 (`bothealth.sh` reports GREEN with governance shadow invariant holding). Recompute max inter-cycle gap at fire-time.
@@ -64,7 +64,7 @@ I, `<TBD operator>`, confirm:
 
 1. All §8.5.1 gates above evaluated TRUE at close time.
 2. The 14-day calendar floor in §8.5 is intentionally relaxed to 7 days per the §8.5.1 addendum, justified by the volume gate clearing 5.3× at Day-4 and the safety counters running clean from day 1.
-3. No mid-soak behavioural code change occurred in the running bot. Doc / script / test commits are §8.5.2 OUT-OF-SCOPE.
+3. Gate 7 is either strict-clean or every surfaced commit has a documented §8.5.2 attestation. Doc / script / test commits are §8.5.2 OUT-OF-SCOPE when they do not affect the running bot.
 4. Wave-1 deploy may begin from this commit per `docs/_archive/governance/post-soak-close-rehearsal-checklist.md`.
 
 Signed (commit author): `<TBD>`
@@ -73,7 +73,7 @@ Wave-1 deploy ETA: `<TBD; nominally same-day as close commit>`
 
 ## Fire-time agent instructions
 
-When this attestation file fires (2026-05-07/08 close commit window):
+When this attestation file fires (active target 2026-05-15 close commit window):
 
 1. Read `logs/governance/decisions.jsonl` for the full soak window (2026-05-01T19:01Z → close time).
 2. Populate every `<TBD>` placeholder with live counts.

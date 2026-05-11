@@ -5,7 +5,7 @@
 **Predecessor Charter:** `2026-05-07-cycle-17c-charter-single-variable-redesign.md`  
 **Trigger:** Operator directive 2026-05-10 (charter-level fixed-corpus reconsideration following structural findings E2 + E3)  
 **Authority:** PROFIT-EDGE-012  
-**Status:** ACTIVE (post-amendment; Cycle-17D locked)
+**Status:** HALTED 2026-05-10 before wrapper/sweep; see `2026-05-10-cycle-17d-halt-on-historical-corpus-degeneracy.md`
 
 ---
 
@@ -88,13 +88,13 @@ PRE_FIX price backfill from Kalshi API is **infeasible**: `logs/edge_replay/cycl
 
 **Effective admissible cohort = POST_FIX_REBUILT only (237 rows; equivalent to or slightly smaller than the original 272-row cycle-16D corpus that produced the 12-row admission ceiling in E2 + E3).** The merged-corpus approach did NOT lift the ceiling. Decision routed to operator before step 5 (GO/NO-GO sweep) — sequence HALTED at step 3.
 >
-> Cycle-16D-only baseline (12 trades / 0 wins / -$1.005 P&L / 0 IC §16 slices) remains the **frozen-baseline-on-cycle-16d-subset** reference; the broader-corpus baseline (E0') is established by re-running the locked scorer against the merged corpus and recording the result in the experiment ledger.
+> Cycle-16D-only baseline (12 trades / 0 wins / -$1.005 P&L / 0 IC §16 slices) remains the **frozen-baseline-on-cycle-16d-subset** reference. The broader-corpus baseline (E0') was not produced because Cycle-17D halted at step 3 before wrapper/sweep work.
 
 ### Delta 2 — Replay command (verbatim)
 
 Replace the §"Hard constraints" replay-command bullet with:
 
-> **Fixed replay command.** Documented at `scripts/edge_replay/run_cycle17d_replay.sh --skip-price-backfill` (new wrapper script — broader-corpus equivalent of `run_cycle16d_replay.sh`; lands in a separate commit) + `scorer_forensics_audit.py` production-proxy variant. The wrapper script targets the merged corpus at the locked path. Schema-compatibility audit between cycle-13/15B/16D row schemas and `scorer_forensics_audit.py` is a **prerequisite for the GO/NO-GO admission-count sweep** and lands as a scorer-tooling-fix per §"Sole exception to single variable per experiment" (no behavioral change to scoring; charter-permitted). Each experiment uses identical commands.
+> **Fixed replay command.** Planned wrapper `scripts/edge_replay/run_cycle17d_replay.sh --skip-price-backfill` was authorized but not produced. Cycle-17D halted at step 3 before wrapper-script work. See `2026-05-10-cycle-17d-halt-on-historical-corpus-degeneracy.md`.
 
 ### Delta 3 — Cohort discipline new clause (verbatim)
 
@@ -106,7 +106,7 @@ Add new bullet to §"Hard constraints" (after the corpus and replay-command bull
 
 Add new subsection inside §"Frozen baseline" (after the existing cycle-16E paragraph):
 
-> **Cycle-17D broader-corpus baseline (E0').** Established by re-running `scorer_forensics_audit.py` production-proxy mode against the merged corpus AFTER the GO/NO-GO admission-count sweep returns GO. Recorded as ledger row E0' with full `trades / wins / market_implied_expected_wins / pnl / ic16_slices_4axis / ic16_slices_5axis_diagnostic / cohort_breakdown` payload. The cycle-16E E0 row remains intact in the ledger as a historical reference; E0' becomes the operative baseline for Cycle-17D experiments.
+> **Cycle-17D broader-corpus baseline (E0').** Authorized at filing time but not produced. The merged-corpus path halted at step 3 before GO/NO-GO sweep, wrapper, or baseline work. The cycle-16E E0 row remains intact as the last executed historical reference.
 
 ### Delta 5 — Amendment dated entry (verbatim)
 
@@ -124,13 +124,13 @@ Add new dated entry to §"Amendments and structural findings" (in `2026-05-07-cy
 >
 > **Revert budget reset.** Cycle-17C carried E1+E3 reverts (2/3). Cycle-17D resets to 0/3. Operator rationale: "this is a charter amendment with a changed corpus surface, so the old revert budget should not mechanically punish the new search space." E1 and E3 retained as historical evidence (cited verbatim above as the amendment trigger).
 >
-> **First post-amendment step.** GO/NO-GO admission-count sweep on the merged corpus. Threshold for GO: at least one 4-axis intersected bin (`signal_source × market_family × signal_type × news_class`) has ≥10 admitted rows. If sweep returns NO-GO, Cycle-17D STOPS before any redesign-axis experiment lands. Operator decides next step (different corpus scope, or pause Cycle-17 entirely). E4 axis pick is **deferred** until post-sweep.
+> **First post-amendment step.** Authorized plan at filing time: GO/NO-GO admission-count sweep on the merged corpus. Superseded by step-3 halt after schema audit found PRE_FIX rows structurally unusable. No sweep ran and no E4 axis was picked.
 
 ### Delta 6 — Sequencing (verbatim, with operator-tweak GO/NO-GO)
 
 Replace the Cycle-17C §"Sequencing" with:
 
-> Strict sequence for Cycle-17D:
+> Strict sequence for Cycle-17D as authorized at filing time. Steps 4-10 were not executed because the cycle halted at step 3; see `2026-05-10-cycle-17d-halt-on-historical-corpus-degeneracy.md`.
 >
 > 1. **Charter amendment lands** (this commit).
 > 2. **Build script lands** — `scripts/edge_replay/build_cycle17d_corpus.py` constructs the merged corpus, applies dedup, records dropped-duplicate count, computes SHA-256, writes the merged JSONL. Lands in a separate commit. Charter is updated to pin the SHA.
@@ -215,4 +215,3 @@ PAPER-ONLY. Hard guardrail per Cycle-14 charter §5. NO experiment in Cycle-17D 
 ---
 
 **Operator sign-off (if required for this document's commitment):** TBD by operator workflow.
-

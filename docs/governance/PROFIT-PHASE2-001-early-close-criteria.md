@@ -2,18 +2,19 @@
 
 **Drafted:** 2026-05-05 (post-day-4 confirmation; user + Codex aligned on early-close path)
 **Resolves:** spec `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md` §8.5.1 addendum (added same day as this doc)
-**Target close:** 2026-05-08 (day-7) if §8.5.1 gates verify clean over days 5/6/7
+**Status:** Historical day-7 derivation; active Phase-2 close target is 2026-05-15 per `PHASE2_RUNBOOK.md`.
+**Active use:** Reuse the §8.5.1/§8.5.2 gate and attestation procedure at the 2026-05-15 close unless superseded by operator instruction.
 
 ## TL;DR
 
-PROFIT-PHASE2-001's volume gate is met by 5.3× (158 decisions vs 30 floor). Safety counters: 0 KILL_SWITCH / 0 batch_aborted / 0 VALIDATION_ERROR through day-4. The 14-day calendar floor is a confidence margin, not a derivation. With the volume gate over-cleared and counters clean, **closing at day-7 is empirically justified** if days 5/6/7 stay clean.
+PROFIT-PHASE2-001's volume gate was met by 5.3× (158 decisions vs 30 floor) by day 4. Safety counters were 0 KILL_SWITCH / 0 batch_aborted / 0 VALIDATION_ERROR. The day-7 close path was not exercised as the active close path. Current operator close posture is 2026-05-15, using this document for the gate structure and §8.5.2 carve-out attestation procedure.
 
 ## §8.5.1 close gates (all must hold)
 
 | # | gate | mechanism |
 |---|---|---|
 | 1 | ≥ 30 GOVERNANCE_DECISION records | `grep -c GOVERNANCE_DECISION logs/governance/decisions.jsonl` |
-| 2 | ≥ 7 days continuous shadow-mode runtime | first cycle 2026-05-01T19:01Z → close ≥ 2026-05-08T19:01Z |
+| 2 | Active close calendar floor satisfied | first cycle 2026-05-01T19:01Z → active close target 2026-05-15T19:01Z |
 | 3 | 0 KILL_SWITCH / batch_aborted / VALIDATION_ERROR | full-window grep across all event types |
 | 4 | 0 PARSE_ERROR in trailing 72 h | filter by `decided_at >= close_ts - 72h` |
 | 5 | Cadence stability ±10 % | inter-cycle-gap audit; no gap > 3 h |
@@ -39,7 +40,7 @@ Net: gate 7 passes under §8.5.2 reading (3 INVOKED carve-outs + 4 OUT-OF-SCOPE 
 
 **Note on additional commits between draft and fire-time:** the operator should re-run `scripts/check_soak_invariant.sh --json` immediately before fire-time and add a row to this table for any commit gate-7 surfaces that isn't already listed. Doc-only commits (`docs/` exclusively) and script-only commits (`scripts/` + `tests/` exclusively, no `analysis/` / `tasks/` / `feeds/` / `governance/` / `trading/` / `kalshi/` / `main.py` / `config.py` touch) qualify as OUT-OF-SCOPE for §8.5.2 by the same logic. Any commit that touches the soak runtime surface needs a fresh §8.5.2 evidence-coverage analysis OR fall-through to the default 14-day close.
 
-## Operator runbook for the early close
+## Historical day-7 runbook and active close-day attestation
 
 ### Day 5 (2026-05-05) — early checkpoint
 
@@ -74,9 +75,9 @@ If day-5 has ≥ 6 cycles and 0 new PARSE_ERROR / VALIDATION_ERROR / KILL_SWITCH
 
 ### Day 6 (2026-05-06) — same checkpoint, change `2026-05-05` → `2026-05-06` in the script.
 
-### Day 7 (2026-05-07-or-08) — close decision
+### Active close day (target 2026-05-15) — close decision
 
-When day-7 has at least one full UTC day of cycles (≥ 12 cycles for 2026-05-07 OR cycles spanning 2026-05-07T19:01Z to 2026-05-08T19:01Z to satisfy the ≥ 7-day calendar floor):
+At the active close target, verify the same gates against the full soak window. The historical day-7 calendar floor is superseded by the active 2026-05-15 target.
 
 1. **Re-run the checkpoint script for days 5/6/7** to confirm gates 1-5 hold.
 2. **Manual review pass on all decisions** for gate 6. Operator reads the `reasoning` field of each `GOVERNANCE_DECISION` and tallies the `≥ 85 % reasonable` count.
@@ -86,15 +87,17 @@ When day-7 has at least one full UTC day of cycles (≥ 12 cycles for 2026-05-07
    git log --oneline --since "2026-05-01T19:01Z" --until HEAD -- analysis/ tasks/ feeds/ governance/ executor/ main.py
    ```
 
-   Expected output: ZERO behavioural commits. Any non-zero result fails gate 7 (and the whole early-close path); document and continue to day-14.
+   A non-zero strict invariant result does not itself fail close. Reconcile every surfaced commit against the §8.5.2 carve-out table and record the attestation. Close fails only if a surfaced runtime-affecting commit cannot be justified under §8.5.2.
 
 4. **Run `scripts/pre_soak_close_branch_backup.sh`** to create the rollback anchor + log archive.
 5. **Write the close attestation:** copy `docs/governance/PROFIT-PHASE2-001-early-close-attestation-template.md` to `docs/governance/PROFIT-PHASE2-001-early-close-attestation.md`, fill in actual numbers from the checkpoint script, commit + push.
-6. **Tag the close:** `git tag -a phase2-soak-closed -m "PROFIT-PHASE2-001 early-closed day-7 per §8.5.1"`.
+6. **Tag the close:** `git tag -a phase2-soak-closed -m "PROFIT-PHASE2-001 closed per active Phase-2 close target"`.
 
-After all 6 steps complete, Wave-1 deploy may begin per `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` §1+ (which now refers to day-7 / 2026-05-08, not day-13 / 2026-05-15) (ARCHIVED Stream G R54).
+After all 6 steps complete, follow the active operator plan. Archived Wave-1 close/deploy rehearsal docs remain historical references only.
 
-## Date-shift summary (14d → 7d)
+## Historical date-shift summary (superseded)
+
+The table below records the day-7 proposal that was available on 2026-05-05. It is not the active Phase-2 close schedule as of 2026-05-10.
 
 | milestone | old (14d soak) | new (7d soak via §8.5.1) |
 |---|---|---|
@@ -123,7 +126,7 @@ Fast/deep cadence halving is a load-test (90 min fast = 60 % more LLM calls per 
 ## Cross-links
 
 - `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md` §8.5 + §8.5.1
-- `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` (now references day-7 close) (ARCHIVED Stream G R54)
+- `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` (historical day-7 close reference; ARCHIVED Stream G R54)
 - `docs/_archive/governance/post-soak-rollback-runbook.md` (ARCHIVED Stream G R54)
 - `scripts/pre_soak_close_branch_backup.sh`
 - `docs/governance/2026-05-04-day-4-mid-soak-confirmation.md` (the data point that justified §8.5.1)

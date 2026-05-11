@@ -127,11 +127,18 @@ Two env-var kill switches recognized by the agent on startup:
 These can be set in launchd via the plist's `EnvironmentVariables`
 block, in the user's shell environment, or via a wrapper script.
 
-## Monitoring during the 14-day soak
+## Monitoring during the active close window
 
 Per spec §8.5, Phase 2 acceptance requires ≥14 days of clean shadow
 operation with ≥30 decisions accumulated and ≥85% of them deemed
 reasonable on manual review.
+
+Active close target is 2026-05-15. Use
+`PROFIT-PHASE2-001-early-close-criteria.md` as historical derivation of
+the §8.5.1/§8.5.2 attestation procedure, not as an active 2026-05-08
+close date. Gate 7 may close through documented §8.5.2 carve-out
+attestation when `scripts/check_soak_invariant.sh --json` surfaces only
+attested policy-equivalent or out-of-scope commits.
 
 Daily monitoring checklist:
 

@@ -7,6 +7,8 @@
 
 ## 1 — Operator decision (verbatim)
 
+Halt recorded at commit `aeef26a`.
+
 > Pick β. Accept the Stage 2 pre-audit finding as decisive and halt the broader-fetch sub-amendment before Stage 4/5/6. Do not lower the 95% threshold. Do not run the formal schema audit or GO/NO-GO sweep just to confirm an already decisive field-completeness failure.
 >
 > Record Cycle-17D as halted on historical-corpus degeneracy: merged corpus failed on PRE_FIX price coverage; broader-fetch failed on confidence/model_prob/edge completeness; all historical shapes converge to roughly the Cycle-16D effective admissible cohort.
@@ -78,6 +80,14 @@ The following artifacts are retained for future reuse. **Do not delete or rebase
 
 **Future value:** When cycle resumes, charter + sub-amendment + criteria-lock template are reusable as-is. The readiness audit establishes the rate baseline (~0.8 PT/day) for projecting when resume conditions §7 are met.
 
+### Artifacts intentionally not produced after halt
+
+- No broader-corpus formal schema-audit output at `logs/edge_replay/cycle17d-broader/schema_compatibility_audit.json`
+- No `scripts/edge_replay/run_cycle17d_replay.sh`
+- No `scripts/edge_replay/cycle17d_admission_sweep.py`
+- No broader admission-sweep governance ledger
+- No `E0''` broader-corpus baseline or downstream replay artifacts
+
 ## 6 — Primary path forward
 
 **POST_FIX_NEW accumulation.** Phase-2 soak ends ~2026-05-15; POST_FIX_NEW rows accumulate at ~0.8 PT/day (per readiness audit). Stage 1 corpus-builder bug fixes ensure these rows are field-complete on arrival. No code work needed during accumulation — the pipeline is self-running.
@@ -108,8 +118,8 @@ PAPER-ONLY. Hard guardrail per Cycle-14 charter §5. Halt does NOT change postur
 
 ## 9 — Cross-references
 
-- Cycle-17D parent charter: `docs/governance/2026-05-10-cycle-17d-charter-amendment.md`
-- Broader-API-fetch sub-amendment: `docs/governance/2026-05-10-cycle-17d-broader-api-fetch-sub-amendment.md`
+- Cycle-17D parent charter: `docs/governance/2026-05-10-cycle-17d-charter-amendment.md` (superseded operationally by this halt record)
+- Broader-API-fetch sub-amendment: `docs/governance/2026-05-10-cycle-17d-broader-api-fetch-sub-amendment.md` (superseded operationally by this halt record)
 - Criteria-lock template: `docs/governance/2026-05-10-cycle-17d-criteria-lock-template.md`
 - POST_FIX_NEW readiness audit: `docs/governance/2026-05-10-cycle-17d-post-fix-new-readiness-audit.md`
 - Stage 1 bug-fix commits: `dcaa7c3` + `a23d473`

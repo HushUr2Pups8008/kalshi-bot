@@ -6,7 +6,7 @@
 ## Close metadata (FILL IN AT CLOSE TIME)
 
 - **Close timestamp (UTC):** _________________________
-- **Soak duration:** _____ days _____ hours (target: ≥ 7 d 0 h)
+- **Soak duration:** _____ days _____ hours (target: active close window)
 - **First cycle:** `gc_2026-05-01_190127` (2026-05-01T19:01:27Z)
 - **Last cycle in window:** _________________________
 - **Soak window:** 2026-05-01T19:01Z → ____________________
@@ -19,7 +19,7 @@
 - [ ] **Gate 4: PARSE_ERROR trailing 72 h.** Count in last 72 h: ___ (must be 0)
 - [ ] **Gate 5: Cadence stability.** Max inter-cycle gap: _____ h (must be ≤ 3 h); cadence-deviation > 10 %: ___ events (must be 0)
 - [ ] **Gate 6: Manual review.** Decisions reviewed: ___ / ___; reasonable count: ___; reasonable rate: ___ % (≥ 85 % required)
-- [ ] **Gate 7: No mid-soak code change OR §8.5.2 policy-equivalence carve-out.** `bash scripts/check_soak_invariant.sh` returned: ___ (0 = clean; non-zero = check §8.5.2 carve-out section below)
+- [ ] **Gate 7: No mid-soak code change OR §8.5.2 policy-equivalence carve-out.** `bash scripts/check_soak_invariant.sh` returned: ___ (0 = clean; non-zero = reconcile each surfaced commit in the §8.5.2 section below)
 - [ ] **Gate 8: Attestation written.** This document committed.
 
 ## Final tally
@@ -35,7 +35,7 @@
 | KILL_SWITCH | 0 (asserted) |
 | `batch_aborted=True` | 0 (asserted) |
 
-## §8.5.2 policy-equivalence carve-out attestation (FILL IN IF GATE 7 NOT CLEAN)
+## §8.5.2 policy-equivalence carve-out attestation (FILL IN FOR EACH COMMIT SURFACED BY GATE 7)
 
 For each behavioural commit gate-7 surfaces, attest that §8.5.2 carve-out applies:
 
@@ -56,9 +56,9 @@ For each behavioural commit gate-7 surfaces, attest that §8.5.2 carve-out appli
 
 I, _____________________ (operator), confirm:
 
-1. All §8.5.1 gates above evaluated TRUE.
-2. The 14-day calendar floor in §8.5 is intentionally relaxed to 7 days per the §8.5.1 addendum, justified by the volume gate clearing 5.3× and the safety counters running clean from day 1.
-3. No mid-soak behavioural code change occurred in the running bot.
+1. All close gates above evaluated TRUE.
+2. The active close timing matches the operator-approved Phase-2 close target.
+3. Gate 7 is either strict-clean or every surfaced commit has a documented §8.5.2 attestation.
 4. Wave-1 deploy may begin from this commit per `docs/_archive/governance/post-soak-close-rehearsal-checklist.md`.
 
 Signed (commit author): _____________________

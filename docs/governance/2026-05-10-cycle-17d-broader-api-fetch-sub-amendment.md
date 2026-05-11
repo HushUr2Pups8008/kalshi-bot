@@ -5,7 +5,7 @@
 **Parent Charter:** `docs/governance/2026-05-10-cycle-17d-charter-amendment.md`  
 **Trigger:** Cycle-17D amendment §4 Delta 5 + operator directive 2026-05-10. Merged-corpus approach halted at step 3 (schema audit) with structural blocker: cycle-13 PRE_FIX rows lack `market_yes_price` and Kalshi API returns 404 on settled-market trade endpoint. POST_FIX_NEW corpus-readiness audit confirmed produced data too sparse for any short timeline (~33 rows at Phase-2 close, ~171 at +30 days). Operator picks option (d) staged.  
 **Authority:** PROFIT-EDGE-012  
-**Status:** ACTIVE (post-sub-amendment; authorizes broader-fetch corpus construction + schema audit + GO/NO-GO sweep only; NO redesign experiment authorized by this sub-amendment)
+**Status:** HALTED 2026-05-10 at commit `aeef26a`; Stage 4/5/6 intentionally not executed. See `2026-05-10-cycle-17d-halt-on-historical-corpus-degeneracy.md`.
 
 ---
 
@@ -70,7 +70,7 @@ Both are recorded in this sub-amendment §3 placeholder below, with explicit mar
 
 > **Pre-normalization SHA-256** (raw fetch from Codex build commit `15f3d47`): `917d04abcf8d4d45615ce2d328c164bcb98f4075a78ef26bd22c2b56fd32c102`
 >
-> **Post-normalization SHA-256:** pending — depends on whether Stage 4 formal schema audit (Codex baton) requires a normalization patch. **Pre-audit field-completeness data reported by the build script (`15f3d47` commit message)** indicates the corpus is structurally below the 95% threshold defined in §4: `confidence` 43.64% present; `model_prob` 45.94%; `edge` 45.94%; `headline` 92.76%. The formal Stage 4 schema audit will compute the canonical numbers; the pre-audit warning is high-confidence the §5 halt criterion (>5% rows missing production-proxy fields) will fire.
+> **Post-normalization SHA-256:** not produced. Cycle-17D halted before Stage 4 formal schema audit / normalization work. **Pre-audit field-completeness data reported by the build script (`15f3d47` commit message)** was accepted as decisive per the halt record: `confidence` 43.64% present; `model_prob` 45.94%; `edge` 45.94%; `headline` 92.76%.
 
 **Build manifest summary** (per `logs/edge_replay/cycle17d-broader/build_manifest.json`):
 
@@ -105,6 +105,8 @@ Every row in the broader-fetch corpus must carry the following fields for admiss
 **Schema-audit verification:** Extend `scripts/edge_replay/cycle17d_schema_audit.py` (built by Codex in commit `6e626ea` for the merged corpus) to also audit the broader-fetch corpus shape. Re-use the existing audit tool; do not reimplement. Audit writes `logs/edge_replay/cycle17d-broader/schema_compatibility_audit.json` with the same shape as the merged-corpus audit.
 
 **Admission threshold:** ≥95% of rows must have ALL production-proxy fields populated (no nulls or missing keys for any of the 13 required fields above). If the audit reports <95% field completeness, the sub-amendment halts before the GO/NO-GO sweep (§5 halt criteria #1).
+
+The formal broader-corpus schema-audit artifact was intentionally not produced after operator halt pick β because the Stage 2 pre-audit completeness failure was already decisive.
 
 ---
 
@@ -151,29 +153,16 @@ Strict sequencing under this sub-amendment:
 
 3. **SHA pin** — Claude pins the broader-corpus SHA-256 in this sub-amendment §3 (follow-up commit), mirroring the `ca0ddb7` pattern. Pre-normalization SHA recorded; post-normalization (if schema remediation lands) recorded in a second pin commit.
 
-4. **Schema-audit lands** — Codex extends `cycle17d_schema_audit.py` and runs it on the broader-fetch corpus. Single-commit scorer-tooling-fix per charter exception (no behavioral change; mechanical normalization). Output: `logs/edge_replay/cycle17d-broader/schema_compatibility_audit.json`. **If `production_proxy_ready: false` or field-completeness < 95%, halt per Halt Criterion 1.**
+4-11. **Not executed after halt.** Steps 4-11 were authorized at filing time but intentionally not executed after halt at commit `aeef26a`. Not produced: `logs/edge_replay/cycle17d-broader/schema_compatibility_audit.json`, `scripts/edge_replay/run_cycle17d_replay.sh`, `scripts/edge_replay/cycle17d_admission_sweep.py`, broader admission-sweep ledger, `E0''` baseline, E4 criteria-lock, E4 replay, post-verdict ledger row.
 
-5. **Wrapper script** — Codex extends or re-uses `scripts/edge_replay/run_cycle17d_replay.sh` (or creates a parallel wrapper) to target the broader-fetch corpus path instead of the merged corpus. Separate commit (if needed; wrapper may already support corpus-path arguments).
-
-6. **GO/NO-GO admission-count sweep** — Codex runs the admission-count sweep on the broader-fetch corpus. New script or extension of `cycle17d_admission_sweep.py`. Threshold for GO: at least one 4-axis intersected bin has ≥10 admitted rows. Result lands as a governance ledger doc (e.g., `docs/governance/2026-05-10-cycle-17d-broader-admission-sweep.md`). **If NO-GO, halt per Halt Criterion 2.**
-
-7. **(GO only)** **E0'' broader-corpus baseline** — Codex runs the (extended) wrapper script in production-proxy mode against the broader-fetch corpus. Recorded as ledger row E0'' (the double-prime distinguishes it from E0' = merged-corpus baseline, which was never run). Full payload: `trades / wins / market_implied_expected_wins / pnl / ic16_slices_4axis / ic16_slices_5axis_diagnostic / cohort_breakdown`.
-
-8. **(GO only)** **E4 axis pick deferred** — Operator decides E4 axis post-sweep, given the admission-count + cohort-breakdown evidence the sweep produces (mirror parent charter §3(b)). No default; deferred until step 6 result is in hand.
-
-9. **(GO only)** **E4 criteria-lock** — Claude clones the template (`docs/governance/2026-05-10-cycle-17d-criteria-lock-template.md`) into a dated document (e.g., `2026-05-10-cycle-17d-e4-criteria-lock-[hypothesis].md`), fills in the hypothesis + implementation path + acceptance bar, lands as pre-replay commit. Includes Clause E (cohort-drift disqualification) and references broader-fetch corpus paths.
-
-10. **(GO only)** **E4 replay** — Codex implements the locked hypothesis (single code change or counterfactual script), runs the locked replay command. Verdict appendix lands.
-
-11. **(GO only)** **Ledger row update** — Claude updates ledger row post-verdict.
-
-12. **3-revert architectural-rethink rule** — applies fresh from 0/3 for Cycle-17D (already reset per parent charter §3(c)).
+12. **3-revert architectural-rethink rule** — preserved but not engaged. The halt occurred pre-criteria-lock; no revert budget was consumed.
 
 ---
 
 ## §7 — Cross-References
 
 - **Parent charter amendment:** `docs/governance/2026-05-10-cycle-17d-charter-amendment.md` (authorizes the merger approach; this sub-amendment is a pivot option per that parent)
+- **Cycle-17D halt record:** `docs/governance/2026-05-10-cycle-17d-halt-on-historical-corpus-degeneracy.md` (commit `aeef26a`; supersedes this sub-amendment operationally)
 - **Schema audit blocker:** `logs/edge_replay/cycle17d/schema_compatibility_audit.json` (commit `6e626ea`) — the finding that motivated this sub-amendment (PRE_FIX rows structurally unusable)
 - **POST_FIX_NEW readiness audit:** `docs/governance/2026-05-10-cycle-17d-post-fix-new-readiness-audit.md` — volume projection showing 30–90 day wait for useful POST_FIX_NEW mass
 - **Cycle-17D corpus-builder bugs:** mentioned in readiness audit §6 (unmapped `llm_confidence` in `_paper_trade_rows()`; key-name mismatches in `_log_rows()`); fixable as Charter-permitted scorer-tooling-fix
@@ -201,4 +190,3 @@ All five invariants from the parent Cycle-17D charter apply unchanged:
 ---
 
 **Operator sign-off:** TBD by operator workflow.
-
