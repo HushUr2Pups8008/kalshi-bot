@@ -174,6 +174,16 @@ def _log_rows(paths: list[Path], markets: dict[str, dict[str, Any]]) -> list[dic
                     "news_class": row.get("news_class") or row.get("source_class") or "unknown",
                     "headline": row.get("headline") or row.get("signal_headline"),
                     "trade_gate_reason": row.get("reason") or row.get("skip_reason"),
+                    # Stage 1b fix: BLEND_DECISION emits blended_confidence; canonical key wins.
+                    # _first_present is None-aware so confidence=0.0 is NOT silently dropped.
+                    "confidence": _as_float(
+                        _first_present(
+                            row,
+                            "confidence",
+                            "blended_confidence",
+                            "llm_confidence",
+                        )
+                    ),
                 }
             )
     return out

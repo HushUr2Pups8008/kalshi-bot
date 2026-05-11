@@ -388,3 +388,106 @@ def test_log_row_canonical_ticker_beats_market_ticker(tmp_path):
 
     assert len(rows) == 1
     assert rows[0]["ticker"] == TICKER
+
+
+# ---------------------------------------------------------------------------
+# Stage 1b — confidence alias chain (2026-05-10)
+# ---------------------------------------------------------------------------
+
+
+def test_log_row_extracts_blend_decision_blended_confidence(tmp_path):
+    """BLEND_DECISION emits blended_confidence; builder must expose it as confidence."""
+    log = tmp_path / "trades.jsonl"
+    _make_log_file(
+        log,
+        [
+            {
+                "type": "BLEND_DECISION",
+                "ts": "2026-05-10T02:00:00+00:00",
+                "market_ticker": TICKER,
+                "blended_p": 0.60,
+                "blended_confidence": 0.75,
+                "market_yes_price": 50.0,
+                "source": "nyt",
+            }
+        ],
+    )
+
+    rows = _log_rows([log], MARKETS)
+
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == pytest.approx(0.75)
+
+
+def test_log_row_canonical_confidence_beats_aliases(tmp_path):
+    """When confidence, blended_confidence, and llm_confidence all present, canonical wins."""
+    log = tmp_path / "trades.jsonl"
+    _make_log_file(
+        log,
+        [
+            {
+                "type": "BLEND_DECISION",
+                "ts": "2026-05-10T02:01:00+00:00",
+                "market_ticker": TICKER,
+                "blended_p": 0.60,
+                "confidence": 0.80,
+                "blended_confidence": 0.55,
+                "llm_confidence": 0.30,
+                "market_yes_price": 50.0,
+                "source": "nyt",
+            }
+        ],
+    )
+
+    rows = _log_rows([log], MARKETS)
+
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == pytest.approx(0.80)
+
+
+def test_log_row_confidence_zero_not_dropped(tmp_path):
+    """confidence=0.0 must be preserved; alias must not shadow it with blended_confidence."""
+    log = tmp_path / "trades.jsonl"
+    _make_log_file(
+        log,
+        [
+            {
+                "type": "BLEND_DECISION",
+                "ts": "2026-05-10T02:02:00+00:00",
+                "market_ticker": TICKER,
+                "blended_p": 0.60,
+                "confidence": 0.0,
+                "blended_confidence": 0.5,
+                "market_yes_price": 50.0,
+                "source": "nyt",
+            }
+        ],
+    )
+
+    rows = _log_rows([log], MARKETS)
+
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == pytest.approx(0.0)
+
+
+def test_log_row_confidence_absent_returns_none(tmp_path):
+    """Row with no confidence-bearing field must yield confidence=None (not KeyError)."""
+    log = tmp_path / "trades.jsonl"
+    _make_log_file(
+        log,
+        [
+            {
+                "type": "SKIPPED",
+                "ts": "2026-05-10T02:03:00+00:00",
+                "ticker": TICKER,
+                "estimated_prob": 0.55,
+                "market_price": 55.0,
+                "source": "ap",
+            }
+        ],
+    )
+
+    rows = _log_rows([log], MARKETS)
+
+    assert len(rows) == 1
+    assert rows[0]["confidence"] is None
