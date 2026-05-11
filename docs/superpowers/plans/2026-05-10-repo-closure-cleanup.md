@@ -9,13 +9,13 @@ on commit `1d0f65a` (CI green, Stream G complete, Wave-1 flipped).
 
 ## User-confirmed decisions (carry forward as defaults unless overridden)
 
-1. **Claude command scope:** project-local at `.claude/commands/`, not global.
+1. **Claude command scope:** no repo-local slash wrapper retained. Use the Make target or ask explicitly when GitLab CI usage is needed.
 2. **GitLab helper:** keep — commit `scripts/gitlab_ci_usage.py`,
    `tests/test_gitlab_ci_usage.py`, and the `Makefile` target.
 3. **Docs-only `[skip ci]`:** implement via `.githooks/prepare-commit-msg`
    (mechanical, repo-portable). NOT via agent memory.
 4. **Docs allowlist:** `docs/**`, `README.md`, `CHANGELOG.md`, `CLAUDE.md`,
-   `AGENTS.md`, `.claude/commands/**`. Excludes `.gitlab-ci.yml`, `Makefile`,
+   `AGENTS.md`. Excludes `.gitlab-ci.yml`, `Makefile`,
    `.githooks/**`, `VERSION`, code, tests, scripts, requirements, runtime
    config.
 5. **Local-only files (do NOT sweep into commits):**
@@ -35,7 +35,7 @@ on commit `1d0f65a` (CI green, Stream G complete, Wave-1 flipped).
 
 | Sub | Description | Files |
 |-----|-------------|-------|
-| T0.1 | Add `.claude/commands/gitlab-ci-usage.md` project command | `.claude/commands/gitlab-ci-usage.md` |
+| T0.1 | Remove stale `.claude/commands/gitlab-ci-usage.md` project command wrapper; helper remains available via Make target | `.claude/commands/gitlab-ci-usage.md` |
 | T0.2 | Commit GitLab helper + Makefile target | `scripts/gitlab_ci_usage.py`, `tests/test_gitlab_ci_usage.py`, `Makefile` |
 | T0.3 | Add docs-only `[skip ci]` hook | `.githooks/prepare-commit-msg` |
 | T0.4 | Delete EDGE-004 Sub-1 plan draft | `docs/superpowers/plans/2026-05-10-profit-edge-004-sub-1-matcher-jaccard-audit.md` |

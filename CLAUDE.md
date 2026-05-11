@@ -32,7 +32,7 @@ Extends `~/.claude/rules/release_versioning.md`.
 - **Bypass (emergency only):** `git commit --no-verify`. CI will still
   catch the drift; only use when the hook itself is broken.
 - **Pre-commit hook also runs `scripts/launchd_template_equivalence_audit.py`** when `.plist.template` files are staged (`.githooks/pre-commit:15-21`). Audit ensures launchd templates stay equivalent across the repo; failure blocks the commit.
-- **Pre-commit-msg auto-skip-ci hook** (`.githooks/prepare-commit-msg`) appends `[skip ci]` to the commit message when every staged file matches the docs-only allowlist (`docs/**`, `README.md`, `CHANGELOG.md`, `CLAUDE.md`, `AGENTS.md`, `.claude/commands/**`). Saves CI minutes on doc-only commits. Bypass with `--no-verify` if a docs change should still trigger CI.
+- **Pre-commit-msg auto-skip-ci hook** (`.githooks/prepare-commit-msg`) appends `[skip ci]` to the commit message when every staged file matches the docs-only allowlist (`docs/**`, `README.md`, `CHANGELOG.md`, `CLAUDE.md`, `AGENTS.md`). Saves CI minutes on doc-only commits. Bypass with `--no-verify` if a docs change should still trigger CI.
 
 ## Critical Gotchas
 

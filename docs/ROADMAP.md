@@ -7,7 +7,7 @@
 This is the shared, authoritative task tracker for Claude, Codex, and Codex.
 Status must be updated as work progresses. See contract Section 10 for rules.
 
-**Allowed statuses:** `NOT_STARTED` | `IN_PROGRESS` | `COMPLETE` | `BLOCKED`
+**Task-table statuses:** `NOT_STARTED` | `IN_PROGRESS` | `COMPLETE` | `BLOCKED`. Timeline and appendix rows may use narrative status labels such as `ACTIVE`, `CLOSED`, `UNBLOCKED`, or `HALTED` when they describe a broader program state rather than a discrete implementation task.
 
 ---
 
@@ -18,7 +18,7 @@ No repo-level semver policy was documented through the v0.29.x stream (patch ver
 - **v0.30.0** — *First non-neutral LLM output producing non-zero edge.* The 0.29.x stream has been diagnostic-and-plumbing-heavy against a system with an empirically universal anchor rate (`est == market_price` on 100% of LLM calls in the current window). v0.30 marks the moment that changes: the first `SIGNAL_ANALYSIS_DETAIL` event in the live trade log with a non-neutral LLM output and a resulting non-zero edge. This is the operational phase change from "architecturally complete but provably inert" to "producing signal."
 - **v1.0.0** — *P4.3 live trading authorization.* Live money changes stable-API semantics; v1.0 is reserved for that boundary.
 
-### Wave-1/2/3 deploy timeline (cycle 7 pinned 2026-05-05)
+### Strategic Deploy / Replay Timeline (reconciled 2026-05-10)
 
 Per cycle-3 EDGE-004 closure path (lever map archived to [`docs/profit_path_debt_log.md`](profit_path_debt_log.md) §Current Status §2.3 on 2026-05-09; original `edge-004-closure-path-tldr-v3.md` archived to `docs/_archive/2026-05-09-docs-consolidation/`) + cycle-3 LOCK addenda + cycle-5 fire-time playbooks:
 

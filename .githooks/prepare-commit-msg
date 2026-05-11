@@ -9,7 +9,6 @@
 #   - CHANGELOG.md
 #   - CLAUDE.md
 #   - AGENTS.md
-#   - .claude/commands/**
 #
 # Excluded (ANY excluded path forces full CI):
 #   - .gitlab-ci.yml, Makefile, .githooks/**, VERSION
@@ -83,7 +82,7 @@ while IFS= read -r path; do
 
     # Allowlist match.
     case "$path" in
-        docs/*|README.md|CHANGELOG.md|CLAUDE.md|AGENTS.md|.claude/commands/*)
+        docs/*|README.md|CHANGELOG.md|CLAUDE.md|AGENTS.md)
             continue
             ;;
         *)

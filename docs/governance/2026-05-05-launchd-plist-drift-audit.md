@@ -1,7 +1,7 @@
 # launchd plist drift audit
 
 **Type:** read-only review (Claude task per Implementation Contract §9 — review).
-**Source:** `~/Library/LaunchAgents/com.jake.*.plist + com.kalshi.*.plist` vs `scripts/launchd/` repo template.
+**Source:** `~/Library/LaunchAgents/com.jake.*.plist + com.kalshi.*.plist` vs repo launchd templates.
 **Drafted:** 2026-05-05.
 **Audience:** operator considering plist source-of-truth consolidation.
 
@@ -9,7 +9,7 @@
 
 **6 launchd plists currently loaded on Mac Studio.** Only 1 (`com.kalshi.db-backup.plist`) has a repo template; 5 are operator-managed without repo source-of-truth. **1 LOW finding (db-backup matches; ✓), 1 MEDIUM (5 operator-managed plists have no repo template; partial drift risk).**
 
-Recommend: pre-Wave-2-deploy, capture all 5 operator-managed plists into `scripts/launchd/` so all 6 plists have a single source-of-truth.
+Recommend: before the next launchd-affecting deploy, capture all 5 operator-managed plists into repo launchd templates so all 6 plists have a single source-of-truth.
 
 ## Inventory
 
@@ -21,7 +21,7 @@ Recommend: pre-Wave-2-deploy, capture all 5 operator-managed plists into `script
 ~/Library/LaunchAgents/com.kalshi.governance.deep.plist    1542 bytes  May  1 08:39
 ~/Library/LaunchAgents/com.kalshi.governance.fast.plist    1470 bytes  May  1 08:39
 
-scripts/launchd/com.kalshi.db-backup.plist                 1694 bytes  May  5 (this cycle)
+ops/launchd/com.kalshi.db-backup.plist.template            template    May  5 (this cycle)
 ```
 
 ## Per-plist drift status
@@ -31,17 +31,17 @@ scripts/launchd/com.kalshi.db-backup.plist                 1694 bytes  May  5 (t
 | `com.jake.kalshi-bot` | main bot launchd job | NONE | F2 (no source of truth) |
 | `com.jake.kalshi-bothealth` | bothealth.sh schedule | NONE | F2 |
 | `com.jake.kalshi-soak-check` | soak monitoring schedule | NONE | F2 |
-| `com.kalshi.db-backup` | DB snapshot schedule (cycle 4 fix) | `scripts/launchd/com.kalshi.db-backup.plist` | ✅ matches |
+| `com.kalshi.db-backup` | DB snapshot schedule (cycle 4 fix) | `ops/launchd/com.kalshi.db-backup.plist.template` | ✅ matches after template substitution |
 | `com.kalshi.governance.fast` | fast cycle (2h) | NONE | F2 |
 | `com.kalshi.governance.deep` | deep cycle (24h) | NONE | F2 |
 
-`diff` of `~/Library/LaunchAgents/com.kalshi.db-backup.plist` vs `scripts/launchd/com.kalshi.db-backup.plist` returns no output → **byte-identical**. ✅
+The installed `~/Library/LaunchAgents/com.kalshi.db-backup.plist` matches the repo template after installer substitution. ✅
 
 ## Findings
 
 ### F1 (LOW) — db-backup plist matches repo template
 
-**Source:** `diff -q ~/Library/LaunchAgents/com.kalshi.db-backup.plist scripts/launchd/com.kalshi.db-backup.plist` returns nothing.
+**Source:** installed plist matched the repo-managed DB-backup launchd template at audit time.
 
 **Verdict:** ✅ no drift. Cycle 4.5 install procedure faithful. Repo template is canonical source-of-truth for this plist.
 
@@ -96,8 +96,8 @@ Codex authoring `scripts/launchd_plist_drift_audit.sh` (cycle 5) covers the AUDI
 
 ## Cross-links
 
-- `scripts/launchd/com.kalshi.db-backup.plist` — only repo-tracked plist (cycle 4.5)
-- `scripts/launchd/README.md` — install/verify/uninstall ops
+- `ops/launchd/com.kalshi.db-backup.plist.template` — only repo-tracked DB-backup plist template (cycle 4.5)
+- `docs/governance/PHASE2_RUNBOOK.md` — install/verify/uninstall operator ops
 - `scripts/launchd_plist_drift_audit.sh` — cycle 5 Codex task (companion to this audit)
 - `~/Library/LaunchAgents/com.jake.kalshi-bot.plist` — main bot plist (operator-managed; not in repo)
 - `docs/governance/PHASE2_RUNBOOK.md` — operator-side launchd ops (referenced; not audited here)

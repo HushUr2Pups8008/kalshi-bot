@@ -7,7 +7,8 @@ adds an additional flip protocol; Phase 4 adds Claude-API escalation.
 > and `com.kalshi.governance.deep` were bootstrapped on the **Mac Studio** at
 > approximately **2026-05-01 ~14:00 UTC** against `qwen3:14b` (Mac-Studio-only
 > model selection per "Model selection (hardware-conditional)" below). The §8.5
-> 14-day acceptance window targets close on **2026-05-15 ~14:00 UTC**, requires
+> 14-day acceptance window targets close on **2026-05-15T19:01Z** (14 days after
+> first recorded cycle `gc_2026-05-01_190127` at 2026-05-01T19:01:27Z), requires
 > **≥30 `GOVERNANCE_DECISION` events** accumulated and **≥85%** deemed reasonable
 > on manual review (per the "Manual decision review" section). The **MacBook never
 > hosted these launchd jobs** (`launchctl list` on the MacBook returns zero

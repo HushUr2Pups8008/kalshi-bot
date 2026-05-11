@@ -52,7 +52,7 @@ Per `PROFIT-PHASE2-001-early-close-criteria.md` §"§8.5.2 policy-equivalence ca
 | `d117b60` | 2026-05-02T22:00Z | `trading/paper_trader.py:record_trade` PROFIT-OBS-004 close — persists executed-side edge to paper_trades.edge column instead of YES-side edge. Persistence-shape change, NOT decision-flow change. Pre-fix decisions stand; post-fix decisions persist correctly. | INVOKED (observability persistence change; cycle-13 audit confirms no decision-path divergence) |
 | `1a466e4` | 2026-05-02T22:04Z | ruff auto-fix unused imports + f-string lints (15 files; touched governance/adapter.py + governance/agent.py among others). Per commit message: "no runtime behavior change. Tests: 1423 passed" | OUT-OF-SCOPE (lint-only, no behavioral change) |
 
-**Cycle-13 audit (2026-05-06T22:30Z):** all 5 surfaced commits triaged above. 2 INVOKED (`fae72fa`, `b47ca71`, `d117b60` — wait, count is 3 INVOKED + 4 OUT-OF-SCOPE; OUT-OF-SCOPE doesn't show in `check_soak_invariant.sh` because that script's commit_count=5 reflects the 5 in behavioral paths; `b44dda2`+`80932cb` aren't in the surfaced list, included here for §8.5.2 completeness). Gate 7: clean via §8.5.2 invocation, all surfaced commits attested.
+**Cycle-13 audit (2026-05-06T22:30Z):** all surfaced commits triaged above. Gate 7 is documented as clean via §8.5.2 invocation / out-of-scope attestation: 3 INVOKED (`fae72fa`, `b47ca71`, `d117b60`) + 4 OUT-OF-SCOPE (`b44dda2`, `80932cb`, `dbe1d30`, `1a466e4`). Some OUT-OF-SCOPE rows may not appear in `check_soak_invariant.sh` output because that script only reports commits touching behavioral paths.
 
 **Operator note for any commits between cycle-13 (this refresh) and fire-time:** rerun `bash scripts/check_soak_invariant.sh --json` against close-time SHA; walk any newly-surfaced commits; append rows to this table.
 
@@ -63,7 +63,7 @@ Per `PROFIT-PHASE2-001-early-close-criteria.md` §"§8.5.2 policy-equivalence ca
 I, `<TBD operator>`, confirm:
 
 1. All §8.5.1 gates above evaluated TRUE at close time.
-2. The 14-day calendar floor in §8.5 is intentionally relaxed to 7 days per the §8.5.1 addendum, justified by the volume gate clearing 5.3× at Day-4 and the safety counters running clean from day 1.
+2. The active 14-day Phase-2 close target is satisfied; the historical day-7 relaxation was not exercised.
 3. Gate 7 is either strict-clean or every surfaced commit has a documented §8.5.2 attestation. Doc / script / test commits are §8.5.2 OUT-OF-SCOPE when they do not affect the running bot.
 4. Wave-1 deploy may begin from this commit per `docs/_archive/governance/post-soak-close-rehearsal-checklist.md`.
 
@@ -78,7 +78,7 @@ When this attestation file fires (active target 2026-05-15 close commit window):
 1. Read `logs/governance/decisions.jsonl` for the full soak window (2026-05-01T19:01Z → close time).
 2. Populate every `<TBD>` placeholder with live counts.
 3. Run `bash scripts/check_soak_invariant.sh --json` against close-time SHA. If non-empty, walk surfaced commits and append §8.5.2 invocation rows above.
-4. Manual review (gate 6): per `feedback_soak_confirmation_cadence.md` (cap 1 confirmation per UTC day per agent), use the day-7 mid-soak confirmation's review batch.
+4. Manual review (gate 6): use `docs/governance/2026-05-06-gate-6-capacity-resolution-plan.md`, especially the Path 1 review-budget procedure and its concrete commands.
 5. Operator signs §"Operator attestation" + commits this file in same hunk as the close-day VERSION/CHANGELOG bump.
 6. Tag with `phase2-soak-closed`.
 
