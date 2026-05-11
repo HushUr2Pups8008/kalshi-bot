@@ -28,14 +28,14 @@
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 66 |
-| Open — HIGH | 6 |
+| Open — HIGH | 4 |
 | Open — MEDIUM | 1 |
 | Open — LOW | 1 |
-| Items IN_PROGRESS | 3 (PROFIT-PHASE2-001 — soak clock running, no operator action until 2026-05-15; PROFIT-EDGE-005 — Codex implementing per filed cycle 12 charter; PROFIT-EDGE-006 — Codex implementing per filed cycle 13 charter) |
+| Items IN_PROGRESS | 1 (PROFIT-PHASE2-001 — soak clock running, no operator action until 2026-05-15) |
 | Items ACTIVE | 1 (PROFIT-EDGE-012 — Cycle-17C in-progress; Cycle-17D HALTED 2026-05-10 pre-experiment per operator pick β) |
 | Items BLOCKED | 1 (PROFIT-EVID-001 — awaiting contract decision on non-trading evidence intake) |
 | Items RESOLVED | 3 (PROFIT-SEC-001 — Kalshi signing fail-fast, Phase-2 commit `ce70924`; PROFIT-OBS-006 — subreddit selector observability, Phase-2 commit `1d0714c`; PROFIT-DOC-001 — governance LLM gotchas in CLAUDE.md, Phase-2 commit `b1e1a0c`) |
-| Items COMPLETE | 50 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-VALID-001, PROFIT-STARTUP-001, PROFIT-CFG-001, PROFIT-STRUCT-001, PROFIT-STRUCT-002, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-EDGE-007, PROFIT-EDGE-008, PROFIT-EDGE-009, PROFIT-EDGE-010, PROFIT-EDGE-011, PROFIT-DOSSIER-001, PROFIT-GOV-001, PROFIT-GOV-002, PROFIT-DOC-002, PROFIT-OBS-003, PROFIT-OBS-004, PROFIT-DEBT-OQ1-SHIM, PROFIT-SOURCE-001, PROFIT-DEBT-WAVE1-DRAFTS) |
+| Items COMPLETE | 52 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-VALID-001, PROFIT-STARTUP-001, PROFIT-CFG-001, PROFIT-STRUCT-001, PROFIT-STRUCT-002, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-EDGE-005, PROFIT-EDGE-006, PROFIT-EDGE-007, PROFIT-EDGE-008, PROFIT-EDGE-009, PROFIT-EDGE-010, PROFIT-EDGE-011, PROFIT-DOSSIER-001, PROFIT-GOV-001, PROFIT-GOV-002, PROFIT-DOC-002, PROFIT-OBS-003, PROFIT-OBS-004, PROFIT-DEBT-OQ1-SHIM, PROFIT-SOURCE-001, PROFIT-DEBT-WAVE1-DRAFTS) |
 | Consolidated From | `docs/EDGE_STATUS.md` (merged 2026-05-09 → §Current Status); `docs/governance/edge-004-closure-path-tldr-v3.md` (lever map + EDGE-004 closure criteria merged 2026-05-09 → §Current Status §2.3) |
 
 ### High-Risk Areas
@@ -187,7 +187,7 @@ Probability of intake-side closure: ~30 % + (1 − 0.30) × 0.40 = **~58 %**. Re
 - Per-decision-time price reconstruction implemented via `--historical-prices` (cycle-13 task #6 done by Codex)
 - "Left on the table" measure implemented (cycle-13 task #7 done by Codex)
 - Cycle-13 charter: expand scope from 3 → 24 markets via `--live-kalshi`
-- Cycle-13 status: in progress (Codex implementing)
+- Cycle-13 status: COMPLETE 2026-05-06 with negative replay verdict; successor diagnostics continued under PROFIT-EDGE-007+ and Cycle-17/PROFIT-EDGE-012
 
 ### 2.5 Live Operations
 
@@ -1674,7 +1674,7 @@ Total strict-xfail markers as of 2026-05-04: 26+ pinning the deploy lattice.
 
 **Honest read after 2026-05-04 cycle:** EDGE-004 closure is dominantly bound by **whether the Google News query family continues to surface legal-niche headlines** (Branch A passive observe), with Branch C as a fallback. Wave-1 base stack landings reduce conversion volume by design (260 OPP / 9 PAPER_TRADE pre-Wave-1 → 87 / 1 post-Wave-1 per simulation `f671468`); the ≥ 5 % closure target is measured against the post-Wave-1 base, not the pre-Wave-1 baseline. Modal scenario per the unified Wave-1+2 forecast (`docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md`, commit `2bf3da1`): Branch A produces some legal-niche surfacing within 14 d; if 0, Branch C deploys; if still 0, escalation fires.
 
-**2026-05-06 cycle-11.5 strategic redirect (IC §16):** EDGE-004 lever menu (A.1+, A.1+1.5, B, C) is **BLOCKED PENDING REPLAY EVIDENCE**. The "Wave-2 deploys feed onboarding → Wave-3 deploys Lever B/C → escalation paths fire on stall" sequencing is replaced by a single new gate: each behavioral deploy requires replayed-EV evidence per IC §16. The replay harness is now the primary closure path; see `PROFIT-EDGE-005` below for the harness work, and `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` for the redirect rationale (3 lifetime trades, 0 wins, -$7.50 P&L, 89% zero-edge SKIPPEDs).
+**2026-05-06 cycle-11.5 strategic redirect (IC §16):** EDGE-004 lever menu (A.1+, A.1+1.5, B, C) is **BLOCKED PENDING REPLAY EVIDENCE**. The "Wave-2 deploys feed onboarding → Wave-3 deploys Lever B/C → escalation paths fire on stall" sequencing is replaced by a single new gate: each behavioral deploy requires replayed-EV evidence per IC §16. The replay harness became the primary closure path and was delivered under `PROFIT-EDGE-005`/`PROFIT-EDGE-006`; see `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` for the redirect rationale (3 lifetime trades, 0 wins, -$7.50 P&L, 89% zero-edge SKIPPEDs).
 
 ---
 
@@ -1686,8 +1686,8 @@ Total strict-xfail markers as of 2026-05-04: 26+ pinning the deploy lattice.
 | **Title** | Edge replay harness — verify ANY (source × market_family × signal_type) slice has positive replayed EV before deploying further behavioral changes |
 | **Category** | Profit-Path Integrity / Signal Quality / Replay Verification |
 | **Severity** | HIGH (gates all subsequent behavioral deploys per IC §16) |
-| **Status** | IN_PROGRESS (filed 2026-05-06 cycle 12; Codex implementing) |
-| **Priority** | NOW |
+| **Status** | COMPLETE (delivered 2026-05-06; harness landed, first-pass 3-market replay returned 0 positive-EV slices; remaining scope moved to PROFIT-EDGE-006) |
+| **Priority** | n/a (closed) |
 | **Owner** | Codex (implementation); Claude (review + readiness inventory) |
 | **Depends On** | PROFIT-PHASE2-001 close (ships Wave-1 cleanly first); evidence_store.db ≥ 13 days populated (already true) |
 | **Blocks** | All behavioral deploys per IC §16; specifically: PROFIT-EDGE-004 lever menu (A.1+, A.1+1.5, B, C); future Wave-N feed onboarding |
@@ -1737,7 +1737,7 @@ This entry tracks the replay-harness deliverable that must produce edge evidence
 **Related**
 
 - `PROFIT-EDGE-004` (open) — lever menu BLOCKED pending this harness's output.
-- `PROFIT-EDGE-006` (open) — Cycle-13 replay scope expansion (24-market full evidence_store run); see entry below.
+- `PROFIT-EDGE-006` (closed) — Cycle-13 replay scope expansion (24-market full evidence_store run); see entry below.
 - `PROFIT-OBS-003` (closed Wave-1 deploy) — SKIPPED-emission attribution surface required for replay.
 - `PROFIT-PHASE2-001` (active close target 2026-05-15) — Wave-1 cleanup scope already descoped to OBS-003-only; Wave-2/3 HALTED.
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate.
@@ -1752,7 +1752,7 @@ This entry tracks the replay-harness deliverable that must produce edge evidence
 
 First-pass result (3-market scope): 0 positive-EV slices, P&L -$7.50, win rate 0.00. Not proof no edge anywhere; sample is single-source / single-series / single-direction.
 
-Remaining work tracked under PROFIT-EDGE-006 (next-step expansion to full 24-market evidence_store scope).
+Closure: all five Cycle-12 deliverables landed; the negative 3-market replay result correctly transferred remaining replay-scope expansion to PROFIT-EDGE-006.
 
 ---
 
@@ -1764,8 +1764,8 @@ Remaining work tracked under PROFIT-EDGE-006 (next-step expansion to full 24-mar
 | **Title** | Cycle-13 replay scope expansion — full 24-resolved-market evidence_store run |
 | **Category** | Profit-Path Integrity / Edge Verification (continuation of PROFIT-EDGE-005) |
 | **Severity** | HIGH (gates Wave-2 deploy authorization per IC §16) |
-| **Status** | IN_PROGRESS (filed 2026-05-06 cycle 13; Codex implementing per `2026-05-06-cycle-13-replay-scope-expansion-charter.md`) |
-| **Priority** | NOW |
+| **Status** | COMPLETE (delivered 2026-05-06; 24-market replay returned 0 positive-EV slices and triggered IC §16 Rule 5 diagnostics) |
+| **Priority** | n/a (closed) |
 | **Owner** | Codex (implementation); Claude (review + diagnostic playbook + ancillaries) |
 | **Depends On** | PROFIT-EDGE-005 (harness exists); evidence_store has ≥24 resolved markets (verified cycle-13 readiness inventory) |
 | **Blocks** | All Wave-2/Wave-3 behavioral deploys per IC §16 |
@@ -1810,7 +1810,7 @@ Cycle-12 ran replay against `paper_trades` scope only — 3 markets, 1 source, 1
 
 **Related**
 
-- `PROFIT-EDGE-005` (in_progress; partially delivered) — direct parent; harness exists.
+- `PROFIT-EDGE-005` (closed; harness delivered) — direct parent; harness exists.
 - `PROFIT-EDGE-004` (open) — lever menu BLOCKED pending this expansion's output.
 - `docs/governance/2026-05-06-cycle-13-replay-scope-expansion-charter.md` — Cycle-13 charter.
 - `docs/governance/edge-replay-pivot-playbook.md` — IC §16 Rule 5 diagnostic playbook (fires on negative result).
@@ -1886,7 +1886,7 @@ Per `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md`:
 **Related**
 
 - `PROFIT-EDGE-006` (delivered with negative verdict) — direct parent.
-- `PROFIT-EDGE-005` (in_progress; harness exists) — replay infrastructure used.
+- `PROFIT-EDGE-005` (closed; harness exists) — replay infrastructure used.
 - `PROFIT-EDGE-004` (open; lever menu OBSOLETE per cycle-14 verdict).
 - `PROFIT-EDGE-008` (active) — Cycle-15B extraction rebuild succeeds this entry.
 - `PROFIT-GOV-002` (closed) — same-class issue at LLM verdict layer (rubber-stamp bias); cycle-14 Lane B failure mode (zero movement on clear input) is the analogous pathology at the extraction layer.

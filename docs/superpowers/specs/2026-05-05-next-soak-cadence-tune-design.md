@@ -1,14 +1,14 @@
 # Next-soak cadence-tune — design spec
 
-**Status:** design (applies to the NEXT post-Wave-1 governance shadow soak; NOT applied mid-PROFIT-PHASE2-001)
-**Tracker:** PROFIT-PHASE2-002 (proposed; opens when Wave-1 closes and the next soak begins)
+**Status:** design (applies to the next governance shadow soak after `PROFIT-PHASE2-001` closes; NOT applied mid-`PROFIT-PHASE2-001`)
+**Tracker:** `PROFIT-PHASE2-002` (proposed; opens after `PROFIT-PHASE2-001` closes and the next soak begins)
 **Owner:** Operator + Claude
-**Drafted:** 2026-05-05 (during PROFIT-PHASE2-001 wind-down)
+**Drafted:** 2026-05-05 (during PROFIT-PHASE2-001 shadow soak)
 **Resolves:** the soak-acceleration discussion 2026-05-05 (user + Codex aligned). Cadence-knob halving applies to the next soak from cycle 1, not retroactively.
 
 ## 1. Why this spec exists
 
-PROFIT-PHASE2-001 is closing under §8.5.1 early-close (target 2026-05-08 or 2026-05-10 depending on gate-7 resolution). The 14-day soak ran on 2 h fast / 24 h deep cadence per the Phase 2 spec. Going forward, the operator wants tighter observation cadence to compress the next soak's calendar window without diluting decision-policy fidelity.
+PROFIT-PHASE2-001 remains on the active 2026-05-15 close target per `docs/governance/PHASE2_RUNBOOK.md`; the earlier §8.5.1 day-7 close path is historical context only. The current soak runs on 2 h fast / 24 h deep cadence per the Phase 2 spec. Going forward, the operator wants tighter observation cadence to compress the next soak's calendar window without diluting decision-policy fidelity.
 
 Two distinct dimensions to tune:
 
@@ -117,11 +117,12 @@ These are gates on the cadence-tune CHANGE, not on the next soak's overall §8.5
 - NOT a mid-PROFIT-PHASE2-001 cadence change. The current soak runs on 2 h / 24 h until close per the soak invariant.
 - NOT an evidence-window halving. That requires a separate spec.
 - NOT a decision-policy change. The LLM model, prompt, gating thresholds all stay constant across the cadence-tune boundary.
-- NOT a §8.5 acceptance-criteria revision. §8.5.1 already specifies the early-close + cadence-tune-deferral policy.
+- NOT a §8.5 acceptance-criteria revision. The 2026-05-15 Phase-2 close remains governed by the active runbook; this spec only preserves the cadence-tune deferral policy for a later soak.
 
 ## 7. Cross-links
 
-- `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` §3 — locked recommendation that this spec implements
-- `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md` §8.5 + §8.5.1 — Phase 2 acceptance criteria + early-close addendum
+- `docs/governance/PHASE2_RUNBOOK.md` — active 2026-05-15 Phase-2 close target
+- `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` §3 — historical day-7 derivation + locked cadence-tune deferral
+- `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md` §8.5 + §8.5.1 — Phase 2 acceptance criteria + historical early-close addendum
 - `~/.claude/projects/-Users-jacobparenti-vscode-kalshi-bot/memory/feedback_soak_acceleration_split.md` — the (a) calendar-floor cut OK / (b) policy-knob cut defer-to-next-soak feedback memory
 - `ops/launchd/install.sh` — installer that templates the plists; needs no changes (it preserves whatever values the templates contain)

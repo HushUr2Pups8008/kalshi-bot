@@ -12,7 +12,7 @@ Bot has zero proof of edge: 3 lifetime paper trades, 0/3 wins, -$7.50 P&L, 1 sou
 Cycles 7-11 work was deployment safety, observability, and operator control. Necessary but insufficient. **Wave-2 (feed onboarding) and Wave-3 (Lever B/C) are speculation absent replay evidence.** Continuing to pre-stage those deploys is "progress toward operating the bot cleanly," not "progress toward making money."
 
 **Decision:**
-1. **Ship Wave-1 2026-05-08** as planned (sunk-cost prep done; OBS-005 has mechanical unblock hypothesis worth testing live; OBS-003 improves attribution we need).
+1. **Wave-1 shipped 2026-05-09 in de-scoped form (`OBS-003` only)**; the original 2026-05-08 cleanup bundle did not ship as planned.
 2. **HALT Wave-2 + Wave-3 deploy track** until replay evidence shows positive expected value for the candidate lever.
 3. **Cycle-12 = replay harness construction** (Codex). Output: per-source × market-family × signal-type counterfactual P&L table with confidence intervals.
 4. **New IC §16: Replayed-EV gate for behavioral deploys.** Behavioral changes (intake, classifier, blender, gates, sizing) deploy only after replayed-EV evidence shows positive expected value. Safety / observability / governance fixes are exempt.
@@ -43,13 +43,13 @@ Reasons:
 
 When bot evaluates a candidate, 89% of the time it has zero informational advantage. The 1 lever-tightening proposal (Wave-3 Lever B G1=0.04) would mostly convert that "zero edge" volume into more sub-margin trades — counterindicated absent replay.
 
-## Wave-1 ships (rationale)
+## Wave-1 shipped (historical rationale)
 
 - All 6 specs prepped; cycle-9/10/11 deploy-safety work is done. Cost to ship ≈ 1h operator-time.
 - **OBS-005 cooldown sentinel fix** has a real mechanical hypothesis: pre-fix `0.0` default for never-traded tickers indistinguishable from "cooldown just expired"; bot may be silently blocking fresh tickers from cooling down. Post-deploy production data is the test. If trade rate ticks up vs pre-deploy baseline on never-traded tickers, hypothesis confirmed; if not, rule it out and move on.
 - **OBS-003 SKIPPED-emission** improves attribution. We NEED this to do replay analysis honestly (G1-G6 reasons must surface, not just executor-level reasons).
 - **MATCH-001 (B′)** + **GOV-003** + **EXEC-002** + **Lever A.1** are defensive / governance / classifier-prereq. Don't create edge but don't block it either; cheap to ship.
-- Wave-1 frames as "cleanup / observability release" per Codex. Trade-rate uplift is hypothesis on OBS-005 only.
+- Wave-1 ultimately landed as an `OBS-003`-only cleanup/observability ship; trade-rate uplift remained a hypothesis, not a delivered claim.
 
 ## Wave-2 + Wave-3 are HALTED pending replay
 
@@ -109,7 +109,7 @@ Cross-references:
 - `docs/_archive/governance/wave-1-changelog-entry-prestaged.md` (ARCHIVED Stream G R49) + `docs/_archive/governance/wave-1-commit-messages-prestaged.md` (ARCHIVED Stream G R46) — both archived post-Wave-1-deploy.
 - `wave-3-deploy-hunks/lever-b.patch` STAYS but is FROZEN pending replay evidence.
 - `tests/test_wave2_branch_a_passive_observation.py` STAYS xfail-strict; Branch A is no longer auto-active post-Wave-1.
-- Pre-Wave-1 deploy artifacts (Day-7 mid-soak skeleton, attestation pre-stage, rollback runbook) all REMAIN active.
+- Pre-Wave-1 deploy artifacts are historical references only unless explicitly reused for a future close/deploy rehearsal.
 
 ## Failure mode this redirect prevents
 

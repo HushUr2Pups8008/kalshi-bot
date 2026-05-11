@@ -416,7 +416,7 @@ The 14-day floor in §8.5 is a **calendar floor for confidence**, not a derivati
 - Cadence (fast 2 h, deep 24 h) stays constant through the soak.
 - Decision policy stays constant — the LLM model, prompt, and gating thresholds do not change mid-soak (subject to §8.5.2 policy-equivalence carve-out).
 
-**Cadence / evidence-window changes are reserved for the NEXT post-Wave-1 shadow soak**, where they apply from cycle 1 (no mixed-policy contamination). See `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` §3 for the next-soak-onboarding cadence-tune notes.
+**Cadence / evidence-window changes are reserved for the NEXT shadow soak after `PROFIT-PHASE2-001` closes**, where they apply from cycle 1 (no mixed-policy contamination). See `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` §3 for the next-soak-onboarding cadence-tune notes.
 
 ### 8.5.2 Policy-equivalence carve-out (added 2026-05-05 during PROFIT-PHASE2-001)
 
