@@ -5,6 +5,11 @@ the bot process — they are auxiliary tools for development, observation, and
 maintenance. Scripts marked *read-only* do not touch DBs, logs, or runtime
 state.
 
+Common read-only operator entrypoints are exposed through `make`:
+`botcheck`, `trade-summary`, `decision-funnel`, `freshness`,
+`pipeline-impact`, `governance-monitor`, `governance-review`,
+`soak-invariant`, and `hook-health`.
+
 ## Test / CI tooling
 
 | Script | Purpose |
@@ -16,7 +21,7 @@ state.
 
 | Script | Purpose |
 |---|---|
-| `botcheck.py` | macOS status report for the Kalshi bot LaunchAgent workflow. |
+| `botcheck.py` | macOS LaunchAgent status plus recent signal-flow heartbeat from structured trade logs. |
 | `setup_launchd.sh` | macOS-only: installs the bot as a LaunchAgent. |
 
 ## Database maintenance

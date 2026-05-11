@@ -16,14 +16,17 @@ inventing a separate process model.
 from __future__ import annotations
 
 import argparse
+import gzip
+import json
 import os
 import re
 import subprocess
 import time
+from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 
 LOG_TS_RE = re.compile(
@@ -34,6 +37,16 @@ BOOT_RE = re.compile(r"\[BOOT\]\s+version=(?P<version>\S+)\s+pid=(?P<pid>\d+)")
 SHUTDOWN_MARKERS = (
     "Shutdown signal received",
     "Bot shutting down...",
+)
+SIGNAL_FLOW_EVENTS = (
+    "EARLY_FRESH_PASS",
+    "MATCH_DIAGNOSTIC",
+    "ANALYSIS_REJECTED",
+    "OPPORTUNITY",
+    "BLEND_DECISION",
+    "SKIPPED",
+    "PAPER_TRADE",
+    "LIVE_ORDER",
 )
 
 
@@ -55,6 +68,17 @@ class BotSession:
     shutdown_ts: datetime | None = None
     shutdown_marker: str | None = None
     next_boot_ts: datetime | None = None
+
+
+@dataclass(frozen=True)
+class SignalFlowStats:
+    path: Path
+    since: datetime
+    records_kept: int
+    lines_total: int
+    lines_malformed: int
+    counts: Counter[str]
+    latest_ts_by_type: dict[str, datetime]
 
 
 def human_duration(seconds: int | float | None) -> str:
@@ -79,6 +103,109 @@ def parse_log_ts(line: str) -> datetime | None:
         return None
     raw = f"{match.group('date')} {match.group('time')}.{match.group('ms')}"
     return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=timezone.utc)
+
+
+def _parse_trade_ts(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _iter_trade_log_files(path: Path) -> Iterable[Path]:
+    if path.is_file():
+        yield path
+        return
+
+    archive_root = path / "archive"
+    if archive_root.exists():
+        yield from sorted(
+            candidate
+            for candidate in archive_root.rglob("*")
+            if candidate.name.endswith((".jsonl", ".jsonl.gz"))
+        )
+
+    legacy = path / "trades.jsonl"
+    live = path / "live" / "trades.jsonl"
+    if legacy.exists():
+        yield legacy
+    if live.exists():
+        yield live
+
+
+def _iter_trade_records(
+    path: Path,
+    *,
+    lines_total: list[int],
+    lines_malformed: list[int],
+) -> Iterable[dict[str, Any]]:
+    for file_path in _iter_trade_log_files(path):
+        opener = gzip.open if file_path.name.endswith(".gz") else open
+        try:
+            with opener(file_path, "rt", encoding="utf-8") as fh:
+                for raw_line in fh:
+                    lines_total[0] += 1
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        lines_malformed[0] += 1
+                        continue
+                    if isinstance(record, dict):
+                        yield record
+                    else:
+                        lines_malformed[0] += 1
+        except OSError:
+            continue
+
+
+def summarize_signal_flow(
+    path: Path,
+    *,
+    now: datetime,
+    window_hours: float,
+) -> SignalFlowStats:
+    since = now - timedelta(hours=window_hours)
+    lines_total = [0]
+    lines_malformed = [0]
+    counts: Counter[str] = Counter()
+    latest_ts_by_type: dict[str, datetime] = {}
+    records_kept = 0
+
+    for record in _iter_trade_records(
+        path,
+        lines_total=lines_total,
+        lines_malformed=lines_malformed,
+    ):
+        event_type = str(record.get("type") or "").strip()
+        if event_type not in SIGNAL_FLOW_EVENTS:
+            continue
+        ts = _parse_trade_ts(record.get("ts"))
+        if ts is not None and ts < since:
+            continue
+        records_kept += 1
+        counts[event_type] += 1
+        if ts is not None and (
+            event_type not in latest_ts_by_type or ts > latest_ts_by_type[event_type]
+        ):
+            latest_ts_by_type[event_type] = ts
+
+    return SignalFlowStats(
+        path=path,
+        since=since,
+        records_kept=records_kept,
+        lines_total=lines_total[0],
+        lines_malformed=lines_malformed[0],
+        counts=counts,
+        latest_ts_by_type=latest_ts_by_type,
+    )
 
 
 def parse_sessions(lines: Iterable[str]) -> list[BotSession]:
@@ -367,6 +494,27 @@ def print_last_boot(log_path: Path, sessions: list[BotSession], now: datetime) -
     print()
 
 
+def print_signal_flow_section(stats: SignalFlowStats, *, now: datetime) -> None:
+    print("=== Signal-flow heartbeat (structured trade log) ===")
+    print(f"Trade log  : {stats.path}")
+    print(f"Window UTC : since {stats.since.isoformat()}")
+    print(f"Records    : {stats.records_kept} kept / {stats.lines_total} scanned")
+    if stats.lines_malformed:
+        print(f"Malformed  : {stats.lines_malformed}")
+    if not stats.counts:
+        print("Result     : no signal-flow records found in window")
+        print()
+        return
+
+    for event_type in SIGNAL_FLOW_EVENTS:
+        count = stats.counts.get(event_type, 0)
+        latest = stats.latest_ts_by_type.get(event_type)
+        age = human_duration((now - latest).total_seconds()) if latest is not None else "n/a"
+        latest_text = latest.isoformat() if latest is not None else "n/a"
+        print(f"{event_type:<17}: {count:>5} latest={latest_text} age={age}")
+    print()
+
+
 def print_history(
     *,
     sessions: list[BotSession],
@@ -430,6 +578,8 @@ def main() -> int:
     parser.add_argument("--python", type=Path, default=Path(os.environ.get("KALSHI_PYTHON", default_home / ".venv/bin/python")))
     parser.add_argument("--main", type=Path, default=Path(os.environ.get("KALSHI_MAIN", default_home / "main.py")))
     parser.add_argument("--log", type=Path, default=Path(os.environ.get("KALSHI_APP_LOG", default_home / "logs/app/bot.log")))
+    parser.add_argument("--trades-log", type=Path, default=default_home / "logs/trades")
+    parser.add_argument("--signal-window-hours", type=float, default=24.0)
     args = parser.parse_args()
 
     now_epoch = time.time()
@@ -443,11 +593,17 @@ def main() -> int:
     caffeinates = _caffeinate_pids(rows, python_path=args.python, main_path=args.main)
 
     sessions = read_sessions(args.log)
+    signal_flow = summarize_signal_flow(
+        args.trades_log,
+        now=now,
+        window_hours=args.signal_window_hours,
+    )
 
     print_launchd(args.label, launchd_output, wrapper_pid)
     current_proc = print_bot_section(bots, now_epoch=now_epoch, now=now)
     print_caffeinate_section(caffeinates, now_epoch=now_epoch)
     print_last_boot(args.log, sessions, now)
+    print_signal_flow_section(signal_flow, now=now)
     print_history(sessions=sessions, current_proc=current_proc, now=now)
     return 0
 

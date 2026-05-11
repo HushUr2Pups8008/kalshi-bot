@@ -20,8 +20,11 @@ from scripts.botcheck import (
     parse_sessions,
     print_bot_section,
     print_caffeinate_section,
+    print_signal_flow_section,
     session_duration,
+    summarize_signal_flow,
 )
+from tests._helpers import write_jsonl
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -102,6 +105,64 @@ def test_parse_sessions_records_next_boot_when_shutdown_missing():
     assert len(sessions) == 2
     assert sessions[0].shutdown_ts is None
     assert sessions[0].next_boot_ts == datetime(2026, 4, 20, 2, 0, tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# signal-flow heartbeat
+# ---------------------------------------------------------------------------
+
+def test_summarize_signal_flow_counts_recent_structured_events(tmp_path):
+    trades = tmp_path / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {"type": "OPPORTUNITY", "ts": "2026-05-10T22:00:00+00:00"},
+            {"type": "BLEND_DECISION", "ts": "2026-05-10T22:05:00+00:00"},
+            {"type": "BLEND_DECISION", "ts": "2026-05-10T22:15:00+00:00"},
+            {"type": "SKIPPED", "ts": "2026-05-10T22:20:00+00:00"},
+            {"type": "PAPER_TRADE", "ts": "2026-05-09T22:00:00+00:00"},
+            {"type": "UNRELATED", "ts": "2026-05-10T22:30:00+00:00"},
+            '{"type": "OPPORTUNITY"',
+        ],
+    )
+
+    stats = summarize_signal_flow(
+        tmp_path / "trades",
+        now=datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc),
+        window_hours=24,
+    )
+
+    assert stats.records_kept == 4
+    assert stats.lines_total == 7
+    assert stats.lines_malformed == 1
+    assert stats.counts["OPPORTUNITY"] == 1
+    assert stats.counts["BLEND_DECISION"] == 2
+    assert stats.counts["SKIPPED"] == 1
+    assert "PAPER_TRADE" not in stats.counts
+    assert stats.latest_ts_by_type["BLEND_DECISION"] == datetime(
+        2026, 5, 10, 22, 15, tzinfo=timezone.utc
+    )
+
+
+def test_print_signal_flow_section_surfaces_pipeline_counts(capsys, tmp_path):
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {"type": "OPPORTUNITY", "ts": "2026-05-10T22:00:00+00:00"},
+            {"type": "BLEND_DECISION", "ts": "2026-05-10T22:30:00+00:00"},
+        ],
+    )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(trades, now=now, window_hours=24)
+
+    print_signal_flow_section(stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "Signal-flow heartbeat" in out
+    assert "OPPORTUNITY      :     1" in out
+    assert "BLEND_DECISION   :     1" in out
+    assert "latest=2026-05-10T22:30:00+00:00 age=30m 00s" in out
 
 
 def test_session_duration_is_honest_for_unpaired_inactive_session():
