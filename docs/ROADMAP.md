@@ -26,7 +26,7 @@ Per cycle-3 EDGE-004 closure path (lever map archived to [`docs/profit_path_debt
 
 | step | trigger | earliest UTC | VERSION | status |
 |---|---|---|---|---|
-| PROFIT-PHASE2-001 close | §8.5.1 gates pass | 2026-05-08T19:01Z | n/a | active |
+| PROFIT-PHASE2-001 close | §8.5 gates + §8.5.2 attestation pass | 2026-05-15T19:01Z | n/a | active |
 | Wave-1 ship (de-scoped to OBS-003 only per Cycle-16E verdict) | post-Phase-2 + Cycle-16E descope decision | 2026-05-09T21:35Z (commit `c9df364`) | 0.29.59 (no bump; cleanup-only ship — v0.30.0 reserved for first non-neutral LLM / non-zero-edge phase change per §Versioning policy above) | **complete (OBS-003 ONLY shipped; 5 original Wave-1 draft commits — OBS-005, MATCH-001 (B'), EXEC-002, GOV-003, EDGE-004 Lever A.1 — descoped per Cycle-16E `scorer_fixed_no_signal_confirmed` verdict and retained on `origin/backup/wave-1-dry-run-2026-05-05` for future reference; see PROFIT-DEBT-WAVE1-DRAFTS for the commit→debt-item map; OBS-003 OPEN→COMPLETE 2026-05-10 `66003b4`; 0 KILL_SWITCH / 0 VALIDATION_ERROR / 0 PARSE_ERROR through audit window)** |
 | Wave-1 stabilisation | 48h post-OBS-003 ship (operator-compressed to 24h-evidenced for cleanup-grade scope) | 2026-05-09T21:35Z + 24h | n/a | **complete (24h-evidenced clean post-`c9df364`; 2 PAPER_TRADE / 0 rollback events / 0 safety-counter trips; OBS-003 audit invariant `OPPORTUNITY = SKIPPED + PAPER_TRADE` met at delta=0; cleanup-grade scope does not need full 48h behavioral-regression window per IC §16 (no edge claim))** |
 | **Cycle-14 calibration diagnosis** | post-Wave-1-deploy | DELIVERED 2026-05-06 | n/a | **DELIVERED 2026-05-06; verdict = `extraction_broken`** |
@@ -420,7 +420,7 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 
 5. **Phase 4 (live trading) is explicitly gated on measurable non-zero edge in paper mode.** No timeline. If edge does not form after P3 improvements, escalation is required — not more operational changes.
 
-6. **PROFIT-PHASE2-001 soak-early-close path + Wave-1/2/3 deploy infrastructure landed 2026-05-05.** §8.5.1 early-close gates documented in [`docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md`](superpowers/specs/2026-04-24-llm-governance-agent-design.md); §8.5.2 policy-equivalence carve-out admits mid-soak hot-fixes under bounded conditions. Wave-1 → Wave-3 deploy sequence consolidated in [`docs/profit_path_debt_log.md`](profit_path_debt_log.md) §Current Status §2.3 (absorbed `edge-004-closure-path-tldr-v3.md` on 2026-05-09) with locked v1 implementation choices for Lever B (G1=0.04) and Lever C (§3.2 normalized hash). Branch D escalation criteria + bounded sizing-scope specs for PROFIT-LLM-001 (4 axes) and P4-GATE Appendix A (3 axes) landed cycle 3.
+6. **PROFIT-PHASE2-001 close-attestation path + Wave-1/2/3 deploy infrastructure landed 2026-05-05.** §8.5.1 day-7 early-close gates are historical; active close target is 2026-05-15 per `PHASE2_RUNBOOK.md`. §8.5.2 policy-equivalence carve-out admits mid-soak hot-fixes under bounded conditions. Wave-1 → Wave-3 deploy sequence consolidated in [`docs/profit_path_debt_log.md`](profit_path_debt_log.md) §Current Status §2.3 (absorbed `edge-004-closure-path-tldr-v3.md` on 2026-05-09) with locked v1 implementation choices for Lever B (G1=0.04) and Lever C (§3.2 normalized hash). Branch D escalation criteria + bounded sizing-scope specs for PROFIT-LLM-001 (4 axes) and P4-GATE Appendix A (3 axes) landed cycle 3.
 
 ---
 

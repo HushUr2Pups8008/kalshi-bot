@@ -105,7 +105,7 @@ Operator picks. PROFIT-EDGE-011 active.
 
 | wave | status | gate |
 |---|---|---|
-| Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **ACTIVE — ships 2026-05-08 as cleanup/observability hygiene only; does NOT claim edge** | exempt under IC §16 Rule 2 (mechanical / observability / governance) |
+| Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **HISTORICAL PLAN — original 2026-05-08 cleanup/observability bundle descoped; OBS-003 only shipped 2026-05-09; does NOT claim edge** | exempt under IC §16 Rule 2 (mechanical / observability / governance) |
 | Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | requires (a) operator picks §B AND (b) post-onboarding replay produces ≥1 slice with `ev_ci_95_lo>0` AND `trades≥10` |
 | Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT — Lever B counterindicated** | loosening admission on a model with 0 IC §16-eligible slices on audited scorer widens losses without expected gain |
 | Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED PENDING CYCLE-17 OPERATOR DECISION + POST-DECISION CYCLE VERDICT** | each candidate fix needs replay evidence under audited scorer |
@@ -147,7 +147,7 @@ When that row exists, the slice it identifies (e.g., "Reuters × KXTRUMPCHINA ×
 
 | lever | role | locked? | deploy timing |
 |---|---|---|---|
-| A.1 | prerequisite hygiene | ✅ classifier patch ready | 2026-05-08+ (Wave-1 commit 6) |
+| A.1 | prerequisite hygiene | ✅ classifier patch draft retained | deferred post-Cycle-17D halt / POST_FIX_NEW readiness |
 | A.1+ Branch A | passive observe | ✅ no code change | 2026-05-15+ (Day-14 default) |
 | A.1+ Branch C | open-RSS legal-analyst | ⏳ feed selection per §A.1+1.5 selection-rubric | 2026-05-29+ if Branch A fails |
 | A.1+ option-A | geopolitics specialist | ✅ URL list locked per parent spec §3.1 | parallel-discretion or fallback |
@@ -1739,7 +1739,7 @@ This entry tracks the replay-harness deliverable that must produce edge evidence
 - `PROFIT-EDGE-004` (open) — lever menu BLOCKED pending this harness's output.
 - `PROFIT-EDGE-006` (open) — Cycle-13 replay scope expansion (24-market full evidence_store run); see entry below.
 - `PROFIT-OBS-003` (closed Wave-1 deploy) — SKIPPED-emission attribution surface required for replay.
-- `PROFIT-PHASE2-001` (closing 2026-05-08) — Wave-1 still ships per redirect; Wave-2/3 HALTED.
+- `PROFIT-PHASE2-001` (active close target 2026-05-15) — Wave-1 cleanup scope already descoped to OBS-003-only; Wave-2/3 HALTED.
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate.
 - `docs/governance/2026-05-06-cycle-12-replay-readiness-inventory.md` — Codex's data + API readiness map.
 
