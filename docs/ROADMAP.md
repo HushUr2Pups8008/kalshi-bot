@@ -498,7 +498,7 @@ Each addition was evaluated against a paper-mode baseline individually so edge a
 
 ## Appendix B — Polymarket Dual-Venue Integration (long-term pending)
 
-**Status (2026-04-26):** Phase 0 research CLOSED. Phase 1 BLOCKED on retail waitlist (operator at position #1,302,257 as of 2026-04-22).
+**Status (2026-05-10):** Phase 0 research CLOSED. **Phase 1 UNBLOCKED 2026-05-10** — operator off the waitlist; polymarket.us account provisioned; Ed25519 API keypair generated; `POLYMARKET_US_KEY_ID` + `POLYMARKET_US_SECRET` populated in operator's local `.env`. Phase 1 implementation NOT YET STARTED — gated behind operator authorization (current sprint scope is no-new-dev pending Phase-2 close 2026-05-15).
 
 **Why it lives here:** condensed status + 6-phase plan, retained in ROADMAP because the initiative is *active-but-blocked*, not closed. Full research transcript (regulatory landscape, codebase coupling audit, all gating Q&A with sources) is preserved at [`docs/_archive/studies/polymarket_venue_integration_investigation.md`](_archive/studies/polymarket_venue_integration_investigation.md).
 
@@ -508,7 +508,7 @@ Each addition was evaluated against a paper-mode baseline individually so edge a
 * **Q2 — same API as Polymarket Global CLOB?** No. Different surface entirely: single-level Ed25519 (vs Global's two-level EIP-712 + HMAC), unified host, slug-based market IDs (vs Global's token IDs), USDC.e collateral. Plan a new `polymarket/` client; do not vendor `py-clob-client`.
 * **Q3 — operator state eligibility?** Colorado is CLEAR of cease-and-desist enforcement and benefits from CFTC federal preemption (per Sen. Matt Ball, 2026-04-09). Sports contracts retain residual state risk; geopolitical contracts (the bot's edge) do not.
 * **Q7 — unauthenticated read-only access?** No. Polymarket US requires Ed25519 auth even for market-data reads. Polymarket Global has anonymous Gamma REST but US IPs are geoblocked at country level.
-* **Active blocker:** retail KYC onboarding is waitlist-gated; operator at position #1,302,257. Phase 1 cannot start until that clears.
+* ~~**Active blocker:** retail KYC onboarding is waitlist-gated; operator at position #1,302,257. Phase 1 cannot start until that clears.~~ **CLEARED 2026-05-10:** operator off waitlist; polymarket.us account provisioned; Ed25519 API keypair generated and stored locally. Phase 1 implementation now operator-discretion (no longer externally blocked); held while current closure-only sprint runs (Phase-2 soak through 2026-05-15).
 
 ### Sequenced execution plan (one phase per branch, no parallel tracks)
 
