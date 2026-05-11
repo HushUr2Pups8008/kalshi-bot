@@ -34,6 +34,10 @@ LOG_TS_RE = re.compile(
     r"(?P<time>\d{2}:\d{2}:\d{2}),(?P<ms>\d{3}) UTC "
 )
 BOOT_RE = re.compile(r"\[BOOT\]\s+version=(?P<version>\S+)\s+pid=(?P<pid>\d+)")
+# New sigil banner: # ===== v0.29.59 | env=prod | model=qwen2.5:7b | py=3.14.4 =====
+SIGIL_RE = re.compile(
+    r"^#\s*={5,}\s+v(?P<version>\S+)\s+\|\s+env=\S+\s+\|\s+model=\S+\s+\|\s+py=\S+\s+=+\s*$"
+)
 SHUTDOWN_MARKERS = (
     "Shutdown signal received",
     "Bot shutting down...",
@@ -209,12 +213,53 @@ def summarize_signal_flow(
 
 
 def parse_sessions(lines: Iterable[str]) -> list[BotSession]:
+    """Parse bot.log lines into BotSession records.
+
+    Recognises two boot-marker formats:
+    1. Legacy [BOOT] marker (has timestamp on the same line):
+           2026-05-09 12:00:00,000 UTC INFO ... [BOOT] version=X pid=Y ...
+    2. Sigil banner (no timestamp on its own line; timestamp from the next
+       timestamped log line):
+           # ===== v0.29.59 | env=prod | model=qwen2.5:7b | py=3.14.4 =====
+           2026-05-11 00:00:52,338 UTC INFO ...
+    """
     sessions: list[BotSession] = []
     current: BotSession | None = None
+    # When a sigil banner is seen we stash its version and wait for the next
+    # timestamped line to provide the boot timestamp.
+    pending_sigil_version: str | None = None
+
     for line in lines:
+        # Check for sigil banner first (no timestamp on this line).
+        sigil_match = SIGIL_RE.match(line)
+        if sigil_match:
+            pending_sigil_version = sigil_match.group("version")
+            continue
+
         ts = parse_log_ts(line)
         if ts is None:
             continue
+
+        # If a sigil banner is pending, this first timestamped line provides
+        # the boot timestamp.
+        if pending_sigil_version is not None:
+            if current is not None:
+                sessions.append(BotSession(
+                    boot_ts=current.boot_ts,
+                    version=current.version,
+                    pid=current.pid,
+                    shutdown_ts=current.shutdown_ts,
+                    shutdown_marker=current.shutdown_marker,
+                    next_boot_ts=ts,
+                ))
+            current = BotSession(
+                boot_ts=ts,
+                version=pending_sigil_version,
+                pid=None,
+            )
+            pending_sigil_version = None
+            # Still process this line for shutdown markers below.
+
         boot_match = BOOT_RE.search(line)
         if boot_match:
             if current is not None:
@@ -386,11 +431,34 @@ def _caffeinate_pids(
     Exact command match only — no relationship inference with the bot process.
     Caffeinate may be a child of the bot, not a parent; relationship is not
     checked here (mirrors botcaff() behaviour).
+
+    Path-form tolerance: launchd may report the python or main argument in
+    relative form (e.g. 'main.py' instead of '/abs/path/main.py') depending on
+    how the plist was authored.  We match structurally:
+      - prefix '/usr/bin/caffeinate -dimsu ' is invariant
+      - python basename appears somewhere in the command args
+      - main basename is the last space-separated token
+    This is equivalent to the shell pgrep -f match for any path-form variant.
     """
-    main = str(main_path)
-    python = str(python_path)
-    caffeinate_cmd = f"/usr/bin/caffeinate -dimsu {python} {main}"
-    return [p for p in rows if p.command == caffeinate_cmd]
+    prefix = "/usr/bin/caffeinate -dimsu "
+    python_basename = Path(python_path).name
+    main_basename = Path(main_path).name
+    result = []
+    for p in rows:
+        if not p.command.startswith(prefix):
+            continue
+        args = p.command[len(prefix):]
+        tokens = args.split()
+        if len(tokens) < 2:
+            continue
+        # python token: any token whose basename matches
+        # main token: last token whose basename matches
+        if (
+            any(Path(t).name == python_basename for t in tokens[:-1])
+            and Path(tokens[-1]).name == main_basename
+        ):
+            result.append(p)
+    return result
 
 
 def process_start_utc(proc: ProcessInfo, now_epoch: float) -> datetime:
@@ -483,7 +551,7 @@ def print_last_boot(log_path: Path, sessions: list[BotSession], now: datetime) -
     print("=== Last bot boot seen in logs ===")
     print(f"Log file   : {log_path}")
     if not sessions:
-        print("Result     : no [BOOT] entries found")
+        print("Result     : no boot markers found ([BOOT] or sigil banner)")
         print()
         return
     last = sessions[-1]

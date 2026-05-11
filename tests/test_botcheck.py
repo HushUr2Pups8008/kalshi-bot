@@ -438,3 +438,135 @@ def test_default_repo_root_default_when_neither_dir_exists(monkeypatch, tmp_path
     monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
 
     assert _default_repo_root() == fake_home / "vscode" / "kalshi-bot"
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 — _caffeinate_pids path-form tolerance (operator-authorized 2026-05-10)
+# ---------------------------------------------------------------------------
+
+def test_caffeinate_pids_matches_absolute_python_relative_main():
+    """ps reports relative main.py; inputs are absolute paths. Must match.
+
+    Replicates operator's live env: KALSHI_PYTHON=.../python (abs),
+    KALSHI_MAIN=.../main.py (abs), but ps shows 'main.py' (relative).
+    Pre-fix: exact f-string match fails -> empty list.
+    Post-fix: basename check matches regardless of path form.
+    """
+    abs_python = Path("/Users/test/.venv/bin/python")
+    abs_main = Path("/Users/test/main.py")
+    proc = ProcessInfo(
+        pid=20770,
+        ppid=1,
+        cpu="0.0",
+        mem="0.0",
+        etimes=3600,
+        command="/usr/bin/caffeinate -dimsu /Users/test/.venv/bin/python main.py",
+    )
+
+    result = _caffeinate_pids([proc], python_path=abs_python, main_path=abs_main)
+
+    assert [p.pid for p in result] == [20770]
+
+
+def test_caffeinate_pids_matches_relative_python_absolute_main():
+    """ps reports relative python; inputs are the other way. Must match.
+
+    Ensures basename matching is symmetric for both path tokens.
+    """
+    abs_python = Path("/Users/test/.venv/bin/python")
+    abs_main = Path("/Users/test/main.py")
+    proc = ProcessInfo(
+        pid=30001,
+        ppid=1,
+        cpu="0.0",
+        mem="0.0",
+        etimes=100,
+        command="/usr/bin/caffeinate -dimsu .venv/bin/python /Users/test/main.py",
+    )
+
+    result = _caffeinate_pids([proc], python_path=abs_python, main_path=abs_main)
+
+    assert [p.pid for p in result] == [30001]
+
+
+def test_caffeinate_pids_no_match_for_unrelated_caffeinate():
+    """A different caffeinate invocation (e.g. -i -t 300) must not match.
+
+    Observed on operator's machine as PID 59298.
+    """
+    abs_python = Path("/Users/test/.venv/bin/python")
+    abs_main = Path("/Users/test/main.py")
+    proc = ProcessInfo(
+        pid=59298,
+        ppid=1,
+        cpu="0.0",
+        mem="0.0",
+        etimes=50,
+        command="/usr/bin/caffeinate -i -t 300",
+    )
+
+    result = _caffeinate_pids([proc], python_path=abs_python, main_path=abs_main)
+
+    assert result == []
+
+
+def test_caffeinate_pids_no_match_for_non_caffeinate_command():
+    """A bare python command must not be mistaken for a caffeinate wrapper."""
+    abs_python = Path("/Users/test/.venv/bin/python")
+    abs_main = Path("/Users/test/main.py")
+    proc = ProcessInfo(
+        pid=11111,
+        ppid=1,
+        cpu="0.0",
+        mem="0.0",
+        etimes=200,
+        command="python main.py",
+    )
+
+    result = _caffeinate_pids([proc], python_path=abs_python, main_path=abs_main)
+
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 — parse_sessions sigil-banner boot detection (operator-authorized 2026-05-10)
+# ---------------------------------------------------------------------------
+
+def test_runtime_history_finds_sigil_banner_marker():
+    """parse_sessions detects the new sigil banner as a boot marker.
+
+    Live bot.log format since a prior commit:
+        # ===== v0.29.59 | env=prod | model=qwen2.5:7b | py=3.14.4 =====
+        2026-05-11 00:00:52,338 UTC INFO rss_monitor ...
+
+    Pre-fix: BOOT_RE only matches [BOOT]; sigil is invisible -> empty sessions.
+    Post-fix: sigil detected; timestamp taken from the next timestamped line.
+    """
+    log_lines = [
+        "# ===== v0.29.59 | env=prod | model=qwen2.5:7b | py=3.14.4 =====",
+        "2026-05-11 00:00:52,338 UTC INFO     rss_monitor          RSS poll cycle complete, sleeping 60s",
+    ]
+
+    sessions = parse_sessions(log_lines)
+
+    assert len(sessions) == 1
+    assert sessions[0].version == "0.29.59"
+    # Timestamp comes from the next log line (first real log line after banner).
+    assert sessions[0].boot_ts == datetime(2026, 5, 11, 0, 0, 52, 338000, tzinfo=timezone.utc)
+
+
+def test_runtime_history_finds_legacy_bracket_BOOT_marker():
+    """Backward compat: [BOOT] version=X pid=Y format still detected after Fix 2.
+
+    Older log files use this format; they must keep working.
+    """
+    log_lines = [
+        "2026-05-09 12:00:00,000 UTC INFO     main                 [BOOT] version=0.29.50 pid=12345 ctx=runtime cwd=/repo",
+    ]
+
+    sessions = parse_sessions(log_lines)
+
+    assert len(sessions) == 1
+    assert sessions[0].version == "0.29.50"
+    assert sessions[0].pid == 12345
+    assert sessions[0].boot_ts == datetime(2026, 5, 9, 12, 0, 0, tzinfo=timezone.utc)
