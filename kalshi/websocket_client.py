@@ -152,7 +152,17 @@ class KalshiWebSocketClient:
         return self._latest_prices.get(ticker)
 
     def get_yes_price(self, ticker: str) -> float | None:
-        """Return mid yes price in cents, or None."""
+        """**DEPRECATED post-P0 (LD-11)** -- reference/staleness signal only,
+        NOT an executable price. Returns the WS-book midpoint in cents (or
+        None) for diagnostic use. Post-P0 callers must NOT use this value
+        to construct executable bid/ask or feed Kelly / paper-trade flows;
+        REST normalized prices are the canonical executable source.
+
+        This helper is retained for test-surface compatibility
+        (`test_p0_ws_016_ws_no_data_returns_none_not_50`) and for future
+        staleness monitoring; it will be removed entirely if no
+        non-diagnostic consumer remains.
+        """
         prices = self._latest_prices.get(ticker)
         if prices:
             return (prices[0] + prices[1]) / 2.0
