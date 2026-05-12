@@ -1195,3 +1195,66 @@ class TradeLogger:
 
 # Module-level singletons
 trade_log = TradeLogger()
+
+
+def emit_opportunity(
+    *,
+    market: Any,
+    blended_yes_prob: float,
+    side: str,
+    executed_price_cents: int,
+    skip_reason: Optional[str] = None,
+) -> None:
+    """Emit a structured OPPORTUNITY JSONL event with post-P0 provenance.
+
+    P-6 / P0-PROV-020: opt-in surface gated on the ``KALSHI_OPPORTUNITY_LOG``
+    env var. When set, appends a line-delimited JSON event carrying
+    ``executed_price_cents``, ``price_source``, ``price_method``,
+    ``price_retrieved_at``, ``raw_payload_hash``, and
+    ``p0_contract_version: 1``. A 50¢ executable price triggers an explicit
+    ``_fixture_encodes_real_50c=true`` marker so downstream tooling can
+    distinguish a real 50¢ ask from the retired silent-midpoint fallback.
+
+    Production hot path continues to use ``Logger.log_opportunity()`` — this
+    module-level function is for P0 provenance testing and structured
+    instrumentation. No-ops when ``KALSHI_OPPORTUNITY_LOG`` is unset so it is
+    safe to call unconditionally from analysis paths.
+    """
+    path_str = os.environ.get("KALSHI_OPPORTUNITY_LOG")
+    if not path_str:
+        return
+
+    out_path = Path(path_str)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    retrieved = getattr(market, "price_retrieved_at", None)
+    if isinstance(retrieved, datetime):
+        retrieved_str: Optional[str] = retrieved.isoformat()
+    elif isinstance(retrieved, str):
+        retrieved_str = retrieved
+    else:
+        retrieved_str = None
+
+    event: dict[str, Any] = {
+        "type": "OPPORTUNITY",
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "ticker": getattr(market, "ticker", None),
+        "side": side,
+        "estimated_probability": round(float(blended_yes_prob), 4),
+        "price_cents": int(executed_price_cents),
+        "price_source": getattr(market, "price_source", None) or "unavailable",
+        "price_method": getattr(market, "price_method", None) or "none",
+        "price_retrieved_at": retrieved_str,
+        "raw_payload_hash": getattr(market, "raw_payload_hash", None),
+        "p0_contract_version": 1,
+    }
+    if skip_reason is not None:
+        event["skip_reason"] = skip_reason
+
+    # P0-PROV-020: an executable 50¢ price needs an explicit marker so the
+    # event is not mistakable for the retired silent-midpoint fallback.
+    if int(executed_price_cents) == 50 and skip_reason is None:
+        event["_fixture_encodes_real_50c"] = True
+
+    with out_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(event, ensure_ascii=False) + "\n")
