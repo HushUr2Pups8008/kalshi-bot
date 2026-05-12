@@ -280,9 +280,45 @@ class PaperTrader:
         startup_state = self._load_state()
         self._log_startup_diagnostics(startup_state)
         self._log_state_initialization(startup_state)
+        self._ensure_p0_cohort_sentinel()
         if self._startup_context == "runtime":
             type(self)._runtime_owner_pid = os.getpid()
         self._initialized = True
+
+    def _ensure_p0_cohort_sentinel(self) -> None:
+        """Idempotent insert of bot_state.p0_price_fix_deployed_ts (P-9 / LD-7).
+
+        Records the timestamp when the post-P0 pricing fix went live. P-8
+        replay cohort filter (``filter_post_p0_rows``) uses this value as
+        the authoritative ts boundary. Once inserted, the value is NEVER
+        updated on subsequent runs — pre-P0 contaminated rows are gated
+        by this sentinel forever.
+        """
+        sentinel_key = "p0_price_fix_deployed_ts"
+        existing = self._conn.execute(
+            "SELECT value FROM bot_state WHERE key = ?",
+            (sentinel_key,),
+        ).fetchone()
+        if existing is not None:
+            return  # already set; never overwrite
+
+        deployed_ts = datetime.now(timezone.utc).isoformat()
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO bot_state(key, value) VALUES (?, ?)",
+                    (sentinel_key, deployed_ts),
+                )
+        except sqlite3.IntegrityError:
+            # Race window: another PaperTrader instance inserted between our
+            # SELECT and INSERT. The other process won; contract honored —
+            # never overwrite the historical boundary (LD-7).
+            return
+        if self._startup_context != "test":
+            log.info(
+                "[P-9 / LD-7] Inserted bot_state.p0_price_fix_deployed_ts=%s",
+                deployed_ts,
+            )
 
     def _validate_startup_context(self) -> None:
         allowed = {"runtime", "cli", "test"}
