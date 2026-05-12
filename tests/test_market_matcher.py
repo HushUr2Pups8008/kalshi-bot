@@ -99,6 +99,7 @@ def _make_market(
     series_ticker: str = "KXTEST",
 ):
     close_time = (datetime.now(timezone.utc) + timedelta(days=days_to_close)).isoformat()
+    yes_int = max(1, min(99, int(round(yes_price))))
     return KalshiMarket(
         ticker=ticker,
         title=title,
@@ -112,6 +113,13 @@ def _make_market(
         series_ticker=series_ticker,
         subtitle=subtitle,
         result="",
+        yes_bid_cents=max(1, yes_int - 1),
+        yes_ask_cents=min(99, yes_int + 1),
+        no_bid_cents=max(1, 100 - yes_int - 1),
+        no_ask_cents=min(99, 100 - yes_int + 1),
+        price_available=True,
+        price_source="rest_list",
+        price_method="dollars_fixed_point",
     )
 
 

@@ -43,6 +43,7 @@ def _market(
     total = sum(regime.values())
     if total < 1.0:
         regime["fast"] += 1.0 - total
+    yes_price_int = max(0, min(100, int(round(yes_price))))
     return KalshiMarket(
         ticker=_TICKER,
         title="Test structural market",
@@ -54,6 +55,13 @@ def _market(
         close_time="2026-12-31T23:59:59Z",
         status="open",
         regime_weights=regime,
+        yes_bid_cents=max(1, yes_price_int - 1),
+        yes_ask_cents=min(99, yes_price_int + 1),
+        no_bid_cents=max(1, 100 - yes_price_int - 1),
+        no_ask_cents=min(99, 100 - yes_price_int + 1),
+        price_available=True,
+        price_source="rest_list",
+        price_method="dollars_fixed_point",
     )
 
 
@@ -278,6 +286,13 @@ class TestContextKeyHandling:
             open_interest=50,
             close_time="2026-12-31T23:59:59Z",
             status="open",
+            yes_bid_cents=49,
+            yes_ask_cents=51,
+            no_bid_cents=49,
+            no_ask_cents=51,
+            price_available=True,
+            price_source="rest_list",
+            price_method="dollars_fixed_point",
         )
         result = compute_structural_prior(market, _context())
         assert result.confidence == pytest.approx(0.0)

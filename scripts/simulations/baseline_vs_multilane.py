@@ -102,7 +102,7 @@ def _executor_passes_sequential(candidates: list[Any]) -> list[str | None]:
 
     out: list[str | None] = []
     for candidate in candidates:
-        analysis = executor._analysis_from_candidate(candidate)
+        analysis = asyncio.run(executor._analysis_from_candidate(candidate))
         skip = executor._validate(analysis)
         out.append(skip)
         if skip is None:

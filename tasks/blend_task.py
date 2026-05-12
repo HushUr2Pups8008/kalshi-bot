@@ -89,7 +89,13 @@ class BlendDecisionLogger(Protocol):
 
 @dataclass(frozen=True)
 class TradeCandidate:
-    """Queue payload produced only after the readiness gate passes."""
+    """Queue payload produced only after the readiness gate passes.
+
+    P-5 LD-10: carries ``executed_price_cents`` (the executed-side ask in
+    cents) alongside the deprecated ``market_yes_price`` alias. Executor
+    uses the canonical field; the alias remains for legacy paper-trade
+    persistence until P-6 migrates that path.
+    """
 
     fast_lane_analysis: SignalAnalysis
     market: KalshiMarket
@@ -98,6 +104,7 @@ class TradeCandidate:
     side: str
     signal_meta: dict[str, Any]
     readiness_decision: ReadinessDecision
+    executed_price_cents: int | None = None
 
 
 @dataclass(frozen=True)
@@ -519,6 +526,18 @@ def _trade_candidate(
         side=fast_lane_result.side,
         signal_meta=signal_meta,
         readiness_decision=readiness,
+        # P-5 LD-10: prefer the canonical executed_price_cents from the
+        # fast-lane analysis. Falls back to the legacy `market_yes_price`
+        # cents value when older callers omit it.
+        executed_price_cents=(
+            fast_lane_result.executed_price_cents
+            if fast_lane_result.executed_price_cents is not None
+            else (
+                int(fast_lane_result.market_yes_price)
+                if fast_lane_result.market_yes_price
+                else None
+            )
+        ),
     )
 
 

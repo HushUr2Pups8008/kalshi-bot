@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
-"""Build an edge-replay decision dataset from resolved markets and local bot artifacts."""
+"""Build an edge-replay decision dataset from resolved markets and local bot artifacts.
+
+P-8 additions (LD-7 / CR-F, P0-REG-022): module-level helpers
+``filter_post_p0_rows`` and ``assert_corpus_quality_or_raise`` ship the
+post-P0 cohort cut and silent-50 contamination guard. See the dedicated
+section below.
+"""
 
 from __future__ import annotations
 
 import argparse
 import glob
 import json
+import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Iterator, Union
+
+logger = logging.getLogger(__name__)
 
 
 def _first_present(row: dict[str, Any], *keys: str) -> Any:
@@ -296,6 +305,123 @@ def expand_trade_logs(patterns: list[str]) -> list[Path]:
     for pattern in patterns:
         paths.extend(Path(p) for p in glob.glob(pattern, recursive=True))
     return sorted(set(paths))
+
+
+# --- P-8 LD-7 / CR-F cohort filtering ----------------------------------------
+# These two helpers are the post-P0 cohort cut and the silent-50 contamination
+# guard required by tests/test_kalshi_pricing_p0_replay.py. They are public,
+# importable without running main(), and intentionally free of module-level
+# state. Orchestrator wiring (reading bot_state.p0_price_fix_deployed_ts and
+# passing it in) lands in a later packet — these helpers only consume the
+# sentinel value, never read bot_state directly.
+
+
+def filter_post_p0_rows(
+    rows: Iterable[dict],
+    sentinel: Union[str, datetime],
+) -> Iterator[dict]:
+    """Drop pre-P0 contaminated rows from a replay corpus by timestamp
+    sentinel (LD-7 / CR-F). Keeps rows where ``row["decision_ts"]`` parses
+    to a datetime >= ``sentinel``. Drops everything earlier.
+
+    Authoritative cohort boundary is ``bot_state.p0_price_fix_deployed_ts``
+    (the timestamp *value*, NOT field presence). SQLite ``paper_trades`` rows
+    never carry ``p0_contract_version``; filtering on that field would
+    silently leak pre-P0 SQLite rows. The ts sentinel is the only correct
+    predicate.
+
+    Args:
+        rows: iterable of dicts with at minimum ``decision_ts`` (ISO-8601
+            string).
+        sentinel: ISO-8601 string OR aware ``datetime``. The boundary is
+            inclusive: ``decision_ts >= sentinel`` keeps the row.
+
+    Yields:
+        Rows that meet the post-sentinel predicate. Rows missing
+        ``decision_ts`` or with unparseable ``decision_ts`` are dropped
+        (fail-closed) with a debug-level log entry.
+    """
+    if isinstance(sentinel, datetime):
+        sentinel_dt = sentinel
+    else:
+        try:
+            sentinel_dt = datetime.fromisoformat(str(sentinel).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(
+                f"filter_post_p0_rows: unparseable sentinel {sentinel!r}: {exc}"
+            ) from exc
+
+    if sentinel_dt.tzinfo is None:
+        raise ValueError(
+            "filter_post_p0_rows: sentinel must be timezone-aware (UTC); "
+            f"got naive {sentinel_dt!r}"
+        )
+
+    for row in rows:
+        raw_ts = row.get("decision_ts")
+        if raw_ts is None:
+            logger.debug("filter_post_p0_rows: dropping row missing decision_ts")
+            continue
+        try:
+            row_dt = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
+        except ValueError:
+            logger.debug(
+                "filter_post_p0_rows: dropping row with unparseable decision_ts=%r",
+                raw_ts,
+            )
+            continue
+        if row_dt >= sentinel_dt:
+            yield row
+
+
+def assert_corpus_quality_or_raise(rows: Iterable[dict]) -> None:
+    """Guard against a silent-50 contaminated replay corpus (P0-REG-022).
+
+    A post-P0 replay corpus must contain either:
+      * at least one row with ``price_cents != 50`` AND
+        ``price_available is True``, OR
+      * every ``price_cents == 50`` or ``price_available is False`` row
+        carries an explicit ``skip_reason`` (or
+        ``_fixture_encodes_real_50c`` marker per the OPPORTUNITY emit
+        contract).
+
+    Raises:
+        AssertionError: when the corpus consists entirely of unmarked
+            silent-50 / silent-unavailable rows, or is empty.
+    """
+    rows_list = list(rows)
+    if not rows_list:
+        raise AssertionError(
+            "replay corpus is empty — POST_FIX_NEW cut produced zero rows"
+        )
+
+    real_executable_seen = any(
+        isinstance(r.get("price_cents"), (int, float))
+        and not isinstance(r.get("price_cents"), bool)
+        and r["price_cents"] != 50
+        and r.get("price_available") is True
+        for r in rows_list
+    )
+    if real_executable_seen:
+        return
+
+    suspects = [
+        r for r in rows_list
+        if r.get("price_cents") == 50 or r.get("price_available") is False
+    ]
+    unmarked = [
+        r for r in suspects
+        if not (r.get("skip_reason") or r.get("_fixture_encodes_real_50c"))
+    ]
+    if unmarked:
+        raise AssertionError(
+            f"replay corpus failed P0-REG-022: {len(unmarked)} of "
+            f"{len(rows_list)} rows are silent-50 / silent-unavailable "
+            f"without explicit skip_reason or _fixture_encodes_real_50c marker"
+        )
+
+
+# --- end P-8 LD-7 / CR-F cohort filtering ------------------------------------
 
 
 def build_replay_dataset(

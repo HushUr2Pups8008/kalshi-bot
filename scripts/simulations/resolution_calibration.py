@@ -131,6 +131,11 @@ def _signal_analysis_with_lanes(event: LLMPositiveEvent, headline: str) -> Signa
     edge = estimated_prob - market.yes_price / 100.0
     price_cents = max(1, min(99, int(market.yes_price)))
     capped = PAPER_FLAT_CONTRACTS * price_cents / 100.0
+    # P-6 / LD-10: paper recorder consumes executed_price_cents.
+    if event.side == "yes":
+        executed_cents = market.yes_ask_cents or price_cents
+    else:
+        executed_cents = market.no_ask_cents or max(1, min(99, 100 - price_cents))
     return SignalAnalysis(
         news_item=NewsItem(
             headline=headline,
@@ -141,6 +146,7 @@ def _signal_analysis_with_lanes(event: LLMPositiveEvent, headline: str) -> Signa
         market=market,
         estimated_probability=estimated_prob,
         market_yes_price=market.yes_price,
+        executed_price_cents=int(executed_cents),
         edge=edge,
         side=event.side,
         kelly_fraction=0.10,

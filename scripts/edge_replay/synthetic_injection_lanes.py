@@ -122,6 +122,14 @@ async def _extract_probability(fixture: SyntheticFixture) -> float:
         close_time="2026-05-01T00:00:00Z",
         status="open",
         series_ticker="KXSYNTH",
+        # P-5 CR-C: post-P0 fields required for guarded legacy reads.
+        yes_bid_cents=50,
+        yes_ask_cents=50,
+        no_bid_cents=50,
+        no_ask_cents=50,
+        price_available=True,
+        price_source="rest_list",
+        price_method="dollars_fixed_point",
     )
     prob, *_ = await estimate_probability(
         news,

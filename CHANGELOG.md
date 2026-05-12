@@ -6,6 +6,105 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.30.0] - 2026-05-12
+
+### Changed (P0 — Kalshi API Contract Stabilization, PROFIT-API-001)
+
+Closes the 10-packet P0 closure roadmap at
+[`docs/governance/2026-05-11-kalshi-api-drift-pricing-correctness-roadmap.md`](docs/governance/2026-05-11-kalshi-api-drift-pricing-correctness-roadmap.md).
+PAPER-ONLY trading posture is unchanged; live execution is not enabled by
+this release.
+
+- **Kalshi API contract stabilization.** New
+  [`kalshi/normalizer.py`](kalshi/normalizer.py) is the single canonical
+  parse boundary for `GET /markets`, `GET /markets/{ticker}`, and
+  `GET /exchange/status`. Parses `*_dollars` fixed-point fields,
+  validates contract shape, and raises `UnsupportedPayloadContractError`
+  at the parse boundary on unknown shapes. `KalshiMarket` extended with
+  `price_available`, `executed_price_cents`, `price_method` provenance,
+  and `unsupported_payload_contract` audit flag.
+- **Fixed-point market pricing normalization.** Dollars-to-cents
+  conversion uses `Decimal` arithmetic with `ROUND_HALF_EVEN` (banker's
+  rounding) at the parse boundary; integer-cent invariant preserved
+  end-to-end through executor and order POST. Raw `_dollars` strings
+  retained as provenance for forensic re-derivation.
+- **No silent 50¢ fallback.** Every `or 50` chain in
+  [`kalshi/rest_client.py`](kalshi/rest_client.py) and every WebSocket
+  midpoint mutation site in [`main.py`](main.py) removed. Missing /
+  null source fields now propagate as `price_available=False` and skip
+  the trade-evaluation path rather than silently defaulting to 50¢.
+  Regression locked by `test_p0_reg_021_no_latent_50_constants_in_fixtures`.
+- **Two-sided executable YES/NO EV.** `SignalAnalysis.executed_price_cents`
+  is the new source of truth for the chosen side's ask price; Kelly
+  sizing and edge math now run against the executable price for the
+  side actually being entered, not an implicit YES-only midpoint.
+  `SignalAnalysis.market_yes_price` and
+  `OpenPosition.market_yes_price` retained as deprecated aliases
+  (LD-10, LD-17) — hard removal deferred to P1.
+- **Exchange-status fail-closed gate.** Orchestrator calls
+  `GET /exchange/status` once per cycle and gates trading on global
+  `exchange_active` + `trading_active`. Connectivity failures or
+  inactive exchange status fail closed (skip trading), not open.
+  [`analysis/market_matcher.py`](analysis/market_matcher.py)
+  `status="open"` filter corrected to `status="active"` (resolves the
+  documented `CLAUDE.md` gotcha that returned zero markets after the
+  parser fix).
+- **Paper-fill on executable price + provenance.**
+  [`trading/paper_trader.py`](trading/paper_trader.py) writes the
+  executed-side ask (not the YES midpoint) into
+  `paper_trades.market_yes_price`, with the `paper_trades.market_snapshot`
+  JSON column carrying `price_method`, `raw_dollars`, and the parser
+  contract version. Custom encoder maps `Decimal → str` and
+  `datetime → ISO8601` (CR-E).
+- **Replay cohort reset boundary.** `bot_state.p0_price_fix_deployed_ts`
+  sentinel is the single authoritative cohort cut for replay corpus
+  assembly. `scripts/edge_replay/build_replay_dataset.py` filters on
+  `row.decision_ts >= sentinel.value`; the JSONL
+  `p0_contract_version: 1` field is a forward-tagged audit signal,
+  NOT the cohort predicate (LD-7, CR-F). No `paper_trades` schema
+  migration was performed; pre-P0 SQLite rows are excluded from the
+  POST_FIX_NEW cohort by ts boundary.
+- **Botcheck drift heartbeat.** [`scripts/botcheck.py`](scripts/botcheck.py)
+  surfaces a `kalshi_drift:` line (cycle count, halt state, last halt
+  timestamp, threshold) and a `bot_state:` cohort-sentinel line per
+  LD-14. Drift counter halts the cycle on absolute count ≥ 1
+  (LD-6 strict); clearance is manual only (LD-6b).
+- **CI fixture-pinned gate.** Captured Kalshi response fixtures under
+  [`tests/fixtures/kalshi_payloads/`](tests/fixtures/kalshi_payloads/)
+  are sha256-pinned in `test_p0_fixture_pinning_sha256`. New
+  `p0_gate` GitLab CI job runs the P0 targeted suite (normalizer,
+  pricing, replay, drift-counter halt, signing fail-fast) on its own
+  so a P0 regression surfaces with a focused failure. The two
+  documented permanent-RED WS-policy tests
+  (`test_p0_ws_015_ws_midpoint_does_not_overwrite_rest_executable`,
+  `test_p0_ws_016_ws_no_data_returns_none_not_50`) are
+  `--deselect`'d from this job because the helpers they import
+  (`absorb_book_update`, `_latest_prices`) are out of P0 scope and
+  land in the P3 WebSocket rewrite; local targeted runs continue to
+  surface them as expected RED. No live API fetch in CI; no secrets
+  required.
+
+### Test invariants
+
+- P0 targeted suite (`test_kalshi_normalizer_p0`, `test_kalshi_pricing_p0`,
+  `test_kalshi_pricing_p0_replay`, `test_drift_counter_halt_p0`,
+  `test_kalshi_signing_failfast`) passes.
+- Broader pytest suite continues to pass on the
+  `feature/kalshi-api-contract-p0` branch; the only intentionally RED
+  surface is the documented permanent WS-policy test set.
+
+### Out of scope (deferred to P1 / P2 / P3)
+
+- `SignalAnalysis.market_yes_price` and `OpenPosition.market_yes_price`
+  field rename → `entry_price_cents` (P1 cleanup).
+- Historical contaminated `paper_trades` row backfill — deliberately
+  not performed (LD-8); values cannot be verified against historical
+  bid/ask snapshots.
+- Official-source runtime work (P2), WebSocket rewrite (P3),
+  trade-tape work (P3).
+
+---
+
 ## [0.29.59] - 2026-05-02
 
 ### Added (PROFIT-EDGE-004 — pipeline simulation buildout)

@@ -128,6 +128,9 @@ def _make_paper_executor() -> TradeExecutor:
     e = TradeExecutor.__new__(TradeExecutor)
     e._paper = paper
     e._rest = MagicMock()
+    # CR-D re-fetch: return None so executor falls back to the candidate
+    # snapshot, which simulations populate with full post-P0 cents fields.
+    e._rest.get_market.return_value = None
     e._is_paper = True
     e._last_traded = {}
     e._live_halted = False

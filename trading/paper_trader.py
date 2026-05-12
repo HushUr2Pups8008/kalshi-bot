@@ -18,8 +18,9 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from tasks.calibration_task import CalibrationTask
@@ -75,7 +76,13 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     resolved                INTEGER DEFAULT 0,
     resolved_yes            INTEGER,
     pnl_dollars             REAL,
-    market_snapshot         TEXT
+    market_snapshot         TEXT,
+    -- P-6 / P0-PROV-019 pricing provenance carried alongside the executed-side entry
+    price_source            TEXT DEFAULT 'unavailable',
+    price_method            TEXT DEFAULT 'none',
+    price_retrieved_at      TEXT,
+    raw_payload_hash        TEXT,
+    p0_contract_version     INTEGER DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS bot_state (
@@ -119,6 +126,52 @@ class _StartupStateSnapshot:
     existing_keys: set[str]
     paper_start_inserted: bool
     bankroll_inserted: bool
+
+
+# P-6 / P0-PROV-019: forward-only additive provenance columns. Added to
+# pre-existing DBs at PaperTrader init via idempotent ALTER TABLE so the
+# CREATE-TABLE-IF-NOT-EXISTS schema and live schema converge over time.
+_P0_PROVENANCE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("price_source", "TEXT DEFAULT 'unavailable'"),
+    ("price_method", "TEXT DEFAULT 'none'"),
+    ("price_retrieved_at", "TEXT"),
+    ("raw_payload_hash", "TEXT"),
+    ("p0_contract_version", "INTEGER DEFAULT 1"),
+)
+
+
+def _market_to_jsonable(market: Any) -> dict:
+    """JSON-serializable view of a KalshiMarket for ``paper_trades.market_snapshot``.
+
+    P-6 / CR-E: replaces the legacy ``dataclasses.asdict(market)`` path so we
+    can persist snapshots even when the post-P0 ``__getattribute__`` guard on
+    ``yes_price`` / ``yes_bid`` / ``yes_ask`` would otherwise raise
+    ``ValueError`` (legacy fields are read via ``object.__getattribute__`` to
+    bypass the guard). Also converts ``Decimal`` -> ``str`` (precision-preserving)
+    and ``datetime`` -> ISO-8601 UTC string so the resulting dict is safe to
+    feed straight into ``json.dumps``.
+
+    Falls back to an empty snapshot for non-dataclass inputs (test mocks);
+    callers that need richer payloads should pass a real dataclass instance.
+    """
+    if not dataclasses.is_dataclass(market):
+        return {}
+    snapshot: dict[str, Any] = {}
+    _legacy_guarded = ("yes_price", "yes_bid", "yes_ask")
+    for f in dataclasses.fields(market):
+        if f.name in _legacy_guarded:
+            # CR-C guard raises on read when price_available=False; bypass
+            # the guard for serialization so non-tradeable snapshots persist.
+            value = object.__getattribute__(market, f.name)
+        else:
+            value = getattr(market, f.name)
+        if isinstance(value, Decimal):
+            snapshot[f.name] = str(value)
+        elif isinstance(value, datetime):
+            snapshot[f.name] = value.isoformat()
+        else:
+            snapshot[f.name] = value
+    return snapshot
 
 
 def _match_quality_report_section() -> list[str]:
@@ -226,13 +279,57 @@ class PaperTrader:
         startup_state = self._load_state()
         self._log_startup_diagnostics(startup_state)
         self._log_state_initialization(startup_state)
+        self._ensure_p0_cohort_sentinel()
         if self._startup_context == "runtime":
             type(self)._runtime_owner_pid = os.getpid()
         self._initialized = True
 
+    def _ensure_p0_cohort_sentinel(self) -> None:
+        """Idempotent insert of bot_state.p0_price_fix_deployed_ts (P-9 / LD-7).
+
+        Records the timestamp when the post-P0 pricing fix went live. P-8
+        replay cohort filter (``filter_post_p0_rows``) uses this value as
+        the authoritative ts boundary. Once inserted, the value is NEVER
+        updated on subsequent runs — pre-P0 contaminated rows are gated
+        by this sentinel forever.
+        """
+        sentinel_key = "p0_price_fix_deployed_ts"
+        existing = self._conn.execute(
+            "SELECT value FROM bot_state WHERE key = ?",
+            (sentinel_key,),
+        ).fetchone()
+        if existing is not None:
+            return  # already set; never overwrite
+
+        deployed_ts = datetime.now(timezone.utc).isoformat()
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO bot_state(key, value) VALUES (?, ?)",
+                    (sentinel_key, deployed_ts),
+                )
+        except sqlite3.IntegrityError:
+            # Race window: another PaperTrader instance inserted between our
+            # SELECT and INSERT. The other process won; contract honored —
+            # never overwrite the historical boundary (LD-7).
+            return
+        if self._startup_context != "test":
+            log.info(
+                "[P-9 / LD-7] Inserted bot_state.p0_price_fix_deployed_ts=%s",
+                deployed_ts,
+            )
+
     def _validate_startup_context(self) -> None:
-        if self._startup_context not in {"runtime", "cli", "test"}:
-            raise ValueError(f"Unsupported startup_context: {self._startup_context}")
+        allowed = {"runtime", "cli", "test"}
+        # P-6: also accept ``p0-*`` test-bench contexts. Tests construct
+        # PaperTrader with descriptive labels (e.g. ``p0-paper-yes``) to
+        # avoid colliding with the runtime PID guard; treat them as test
+        # contexts for diagnostic-logging purposes.
+        if self._startup_context in allowed:
+            return
+        if self._startup_context.startswith("p0-"):
+            return
+        raise ValueError(f"Unsupported startup_context: {self._startup_context}")
 
     def _enforce_runtime_guards(self) -> None:
         if self._startup_context != "runtime":
@@ -287,6 +384,12 @@ class PaperTrader:
         for col, col_type in new_cols:
             if col not in cols and self._ensure_paper_trades_column(col, col_type, cols):
                 added_cols.append(col)
+
+        # P-6 / P0-PROV-019: idempotent forward-only column-add for provenance
+        # fields. Safe to run on every PaperTrader init.
+        for name, ddl in _P0_PROVENANCE_COLUMNS:
+            if name not in cols and self._ensure_paper_trades_column(name, ddl, cols):
+                added_cols.append(name)
 
         # Backfill series_ticker from market_snapshot JSON for historical rows
         if "series_ticker" in added_cols:
@@ -391,7 +494,7 @@ class PaperTrader:
         return self._conn.total_changes > before
 
     def _log_startup_diagnostics(self, startup_state: _StartupStateSnapshot) -> None:
-        if self._startup_context == "test":
+        if self._startup_context == "test" or self._startup_context.startswith("p0-"):
             return
         level = logging.INFO if self._startup_context == "runtime" else logging.DEBUG
         config_path = getattr(config_module, "__file__", "unknown")
@@ -411,7 +514,7 @@ class PaperTrader:
         )
 
     def _log_state_initialization(self, startup_state: _StartupStateSnapshot) -> None:
-        if self._startup_context == "test":
+        if self._startup_context == "test" or self._startup_context.startswith("p0-"):
             return
         if startup_state.paper_start_inserted:
             log.info("Paper trading phase started -- runs until you confirm --go-live.")
@@ -486,10 +589,39 @@ class PaperTrader:
     def record_trade(self, analysis: SignalAnalysis) -> str:
         from analysis.kelly import contracts_from_dollars
 
+        # P-6 / LD-2 / CR-C: fail-closed when price_available=False. Past the
+        # executor gate so an unavailable market here means an upstream
+        # contract violation; persist nothing and emit a structured warning
+        # so the test bench + operators can see it. We gate on
+        # ``price_available`` rather than full ``is_tradeable()`` so a
+        # tradeable-but-borderline-invariant market still records (the
+        # invariant check is the normalizer's job, not paper_trader's).
+        price_available = bool(getattr(analysis.market, "price_available", True))
+        if not price_available:
+            log.warning(
+                "[PAPER] Skipping record_trade for %s: market not tradeable "
+                "(price_available=%s, skip_reason=price_unavailable). "
+                "LD-2/CR-C guard.",
+                getattr(analysis.market, "ticker", "<unknown>"),
+                getattr(analysis.market, "price_available", None),
+            )
+            return ""
+
+        # P-6 / LD-10 / DT-1b: paper fill uses executed_price_cents. Each side
+        # already holds its own executable ask; midpoint synthesis
+        # (``100 - yes_price``) is removed as a load-bearing pricing path.
+        if analysis.executed_price_cents is None:
+            log.warning(
+                "[PAPER] Skipping record_trade for %s: executed_price_cents is "
+                "None (price_available=%s, skip_reason=price_unavailable). "
+                "LD-10 contract violation by upstream.",
+                getattr(analysis.market, "ticker", "<unknown>"),
+                getattr(analysis.market, "price_available", None),
+            )
+            return ""
+
         trade_id    = str(uuid.uuid4())[:12]
-        price_cents = int(analysis.market.yes_price) if analysis.side == "yes" \
-                      else int(100 - analysis.market.yes_price)
-        price_cents  = max(1, min(99, price_cents))
+        price_cents = max(1, min(99, int(analysis.executed_price_cents)))
         # Kelly shadow: always compute what Kelly would size, even in flat paper mode.
         # Stored as kelly_contracts for post-hoc analytics comparing flat-5 vs Kelly P&L.
         kelly_contracts = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
@@ -505,7 +637,26 @@ class PaperTrader:
         bankroll_after  = self._debit_bankroll(cost_dollars)
 
         source_mult = self.credibility.get_multiplier(analysis.news_item.source)
-        market_snapshot = json.dumps(dataclasses.asdict(analysis.market))
+        # P-6 / CR-E: custom encoder routes around the LD-2/CR-C legacy guard
+        # and serializes Decimal / datetime fields safely.
+        market_snapshot = json.dumps(
+            _market_to_jsonable(analysis.market), ensure_ascii=False
+        )
+
+        # P-6 / P0-PROV-019: pull provenance from the market and persist alongside
+        # the executed-side entry so analytics can attribute every row to its
+        # source surface (rest_list/rest_get/ws_book/...) and method.
+        _market = analysis.market
+        provenance_source = getattr(_market, "price_source", None) or "unavailable"
+        provenance_method = getattr(_market, "price_method", None) or "none"
+        provenance_retrieved = getattr(_market, "price_retrieved_at", None)
+        if isinstance(provenance_retrieved, datetime):
+            provenance_retrieved_str: str | None = provenance_retrieved.isoformat()
+        elif isinstance(provenance_retrieved, str):
+            provenance_retrieved_str = provenance_retrieved
+        else:
+            provenance_retrieved_str = None
+        provenance_hash = getattr(_market, "raw_payload_hash", None)
 
         # PROFIT-OBS-004 (closed 2026-05-02): persist the EXECUTED-side edge,
         # not the YES-side edge. analysis.edge is set upstream as
@@ -550,8 +701,10 @@ class PaperTrader:
                 market_snapshot, series_ticker, signal_type, match_score,
                 llm_direction, llm_magnitude, llm_confidence, kelly_contracts,
                 fast_lane_p, fast_lane_confidence, accumulation_p, accumulation_confidence,
-                structural_p, structural_confidence)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                structural_p, structural_confidence,
+                price_source, price_method, price_retrieved_at, raw_payload_hash,
+                p0_contract_version)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 trade_id,
                 datetime.now(timezone.utc).isoformat(),
@@ -587,6 +740,11 @@ class PaperTrader:
                 lane_acc_conf,
                 lane_struct_p,
                 lane_struct_conf,
+                provenance_source,
+                provenance_method,
+                provenance_retrieved_str,
+                provenance_hash,
+                1,
             ),
         )
         self._conn.commit()
@@ -602,6 +760,8 @@ class PaperTrader:
             estimated_prob=analysis.estimated_probability,
             market_yes_price=analysis.market_yes_price,
             ts=datetime.now(timezone.utc).isoformat(),
+            price_source=provenance_source,
+            price_method=provenance_method,
         ))
 
         paper_trade_kwargs = {

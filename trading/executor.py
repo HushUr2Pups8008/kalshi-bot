@@ -105,7 +105,14 @@ class TradeExecutor:
         """
         Evaluate and execute a trade. Returns trade/order ID or None if skipped.
         """
-        analysis = self._analysis_from_candidate(candidate)
+        analysis = await self._analysis_from_candidate(candidate)
+        if analysis is None:
+            # CR-D: re-fetch hook fail-closed (market not tradeable post-blend
+            # or side selection no longer yields positive edge). Caller logs
+            # the reason; no trade attempted.
+            return None
+        # P-5 CR-C: legacy yes_price read in this log line is guarded by the
+        # candidate-side `is_tradeable()` check inside `_analysis_from_candidate`.
         log.debug(
             "[DECISION] start ticker=%s mode=%s side=%s edge=%+.4f "
             "capped=$%.2f yes_price=%.1fc est_prob=%.3f confidence=%.2f",
@@ -114,7 +121,7 @@ class TradeExecutor:
             analysis.side.upper(),
             analysis.edge,
             analysis.capped_dollars,
-            analysis.market.yes_price,
+            analysis.market.yes_price if analysis.market.price_available else 0.0,
             analysis.estimated_probability,
             analysis.confidence,
         )
@@ -195,8 +202,16 @@ class TradeExecutor:
         if analysis.market.status not in ("open", "active"):
             return f"market status={analysis.market.status}"
 
-        # Price sanity: during paper trading allow slightly wider range
-        yes_price = analysis.market.yes_price
+        # Price sanity: during paper trading allow slightly wider range.
+        # P-5 LD-10: prefer the executed-side ask cents (canonical post-P0)
+        # over the legacy YES midpoint; fall back to the midpoint when the
+        # canonical field is missing (legacy SignalAnalysis instances).
+        if analysis.executed_price_cents is not None:
+            yes_price = float(analysis.executed_price_cents)
+        elif analysis.market.price_available:
+            yes_price = analysis.market.yes_price
+        else:
+            return "price_unavailable: market.price_available=False"
         price_floor = 2 if self._is_paper else 3
         price_ceil  = 98 if self._is_paper else 97
         if yes_price < price_floor or yes_price > price_ceil:
@@ -248,8 +263,16 @@ class TradeExecutor:
         # of the notional bankroll. Prevents a flood of signals on one ticker
         # from deploying an outsized fraction of capital on a single outcome.
         notional = self._paper.get_notional_bankroll()
+        # P-5 LD-10: paper-cost estimate uses executed-side ask cents
+        # when available; falls back to YES midpoint for legacy analyses.
+        if analysis.executed_price_cents is not None:
+            paper_unit_price = max(1, min(99, int(analysis.executed_price_cents)))
+        elif analysis.market.price_available:
+            paper_unit_price = max(1, min(99, int(analysis.market.yes_price)))
+        else:
+            paper_unit_price = 50  # not reachable past the price-sanity gate
         trade_cost = (
-            PAPER_FLAT_CONTRACTS * max(1, min(99, int(analysis.market.yes_price))) / 100.0
+            PAPER_FLAT_CONTRACTS * paper_unit_price / 100.0
             if self._is_paper
             else analysis.capped_dollars
         )
@@ -302,8 +325,23 @@ class TradeExecutor:
 
         return None
 
-    def _analysis_from_candidate(self, candidate: Any) -> SignalAnalysis:
-        """Normalize legacy SignalAnalysis or S3.4 TradeCandidate inputs."""
+    async def _analysis_from_candidate(self, candidate: Any) -> Optional[SignalAnalysis]:
+        """Normalize legacy SignalAnalysis or S3.4 TradeCandidate inputs.
+
+        P-5 CR-D (LD-13 stale-candidate guard): for blended candidates the
+        upstream `candidate.market` snapshot reflects fast-lane-time book
+        state. Between fast-lane match and blend completion, the executable
+        bid/ask can move. Re-fetch the market via `self._rest.get_market`
+        and re-derive side + executed_price_cents against the fresh book
+        before sizing/placing. Returns ``None`` (fail-closed) when the
+        market is no longer tradeable or neither side has positive edge —
+        the caller short-circuits without trading.
+
+        Async since P-5 Q4: `self._rest.get_market` is a synchronous HTTP
+        round trip; running it directly from the consumer-worker event loop
+        serialized all blended-candidate executions. Wrap in
+        `asyncio.to_thread` so the loop stays responsive.
+        """
         # Shape-based detection: isinstance(candidate, TradeCandidate) would require
         # importing tasks.blend_task into /trading, violating layer boundaries.
         # If fast_lane_analysis is renamed in TradeCandidate, this check must be updated.
@@ -312,11 +350,63 @@ class TradeExecutor:
 
         signal_meta = self._candidate_signal_meta(candidate)
         analysis = copy.copy(candidate.fast_lane_analysis)
-        analysis.market = candidate.market
+
+        ticker = candidate.market.ticker
+        fresh_market = None
+        try:
+            fresh_market = await asyncio.to_thread(self._rest.get_market, ticker)
+        except Exception as exc:
+            log.warning(
+                "[BLEND_REFETCH] %s fetch failed: %s -- falling back to candidate snapshot",
+                ticker, exc,
+            )
+
+        if fresh_market is None:
+            # Fetch unavailable. Fall back to candidate snapshot if it is
+            # itself tradeable; otherwise fail-closed.
+            if not candidate.market.is_tradeable():
+                log.warning(
+                    "[BLEND_REFETCH] %s candidate market not tradeable and "
+                    "refetch returned None -- skipping",
+                    ticker,
+                )
+                return None
+            log.warning(
+                "[BLEND_REFETCH] fallback_to_snapshot ticker=%s — fresh REST get_market returned None; "
+                "using fast-lane-time candidate market (CR-D degraded path)",
+                ticker,
+            )
+            fresh_market = candidate.market
+
+        if not fresh_market.is_tradeable():
+            log.warning(
+                "[BLEND_REFETCH] %s not tradeable post-blend "
+                "(price_available=%s) -- skipping",
+                ticker, fresh_market.price_available,
+            )
+            return None
+
+        analysis.market = fresh_market
         analysis.estimated_probability = candidate.blended_probability
-        analysis.market_yes_price = candidate.market_yes_price
-        analysis.edge = candidate.blended_probability - (candidate.market_yes_price / 100.0)
-        analysis.side = candidate.side
+
+        # Re-derive side + executable price against the fresh book.
+        try:
+            from analysis.side_selection import select_side, compute_edge
+            new_side, new_executed_cents = select_side(
+                fresh_market, candidate.blended_probability
+            )
+            edges = compute_edge(fresh_market, candidate.blended_probability)
+        except ValueError as exc:
+            log.debug(
+                "[BLEND_REFETCH] %s side selection failed post-refetch: %s",
+                ticker, exc,
+            )
+            return None
+
+        analysis.side = new_side
+        analysis.executed_price_cents = new_executed_cents
+        analysis.market_yes_price = float(new_executed_cents)  # DT-2b alias
+        analysis.edge = edges.yes_edge if new_side == "yes" else edges.no_edge
         analysis.signal_type = "blend"
         analysis.signal_meta = signal_meta
         return analysis
@@ -399,9 +489,17 @@ class TradeExecutor:
             )
             return None
 
-        price_cents = int(analysis.market.yes_ask) if analysis.side == "yes" \
-                      else int(100 - analysis.market.yes_bid)
-        price_cents  = max(1, min(99, price_cents))
+        # P-5 LD-10: live order price comes from the executed-side ask
+        # cents the side selector chose, not a yes_ask/yes_bid pair that
+        # silently inverted on NO trades. Fail-closed when missing.
+        if analysis.executed_price_cents is None:
+            log.error(
+                "[LIVE_GUARD] BLOCKED live order for %s -- executed_price_cents is None. "
+                "P-5 contract violation: side selector must set executed_price_cents.",
+                analysis.market.ticker,
+            )
+            return None
+        price_cents  = max(1, min(99, int(analysis.executed_price_cents)))
         contracts    = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
 
         if contracts <= 0:

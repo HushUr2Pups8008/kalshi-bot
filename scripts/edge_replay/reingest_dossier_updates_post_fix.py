@@ -94,6 +94,7 @@ def _market(row: sqlite3.Row, market_meta: dict[str, Any] | None) -> KalshiMarke
     ticker = str(row["market_ticker"])
     title = str((market_meta or {}).get("title") or ticker)
     yes_price = float((market_meta or {}).get("yes_price") or 50)
+    yes_int = max(1, min(99, int(round(yes_price))))
     return KalshiMarket(
         ticker=ticker,
         title=title,
@@ -105,6 +106,14 @@ def _market(row: sqlite3.Row, market_meta: dict[str, Any] | None) -> KalshiMarke
         close_time=str((market_meta or {}).get("close_time") or "2026-05-01T00:00:00Z"),
         status=str((market_meta or {}).get("status") or "open"),
         series_ticker=str((market_meta or {}).get("series_ticker") or ticker.split("-", 1)[0]),
+        # P-5 CR-C: post-P0 fields required for guarded legacy reads.
+        yes_bid_cents=yes_int,
+        yes_ask_cents=yes_int,
+        no_bid_cents=100 - yes_int,
+        no_ask_cents=100 - yes_int,
+        price_available=True,
+        price_source="rest_list",
+        price_method="dollars_fixed_point",
     )
 
 

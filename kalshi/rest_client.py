@@ -19,7 +19,13 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from config import cfg
-from kalshi import KalshiMarket, OrderResult
+from kalshi import ExchangeState, KalshiMarket, OrderResult
+from kalshi.normalizer import (
+    UnsupportedPayloadContractError,
+    normalize_exchange_status,
+    normalize_market_list_entry,
+    normalize_market_detail,
+)
 from utils.logger import get_logger
 
 log = get_logger("kalshi_rest")
@@ -210,23 +216,14 @@ class KalshiRestClient:
         markets = []
         for m in data.get("markets", []):
             try:
-                yes_bid   = float(m.get("yes_bid",   m.get("yes_ask", 50)) or 50)
-                yes_ask   = float(m.get("yes_ask",   m.get("yes_bid", 50)) or 50)
-                yes_price = (yes_bid + yes_ask) / 2.0
-                markets.append(KalshiMarket(
-                    ticker=m["ticker"],
-                    title=m.get("title", m.get("subtitle", m["ticker"])),
-                    yes_bid=yes_bid,
-                    yes_ask=yes_ask,
-                    yes_price=yes_price,
-                    volume=int(m.get("volume", 0) or 0),
-                    open_interest=int(m.get("open_interest", 0) or 0),
-                    close_time=m.get("close_time", ""),
-                    status=m.get("status", "open"),
-                    series_ticker=m.get("series_ticker", ""),
-                    subtitle=m.get("subtitle", ""),
-                    result=m.get("result", ""),
-                ))
+                markets.append(normalize_market_list_entry(m))
+            except UnsupportedPayloadContractError as exc:
+                log.warning(
+                    "Skipping market with unsupported payload contract: "
+                    "ticker=%s reason=%s",
+                    getattr(exc, "ticker", "") or m.get("ticker", "<unknown>"),
+                    exc,
+                )
             except (KeyError, TypeError, ValueError) as exc:
                 log.debug("Skipping malformed market entry: %s", exc)
 
@@ -234,29 +231,37 @@ class KalshiRestClient:
         return markets, next_cursor
 
     def get_market(self, ticker: str) -> Optional[KalshiMarket]:
-        """Fetch a single market by ticker."""
+        """Fetch a single market by ticker. Uses the P-2 normalizer so
+        cents fields, provenance, and payload-hash all flow through one
+        canonical parse path (LD-3)."""
         try:
             data = self._request("GET", f"/markets/{ticker}")
-            m = data.get("market", data)
-            yes_bid   = float(m.get("yes_bid",   m.get("yes_ask", 50)) or 50)
-            yes_ask   = float(m.get("yes_ask",   m.get("yes_bid", 50)) or 50)
-            yes_price = (yes_bid + yes_ask) / 2.0
-            return KalshiMarket(
-                ticker=m["ticker"],
-                title=m.get("title", m.get("subtitle", ticker)),
-                yes_bid=yes_bid,
-                yes_ask=yes_ask,
-                yes_price=yes_price,
-                volume=int(m.get("volume", 0) or 0),
-                open_interest=int(m.get("open_interest", 0) or 0),
-                close_time=m.get("close_time", ""),
-                status=m.get("status", "open"),
-                series_ticker=m.get("series_ticker", ""),
-                subtitle=m.get("subtitle", ""),
-                result=m.get("result", ""),
+            return normalize_market_detail(data)
+        except UnsupportedPayloadContractError as exc:
+            log.warning(
+                "get_market(%s) unsupported payload contract: %s", ticker, exc,
             )
+            return None
         except Exception as exc:
             log.warning("get_market(%s) failed: %s", ticker, exc)
+            return None
+
+    def get_exchange_status(self) -> Optional[ExchangeState]:
+        """Fetch /exchange/status once per cycle and normalize through the
+        P-2 normalizer (LD-4 / P-7). Returns None on fetch failure or
+        unsupported payload contract — caller must treat None as fail-closed
+        (exchange NOT open, skip all market analysis for this cycle).
+        """
+        try:
+            data = self._request("GET", "/exchange/status")
+            return normalize_exchange_status(data)
+        except UnsupportedPayloadContractError as exc:
+            log.warning(
+                "get_exchange_status unsupported payload contract: %s", exc,
+            )
+            return None
+        except Exception as exc:
+            log.warning("get_exchange_status fetch failed: %s", exc)
             return None
 
     def get_all_open_markets(self, max_pages: int = 10) -> list[KalshiMarket]:

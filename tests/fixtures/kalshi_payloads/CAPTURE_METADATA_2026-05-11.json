@@ -1,0 +1,86 @@
+{
+  "capture_session": "2026-05-11T13:37Z",
+  "capture_authority": "P0 Kalshi API Contract Stabilization fixture-pinned CI prerequisite (canonical roadmap §6, accepted D5(a))",
+  "operator_constraints_honored": [
+    "read-only HTTP GET only",
+    "no auth headers — public unauthenticated endpoints",
+    "no .env touched",
+    "no bot runtime code imported",
+    "no launchd/config/feeds/analysis/trading state touched",
+    "no orders placed",
+    "PAPER-ONLY posture preserved"
+  ],
+  "api_base": "https://api.elections.kalshi.com/trade-api/v2",
+  "fixtures": [
+    {
+      "fixture": "exchange_status_2026-05-11.json",
+      "endpoint": "GET /exchange/status",
+      "captured_at_utc": "2026-05-11T13:37:16Z",
+      "size_bytes": 46,
+      "sha256": "457ba5176d7f54a556573f117659bab7f8990f8af12548a8b3cd27a12c06f383",
+      "purpose": "validate global exchange_active/trading_active live here, not per-market (D1 fail-closed gating source)"
+    },
+    {
+      "fixture": "list_markets_status_open_limit50_2026-05-11.json",
+      "endpoint": "GET /markets?status=open&limit=50",
+      "captured_at_utc": "2026-05-11T13:37:16Z",
+      "size_bytes": 169445,
+      "sha256": "6173c20ddc53380d2baccd79775cf5a5f3b80cbf264a1571935a1c49810b62f0",
+      "market_count": 50,
+      "note_value_distribution": "All 50 markets return status='active' (NOT 'open' as request param suggested) — confirms CLAUDE.md gotcha and analysis/market_matcher.py:487 bug. Markets in first page dominated by KXMVECROSSCATEGORY-* / KXMVESPORTSMULTIGAMEEXTENDED-* (sports cross-category); not bot-relevant. Bot-relevant capture done via event_ticker filter below.",
+      "purpose": "primary list-parser fixture; field-presence audit"
+    },
+    {
+      "fixture": "single_market_KXTRUMPIRAN-27JAN01_2026-05-11.json",
+      "endpoint": "GET /markets/KXTRUMPIRAN-27JAN01",
+      "captured_at_utc": "2026-05-11T13:37:16Z",
+      "size_bytes": 2622,
+      "sha256": "42375c772066b5e24ada7cd02156073bb6fa27de84ffb53d6042af93d8c7a8fc",
+      "market_identity": {
+        "ticker": "KXTRUMPIRAN-27JAN01",
+        "event_ticker": "KXTRUMPIRAN",
+        "series_ticker": "KXTRUMPIRAN",
+        "title": "Will Donald Trump visit Iran before Jan 1, 2027?",
+        "category": "Politics",
+        "status": "active"
+      },
+      "observed_prices_dollars": {
+        "yes_bid": "0.0880",
+        "yes_ask": "0.0980",
+        "no_bid": "0.9020",
+        "no_ask": "0.9120",
+        "last_price": "0.0880",
+        "previous_price": "0.0760"
+      },
+      "purpose": "primary detail-parser fixture; politics/geopolitics bot-relevant; demonstrates real non-50 prices that legacy parser would silently overwrite to 50"
+    },
+    {
+      "fixture": "event_KXTRUMPIRAN_2026-05-11.json",
+      "endpoint": "GET /events/KXTRUMPIRAN",
+      "captured_at_utc": "2026-05-11T13:37:16Z",
+      "size_bytes": 11286,
+      "sha256": "d5325604cfc58e7616fa7f1e6dfa14bc26981e4f78d6030d3cbe1701667db66d",
+      "purpose": "P2 official-source level audit; confirms event response includes nested markets[] by default (with_nested_markets=true may be redundant)"
+    },
+    {
+      "fixture": "series_KXTRUMPIRAN_2026-05-11.json",
+      "endpoint": "GET /series/KXTRUMPIRAN",
+      "captured_at_utc": "2026-05-11T13:37:16Z",
+      "size_bytes": 1830,
+      "sha256": "8dbebaff09308504a64e1e402309db829cd336b21410b7064cbbc895062b25a1",
+      "purpose": "P2 official-source level audit; confirms settlement_sources (17 sources), contract_url, contract_terms_url live at series level, not market level"
+    }
+  ],
+  "key_findings_summary": {
+    "field_drift_hypothesis_status": "EMPIRICALLY CONFIRMED",
+    "fixed_point_fields_present_in_100pct": ["yes_bid_dollars","yes_ask_dollars","no_bid_dollars","no_ask_dollars","last_price_dollars","previous_price_dollars","volume_fp","volume_24h_fp","open_interest_fp","yes_bid_size_fp","yes_ask_size_fp","price_level_structure","price_ranges","fractional_trading_enabled","response_price_units","notional_value_dollars","liquidity_dollars"],
+    "legacy_cents_int_fields_present_in_0pct": ["yes_bid","yes_ask","no_bid","no_ask","last_price","previous_yes_bid","previous_yes_ask","volume","volume_24h","open_interest"],
+    "status_field_observed_value": "active",
+    "status_field_filter_request_value": "open",
+    "status_filter_drift": "Request status=open returned 50/50 markets with status='active' — confirms analysis/market_matcher.py:487 filter is broken AND that the value 'active' is the live state name",
+    "exchange_status_endpoint_returns_global_not_per_market": true,
+    "roadmap_contradictions_found": 4,
+    "roadmap_clarifications_found": 5,
+    "non_50_prices_observed_on_politics_ticker": true
+  }
+}

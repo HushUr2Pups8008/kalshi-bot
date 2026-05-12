@@ -583,6 +583,67 @@ def print_signal_flow_section(stats: SignalFlowStats, *, now: datetime) -> None:
     print()
 
 
+def print_kalshi_drift_section(now: datetime) -> None:
+    """Additive Kalshi API drift heartbeat (P-9 / LD-14).
+
+    Reads the DriftCounter halt sentinel at data/runtime/kalshi_drift_halt.json
+    (if present) plus reads bot_state.p0_price_fix_deployed_ts for cohort
+    boundary visibility. Strictly diagnostic; emits a single line for the
+    operator and never mutates state.
+
+    Operator-locked threshold (OQ-A -> LD-6): abs >= 1.
+    """
+    import sqlite3
+
+    print("=== Kalshi API drift heartbeat (P0) ===")
+
+    sentinel_path = _default_repo_root() / "data" / "runtime" / "kalshi_drift_halt.json"
+    halt_state: dict[str, Any] = {
+        "cycle_count": 0,
+        "halt": False,
+        "last_halt_at": None,
+        "threshold_abs": 1,
+    }
+    if sentinel_path.is_file():
+        try:
+            payload = json.loads(sentinel_path.read_text(encoding="utf-8"))
+            halt_state["cycle_count"] = int(payload.get("cycle_drift_count") or 0)
+            halt_state["halt"] = True
+            halt_state["last_halt_at"] = payload.get("halt_ts")
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            print(f"halt sentinel unreadable at {sentinel_path}: {exc}")
+            halt_state["halt"] = True  # fail-closed if sentinel exists but bad
+
+    cohort_ts: str | None = None
+    db_path = _default_repo_root() / "data" / "paper_trades.db"
+    if db_path.is_file():
+        try:
+            conn = sqlite3.connect(str(db_path))
+            try:
+                row = conn.execute(
+                    "SELECT value FROM bot_state WHERE key = ?",
+                    ("p0_price_fix_deployed_ts",),
+                ).fetchone()
+                if row is not None:
+                    cohort_ts = row[0]
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            print(f"bot_state read failed: {exc}")
+
+    print(
+        f"kalshi_drift: cycle_count={halt_state['cycle_count']} "
+        f"halt={halt_state['halt']} "
+        f"last_halt_at={halt_state['last_halt_at'] or 'null'} "
+        f"threshold_abs={halt_state['threshold_abs']}"
+    )
+    print(
+        f"p0_cohort   : deployed_ts={cohort_ts or 'null'} "
+        f"(post-P0 replay rows: decision_ts >= deployed_ts; LD-7 / CR-F)"
+    )
+    print()
+
+
 def print_history(
     *,
     sessions: list[BotSession],
@@ -672,6 +733,7 @@ def main() -> int:
     print_caffeinate_section(caffeinates, now_epoch=now_epoch)
     print_last_boot(args.log, sessions, now)
     print_signal_flow_section(signal_flow, now=now)
+    print_kalshi_drift_section(now=now)
     print_history(sessions=sessions, current_proc=current_proc, now=now)
     return 0
 

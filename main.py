@@ -49,7 +49,6 @@ _ensure_supported_python()
 
 import argparse
 import asyncio
-import dataclasses
 import hashlib
 import itertools
 import json
@@ -538,6 +537,38 @@ class TradingBot:
         family = self._source_family(source)
         return family in DISABLED_SOURCE_FAMILIES
 
+    def _exchange_open_or_skip(self, cycle_label: str) -> bool:
+        """P-7: one-fetch-per-cycle ExchangeState gate. Fetches
+        /exchange/status synchronously through the REST client and applies
+        fail-closed logic. Returns True iff the exchange is open and trading
+        is active; logs the skip reason otherwise.
+
+        Skip reasons emitted:
+          - exchange_status_fetch_failed (None returned by REST — fail-closed)
+          - exchange_paused             (exchange_active is False)
+          - trading_inactive            (trading_active is False)
+        """
+        state = self.rest.get_exchange_status()
+        if state is None:
+            log.warning(
+                "[P-7] Skipping %s cycle: exchange_status_fetch_failed (fail-closed)",
+                cycle_label,
+            )
+            return False
+        if not state.exchange_active:
+            log.info(
+                "[P-7] Skipping %s cycle: exchange_paused (exchange_active=False)",
+                cycle_label,
+            )
+            return False
+        if not state.trading_active:
+            log.info(
+                "[P-7] Skipping %s cycle: trading_inactive (trading_active=False)",
+                cycle_label,
+            )
+            return False
+        return True
+
     async def _enqueue_news(self, news: NewsItem) -> None:
         """Non-blocking enqueue from feed pollers. Drops items if queue is full."""
         from utils.logger import trade_log
@@ -629,6 +660,10 @@ class TradingBot:
         log.info("[NEWS] [%s] %s", news.source, news.headline[:100])
         self.source_stats.increment_posts(news.source)
 
+        # P-7: one-fetch-per-cycle exchange-status fail-closed gate.
+        if not self._exchange_open_or_skip("news"):
+            return
+
         candidates = await self.matcher.find_candidates(news)
         if not candidates:
             log.debug("No matching markets for: %s", news.headline[:60])
@@ -639,6 +674,23 @@ class TradingBot:
 
     async def _process_candidate(self, news: NewsItem, market, match_score: float, match_meta: dict | None = None) -> None:
         from utils.logger import trade_log
+        # P-7: per-market status guard. Upstream of price-availability and
+        # tradeable checks — the market must be in Kalshi's "active" state.
+        if getattr(market, "status", None) != "active":
+            log.debug(
+                "[P-7] Skipping market %s: status_not_active (status=%s)",
+                market.ticker, getattr(market, "status", None),
+            )
+            return
+        # P-5 CR-C / LD-2: short-circuit when the market has no executable
+        # price. Reading `market.yes_price` is now guarded; honor it here
+        # before any downstream consumer would crash.
+        if not getattr(market, "price_available", True):
+            log.debug(
+                "[ANALYSIS] price_unavailable ticker=%s source=%s -- skipping candidate",
+                market.ticker, news.source,
+            )
+            return
         # Staleness check: skip if the article is too old when we process it.
         # With a queue, items can sit for several minutes; old news is already priced in.
         age_secs = (datetime.now(timezone.utc) - news.published).total_seconds()
@@ -659,17 +711,10 @@ class TradingBot:
             )
             return
 
-        # Use WS price if available -- defensive copy before mutation so the shared cache
-        # object is never modified in-place (avoids race with concurrent WS price updates)
-        ws_price = self.ws.get_yes_price(market.ticker)
-        if ws_price is not None:
-            market = dataclasses.replace(market)
-            market.yes_price = ws_price
-            market.yes_bid   = max(1, ws_price - 1)
-            market.yes_ask   = min(99, ws_price + 1)
-            price_source = "ws"
-        else:
-            price_source = "cache"
+        # WS midpoint mutation removed in P-4 (LD-11): WS is reference /
+        # staleness signal only; REST normalized prices via the P-2 normalizer
+        # remain the canonical executable source.
+        price_source = "rest_cache"
 
         log.debug(
             "[ANALYSIS] candidate ticker=%s source=%s match_score=%.3f age=%.0fs "
@@ -710,8 +755,34 @@ class TradingBot:
             return
 
         self.source_stats.increment_signals(news.source)
-        edge = estimated_prob - market.yes_prob
-        side = "yes" if edge > 0 else "no"
+        # P-5 LD-10 / CR-A: two-sided executable EV side selection.
+        # Replaces legacy YES-midpoint sign heuristic; each side scored
+        # against its own executable ask. Fail-closed when the market is
+        # not tradeable or neither side has positive edge.
+        from analysis.side_selection import select_side, compute_edge
+        if not market.is_tradeable():
+            log.debug(
+                "[ANALYSIS] not_tradeable ticker=%s -- skipping",
+                market.ticker,
+            )
+            return
+        try:
+            side, executed_price_cents = select_side(market, estimated_prob)
+        except ValueError as exc:
+            log.debug(
+                "[ANALYSIS] no_positive_edge ticker=%s reason=%s",
+                market.ticker, exc,
+            )
+            return
+        try:
+            edges = compute_edge(market, estimated_prob)
+        except ValueError as exc:
+            log.debug(
+                "[ANALYSIS] edge_unavailable ticker=%s reason=%s",
+                market.ticker, exc,
+            )
+            return
+        edge = edges.yes_edge if side == "yes" else edges.no_edge
         method = "llm" if any(value is not None for value in (llm_dir, llm_mag, llm_conf)) else "keyword"
 
         # Get source credibility multiplier
@@ -726,9 +797,13 @@ class TradingBot:
         from analysis.market_matcher import _days_to_close
         days_to_close = _days_to_close(market.close_time) or 14.0
 
+        # P-5 LD-10 / CR-A: Kelly consumes the executed-side ask in cents,
+        # not the YES midpoint. For NO trades this is no_ask_cents; for
+        # YES trades this is yes_ask_cents. Replaces market.yes_price
+        # (midpoint), which silently broke Kelly sizing on NO-side trades.
         kelly_frac, kelly_dollars, capped_dollars = kelly_bet(
-            estimated_probability=estimated_prob,
-            market_price_cents=market.yes_price,
+            estimated_probability=estimated_prob if side == "yes" else (1.0 - estimated_prob),
+            market_price_cents=executed_price_cents,
             bankroll=notional,
             kelly_fraction=cfg.kelly_fraction,
             max_bet_dollars=max_bet,
@@ -794,8 +869,9 @@ class TradingBot:
                 return
             # Paper mode uses flat contracts regardless of Kelly sizing.
             # Set a placeholder so the executor runs its own edge/position checks
-            # and logs a proper SKIPPED event if needed.
-            capped_dollars = PAPER_FLAT_CONTRACTS * max(1, min(99, int(market.yes_price))) / 100.0
+            # and logs a proper SKIPPED event if needed. Use the executed-side
+            # ask cents instead of the YES midpoint to avoid NO-side mispricing.
+            capped_dollars = PAPER_FLAT_CONTRACTS * max(1, min(99, int(executed_price_cents))) / 100.0
             log.debug(
                 "[ANALYSIS] paper_placeholder ticker=%s placeholder=$%.2f",
                 market.ticker,
@@ -806,7 +882,9 @@ class TradingBot:
             news_item=news,
             market=market,
             estimated_probability=estimated_prob,
-            market_yes_price=market.yes_price,
+            # market_yes_price is the deprecated alias; __post_init__ will
+            # populate it from executed_price_cents when omitted.
+            executed_price_cents=executed_price_cents,
             edge=edge,
             side=side,
             kelly_fraction=kelly_frac,
@@ -877,6 +955,9 @@ class TradingBot:
         """Callback for the fade-tweet RSS monitor. Extracts source account and routes."""
         account = _account_from_rsshub_url(tweet.url or "")
         log.info("[FADE] [%s] %s", account, tweet.headline[:100])
+        # P-7: one-fetch-per-cycle exchange-status fail-closed gate.
+        if not self._exchange_open_or_skip("fade_tweet"):
+            return
         await self._process_fade_tweet(tweet, account)
 
     async def _process_fade_tweet(self, tweet: NewsItem, account: str) -> None:
@@ -902,12 +983,23 @@ class TradingBot:
 
         market, score = candidates[0]
 
-        ws_price = self.ws.get_yes_price(market.ticker)
-        if ws_price is not None:
-            market = dataclasses.replace(market)
-            market.yes_price = ws_price
-            market.yes_bid   = max(1, ws_price - 1)
-            market.yes_ask   = min(99, ws_price + 1)
+        # P-7: per-market status guard. Upstream of tradeable check.
+        if getattr(market, "status", None) != "active":
+            log.debug(
+                "[P-7] Skipping market %s: status_not_active (status=%s)",
+                market.ticker, getattr(market, "status", None),
+            )
+            return
+
+        # P-5 CR-C: short-circuit when the matched market has no executable price.
+        if not market.is_tradeable():
+            log.debug(
+                "[FADE] not_tradeable ticker=%s -- skipping",
+                market.ticker,
+            )
+            return
+
+        # WS midpoint mutation removed in P-4 (LD-11): see fade flow above.
 
         # Fade: bullish tweet → buy NO (short the hype)
         fade_side = "no" if pattern == "bullish" else "yes"
@@ -919,11 +1011,16 @@ class TradingBot:
         is_sports = any(_ticker.startswith(p) for p in MARKET_SERIES_BLOCKLIST_PREFIXES)
         category  = "SPORTS" if is_sports else "GEO"
 
+        # P-5 LD-10: executed-side ask in cents for the chosen fade side.
+        executed_price_cents_fade = (
+            market.yes_ask_cents if fade_side == "yes" else market.no_ask_cents
+        )
+
         analysis = SignalAnalysis(
             news_item=tweet,
             market=market,
             estimated_probability=market.yes_prob + fake_edge,
-            market_yes_price=market.yes_price,
+            executed_price_cents=executed_price_cents_fade,
             edge=fake_edge,
             side=fade_side,
             kelly_fraction=cfg.kelly_fraction,
@@ -1080,17 +1177,39 @@ class TradingBot:
             log.debug("[PRICE_FADE] Skipping sports ticker %s", ticker)
             return
 
+        # P-7: one-fetch-per-cycle exchange-status fail-closed gate.
+        if not self._exchange_open_or_skip("price_fade"):
+            return
+
         markets = await self.matcher._cache.get_markets()
         market = next((m for m in markets if m.ticker == ticker), None)
         if market is None:
             log.debug("[PRICE_FADE] %s not in geo cache, skipping", ticker)
             return
 
-        # Update market price to reflect live WS data -- defensive copy first
-        market = dataclasses.replace(market)
-        market.yes_price = now_mid
-        market.yes_bid   = max(1, yes_bid)
-        market.yes_ask   = min(99, yes_ask)
+        # P-7: per-market status guard. Upstream of tradeable check.
+        if getattr(market, "status", None) != "active":
+            log.debug(
+                "[P-7] Skipping market %s: status_not_active (status=%s)",
+                market.ticker, getattr(market, "status", None),
+            )
+            return
+
+        # WS midpoint mutation removed in P-4 advisory fold-in (LD-11):
+        # WS is reference/staleness signal only; never overwrites REST
+        # executable bid/ask. `now_mid`/`yes_bid`/`yes_ask` parameters
+        # remain in scope as the *trigger* values (used for diagnostic
+        # log + synthetic news headline); the trade decision below
+        # consumes REST-normalized prices from `market.yes_price` /
+        # `market.yes_prob` populated by the P-2 normalizer.
+
+        # P-5 CR-C: short-circuit when the price-fade market lacks executable price.
+        if not market.is_tradeable():
+            log.debug(
+                "[PRICE_FADE] not_tradeable ticker=%s -- skipping",
+                market.ticker,
+            )
+            return
 
         fade_side = "no" if crossing == "high_cross" else "yes"
         edge_sign = -1.0 if fade_side == "no" else 1.0
@@ -1107,11 +1226,15 @@ class TradingBot:
             source="price_fade",
         )
 
+        executed_price_cents_fade = (
+            market.yes_ask_cents if fade_side == "yes" else market.no_ask_cents
+        )
+
         analysis = SignalAnalysis(
             news_item=synthetic_news,
             market=market,
             estimated_probability=market.yes_prob + fake_edge,
-            market_yes_price=market.yes_price,
+            executed_price_cents=executed_price_cents_fade,
             edge=fake_edge,
             side=fade_side,
             kelly_fraction=cfg.kelly_fraction,

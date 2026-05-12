@@ -27,7 +27,8 @@
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 66 |
+| Total Items | 67 |
+| Last Updated (P0 closure) | 2026-05-12 (PROFIT-API-001 — Kalshi API Contract Stabilization P0 closure landed on `feature/kalshi-api-contract-p0`; VERSION 0.29.59 → 0.30.0; P-1 through P-10 complete; PAPER-ONLY posture preserved) |
 | Open — HIGH | 4 |
 | Open — MEDIUM | 1 |
 | Open — LOW | 1 |
@@ -4852,6 +4853,151 @@ Phase 6 Agent 1 (intra-cluster conflicts) cited several findings as "per Phase 2
 - Global config repo `~/.claude/` (separate git repo) accumulated edits from Track 1 Phase-3 work plus this initiative's Batches 1, 2, 5, 6 — committed separately under that repo's branching scheme.
 - Project `AGENTS.md` is still ~95% verbatim copy of global `~/.claude/AGENTS.md`. Phase 6 only flagged step-4 wording (resolved). Full project-AGENTS.md dedup deferred — separate decision flagged in plan.
 - Out-of-scope observations surfaced: `MAX_BET_HARD_CAP` env-var fall-through behavior (would silently default rather than error if unset — gotcha says "old name silently falls back to default", but live env-var name is the new one — this is correct as documented).
+
+---
+
+### PROFIT-API-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-API-001 |
+| **Title** | Kalshi API contract stabilization — fixed-point parser, fail-closed exchange gate, two-sided executable EV, replay cohort reset, botcheck drift heartbeat |
+| **Category** | API-contract Correctness / Pricing Integrity / Fail-closed Detection |
+| **Severity** | HIGH (correctness — pre-P0 parser silently overwrote real Kalshi prices with 50¢ midpoint on any payload missing the legacy cents-int fields, contaminating every downstream edge / Kelly / paper-fill computation) |
+| **Status** | COMPLETE (P0 closure landed 2026-05-12 on `feature/kalshi-api-contract-p0`, packets P-1 through P-10) |
+| **Priority** | n/a (closed) |
+| **Owner** | Claude (Opus 4.7) implementation; ECC subagents (code-explorer, architect, tdd-guide) discovery + design |
+| **Depends On** | — |
+| **Blocks** | All P1 trade-quality / market-state policy work; all P2 official-source runtime work; all P3 WebSocket rewrite / trade-tape work |
+
+**Description**
+
+Kalshi migrated from the legacy cents-int response contract (e.g.
+`yes_bid`, `yes_ask` as integers 0–100) to a fixed-point dollars contract
+(`yes_bid_dollars`, `yes_ask_dollars` as decimal strings) at an
+undocumented earlier date. The bot's parser at
+`kalshi/rest_client.py:213-215, 241-242` (pre-P0) chained `or 50` against
+the legacy fields, so every market that no longer carried the legacy
+fields silently parsed as a 50¢ midpoint. WebSocket fade-on-tweet and
+news-flow handlers at `main.py:664-669, 905-910, 1077-1081` additionally
+mutated `market.yes_price` from WS-pushed midpoints, so even legitimate
+REST prices were overwritten downstream by stale WS data. The
+SignalAnalysis dataclass collapsed both YES and NO entries into a
+YES-only `market_yes_price` field, so NO-side trades computed edge
+against the wrong side's ask. Live capture 2026-05-11T13:37Z empirically
+confirmed: 100% of captured market payloads carry the
+`*_dollars` fixed-point fields, 0% carry the legacy cents-int fields,
+and `GET /markets?status=open` returns 50/50 markets with
+`status="active"` (not `"open"`) — the bot's status filter at
+`analysis/market_matcher.py:487` was additionally broken and would have
+returned zero markets after the parser fix.
+
+**Why it matters**
+
+Every downstream profit-path computation (edge math, Kelly sizing,
+paper-fill price, replay corpus assembly, calibration scoring,
+opportunity logging) was contaminated by the silent 50¢ fallback for
+the entire pre-P0 era. The bot was non-tradeable in `live` mode in
+multiple ways simultaneously: parser would default to 50¢, executor
+would post integer-clamped 50¢ orders against real bids/asks, the
+status filter would silently filter out every active market, and there
+was no fail-closed exchange-status gate, so a Kalshi outage would let
+the bot continue acting on stale REST snapshots. PAPER-ONLY posture
+was preserved because no orders POSTed, but the paper-trade ledger
+recorded contaminated entry prices for the full pre-P0 archive
+(deliberately not backfilled per LD-8 — values cannot be verified
+against historical bid/ask snapshots).
+
+**Resolution (10-packet P0 closure)**
+
+| Packet | Title | Commit |
+|---|---|---|
+| P-1 | Tests-only, fixture-backed RED suite for `kalshi/normalizer.py` and `kalshi/__init__.py` extended `KalshiMarket` | bundled into P-2 commit on landing |
+| P-2 | `kalshi/normalizer.py` (new) + extended `KalshiMarket` dataclass (GREEN) | P-2 in branch history |
+| P-3 | `DriftCounter` (absolute ≥ 1 strict halt, manual clearance only) + `UnsupportedPayloadContractError` raised at parse boundary | P-3 in branch history |
+| P-4 | Replaced every `or 50` chain in `kalshi/rest_client.py`; removed all three WebSocket midpoint mutation sites in `main.py` | P-4 in branch history |
+| P-5 | `SignalAnalysis.executed_price_cents` (new source of truth) + side selector + Kelly wiring + `BlendTask` re-fetch hook in `trading/executor.py` | P-5 in branch history |
+| P-6 | Paper-fill on executable side + `_market_to_jsonable` encoder for `Decimal` / `datetime` in `paper_trades.market_snapshot` | `44d8b57` |
+| P-7 | One-per-cycle `/exchange/status` fail-closed gate + `analysis/market_matcher.py:487` `status="open"` → `status="active"` fix | `c8ba02f` |
+| P-8 | Replay cohort `bot_state.p0_price_fix_deployed_ts` sentinel filter; corpus-quality guard | `7846c3b` |
+| P-9 | Botcheck `kalshi_drift:` heartbeat + `bot_state:` cohort sentinel; audit-trail payload hash | `e494179` |
+| P-10 | CI fixture-pinned `p0_gate` job; VERSION `0.29.59 → 0.30.0`; CHANGELOG entry; this debt-log entry | this commit |
+
+**POST_FIX_NEW reset implication**
+
+The `bot_state.p0_price_fix_deployed_ts` sentinel is the single
+authoritative cohort cut for replay corpus assembly (LD-7).
+`scripts/edge_replay/build_replay_dataset.py:301-317` filters on
+`row.decision_ts >= sentinel.value`; the JSONL `p0_contract_version: 1`
+field is a forward-tagged audit signal, NOT the cohort predicate
+(CR-F). No `paper_trades` schema migration was performed. Pre-P0
+SQLite paper-trade rows are excluded from the POST_FIX_NEW cohort by
+ts boundary, not by JSONL field presence. Operators reading the
+replay corpus after P0 must treat pre-sentinel rows as contaminated.
+
+**Current remaining known RED**
+
+- Permanent WS-policy tests (documented intentional RED reflecting
+  the "WS reference-only, never overwrite REST" policy enforced in
+  P-4); these are not a regression and are out of scope for any P1
+  work.
+
+**Next phase after P0**
+
+P1 — Trade-Quality and Market-State Policy Controls (canonical roadmap
+§5 P1). Includes hard removal of the deprecated
+`SignalAnalysis.market_yes_price` / `OpenPosition.market_yes_price`
+aliases (LD-10, LD-17), DriftCounter threshold relaxation if
+operationally warranted (LD-6 strict-1 → ≥5 absolute or ≥10% ratio),
+and the trade-quality / market-state policy controls themselves.
+Sequencing locked by the canonical roadmap; this entry blocks none of
+them.
+
+**Acceptance Criteria (all met)**
+
+- ✅ Parser raises `UnsupportedPayloadContractError` at parse
+  boundary on unknown shapes; never silently defaults to 50¢.
+- ✅ `_dollars` → cents conversion uses `Decimal` with
+  `ROUND_HALF_EVEN`; integer-cent invariant holds end-to-end.
+- ✅ Drift counter halts cycle on absolute count ≥ 1; clearance
+  manual only.
+- ✅ WebSocket midpoint mutation removed from all three sites in
+  `main.py`; WS is reference-only.
+- ✅ `SignalAnalysis.executed_price_cents` is the source of truth
+  for side-selected ask price; YES and NO sides priced
+  independently.
+- ✅ Paper-fill writes executable side ask + provenance
+  (`price_method`, `raw_dollars`, contract version) into
+  `paper_trades.market_snapshot`.
+- ✅ One-per-cycle `GET /exchange/status` call gates trading on
+  global `exchange_active` + `trading_active`; fail-closed on
+  outage.
+- ✅ `analysis/market_matcher.py` filters on `status="active"`,
+  not `status="open"`.
+- ✅ Replay cohort cut uses `bot_state.p0_price_fix_deployed_ts`
+  ts sentinel; no `paper_trades` schema migration.
+- ✅ Botcheck heartbeat surfaces `kalshi_drift:` + `bot_state:`
+  lines.
+- ✅ Captured Kalshi response fixtures sha256-pinned by
+  `test_p0_fixture_pinning_sha256`.
+- ✅ Dedicated `p0_gate` CI job runs the P0 targeted suite in
+  isolation; the two documented permanent-RED WS-policy tests
+  (P0-WS-015, P0-WS-016) are `--deselect`'d explicitly by node id
+  because the helpers they import are P3-scope; no live API; no
+  secrets.
+- ✅ VERSION bumped 0.29.59 → 0.30.0; CHANGELOG entry landed.
+- ✅ PAPER-ONLY posture preserved throughout; no orders placed.
+
+**Notes**
+
+- Captured fixtures under `tests/fixtures/kalshi_payloads/*.json` are
+  P0-gate evidence per the canonical roadmap §11.5 lockdown; do not
+  edit them without re-capture and a new audit session.
+- The roadmap document at
+  `docs/governance/2026-05-11-kalshi-api-drift-pricing-correctness-roadmap.md`
+  is the single canonical tracking surface for this work; per CLAUDE.md
+  R-10 (no new tracking files), no separate P0 status file or per-day
+  decision-log was created.
 
 ---
 
