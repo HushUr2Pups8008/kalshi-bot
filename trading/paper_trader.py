@@ -29,7 +29,6 @@ from tabulate import tabulate
 
 import config as config_module
 from analysis import SignalAnalysis
-from kalshi import KalshiMarket
 from tasks.stats.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR, PAPER_FLAT_CONTRACTS
 from trading.portfolio import Portfolio, Position

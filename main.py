@@ -49,7 +49,6 @@ _ensure_supported_python()
 
 import argparse
 import asyncio
-import dataclasses
 import hashlib
 import itertools
 import json
