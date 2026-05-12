@@ -104,3 +104,46 @@ sims_smoke:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
+
+p0_gate:
+  # PROFIT-API-001 (Kalshi API Contract Stabilization) P0 closure gate.
+  # Runs the P0 targeted suite on its own so a regression in the API-contract
+  # parse boundary, fixed-point pricing, fail-closed exchange-status gate,
+  # drift-counter halt, signing fail-fast, or replay cohort boundary surfaces
+  # with a focused failure rather than being absorbed into the full pytest run.
+  #
+  # The fixture-pinning test (test_p0_fixture_pinning_sha256 in
+  # tests/test_kalshi_normalizer_p0.py) enforces sha256 of the captured
+  # Kalshi response fixtures under tests/fixtures/kalshi_payloads/. Any
+  # accidental edit to a fixture fails this job. Captured fixtures are
+  # P0-gate evidence per the canonical roadmap §11.5 lockdown.
+  #
+  # This job hits zero live endpoints; tests use captured JSON fixtures
+  # only. No KALSHI / Anthropic / Ollama secrets are required.
+  #
+  # The two `--deselect`'d tests in `tests/test_kalshi_pricing_p0.py`
+  # (`test_p0_ws_015_ws_midpoint_does_not_overwrite_rest_executable` and
+  # `test_p0_ws_016_ws_no_data_returns_none_not_50`) are documented
+  # permanent-RED WS-policy tests; they require the WebSocket rewrite
+  # helpers (`absorb_book_update`, `_latest_prices` cache attribute)
+  # that are out of P0 scope and land in the P3 WebSocket rewrite
+  # (canonical roadmap §5 P3). Including them here would make `p0_gate`
+  # permanently red. They are NOT deleted — local targeted runs still
+  # surface them as expected RED, preserving the P3 work signal.
+  stage: test
+  before_script:
+    - *install
+  script:
+    - .venv/bin/python -m pytest
+        tests/test_kalshi_normalizer_p0.py
+        tests/test_kalshi_pricing_p0.py
+        tests/test_kalshi_pricing_p0_replay.py
+        tests/test_drift_counter_halt_p0.py
+        tests/test_kalshi_signing_failfast.py
+        --deselect tests/test_kalshi_pricing_p0.py::test_p0_ws_015_ws_midpoint_does_not_overwrite_rest_executable
+        --deselect tests/test_kalshi_pricing_p0.py::test_p0_ws_016_ws_no_data_returns_none_not_50
+        -q --tb=short
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'

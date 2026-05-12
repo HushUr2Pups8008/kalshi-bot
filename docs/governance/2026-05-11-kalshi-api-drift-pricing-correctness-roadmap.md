@@ -1,7 +1,7 @@
 # Kalshi API Drift, Pricing Correctness, and Official-Source Roadmap
 
 **Date:** 2026-05-11
-**Status:** ACTIVE ROADMAP — review complete, accepted decisions folded in (2026-05-11); live fixture capture complete (2026-05-11T13:37Z); P0 implementation planning unblocked
+**Status:** P0 CLOSED 2026-05-12 — all 10 P0 packets COMPLETE on `feature/kalshi-api-contract-p0`; VERSION 0.29.59 → 0.30.0; debt-log entry `PROFIT-API-001` filed; PAPER-ONLY posture preserved; `main` untouched at `43c5cc4`. See §11.2a for the closure status table. P1/P2/P3 remain ACTIVE on the canonical roadmap.
 **Authority:** operator directive after live-pricing and Kalshi API-surface audits; Claude review accepted 2026-05-11; field-drift hypothesis empirically confirmed via 5 read-only fixture payloads (2026-05-11)
 **Capital posture:** PAPER-ONLY hard guardrail unchanged
 **Runtime posture:** no runtime, trading, threshold, feed, analysis, config, `.env`, launchd, environment, plugin, or order-placement changes authorized by this document
@@ -592,6 +592,31 @@ Evidence commands used:
 | P-8 | Replay-script annotations + production-replay fail-closed | `scripts/edge_replay/*.py` (9 scripts, single-line guard), `scripts/edge_replay/reingest_dossier_updates_post_fix.py:96`, `scripts/performance_analysis.py:568` | Operator review of corpus reset boundary |
 | P-9 | Botcheck heartbeat surface + audit-trail payload hash + `bot_state` sentinel | `botcheck` script, `utils/logger.py` emitter wrapper, `trading/paper_trader.py:81-83` bot_state insert | Operator review of heartbeat additive line (OQ-C) |
 | P-10 | CI fixture-pinned gate + VERSION/CHANGELOG bump | CI workflow, `VERSION`, `CHANGELOG.md`, debt-log P0 entry | Operator final approval before merge |
+
+### 11.2a — P0 closure status (landed 2026-05-12)
+
+All 10 P0 packets are COMPLETE on `feature/kalshi-api-contract-p0`.
+PAPER-ONLY posture preserved; no orders placed; `main` untouched at
+`43c5cc4`. VERSION bumped `0.29.59 → 0.30.0` in the P-10 commit;
+CHANGELOG `[0.30.0]` entry filed; debt-log entry `PROFIT-API-001` filed.
+
+| # | Title | Status | Landing commit |
+|---|---|---|---|
+| P-1 | Tests-only RED suite (`test_kalshi_normalizer_p0`, `test_kalshi_pricing_p0` stubs) | ✅ COMPLETE | bundled into P-2 commit |
+| P-2 | `kalshi/normalizer.py` + extended `KalshiMarket` (GREEN) | ✅ COMPLETE | P-2 in branch history |
+| P-3 | Drift counter + `UnsupportedPayloadContractError` halt | ✅ COMPLETE | P-3 in branch history |
+| P-4 | Replaced `or 50` chains + removed WS midpoint mutations | ✅ COMPLETE | P-4 in branch history |
+| P-5 | `SignalAnalysis` side selector + Kelly wiring + `BlendTask` re-fetch hook | ✅ COMPLETE | P-5 in branch history |
+| P-6 | Paper-fill on executable side + provenance + `_market_to_jsonable` encoder | ✅ COMPLETE | `44d8b57` |
+| P-7 | Exchange-status fail-closed gate + `market_matcher` `status="active"` fix | ✅ COMPLETE | `c8ba02f` |
+| P-8 | Replay cohort `bot_state.p0_price_fix_deployed_ts` sentinel filter | ✅ COMPLETE | `7846c3b` |
+| P-9 | Botcheck `kalshi_drift:` + `bot_state:` heartbeat lines | ✅ COMPLETE | `e494179` |
+| P-10 | CI `p0_gate` job + VERSION 0.30.0 + CHANGELOG + `PROFIT-API-001` debt-log entry | ✅ COMPLETE | this commit |
+
+Single canonical tracking surface (this document) preserved per
+CLAUDE.md R-10. No new tracker created. Live-trading enablement is
+out of P0 scope and remains gated by the canonical Pre-Go-Live Gate
+in `docs/profit_path_debt_log.md`.
 
 ### 11.3 — Open questions
 
