@@ -75,6 +75,15 @@ def _make_mock_analysis(
     market.yes_prob     = yes_price / 100.0
     market.status       = "active"
     market.close_time   = "2025-12-31T23:59:59Z"
+    # P-6 / LD-2: post-P0 paper recorder gates on price_available and reads
+    # provenance fields. Default the mock to a valid post-P0 surface so
+    # existing tests retain pre-P-6 record_trade semantics.
+    market.price_available = True
+    market.is_tradeable = lambda: True
+    market.price_source = "rest_list"
+    market.price_method = "dollars_fixed_point"
+    market.price_retrieved_at = datetime.now(timezone.utc)
+    market.raw_payload_hash = None
 
     # dataclasses.asdict requires a real dataclass; we stub asdict separately
     market.__dataclass_fields__ = {}
@@ -91,6 +100,13 @@ def _make_mock_analysis(
     analysis.side                  = side
     analysis.estimated_probability = estimated_prob
     analysis.market_yes_price      = yes_price
+    # P-6 / LD-10: paper fill consumes executed_price_cents (not yes_price).
+    # Maps to the chosen side at the same cents level the pre-P-6 path would
+    # have synthesized so existing test assertions continue to hold.
+    if side == "yes":
+        analysis.executed_price_cents = max(1, min(99, int(round(yes_price))))
+    else:
+        analysis.executed_price_cents = max(1, min(99, int(round(100 - yes_price))))
     analysis.edge                  = edge
     analysis.kelly_fraction        = 0.5
     analysis.kelly_dollars         = kelly_dollars

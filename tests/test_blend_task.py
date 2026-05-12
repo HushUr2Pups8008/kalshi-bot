@@ -87,6 +87,15 @@ def _market(
         status="open",
         regime_weights=regime_weights
         or {"fast": 1.0, "interpretation": 0.0, "structural": 0.0},
+        # P-5 CR-C: legacy fixtures need post-P0 pricing surface fields
+        # populated so the new __getattribute__ guard does not raise.
+        yes_bid_cents=49,
+        yes_ask_cents=51,
+        no_bid_cents=49,
+        no_ask_cents=51,
+        price_available=True,
+        price_source="rest_list",
+        price_method="dollars_fixed_point",
     )
 
 
@@ -863,6 +872,13 @@ def _market_for_series(ticker: str) -> KalshiMarket:
         close_time="2026-06-01T00:00:00Z",
         status="open",
         regime_weights={"fast": 1.0, "interpretation": 0.0, "structural": 0.0},
+        yes_bid_cents=49,
+        yes_ask_cents=51,
+        no_bid_cents=49,
+        no_ask_cents=51,
+        price_available=True,
+        price_source="rest_list",
+        price_method="dollars_fixed_point",
     )
 
 

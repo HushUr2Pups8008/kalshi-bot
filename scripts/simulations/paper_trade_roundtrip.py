@@ -96,6 +96,13 @@ def _signal_analysis(event: LLMPositiveEvent, headline: str) -> SignalAnalysis:
     # but the live path branches on it, so populate something realistic.
     price_cents = max(1, min(99, int(market.yes_price)))
     capped = PAPER_FLAT_CONTRACTS * price_cents / 100.0
+    # P-6 / LD-10: paper recorder consumes executed_price_cents; map to the
+    # chosen side's executable ask so the simulation continues to record
+    # trades the same way it did pre-P-6.
+    if event.side == "yes":
+        executed_cents = market.yes_ask_cents or price_cents
+    else:
+        executed_cents = market.no_ask_cents or max(1, min(99, 100 - price_cents))
     return SignalAnalysis(
         news_item=NewsItem(
             headline=headline,
@@ -106,6 +113,7 @@ def _signal_analysis(event: LLMPositiveEvent, headline: str) -> SignalAnalysis:
         market=market,
         estimated_probability=estimated_prob,
         market_yes_price=market.yes_price,
+        executed_price_cents=int(executed_cents),
         edge=edge,
         side=event.side,
         kelly_fraction=0.10,
@@ -150,13 +158,20 @@ def _read_inserted_row(db_path: Path, trade_id: str) -> Optional[dict]:
         conn.close()
 
 
-def _expected_paper_cost(market_yes_price: float, side: str) -> float:
-    price_cents = (
-        int(market_yes_price)
-        if side == "yes"
-        else int(100 - market_yes_price)
-    )
-    price_cents = max(1, min(99, price_cents))
+def _expected_paper_cost(market, side: str) -> float:
+    """P-6 / LD-10: paper recorder consumes ``executed_price_cents`` on the
+    chosen side, so the expected debit mirrors that executable ask rather
+    than the legacy midpoint synthesis."""
+    if side == "yes":
+        price_cents = market.yes_ask_cents
+    else:
+        price_cents = market.no_ask_cents
+    if price_cents is None:
+        # Fallback shouldn't fire under synthetic_market but keep the math
+        # defined rather than raising in a harness path.
+        yes_int = max(1, min(99, int(market.yes_price)))
+        price_cents = yes_int if side == "yes" else max(1, min(99, 100 - yes_int))
+    price_cents = max(1, min(99, int(price_cents)))
     return PAPER_FLAT_CONTRACTS * price_cents / 100.0
 
 
@@ -191,7 +206,7 @@ async def _run_event(
     )
 
     expected_cost = (
-        _expected_paper_cost(analysis.market.yes_price, analysis.side)
+        _expected_paper_cost(analysis.market, analysis.side)
         if trade_id
         else None
     )

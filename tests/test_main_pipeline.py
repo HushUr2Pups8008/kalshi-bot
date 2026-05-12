@@ -82,6 +82,14 @@ def _make_market():
         series_ticker="KXTEST",
         subtitle="Test criteria",
         result="",
+        # P-5 CR-C: post-P0 pricing surface required for guarded reads
+        yes_bid_cents=49,
+        yes_ask_cents=51,
+        no_bid_cents=49,
+        no_ask_cents=51,
+        price_available=True,
+        price_source="rest_list",
+        price_method="dollars_fixed_point",
     )
 
 
@@ -175,8 +183,13 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     assert analysis.news_item is news
     assert analysis.market.ticker == "KXTEST-25DEC31"
     assert analysis.estimated_probability == pytest.approx(0.65)
-    assert analysis.market_yes_price == pytest.approx(50.0)
-    assert analysis.edge == pytest.approx(0.15)
+    # P-5 LD-10 semantic shift: market_yes_price is now the executed-side
+    # ask in cents (DT-2b alias of executed_price_cents). For YES side at
+    # yes_ask=51, this is 51.0 — not the 50¢ midpoint.
+    assert analysis.market_yes_price == pytest.approx(51.0)
+    assert analysis.executed_price_cents == 51
+    # Edge now scored vs executed ask: 0.65 - 0.51 = 0.14
+    assert analysis.edge == pytest.approx(0.14)
     assert analysis.side == "yes"
     assert analysis.kelly_fraction == pytest.approx(0.12)
     assert analysis.kelly_dollars == pytest.approx(15.0)
@@ -194,12 +207,15 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     # increment_trades is now called by _trading_queue_consumer_task, not _process_candidate
     bot.source_stats.increment_trades.assert_not_called()
     bot.ws.watch.assert_called_with(["KXTEST-25DEC31"])
+    # P-5 LD-10: edge now scored vs executed ask (yes_ask=51), so 0.65 - 0.51 = 0.14.
+    # market_yes_price log field still emits market.yes_price (50¢ midpoint)
+    # because the log_opportunity call site has not migrated yet (P-6).
     opportunity_mock.assert_called_once_with(
         ticker=market.ticker,
         market_title=market.title,
         market_yes_price=market.yes_price,
         estimated_probability=0.65,
-        edge=pytest.approx(0.15),
+        edge=pytest.approx(0.14),
         kelly_fraction=0.12,
         kelly_dollars=15.0,
         capped_dollars=12.0,
@@ -331,7 +347,13 @@ async def test_process_candidate_skips_stale_news_before_estimation(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_process_candidate_uses_websocket_price_in_handoff(monkeypatch):
+async def test_process_candidate_uses_rest_executable_in_handoff_not_ws(monkeypatch):
+    # LD-11 regression invariant: WS price is reference/staleness signal only.
+    # It must NOT overwrite REST executable bid/ask, and the SignalAnalysis
+    # handoff must carry the REST-derived executed_price_cents (and the
+    # deprecated market_yes_price alias mirrored from it) — NOT the WS midpoint.
+    # Original test asserted the now-removed WS-mutation behavior (62.0 leaking
+    # through); rewritten in P-5 advisory fold-in to lock the inverse invariant.
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
     monkeypatch.setattr(_cfg_module.cfg, "min_bet_dollars", 2.0)
@@ -340,9 +362,10 @@ async def test_process_candidate_uses_websocket_price_in_handoff(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
 
     bot = _make_bot_stub()
+    # WS reports a divergent midpoint; this used to flow through to the handoff.
     bot.ws.get_yes_price.return_value = 62.0
     news = _make_news()
-    market = _make_market()
+    market = _make_market()  # REST: yes_bid=49, yes_ask=51, yes_price=50
 
     with patch("main.estimate_probability", new=AsyncMock(return_value=(
         0.70, 0.7, ["missile strike"], "test reasoning", "yes", "small", 0.7
@@ -352,11 +375,16 @@ async def test_process_candidate_uses_websocket_price_in_handoff(monkeypatch):
         await bot._process_candidate(news, market, 0.33)
 
     analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
-    assert analysis.market_yes_price == pytest.approx(62.0)
-    assert analysis.market.yes_price == pytest.approx(62.0)
-    assert analysis.market.yes_bid == pytest.approx(61.0)
-    assert analysis.market.yes_ask == pytest.approx(63.0)
-    assert analysis.edge == pytest.approx(0.08)
+    # P-5 LD-10: YES side → executed_price_cents == yes_ask_cents (REST=51).
+    assert analysis.executed_price_cents == 51
+    # DT-2b alias mirrors executed_price_cents, NOT the WS midpoint (62.0).
+    assert analysis.market_yes_price == pytest.approx(51.0)
+    # LD-11: REST bid/ask must remain unmutated by the WS update.
+    assert analysis.market.yes_price == pytest.approx(50.0)
+    assert analysis.market.yes_bid == pytest.approx(49.0)
+    assert analysis.market.yes_ask == pytest.approx(51.0)
+    # Edge = est_prob (0.70) - executable_ask/100 (0.51) = 0.19.
+    assert analysis.edge == pytest.approx(0.19)
 
 
 @pytest.mark.asyncio
@@ -380,7 +408,9 @@ async def test_process_candidate_uses_paper_placeholder_when_kelly_returns_zero(
         await bot._process_candidate(news, market, 0.25)
 
     analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
-    assert analysis.capped_dollars == pytest.approx(2.5)
+    # P-5 LD-10: placeholder uses executed_price_cents (yes_ask=51) not
+    # legacy midpoint (50). 5 contracts * 0.51 = 2.55.
+    assert analysis.capped_dollars == pytest.approx(2.55)
 
 
 @pytest.mark.asyncio
@@ -925,13 +955,18 @@ async def test_structural_recompute_yields_even_if_run_periodic_returns_instantl
 
 
 @pytest.mark.asyncio
-async def test_process_fade_tweet_builds_geo_fade_handoff_with_ws_price(monkeypatch):
+async def test_process_fade_tweet_builds_geo_fade_handoff_with_rest_executable(monkeypatch):
+    # LD-11 regression invariant: fade-tweet flow uses REST executable cents
+    # for the chosen fade side; WS midpoint must NOT mutate the handoff.
+    # Original test asserted the WS-mutation behavior (72.0 leaking through);
+    # rewritten in P-5 advisory fold-in to lock the inverse invariant.
     monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
     bot = _make_bot_stub()
+    # WS reports a divergent midpoint; this used to flow through to the handoff.
     bot.ws.get_yes_price.return_value = 72.0
     tweet = _make_news()
     tweet.headline = "Prediction market is going to the moon"
-    market = _make_market()
+    market = _make_market()  # REST: yes_bid=49, yes_ask=51, no_ask_cents=51
     bot.matcher.find_all_candidates.return_value = [(market, 0.61)]
 
     with patch("analysis.fade_signal.detect_fade_pattern", return_value="bullish"):
@@ -942,9 +977,13 @@ async def test_process_fade_tweet_builds_geo_fade_handoff_with_ws_price(monkeypa
     analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
     assert analysis.signal_type == "fade_tweet"
     assert analysis.side == "no"
-    assert analysis.market_yes_price == pytest.approx(72.0)
-    assert analysis.market.yes_bid == pytest.approx(71.0)
-    assert analysis.market.yes_ask == pytest.approx(73.0)
+    # P-5 LD-10: NO side fade → executed_price_cents == no_ask_cents (REST=51).
+    assert analysis.executed_price_cents == 51
+    # DT-2b alias mirrors executed_price_cents, NOT the WS midpoint (72.0).
+    assert analysis.market_yes_price == pytest.approx(51.0)
+    # LD-11: REST bid/ask must remain unmutated by the WS update.
+    assert analysis.market.yes_bid == pytest.approx(49.0)
+    assert analysis.market.yes_ask == pytest.approx(51.0)
     assert analysis.match_score == pytest.approx(0.61)
     assert analysis.confidence == pytest.approx(0.3)
     assert analysis.reasoning.startswith("[FADE/GEO/@Kalshi] bullish:")
@@ -979,15 +1018,24 @@ async def test_process_fade_tweet_tags_sports_markets():
     [("high_cross", "no"), ("low_cross", "yes")],
 )
 async def test_process_price_fade_builds_representative_handoff(crossing, expected_side, monkeypatch):
+    # LD-11 regression invariant: price-fade trigger values (now_mid, yes_bid,
+    # yes_ask) are diagnostic-only (synthetic headline, reasoning string). The
+    # trade handoff must consume REST executable cents, NOT the WS-derived
+    # midpoint. Original test asserted the WS-mutation behavior (86.0/14.0
+    # leaking through to market_yes_price); rewritten in P-5 advisory fold-in
+    # to lock the inverse invariant. now_mid still appears in the reasoning
+    # string by design.
     monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
     bot = _make_bot_stub()
-    market = _make_market()
+    market = _make_market()  # REST: yes_ask_cents=51, no_ask_cents=51
     bot.matcher._cache.get_markets.return_value = [market]
+
+    now_mid = 86.0 if crossing == "high_cross" else 14.0
 
     await bot._process_price_fade(
         ticker=market.ticker,
         crossing=crossing,
-        now_mid=86.0 if crossing == "high_cross" else 14.0,
+        now_mid=now_mid,
         yes_bid=85.0 if crossing == "high_cross" else 13.0,
         yes_ask=87.0 if crossing == "high_cross" else 15.0,
     )
@@ -998,10 +1046,19 @@ async def test_process_price_fade_builds_representative_handoff(crossing, expect
     assert analysis.signal_type == "price_fade"
     assert analysis.side == expected_side
     assert analysis.market.ticker == market.ticker
-    assert analysis.market_yes_price == pytest.approx(86.0 if crossing == "high_cross" else 14.0)
+    # P-5 LD-10: executed_price_cents == ask_cents for the chosen fade side
+    # (both 51 in the fixture); DT-2b alias mirrors it, NOT the WS midpoint.
+    expected_executed = 51  # yes_ask_cents for low_cross, no_ask_cents for high_cross
+    assert analysis.executed_price_cents == expected_executed
+    assert analysis.market_yes_price == pytest.approx(float(expected_executed))
+    # LD-11: REST executable bid/ask remain unmutated by the WS trigger values.
+    assert analysis.market.yes_bid == pytest.approx(49.0)
+    assert analysis.market.yes_ask == pytest.approx(51.0)
     assert analysis.news_item.source == "price_fade"
     assert analysis.news_item.url == f"kalshi://price_fade/{market.ticker}"
     assert crossing in analysis.reasoning
+    # WS now_mid appears in the diagnostic reasoning string only (not handoff price).
+    assert f"{now_mid:.1f}c" in analysis.reasoning
     evidence = bot._evidence_queue.get_nowait()
     assert evidence.source_class == "market"
 
@@ -1251,6 +1308,13 @@ def test_select_subreddits_filters_disabled_core_and_topic_subreddits(monkeypatc
         series_ticker="KXTEST",
         subtitle="Military conflict",
         result="",
+        yes_bid_cents=49,
+        yes_ask_cents=51,
+        no_bid_cents=49,
+        no_ask_cents=51,
+        price_available=True,
+        price_source="rest_list",
+        price_method="dollars_fixed_point",
     )
 
     selected = select_subreddits([market], source_stats=None, db_path=None)

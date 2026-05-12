@@ -152,7 +152,14 @@ def regime_confidence(weights: Iterable[float]) -> float:
 
 
 def synthetic_market(event: LLMPositiveEvent, *, yes_price_cents: float = 50.0) -> KalshiMarket:
-    """Build a KalshiMarket matching an anchor event for use in simulations."""
+    """Build a KalshiMarket matching an anchor event for use in simulations.
+
+    P-5 CR-C: populates the post-P0 pricing surface so the new
+    `__getattribute__` guard does not raise on legacy reads of
+    `.yes_price` / `.yes_bid` / `.yes_ask`. Scripts that need a
+    not-tradeable market should construct that explicitly.
+    """
+    yes_int = max(1, min(99, int(round(yes_price_cents))))
     return KalshiMarket(
         ticker=event.ticker,
         title=event.title,
@@ -164,4 +171,11 @@ def synthetic_market(event: LLMPositiveEvent, *, yes_price_cents: float = 50.0) 
         close_time=event.close_time,
         status="active",
         series_ticker=event.series,
+        yes_bid_cents=max(1, yes_int - 1),
+        yes_ask_cents=min(99, yes_int + 1),
+        no_bid_cents=max(1, 100 - yes_int - 1),
+        no_ask_cents=min(99, 100 - yes_int + 1),
+        price_available=True,
+        price_source="rest_list",
+        price_method="dollars_fixed_point",
     )

@@ -59,6 +59,14 @@ def _market(fixture: dict[str, Any]) -> KalshiMarket:
         close_time="2026-05-01T00:00:00Z",
         status="open",
         series_ticker=str(fixture.get("market_ticker") or "KXSYNTH").split("-", 1)[0],
+        # P-5 CR-C: post-P0 fields required for the guarded legacy reads.
+        yes_bid_cents=50,
+        yes_ask_cents=50,
+        no_bid_cents=50,
+        no_ask_cents=50,
+        price_available=True,
+        price_source="rest_list",
+        price_method="dollars_fixed_point",
     )
 
 

@@ -27,6 +27,11 @@ def _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10):
     monkeypatch.setattr(_cfg_module.cfg, "max_ticker_exposure_pct", 1.0)
 
     rest   = MagicMock()
+    # CR-D re-fetch: default to None so the executor falls back to the
+    # candidate.market snapshot, which test fixtures already populate.
+    # Tests that exercise the re-fetch path explicitly should override
+    # `rest.get_market.return_value` to a fully-formed market.
+    rest.get_market.return_value = None
     paper  = MagicMock()
     paper.get_notional_bankroll.return_value = bankroll
     paper.portfolio.open_positions.return_value = []
@@ -51,6 +56,17 @@ def _make_analysis(ticker="KXTEST-25DEC31", side="yes", yes_price=50.0,
     news.headline = "Test"
     news.source   = "test"
 
+    # Post-P0 pricing surface on the MagicMock market so executor reads
+    # that go through `market.is_tradeable()` / `executed_price_cents`
+    # see consistent values instead of MagicMock default attrs.
+    market.price_available = True
+    yes_int = max(0, min(100, int(round(yes_price))))
+    market.yes_bid_cents = max(1, yes_int - 1)
+    market.yes_ask_cents = min(99, yes_int + 1)
+    market.no_bid_cents = max(1, 100 - yes_int - 1)
+    market.no_ask_cents = min(99, 100 - yes_int + 1)
+    market.is_tradeable = lambda: True
+
     a = MagicMock()
     a.market             = market
     a.news_item          = news
@@ -58,6 +74,12 @@ def _make_analysis(ticker="KXTEST-25DEC31", side="yes", yes_price=50.0,
     a.edge               = edge
     a.estimated_probability = estimated_prob
     a.market_yes_price   = yes_price
+    # P-5 LD-10: post-P0 fixtures populate the canonical executed-side
+    # ask cents. We use the yes_price value directly here to preserve the
+    # legacy price-boundary semantics that the rest of the executor test
+    # suite encodes (e.g. yes_price=98 should pass paper bounds at 98).
+    # Tests that exercise live-order pricing override this explicitly.
+    a.executed_price_cents = max(1, min(99, int(round(yes_price))))
     a.capped_dollars     = capped_dollars
     a.confidence         = 0.8
     a.kelly_fraction     = 0.5
@@ -468,11 +490,13 @@ class TestBlendedCandidateCompatibility:
     ):
         ex, _, _ = _make_paper_executor(monkeypatch)
         ex._execute_paper = AsyncMock(return_value="paper-trade-id")
+        # P-5 CR-D: blended_p chosen so the post-refetch executed-side edge
+        # (0.525 - 0.51 = 0.015) exceeds the override threshold (0.01).
         candidate = _make_blended_candidate(
-            blended_probability=0.515,
+            blended_probability=0.525,
             signal_meta={
                 "source_lane": "blend",
-                "blended_p": 0.515,
+                "blended_p": 0.525,
                 "readiness_gate_min_edge_override": 0.01,
             },
         )
@@ -482,7 +506,10 @@ class TestBlendedCandidateCompatibility:
 
         assert trade_id == "paper-trade-id"
         routed_analysis = ex._execute_paper.await_args.args[0]
-        assert routed_analysis.estimated_probability == pytest.approx(0.515)
+        assert routed_analysis.estimated_probability == pytest.approx(0.525)
+        # P-5 CR-D: edge re-derived against the executed-side ask cents
+        # (yes_ask=51 here), not the legacy YES midpoint (50). For blended
+        # YES side: 0.525 - 0.51 = 0.015.
         assert routed_analysis.edge == pytest.approx(0.015)
         assert routed_analysis.signal_type == "blend"
         assert routed_analysis.signal_meta == candidate.signal_meta
@@ -507,7 +534,8 @@ class TestBlendedCandidateCompatibility:
         ex._execute_paper.assert_not_called()
         trade_log_mock.log_skipped.assert_called_once()
         kwargs = trade_log_mock.log_skipped.call_args.kwargs
-        assert kwargs["reason"] == "edge +0.0150 below min_edge 0.02"
+        # P-5 CR-D: edge re-derived against executed-side ask = 0.515-0.51=0.005.
+        assert kwargs["reason"] == "edge +0.0050 below min_edge 0.02"
         assert kwargs["min_edge_threshold"] == pytest.approx(0.02)
         assert kwargs["signal_meta"] == candidate.signal_meta
 
@@ -545,6 +573,8 @@ class TestBlendedCandidateCompatibility:
             yes_price=50.0,
             capped_dollars=10.0,
         )
+        # P-5 LD-10: override fixture default to executed-side ask cents.
+        analysis.executed_price_cents = 51
         analysis.signal_meta = {
             "source_lane": "blend",
             "blended_p": 0.53,
@@ -631,6 +661,10 @@ class TestStructuredBoundaryLogging:
         rest.place_limit_order.return_value = result
 
         analysis = _make_analysis(edge=0.10, estimated_prob=0.60, yes_price=50.0, capped_dollars=10.0)
+        # P-5 LD-10: legacy fixture maps executed_price_cents=int(yes_price).
+        # The live-order semantics this test encodes expect the executed-side
+        # ask (yes_ask=51 when yes_price=50), so override here.
+        analysis.executed_price_cents = 51
 
         with patch("trading.executor.trade_log") as trade_log_mock:
             order_id = await ex._execute_live(analysis)
@@ -665,6 +699,9 @@ def _make_paper_executor(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "max_ticker_exposure_pct", 1.0)
 
     rest  = MagicMock()
+    # CR-D re-fetch: default to None so executor falls back to the
+    # candidate.market snapshot (which carries cents-level fields).
+    rest.get_market.return_value = None
     paper = MagicMock()
     paper.get_notional_bankroll.return_value = 500.0
     paper.portfolio.open_positions.return_value = []
