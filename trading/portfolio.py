@@ -18,7 +18,15 @@ from typing import Optional
 
 @dataclass
 class Position:
-    """A single open paper or live trade."""
+    """A single open paper or live trade.
+
+    Post-P0 (DT-1b): ``market_yes_price`` is the EXECUTED ENTRY price in
+    cents for the chosen side (NOT the legacy YES midpoint). The
+    ``price_source`` and ``price_method`` fields carry provenance so
+    callers can distinguish executed-side semantics from legacy rows.
+    Defaulted to ``"unavailable"`` / ``"none"`` for hydration of pre-P0
+    DB rows that lack the columns.
+    """
     trade_id:         str
     ticker:           str
     side:             str    # "yes" | "no"
@@ -28,6 +36,8 @@ class Position:
     estimated_prob:   float
     market_yes_price: float
     ts:               str    # ISO8601 UTC — used for cooldown seeding on restart
+    price_source:     str = "unavailable"
+    price_method:     str = "none"
 
 
 class Portfolio:
@@ -48,14 +58,40 @@ class Portfolio:
         """
         Populate from all unresolved trades in the DB.
         Called once by PaperTrader.__init__ after schema migration.
+
+        DT-1b: hydrates post-P0 provenance columns (``price_source``,
+        ``price_method``) when present in the DB schema; legacy rows that
+        predate the columns default to ``"unavailable"`` / ``"none"``.
         """
-        rows = conn.execute(
-            "SELECT trade_id, ticker, side, contracts, cost_dollars, price_cents, "
-            "       estimated_prob, market_yes_price, ts "
-            "FROM paper_trades WHERE resolved = 0 ORDER BY ts ASC"
-        ).fetchall()
+        # Detect post-P0 provenance columns without forcing a schema
+        # migration (P-6 owns that). Use PRAGMA introspection so legacy
+        # schemas continue to load.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(paper_trades)").fetchall()}
+        has_provenance = "price_source" in cols and "price_method" in cols
+        if has_provenance:
+            select_sql = (
+                "SELECT trade_id, ticker, side, contracts, cost_dollars, price_cents, "
+                "       estimated_prob, market_yes_price, ts, "
+                "       price_source, price_method "
+                "FROM paper_trades WHERE resolved = 0 ORDER BY ts ASC"
+            )
+        else:
+            select_sql = (
+                "SELECT trade_id, ticker, side, contracts, cost_dollars, price_cents, "
+                "       estimated_prob, market_yes_price, ts "
+                "FROM paper_trades WHERE resolved = 0 ORDER BY ts ASC"
+            )
+        rows = conn.execute(select_sql).fetchall()
         self._positions.clear()
         for row in rows:
+            keys = row.keys() if hasattr(row, "keys") else None
+
+            def _get(name: str, default):
+                if keys is not None and name in keys:
+                    value = row[name]
+                    return value if value is not None else default
+                return default
+
             pos = Position(
                 trade_id=row["trade_id"],
                 ticker=row["ticker"],
@@ -66,6 +102,8 @@ class Portfolio:
                 estimated_prob=row["estimated_prob"],
                 market_yes_price=row["market_yes_price"],
                 ts=row["ts"],
+                price_source=_get("price_source", "unavailable"),
+                price_method=_get("price_method", "none"),
             )
             self._positions.setdefault(pos.ticker, []).append(pos)
 

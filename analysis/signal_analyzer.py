@@ -1158,6 +1158,19 @@ async def estimate_probability(
          llm_direction, llm_magnitude, llm_confidence)
         llm_* fields are None when keyword-only path is used.
     """
+    # P-5 CR-C / LD-2: refuse to operate on markets with no executable
+    # price. Returning a sentinel (base_probability=0.5, no keywords) is
+    # the upstream-safe equivalent of the legacy "no signal" path; the
+    # caller in main.py already short-circuits on empty keywords+no LLM
+    # signal. Defensive `getattr` keeps SimpleNamespace probe stubs
+    # compatible — they default to "tradeable".
+    if not getattr(market, "price_available", True):
+        log.debug(
+            "[ANALYSIS] price_unavailable ticker=%s source=%s -- estimate_probability skipped",
+            market.ticker,
+            news.source,
+        )
+        return 0.5, 0.0, [], "price_unavailable -- no estimate", None, None, None
     # Always run keyword scoring for the keyword list
     base_probability = market.yes_prob
     combined_text = f"{news.headline} {news.body}"
