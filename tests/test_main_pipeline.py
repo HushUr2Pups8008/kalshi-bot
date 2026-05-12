@@ -37,6 +37,13 @@ def _make_bot_stub():
     bot.paper.portfolio.open_positions.return_value = []
     bot.executor = MagicMock()
     bot.executor.execute = AsyncMock(return_value="trade-123")
+    # P-7: cycle-level exchange-status gate calls self.rest.get_exchange_status().
+    # Default to an open exchange so existing handler-level tests aren't gated.
+    from kalshi import ExchangeState
+    bot.rest = MagicMock()
+    bot.rest.get_exchange_status.return_value = ExchangeState(
+        exchange_active=True, trading_active=True,
+    )
     bot.matcher = MagicMock()
     bot.matcher.find_all_candidates = AsyncMock(return_value=[])
     bot.matcher._cache = MagicMock()
@@ -78,7 +85,7 @@ def _make_market():
         volume=100,
         open_interest=200,
         close_time="2026-12-31T23:59:59Z",
-        status="open",
+        status="active",
         series_ticker="KXTEST",
         subtitle="Test criteria",
         result="",
@@ -1304,7 +1311,7 @@ def test_select_subreddits_filters_disabled_core_and_topic_subreddits(monkeypatc
         volume=100,
         open_interest=200,
         close_time="2026-12-31T23:59:59Z",
-        status="open",
+        status="active",
         series_ticker="KXTEST",
         subtitle="Military conflict",
         result="",

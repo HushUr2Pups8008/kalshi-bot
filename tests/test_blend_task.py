@@ -84,7 +84,7 @@ def _market(
         volume=100,
         open_interest=50,
         close_time="2026-05-01T00:00:00Z",
-        status="open",
+        status="active",
         regime_weights=regime_weights
         or {"fast": 1.0, "interpretation": 0.0, "structural": 0.0},
         # P-5 CR-C: legacy fixtures need post-P0 pricing surface fields
@@ -870,7 +870,7 @@ def _market_for_series(ticker: str) -> KalshiMarket:
         volume=100,
         open_interest=50,
         close_time="2026-06-01T00:00:00Z",
-        status="open",
+        status="active",
         regime_weights={"fast": 1.0, "interpretation": 0.0, "structural": 0.0},
         yes_bid_cents=49,
         yes_ask_cents=51,

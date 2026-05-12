@@ -538,6 +538,38 @@ class TradingBot:
         family = self._source_family(source)
         return family in DISABLED_SOURCE_FAMILIES
 
+    def _exchange_open_or_skip(self, cycle_label: str) -> bool:
+        """P-7: one-fetch-per-cycle ExchangeState gate. Fetches
+        /exchange/status synchronously through the REST client and applies
+        fail-closed logic. Returns True iff the exchange is open and trading
+        is active; logs the skip reason otherwise.
+
+        Skip reasons emitted:
+          - exchange_status_fetch_failed (None returned by REST — fail-closed)
+          - exchange_paused             (exchange_active is False)
+          - trading_inactive            (trading_active is False)
+        """
+        state = self.rest.get_exchange_status()
+        if state is None:
+            log.warning(
+                "[P-7] Skipping %s cycle: exchange_status_fetch_failed (fail-closed)",
+                cycle_label,
+            )
+            return False
+        if not state.exchange_active:
+            log.info(
+                "[P-7] Skipping %s cycle: exchange_paused (exchange_active=False)",
+                cycle_label,
+            )
+            return False
+        if not state.trading_active:
+            log.info(
+                "[P-7] Skipping %s cycle: trading_inactive (trading_active=False)",
+                cycle_label,
+            )
+            return False
+        return True
+
     async def _enqueue_news(self, news: NewsItem) -> None:
         """Non-blocking enqueue from feed pollers. Drops items if queue is full."""
         from utils.logger import trade_log
@@ -629,6 +661,10 @@ class TradingBot:
         log.info("[NEWS] [%s] %s", news.source, news.headline[:100])
         self.source_stats.increment_posts(news.source)
 
+        # P-7: one-fetch-per-cycle exchange-status fail-closed gate.
+        if not self._exchange_open_or_skip("news"):
+            return
+
         candidates = await self.matcher.find_candidates(news)
         if not candidates:
             log.debug("No matching markets for: %s", news.headline[:60])
@@ -639,6 +675,14 @@ class TradingBot:
 
     async def _process_candidate(self, news: NewsItem, market, match_score: float, match_meta: dict | None = None) -> None:
         from utils.logger import trade_log
+        # P-7: per-market status guard. Upstream of price-availability and
+        # tradeable checks — the market must be in Kalshi's "active" state.
+        if getattr(market, "status", None) != "active":
+            log.debug(
+                "[P-7] Skipping market %s: status_not_active (status=%s)",
+                market.ticker, getattr(market, "status", None),
+            )
+            return
         # P-5 CR-C / LD-2: short-circuit when the market has no executable
         # price. Reading `market.yes_price` is now guarded; honor it here
         # before any downstream consumer would crash.
@@ -912,6 +956,9 @@ class TradingBot:
         """Callback for the fade-tweet RSS monitor. Extracts source account and routes."""
         account = _account_from_rsshub_url(tweet.url or "")
         log.info("[FADE] [%s] %s", account, tweet.headline[:100])
+        # P-7: one-fetch-per-cycle exchange-status fail-closed gate.
+        if not self._exchange_open_or_skip("fade_tweet"):
+            return
         await self._process_fade_tweet(tweet, account)
 
     async def _process_fade_tweet(self, tweet: NewsItem, account: str) -> None:
@@ -936,6 +983,14 @@ class TradingBot:
             return
 
         market, score = candidates[0]
+
+        # P-7: per-market status guard. Upstream of tradeable check.
+        if getattr(market, "status", None) != "active":
+            log.debug(
+                "[P-7] Skipping market %s: status_not_active (status=%s)",
+                market.ticker, getattr(market, "status", None),
+            )
+            return
 
         # P-5 CR-C: short-circuit when the matched market has no executable price.
         if not market.is_tradeable():
@@ -1123,10 +1178,22 @@ class TradingBot:
             log.debug("[PRICE_FADE] Skipping sports ticker %s", ticker)
             return
 
+        # P-7: one-fetch-per-cycle exchange-status fail-closed gate.
+        if not self._exchange_open_or_skip("price_fade"):
+            return
+
         markets = await self.matcher._cache.get_markets()
         market = next((m for m in markets if m.ticker == ticker), None)
         if market is None:
             log.debug("[PRICE_FADE] %s not in geo cache, skipping", ticker)
+            return
+
+        # P-7: per-market status guard. Upstream of tradeable check.
+        if getattr(market, "status", None) != "active":
+            log.debug(
+                "[P-7] Skipping market %s: status_not_active (status=%s)",
+                market.ticker, getattr(market, "status", None),
+            )
             return
 
         # WS midpoint mutation removed in P-4 advisory fold-in (LD-11):

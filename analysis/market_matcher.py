@@ -437,7 +437,9 @@ class MarketCache:
         for series_ticker in geo_tickers:
             try:
                 page, _ = self._client.get_markets(
-                    series_ticker=series_ticker, limit=200
+                    status="active",
+                    series_ticker=series_ticker,
+                    limit=200,
                 )
                 for m in page:
                     if _is_excluded_test_market(m):
@@ -485,7 +487,7 @@ class MarketCache:
         cursor  = None
         for _ in range(10):
             page, cursor = self._client.get_markets(
-                status="open", cursor=cursor, limit=200
+                status="active", cursor=cursor, limit=200
             )
             for m in page:
                 if _is_excluded_test_market(m):

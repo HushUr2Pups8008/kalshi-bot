@@ -19,9 +19,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from config import cfg
-from kalshi import KalshiMarket, OrderResult
+from kalshi import ExchangeState, KalshiMarket, OrderResult
 from kalshi.normalizer import (
     UnsupportedPayloadContractError,
+    normalize_exchange_status,
     normalize_market_list_entry,
     normalize_market_detail,
 )
@@ -243,6 +244,24 @@ class KalshiRestClient:
             return None
         except Exception as exc:
             log.warning("get_market(%s) failed: %s", ticker, exc)
+            return None
+
+    def get_exchange_status(self) -> Optional[ExchangeState]:
+        """Fetch /exchange/status once per cycle and normalize through the
+        P-2 normalizer (LD-4 / P-7). Returns None on fetch failure or
+        unsupported payload contract — caller must treat None as fail-closed
+        (exchange NOT open, skip all market analysis for this cycle).
+        """
+        try:
+            data = self._request("GET", "/exchange/status")
+            return normalize_exchange_status(data)
+        except UnsupportedPayloadContractError as exc:
+            log.warning(
+                "get_exchange_status unsupported payload contract: %s", exc,
+            )
+            return None
+        except Exception as exc:
+            log.warning("get_exchange_status fetch failed: %s", exc)
             return None
 
     def get_all_open_markets(self, max_pages: int = 10) -> list[KalshiMarket]:
