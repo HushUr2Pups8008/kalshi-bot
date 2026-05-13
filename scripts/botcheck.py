@@ -641,7 +641,114 @@ def print_kalshi_drift_section(now: datetime) -> None:
         f"p0_cohort   : deployed_ts={cohort_ts or 'null'} "
         f"(post-P0 replay rows: decision_ts >= deployed_ts; LD-7 / CR-F)"
     )
+
+    # P0 contract-version drift alarm (audit rec #7).
+    # `paper_trades.p0_contract_version` defaults to 1; if a future Kalshi
+    # contract change bumps it, this is the only forward-tracked audit
+    # signal that catches the bump. Surface a heartbeat line so multi-
+    # version drift is visible before it hides in replay corpora.
+    contract_state = _summarize_p0_contract_version_drift(db_path)
+    if contract_state["status"] == "no_recent_events":
+        print(
+            "p0_contract : status=no_recent_events "
+            "(no paper_trades rows; expected if bot has not yet emitted "
+            "a PAPER_TRADE post-deploy)"
+        )
+    elif contract_state["status"] == "single_version":
+        print(
+            f"p0_contract : status=ok version={contract_state['versions'][0]} "
+            f"row_count={contract_state['recent_row_count']}"
+        )
+    elif contract_state["status"] == "drift":
+        versions_text = ",".join(
+            str(v) if v is not None else "null"
+            for v in contract_state["versions"]
+        )
+        print(
+            "p0_contract : status=DRIFT versions=["
+            f"{versions_text}] row_count={contract_state['recent_row_count']} "
+            "(multiple p0_contract_version values present; investigate)"
+        )
+    elif contract_state["status"] == "unknown":
+        print(
+            f"p0_contract : status=unknown reason={contract_state['reason']!r}"
+        )
+
     print()
+
+
+def _summarize_p0_contract_version_drift(
+    db_path: Path,
+    *,
+    recent_limit: int = 200,
+) -> dict[str, Any]:
+    """Inspect recent paper_trades rows for ``p0_contract_version`` drift.
+
+    Strictly read-only. Returns one of:
+
+    - ``{"status": "unknown", "reason": ...}`` — DB unreadable, schema
+      missing, or query failed.
+    - ``{"status": "no_recent_events", "versions": [], "recent_row_count": 0}``
+      — DB readable but no paper_trades rows.
+    - ``{"status": "single_version", "versions": [v], "recent_row_count": n}``
+      — all recent rows carry the same contract version (the common case
+      when the bot is operating on a single P0 contract era).
+    - ``{"status": "drift", "versions": [...], "recent_row_count": n}`` —
+      multiple distinct contract versions present in the recent window;
+      requires operator attention.
+
+    The ``recent_limit`` window keeps the query cheap and bounds the alarm
+    to current operational state — historical multi-version drift in
+    long-archived rows is not the operator's concern at heartbeat time.
+    """
+    import sqlite3
+
+    if not db_path.is_file():
+        return {"status": "unknown", "reason": "paper_trades.db not found"}
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            schema_row = conn.execute(
+                "SELECT name FROM pragma_table_info('paper_trades') "
+                "WHERE name = 'p0_contract_version'"
+            ).fetchone()
+            if schema_row is None:
+                return {
+                    "status": "unknown",
+                    "reason": "p0_contract_version column missing",
+                }
+            rows = conn.execute(
+                "SELECT p0_contract_version, count(*) AS n "
+                "FROM (SELECT p0_contract_version FROM paper_trades "
+                "ORDER BY ts DESC LIMIT ?) "
+                "GROUP BY p0_contract_version "
+                "ORDER BY p0_contract_version",
+                (recent_limit,),
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return {"status": "unknown", "reason": f"sqlite error: {exc}"}
+
+    if not rows:
+        return {
+            "status": "no_recent_events",
+            "versions": [],
+            "recent_row_count": 0,
+        }
+    versions = [r[0] for r in rows]
+    total = sum(int(r[1]) for r in rows)
+    if len(versions) == 1:
+        return {
+            "status": "single_version",
+            "versions": versions,
+            "recent_row_count": total,
+        }
+    return {
+        "status": "drift",
+        "versions": versions,
+        "recent_row_count": total,
+    }
 
 
 def print_history(
