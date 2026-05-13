@@ -1,10 +1,12 @@
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
 
-from scripts.edge_replay.build_replay_dataset import build_replay_dataset
+import scripts.edge_replay.build_replay_dataset as replay_builder
+from scripts.edge_replay.build_replay_dataset import build_replay_dataset, filter_post_p0_rows
 from tests._helpers import write_jsonl
 
 
@@ -52,6 +54,118 @@ def _paper_db(path: Path) -> None:
         conn.close()
 
 
+def _paper_db_with_sentinel(
+    path: Path,
+    *,
+    sentinel: str,
+    trades: list[tuple[str, str, int, float]],
+) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE bot_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE paper_trades (
+                trade_id TEXT,
+                ts TEXT,
+                ticker TEXT,
+                market_title TEXT,
+                side TEXT,
+                contracts INTEGER,
+                price_cents INTEGER,
+                estimated_prob REAL,
+                market_yes_price REAL,
+                edge REAL,
+                signal_headline TEXT,
+                signal_source TEXT,
+                resolved INTEGER,
+                resolved_yes INTEGER,
+                pnl_dollars REAL,
+                series_ticker TEXT,
+                signal_type TEXT,
+                fast_lane_p REAL,
+                accumulation_p REAL,
+                structural_p REAL
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO bot_state (key, value) VALUES (?, ?)",
+            ("p0_price_fix_deployed_ts", sentinel),
+        )
+        for trade_id, ts, price_cents, estimated_prob in trades:
+            conn.execute(
+                """
+                INSERT INTO paper_trades VALUES (
+                    ?, ?, 'KXTEST-26MAY01', 'Will the test pass?', 'yes',
+                    1, ?, ?, ?, ?,
+                    'Headline', 'Reuters', 1, 1, 0.00, 'KXTEST', 'llm',
+                    0.58, 0.59, 0.57
+                )
+                """,
+                (
+                    trade_id,
+                    ts,
+                    price_cents,
+                    estimated_prob,
+                    float(price_cents),
+                    estimated_prob - (price_cents / 100.0),
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _markets_file(path: Path) -> None:
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "ticker": "KXTEST-26MAY01",
+                    "title": "Will the test pass?",
+                    "series_ticker": "KXTEST",
+                    "resolved_yes": True,
+                    "result": "yes",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _run_main(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    markets_path: Path,
+    paper_trades_db: Path,
+    output_path: Path,
+) -> int:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_replay_dataset.py",
+            "--markets",
+            str(markets_path),
+            "--paper-trades-db",
+            str(paper_trades_db),
+            "--evidence-store-db",
+            str(tmp_path / "missing_evidence.db"),
+            "--trade-log",
+            str(tmp_path / "missing_trade_log.jsonl"),
+            "--output",
+            str(output_path),
+        ],
+    )
+    return replay_builder.main()
+
+
 def test_build_replay_dataset_joins_paper_trades_to_resolved_markets(tmp_path):
     db_path = tmp_path / "paper_trades.db"
     _paper_db(db_path)
@@ -80,6 +194,167 @@ def test_build_replay_dataset_joins_paper_trades_to_resolved_markets(tmp_path):
     assert rows[0]["resolved_yes"] is True
     assert rows[0]["model_prob"] == 0.61
     assert rows[0]["market_yes_price"] == 40.0
+
+
+def test_main_filters_pre_p0_rows_when_bot_state_sentinel_exists(tmp_path, monkeypatch):
+    sentinel = "2026-05-13T00:00:00+00:00"
+    db_path = tmp_path / "paper_trades.db"
+    _paper_db_with_sentinel(
+        db_path,
+        sentinel=sentinel,
+        trades=[
+            ("pre", "2026-05-12T23:59:59+00:00", 41, 0.61),
+            ("post", "2026-05-13T00:00:00+00:00", 43, 0.63),
+        ],
+    )
+    markets_path = tmp_path / "markets.json"
+    _markets_file(markets_path)
+    output_path = tmp_path / "out" / "replay.jsonl"
+
+    exit_code = _run_main(
+        monkeypatch,
+        tmp_path,
+        markets_path=markets_path,
+        paper_trades_db=db_path,
+        output_path=output_path,
+    )
+
+    assert exit_code == 0
+    rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
+    assert [row["decision_ts"] for row in rows] == ["2026-05-13T00:00:00+00:00"]
+    assert rows[0]["market_yes_price"] == 43.0
+
+
+def test_build_replay_dataset_can_apply_explicit_post_p0_sentinel(tmp_path):
+    sentinel = "2026-05-13T00:00:00+00:00"
+    db_path = tmp_path / "paper_trades.db"
+    _paper_db_with_sentinel(
+        db_path,
+        sentinel=sentinel,
+        trades=[
+            ("pre", "2026-05-12T23:59:59+00:00", 41, 0.61),
+            ("post", "2026-05-13T00:00:00+00:00", 43, 0.63),
+        ],
+    )
+    markets_path = tmp_path / "markets.json"
+    _markets_file(markets_path)
+
+    rows = build_replay_dataset(
+        markets_path=markets_path,
+        paper_trades_db=db_path,
+        trade_logs=[],
+        post_p0_sentinel=sentinel,
+        validate_post_p0_quality=True,
+    )
+
+    assert [row["decision_ts"] for row in rows] == ["2026-05-13T00:00:00+00:00"]
+
+
+def test_main_rejects_missing_p0_sentinel_before_writing_output(tmp_path, monkeypatch):
+    db_path = tmp_path / "paper_trades.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE bot_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE paper_trades (
+                trade_id TEXT,
+                ts TEXT,
+                ticker TEXT,
+                market_title TEXT,
+                side TEXT,
+                contracts INTEGER,
+                price_cents INTEGER,
+                estimated_prob REAL,
+                market_yes_price REAL,
+                edge REAL,
+                signal_headline TEXT,
+                signal_source TEXT,
+                resolved INTEGER,
+                resolved_yes INTEGER,
+                pnl_dollars REAL,
+                series_ticker TEXT,
+                signal_type TEXT,
+                fast_lane_p REAL,
+                accumulation_p REAL,
+                structural_p REAL
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_trades VALUES (
+                'pre', '2026-05-12T23:59:59+00:00', 'KXTEST-26MAY01',
+                'Will the test pass?', 'yes', 1, 41, 0.61, 41.0, 0.20,
+                'Headline', 'Reuters', 1, 1, 0.00, 'KXTEST', 'llm',
+                0.58, 0.59, 0.57
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    markets_path = tmp_path / "markets.json"
+    _markets_file(markets_path)
+    output_path = tmp_path / "out" / "replay.jsonl"
+
+    with pytest.raises(AssertionError, match="p0_price_fix_deployed_ts sentinel missing"):
+        _run_main(
+            monkeypatch,
+            tmp_path,
+            markets_path=markets_path,
+            paper_trades_db=db_path,
+            output_path=output_path,
+        )
+
+    assert not output_path.exists()
+
+
+def test_filter_post_p0_rows_treats_naive_decision_ts_as_utc():
+    kept = list(
+        filter_post_p0_rows(
+            [
+                {"decision_ts": "2026-05-12T23:59:59", "ticker": "PRE"},
+                {"decision_ts": "2026-05-13T00:00:01", "ticker": "POST"},
+            ],
+            "2026-05-13T00:00:00+00:00",
+        )
+    )
+
+    assert [row["ticker"] for row in kept] == ["POST"]
+
+
+def test_main_rejects_all_50_post_sentinel_corpus_before_writing_output(
+    tmp_path,
+    monkeypatch,
+):
+    sentinel = "2026-05-13T00:00:00+00:00"
+    db_path = tmp_path / "paper_trades.db"
+    _paper_db_with_sentinel(
+        db_path,
+        sentinel=sentinel,
+        trades=[
+            ("post-1", "2026-05-13T00:00:00+00:00", 50, 0.50),
+            ("post-2", "2026-05-13T00:01:00+00:00", 50, 0.50),
+        ],
+    )
+    markets_path = tmp_path / "markets.json"
+    _markets_file(markets_path)
+    output_path = tmp_path / "out" / "replay.jsonl"
+
+    with pytest.raises(AssertionError, match="P0-REG-022"):
+        _run_main(
+            monkeypatch,
+            tmp_path,
+            markets_path=markets_path,
+            paper_trades_db=db_path,
+            output_path=output_path,
+        )
+
+    assert not output_path.exists()
 
 
 def test_build_replay_dataset_includes_skipped_trade_log_rows(tmp_path):
