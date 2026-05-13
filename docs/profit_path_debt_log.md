@@ -5041,6 +5041,32 @@ published release that exposed a production bug would degrade audit
 history. The hotfix ships under `v0.30.1` per CLAUDE.md Release
 Versioning rule.
 
+**POST_FIX_NEW readiness watcher (2026-05-13):** the carve-out
+semantics above ("clean POST_FIX_NEW evidence begins
+2026-05-13T00:02:37Z, NOT at the 23:50:04Z sentinel") is now codified
+as an operator-runnable watcher at
+[`scripts/edge_replay/post_fix_new_readiness_status.py`](../scripts/edge_replay/post_fix_new_readiness_status.py).
+The watcher is strictly read-only against `data/paper_trades.db` and
+reports:
+
+- the sentinel `bot_state.p0_price_fix_deployed_ts` value,
+- the operator-overridable clean-start timestamp (default
+  `2026-05-13T00:02:37Z`, the hotfix bootstrap),
+- the failed-start carve-out interval `[sentinel, clean_start)` row
+  count (must be excluded from readiness — these may be 400-storm or
+  bootout-interval rows),
+- post-clean-start paper-trade count + distinct ticker count,
+- `READY` / `NOT_READY` verdict against `--min-trades` (default 10)
+  and `--min-tickers` (default 3) thresholds.
+
+Cycle-17D / PROFIT-EDGE-012 resume checks (earliest 2026-06-14 per
+`docs/governance/2026-05-10-cycle-17d-halt-on-historical-corpus-degeneracy.md`)
+should run this watcher first; a `NOT_READY` verdict means the
+post-hotfix corpus has not yet accumulated enough Stage-1-clean rows
+to justify a replay re-evaluation. Live readout 2026-05-13T00:55Z
+post-hotfix: `NOT_READY` (0 / 10 trades since clean-start; bot has
+not yet emitted a PAPER_TRADE event in the post-hotfix window).
+
 ---
 
 ## Execution Views
