@@ -436,8 +436,18 @@ class MarketCache:
         filtered = []
         for series_ticker in geo_tickers:
             try:
+                # Kalshi /markets has TWO different `status` contracts:
+                #   - REQUEST query parameter accepts {"open", "closed", "settled", ...}
+                #     and rejects "active" with 400 "invalid status filter".
+                #   - RESPONSE field reports the live state name as "active".
+                # Send "open"; downstream readers (paper_trader, executor, this
+                # module's `_is_tradeable` checks) gate on response field == "active".
+                # See CLAUDE.md Critical Gotchas ("Market status field is `\"active\"`,
+                # not `\"open\"`") — that gotcha is about the *response field*, NOT
+                # the request parameter. Conflating the two ships a 400-error storm
+                # in production (see fix/p7-status-filter-regression).
                 page, _ = self._client.get_markets(
-                    status="active",
+                    status="open",
                     series_ticker=series_ticker,
                     limit=200,
                 )
@@ -486,8 +496,12 @@ class MarketCache:
         markets = []
         cursor  = None
         for _ in range(10):
+            # `status="open"` is the request-parameter contract (see geo
+            # path above for the full explanation). The response field
+            # `KalshiMarket.status` reports tradeable rows as `"active"`,
+            # which downstream readers filter on separately.
             page, cursor = self._client.get_markets(
-                status="active", cursor=cursor, limit=200
+                status="open", cursor=cursor, limit=200
             )
             for m in page:
                 if _is_excluded_test_market(m):
