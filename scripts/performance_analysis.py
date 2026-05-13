@@ -56,6 +56,7 @@ REPORTS_DIR = LOGS_DIR / "reports"
 PAPER_MIN_EDGE = 0.02
 PAPER_FLAT_CONTRACTS = 5
 CREDIBILITY_MIN_SAMPLE = 10
+P0_PRICE_FIX_SENTINEL_KEY = "p0_price_fix_deployed_ts"
 
 # Skip categories
 _CONTROLLABLE_KEYWORDS = (
@@ -161,6 +162,65 @@ def _fmt_pnl(v):
     return "%s$%.2f" % (sign, v)
 
 
+def _p0_cohort_boundary(conn):
+    try:
+        row = conn.execute(
+            "SELECT value FROM bot_state WHERE key = ?",
+            (P0_PRICE_FIX_SENTINEL_KEY,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if not row:
+        return None
+    value = row[0]
+    if value is None:
+        return None
+    value = str(value).strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _p0_boundary_missing_message(section_name):
+    return "\n".join(
+        [
+            section_name + ":",
+            "",
+            "P0 cohort boundary missing "
+            "(bot_state.%s); not reporting blended lifetime aggregates."
+            % P0_PRICE_FIX_SENTINEL_KEY,
+        ]
+    )
+
+
+def _has_table(conn, table_name):
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _has_columns(conn, table_name, column_names):
+    if not _has_table(conn, table_name):
+        return False
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(%s)" % table_name)}
+    return set(column_names).issubset(cols)
+
+
+def _p0_cohort_specs(boundary):
+    return (
+        ("Pre-P0 (frozen)", "ts < ?", (boundary,)),
+        ("Post-P0", "ts >= ?", (boundary,)),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
@@ -195,8 +255,12 @@ def load_db_state():
     if not DB_PATH.exists():
         return {}
     conn = sqlite3.connect(str(DB_PATH))
-    rows = conn.execute("SELECT key, value FROM bot_state").fetchall()
-    conn.close()
+    try:
+        rows = conn.execute("SELECT key, value FROM bot_state").fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    finally:
+        conn.close()
     return {r[0]: r[1] for r in rows}
 
 
@@ -911,51 +975,73 @@ def section_per_series_win_rate():
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            """
-            SELECT
-                COALESCE(NULLIF(series_ticker, ''), '(unknown)') AS series,
-                count(*) AS total,
-                sum(CASE WHEN pnl_dollars > 0 THEN 1 ELSE 0 END) AS wins,
-                sum(pnl_dollars) AS net_pnl
-            FROM paper_trades
-            WHERE resolved = 1 AND pnl_dollars IS NOT NULL
-            GROUP BY series
-            HAVING count(*) >= 2
-            ORDER BY total DESC
-            """
-        ).fetchall()
+        if not _has_columns(conn, "paper_trades", ("series_ticker",)):
+            return "series_ticker column not found -- run bot once with v0.22.0+ to migrate schema."
+        boundary = _p0_cohort_boundary(conn)
+        if boundary is None:
+            return _p0_boundary_missing_message("Win rate by series")
+        cohort_rows = []
+        for label, ts_filter, params in _p0_cohort_specs(boundary):
+            rows = conn.execute(
+                """
+                SELECT
+                    COALESCE(NULLIF(series_ticker, ''), '(unknown)') AS series,
+                    count(*) AS total,
+                    sum(CASE WHEN pnl_dollars > 0 THEN 1 ELSE 0 END) AS wins,
+                    sum(pnl_dollars) AS net_pnl
+                FROM paper_trades
+                WHERE resolved = 1
+                  AND pnl_dollars IS NOT NULL
+                  AND """
+                + ts_filter
+                + """
+                GROUP BY series
+                HAVING count(*) >= 2
+                ORDER BY total DESC
+                """,
+                params,
+            ).fetchall()
+            cohort_rows.append((label, rows))
     except sqlite3.OperationalError:
         return "series_ticker column not found -- run bot once with v0.22.0+ to migrate schema."
     finally:
         conn.close()
 
-    if not rows:
+    if not any(rows for _label, rows in cohort_rows):
         return "No resolved trades with series_ticker yet."
 
-    table_rows = []
-    for r in rows:
-        n = r["total"]
-        wins = r["wins"]
-        wr = wins / n if n else 0.0
-        table_rows.append(
-            [
-                r["series"],
-                n,
-                wins,
-                "%.1f%%" % (wr * 100),
-                "$%+.2f" % (r["net_pnl"] or 0),
-            ]
+    lines = [
+        "Win rate by series (resolved, >= 2 trades; P0 cohorts):",
+        "",
+        "P0 cohort boundary: %s" % boundary,
+    ]
+    for label, rows in cohort_rows:
+        lines.append("")
+        lines.append("%s cohort:" % label)
+        if not rows:
+            lines.append("  No resolved trades with series_ticker in this cohort.")
+            continue
+        table_rows = []
+        for r in rows:
+            n = r["total"]
+            wins = r["wins"]
+            wr = wins / n if n else 0.0
+            table_rows.append(
+                [
+                    r["series"],
+                    n,
+                    wins,
+                    "%.1f%%" % (wr * 100),
+                    "$%+.2f" % (r["net_pnl"] or 0),
+                ]
+            )
+        lines.append(
+            tabulate(
+                table_rows,
+                headers=["Series", "Trades", "Wins", "Win Rate", "Net P&L"],
+                tablefmt="simple",
+            )
         )
-
-    lines = ["Win rate by series (resolved, >= 2 trades):", ""]
-    lines.append(
-        tabulate(
-            table_rows,
-            headers=["Series", "Trades", "Wins", "Win Rate", "Net P&L"],
-            tablefmt="simple",
-        )
-    )
     return "\n".join(lines)
 
 
@@ -1072,102 +1158,113 @@ def section_match_score_calibration():
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            """
-            SELECT match_score, pnl_dollars
-            FROM paper_trades
-            WHERE resolved = 1
-              AND pnl_dollars IS NOT NULL
-              AND match_score IS NOT NULL
-            """
-        ).fetchall()
+        if not _has_columns(conn, "paper_trades", ("match_score",)):
+            return "match_score column not found -- run bot once with v0.22.0+ to migrate schema."
+        boundary = _p0_cohort_boundary(conn)
+        if boundary is None:
+            return _p0_boundary_missing_message("Win rate by match_score band")
+        cohort_rows = []
+        for label, ts_filter, params in _p0_cohort_specs(boundary):
+            rows = conn.execute(
+                """
+                SELECT match_score, pnl_dollars
+                FROM paper_trades
+                WHERE resolved = 1
+                  AND pnl_dollars IS NOT NULL
+                  AND match_score IS NOT NULL
+                  AND """
+                + ts_filter,
+                params,
+            ).fetchall()
+            cohort_rows.append((label, rows))
     except sqlite3.OperationalError:
         return "match_score column not found -- run bot once with v0.22.0+ to migrate schema."
     finally:
         conn.close()
 
-    if not rows:
+    if not any(rows for _label, rows in cohort_rows):
         return "No resolved trades with match_score yet (column added in v0.22.0)."
 
     # Bin into bands
     bands = [0.0, 0.10, 0.20, 0.30, 0.50, 1.01]
     band_labels = ["0.00-0.10", "0.10-0.20", "0.20-0.30", "0.30-0.50", "0.50+"]
-    band_data: dict[str, list[float]] = {l: [] for l in band_labels}
-
-    for r in rows:
-        score = r["match_score"] or 0.0
-        pnl = r["pnl_dollars"]
-        for i in range(len(bands) - 1):
-            if bands[i] <= score < bands[i + 1]:
-                band_data[band_labels[i]].append(pnl)
-                break
-
-    table_rows = []
-    best_band = None
-    best_wr = 0.0
-    for label in band_labels:
-        pnls = band_data[label]
-        if not pnls:
-            continue
-        wins = sum(1 for p in pnls if p > 0)
-        wr = wins / len(pnls)
-        net = sum(pnls)
-        table_rows.append(
-            [label, len(pnls), wins, "%.1f%%" % (wr * 100), "$%+.2f" % net]
-        )
-        if wr > best_wr:
-            best_wr = wr
-            best_band = label
-
-    if not table_rows:
-        return "No resolved trades with match_score in range."
-
-    lines = ["Win rate by match_score band:", ""]
-    lines.append(
-        tabulate(
-            table_rows,
-            headers=["Score Band", "Trades", "Wins", "Win Rate", "Net P&L"],
-            tablefmt="simple",
-        )
-    )
-    lines.append("")
+    lines = [
+        "Win rate by match_score band (P0 cohorts):",
+        "",
+        "P0 cohort boundary: %s" % boundary,
+    ]
+    any_table_rows = False
 
     # Advisory
     current_threshold = float(os.environ.get("PAPER_MIN_MATCH_SCORE", "0.06"))
-    if best_band and table_rows:
-        low_bound = float(best_band.split("-")[0])
-        lines.append(
-            "  Advisory: highest win rate band is %s (%.1f%%). "
-            "Current threshold: %.2f." % (best_band, best_wr * 100, current_threshold)
-        )
-        if low_bound > current_threshold + 0.01:
-            lines.append(
-                "  Raising PAPER_MIN_MATCH_SCORE to %.2f may improve signal quality "
-                "-- verify with >= 30 samples before changing." % low_bound
+    for cohort_label, rows in cohort_rows:
+        lines.append("")
+        lines.append("%s cohort:" % cohort_label)
+        if not rows:
+            lines.append("  No resolved trades with match_score in this cohort.")
+            continue
+
+        band_data: dict[str, list[float]] = {l: [] for l in band_labels}
+        for r in rows:
+            score = r["match_score"] or 0.0
+            pnl = r["pnl_dollars"]
+            for i in range(len(bands) - 1):
+                if bands[i] <= score < bands[i + 1]:
+                    band_data[band_labels[i]].append(pnl)
+                    break
+
+        table_rows = []
+        best_band = None
+        best_wr = 0.0
+        for band_label in band_labels:
+            pnls = band_data[band_label]
+            if not pnls:
+                continue
+            wins = sum(1 for p in pnls if p > 0)
+            wr = wins / len(pnls)
+            net = sum(pnls)
+            table_rows.append(
+                [band_label, len(pnls), wins, "%.1f%%" % (wr * 100), "$%+.2f" % net]
             )
-        else:
-            lines.append("  Current threshold appears reasonable given available data.")
+            if wr > best_wr:
+                best_wr = wr
+                best_band = band_label
+
+        if not table_rows:
+            lines.append("  No resolved trades with match_score in range.")
+            continue
+
+        any_table_rows = True
+        lines.append(
+            tabulate(
+                table_rows,
+                headers=["Score Band", "Trades", "Wins", "Win Rate", "Net P&L"],
+                tablefmt="simple",
+            )
+        )
+        lines.append("")
+        if best_band:
+            low_bound = float(best_band.split("-")[0])
+            lines.append(
+                "  Advisory: highest win rate band is %s (%.1f%%). "
+                "Current threshold: %.2f."
+                % (best_band, best_wr * 100, current_threshold)
+            )
+            if low_bound > current_threshold + 0.01:
+                lines.append(
+                    "  Raising PAPER_MIN_MATCH_SCORE to %.2f may improve signal quality "
+                    "-- verify with >= 30 samples before changing." % low_bound
+                )
+            else:
+                lines.append("  Current threshold appears reasonable given available data.")
+
+    if not any_table_rows:
+        return "No resolved trades with match_score in range."
 
     return "\n".join(lines)
 
 
-def section_kelly_shadow():
-    """Compare flat-5 actual P&L vs what Kelly shadow sizing would have returned."""
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        """SELECT contracts, kelly_contracts, price_cents, pnl_dollars,
-                  cost_dollars, resolved_yes, side
-           FROM paper_trades
-           WHERE resolved = 1
-             AND kelly_contracts IS NOT NULL
-             AND pnl_dollars IS NOT NULL"""
-    ).fetchall()
-    conn.close()
-
-    if not rows:
-        return "No resolved trades with kelly_contracts yet (column added in v0.23.0)."
-
+def _render_kelly_shadow_rows(rows):
     flat_pnl   = 0.0
     kelly_pnl  = 0.0
     flat_cost  = 0.0
@@ -1204,6 +1301,57 @@ def section_kelly_shadow():
         "  that the bot computed at trade time, converted to contracts at that price.",
         "  A positive Delta means Kelly would have outperformed flat-5 on these trades.",
     ]
+    return "\n".join(lines)
+
+
+def section_kelly_shadow():
+    """Compare flat-5 actual P&L vs what Kelly shadow sizing would have returned."""
+    if not DB_PATH.exists():
+        return "No database found."
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        if not _has_columns(conn, "paper_trades", ("kelly_contracts",)):
+            return "kelly_contracts column not found -- run bot once with v0.23.0+ to migrate schema."
+        boundary = _p0_cohort_boundary(conn)
+        if boundary is None:
+            return _p0_boundary_missing_message("Flat-5 vs Kelly shadow sizing")
+        cohort_rows = []
+        for label, ts_filter, params in _p0_cohort_specs(boundary):
+            rows = conn.execute(
+                """SELECT contracts, kelly_contracts, price_cents, pnl_dollars,
+                          cost_dollars, resolved_yes, side
+                   FROM paper_trades
+                   WHERE resolved = 1
+                     AND kelly_contracts IS NOT NULL
+                     AND pnl_dollars IS NOT NULL
+                     AND """
+                + ts_filter,
+                params,
+            ).fetchall()
+            cohort_rows.append((label, rows))
+    except sqlite3.OperationalError:
+        return "kelly_contracts column not found -- run bot once with v0.23.0+ to migrate schema."
+    finally:
+        conn.close()
+
+    if not any(rows for _label, rows in cohort_rows):
+        return "No resolved trades with kelly_contracts yet (column added in v0.23.0)."
+
+    lines = [
+        "Flat-5 (actual) vs Kelly shadow sizing (P0 cohorts):",
+        "",
+        "P0 cohort boundary: %s" % boundary,
+    ]
+    for label, rows in cohort_rows:
+        lines.append("")
+        lines.append("%s cohort:" % label)
+        if not rows:
+            lines.append("  No resolved trades with kelly_contracts in this cohort.")
+            continue
+        lines.append(_render_kelly_shadow_rows(rows))
+
     return "\n".join(lines)
 
 
