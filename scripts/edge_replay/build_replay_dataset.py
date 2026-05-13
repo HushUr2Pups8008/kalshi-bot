@@ -14,7 +14,7 @@ import glob
 import json
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Union
 
@@ -307,13 +307,35 @@ def expand_trade_logs(patterns: list[str]) -> list[Path]:
     return sorted(set(paths))
 
 
+def read_p0_price_fix_deployed_ts(db_path: Path | None) -> str | None:
+    """Read the post-P0 cohort sentinel from paper_trades DB, if present."""
+    if db_path is None or not db_path.is_file():
+        return None
+
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("bot_state",),
+        ).fetchone()
+        if table is None:
+            return None
+        row = conn.execute(
+            "SELECT value FROM bot_state WHERE key = ?",
+            ("p0_price_fix_deployed_ts",),
+        ).fetchone()
+        return str(row[0]) if row is not None and row[0] is not None else None
+    finally:
+        conn.close()
+
+
 # --- P-8 LD-7 / CR-F cohort filtering ----------------------------------------
 # These two helpers are the post-P0 cohort cut and the silent-50 contamination
 # guard required by tests/test_kalshi_pricing_p0_replay.py. They are public,
 # importable without running main(), and intentionally free of module-level
-# state. Orchestrator wiring (reading bot_state.p0_price_fix_deployed_ts and
-# passing it in) lands in a later packet — these helpers only consume the
-# sentinel value, never read bot_state directly.
+# state. CLI wiring reads bot_state.p0_price_fix_deployed_ts read-only and
+# passes the timestamp value into filter_post_p0_rows.
 
 
 def filter_post_p0_rows(
@@ -370,7 +392,12 @@ def filter_post_p0_rows(
                 raw_ts,
             )
             continue
-        if row_dt >= sentinel_dt:
+        if row_dt.tzinfo is None:
+            row_dt = row_dt.replace(tzinfo=timezone.utc)
+        else:
+            row_dt = row_dt.astimezone(timezone.utc)
+        sentinel_cmp = sentinel_dt.astimezone(timezone.utc)
+        if row_dt >= sentinel_cmp:
             yield row
 
 
@@ -395,11 +422,21 @@ def assert_corpus_quality_or_raise(rows: Iterable[dict]) -> None:
             "replay corpus is empty — POST_FIX_NEW cut produced zero rows"
         )
 
+    def row_price(row: dict) -> float | None:
+        return _as_float(
+            _first_present(
+                row,
+                "price_cents",
+                "market_yes_price",
+                "yes_price",
+                "market_price",
+            )
+        )
+
     real_executable_seen = any(
-        isinstance(r.get("price_cents"), (int, float))
-        and not isinstance(r.get("price_cents"), bool)
-        and r["price_cents"] != 50
-        and r.get("price_available") is True
+        (price := row_price(r)) is not None
+        and price != 50
+        and r.get("price_available") is not False
         for r in rows_list
     )
     if real_executable_seen:
@@ -407,11 +444,15 @@ def assert_corpus_quality_or_raise(rows: Iterable[dict]) -> None:
 
     suspects = [
         r for r in rows_list
-        if r.get("price_cents") == 50 or r.get("price_available") is False
+        if row_price(r) == 50 or r.get("price_available") is False
     ]
     unmarked = [
         r for r in suspects
-        if not (r.get("skip_reason") or r.get("_fixture_encodes_real_50c"))
+        if not (
+            r.get("skip_reason")
+            or r.get("trade_gate_reason")
+            or r.get("_fixture_encodes_real_50c")
+        )
     ]
     if unmarked:
         raise AssertionError(
@@ -431,6 +472,8 @@ def build_replay_dataset(
     trade_logs: list[Path],
     evidence_store_db: Path | None = None,
     historical_prices_path: Path | None = None,
+    post_p0_sentinel: str | datetime | None = None,
+    validate_post_p0_quality: bool = False,
 ) -> list[dict[str, Any]]:
     markets = load_resolved_markets(markets_path)
     rows: list[dict[str, Any]] = []
@@ -440,6 +483,10 @@ def build_replay_dataset(
     if evidence_store_db is not None:
         rows.extend(_evidence_store_rows(evidence_store_db, markets))
     apply_historical_prices(rows, load_historical_prices(historical_prices_path))
+    if post_p0_sentinel is not None:
+        rows = list(filter_post_p0_rows(rows, post_p0_sentinel))
+    if validate_post_p0_quality:
+        assert_corpus_quality_or_raise(rows)
     return sorted(rows, key=lambda row: (row.get("decision_ts") or "", row.get("ticker") or ""))
 
 
@@ -456,12 +503,20 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    sentinel = read_p0_price_fix_deployed_ts(args.paper_trades_db)
+    if sentinel is None:
+        raise AssertionError(
+            "p0_price_fix_deployed_ts sentinel missing from paper_trades bot_state; "
+            "refusing to emit replay corpus without a POST_FIX_NEW cohort boundary"
+        )
     rows = build_replay_dataset(
         markets_path=args.markets,
         paper_trades_db=args.paper_trades_db,
         trade_logs=expand_trade_logs(args.trade_log),
         evidence_store_db=args.evidence_store_db,
         historical_prices_path=args.historical_prices,
+        post_p0_sentinel=sentinel,
+        validate_post_p0_quality=True,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
