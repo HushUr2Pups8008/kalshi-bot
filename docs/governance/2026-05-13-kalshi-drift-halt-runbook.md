@@ -21,6 +21,15 @@ operator-only** — the bot does NOT auto-clear on next cycle. This is
 intentional: a recurring schema drift that the bot keeps auto-clearing
 would mask the upstream API change rather than surface it.
 
+`scripts/bothealth.sh` now checks this sentinel on its daily scheduled
+run and promotes the operator notification to `RED — DRIFT HALT —
+kalshi contract drift; bot fail-closed` when the file exists. The
+notification includes the sentinel mtime, and the Markdown report prints
+the `kalshi_drift` and `p0_cohort` lines in the P0 health section. This
+is a push surface; direct `botcheck` remains useful for immediate
+inspection, but it is no longer the only way the halt reaches the
+operator.
+
 ## How to inspect the sentinel
 
 The sentinel is a single JSON object with diagnostic fields:
@@ -141,12 +150,15 @@ After clearing the sentinel:
 
    ```bash
    .venv/bin/python scripts/botcheck.py
+   bash scripts/bothealth.sh
    ```
 
    Expected lines (post-clearance):
    - `kalshi_drift: cycle_count=0 halt=False last_halt_at=null threshold_abs=1`
    - `p0_cohort   : deployed_ts=<ts> (post-P0 replay rows: ...)`
    - `p0_contract : status=ok version=1 row_count=N`
+   - bothealth verdict is not `RED — DRIFT HALT`, and its P0 section
+     shows `kalshi_drift=ok`
 
    The daily-review report (`scripts/daily_review.py`) surfaces the
    same heartbeat at "0. SYSTEM HEALTH" (landed in MR `!15`); confirm
