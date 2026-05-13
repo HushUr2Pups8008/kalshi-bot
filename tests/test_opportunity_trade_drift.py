@@ -936,8 +936,6 @@ def test_count_opportunities_skips_unreadable_archive_file_and_increments_parse_
     One readable archive file with 2 OPPORTUNITY records + one unreadable file.
     After the fix: opportunity_count == 2, parse_errors >= 1, no crash.
     """
-    import platform
-
     archive_dir = tmp_path / "archive"
     archive_dir.mkdir()
 
