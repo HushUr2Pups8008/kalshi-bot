@@ -5053,6 +5053,16 @@ schema → P1-B DB schema migration → P1-C replay/offline migration).
 This inventory is the prerequisite for P1 alias-removal; it does not
 itself change any behavior.
 
+**DriftCounter halt operator runbook (2026-05-13):** new runbook at
+[`docs/governance/2026-05-13-kalshi-drift-halt-runbook.md`](governance/2026-05-13-kalshi-drift-halt-runbook.md)
+covers the `data/runtime/kalshi_drift_halt.json` sentinel semantics
+(LD-6/LD-6b: presence equals halt, manual clearance only), inspection
+procedure, verification steps (manual REST refetch + fixture-pinning
+test + botcheck `p0_contract` heartbeat cross-check), exact clear
+procedure with snapshot, post-clear checklist, and the rationale for
+the fail-closed / manual-clear-only design. Operator must consult this
+runbook before clearing any drift halt.
+
 **POST_FIX_NEW readiness watcher (2026-05-13):** the carve-out
 semantics above ("clean POST_FIX_NEW evidence begins
 2026-05-13T00:02:37Z, NOT at the 23:50:04Z sentinel") is now codified
