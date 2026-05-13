@@ -455,6 +455,68 @@ class TestMarketCacheTestTickerExclusion:
 
 
 # ---------------------------------------------------------------------------
+# Request-filter contract regression — fix/p7-status-filter-regression
+# ---------------------------------------------------------------------------
+# Kalshi `/markets` has two distinct `status` contracts:
+#   - REQUEST query parameter accepts {"open", "closed", "settled", ...} and
+#     rejects "active" with `400 bad_request "invalid status filter"`.
+#   - RESPONSE field reports the live state name as "active".
+# P-7 originally conflated these and shipped `status="active"` as the request
+# filter, producing a sustained 400-error storm in production v0.30.0. These
+# tests lock the request-side and response-side contracts independently so a
+# future refactor cannot re-introduce the regression.
+
+
+class TestKalshiMarketsRequestFilterContract:
+    def test_fetch_geo_markets_sends_request_status_open(self):
+        """`_fetch_geo_markets` must request `status="open"` from the REST client."""
+        rest = MagicMock()
+        rest.get_all_series.return_value = [
+            {"ticker": "KXIRAN", "title": "Iran"},
+        ]
+        # Return a market whose RESPONSE field is "active" — the live state name.
+        active_market = _make_market(
+            "KXIRAN-1",
+            "Will Iran close the Strait of Hormuz in 2026?",
+            series_ticker="KXIRAN",
+        )
+        active_market.status = "active"
+        rest.get_markets.return_value = ([active_market], None)
+
+        matcher = MarketMatcher(rest)
+        markets, _ = matcher._cache._fetch_geo_markets()
+
+        # Request contract: the bot asks Kalshi for status="open" markets.
+        rest.get_markets.assert_called_with(
+            status="open",
+            series_ticker="KXIRAN",
+            limit=200,
+        )
+        # Response contract: a market reported with status="active" is still
+        # accepted downstream (the live state name).
+        assert len(markets) == 1
+        assert markets[0].status == "active"
+
+    def test_fetch_all_markets_sends_request_status_open(self):
+        """`_fetch_all_markets` must request `status="open"` from the REST client."""
+        rest = MagicMock()
+        active_market = _make_market(
+            "KXNBA-1", "Will the Nuggets win tonight?", series_ticker="KXNBA",
+        )
+        active_market.status = "active"
+        rest.get_markets.side_effect = [([active_market], None)]
+
+        matcher = MarketMatcher(rest)
+        markets = matcher._cache._fetch_all_markets()
+
+        rest.get_markets.assert_called_with(
+            status="open", cursor=None, limit=200,
+        )
+        assert len(markets) == 1
+        assert markets[0].status == "active"
+
+
+# ---------------------------------------------------------------------------
 # Low-quality match suppression
 # ---------------------------------------------------------------------------
 
