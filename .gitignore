@@ -89,3 +89,13 @@ setup_service.ps1
 .vscode/
 .idea/
 mac_archive/db_snapshots/
+
+# Agent runtime scratch surfaces (Claude Code / Codex / Cursor / etc).
+# These directories contain plugin caches, scheduled-task locks, local
+# agent settings, and short-lived agent worktrees. Nothing inside them
+# should ever be committed; ignoring them guards against accidental
+# `git add -A` capturing 29 MB+ of local state. Audit rec #9
+# (v0.30.0 vertical-integration audit, 2026-05-13).
+.claude/
+.codex/
+.cursor/
