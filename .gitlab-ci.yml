@@ -72,10 +72,11 @@ tests:
   stage: test
   before_script:
     # Tests subprocess `git` (db_snapshot, close_day audit, wave1 acceptance audit),
-    # `node` (wave2_branch_a_invariant_check.sh JSON probe), and `make` (Makefile
-    # operator-target dry-run tests added in 50f7aac). python:3.14-slim is
-    # Debian-based and ships none of them; install all three before pytest collection.
-    - apt-get update -qq && apt-get install -y --no-install-recommends git nodejs make
+    # `node` (wave2_branch_a_invariant_check.sh JSON probe), `make` (Makefile
+    # operator-target dry-run tests added in 50f7aac), and `sqlite3`
+    # (bothealth shell verdict regression). python:3.14-slim is Debian-based
+    # and ships none of them; install all four before pytest collection.
+    - apt-get update -qq && apt-get install -y --no-install-recommends git nodejs make sqlite3
     - *install
   script:
     - .venv/bin/python -m pytest -q --tb=short --junitxml=junit.xml
