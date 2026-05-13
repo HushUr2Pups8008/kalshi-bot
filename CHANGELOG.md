@@ -4,6 +4,19 @@ All notable changes to kalshi-bot are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## Release tag dispatch
+
+| Tag | Commit | Status | Use? |
+|---|---|---|---|
+| `v0.30.0` | `0a513e4` | **published — broken — immutable** | **NO.** Contains the Kalshi `/markets` request-filter regression (P-7 sent `?status=active`, which Kalshi rejects with `400 bad_request "invalid status filter"`). Producing 2726+ rejected requests in ~4min on first restart. Do not deploy this tag. Do not move or reuse this tag — the broken release stays anchored for audit history. |
+| `v0.30.1` | `b41e4bf` | **operative patch release** | **YES.** Hotfix MR `!14` restored `?status=open`; all v0.30.0 P0 work (parser, drift halt, paper-fill provenance, replay cohort sentinel, two-sided EV, custom encoder, exchange-status fail-closed gate) ships intact. |
+
+Operators consuming `git tag -l` output should treat `v0.30.0` as if it
+carried a `BROKEN-DO-NOT-USE` suffix. The hotfix is `v0.30.1`. See
+[`PROFIT-API-001`](docs/profit_path_debt_log.md) for full incident
+narrative and [CLAUDE.md](CLAUDE.md) Kalshi API gotchas for the
+request-vs-response status contract that the P-7 author misread.
+
 ---
 
 ## [0.30.1] - 2026-05-13
