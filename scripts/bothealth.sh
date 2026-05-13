@@ -43,7 +43,7 @@ done
 
 # ── Resolve paths ─────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+REPO_ROOT="${BOTHEALTH_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
 VENV_PYTHON="$REPO_ROOT/.venv/bin/python"
 LOG_DIR="$REPO_ROOT/logs/app"
 TRADES_LOG="$REPO_ROOT/logs/trades/live/trades.jsonl"
@@ -51,6 +51,10 @@ ERRORS_LOG="$LOG_DIR/errors.log"
 BOT_LOG="$LOG_DIR/bot.log"
 PAPER_DB="$REPO_ROOT/data/paper_trades.db"
 EVIDENCE_DB="$REPO_ROOT/data/evidence_store.db"
+RUNTIME_DIR="$REPO_ROOT/data/runtime"
+DRIFT_HALT_SENTINEL="$RUNTIME_DIR/kalshi_drift_halt.json"
+BOT_RUNTIME_LOCK="$REPO_ROOT/data/bot_runtime.lock"
+READINESS_SCRIPT="$REPO_ROOT/scripts/edge_replay/post_fix_new_readiness_status.py"
 GOV_LOG_DIR="$REPO_ROOT/logs/governance"
 DEBT_LOG="$REPO_ROOT/docs/profit_path_debt_log.md"
 LAUNCHD_LABEL="com.jake.kalshi-bot"
@@ -67,6 +71,70 @@ sub()      { printf '\n### %s\n\n' "$1" >>"$REPORT"; }
 codeblock_start() { printf '```\n' >>"$REPORT"; }
 codeblock_end()   { printf '```\n' >>"$REPORT"; }
 sql() { sqlite3 "$1" "$2" 2>/dev/null; }
+sql_ro() { sqlite3 -readonly "$1" "$2" 2>/dev/null; }
+python_bin() {
+    local candidate
+    if [[ -x "$VENV_PYTHON" ]]; then
+        printf '%s\n' "$VENV_PYTHON"
+        return 0
+    fi
+    for candidate in python3 python; do
+        candidate="$(command -v "$candidate" 2>/dev/null || true)"
+        if [[ -n "$candidate" ]] && "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)' 2>/dev/null; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+file_mtime_utc() {
+    local py
+    py="$(python_bin)"
+    if [[ -z "$py" ]]; then
+        return 1
+    fi
+    "$py" -c 'from datetime import datetime, timezone; import os, sys
+print(datetime.fromtimestamp(os.path.getmtime(sys.argv[1]), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1" 2>/dev/null
+}
+json_field() {
+    local json="$1"
+    local key="$2"
+    local py
+    py="$(python_bin)"
+    if [[ -z "$py" ]]; then
+        return 1
+    fi
+    JSON_INPUT="$json" JSON_KEY="$key" "$py" -c 'import json, os; d=json.loads(os.environ["JSON_INPUT"]); v=d.get(os.environ["JSON_KEY"]); print("" if v is None else v)' 2>/dev/null
+}
+runtime_started_utc() {
+    local py
+    py="$(python_bin)"
+    if [[ ! -f "$BOT_RUNTIME_LOCK" || -z "$py" ]]; then
+        return 1
+    fi
+    "$py" -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("started_utc") or "")' "$BOT_RUNTIME_LOCK" 2>/dev/null
+}
+elapsed_hours_since() {
+    local started="$1"
+    local py
+    py="$(python_bin)"
+    if [[ -z "$started" || -z "$py" ]]; then
+        return 1
+    fi
+    "$py" -c 'from datetime import datetime, timezone; import sys
+raw=sys.argv[1].strip().replace("Z","+00:00")
+dt=datetime.fromisoformat(raw)
+if dt.tzinfo is None:
+    dt=dt.replace(tzinfo=timezone.utc)
+hours=(datetime.now(timezone.utc)-dt.astimezone(timezone.utc)).total_seconds()/3600
+print(int(hours) if hours > 0 else 0)' "$started" 2>/dev/null
+}
+osascript_escape() {
+    local text="$1"
+    text="${text//\\/\\\\}"
+    text="${text//\"/\\\"}"
+    printf '%s\n' "$text"
+}
 
 # ── Header ────────────────────────────────────────────────────────────────────
 {
@@ -199,6 +267,79 @@ else
 fi
 codeblock_end
 
+# ── P0. Kalshi drift / cohort / readiness heartbeat ─────────────────────────
+section "P0. Kalshi drift and cohort"
+codeblock_start
+KALSHI_DRIFT_STATUS="kalshi_drift=ok"
+P0_COHORT_STATUS="p0_cohort=db_missing"
+P0_SENTINEL_TS=""
+P0_POST_SENTINEL_ROWS=""
+P0_RUNTIME_HOURS=""
+POST_FIX_NEW_STATUS="post_fix_new=not_checked"
+POST_FIX_NEW_READINESS=""
+POST_FIX_NEW_REASON=""
+POST_FIX_NEW_CHECK_STATE="not_checked"
+
+if [[ -f "$DRIFT_HALT_SENTINEL" ]]; then
+    DRIFT_HALT_MTIME="$(file_mtime_utc "$DRIFT_HALT_SENTINEL" || true)"
+    KALSHI_DRIFT_STATUS="kalshi_drift=HALT mtime=${DRIFT_HALT_MTIME:-unknown}"
+    printf '%s path=%s\n' "$KALSHI_DRIFT_STATUS" "$DRIFT_HALT_SENTINEL" >>"$REPORT"
+else
+    printf '%s\n' "$KALSHI_DRIFT_STATUS" >>"$REPORT"
+fi
+
+if [[ -f "$PAPER_DB" ]]; then
+    P0_SENTINEL_TS="$(sql_ro "$PAPER_DB" "SELECT value FROM bot_state WHERE key='p0_price_fix_deployed_ts';" || true)"
+    if [[ -n "$P0_SENTINEL_TS" ]]; then
+        P0_POST_SENTINEL_ROWS="$(sql_ro "$PAPER_DB" "SELECT COUNT(*) FROM paper_trades WHERE ts >= '$P0_SENTINEL_TS';" || true)"
+        P0_COHORT_STATUS="p0_cohort=${P0_SENTINEL_TS} rows_since=${P0_POST_SENTINEL_ROWS:-unknown}"
+    else
+        P0_COHORT_STATUS="p0_cohort=P0 sentinel missing"
+    fi
+    printf '%s\n' "$P0_COHORT_STATUS" >>"$REPORT"
+else
+    printf '%s path=%s\n' "$P0_COHORT_STATUS" "$PAPER_DB" >>"$REPORT"
+fi
+
+RUNTIME_STARTED="$(runtime_started_utc || true)"
+if [[ -n "$RUNTIME_STARTED" ]]; then
+    P0_RUNTIME_HOURS="$(elapsed_hours_since "$RUNTIME_STARTED" || true)"
+    printf 'bot_runtime.started_utc=%s elapsed_hours=%s\n' "$RUNTIME_STARTED" "${P0_RUNTIME_HOURS:-unknown}" >>"$REPORT"
+else
+    printf 'bot_runtime.started_utc=unknown\n' >>"$REPORT"
+fi
+
+if [[ -f "$READINESS_SCRIPT" && -f "$PAPER_DB" ]]; then
+    READINESS_PY="$(python_bin)"
+    if [[ -n "$READINESS_PY" ]]; then
+        READINESS_JSON="$("$READINESS_PY" "$READINESS_SCRIPT" --db "$PAPER_DB" --json 2>/dev/null || true)"
+    else
+        READINESS_JSON=""
+    fi
+    if [[ -n "$READINESS_JSON" ]]; then
+        POST_FIX_NEW_READINESS="$(json_field "$READINESS_JSON" readiness || true)"
+        POST_FIX_NEW_REASON="$(json_field "$READINESS_JSON" reason || true)"
+        POST_FIX_NEW_ROWS="$(json_field "$READINESS_JSON" post_clean_start_row_count || true)"
+        POST_FIX_NEW_TICKERS="$(json_field "$READINESS_JSON" post_clean_start_distinct_tickers || true)"
+        if [[ -n "$POST_FIX_NEW_READINESS" ]]; then
+            POST_FIX_NEW_CHECK_STATE="ok"
+        else
+            POST_FIX_NEW_CHECK_STATE="unavailable"
+        fi
+        POST_FIX_NEW_STATUS="post_fix_new=${POST_FIX_NEW_READINESS:-unknown} rows=${POST_FIX_NEW_ROWS:-unknown} tickers=${POST_FIX_NEW_TICKERS:-unknown}"
+        if [[ -n "$POST_FIX_NEW_REASON" ]]; then
+            POST_FIX_NEW_STATUS="$POST_FIX_NEW_STATUS reason=${POST_FIX_NEW_REASON}"
+        fi
+    else
+        POST_FIX_NEW_STATUS="post_fix_new=unavailable"
+        POST_FIX_NEW_CHECK_STATE="unavailable"
+    fi
+else
+    POST_FIX_NEW_STATUS="post_fix_new=not_checked"
+fi
+printf '%s\n' "$POST_FIX_NEW_STATUS" >>"$REPORT"
+codeblock_end
+
 # ── 6. Exception class scan (last 24h) ────────────────────────────────────────
 section "6. Exception classes (last 24h)"
 codeblock_start
@@ -251,10 +392,20 @@ fi
 # ── 8. Verdict line ───────────────────────────────────────────────────────────
 section "Verdict"
 {
-    if (( BOT_ALIVE == 0 )); then
+    if [[ "$KALSHI_DRIFT_STATUS" == kalshi_drift=HALT* ]]; then
+        VERDICT="**RED** — DRIFT HALT — kalshi contract drift; bot fail-closed (${KALSHI_DRIFT_STATUS})"
+    elif (( BOT_ALIVE == 0 )); then
         VERDICT="**RED** — bot not running"
     elif (( APPLIED > 0 || KS > 0 || VE > 0 || BATCH_ABORTED > 0 )); then
         VERDICT="**RED** — governance shadow-mode invariant violated (applied=$APPLIED, KILL_SWITCH=$KS, VALIDATION_ERROR=$VE, batch_aborted=$BATCH_ABORTED)"
+    elif [[ -f "$PAPER_DB" && -z "$P0_SENTINEL_TS" ]]; then
+        VERDICT="**YELLOW** — P0 sentinel missing"
+    elif [[ "$POST_FIX_NEW_READINESS" == "NOT_READY" ]]; then
+        VERDICT="**RED** — POST_FIX_NEW readiness NOT_READY (${POST_FIX_NEW_REASON:-review P0 section})"
+    elif [[ "$POST_FIX_NEW_CHECK_STATE" == "unavailable" ]]; then
+        VERDICT="**YELLOW** — POST_FIX_NEW readiness unavailable; review P0 section"
+    elif [[ "${P0_POST_SENTINEL_ROWS:-}" == "0" && "${P0_RUNTIME_HOURS:-0}" =~ ^[0-9]+$ && "$P0_RUNTIME_HOURS" -ge 6 ]]; then
+        VERDICT="**YELLOW** — No new paper_trades since clean-start (${P0_RUNTIME_HOURS}h elapsed)"
     elif (( EXC_COUNT > 5 )); then
         VERDICT="**YELLOW** — $EXC_COUNT distinct exception classes; review section 6"
     else
@@ -264,7 +415,9 @@ section "Verdict"
 } >>"$REPORT"
 
 # Notify operator (best-effort, won't fail the script if osascript missing)
-osascript -e "display notification \"bothealth: ${VERDICT//\*/}\" with title \"kalshi-bot\"" 2>/dev/null || true
+NOTIFY_BODY="bothealth: ${VERDICT//\*/}; ${KALSHI_DRIFT_STATUS}; ${P0_COHORT_STATUS}; ${POST_FIX_NEW_STATUS}"
+NOTIFY_BODY_ESCAPED="$(osascript_escape "$NOTIFY_BODY")"
+osascript -e "display notification \"$NOTIFY_BODY_ESCAPED\" with title \"kalshi-bot\"" 2>/dev/null || true
 
 echo "Report: $REPORT"
 echo "Verdict: $VERDICT"
