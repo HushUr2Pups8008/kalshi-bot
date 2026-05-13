@@ -5041,6 +5041,18 @@ published release that exposed a production bug would degrade audit
 history. The hotfix ships under `v0.30.1` per CLAUDE.md Release
 Versioning rule.
 
+**`market_yes_price` alias caller inventory (2026-05-13):** full
+inventory of the LD-10 / LD-17 deprecated-alias readers landed at
+[`docs/governance/2026-05-13-market-yes-price-alias-inventory.md`](governance/2026-05-13-market-yes-price-alias-inventory.md).
+Counts: **64 hits** across the live tree (excl. `__pycache__` /
+`.claude/worktrees` / `_archive`), distributed as: 7 production-runtime
+files (~40 hits), ~20 replay/offline scripts, ~20 test fixtures, 2 DB
+schema/hydration sites + 1 dataclass field, ~16 docs/comments. P1
+program recommended as 3 sequential PRs (P1-A runtime + dataclass + log
+schema → P1-B DB schema migration → P1-C replay/offline migration).
+This inventory is the prerequisite for P1 alias-removal; it does not
+itself change any behavior.
+
 **POST_FIX_NEW readiness watcher (2026-05-13):** the carve-out
 semantics above ("clean POST_FIX_NEW evidence begins
 2026-05-13T00:02:37Z, NOT at the 23:50:04Z sentinel") is now codified
