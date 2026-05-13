@@ -4999,6 +4999,48 @@ them.
   R-10 (no new tracking files), no separate P0 status file or per-day
   decision-log was created.
 
+**v0.30.1 hotfix follow-up (2026-05-13):** First v0.30.0 production
+restart on `com.jake.kalshi-bot` at `2026-05-12T23:49:59Z` produced a
+400-error storm against Kalshi `/markets` — the P-7 packet
+(`analysis/market_matcher.py`, commit `c8ba02f`) shipped
+`status="active"` as the **request filter** based on a misreading of
+the captured-metadata observation that responses report
+`status="active"` as the **field value**. Kalshi rejects `status=active`
+as a query parameter (`400 bad_request "invalid status filter"`). 2726
+sustained 400s in ~4 minutes; zero successful market fetches.
+PAPER-ONLY guards held — no live-order side effects. Bot was unloaded
+via `launchctl bootout` at `23:56:16Z` to halt the storm. Hotfix MR
+`!14` (commit `1b0f441`) restored `status="open"` and added regression
+coverage; merged to `main` at `fddc94a` and shipped as **v0.30.1**.
+Bot bootstrapped at `2026-05-13T00:02:37Z`; PID 53447 running cleanly
+post-hotfix.
+
+**POST_FIX_NEW replay caution:** the cohort sentinel
+`bot_state.p0_price_fix_deployed_ts = 2026-05-12T23:50:04.422696+00:00`
+was planted at the *first* v0.30.0 restart, **before** the 400 storm
+was diagnosed and the bot bootout'd. The genuinely-clean post-hotfix
+runtime window begins `2026-05-13T00:02:37Z`. Decision evidence
+emitted in the ~12-minute interval between those two timestamps
+(`23:50:04Z → 00:02:37Z`) was produced under the 400-error storm or
+during the bootout interval; replay scripts that consume the
+`p0_price_fix_deployed_ts` sentinel should either:
+
+- exclude `[23:50:04Z, 00:02:37Z]` as a failed-start interval, OR
+- annotate that interval as evidence-of-non-trading rather than as
+  POST_FIX_NEW trading signal.
+
+The sentinel itself is deliberately NOT moved — the LD-7/CR-F
+cohort-cut semantics anchor on the deploy-time-of-the-code, not on
+the runtime-stability-of-the-code; moving it would weaken the audit
+trail for the next P0-style change. Treat this as a known
+documented carve-out within `PROFIT-API-001`.
+
+**`v0.30.0` tag policy:** tag `v0.30.0` remains anchored to the
+broken release commit `0a513e4`. **It is NOT moved.** Retagging a
+published release that exposed a production bug would degrade audit
+history. The hotfix ships under `v0.30.1` per CLAUDE.md Release
+Versioning rule.
+
 ---
 
 ## Execution Views

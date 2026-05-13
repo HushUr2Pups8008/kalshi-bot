@@ -6,6 +6,61 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.30.1] - 2026-05-13
+
+### Fixed (P-7 status-filter regression)
+
+Hotfix for a production-breaking v0.30.0 regression. The v0.30.0 P-7
+packet (commit `c8ba02f`) changed
+[`analysis/market_matcher.py`](analysis/market_matcher.py) to request
+`/markets` with `status="active"`. Kalshi's `/markets` endpoint
+rejects that value as a query parameter with
+`400 bad_request "invalid status filter"`. The fix author conflated
+the **response field** value (`status="active"` is what payloads
+return) with the **request query parameter** value (`status="open"`
+is what the endpoint accepts).
+
+First v0.30.0 production restart at `2026-05-12T23:49:59Z` produced
+2726 sustained `invalid status filter` 400 errors in ~4 minutes of
+runtime; zero successful market fetches. Bot was unloaded via
+`launchctl bootout` at `2026-05-12T23:56:16Z` to halt the storm.
+PAPER-ONLY guards prevented any live-order side effects.
+
+- **Restored `?status=open` as the `/markets` request filter** at
+  both `analysis/market_matcher.py:_fetch_geo_markets_sync` and
+  `analysis/market_matcher.py:_fetch_all_markets`. Documented the
+  two distinct `status` contracts (request param vs response field)
+  in-line so future readers cannot re-conflate them.
+- **Preserved all P0 downstream invariants:** `KalshiMarket.status == "active"`
+  remains the tradeable response state; exchange-status fail-closed
+  gate at `main.py:540-570` unchanged; per-market `status_not_active`
+  guards unchanged; cohort sentinel
+  `bot_state.p0_price_fix_deployed_ts` preserved at the original
+  planting time `2026-05-12T23:50:04.422696+00:00`.
+- **Regression coverage** added to `tests/test_market_matcher.py`
+  (`TestKalshiMarketsRequestFilterContract`) — two tests that lock
+  the request-filter contract (`status="open"`) and the
+  response-field contract (`status="active"`) independently.
+
+### Operator notes
+
+- **`v0.30.0` tag is NOT moved.** It remains anchored to the broken
+  release commit `0a513e4` as published audit history. This
+  hotfix ships under a new `v0.30.1` patch tag.
+- **POST_FIX_NEW replay caution:** the cohort sentinel ts
+  (`23:50:04Z`) and the genuinely-clean post-hotfix runtime start
+  (`2026-05-13T00:02:37Z`) are not the same. Decision evidence
+  emitted during the `~12-minute` window between those two
+  timestamps was produced under the 400-error storm or during
+  bootout; replay scripts should exclude that window or annotate it
+  as failed-start evidence rather than treating it as POST_FIX_NEW
+  signal.
+
+PAPER-ONLY trading posture unchanged. No live trading enabled by
+this release.
+
+---
+
 ## [0.30.0] - 2026-05-12
 
 ### Changed (P0 — Kalshi API Contract Stabilization, PROFIT-API-001)
