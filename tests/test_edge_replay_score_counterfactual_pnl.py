@@ -44,6 +44,206 @@ def test_score_candidate_scores_no_contract_against_resolution():
     assert scored["counterfactual_pnl"] == pytest.approx(-2.50)
 
 
+def test_score_candidate_preserves_legacy_no_side_yes_price_semantics():
+    row = {
+        "ticker": "KXNOLEGACY",
+        "side": "no",
+        "contracts": 1,
+        "market_yes_price": 72.0,
+        "edge": 0.20,
+        "resolved_yes": False,
+        "signal_source": "Reuters",
+        "series_ticker": "KXNOLEGACY",
+        "signal_type": "llm",
+        "news_class": "publisher_rss",
+    }
+
+    scored = score_candidate(row, min_edge=0.02, default_contracts=1)
+
+    assert scored["would_have_traded"] is True
+    assert scored["would_have_won"] is True
+    assert scored["counterfactual_pnl"] == pytest.approx(0.72)
+
+
+def test_score_candidate_scores_post_p0_paper_trade_alias_as_executed_price():
+    row = {
+        "ticker": "KXNOPOSTP0",
+        "decision_kind": "paper_trade",
+        "side": "no",
+        "contracts": 1,
+        "market_yes_price": 61.0,
+        "edge": 0.20,
+        "resolved_yes": False,
+        "signal_source": "Reuters",
+        "series_ticker": "KXNOPOSTP0",
+        "signal_type": "llm",
+        "news_class": "publisher_rss",
+    }
+
+    scored = score_candidate(row, min_edge=0.02, default_contracts=1)
+
+    assert scored["would_have_traded"] is True
+    assert scored["would_have_won"] is True
+    assert scored["counterfactual_pnl"] == pytest.approx(0.39)
+
+
+def test_score_candidate_scores_post_p0_provenance_alias_as_executed_price():
+    row = {
+        "ticker": "KXNOPOSTP0PROV",
+        "side": "no",
+        "contracts": 1,
+        "market_yes_price": 61.0,
+        "price_method": "dollars_fixed_point",
+        "edge": 0.20,
+        "resolved_yes": True,
+        "signal_source": "Reuters",
+        "series_ticker": "KXNOPOSTP0PROV",
+        "signal_type": "llm",
+        "news_class": "publisher_rss",
+    }
+
+    scored = score_candidate(row, min_edge=0.02, default_contracts=1)
+
+    assert scored["would_have_traded"] is True
+    assert scored["would_have_won"] is False
+    assert scored["counterfactual_pnl"] == pytest.approx(-0.61)
+
+
+def test_score_candidate_treats_legacy_cents_provenance_as_yes_price():
+    row = {
+        "ticker": "KXNOLEGACYPROV",
+        "side": "no",
+        "contracts": 1,
+        "market_yes_price": 72.0,
+        "price_method": "legacy_cents",
+        "edge": 0.20,
+        "resolved_yes": False,
+        "signal_source": "Reuters",
+        "series_ticker": "KXNOLEGACYPROV",
+        "signal_type": "llm",
+        "news_class": "publisher_rss",
+    }
+
+    scored = score_candidate(row, min_edge=0.02, default_contracts=1)
+
+    assert scored["would_have_traded"] is True
+    assert scored["would_have_won"] is True
+    assert scored["counterfactual_pnl"] == pytest.approx(0.72)
+
+
+def test_score_candidate_scores_no_executable_price_as_no_contract_cost():
+    row = {
+        "ticker": "KXNOASK",
+        "side": "no",
+        "contracts": 1,
+        "market_yes_price": 72.0,
+        "executable_price_cents": 61.0,
+        "edge": 0.20,
+        "resolved_yes": True,
+        "signal_source": "Reuters",
+        "series_ticker": "KXNOASK",
+        "signal_type": "llm",
+        "news_class": "publisher_rss",
+    }
+
+    scored = score_candidate(row, min_edge=0.02, default_contracts=1)
+
+    assert scored["would_have_traded"] is True
+    assert scored["would_have_won"] is False
+    assert scored["counterfactual_pnl"] == pytest.approx(-0.61)
+
+
+def test_score_candidate_uses_executable_price_with_direction_alias_when_side_missing():
+    row = {
+        "ticker": "KXNOALIAS",
+        "llm_direction": "no",
+        "contracts": 1,
+        "market_yes_price": 72.0,
+        "executable_price_cents": 61.0,
+        "edge": 0.20,
+        "resolved_yes": False,
+        "signal_source": "Reuters",
+        "series_ticker": "KXNOALIAS",
+        "signal_type": "llm",
+        "news_class": "publisher_rss",
+    }
+
+    scored = score_candidate(row, min_edge=0.02, default_contracts=1)
+
+    assert scored["side"] == "no"
+    assert scored["would_have_traded"] is True
+    assert scored["would_have_won"] is True
+    assert scored["counterfactual_pnl"] == pytest.approx(0.39)
+
+
+def test_score_candidate_preserves_legacy_model_price_side_inference_without_executable_price():
+    row = {
+        "ticker": "KXLEGACYDOSSIER",
+        "contracts": 1,
+        "model_prob": 0.38,
+        "market_yes_price": 80.0,
+        "edge": 0.20,
+        "resolved_yes": False,
+        "signal_source": "Reuters",
+        "series_ticker": "KXLEGACYDOSSIER",
+        "signal_type": "state",
+        "news_class": "publisher_rss",
+    }
+
+    scored = score_candidate(row, min_edge=0.02, default_contracts=1)
+
+    assert scored["side"] == "no"
+    assert scored["would_have_traded"] is True
+    assert scored["would_have_won"] is True
+    assert scored["counterfactual_pnl"] == pytest.approx(0.80)
+
+
+def test_score_candidate_skips_executable_price_with_ambiguous_missing_side():
+    row = {
+        "ticker": "KXAMBIG",
+        "contracts": 1,
+        "model_prob": 0.80,
+        "market_yes_price": 72.0,
+        "executable_price_cents": 61.0,
+        "edge": 0.20,
+        "resolved_yes": True,
+        "signal_source": "Reuters",
+        "series_ticker": "KXAMBIG",
+        "signal_type": "llm",
+        "news_class": "publisher_rss",
+    }
+
+    scored = score_candidate(row, min_edge=0.02, default_contracts=1)
+
+    assert scored["side"] is None
+    assert scored["would_have_traded"] is False
+    assert scored["would_have_won"] is None
+    assert scored["counterfactual_pnl"] == 0.0
+
+
+def test_score_candidate_skips_post_p0_alias_with_ambiguous_missing_side():
+    row = {
+        "ticker": "KXAMBIGALIAS",
+        "p0_contract_version": 1,
+        "contracts": 1,
+        "model_prob": 0.70,
+        "market_yes_price": 61.0,
+        "edge": 0.20,
+        "resolved_yes": True,
+        "signal_source": "Reuters",
+        "series_ticker": "KXAMBIGALIAS",
+        "signal_type": "llm",
+        "news_class": "publisher_rss",
+    }
+
+    scored = score_candidate(row, min_edge=0.02, default_contracts=1)
+
+    assert scored["side"] is None
+    assert scored["would_have_traded"] is False
+    assert scored["would_have_won"] is None
+    assert scored["counterfactual_pnl"] == 0.0
+
+
 def test_summarize_scores_reports_no_positive_ev_slice():
     scored = [
         score_candidate(

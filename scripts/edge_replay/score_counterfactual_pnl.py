@@ -39,23 +39,59 @@ def _as_bool(value: Any) -> bool | None:
     return None
 
 
-def _infer_side(row: dict[str, Any]) -> str:
-    side = str(row.get("side") or "").lower()
+def _normalize_side(value: Any) -> str | None:
+    side = str(value or "").lower()
     if side in {"yes", "no"}:
         return side
+    return None
+
+
+def _infer_side(row: dict[str, Any]) -> str | None:
+    side = _normalize_side(row.get("side"))
+    if side is not None:
+        return side
+    for key in ("executable_side", "executed_side", "trade_side", "llm_direction"):
+        side = _normalize_side(row.get(key))
+        if side is not None:
+            return side
+    if _as_float(row.get("executable_price_cents")) is not None or _market_yes_price_is_executed_alias(row):
+        return None
     model_prob = _as_float(row.get("model_prob"))
     market_yes_price = _as_float(row.get("market_yes_price"))
     if model_prob is not None and market_yes_price is not None:
         return "yes" if model_prob >= market_yes_price / 100.0 else "no"
-    return "yes"
+    return None
 
 
-def _pnl(side: str, yes_price_cents: float, contracts: int, resolved_yes: bool) -> float:
-    yes_cost = yes_price_cents / 100.0
+def _market_yes_price_is_executed_alias(row: dict[str, Any]) -> bool:
+    if row.get("p0_contract_version") is not None:
+        return True
+    if str(row.get("decision_kind") or "").lower() == "paper_trade":
+        return True
+    price_method = str(row.get("price_method") or "").lower()
+    if price_method in {"dollars_fixed_point", "bid", "ask"}:
+        return True
+    return bool(row.get("raw_payload_hash"))
+
+
+def _contract_price(row: dict[str, Any], side: str | None) -> float | None:
+    executable_price = _as_float(row.get("executable_price_cents"))
+    if executable_price is not None:
+        return executable_price
+    yes_price = _as_float(row.get("market_yes_price"))
+    if yes_price is None or side is None:
+        return None
+    if _market_yes_price_is_executed_alias(row):
+        return yes_price
+    return yes_price if side == "yes" else 100.0 - yes_price
+
+
+def _pnl(side: str, price_cents: float, contracts: int, resolved_yes: bool) -> float:
+    cost = price_cents / 100.0
     if side == "yes":
-        per_contract = (1.0 - yes_cost) if resolved_yes else -yes_cost
+        per_contract = (1.0 - cost) if resolved_yes else -cost
     else:
-        per_contract = -((1.0 - yes_cost)) if resolved_yes else yes_cost
+        per_contract = -cost if resolved_yes else (1.0 - cost)
     return per_contract * contracts
 
 
@@ -83,12 +119,12 @@ def score_candidate(
     readiness_no_threshold: float = 0.40,
 ) -> dict[str, Any]:
     edge = _as_float(row.get("edge")) or 0.0
-    price = _as_float(row.get("market_yes_price"))
     resolved_yes = _as_bool(row.get("resolved_yes"))
     contracts = int(_as_float(row.get("contracts")) or default_contracts)
     side = _infer_side(row)
-    would_trade = price is not None and resolved_yes is not None and abs(edge) >= min_edge
-    pnl = _pnl(side, price, contracts, resolved_yes) if would_trade and price is not None and resolved_yes is not None else 0.0
+    price = _contract_price(row, side)
+    would_trade = side is not None and price is not None and resolved_yes is not None and abs(edge) >= min_edge
+    pnl = _pnl(side, price, contracts, resolved_yes) if would_trade else 0.0
     readiness = _readiness_admitted(
         row,
         readiness_confidence=readiness_confidence,
