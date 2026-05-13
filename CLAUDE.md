@@ -4,6 +4,12 @@
 
 - Understand and honor the intent of these local instructions fully: they direct the agent back to the broader global guidance, and that guidance must be followed accordingly rather than interpreted narrowly.
 
+## Agent Collaboration
+
+This repo follows the global agent-collaboration policy at `~/.claude/rules/agent_collaboration.md`: Claude Code and Codex are peer coding agents, roles are assigned by blast radius rather than identity, independence is required when risk is high, and the operator owns live-state authority.
+
+For `kalshi-bot`, use the high-assurance workflow for changes that touch execution paths, order submission, bet sizing, Kelly or bankroll logic, hard caps, paper/live mode, readiness gates, market resolution, signal-generating news ingestion, database schema or live-state mutation, launchd/service behavior, paper-to-live cutover, or anything that could create real Kalshi orders. The first agent plans or implements, the second agent reviews adversarially, and the operator performs or explicitly approves merges, tags, restarts, database changes, launchd state changes, production changes, paper/live transitions, and irreversible actions.
+
 ## Continuous Improvement
 
 - This project's unified tracking system is `docs/profit_path_debt_log.md`. Do not create parallel tracking surfaces (status / roadmap / debt / decision-log / dashboard / per-day stamps). New tracking content lands as a section in the debt log, not a new file. The 2026-05-09 docs consolidation removed 8 parallel surfaces (1 deleted, 7 archived; see `docs/_archive/plans/2026-05-09-docs-directory-consolidation.md` for the consolidation plan and `docs/_archive/2026-05-09-docs-consolidation/` for archived evidence); preserving the consolidation is now a maintenance invariant.
