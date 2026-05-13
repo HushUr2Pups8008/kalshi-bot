@@ -158,6 +158,86 @@ def fmt_counter_line(counter: Counter[str], keys: list[tuple[str, str]]) -> str:
     return ", ".join(f"{label}={counter.get(key, 0)}" for key, label in keys)
 
 
+def _collect_kalshi_drift_state() -> tuple[dict[str, Any], str | None]:
+    """Read the same P0 heartbeat sources `scripts/botcheck.py` consumes.
+
+    Returns ``(halt_state, cohort_ts)`` for `_format_kalshi_drift_lines`
+    to render. Reads two sources, both read-only:
+
+    - ``data/runtime/kalshi_drift_halt.json`` — DriftCounter halt sentinel
+      (LD-6/LD-6b: presence-equals-halt; manual clearance only).
+    - ``data/paper_trades.db`` ``bot_state.p0_price_fix_deployed_ts`` —
+      POST_FIX_NEW cohort boundary (LD-7/CR-F).
+
+    If either source is missing or unreadable, that signal renders as
+    ``null`` rather than crashing the daily review. The DriftCounter
+    threshold is operator-locked to ``abs >= 1`` (LD-6 / OQ-A).
+
+    Local mirror rather than re-import of ``scripts.botcheck.print_kalshi_drift_section``
+    so the daily-review section can append into the ``lines`` list (the
+    botcheck helper writes to stdout, which doesn't compose with the
+    report-file output path used here).
+    """
+    import sqlite3
+
+    halt_state: dict[str, Any] = {
+        "cycle_count": 0,
+        "halt": False,
+        "last_halt_at": None,
+        "threshold_abs": 1,
+    }
+    sentinel_path = REPO_ROOT / "data" / "runtime" / "kalshi_drift_halt.json"
+    if sentinel_path.is_file():
+        try:
+            payload = json.loads(sentinel_path.read_text(encoding="utf-8"))
+            halt_state["cycle_count"] = int(payload.get("cycle_drift_count") or 0)
+            halt_state["halt"] = True
+            halt_state["last_halt_at"] = payload.get("halt_ts")
+        except (json.JSONDecodeError, OSError, ValueError):
+            # Fail-closed if sentinel exists but is unreadable —
+            # operator should treat as halted and investigate.
+            halt_state["halt"] = True
+
+    cohort_ts: str | None = None
+    db_path = REPO_ROOT / "data" / "paper_trades.db"
+    if db_path.is_file():
+        try:
+            conn = sqlite3.connect(str(db_path))
+            try:
+                row = conn.execute(
+                    "SELECT value FROM bot_state WHERE key = ?",
+                    ("p0_price_fix_deployed_ts",),
+                ).fetchone()
+                if row is not None:
+                    cohort_ts = row[0]
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            cohort_ts = None
+
+    return halt_state, cohort_ts
+
+
+def _format_kalshi_drift_lines(
+    halt_state: dict[str, Any], cohort_ts: str | None
+) -> list[str]:
+    """Render the P0 heartbeat block for the daily-review report file.
+
+    Output shape matches `scripts/botcheck.py::print_kalshi_drift_section`
+    so a single operator visual model covers both surfaces.
+    """
+    return [
+        "0. SYSTEM HEALTH  [source: data/runtime/kalshi_drift_halt.json + data/paper_trades.db]",
+        f"  kalshi_drift: cycle_count={halt_state['cycle_count']} "
+        f"halt={halt_state['halt']} "
+        f"last_halt_at={halt_state['last_halt_at'] or 'null'} "
+        f"threshold_abs={halt_state['threshold_abs']}",
+        f"  p0_cohort   : deployed_ts={cohort_ts or 'null'} "
+        f"(post-P0 replay rows: decision_ts >= deployed_ts; LD-7 / CR-F)",
+        "",
+    ]
+
+
 def _format_segment_rate_lines(
     rows: list[dict[str, Any]],
     *,
@@ -456,6 +536,14 @@ def build_daily_review(
         lines.append(f"Date range: {since_text} -> {until_text}")
     lines.append(f"Records included: {fmt_int(funnel_stats.get('records_kept'))}")
     lines.append("")
+
+    # P0 heartbeat — surface DriftCounter halt state + POST_FIX_NEW cohort
+    # boundary at the top of the report so a fail-closed halt or a missing
+    # cohort sentinel is visible before the operator wades through the
+    # downstream analysis sections. Same data sources as
+    # `scripts/botcheck.py::print_kalshi_drift_section` (P-9 / LD-14).
+    halt_state, cohort_ts = _collect_kalshi_drift_state()
+    lines.extend(_format_kalshi_drift_lines(halt_state, cohort_ts))
 
     lines.append("1. INGESTION  [source: scripts/freshness_diagnostics.py + scripts/decision_funnel_summary.py]")
     observed_records = sum(

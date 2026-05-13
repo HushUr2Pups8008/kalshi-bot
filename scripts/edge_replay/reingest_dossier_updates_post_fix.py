@@ -27,6 +27,11 @@ from analysis.signal_analyzer import keyword_estimate
 from feeds import NewsItem
 from kalshi import KalshiMarket
 
+# Optional only here; the per-row Optional[KalshiMarket] return path was
+# introduced by the v0.30.1 hotfix follow-up to remove the last surviving
+# `or 50` silent-fallback from the live tree. See `_market` below.
+from typing import Optional
+
 
 SCHEMA_PATH = Path("docs/evidence_store_schema.sql")
 DEFAULT_SOURCE_DB = Path("data/evidence_store.db")
@@ -90,11 +95,33 @@ def _source_evidence_rows(source: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def _market(row: sqlite3.Row, market_meta: dict[str, Any] | None) -> KalshiMarket:
+def _market(row: sqlite3.Row, market_meta: dict[str, Any] | None) -> Optional[KalshiMarket]:
+    """Build a KalshiMarket for the given evidence row, or return None.
+
+    Returns None (fail-closed) when no usable price is available for the
+    ticker, so the caller can skip the row instead of silently fabricating
+    a 50¢ midpoint. The pre-v0.30.1 implementation chained `or 50` here,
+    which produced silent-50 contamination in any rebuild that consumed a
+    markets fixture missing the price field. v0.30.1 follow-up removed the
+    last `or 50` site in the live tree (P-4 LD-2: no silent-50).
+
+    A row qualifies as "no usable price" when ANY of:
+      - the markets fixture has no entry for this ticker (`market_meta is None`),
+      - the entry exists but `yes_price` is absent or explicitly None.
+
+    An explicit ``yes_price`` value of 0 or 50 IS honored (operator may
+    have captured exactly that price); only the missing/null case is
+    rejected.
+    """
     ticker = str(row["market_ticker"])
-    title = str((market_meta or {}).get("title") or ticker)
-    yes_price = float((market_meta or {}).get("yes_price") or 50)
+    if market_meta is None:
+        return None
+    yes_price_raw = market_meta.get("yes_price")
+    if yes_price_raw is None:
+        return None
+    yes_price = float(yes_price_raw)
     yes_int = max(1, min(99, int(round(yes_price))))
+    title = str(market_meta.get("title") or ticker)
     return KalshiMarket(
         ticker=ticker,
         title=title,
@@ -103,9 +130,9 @@ def _market(row: sqlite3.Row, market_meta: dict[str, Any] | None) -> KalshiMarke
         yes_price=yes_price,
         volume=1,
         open_interest=1,
-        close_time=str((market_meta or {}).get("close_time") or "2026-05-01T00:00:00Z"),
-        status=str((market_meta or {}).get("status") or "open"),
-        series_ticker=str((market_meta or {}).get("series_ticker") or ticker.split("-", 1)[0]),
+        close_time=str(market_meta.get("close_time") or "2026-05-01T00:00:00Z"),
+        status=str(market_meta.get("status") or "open"),
+        series_ticker=str(market_meta.get("series_ticker") or ticker.split("-", 1)[0]),
         # P-5 CR-C: post-P0 fields required for guarded legacy reads.
         yes_bid_cents=yes_int,
         yes_ask_cents=yes_int,
@@ -325,8 +352,14 @@ def rebuild_post_fix_db(
         dossiers: dict[str, Dossier] = {}
         recent: dict[str, list[Evidence]] = {}
         extraction_nonzero = 0
+        skipped_no_price = 0
         for row in evidence_rows:
             market = _market(row, markets.get(str(row["market_ticker"])))
+            if market is None:
+                # P-4 LD-2: no silent-50 — skip rows whose markets fixture
+                # carries no usable price rather than fabricating 50¢.
+                skipped_no_price += 1
+                continue
             prob, *_ = keyword_estimate(_news(row), market, base_probability=BASE_PROBABILITY)
             if abs(float(prob) - BASE_PROBABILITY) > 0.0:
                 extraction_nonzero += 1
@@ -375,9 +408,12 @@ def rebuild_post_fix_db(
         "markets_path": str(markets_path) if markets_path else None,
         "source_evidence_rows": len(evidence_rows),
         "pre_fix_dossier_updates_rows": pre_fix_count,
-        "post_fix_dossier_updates_rows": len(evidence_rows),
+        # Rows actually written equals total minus rows skipped for the
+        # no-usable-price fail-closed path (P-4 LD-2: no silent-50).
+        "post_fix_dossier_updates_rows": len(evidence_rows) - skipped_no_price,
         "post_fix_dossiers_rows": len(dossiers),
         "post_fix_nonzero_extraction_rows": extraction_nonzero,
+        "skipped_no_price_rows": skipped_no_price,
         "pre_fix_rows_recoverable": True,
         "atomic_write": True,
         "idempotence_sha256": digest,
