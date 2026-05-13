@@ -425,6 +425,14 @@ def section_placed_performance(entries, db_trades, resolution_map):
         rows = []
         for t in sorted(resolved, key=lambda x: x["ts"]):
             result = "YES" if t.get("resolved_yes") else "NO"
+            # v0.30.1 follow-up: render missing market_yes_price as "n/a"
+            # rather than `"%.0fc" % (... or 0)` which silently displayed a
+            # missing price as "0c" (looks like a real 0¢ entry-price = audit
+            # bug). Explicit 0 is preserved as "0c"; only None/missing renders
+            # as "n/a". P-4 LD-2: no silent-50 (display-layer corollary: no
+            # silent-0 either).
+            myp = t.get("market_yes_price")
+            mkt_p_text = "n/a" if myp is None else "%.0fc" % myp
             rows.append(
                 [
                     t["ts"][:10],
@@ -432,7 +440,7 @@ def section_placed_performance(entries, db_trades, resolution_map):
                     t["side"].upper(),
                     "%+.3f" % (t.get("edge") or 0),
                     "%.2f" % (t.get("estimated_prob") or 0),
-                    "%.0fc" % (t.get("market_yes_price") or 0),
+                    mkt_p_text,
                     "$%.2f" % (t.get("cost_dollars") or 0),
                     result,
                     _fmt_pnl(t.get("pnl_dollars")),
@@ -561,11 +569,23 @@ def section_missed_opportunities(entries, resolution_map):
 
     # For each paired, check if resolution is known
     resolvable = []
+    skipped_no_price = 0
     for skip, opp in paired:
         ticker = opp.get("ticker", "")
         res = resolution_map.get(ticker)
         if res:
-            price_cents = int(opp.get("market_yes_price", 50))
+            # v0.30.1 follow-up: P-4 LD-2 no silent-50. Pre-fix code was
+            # `int(opp.get("market_yes_price", 50))` — when the
+            # OPPORTUNITY log row lacked `market_yes_price`, the entry-
+            # price defaulted to 50¢ and silently fed the counterfactual
+            # P&L computation, contaminating the missed-opportunities
+            # table. Fail-closed: skip rows with no usable price and
+            # surface the count in section output.
+            myp = opp.get("market_yes_price")
+            if myp is None:
+                skipped_no_price += 1
+                continue
+            price_cents = int(myp)
             side = opp.get("side", "yes")
             edge = opp.get("edge", 0)
             est_p = opp.get("estimated_probability", 0)
@@ -586,6 +606,11 @@ def section_missed_opportunities(entries, resolution_map):
             )
 
     lines.append("  With known resolution        : %d" % len(resolvable))
+    if skipped_no_price:
+        lines.append(
+            "  Excluded — missing market price : %d "
+            "(P-4 LD-2 fail-closed; no silent-50)" % skipped_no_price
+        )
 
     if not resolvable:
         lines.append("")
