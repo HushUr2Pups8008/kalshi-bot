@@ -63,6 +63,28 @@ def _parse_ts(value: Any) -> datetime | None:
         return None
 
 
+def _utc_dt(value: Any, *, name: str) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = _parse_ts(value)
+    if parsed is None:
+        raise ValueError(f"{name}: unparseable timestamp {value!r}")
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _row_is_at_or_after_sentinel(row: dict[str, Any], sentinel_dt: datetime | None) -> bool:
+    if sentinel_dt is None:
+        return False
+    try:
+        row_dt = _utc_dt(row.get("decision_ts"), name="decision_ts")
+    except ValueError:
+        return False
+    return row_dt >= sentinel_dt
+
+
 def load_resolved_markets(path: Path) -> dict[str, dict[str, Any]]:
     rows = json.loads(path.read_text(encoding="utf-8"))
     return {str(row["ticker"]): row for row in rows}
@@ -287,8 +309,16 @@ def price_at_decision(prices: dict[str, list[dict[str, Any]]], ticker: str, deci
     return float(candidates[-1]["yes_price"])
 
 
-def apply_historical_prices(rows: list[dict[str, Any]], prices: dict[str, list[dict[str, Any]]]) -> None:
+def apply_historical_prices(
+    rows: list[dict[str, Any]],
+    prices: dict[str, list[dict[str, Any]]],
+    *,
+    post_p0_sentinel: str | datetime | None = None,
+) -> None:
+    sentinel_dt = _utc_dt(post_p0_sentinel, name="post_p0_sentinel") if post_p0_sentinel is not None else None
     for row in rows:
+        if _row_is_at_or_after_sentinel(row, sentinel_dt):
+            continue
         if row.get("market_yes_price") is not None:
             continue
         price = price_at_decision(prices, str(row.get("ticker") or ""), row.get("decision_ts"))
@@ -482,7 +512,11 @@ def build_replay_dataset(
     rows.extend(_log_rows(trade_logs, markets))
     if evidence_store_db is not None:
         rows.extend(_evidence_store_rows(evidence_store_db, markets))
-    apply_historical_prices(rows, load_historical_prices(historical_prices_path))
+    apply_historical_prices(
+        rows,
+        load_historical_prices(historical_prices_path),
+        post_p0_sentinel=post_p0_sentinel,
+    )
     if post_p0_sentinel is not None:
         rows = list(filter_post_p0_rows(rows, post_p0_sentinel))
     if validate_post_p0_quality:
@@ -496,6 +530,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--paper-trades-db", type=Path, default=Path("data/paper_trades.db"))
     parser.add_argument("--evidence-store-db", type=Path, default=Path("data/evidence_store.db"))
     parser.add_argument("--historical-prices", type=Path, help="Optional JSON mapping ticker to decision-time YES price rows.")
+    parser.add_argument("--post-p0-sentinel", help="Explicit POST_FIX_NEW cohort boundary; overrides bot_state auto-read.")
     parser.add_argument("--trade-log", action="append", default=["logs/**/*.jsonl"], help="JSONL path/glob; repeatable.")
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
@@ -503,7 +538,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    sentinel = read_p0_price_fix_deployed_ts(args.paper_trades_db)
+    sentinel = args.post_p0_sentinel or read_p0_price_fix_deployed_ts(args.paper_trades_db)
     if sentinel is None:
         raise AssertionError(
             "p0_price_fix_deployed_ts sentinel missing from paper_trades bot_state; "
