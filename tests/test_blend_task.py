@@ -110,7 +110,7 @@ def _analysis(
         news_item=None,
         market=market,
         estimated_probability=probability,
-        market_yes_price=market.yes_price,
+        executed_price_cents=int(round(market.yes_price)),  # F-16: canonical post-P0; __post_init__ mirrors to market_yes_price
         edge=probability - market.yes_prob,
         side="yes",
         kelly_fraction=0.0,
@@ -513,7 +513,7 @@ def _analysis_with_news() -> SignalAnalysis:
         news_item=_news_item_for_obs003(),
         market=market,
         estimated_probability=0.72,
-        market_yes_price=market.yes_price,
+        executed_price_cents=int(round(market.yes_price)),  # F-16: canonical post-P0; __post_init__ mirrors to market_yes_price
         edge=0.72 - market.yes_prob,
         side="yes",
         kelly_fraction=0.0,
@@ -887,7 +887,7 @@ def _analysis_for_series(ticker: str) -> SignalAnalysis:
         news_item=None,
         market=_market_for_series(ticker),
         estimated_probability=0.72,
-        market_yes_price=50,
+        executed_price_cents=50,  # F-16: canonical post-P0; __post_init__ mirrors to market_yes_price
         edge=0.22,
         side="yes",
         kelly_fraction=0.0,

@@ -145,8 +145,7 @@ def _signal_analysis_with_lanes(event: LLMPositiveEvent, headline: str) -> Signa
         ),
         market=market,
         estimated_probability=estimated_prob,
-        market_yes_price=market.yes_price,
-        executed_price_cents=int(executed_cents),
+        executed_price_cents=int(executed_cents),  # F-16: canonical post-P0; __post_init__ mirrors to market_yes_price
         edge=edge,
         side=event.side,
         kelly_fraction=0.10,
