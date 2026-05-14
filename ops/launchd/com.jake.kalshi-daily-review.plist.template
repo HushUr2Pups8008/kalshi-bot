@@ -19,7 +19,7 @@
          operator's morning has two distinct push surfaces: bothealth (fast
          RED/YELLOW/GREEN verdict + osascript toast) and daily_review
          (full pipeline funnel + section-0 SYSTEM HEALTH + scorecard).
-         Like bothealth, this plist does NOT self-clean -- it keeps firing
+         Like bothealth, this plist does NOT self-clean; it keeps firing
          forever until the operator removes it. -->
     <key>StartCalendarInterval</key>
     <dict>
