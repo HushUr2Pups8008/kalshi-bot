@@ -111,7 +111,8 @@ def _candidate_for_event(event: LLMPositiveEvent) -> TradeCandidate:
         fast_lane_analysis=analysis,
         market=analysis.market,
         blended_probability=analysis.estimated_probability,
-        market_yes_price=analysis.market.yes_price,
+        # F-11 P1-A: TradeCandidate.market_yes_price renamed to entry_price_cents.
+        entry_price_cents=float(analysis.executed_price_cents or 0),
         side=event.side,
         signal_meta={
             "source_lane": "fast",
@@ -119,6 +120,7 @@ def _candidate_for_event(event: LLMPositiveEvent) -> TradeCandidate:
             "disagreement_score": 0.0,
         },
         readiness_decision=_readiness_decision_passed(),
+        executed_price_cents=analysis.executed_price_cents,
     )
 
 

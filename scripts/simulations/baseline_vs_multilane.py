@@ -110,7 +110,11 @@ def _executor_passes_sequential(candidates: list[Any]) -> list[str | None]:
             open_positions.setdefault(analysis.market.ticker, []).append(SimpleNamespace(
                 side=analysis.side,
                 estimated_prob=analysis.estimated_probability,
-                market_yes_price=analysis.market_yes_price,
+                # F-11 P1-A: SignalAnalysis.market_yes_price was deleted; mirror
+                # the executed-side price under the canonical name so the
+                # SimpleNamespace open-position fixture matches Position's new
+                # entry_price_cents field.
+                entry_price_cents=analysis.executed_price_cents,
             ))
     return out
 

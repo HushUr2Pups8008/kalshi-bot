@@ -190,10 +190,8 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     assert analysis.news_item is news
     assert analysis.market.ticker == "KXTEST-25DEC31"
     assert analysis.estimated_probability == pytest.approx(0.65)
-    # P-5 LD-10 semantic shift: market_yes_price is now the executed-side
-    # ask in cents (DT-2b alias of executed_price_cents). For YES side at
-    # yes_ask=51, this is 51.0 — not the 50¢ midpoint.
-    assert analysis.market_yes_price == pytest.approx(51.0)
+    # P1-A: market_yes_price alias removed. executed_price_cents is canonical.
+    # For YES side at yes_ask=51, executed_price_cents == 51.
     assert analysis.executed_price_cents == 51
     # Edge now scored vs executed ask: 0.65 - 0.51 = 0.14
     assert analysis.edge == pytest.approx(0.14)
@@ -214,13 +212,12 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     # increment_trades is now called by _trading_queue_consumer_task, not _process_candidate
     bot.source_stats.increment_trades.assert_not_called()
     bot.ws.watch.assert_called_with(["KXTEST-25DEC31"])
-    # P-5 LD-10: edge now scored vs executed ask (yes_ask=51), so 0.65 - 0.51 = 0.14.
-    # market_yes_price log field still emits market.yes_price (50¢ midpoint)
-    # because the log_opportunity call site has not migrated yet (P-6).
+    # P1-A: log_opportunity kwarg renamed market_yes_price → entry_price_cents.
+    # Emits the executed ask cents (51) not the midpoint (50).
     opportunity_mock.assert_called_once_with(
         ticker=market.ticker,
         market_title=market.title,
-        market_yes_price=market.yes_price,
+        entry_price_cents=pytest.approx(51.0),
         estimated_probability=0.65,
         edge=pytest.approx(0.14),
         kelly_fraction=0.12,
@@ -382,10 +379,9 @@ async def test_process_candidate_uses_rest_executable_in_handoff_not_ws(monkeypa
         await bot._process_candidate(news, market, 0.33)
 
     analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
-    # P-5 LD-10: YES side → executed_price_cents == yes_ask_cents (REST=51).
+    # P1-A: market_yes_price alias removed. executed_price_cents is canonical.
+    # YES side → executed_price_cents == yes_ask_cents (REST=51), not WS midpoint (62.0).
     assert analysis.executed_price_cents == 51
-    # DT-2b alias mirrors executed_price_cents, NOT the WS midpoint (62.0).
-    assert analysis.market_yes_price == pytest.approx(51.0)
     # LD-11: REST bid/ask must remain unmutated by the WS update.
     assert analysis.market.yes_price == pytest.approx(50.0)
     assert analysis.market.yes_bid == pytest.approx(49.0)
@@ -984,10 +980,9 @@ async def test_process_fade_tweet_builds_geo_fade_handoff_with_rest_executable(m
     analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
     assert analysis.signal_type == "fade_tweet"
     assert analysis.side == "no"
-    # P-5 LD-10: NO side fade → executed_price_cents == no_ask_cents (REST=51).
+    # P1-A: market_yes_price alias removed. executed_price_cents is canonical.
+    # NO side fade → executed_price_cents == no_ask_cents (REST=51), not WS midpoint (72.0).
     assert analysis.executed_price_cents == 51
-    # DT-2b alias mirrors executed_price_cents, NOT the WS midpoint (72.0).
-    assert analysis.market_yes_price == pytest.approx(51.0)
     # LD-11: REST bid/ask must remain unmutated by the WS update.
     assert analysis.market.yes_bid == pytest.approx(49.0)
     assert analysis.market.yes_ask == pytest.approx(51.0)
@@ -1053,11 +1048,10 @@ async def test_process_price_fade_builds_representative_handoff(crossing, expect
     assert analysis.signal_type == "price_fade"
     assert analysis.side == expected_side
     assert analysis.market.ticker == market.ticker
-    # P-5 LD-10: executed_price_cents == ask_cents for the chosen fade side
-    # (both 51 in the fixture); DT-2b alias mirrors it, NOT the WS midpoint.
+    # P1-A: market_yes_price alias removed. executed_price_cents is canonical.
+    # executed_price_cents == ask_cents for the chosen fade side (both 51 in fixture).
     expected_executed = 51  # yes_ask_cents for low_cross, no_ask_cents for high_cross
     assert analysis.executed_price_cents == expected_executed
-    assert analysis.market_yes_price == pytest.approx(float(expected_executed))
     # LD-11: REST executable bid/ask remain unmutated by the WS trigger values.
     assert analysis.market.yes_bid == pytest.approx(49.0)
     assert analysis.market.yes_ask == pytest.approx(51.0)

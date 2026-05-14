@@ -182,17 +182,17 @@ def _make_analysis_for_paper(*, market, side: str, executed_price_cents: int):
 
 
 def test_p0_dt_2b_signal_analysis_market_yes_price_alias_populated():
-    """post-P0: market_yes_price is a deprecated alias of executed_price_cents."""
+    """P1-A: market_yes_price alias removed; executed_price_cents is the sole field."""
     m = _make_post_p0_market(yes_bid_cents=40, yes_ask_cents=42,
                              no_bid_cents=58, no_ask_cents=60)
     sa = _make_analysis_for_paper(market=m, side="yes", executed_price_cents=42)
-    # Alias populated at construction time from executed_price_cents.
-    assert sa.market_yes_price == 42, (
-        f"market_yes_price alias not populated from executed_price_cents; "
-        f"got {sa.market_yes_price!r}"
+    # Alias is gone — executed_price_cents is the canonical field.
+    assert sa.executed_price_cents == 42, (
+        f"executed_price_cents not set; got {sa.executed_price_cents!r}"
     )
-    # Executed price still the canonical field.
-    assert sa.executed_price_cents == 42
+    assert not hasattr(sa, "market_yes_price"), (
+        "market_yes_price alias survived P1-A removal — delete it"
+    )
 
 
 def test_p0_paper_011_paper_fill_uses_yes_executable_price():
@@ -619,13 +619,18 @@ def test_p0_dt_1b_open_position_market_yes_price_stores_executed():
         pos = positions[0]
         assert isinstance(pos, Position)
         assert pos.side == "no"
-        # market_yes_price column == executed entry price for chosen side.
-        assert pos.market_yes_price == 61.0
+        # P1-A: field renamed market_yes_price → entry_price_cents.
+        # DB column still market_yes_price (renamed in P1-B); hydration maps
+        # row["market_yes_price"] → Position.entry_price_cents.
+        assert pos.entry_price_cents == 61.0, (
+            f"entry_price_cents not hydrated from market_yes_price DB column; "
+            f"got {pos.entry_price_cents!r}"
+        )
         # Documents the semantic shift: NOT 100-61=39 (yes midpoint).
-        assert pos.market_yes_price != 39.0
+        assert pos.entry_price_cents != 39.0
         # Load-bearing post-P0 assertions: Position must carry provenance
-        # so it is unambiguous that market_yes_price is the executed-side
-        # entry, not a legacy midpoint. These attributes don't exist today.
+        # so it is unambiguous that entry_price_cents is the executed-side
+        # entry, not a legacy midpoint.
         assert hasattr(pos, "price_source"), (
             "Position dataclass missing post-P0 price_source attribute"
         )

@@ -847,7 +847,7 @@ class TradingBot:
             trade_log.log_opportunity,
             ticker=market.ticker,
             market_title=market.title,
-            market_yes_price=market.yes_price,
+            entry_price_cents=float(executed_price_cents),
             estimated_probability=estimated_prob,
             edge=edge,
             kelly_fraction=kelly_frac,

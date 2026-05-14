@@ -73,12 +73,10 @@ def _make_analysis(ticker="KXTEST-25DEC31", side="yes", yes_price=50.0,
     a.side               = side
     a.edge               = edge
     a.estimated_probability = estimated_prob
-    a.market_yes_price   = yes_price
-    # P-5 LD-10: post-P0 fixtures populate the canonical executed-side
-    # ask cents. We use the yes_price value directly here to preserve the
-    # legacy price-boundary semantics that the rest of the executor test
-    # suite encodes (e.g. yes_price=98 should pass paper bounds at 98).
-    # Tests that exercise live-order pricing override this explicitly.
+    # P-5 LD-10 / P1-A: canonical executed-side ask cents. We use
+    # yes_price directly to preserve legacy price-boundary semantics
+    # (e.g. yes_price=98 should pass paper bounds at 98). Tests that
+    # exercise live-order pricing override this explicitly.
     a.executed_price_cents = max(1, min(99, int(round(yes_price))))
     a.capped_dollars     = capped_dollars
     a.confidence         = 0.8
@@ -105,7 +103,7 @@ def _make_blended_candidate(
         fast_lane_analysis=base,
         market=base.market,
         blended_probability=blended_probability,
-        market_yes_price=base.market_yes_price,
+        executed_price_cents=base.executed_price_cents,
         side=side,
         signal_meta=signal_meta or {
             "source_lane": "blend",
@@ -362,7 +360,7 @@ class TestValidateSkipReasons:
         pos = MagicMock()
         pos.side = "yes"
         pos.estimated_prob = 0.60
-        pos.market_yes_price = 50.0
+        pos.entry_price_cents = 50.0
         paper.portfolio.open_positions.return_value = [pos]
         reason = ex._validate(_make_analysis(side="yes", estimated_prob=0.61, yes_price=51.0))
         assert reason is not None
@@ -451,7 +449,7 @@ class TestValidateSkipReasons:
         pos = MagicMock()
         pos.side = "yes"
         pos.estimated_prob = 0.60
-        pos.market_yes_price = 50.0
+        pos.entry_price_cents = 50.0
         paper.portfolio.open_positions.return_value = [pos]
         paper.portfolio.is_concentration_ok.return_value = True
         paper.portfolio.exposure.return_value = 0.0
@@ -467,7 +465,7 @@ class TestValidateSkipReasons:
         pos = MagicMock()
         pos.side = "yes"
         pos.estimated_prob = 0.60
-        pos.market_yes_price = 50.0
+        pos.entry_price_cents = 50.0
         paper.portfolio.open_positions.return_value = [pos]
 
         reason = ex._validate(_make_analysis(side="yes", estimated_prob=0.61, yes_price=51.0))
@@ -613,7 +611,7 @@ class TestStructuredBoundaryLogging:
             llm_direction=None,
             llm_magnitude=None,
             model_probability=analysis.estimated_probability,
-            market_price=analysis.market_yes_price,
+            market_price=float(analysis.executed_price_cents),
             edge=analysis.edge,
             min_edge_threshold=0.04,
         )
@@ -679,7 +677,7 @@ class TestStructuredBoundaryLogging:
             cost_dollars=9.69,
             status="resting",
             model_probability=analysis.estimated_probability,
-            market_price=analysis.market_yes_price,
+            market_price=float(analysis.executed_price_cents),
             edge=analysis.edge,
             min_edge_threshold=0.04,
         )

@@ -25,7 +25,7 @@ def _pos(
         cost_dollars=cost,
         price_cents=50,
         estimated_prob=0.60,
-        market_yes_price=50.0,
+        entry_price_cents=50.0,
         ts=ts,
     )
 

@@ -99,7 +99,7 @@ def _make_mock_analysis(
     analysis.news_item             = news
     analysis.side                  = side
     analysis.estimated_probability = estimated_prob
-    analysis.market_yes_price      = yes_price
+    # P1-A: market_yes_price removed; executed_price_cents is canonical.
     # P-6 / LD-10: paper fill consumes executed_price_cents (not yes_price).
     # Maps to the chosen side at the same cents level the pre-P-6 path would
     # have synthesized so existing test assertions continue to hold.

@@ -20,6 +20,7 @@ INSTALL_SH = REPO_ROOT / "ops" / "launchd" / "install.sh"
 TEMPLATES = (
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-bot.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-bothealth.plist.template",
+    REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-daily-review.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-soak-check.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.kalshi.db-backup.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.kalshi.governance.fast.plist.template",
