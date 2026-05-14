@@ -150,7 +150,7 @@ class TradeExecutor:
                 "llm_direction": analysis.llm_direction,
                 "llm_magnitude": analysis.llm_magnitude,
                 "model_probability": analysis.estimated_probability,
-                "market_price": analysis.market_yes_price,
+                "market_price": float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0,
                 "edge": analysis.edge,
                 "min_edge_threshold": effective_min_edge,
             }
@@ -246,9 +246,10 @@ class TradeExecutor:
             # has shifted significantly (>=0.07) OR market price has moved (>=5c).
             # This replaces the former flat block (PAPER_BLOCK_SAME_SIDE_DUPLICATE)
             # which suppressed 11 valid follow-on signals over the first 30 days.
+            analysis_price = float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0
             if self._is_paper and PAPER_BLOCK_SAME_SIDE_DUPLICATE:
                 prob_delta_paper  = abs(pos.estimated_prob - analysis.estimated_probability)
-                price_delta_paper = abs(pos.market_yes_price - analysis.market_yes_price)
+                price_delta_paper = abs(pos.entry_price_cents - analysis_price)
                 if prob_delta_paper < 0.07 and price_delta_paper < 5.0:
                     return (
                         f"paper duplicate skip: open {pos.side.upper()} at "
@@ -256,12 +257,12 @@ class TradeExecutor:
                         f"-- prob shift too small to add position"
                     )
             prob_delta  = abs(pos.estimated_prob - analysis.estimated_probability)
-            price_delta = abs(pos.market_yes_price - analysis.market_yes_price)
+            price_delta = abs(pos.entry_price_cents - analysis_price)
             if prob_delta < 0.02 and price_delta < 2.0:
                 return (
                     f"same-signal skip: open {pos.side.upper()} at "
                     f"est={pos.estimated_prob:.3f} "
-                    f"mkt={pos.market_yes_price:.1f}c -- no new information"
+                    f"mkt={pos.entry_price_cents:.1f}c -- no new information"
                 )
 
         # Concentration risk: cap exposure per ticker at max_ticker_exposure_pct
@@ -411,7 +412,6 @@ class TradeExecutor:
 
         analysis.side = new_side
         analysis.executed_price_cents = new_executed_cents
-        analysis.market_yes_price = float(new_executed_cents)  # DT-2b alias
         analysis.edge = edges.yes_edge if new_side == "yes" else edges.no_edge
         analysis.signal_type = "blend"
         analysis.signal_meta = signal_meta
@@ -571,7 +571,7 @@ class TradeExecutor:
                 "cost_dollars": cost_dollars,
                 "status": result.status,
                 "model_probability": analysis.estimated_probability,
-                "market_price": analysis.market_yes_price,
+                "market_price": float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0,
                 "edge": analysis.edge,
                 "min_edge_threshold": self._min_edge_threshold(analysis),
             }

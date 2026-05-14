@@ -91,16 +91,19 @@ class BlendDecisionLogger(Protocol):
 class TradeCandidate:
     """Queue payload produced only after the readiness gate passes.
 
-    P-5 LD-10: carries ``executed_price_cents`` (the executed-side ask in
-    cents) alongside the deprecated ``market_yes_price`` alias. Executor
-    uses the canonical field; the alias remains for legacy paper-trade
-    persistence until P-6 migrates that path.
+    P-5 LD-10 / F-11 P1-A: carries ``executed_price_cents`` (the executed-side
+    ask in cents) as the canonical post-P0 entry price for the chosen side.
+    The ``entry_price_cents`` field is the float mirror used by the executor
+    and historical-event readers; the deprecated ``market_yes_price`` alias
+    has been removed in P1-A. Field name matches Position.entry_price_cents
+    for in-process consistency; the DB column remains ``market_yes_price``
+    until P1-B's schema migration.
     """
 
     fast_lane_analysis: SignalAnalysis
     market: KalshiMarket
     blended_probability: float
-    market_yes_price: float
+    entry_price_cents: float
     side: str
     signal_meta: dict[str, Any]
     readiness_decision: ReadinessDecision
@@ -386,7 +389,10 @@ class BlendTask:
             )
             else "keyword"
         )
-        market_price = fast_lane_result.market_yes_price
+        # F-11 P1-A: SignalAnalysis.market_yes_price was deleted; the canonical
+        # post-P0 source of the executed-side entry price is executed_price_cents.
+        # market_price is in float cents for the legacy edge math.
+        market_price = float(fast_lane_result.executed_price_cents or 0)
         blended_p = blend_result.blended_p
         edge = blended_p - market_price / 100.0
         if readiness.readiness_gate_min_edge_override is not None:
@@ -518,26 +524,19 @@ def _trade_candidate(
         "blend_mode": blend_result.blend_mode,
         "readiness_gate_min_edge_override": readiness_override,
     }
+    # F-11 P1-A: SignalAnalysis.market_yes_price was deleted; the canonical
+    # post-P0 source for the executed-side entry price is executed_price_cents.
+    # entry_price_cents is the float mirror used by the executor's edge math.
+    canonical_cents = fast_lane_result.executed_price_cents
     return TradeCandidate(
         fast_lane_analysis=fast_lane_result,
         market=fast_lane_result.market,
         blended_probability=blend_result.blended_p,
-        market_yes_price=fast_lane_result.market_yes_price,
+        entry_price_cents=float(canonical_cents) if canonical_cents is not None else 0.0,
         side=fast_lane_result.side,
         signal_meta=signal_meta,
         readiness_decision=readiness,
-        # P-5 LD-10: prefer the canonical executed_price_cents from the
-        # fast-lane analysis. Falls back to the legacy `market_yes_price`
-        # cents value when older callers omit it.
-        executed_price_cents=(
-            fast_lane_result.executed_price_cents
-            if fast_lane_result.executed_price_cents is not None
-            else (
-                int(fast_lane_result.market_yes_price)
-                if fast_lane_result.market_yes_price
-                else None
-            )
-        ),
+        executed_price_cents=canonical_cents,
     )
 
 

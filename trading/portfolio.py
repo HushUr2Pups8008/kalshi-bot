@@ -20,22 +20,27 @@ from typing import Optional
 class Position:
     """A single open paper or live trade.
 
-    Post-P0 (DT-1b): ``market_yes_price`` is the EXECUTED ENTRY price in
-    cents for the chosen side (NOT the legacy YES midpoint). The
-    ``price_source`` and ``price_method`` fields carry provenance so
-    callers can distinguish executed-side semantics from legacy rows.
-    Defaulted to ``"unavailable"`` / ``"none"`` for hydration of pre-P0
-    DB rows that lack the columns.
+    ``entry_price_cents`` is the EXECUTED ENTRY price in cents for the
+    chosen side (NOT the legacy YES midpoint). The ``price_source`` and
+    ``price_method`` fields carry provenance so callers can distinguish
+    executed-side semantics from legacy rows. Defaulted to
+    ``"unavailable"`` / ``"none"`` for hydration of pre-P0 DB rows that
+    lack the columns.
+
+    Note: the underlying DB column is still named ``market_yes_price``
+    (renamed to ``entry_price_cents`` in P1-B). The hydration layer maps
+    ``row["market_yes_price"] → entry_price_cents`` until that migration
+    lands.
     """
-    trade_id:         str
-    ticker:           str
-    side:             str    # "yes" | "no"
-    contracts:        int
-    cost_dollars:     float
-    price_cents:      int
-    estimated_prob:   float
-    market_yes_price: float
-    ts:               str    # ISO8601 UTC — used for cooldown seeding on restart
+    trade_id:          str
+    ticker:            str
+    side:              str    # "yes" | "no"
+    contracts:         int
+    cost_dollars:      float
+    price_cents:       int
+    estimated_prob:    float
+    entry_price_cents: float
+    ts:                str    # ISO8601 UTC — used for cooldown seeding on restart
     price_source:     str = "unavailable"
     price_method:     str = "none"
 
@@ -100,7 +105,7 @@ class Portfolio:
                 cost_dollars=row["cost_dollars"],
                 price_cents=row["price_cents"],
                 estimated_prob=row["estimated_prob"],
-                market_yes_price=row["market_yes_price"],
+                entry_price_cents=row["market_yes_price"],
                 ts=row["ts"],
                 price_source=_get("price_source", "unavailable"),
                 price_method=_get("price_method", "none"),

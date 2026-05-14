@@ -682,10 +682,12 @@ async def test_skipped_payload_carries_blended_edge_not_fast_lane_edge() -> None
     )
 
     # market_price is sourced from the fast-lane analysis (it does not change at blend time).
-    assert record["market_price"] == pytest.approx(fast_lane.market_yes_price)
+    # F-11 P1-A: market_yes_price field deleted; the canonical source is now executed_price_cents.
+    expected_market_price = float(fast_lane.executed_price_cents or 0)
+    assert record["market_price"] == pytest.approx(expected_market_price)
 
-    # edge is the post-blend edge: blended_p - market_yes_price/100.0 (executor convention).
-    expected_edge = blended_p_value - fast_lane.market_yes_price / 100.0
+    # edge is the post-blend edge: blended_p - market_price/100.0 (executor convention).
+    expected_edge = blended_p_value - expected_market_price / 100.0
     assert record["edge"] == pytest.approx(expected_edge, abs=1e-6)
 
     # Reason mirrors the trade_blocked_reason.

@@ -180,7 +180,9 @@ def run_sequential() -> list[ValidationResult]:
             open_positions.setdefault(ev.ticker, []).append(SimpleNamespace(
                 side=ev.side,
                 estimated_prob=analysis.estimated_probability,
-                market_yes_price=analysis.market_yes_price,
+                # F-11 P1-A: alias-removal; mirror executed-side price under
+                # the canonical name (Position.entry_price_cents).
+                entry_price_cents=analysis.executed_price_cents,
             ))
     return out
 
