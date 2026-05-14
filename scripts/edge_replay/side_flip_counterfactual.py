@@ -63,6 +63,14 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _abs_delta(left: Any, right: Any) -> float | None:
+    left_value = _as_float(left)
+    right_value = _as_float(right)
+    if left_value is None or right_value is None:
+        return None
+    return abs(left_value - right_value)
+
+
 def _as_bool(value: Any) -> bool | None:
     if value is None:
         return None
@@ -115,6 +123,9 @@ def _production_proxy_rows(raw_rows: list[dict[str, Any]]) -> tuple[list[dict[st
         if not gate_row["readiness"]:
             skipped["readiness_not_admitted"] += 1
             continue
+        if _as_float(gate_row["market_yes_price"]) is None:
+            skipped["skipped_no_price"] += 1
+            continue
         if not gate_row["paper_price"]:
             skipped["paper_price_sanity"] += 1
             continue
@@ -136,7 +147,10 @@ def _production_proxy_rows(raw_rows: list[dict[str, Any]]) -> tuple[list[dict[st
                 skipped["opposing_position"] += 1
                 continue
             prob_delta = abs((position["model_prob"] or 0.0) - (gate_row["model_prob"] or 0.0))
-            price_delta = abs((position["market_yes_price"] or 0.0) - (gate_row["market_yes_price"] or 0.0))
+            price_delta = _abs_delta(position["market_yes_price"], gate_row["market_yes_price"])
+            if price_delta is None:
+                skipped["skipped_no_price"] += 1
+                continue
             if (
                 g1.PAPER_BLOCK_SAME_SIDE_DUPLICATE
                 and prob_delta < g1.PAPER_DUPLICATE_PROB_DELTA
@@ -514,6 +528,20 @@ def write_outputs(result: dict[str, Any], *, output_dir: Path, report: Path, dat
     )
 
 
+def build_cli_summary(result: dict[str, Any], *, summary_path: str, report_path: str) -> dict[str, Any]:
+    summary = result["summary"]
+    skipped = summary.get("production_proxy_skipped") or {}
+    return {
+        "verdict_label": summary["verdict_label"],
+        "admitted_rows": summary["admitted_rows"],
+        "ic16_slice_count": summary["ic16_slice_count"],
+        "excess_wins_vs_market_flip": summary["excess_wins_vs_market_flip"],
+        "production_proxy_skipped_no_price": skipped.get("skipped_no_price", 0),
+        "summary": summary_path,
+        "report": report_path,
+    }
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
@@ -563,19 +591,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(result["summary"], sort_keys=True))
     else:
-        print(
-            json.dumps(
-                {
-                    "verdict_label": result["summary"]["verdict_label"],
-                    "admitted_rows": result["summary"]["admitted_rows"],
-                    "ic16_slice_count": result["summary"]["ic16_slice_count"],
-                    "excess_wins_vs_market_flip": result["summary"]["excess_wins_vs_market_flip"],
-                    "summary": str(args.output_dir / "side_flip_summary.json"),
-                    "report": str(args.write_report),
-                },
-                sort_keys=True,
-            )
-        )
+        print(json.dumps(build_cli_summary(result, summary_path=str(args.output_dir / "side_flip_summary.json"), report_path=str(args.write_report)), sort_keys=True))
     return 0
 
 
