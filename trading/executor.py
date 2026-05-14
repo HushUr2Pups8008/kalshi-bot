@@ -203,15 +203,20 @@ class TradeExecutor:
             return f"market status={analysis.market.status}"
 
         # Price sanity: during paper trading allow slightly wider range.
-        # P-5 LD-10: prefer the executed-side ask cents (canonical post-P0)
-        # over the legacy YES midpoint; fall back to the midpoint when the
-        # canonical field is missing (legacy SignalAnalysis instances).
+        # P-5 LD-10: prefer the executed-side ask cents (canonical post-P0).
+        # F-08: fail-closed when executed_price_cents is None — the side selector
+        # must always populate this field for any tradeable candidate. Falling back
+        # to the YES midpoint silently masked producer-side bugs and caused the
+        # F-06 ALARM (4 opportunities, 0 SQL trades, 11.5h gap).
         if analysis.executed_price_cents is not None:
             yes_price = float(analysis.executed_price_cents)
-        elif analysis.market.price_available:
-            yes_price = analysis.market.yes_price
-        else:
+        elif not analysis.market.price_available:
             return "price_unavailable: market.price_available=False"
+        else:
+            return (
+                "price_unavailable: executed_price_cents is None despite "
+                "price_available=True (side selector did not set canonical price)"
+            )
         price_floor = 2 if self._is_paper else 3
         price_ceil  = 98 if self._is_paper else 97
         if yes_price < price_floor or yes_price > price_ceil:
@@ -263,14 +268,15 @@ class TradeExecutor:
         # of the notional bankroll. Prevents a flood of signals on one ticker
         # from deploying an outsized fraction of capital on a single outcome.
         notional = self._paper.get_notional_bankroll()
-        # P-5 LD-10: paper-cost estimate uses executed-side ask cents
-        # when available; falls back to YES midpoint for legacy analyses.
-        if analysis.executed_price_cents is not None:
-            paper_unit_price = max(1, min(99, int(analysis.executed_price_cents)))
-        elif analysis.market.price_available:
-            paper_unit_price = max(1, min(99, int(analysis.market.yes_price)))
-        else:
-            paper_unit_price = 50  # not reachable past the price-sanity gate
+        # F-08 (Site 2): executed_price_cents must be non-None here — Site 1's
+        # fail-closed gate returns early when it is None. The assert encodes that
+        # invariant; it should never fire in practice. The legacy midpoint fallback
+        # (elif price_available / else 50) has been removed; it masked producer bugs.
+        assert analysis.executed_price_cents is not None, (  # noqa: S101
+            "Site 1 F-08 gate failed: executed_price_cents is None at Site 2. "
+            "This is a bug in _validate control flow."
+        )
+        paper_unit_price = max(1, min(99, int(analysis.executed_price_cents)))
         trade_cost = (
             PAPER_FLAT_CONTRACTS * paper_unit_price / 100.0
             if self._is_paper
