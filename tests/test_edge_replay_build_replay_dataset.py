@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 import scripts.edge_replay.build_replay_dataset as replay_builder
-from scripts.edge_replay.build_replay_dataset import build_replay_dataset, filter_post_p0_rows
+from scripts.edge_replay.build_replay_dataset import (
+    apply_historical_prices,
+    build_replay_dataset,
+    filter_post_p0_rows,
+)
 from tests._helpers import write_jsonl
 
 
@@ -539,3 +543,117 @@ def test_build_replay_dataset_applies_decision_time_price_map(tmp_path):
 
     assert rows[0]["market_yes_price"] == 44.0
     assert rows[0]["edge"] == pytest.approx(0.26)
+
+
+def test_apply_historical_prices_skips_overwrite_for_post_sentinel_rows():
+    rows = [
+        {
+            "ticker": "KXTEST-26MAY04",
+            "decision_ts": "2026-05-12T23:59:59+00:00",
+            "model_prob": 0.70,
+            "market_yes_price": None,
+            "edge": None,
+        },
+        {
+            "ticker": "KXTEST-26MAY04",
+            "decision_ts": "2026-05-13T00:00:00+00:00",
+            "model_prob": 0.72,
+            "market_yes_price": 41.0,
+            "edge": 0.31,
+        },
+    ]
+    prices = {
+        "KXTEST-26MAY04": [
+            {"ts": replay_builder._parse_ts("2026-05-12T23:00:00+00:00"), "yes_price": 44.0},
+            {"ts": replay_builder._parse_ts("2026-05-13T00:00:00+00:00"), "yes_price": 55.0},
+        ]
+    }
+
+    apply_historical_prices(rows, prices, post_p0_sentinel="2026-05-13T00:00:00+00:00")
+
+    assert rows[0]["market_yes_price"] == 44.0
+    assert rows[0]["edge"] == pytest.approx(0.26)
+    assert rows[1]["market_yes_price"] == 41.0
+    assert rows[1]["edge"] == 0.31
+
+
+def test_apply_historical_prices_no_sentinel_preserves_legacy_behavior():
+    rows = [
+        {
+            "ticker": "KXTEST-26MAY04",
+            "decision_ts": "2026-05-13T00:00:00+00:00",
+            "model_prob": 0.72,
+            "market_yes_price": None,
+            "edge": None,
+        }
+    ]
+    prices = {
+        "KXTEST-26MAY04": [
+            {"ts": replay_builder._parse_ts("2026-05-13T00:00:00+00:00"), "yes_price": 55.0},
+        ]
+    }
+
+    apply_historical_prices(rows, prices, post_p0_sentinel=None)
+
+    assert rows[0]["market_yes_price"] == 55.0
+    assert rows[0]["edge"] == pytest.approx(0.17)
+
+
+def test_apply_historical_prices_does_not_recompute_edge_post_sentinel():
+    rows = [
+        {
+            "ticker": "KXTEST-26MAY04",
+            "decision_ts": "2026-05-13T00:00:01+00:00",
+            "model_prob": 0.72,
+            "market_yes_price": None,
+            "edge": 0.31,
+        }
+    ]
+    prices = {
+        "KXTEST-26MAY04": [
+            {"ts": replay_builder._parse_ts("2026-05-13T00:00:00+00:00"), "yes_price": 55.0},
+        ]
+    }
+
+    apply_historical_prices(rows, prices, post_p0_sentinel="2026-05-13T00:00:00+00:00")
+
+    assert rows[0]["market_yes_price"] is None
+    assert rows[0]["edge"] == 0.31
+
+
+def test_build_replay_dataset_threads_sentinel_through_to_apply_historical_prices(tmp_path):
+    markets_path = tmp_path / "markets.json"
+    markets_path.write_text(
+        json.dumps([{"ticker": "KXTEST-26MAY04", "series_ticker": "KXTEST", "resolved_yes": True}]),
+        encoding="utf-8",
+    )
+    log_path = tmp_path / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "OPPORTUNITY",
+                "ts": "2026-05-13T00:00:01+00:00",
+                "ticker": "KXTEST-26MAY04",
+                "model_probability": 0.72,
+                "edge": 0.31,
+                "source": "Reuters",
+            }
+        ],
+    )
+    price_path = tmp_path / "prices.json"
+    price_path.write_text(
+        json.dumps({"KXTEST-26MAY04": [{"ts": "2026-05-13T00:00:00+00:00", "yes_price": 55.0}]}),
+        encoding="utf-8",
+    )
+
+    rows = build_replay_dataset(
+        markets_path=markets_path,
+        paper_trades_db=None,
+        trade_logs=[log_path],
+        historical_prices_path=price_path,
+        post_p0_sentinel="2026-05-13T00:00:00+00:00",
+    )
+
+    assert rows[0]["market_yes_price"] is None
+    assert rows[0]["edge"] == 0.31
