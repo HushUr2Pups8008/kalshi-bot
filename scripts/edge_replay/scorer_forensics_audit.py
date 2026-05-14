@@ -51,6 +51,14 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _abs_delta(left: Any, right: Any) -> float | None:
+    left_value = _as_float(left)
+    right_value = _as_float(right)
+    if left_value is None or right_value is None:
+        return None
+    return abs(left_value - right_value)
+
+
 def _parse_ts(value: Any) -> datetime | None:
     if not value:
         return None
@@ -168,10 +176,15 @@ def apply_static_variant(
             skipped["readiness_not_admitted"] += 1
             out.append(_no_trade(row, "readiness_not_admitted"))
             continue
-        if require_price_sanity and not paper_price_ok(row):
-            skipped["paper_price_sanity"] += 1
-            out.append(_no_trade(row, "paper_price_sanity"))
-            continue
+        if require_price_sanity:
+            if _as_float(row.get("market_yes_price")) is None:
+                skipped["skipped_no_price"] += 1
+                out.append(_no_trade(row, "skipped_no_price"))
+                continue
+            if not paper_price_ok(row):
+                skipped["paper_price_sanity"] += 1
+                out.append(_no_trade(row, "paper_price_sanity"))
+                continue
         if require_signed_edge and not signed_edge_ok(row):
             skipped["signed_edge_mismatch"] += 1
             out.append(_no_trade(row, "signed_edge_mismatch"))
@@ -206,10 +219,15 @@ def apply_episode_gate(
             skipped["readiness_not_admitted"] += 1
             skipped_by_index[index] = "readiness_not_admitted"
             continue
-        if require_price_sanity and not paper_price_ok(row):
-            skipped["paper_price_sanity"] += 1
-            skipped_by_index[index] = "paper_price_sanity"
-            continue
+        if require_price_sanity:
+            if _as_float(row.get("market_yes_price")) is None:
+                skipped["skipped_no_price"] += 1
+                skipped_by_index[index] = "skipped_no_price"
+                continue
+            if not paper_price_ok(row):
+                skipped["paper_price_sanity"] += 1
+                skipped_by_index[index] = "paper_price_sanity"
+                continue
         if require_signed_edge and not signed_edge_ok(row):
             skipped["signed_edge_mismatch"] += 1
             skipped_by_index[index] = "signed_edge_mismatch"
@@ -231,7 +249,11 @@ def apply_episode_gate(
                 skipped_by_index[index] = "opposing_position"
                 continue
             prob_delta = abs((_as_float(position.get("model_prob")) or 0.0) - (_as_float(row.get("model_prob")) or 0.0))
-            price_delta = abs((_as_float(position.get("market_yes_price")) or 0.0) - (_as_float(row.get("market_yes_price")) or 0.0))
+            price_delta = _abs_delta(position.get("market_yes_price"), row.get("market_yes_price"))
+            if price_delta is None:
+                skipped["skipped_no_price"] += 1
+                skipped_by_index[index] = "skipped_no_price"
+                continue
             if PAPER_BLOCK_SAME_SIDE_DUPLICATE and prob_delta < PAPER_DUPLICATE_PROB_DELTA and price_delta < PAPER_DUPLICATE_PRICE_DELTA:
                 skipped["paper_duplicate_position"] += 1
                 skipped_by_index[index] = "paper_duplicate_position"
@@ -548,6 +570,25 @@ def render_markdown(report: dict[str, Any]) -> str:
     )
 
 
+def build_cli_summary(
+    payload: dict[str, Any],
+    *,
+    output: str,
+    corrected_scores: str,
+    report_doc: str,
+) -> dict[str, Any]:
+    production_skipped = payload["variant_summaries"][-1].get("skipped") or {}
+    return {
+        "output": output,
+        "corrected_scores": corrected_scores,
+        "report": report_doc,
+        "production_proxy_trades": payload["verdict"]["production_proxy_trades"],
+        "production_proxy_wins": payload["verdict"]["production_proxy_wins"],
+        "accepted_ic16_slices": payload["verdict"]["production_proxy_ic16_accepted_slices"],
+        "production_proxy_skipped_no_price": production_skipped.get("skipped_no_price", 0),
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
@@ -580,14 +621,12 @@ def main() -> int:
     args.report.write_text(render_markdown(report), encoding="utf-8")
     print(
         json.dumps(
-            {
-                "output": str(args.output),
-                "corrected_scores": str(args.corrected_scores),
-                "report": str(args.report),
-                "production_proxy_trades": report["verdict"]["production_proxy_trades"],
-                "production_proxy_wins": report["verdict"]["production_proxy_wins"],
-                "accepted_ic16_slices": report["verdict"]["production_proxy_ic16_accepted_slices"],
-            },
+            build_cli_summary(
+                report,
+                output=str(args.output),
+                corrected_scores=str(args.corrected_scores),
+                report_doc=str(args.report),
+            ),
             sort_keys=True,
         )
     )
