@@ -91,7 +91,7 @@ def _signal_analysis_from_event(
         news_item=_news_item(f"news for {event.ticker}"),
         market=market,
         estimated_probability=estimated_prob,
-        market_yes_price=market_price_cents,
+        executed_price_cents=int(round(market_price_cents)),  # F-16: canonical post-P0; __post_init__ mirrors to market_yes_price
         edge=edge,
         side=event.side,
         kelly_fraction=0.10,
