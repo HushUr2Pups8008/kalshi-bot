@@ -677,7 +677,11 @@ class TradingBot:
         # P-7: per-market status guard. Upstream of price-availability and
         # tradeable checks — the market must be in Kalshi's "active" state.
         if getattr(market, "status", None) != "active":
-            log.debug(
+            # F-15: emit at INFO so this skip event surfaces in the default
+            # production log level. Pre-fix this was DEBUG, which combined
+            # with the silent attrition fixed in F-08 made the candidate
+            # funnel hard to diagnose from log tails alone.
+            log.info(
                 "[P-7] Skipping market %s: status_not_active (status=%s)",
                 market.ticker, getattr(market, "status", None),
             )
@@ -686,7 +690,12 @@ class TradingBot:
         # price. Reading `market.yes_price` is now guarded; honor it here
         # before any downstream consumer would crash.
         if not getattr(market, "price_available", True):
-            log.debug(
+            # F-15: emit at INFO so this skip event surfaces in the default
+            # production log level (see F-15 rationale on the sibling branch
+            # above). The market.price_available=False condition is the
+            # producer-side surface area F-06 watches; making it visible
+            # at INFO completes the diagnostic loop.
+            log.info(
                 "[ANALYSIS] price_unavailable ticker=%s source=%s -- skipping candidate",
                 market.ticker, news.source,
             )
