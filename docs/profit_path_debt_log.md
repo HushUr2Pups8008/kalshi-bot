@@ -67,6 +67,39 @@
 > **Operator-facing edge dashboard.** Refresh by commit. Single page; replaces 100+ doc index for "are we making money?" questions.
 > **Last refresh:** 2026-05-07 cycle-16E scorer-forensics run.
 
+### 2.0 v0.30.x Data/Runtime Alignment Audit (2026-05-13)
+
+Audit artifact: [`docs/governance/2026-05-13-v030x-data-runtime-alignment-audit.md`](governance/2026-05-13-v030x-data-runtime-alignment-audit.md)
+
+Verdict: **PARTIALLY ALIGNED.** Producer paths fail-closed; observability gaps closed via F-01/F-04/F-12. Bot continues running.
+
+Workoff status (snapshot 2026-05-13T23:56Z):
+
+**Landed (no-restart Either):**
+- F-01 + F-04 + F-12 → `2cb8646` (+ CI fix `7160a5a`) — bothealth verdict P0-aware + readiness wiring + osascript
+- F-02 → `8d2ad28` — `build_replay_dataset` cohort wiring
+- F-03 → `a4e6f44` — `score_counterfactual_pnl` side-semantics
+- F-05 → `3059d49` — `performance_analysis` cohort split
+- F-06 → `72fdf4a` (+ lint `ea72580`) — opportunity-vs-trade drift watcher
+- F-13 → bundled in `2cb8646` — runbook pull-vs-push callout
+
+**Open (no-restart Either, in flight):**
+- F-09 (Codex) — `apply_historical_prices` cohort-aware
+- F-10 (Codex) — replay silent-zero in `price_delta`
+- F-14 (Claude Code, this iteration) — README v0.30.1-operative leading language
+- F-16 (Claude Code, this iteration) — test pattern hygiene (canonical `SignalAnalysis` construction)
+- F-18 (Claude Code, this iteration) — `daily_review` launchd plist
+
+**Open (operator-scheduled bot bounce required):**
+- F-07 — `evidence_store` cohort column (Claude Code, schema migration)
+- F-08 — executor `_validate` require `executed_price_cents` (Claude Code)
+- F-11 — `market_yes_price` rename P1-A (Claude Code)
+- F-15 — `main.py` skip events INFO-level
+
+**Operator decisions outstanding:**
+- Schedule next bot bounce window for F-07 / F-08 / F-11 / F-15 cluster.
+- Whether to escalate F-08 ahead of F-07 — executor silent-attrition is the higher operator-visibility win once F-06 watcher confirms which candidates are being dropped. The F-06 live readout at watcher-deploy time was `verdict=ALARM, opportunity_count=4, paper_trade_count=0, hours_elapsed=11.57`, which is consistent with the silent-attrition hypothesis F-08 is intended to fix.
+
 ### 2.1 Edge Verdict
 
 | metric | value |
