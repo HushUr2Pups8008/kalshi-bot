@@ -35,6 +35,7 @@ GOVERNANCE_LLM_MODEL="${GOVERNANCE_LLM_MODEL:-qwen3:14b}"
 TEMPLATES=(
     "com.jake.kalshi-bot"
     "com.jake.kalshi-bothealth"
+    "com.jake.kalshi-daily-review"
     "com.jake.kalshi-soak-check"
     "com.kalshi.db-backup"
     "com.kalshi.governance.fast"
