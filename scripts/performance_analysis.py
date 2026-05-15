@@ -645,7 +645,8 @@ def section_missed_opportunities(entries, resolution_map):
             # P&L computation, contaminating the missed-opportunities
             # table. Fail-closed: skip rows with no usable price and
             # surface the count in section output.
-            myp = opp.get("market_yes_price")
+            # F-11 P1-C: accept either canonical key (post-bounce) or legacy alias (pre-bounce)
+            myp = opp.get("entry_price_cents") if opp.get("entry_price_cents") is not None else opp.get("market_yes_price")
             if myp is None:
                 skipped_no_price += 1
                 continue

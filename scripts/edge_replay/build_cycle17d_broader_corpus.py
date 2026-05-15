@@ -41,6 +41,9 @@ DEFAULT_START = "2026-01-01T00:00:00Z"
 DEFAULT_END = "2026-05-10T00:00:00Z"
 DEFAULT_COHORT = "POST_FIX_REBUILT"
 DEFAULT_STATUSES = ("settled",)
+# F-11 P1-C: canonical output key is entry_price_cents (post-P1-A).
+# The legacy market_yes_price key is accepted on read via _entry_price_cents()
+# in downstream consumers; new output rows use entry_price_cents.
 REQUIRED_OUTPUT_FIELDS = (
     "ticker",
     "decision_ts",
@@ -50,7 +53,7 @@ REQUIRED_OUTPUT_FIELDS = (
     "news_class",
     "cohort",
     "headline",
-    "market_yes_price",
+    "entry_price_cents",
     "confidence",
     "edge",
     "model_prob",

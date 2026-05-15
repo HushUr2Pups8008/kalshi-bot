@@ -14,12 +14,12 @@ from scripts.performance_analysis import (
 )
 
 
-def _opportunity(ticker: str, *, market_yes_price: int | None) -> dict:
+def _opportunity(ticker: str, *, entry_price_cents: int | None) -> dict:
     """Synthesize a minimal OPPORTUNITY log row.
 
-    When ``market_yes_price`` is None, the key is omitted entirely so
-    that ``opp.get("market_yes_price")`` returns None (matching the
-    pre-fix bug-trigger condition).
+    When ``entry_price_cents`` is None, the key is omitted entirely so
+    that the price lookup returns None (matching the pre-fix bug-trigger
+    condition). F-11 P1-C: canonical key is ``entry_price_cents``.
     """
     row: dict = {
         "type": "OPPORTUNITY",
@@ -30,8 +30,8 @@ def _opportunity(ticker: str, *, market_yes_price: int | None) -> dict:
         "estimated_probability": 0.55,
         "signal_source": "test",
     }
-    if market_yes_price is not None:
-        row["market_yes_price"] = market_yes_price
+    if entry_price_cents is not None:
+        row["entry_price_cents"] = entry_price_cents
     return row
 
 
@@ -57,8 +57,8 @@ def test_section_missed_opportunities_skips_rows_with_no_market_price():
     must skip the row and surface the count.
     """
     entries = [
-        _opportunity("KX-A", market_yes_price=37),
-        _opportunity("KX-B", market_yes_price=None),
+        _opportunity("KX-A", entry_price_cents=37),
+        _opportunity("KX-B", entry_price_cents=None),
         _skip("KX-A"),
         _skip("KX-B"),
     ]
@@ -87,7 +87,7 @@ def test_section_missed_opportunities_preserves_explicit_zero_price():
     table without exclusion. Only the missing/None case is rejected.
     """
     entries = [
-        _opportunity("KX-Z", market_yes_price=0),
+        _opportunity("KX-Z", entry_price_cents=0),
         _skip("KX-Z"),
     ]
     resolution_map = {
@@ -97,6 +97,35 @@ def test_section_missed_opportunities_preserves_explicit_zero_price():
 
     assert "Excluded — missing market price" not in output, output
     assert "KX-Z" in output
+
+
+def test_section_missed_opportunities_accepts_legacy_market_yes_price_key():
+    """F-11 P1-C: pre-bounce OPPORTUNITY log rows carry ``market_yes_price``
+    (not ``entry_price_cents``). The fallback read must accept the legacy key
+    so that historical corpora are not spuriously excluded as missing-price.
+    """
+    entries = [
+        # legacy pre-bounce record — uses old key only
+        {
+            "type": "OPPORTUNITY",
+            "ticker": "KX-LEGACY",
+            "ts": "2026-05-13T00:30:00+00:00",
+            "side": "yes",
+            "edge": 0.05,
+            "estimated_probability": 0.55,
+            "signal_source": "test",
+            "market_yes_price": 42,  # legacy key, no entry_price_cents
+        },
+        _skip("KX-LEGACY"),
+    ]
+    resolution_map = {
+        "KX-LEGACY": {"resolved_yes": True, "result": "yes"},
+    }
+    output = section_missed_opportunities(entries, resolution_map)
+
+    # Row must NOT be excluded as missing-price — the fallback must find it.
+    assert "Excluded — missing market price" not in output, output
+    assert "KX-LEGACY" in output
 
 
 def test_section_placed_performance_renders_missing_price_as_na():

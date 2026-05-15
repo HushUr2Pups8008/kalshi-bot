@@ -33,6 +33,16 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _entry_price_cents(row: dict) -> float | None:
+    # F-11 P1-C: prefer canonical post-P1-A key; fall back to the legacy
+    # `market_yes_price` key for pre-bounce JSONL records and historical
+    # replay corpora. Missing stays missing -- do NOT default to 0 or 50.
+    val = row.get("entry_price_cents")
+    if val is None:
+        val = row.get("market_yes_price")
+    return _as_float(val)
+
+
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -85,8 +95,10 @@ def _coverage(count: int, total: int) -> float:
 
 def _missing_reason(row: dict[str, Any], price_tickers: set[str]) -> str:
     ticker = str(row.get("ticker") or "")
-    if _as_float(row.get("market_yes_price")) is not None:
-        return "covered_existing_market_yes_price"
+    # F-11 P1-C: accept either entry_price_cents (post-bounce) or market_yes_price
+    # (pre-bounce legacy) as evidence of an existing recorded price.
+    if _entry_price_cents(row) is not None:
+        return "covered_existing_entry_price_cents"
     if not ticker:
         return "missing_ticker"
     if ticker not in price_tickers:
@@ -114,7 +126,8 @@ def audit_price_coverage(
 
     for row in rows:
         ticker = str(row.get("ticker") or "")
-        existing_price = _as_float(row.get("market_yes_price"))
+        # F-11 P1-C: accept either canonical key or legacy alias for existing price.
+        existing_price = _entry_price_cents(row)
         reconstructed_price = price_at_decision(prices, ticker, row.get("decision_ts"))
         covered = existing_price is not None or reconstructed_price is not None
         reason = "covered_reconstructed_price" if reconstructed_price is not None else _missing_reason(row, price_tickers)

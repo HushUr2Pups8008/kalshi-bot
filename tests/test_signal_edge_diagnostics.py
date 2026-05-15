@@ -58,7 +58,7 @@ def test_summarize_builds_edge_audit_and_group_metrics():
                     "source": "NYT > World News",
                     "headline": "Talks resume",
                     "estimated_probability": 0.62,
-                    "market_yes_price": 0.62,
+                    "entry_price_cents": 0.62,
                     "edge": 0.0,
                     "method": "llm",
                     "llm_direction": "yes",
@@ -117,7 +117,7 @@ def test_summarize_builds_edge_audit_and_group_metrics():
                     "source": "Reuters",
                     "headline": "Ceasefire tested",
                     "estimated_probability": 0.58,
-                    "market_yes_price": 0.54,
+                    "entry_price_cents": 0.54,
                     "edge": 0.04,
                     "method": "keyword",
                     "ts": "2026-04-12T12:05:02+00:00",
@@ -265,7 +265,7 @@ def test_summarize_reads_partitioned_trade_root():
                     "source": "Reuters",
                     "headline": "Talks resume",
                     "estimated_probability": 0.60,
-                    "market_yes_price": 0.55,
+                    "entry_price_cents": 0.55,
                     "edge": 0.05,
                     "ts": "2026-04-12T12:00:00+00:00",
                 },
@@ -342,7 +342,7 @@ def test_print_summary_includes_edge_sections(capsys):
                     "source": "Reuters",
                     "headline": "Edge audit",
                     "estimated_probability": 0.55,
-                    "market_yes_price": 0.50,
+                    "entry_price_cents": 0.50,
                     "edge": 0.05,
                     "method": "keyword",
                     "ts": "2026-04-12T12:00:01+00:00",
@@ -373,5 +373,54 @@ def test_print_summary_includes_edge_sections(capsys):
         assert "LLM total stage" in output
         assert "LLM queue wait" in output
         assert "Live orders are counted in the cohort summary" in output
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_summarize_accepts_legacy_market_yes_price_key_in_opportunity():
+    """F-11 P1-C: pre-bounce OPPORTUNITY log rows carry ``market_yes_price``
+    instead of ``entry_price_cents``. The summarize() path must read the legacy
+    key via fallback and store the value so downstream consumers can find it.
+    """
+    tmp = make_tmp_dir("signal_edge_diagnostics")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "OPPORTUNITY",
+                    "ticker": "KXLEGACY",
+                    "source": "Reuters",
+                    "headline": "Legacy key test",
+                    "estimated_probability": 0.60,
+                    "market_yes_price": 0.45,  # legacy key only — no entry_price_cents
+                    "edge": 0.15,
+                    "method": "keyword",
+                    "ts": "2026-04-12T12:00:00+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(path, since=None, until=None)
+
+        assert stats["counts"]["OPPORTUNITY"] == 1
+        # F-11 P1-C: the fallback at scripts/signal_edge_diagnostics.py:665-668
+        # must have resolved the legacy `market_yes_price` to the canonical
+        # `entry_price_cents`; the resolved value flows into the unmatched
+        # audit_rows list with key "market_price" via line 404.
+        # If the fallback regressed (e.g. switched to direct `record["entry_price_cents"]`),
+        # the OPPORTUNITY would either crash with KeyError or surface as
+        # market_price=None, and this assertion would fail.
+        audit_rows = stats.get("audit_rows", [])
+        legacy_rows = [r for r in audit_rows if r.get("ticker") == "KXLEGACY"]
+        assert legacy_rows, (
+            f"audit_rows missing KXLEGACY entry; got tickers "
+            f"{sorted({r.get('ticker') for r in audit_rows})}"
+        )
+        assert legacy_rows[0]["market_price"] == pytest.approx(0.45), (
+            f"resolved market_price must equal the legacy market_yes_price "
+            f"value (0.45); got {legacy_rows[0]['market_price']!r}"
+        )
     finally:
         cleanup_tmp_dir(tmp)

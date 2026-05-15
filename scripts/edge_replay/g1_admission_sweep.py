@@ -53,6 +53,16 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _entry_price_cents(row: dict) -> float | None:
+    # F-11 P1-C: prefer canonical post-P1-A key; fall back to the legacy
+    # `market_yes_price` key for pre-bounce JSONL records and historical
+    # replay corpora. Missing stays missing -- do NOT default to 0 or 50.
+    val = row.get("entry_price_cents")
+    if val is None:
+        val = row.get("market_yes_price")
+    return _as_float(val)
+
+
 def _parse_ts(value: Any) -> datetime | None:
     if not value:
         return None
@@ -87,15 +97,15 @@ def _infer_side(row: dict[str, Any]) -> str:
     if side in {"yes", "no"}:
         return side
     model_prob = _as_float(row.get("model_prob"))
-    market_yes_price = _as_float(row.get("market_yes_price"))
-    if model_prob is not None and market_yes_price is not None:
-        return "yes" if model_prob >= market_yes_price / 100.0 else "no"
+    price = _entry_price_cents(row)
+    if model_prob is not None and price is not None:
+        return "yes" if model_prob >= price / 100.0 else "no"
     return "yes"
 
 
 def _admission_row(row: dict[str, Any], *, g1_threshold: float) -> dict[str, Any]:
     edge = _as_float(row.get("edge")) or 0.0
-    price = _as_float(row.get("market_yes_price"))
+    price = _entry_price_cents(row)
     confidence = _as_float(row.get("confidence"))
     model_prob = _as_float(row.get("model_prob"))
     side = _infer_side(row)
@@ -103,6 +113,14 @@ def _admission_row(row: dict[str, Any], *, g1_threshold: float) -> dict[str, Any
         "ticker": str(row.get("ticker") or ""),
         "decision_ts": str(row.get("decision_ts") or ""),
         "model_prob": model_prob,
+        # F-11 P1-C: this internal admission record dict deliberately keeps the
+        # legacy "market_yes_price" key. The dict is consumed only by sibling
+        # internal functions in this module (e.g. `_production_proxy_count`),
+        # never serialized to JSONL output, and the value stored here is the
+        # already-resolved canonical price (the helper at line 100 honors both
+        # source keys). Renaming would require a coordinated update to every
+        # internal consumer with no external benefit; a future refactor PR can
+        # rename together with `side_flip_counterfactual.py`'s parallel dict.
         "market_yes_price": price,
         "side": side,
         "candidate": price is not None and abs(edge) >= PAPER_MIN_EDGE,

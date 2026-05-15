@@ -63,6 +63,16 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _entry_price_cents(row: dict) -> float | None:
+    # F-11 P1-C: prefer canonical post-P1-A key; fall back to the legacy
+    # `market_yes_price` key for pre-bounce JSONL records and historical
+    # replay corpora. Missing stays missing -- do NOT default to 0 or 50.
+    val = row.get("entry_price_cents")
+    if val is None:
+        val = row.get("market_yes_price")
+    return _as_float(val)
+
+
 def _abs_delta(left: Any, right: Any) -> float | None:
     left_value = _as_float(left)
     right_value = _as_float(right)
@@ -123,7 +133,7 @@ def _production_proxy_rows(raw_rows: list[dict[str, Any]]) -> tuple[list[dict[st
         if not gate_row["readiness"]:
             skipped["readiness_not_admitted"] += 1
             continue
-        if _as_float(gate_row["market_yes_price"]) is None:
+        if _entry_price_cents(gate_row) is None:
             skipped["skipped_no_price"] += 1
             continue
         if not gate_row["paper_price"]:
@@ -147,7 +157,7 @@ def _production_proxy_rows(raw_rows: list[dict[str, Any]]) -> tuple[list[dict[st
                 skipped["opposing_position"] += 1
                 continue
             prob_delta = abs((position["model_prob"] or 0.0) - (gate_row["model_prob"] or 0.0))
-            price_delta = _abs_delta(position["market_yes_price"], gate_row["market_yes_price"])
+            price_delta = _abs_delta(position["entry_price_cents"], _entry_price_cents(gate_row))
             if price_delta is None:
                 skipped["skipped_no_price"] += 1
                 continue
@@ -168,7 +178,8 @@ def _production_proxy_rows(raw_rows: list[dict[str, Any]]) -> tuple[list[dict[st
         open_position[ticker] = {
             "side": gate_row["side"],
             "model_prob": gate_row["model_prob"],
-            "market_yes_price": gate_row["market_yes_price"],
+            # F-11 P1-C: store under canonical key; already resolved via _entry_price_cents above
+            "entry_price_cents": _entry_price_cents(gate_row),
         }
 
     accepted = []
@@ -183,7 +194,7 @@ def _production_proxy_rows(raw_rows: list[dict[str, Any]]) -> tuple[list[dict[st
 def _score_flip_row(row: dict[str, Any]) -> dict[str, Any]:
     original_side = str(row.get("_original_side") or g1._infer_side(row))
     flip_side = "no" if original_side == "yes" else "yes"
-    price = _as_float(row.get("market_yes_price"))
+    price = _entry_price_cents(row)
     resolved_yes = _as_bool(row.get("resolved_yes"))
     contracts = int(_as_float(row.get("contracts")) or 1)
     if price is None or resolved_yes is None:

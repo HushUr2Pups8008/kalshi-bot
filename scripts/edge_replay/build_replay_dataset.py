@@ -127,6 +127,13 @@ def _paper_trade_rows(db_path: Path, markets: dict[str, dict[str, Any]]) -> list
             "side": str(trade.get("side") or "").lower() or None,
             "contracts": trade.get("contracts"),
             "model_prob": _as_float(trade.get("estimated_prob")),
+            # F-11 P1-C: this row originates from a SQLite paper_trades DB
+            # row (`trade`), not from a JSONL log record. The DB column is
+            # still named `market_yes_price` — the column rename is F-11
+            # P1-B's job, gated on Bounce 2. Do NOT add an
+            # `entry_price_cents` dual-emit here; the asymmetry vs
+            # `_log_rows()` (which dual-emits both keys for JSONL-sourced
+            # rows) is intentional and resolves when P1-B lands.
             "market_yes_price": _as_float(trade.get("market_yes_price") or trade.get("price_cents")),
             "edge": _as_float(trade.get("edge")),
             "signal_source": trade.get("signal_source") or "unknown",
@@ -190,7 +197,20 @@ def _log_rows(paths: list[Path], markets: dict[str, dict[str, Any]]) -> list[dic
                     ),
                     # Bug 2 fix (market_yes_price alias): SKIPPED emits market_price.
                     # _first_present used so 0.0 is not silently dropped by falsy or-chain.
+                    # F-11 P1-C: emit both keys for backward-compat. Downstream consumers
+                    # that have been migrated read entry_price_cents; legacy consumers
+                    # (score_counterfactual_pnl.py, pre-bounce JSONL readers) read
+                    # market_yes_price. Both carry the same value.
                     "market_yes_price": _as_float(
+                        _first_present(
+                            row,
+                            "market_yes_price",
+                            "yes_price",
+                            "price_cents",
+                            "market_price",
+                        )
+                    ),
+                    "entry_price_cents": _as_float(
                         _first_present(
                             row,
                             "market_yes_price",
@@ -319,12 +339,14 @@ def apply_historical_prices(
     for row in rows:
         if _row_is_at_or_after_sentinel(row, sentinel_dt):
             continue
-        if row.get("market_yes_price") is not None:
+        if row.get("market_yes_price") is not None or row.get("entry_price_cents") is not None:
             continue
         price = price_at_decision(prices, str(row.get("ticker") or ""), row.get("decision_ts"))
         if price is None:
             continue
+        # F-11 P1-C: emit both keys so pre-bounce and post-bounce consumers can read the price.
         row["market_yes_price"] = price
+        row["entry_price_cents"] = price
         model_prob = _as_float(row.get("model_prob"))
         if model_prob is not None:
             row["edge"] = model_prob - (price / 100.0)

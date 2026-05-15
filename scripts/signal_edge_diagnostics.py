@@ -401,7 +401,7 @@ def attach_opportunities(
                 "llm_direction": opp["llm_direction"],
                 "llm_magnitude": opp["llm_magnitude"],
                 "estimated_probability": opp["estimated_probability"],
-                "market_price": opp["market_yes_price"],
+                "market_price": opp["entry_price_cents"],
                 "edge": opp["edge"],
                 "signal_ts": None,
                 "opportunity_ts": opp["ts"],
@@ -412,7 +412,7 @@ def attach_opportunities(
         row = unmatched_rows[target_idx]
         row["opportunity_ts"] = opp["ts"]
         row["estimated_probability"] = row["estimated_probability"] or opp["estimated_probability"]
-        row["market_price"] = row["market_price"] or opp["market_yes_price"]
+        row["market_price"] = row["market_price"] or opp["entry_price_cents"]
         row["edge"] = row["edge"] if row["edge"] is not None else opp["edge"]
         row["method"] = row["method"] or opp["method"]
         row["llm_direction"] = row["llm_direction"] or opp["llm_direction"]
@@ -661,7 +661,11 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                 "llm_direction": str(record.get("llm_direction") or "").strip() or None,
                 "llm_magnitude": str(record.get("llm_magnitude") or "").strip() or None,
                 "estimated_probability": safe_float(record.get("estimated_probability")),
-                "market_yes_price": safe_float(record.get("market_yes_price")),
+                # F-11 P1-C: read with fallback; emit under canonical key only
+                "entry_price_cents": safe_float(
+                    record.get("entry_price_cents") if record.get("entry_price_cents") is not None
+                    else record.get("market_yes_price")
+                ),
                 "edge": safe_float(record.get("edge")),
             })
         elif event_type == "SKIPPED":

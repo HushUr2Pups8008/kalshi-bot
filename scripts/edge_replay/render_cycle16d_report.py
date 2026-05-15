@@ -114,7 +114,11 @@ def render_report(
     raw_positive = summary["positive_ev_slices"]
     overall = summary["overall"]
     brier = brier_score(dataset)
-    priced_rows = sum(1 for row in dataset if row.get("market_yes_price") is not None)
+    # F-11 P1-C: accept either canonical key (post-bounce) or legacy alias (pre-bounce)
+    priced_rows = sum(
+        1 for row in dataset
+        if row.get("entry_price_cents") is not None or row.get("market_yes_price") is not None
+    )
     anomaly = coverage.get("anomalies", [])
     sentinel = coverage.get("cohort_sentinel", {})
     verdict = (

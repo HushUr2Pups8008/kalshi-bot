@@ -32,8 +32,12 @@ SCORER_REQUIRED_FIELDS = (
 )
 SCORER_GROUP_FIELDS = ("signal_source", "series_ticker", "signal_type", "news_class")
 CHARTER_SWEEP_FIELDS = ("signal_source", "market_family", "signal_type", "news_class", "cohort")
+# F-11 P1-C: "market_yes_price" kept here because pre-bounce corpora (cycle13,
+# cycle15b) carry that key. Post-bounce rows carry "entry_price_cents". The
+# _missing_counts helper treats a row as present when EITHER key is non-blank;
+# see _has_price_field() and _missing_production_proxy_counts() below.
 PRODUCTION_PROXY_REQUIRED_FIELDS = (
-    "market_yes_price",
+    "market_yes_price",  # pre-bounce alias -- presence check done via _has_price_field
     "edge",
     "model_prob",
     "confidence",
@@ -49,7 +53,8 @@ OPTIONAL_REPORTED_FIELDS = (
     "market_family",
     "readiness_admitted",
 )
-NUMERIC_FIELDS = ("market_yes_price", "edge", "model_prob", "confidence", "contracts")
+# F-11 P1-C: price field appears under either key; numeric validation covers both.
+NUMERIC_FIELDS = ("market_yes_price", "entry_price_cents", "edge", "model_prob", "confidence", "contracts")
 PROBABILITY_FIELDS = ("model_prob", "confidence")
 BOOLEAN_FIELDS = ("resolved_yes", "readiness_admitted")
 ALLOWED_COHORTS = ("PRE_FIX", "POST_FIX_REBUILT", "POST_FIX_NEW")
@@ -120,6 +125,24 @@ def _present_blank_counts(rows: list[dict[str, Any]], fields: tuple[str, ...]) -
     return {field: count for field, count in counts.items() if count}
 
 
+def _has_price_field(row: dict[str, Any]) -> bool:
+    """F-11 P1-C: accept either canonical or legacy price key as satisfying presence check."""
+    return not _is_blank(row.get("entry_price_cents")) or not _is_blank(row.get("market_yes_price"))
+
+
+def _missing_production_proxy_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Override for PRODUCTION_PROXY_REQUIRED_FIELDS: price field accepts either key."""
+    missing: dict[str, int] = {}
+    for field in PRODUCTION_PROXY_REQUIRED_FIELDS:
+        if field == "market_yes_price":
+            count = sum(1 for row in rows if not _has_price_field(row))
+        else:
+            count = sum(1 for row in rows if field not in row or _is_blank(row.get(field)))
+        if count:
+            missing[field] = count
+    return missing
+
+
 def _invalid_numeric_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
     invalid: dict[str, int] = {}
     for field in NUMERIC_FIELDS:
@@ -134,7 +157,8 @@ def _invalid_numeric_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
                 continue
             if field in PROBABILITY_FIELDS and not 0.0 <= number <= 1.0:
                 count += 1
-            if field == "market_yes_price" and not 0.0 <= number <= 100.0:
+            # F-11 P1-C: price range check applies to both canonical and legacy key
+            if field in {"market_yes_price", "entry_price_cents"} and not 0.0 <= number <= 100.0:
                 count += 1
             if field == "contracts" and number <= 0:
                 count += 1
@@ -161,7 +185,7 @@ def _audit_rows(
 ) -> dict[str, Any]:
     required_fields = tuple(dict.fromkeys((*SCORER_REQUIRED_FIELDS, *extra_required_fields)))
     missing_required = _missing_counts(rows, required_fields)
-    missing_production_proxy = _missing_counts(rows, PRODUCTION_PROXY_REQUIRED_FIELDS)
+    missing_production_proxy = _missing_production_proxy_counts(rows)
     invalid_value_types = {
         **_invalid_numeric_counts(rows),
         **_invalid_boolean_counts(rows),

@@ -20,7 +20,7 @@ def _row(
         "decision_ts": ts,
         "model_prob": model_prob,
         "confidence": confidence,
-        "market_yes_price": price,
+        "entry_price_cents": price,
         "edge": edge,
         "side": side,
     }
@@ -97,6 +97,29 @@ def test_production_proxy_applies_cooldown_and_duplicate_gates():
         "paper_duplicate_position": 1,
         "paper_ticker_cooldown": 1,
     }
+
+
+def test_admission_row_accepts_legacy_market_yes_price_key():
+    """F-11 P1-C: pre-bounce replay rows carry ``market_yes_price`` instead of
+    ``entry_price_cents``. The _entry_price_cents() fallback in g1_admission_sweep
+    must resolve the price so the row is not skipped as no-price.
+    """
+    legacy_row = {
+        "ticker": "KX-LEGACY",
+        "decision_ts": "2026-05-01T00:00:00+00:00",
+        "model_prob": 0.80,
+        "confidence": 0.10,
+        "market_yes_price": 30.0,  # legacy key only — no entry_price_cents
+        "edge": 0.50,
+        "side": "yes",
+    }
+    admission = sweep._admission_row(legacy_row, g1_threshold=0.05)
+    # price must be resolved (not None) via the legacy fallback;
+    # _admission_row stores the resolved value under "market_yes_price" internally
+    assert admission["market_yes_price"] is not None, (
+        "_admission_row must resolve price from market_yes_price when entry_price_cents is absent"
+    )
+    assert admission["market_yes_price"] == 30.0
 
 
 def test_cli_writes_report_with_projection_disclaimer(tmp_path):

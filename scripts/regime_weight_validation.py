@@ -49,7 +49,7 @@ class MarketRecord:
 
     ticker: str
     title: str
-    # list of (estimated_probability, market_yes_price_cents, ts)
+    # list of (estimated_probability, entry_price_cents, ts)
     signals: list[tuple[float, float, str]] = field(default_factory=list)
     resolved_yes: Optional[bool] = None
 
@@ -109,7 +109,7 @@ def _load_records(path: str) -> dict[str, MarketRecord]:
     Load market records from trades_all.jsonl[.gz].
 
     Uses OPPORTUNITY events as the primary signal source — each has
-    estimated_probability and market_yes_price. PAPER_RESOLUTION events
+    estimated_probability and entry_price_cents (or legacy market_yes_price). PAPER_RESOLUTION events
     provide resolution outcomes.
     """
     records: dict[str, MarketRecord] = {}
@@ -135,7 +135,10 @@ def _load_records(path: str) -> dict[str, MarketRecord]:
                 ticker = ev.get("ticker", "")
                 title = ev.get("market_title", ticker)
                 est_prob = ev.get("estimated_probability")
-                yes_price = ev.get("market_yes_price")
+                # F-11 P1-C: prefer canonical post-P1-A key; fall back to legacy alias
+                yes_price = ev.get("entry_price_cents")
+                if yes_price is None:
+                    yes_price = ev.get("market_yes_price")
                 ts = ev.get("ts", "")
                 if not ticker or est_prob is None or yes_price is None:
                     continue

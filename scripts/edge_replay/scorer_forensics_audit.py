@@ -51,6 +51,16 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _entry_price_cents(row: dict) -> float | None:
+    # F-11 P1-C: prefer canonical post-P1-A key; fall back to the legacy
+    # `market_yes_price` key for pre-bounce JSONL records and historical
+    # replay corpora. Missing stays missing -- do NOT default to 0 or 50.
+    val = row.get("entry_price_cents")
+    if val is None:
+        val = row.get("market_yes_price")
+    return _as_float(val)
+
+
 def _abs_delta(left: Any, right: Any) -> float | None:
     left_value = _as_float(left)
     right_value = _as_float(right)
@@ -77,7 +87,7 @@ def load_json(path: Path) -> Any:
 
 
 def market_implied_win_prob(row: dict[str, Any]) -> float | None:
-    price = _as_float(row.get("market_yes_price"))
+    price = _entry_price_cents(row)
     side = str(row.get("side") or "").lower()
     if price is None or side not in {"yes", "no"}:
         return None
@@ -114,7 +124,7 @@ def signed_edge_ok(row: dict[str, Any], *, min_edge: float = PAPER_MIN_EDGE) -> 
 
 
 def paper_price_ok(row: dict[str, Any]) -> bool:
-    price = _as_float(row.get("market_yes_price"))
+    price = _entry_price_cents(row)
     return price is not None and PAPER_PRICE_FLOOR_CENTS <= price <= PAPER_PRICE_CEIL_CENTS
 
 
@@ -177,7 +187,7 @@ def apply_static_variant(
             out.append(_no_trade(row, "readiness_not_admitted"))
             continue
         if require_price_sanity:
-            if _as_float(row.get("market_yes_price")) is None:
+            if _entry_price_cents(row) is None:
                 skipped["skipped_no_price"] += 1
                 out.append(_no_trade(row, "skipped_no_price"))
                 continue
@@ -220,7 +230,7 @@ def apply_episode_gate(
             skipped_by_index[index] = "readiness_not_admitted"
             continue
         if require_price_sanity:
-            if _as_float(row.get("market_yes_price")) is None:
+            if _entry_price_cents(row) is None:
                 skipped["skipped_no_price"] += 1
                 skipped_by_index[index] = "skipped_no_price"
                 continue
@@ -249,7 +259,7 @@ def apply_episode_gate(
                 skipped_by_index[index] = "opposing_position"
                 continue
             prob_delta = abs((_as_float(position.get("model_prob")) or 0.0) - (_as_float(row.get("model_prob")) or 0.0))
-            price_delta = _abs_delta(position.get("market_yes_price"), row.get("market_yes_price"))
+            price_delta = _abs_delta(position.get("entry_price_cents"), _entry_price_cents(row))
             if price_delta is None:
                 skipped["skipped_no_price"] += 1
                 skipped_by_index[index] = "skipped_no_price"
@@ -270,7 +280,8 @@ def apply_episode_gate(
         open_position[ticker] = {
             "side": row.get("side"),
             "model_prob": row.get("model_prob"),
-            "market_yes_price": row.get("market_yes_price"),
+            # F-11 P1-C: store under canonical key; already resolved via _entry_price_cents above
+            "entry_price_cents": _entry_price_cents(row),
         }
 
     out = []
@@ -296,7 +307,7 @@ def breakdowns(scored_rows: list[dict[str, Any]]) -> dict[str, Any]:
         keys = {
             "by_side": str(row.get("side") or "unknown"),
             "by_series": str(row.get("series_ticker") or "unknown"),
-            "by_price_bucket": price_bucket(_as_float(row.get("market_yes_price"))),
+            "by_price_bucket": price_bucket(_entry_price_cents(row)),
             "by_admission_reason": str(row.get("forensic_admission_reason") or "baseline_abs_edge"),
             "by_decision_kind": str(row.get("decision_kind") or "unknown"),
         }
