@@ -15,6 +15,23 @@ from typing import Any
 GROUP_KEYS = ("signal_source", "series_ticker", "signal_type", "news_class")
 
 
+def _entry_price_cents(row: dict[str, Any]) -> float | None:
+    """F-11 P1-C: read the canonical post-P1-A entry-price key, falling
+    back to the legacy ``market_yes_price`` key for pre-bounce JSONL
+    records and historical replay corpora. Missing stays missing -- no
+    silent default to 0 or 50.
+
+    Result is always in cents (Kalshi convention). The canonical key
+    represents the executed-side entry price; when present it does NOT
+    need the YES/NO complement flip applied to legacy ``market_yes_price``
+    values that were originally YES-side midpoints.
+    """
+    val = row.get("entry_price_cents")
+    if val is None:
+        val = row.get("market_yes_price")
+    return _as_float(val)
+
+
 def _as_float(value: Any) -> float | None:
     if value is None:
         return None
@@ -57,9 +74,14 @@ def _infer_side(row: dict[str, Any]) -> str | None:
     if _as_float(row.get("executable_price_cents")) is not None or _market_yes_price_is_executed_alias(row):
         return None
     model_prob = _as_float(row.get("model_prob"))
-    market_yes_price = _as_float(row.get("market_yes_price"))
-    if model_prob is not None and market_yes_price is not None:
-        return "yes" if model_prob >= market_yes_price / 100.0 else "no"
+    # F-11 P1-C: prefer canonical `entry_price_cents`; the helper falls
+    # back to legacy `market_yes_price` when only the legacy key is set.
+    # Pre-P0 legacy rows used `market_yes_price` as the YES-side midpoint,
+    # so the side inference (model_prob vs price/100) carries the same
+    # semantics whether the value came from the canonical or legacy key.
+    price_cents = _entry_price_cents(row)
+    if model_prob is not None and price_cents is not None:
+        return "yes" if model_prob >= price_cents / 100.0 else "no"
     return None
 
 
@@ -78,6 +100,12 @@ def _contract_price(row: dict[str, Any], side: str | None) -> float | None:
     executable_price = _as_float(row.get("executable_price_cents"))
     if executable_price is not None:
         return executable_price
+    # F-11 P1-C: canonical `entry_price_cents` IS the executed-side entry
+    # price by definition; when present, do NOT flip to the NO-side
+    # complement (the flip was the legacy YES-midpoint compatibility path).
+    canonical = _as_float(row.get("entry_price_cents"))
+    if canonical is not None:
+        return canonical
     yes_price = _as_float(row.get("market_yes_price"))
     if yes_price is None or side is None:
         return None

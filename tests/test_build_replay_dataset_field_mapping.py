@@ -108,6 +108,31 @@ def test_paper_trade_row_confidence_is_none_when_db_column_is_null(tmp_path):
     assert rows[0]["confidence"] is None
 
 
+def test_paper_trade_row_dual_emits_market_yes_price_and_entry_price_cents(tmp_path):
+    """F-11 P1-C: ``_paper_trade_rows`` reads from the live SQLite
+    ``paper_trades.market_yes_price`` column (rename pending P1-B) and must
+    emit BOTH the legacy ``market_yes_price`` key and the canonical
+    ``entry_price_cents`` key on the generated replay row, with identical
+    values. Downstream consumers that switched to the canonical key during
+    P1-C must find the value without backward-fallback overhead.
+    """
+    db = tmp_path / "paper_trades.db"
+    _make_paper_db(db, llm_confidence=0.75)
+
+    rows = _paper_trade_rows(db, MARKETS)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert "market_yes_price" in row, "legacy key must be emitted (P1-B not yet landed)"
+    assert "entry_price_cents" in row, "canonical key must be dual-emitted (F-11 P1-C)"
+    assert row["market_yes_price"] == row["entry_price_cents"], (
+        "dual-emit values must be byte-identical -- they share one _as_float() resolution"
+    )
+    assert row["market_yes_price"] is not None, (
+        "fixture seeds a non-null price; both keys must carry the value"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Bug 2a — BLEND_DECISION: blended_p -> model_prob, market_ticker -> ticker
 # ---------------------------------------------------------------------------

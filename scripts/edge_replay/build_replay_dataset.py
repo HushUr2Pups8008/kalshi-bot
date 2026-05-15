@@ -127,14 +127,17 @@ def _paper_trade_rows(db_path: Path, markets: dict[str, dict[str, Any]]) -> list
             "side": str(trade.get("side") or "").lower() or None,
             "contracts": trade.get("contracts"),
             "model_prob": _as_float(trade.get("estimated_prob")),
-            # F-11 P1-C: this row originates from a SQLite paper_trades DB
-            # row (`trade`), not from a JSONL log record. The DB column is
-            # still named `market_yes_price` — the column rename is F-11
-            # P1-B's job, gated on Bounce 2. Do NOT add an
-            # `entry_price_cents` dual-emit here; the asymmetry vs
-            # `_log_rows()` (which dual-emits both keys for JSONL-sourced
-            # rows) is intentional and resolves when P1-B lands.
+            # F-11 P1-C: the source SQLite column is still named
+            # `market_yes_price` (rename is F-11 P1-B's job, gated on
+            # Bounce 2), but the VALUE in that column is the executed
+            # entry price for paper-trade rows. Emit BOTH keys on the
+            # generated replay row so downstream consumers can read
+            # either name. P1-B will let us drop the legacy emit; until
+            # then dual-emit keeps consumers schema-agnostic. The two
+            # writes share one `_as_float(...)` resolution and cannot
+            # drift at construction.
             "market_yes_price": _as_float(trade.get("market_yes_price") or trade.get("price_cents")),
+            "entry_price_cents": _as_float(trade.get("market_yes_price") or trade.get("price_cents")),
             "edge": _as_float(trade.get("edge")),
             "signal_source": trade.get("signal_source") or "unknown",
             "signal_type": trade.get("signal_type") or "unknown",

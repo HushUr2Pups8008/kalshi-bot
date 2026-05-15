@@ -330,6 +330,76 @@ def test_readiness_gate_marks_left_on_table_when_model_would_have_won_without_pr
     assert scored["would_have_traded"] is False
 
 
+def test_score_candidate_accepts_canonical_entry_price_cents_without_legacy_key():
+    """F-11 P1-C: post-bounce JSONL records carry only ``entry_price_cents``
+    (no ``market_yes_price``). score_candidate must read the canonical key
+    via the new helper, infer side correctly, derive the contract price,
+    and produce a non-zero counterfactual PnL when the trade would
+    execute. If the helper regressed (e.g. only read ``market_yes_price``),
+    side inference would fall through to None and ``would_have_traded``
+    would be False -- this assertion would catch it.
+    """
+    canonical_row = {
+        "ticker": "KXENTRY",
+        "contracts": 1,
+        # Canonical post-P1-A key only; no legacy market_yes_price.
+        "entry_price_cents": 40.0,
+        "model_prob": 0.62,  # >= 40/100 -> infer YES side
+        "edge": 0.20,
+        "resolved_yes": True,
+        "signal_source": "Reuters",
+        "series_ticker": "KXENTRY",
+        "signal_type": "llm",
+        "news_class": "publisher_rss",
+    }
+
+    scored = score_candidate(canonical_row, min_edge=0.02, default_contracts=1)
+
+    assert scored["side"] == "yes", (
+        "side must be inferred from model_prob vs entry_price_cents/100 "
+        "when the canonical key is the only price source"
+    )
+    assert scored["would_have_traded"] is True, (
+        "score_candidate must consume canonical entry_price_cents; if only "
+        "market_yes_price was honored, would_have_traded would be False"
+    )
+    assert scored["counterfactual_pnl"] == pytest.approx(0.60), (
+        "PnL = (1 - 0.40) * 1 contract = 0.60 for a winning YES contract"
+    )
+
+
+def test_score_candidate_canonical_and_legacy_keys_produce_identical_pnl():
+    """F-11 P1-C: with side and resolution held constant, a row carrying
+    only ``entry_price_cents`` and a row carrying only ``market_yes_price``
+    (treated as the YES-side price for an explicit YES trade) must score
+    to the same PnL. The two reads use different code branches inside
+    ``_contract_price``; this test pins they agree on identical inputs.
+    """
+    base = {
+        "ticker": "KXPARITY",
+        "side": "yes",  # explicit; avoids the alias-detector early-out
+        "contracts": 1,
+        "model_prob": 0.62,
+        "edge": 0.20,
+        "resolved_yes": True,
+        "signal_source": "Reuters",
+        "series_ticker": "KXPARITY",
+        "signal_type": "llm",
+        "news_class": "publisher_rss",
+    }
+    canonical_row = dict(base, entry_price_cents=40.0)
+    legacy_row = dict(base, market_yes_price=40.0)
+
+    canonical_scored = score_candidate(canonical_row, min_edge=0.02)
+    legacy_scored = score_candidate(legacy_row, min_edge=0.02)
+
+    assert canonical_scored["counterfactual_pnl"] == pytest.approx(legacy_scored["counterfactual_pnl"])
+    assert canonical_scored["side"] == legacy_scored["side"] == "yes"
+    assert canonical_scored["would_have_traded"] is True
+    assert legacy_scored["would_have_traded"] is True
+    assert canonical_scored["counterfactual_pnl"] == pytest.approx(0.60)
+
+
 # F-11 P1-C fallback test: scorer_forensics_audit.market_implied_win_prob
 # must accept legacy ``market_yes_price`` key for pre-bounce corpus rows.
 def test_market_implied_win_prob_accepts_legacy_market_yes_price_key():

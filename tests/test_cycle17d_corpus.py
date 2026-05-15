@@ -182,7 +182,7 @@ def test_cross_vintage_duplicate_prefers_priced_later_source_and_cli_json(tmp_pa
         "key": ["ticker", "decision_ts", "signal_source", "headline"],
         "cycle13_conflicts": "prefer cycle13_live over cycle13_local",
         "other_conflicts": (
-            "prefer rows with non-null market_yes_price; "
+            "prefer rows with non-null entry_price_cents OR market_yes_price (F-11 P1-C: either key satisfies price-presence); "
             "if tied prefer source precedence cycle16d > cycle15b > cycle13_live > cycle13_local; "
             "if still tied keep the first input row"
         ),
@@ -362,3 +362,50 @@ def test_non_json_object_row_rejected(tmp_path):
             output=tmp_path / "out.jsonl",
             manifest_path=tmp_path / "manifest.json",
         )
+
+
+def test_dedup_price_presence_accepts_canonical_entry_price_cents(tmp_path):
+    """F-11 P1-C: ``_has_price`` must treat ``entry_price_cents`` as
+    satisfying price-presence for dedup-conflict resolution. A row carrying
+    only the canonical key (no legacy ``market_yes_price``) must beat an
+    unpriced sibling under the "prefer priced row" rule.
+    """
+    cycle13_live = tmp_path / "cycle13_live.jsonl"
+    cycle13_local = tmp_path / "cycle13_local.jsonl"
+    cycle15b = tmp_path / "cycle15b.jsonl"
+    cycle16d = tmp_path / "cycle16d.jsonl"
+
+    duplicate_key = {
+        "ticker": "KXCANONICAL",
+        "decision_ts": "2026-05-14T00:00:00Z",
+        "signal_source": "publisher_rss",
+        "headline": "post-bounce duplicate",
+    }
+    write_jsonl(cycle13_live, [])
+    write_jsonl(cycle13_local, [])
+    unpriced = {**duplicate_key, "selected": "cycle15b"}
+    write_jsonl(cycle15b, [unpriced])
+    canonical_priced = {**duplicate_key, "entry_price_cents": 0.55, "selected": "cycle16d"}
+    write_jsonl(cycle16d, [canonical_priced])
+
+    output = tmp_path / "out.jsonl"
+    manifest_path = tmp_path / "manifest.json"
+
+    build_cycle17d_corpus(
+        inputs={
+            "cycle13_live": cycle13_live,
+            "cycle13_local": cycle13_local,
+            "cycle15b": cycle15b,
+            "cycle16d": cycle16d,
+        },
+        output=output,
+        manifest_path=manifest_path,
+    )
+
+    rows = _read_jsonl(output)
+    canonical_rows = [r for r in rows if r["ticker"] == "KXCANONICAL"]
+    assert len(canonical_rows) == 1
+    assert canonical_rows[0]["selected"] == "cycle16d", (
+        "F-11 P1-C: priced row (entry_price_cents only) must be preferred over unpriced sibling"
+    )
+    assert canonical_rows[0].get("entry_price_cents") == 0.55

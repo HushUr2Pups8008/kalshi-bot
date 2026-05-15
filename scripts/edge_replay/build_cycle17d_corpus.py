@@ -35,7 +35,7 @@ DEDUP_POLICY = {
     "key": list(DEDUP_KEY),
     "cycle13_conflicts": "prefer cycle13_live over cycle13_local",
     "other_conflicts": (
-        "prefer rows with non-null market_yes_price; "
+        "prefer rows with non-null entry_price_cents OR market_yes_price (F-11 P1-C: either key satisfies price-presence); "
         "if tied prefer source precedence cycle16d > cycle15b > cycle13_live > cycle13_local; "
         "if still tied keep the first input row"
     ),
@@ -86,7 +86,12 @@ def _dedup_key(row: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _has_price(row: dict[str, Any]) -> bool:
-    return row.get("market_yes_price") is not None
+    # F-11 P1-C: accept either the canonical post-P1-A `entry_price_cents`
+    # key or the legacy `market_yes_price` key. Pre-bounce JSONL records
+    # and historical replay corpora carry the legacy key; post-bounce
+    # records carry the canonical key. Either populated value satisfies
+    # price-presence for dedup-conflict resolution.
+    return row.get("entry_price_cents") is not None or row.get("market_yes_price") is not None
 
 
 def _cohort_for(source: str, row: dict[str, Any]) -> str:
