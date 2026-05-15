@@ -73,32 +73,35 @@ Audit artifact: [`docs/governance/2026-05-13-v030x-data-runtime-alignment-audit.
 
 Verdict: **PARTIALLY ALIGNED.** Producer paths fail-closed; observability gaps closed via F-01/F-04/F-12. Bot continues running.
 
-Workoff status (snapshot 2026-05-13T23:56Z):
+Workoff status (snapshot 2026-05-15T01:30Z):
 
-**Landed (no-restart Either):**
+**Landed — no-restart Either (closed since the audit was written):**
 - F-01 + F-04 + F-12 → `2cb8646` (+ CI fix `7160a5a`) — bothealth verdict P0-aware + readiness wiring + osascript
 - F-02 → `8d2ad28` — `build_replay_dataset` cohort wiring
 - F-03 → `a4e6f44` — `score_counterfactual_pnl` side-semantics
 - F-05 → `3059d49` — `performance_analysis` cohort split
 - F-06 → `72fdf4a` (+ lint `ea72580`) — opportunity-vs-trade drift watcher
+- F-09 → `f1cc619` — `apply_historical_prices` cohort-aware
+- F-10 → `06c048c` — replay silent-zero in `price_delta`
 - F-13 → bundled in `2cb8646` — runbook pull-vs-push callout
+- F-14 → `95ffc2d` — README v0.30.1-operative leading language
+- F-16 → `0d34b47` — test pattern hygiene (canonical `SignalAnalysis` construction)
+- F-18 → `348173e` (+ CI fix `27c481b`) — `daily_review` launchd plist + push surface
 
-**Open (no-restart Either, in flight):**
-- F-09 (Codex) — `apply_historical_prices` cohort-aware
-- F-10 (Codex) — replay silent-zero in `price_delta`
-- F-14 (Claude Code, this iteration) — README v0.30.1-operative leading language
-- F-16 (Claude Code, this iteration) — test pattern hygiene (canonical `SignalAnalysis` construction)
-- F-18 (Claude Code, this iteration) — `daily_review` launchd plist
+**Landed — Bounce 1 (restart-required, bot bounced 2026-05-14T01:25:29Z; new PID 92951):**
+- F-08 → `3cd0e98` — executor `_validate` fail-closed when `executed_price_cents is None despite price_available=True`. Skip-reason vocabulary carries `price_unavailable` + `executed_price_cents is None` substrings for downstream analytics grep.
+- F-11 P1-A → `bb9cc95` — alias removal (runtime + dataclass + log schema). `SignalAnalysis.market_yes_price` field deleted; `Position.market_yes_price` and `TradeCandidate.market_yes_price` renamed to `entry_price_cents`; `utils/logger.py` log-field kwarg renamed for `log_opportunity` and `log_paper_trade`. DB column `paper_trades.market_yes_price` deliberately UNCHANGED here — that is P1-B.
+- F-15 → `2b8bbd0` — `main.py` `_process_candidate` skip events promoted from DEBUG to INFO (`[P-7] status_not_active`, `[ANALYSIS] price_unavailable`).
 
-**Open (operator-scheduled bot bounce required):**
-- F-07 — `evidence_store` cohort column (Claude Code, schema migration)
-- F-08 — executor `_validate` require `executed_price_cents` (Claude Code)
-- F-11 — `market_yes_price` rename P1-A (Claude Code)
-- F-15 — `main.py` skip events INFO-level
+**Open — remaining v0.30.x audit items:**
+- **F-07** — `evidence_store` / `dossier_updates` cohort discriminator. Bounce 2 candidate. Restart-required; schema migration on `data/evidence_store.db`. Highest blast radius remaining; needs `scripts/db_snapshot_backup.sh` snapshot precondition.
+- **F-11 P1-B** — SQL column rename `paper_trades.market_yes_price` → `entry_price_cents`. Bounce 2 candidate. Restart-required; schema migration via `ALTER TABLE`. Updates SELECT/INSERT/DDL strings in `trading/portfolio.py` + `trading/paper_trader.py`. Closes the in-process / DB asymmetry P1-A intentionally left open.
+- **F-11 P1-C** — replay/offline migration. **No restart required; safe while bot runs.** `scripts/edge_replay/**` consumers and remaining simulation harnesses still expect the old `market_yes_price` JSONL key and DB column. Largest by file count, smallest per-file delta. Prerequisite-free; can land before or after Bounce 2.
 
 **Operator decisions outstanding:**
-- Schedule next bot bounce window for F-07 / F-08 / F-11 / F-15 cluster.
-- Whether to escalate F-08 ahead of F-07 — executor silent-attrition is the higher operator-visibility win once F-06 watcher confirms which candidates are being dropped. The F-06 live readout at watcher-deploy time was `verdict=ALARM, opportunity_count=4, paper_trade_count=0, hours_elapsed=11.57`, which is consistent with the silent-attrition hypothesis F-08 is intended to fix.
+- Schedule Bounce 2 window for F-07 + F-11 P1-B (both DB schema migrations; bundle the snapshot precondition).
+- F-11 P1-C ordering preference — recommended next-implementation slot because it is offline / no-restart and reduces remaining alias drift before the DB rename.
+- F-06 watcher follow-up (out of v0.30.x audit scope, separate audit thread): post-Bounce 1 verdict = `ALARM` with `opportunity_count=11`, `paper_trade_count=0`, `hours_elapsed≈23.7h` (snapshot 2026-05-15T01:05Z). **Silent-attrition hypothesis disproven by Bounce 1 + post-bounce data**: 0 SKIPPED events fire the F-08 new reason; the actual cause is producer-side strategy gating (6 × `G1_blended_confidence`, 2 × `G2_evidence_source_class_diversity`, 1 × `edge +0.0200 below min_edge 0.02`). F-08 was correct defense-in-depth but does not address the gap. A 2-event accounting gap (11 OPP − 9 SKIP = 2 unaccounted) deserves a separate follow-up — either an executor branch that does not `log_skipped` or a watcher double-count.
 
 ### 2.0a Polymarket US Integration Investigation (2026-05-14)
 
