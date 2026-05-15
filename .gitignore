@@ -89,6 +89,7 @@ setup_service.ps1
 .vscode/
 .idea/
 mac_archive/db_snapshots/
+mac_archive/pre_wave1_*/
 
 # Agent runtime scratch surfaces (Claude Code / Codex / Cursor / etc).
 # These directories contain plugin caches, scheduled-task locks, local

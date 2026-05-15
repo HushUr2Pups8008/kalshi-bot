@@ -1,93 +1,71 @@
-# PROFIT-PHASE2-001 early-close attestation
+# PROFIT-PHASE2-001 close attestation
 
-**Status:** ACTIVE CLOSE ARTIFACT — populated 2026-05-06 cycle 11 from current soak counters; placeholders denote fire-time fields. Operator finalizes at close commit (active target 2026-05-15; day-7 close path preserved as historical context only).
-**Closes:** PROFIT-PHASE2-001 governance shadow-soak per `docs/superpowers/specs/2026-04-24-llm-governance-agent-design.md` §8.5, with Gate 7 resolved through §8.5.2 attestation where applicable.
+**Status:** CLOSE ATTEMPT FAILED (Gate 5 cadence stability)
+**Attempt timestamp:** 2026-05-15T23:41:20Z
+**Active target:** 2026-05-15T19:01Z
+**HEAD at attempt:** `97a00a8`
 
-## Close metadata (FINAL FILL AT CLOSE TIME)
+## Close metadata
 
-- **Close timestamp (UTC):** `<TBD at fire time>` (active target: 2026-05-15T19:01Z)
-- **Soak duration:** `<TBD>` days `<TBD>` hours (target: active close window per `PHASE2_RUNBOOK.md`)
-- **First cycle:** `gc_2026-05-01_190127` (2026-05-01T19:01:27Z)
-- **Last cycle in window:** `<TBD at fire time>`
-- **Soak window:** 2026-05-01T19:01Z → `<TBD>`
+- **Soak window checked:** 2026-05-01T19:01Z -> 2026-05-15T22:27:54.783Z
+- **First cycle:** `gc_2026-05-01_190127` (2026-05-01T19:01:27.084Z)
+- **Last complete cycle basis:** `gc_2026-05-15_222754` (2026-05-15T22:27:54.783Z)
+- **Observed duration:** 14.143 days
+- **Rollback anchor created:** tag `pre-wave-1-deploy-2026-05-15`, branch `backup/pre-wave-1-deploy-2026-05-15`, archive `mac_archive/pre_wave1_2026-05-15/logs_2026-05-15T234347Z.tar.gz`
+- **Close tag:** NOT APPLIED (`phase2-soak-closed` must not be created until all gates pass)
 
 ## §8.5.1 gate verification
 
-Pre-stage values reflect cumulative state through cycle-13 refresh (2026-05-06T22:30Z; latest decision 2026-05-06T21:43Z; ~125h elapsed soak). Final figures fill at fire-time (~13h post-cycle-13).
+- [x] **Gate 1: Volume.** GOVERNANCE_DECISION count: 2355 (>= 30 required).
+- [x] **Gate 2: Calendar floor.** Continuous observed runtime: 14.143 days (>= 14-day active target satisfied).
+- [x] **Gate 3: Safety counters.** KILL_SWITCH: 0, batch_aborted: 0, VALIDATION_ERROR: 0.
+- [x] **Gate 4: PARSE_ERROR trailing 72 h.** Count: 0 from 2026-05-12T22:27:54.783Z through close basis.
+- [ ] **Gate 5: Cadence stability.** FAILED. No inter-cycle gap exceeded 3 h, and deep cadence had 0 deviations, but three fast-cycle gaps exceeded the +/-10% tolerance:
+  - 2026-05-02T03:01:40.945649Z -> 2026-05-02T04:12:48.398593Z: 1.185 h, 40.7% deviation.
+  - 2026-05-02T04:12:48.398593Z -> 2026-05-02T05:01:44.627068Z: 0.816 h, 59.2% deviation.
+  - 2026-05-03T15:07:04.972374Z -> 2026-05-03T15:28:36.183310Z: 0.359 h, 82.1% deviation.
+- [x] **Gate 6: Manual review.** `logs/governance/review_2026-05-15.jsonl` records bulk review of the uniform dead-source-disable class: 2360 reviewed, 2360 reasonable, 0 not reasonable, 0 skipped, 100.0% reasonable.
+- [ ] **Gate 7: No mid-soak code change OR §8.5.2 policy-equivalence carve-out.** NOT COMPLETED because Gate 5 already blocks close. `bash scripts/check_soak_invariant.sh --json` at `97a00a8` returned `status=fail`, `commit_count=38`; a future close needs a complete §8.5.2 table for all surfaced commits unless the stable-window reset supersedes the original window.
+- [x] **Gate 8: Attestation written.** This failed-close attestation is recorded; it is not a close approval.
 
-- [ ] **Gate 1: Volume.** GOVERNANCE_DECISION count: 552 as of cycle-13 refresh (≥ 30 required → 18.4× over-clear). PASS-PROJECTED.
-- [ ] **Gate 2: Calendar floor.** Continuous shadow-mode runtime: 5d 5h as of cycle-13; active target is the 2026-05-15 close window per `PHASE2_RUNBOOK.md`.
-- [ ] **Gate 3: Safety counters.** KILL_SWITCH: 0, batch_aborted: 0, VALIDATION_ERROR: 0 as of cycle-13. PASS-PROJECTED (all must remain 0).
-- [ ] **Gate 4: PARSE_ERROR trailing 72 h.** Total PARSE_ERROR: 7 (all from days 1-2; first 48h of soak). Trailing-72h count at fire-time TBD; expected 0 since no recent PARSE_ERRORs.
-- [ ] **Gate 5: Cadence stability.** 69 fast cycles + cadence stable through cycle-13 (`bothealth.sh` reports GREEN with governance shadow invariant holding). Recompute max inter-cycle gap at fire-time.
-- [ ] **Gate 6: Manual review.** ⚠️ **AT RISK.** Cycle-13 capacity audit projection: 552 decisions across 5 days = 366 reviewable at 80/day = **0.663 reviewable fraction** (was 0.747 at Day-4). Day-6 peak (169) inflates per-day-cap denominator; trend is UP not down. **Path 3 (re-eval at close-time) likely fails.** Operator should plan on Path 1 (increase daily review budget to ≥ 169 to cover peak day) per `docs/_archive/governance/2026-05-06-gate-6-capacity-resolution-plan.md`. Path 1 = ~169-decision review on heaviest day, ~2× cycle-9's 67-decision review effort.
-- [ ] **Gate 7: No mid-soak code change OR §8.5.2 policy-equivalence carve-out.** `bash scripts/check_soak_invariant.sh --json` against HEAD `e614b96`: status=fail, commit_count=5. Per cycle-13 audit, all 5 commits have §8.5.2 carve-out applicability — see refreshed table below.
-- [ ] **Gate 8: Attestation written.** This document committed.
+## Final tally
 
-## Final tally (fire-time fill — cycle-13 baseline)
-
-| event type | count (cycle-13 refresh, 2026-05-06T22:30Z) |
+| event type | count |
 |---|---:|
-| total events | 697 (552 GD + 7 PE + 69 cycle_start + 69 cycle_end) |
-| GOVERNANCE_CYCLE_START | 69 |
-| GOVERNANCE_CYCLE_END | 69 |
-| GOVERNANCE_DECISION | **552** |
-| GOVERNANCE_DECISION_PARSE_ERROR | 7 (all from days 1-2; trailing-72h = 0) |
-| GOVERNANCE_VALIDATION_ERROR | 0 (asserted) |
-| KILL_SWITCH | 0 (asserted) |
-| `batch_aborted=True` | 0 (asserted) |
-| Per-day GD (2026-05-02 → 2026-05-06) | 46 / 82 / 109 / 146 / 169 |
+| total events in checked window | 2734 |
+| GOVERNANCE_CYCLE_START | 186 |
+| GOVERNANCE_CYCLE_END | 186 |
+| GOVERNANCE_DECISION | 2355 |
+| GOVERNANCE_DECISION_PARSE_ERROR | 7 total / 0 trailing-72h |
+| GOVERNANCE_VALIDATION_ERROR | 0 |
+| KILL_SWITCH | 0 |
+| `batch_aborted=True` | 0 |
+| Per-day GD (2026-05-02 -> 2026-05-15) | 46 / 82 / 109 / 146 / 174 / 202 / 227 / 229 / 213 / 213 / 193 / 190 / 172 / 159 |
 
-## §8.5.2 policy-equivalence carve-out attestation
+## Stable-window reset candidate
 
-Per `PROFIT-PHASE2-001-early-close-criteria.md` §"§8.5.2 policy-equivalence carve-outs invoked", the canonical commits surfacing as of 2026-05-05 cycle 5 were:
+The last Gate 5 cadence deviation occurred at 2026-05-03T15:28:36.183Z.
+From that point through this attempt:
 
-| commit | window-time | scope | invocation |
-|---|---|---|---|
-| `fae72fa` | 2026-05-02T04:15Z | `governance/llm.py` think=False fix | INVOKED (effective soak start = post-fix decision time) |
-| `b47ca71` | 2026-05-03T15:28Z | A5 SYSTEM_PROMPT addition (anchor_rate) | INVOKED (canonical §8.5.2 example) |
-| `b44dda2` | 2026-05-05T~12:30Z | docs/governance/ + docs/superpowers/specs/ ONLY | OUT-OF-SCOPE (doc artifact only) |
-| `80932cb` | 2026-05-05T~12:35Z | scripts/ + tests/ ONLY (0 prod-code touch) | OUT-OF-SCOPE (script + test artifacts only) |
-| `dbe1d30` | 2026-05-02T03:48Z | post-soak hygiene bundle (config.py 16 lines dead-code removal + .gitignore + .env.example + scripts/soak_check.sh + debt log). Per commit message + post-edit `pytest -q: 1421 passed`: "none of them touch runtime code paths" | OUT-OF-SCOPE (dead-code removal + non-runtime artifacts only) |
-| `d117b60` | 2026-05-02T22:00Z | `trading/paper_trader.py:record_trade` PROFIT-OBS-004 close — persists executed-side edge to paper_trades.edge column instead of YES-side edge. Persistence-shape change, NOT decision-flow change. Pre-fix decisions stand; post-fix decisions persist correctly. | INVOKED (observability persistence change; cycle-13 audit confirms no decision-path divergence) |
-| `1a466e4` | 2026-05-02T22:04Z | ruff auto-fix unused imports + f-string lints (15 files; touched governance/adapter.py + governance/agent.py among others). Per commit message: "no runtime behavior change. Tests: 1423 passed" | OUT-OF-SCOPE (lint-only, no behavioral change) |
+- fast cycles: 148, deviations over +/-10%: 0.
+- deep cycles: 12, deviations over +/-10%: 0.
+- decisions: 2257.
+- parse errors: 0.
+- safety counters: 0 KILL_SWITCH / 0 VALIDATION_ERROR / 0 batch_aborted.
 
-**Cycle-13 audit (2026-05-06T22:30Z):** all surfaced commits triaged above. Gate 7 is documented as clean via §8.5.2 invocation / out-of-scope attestation: 3 INVOKED (`fae72fa`, `b47ca71`, `d117b60`) + 4 OUT-OF-SCOPE (`b44dda2`, `80932cb`, `dbe1d30`, `1a466e4`). Some OUT-OF-SCOPE rows may not appear in `check_soak_invariant.sh` output because that script only reports commits touching behavioral paths.
+If the operator requires a clean 14-day effective window with no cadence carve-out, the earliest re-check is 2026-05-17T15:28:36.183Z. Runtime should continue; do not restart solely for the close attempt.
 
-**Operator note for any commits between cycle-13 (this refresh) and fire-time:** rerun `bash scripts/check_soak_invariant.sh --json` against close-time SHA; walk any newly-surfaced commits; append rows to this table.
+## Operator attestation
 
-**Wave-1 deploy commits (POST-soak-close):** §8.5.2 governs commits DURING the soak window (2026-05-01T19:01Z → close). Wave-1's 6 deploy commits land POST-soak-close, so they are OUT-OF-WINDOW for §8.5.2 and require no carve-out attestation here. Standard `git revert` rollback per `docs/_archive/governance/post-soak-rollback-runbook.md` is the recovery path for any Wave-1 commit; soak-close attestation does not extend over Wave-1 deploys.
+No close attestation is signed. Wave-1/Phase-2 successor actions remain blocked by Gate 5 until either:
 
-## Operator attestation (FILL AT CLOSE TIME)
-
-I, `<TBD operator>`, confirm:
-
-1. All §8.5.1 gates above evaluated TRUE at close time.
-2. The active 14-day Phase-2 close target is satisfied; the historical day-7 relaxation was not exercised.
-3. Gate 7 is either strict-clean or every surfaced commit has a documented §8.5.2 attestation. Doc / script / test commits are §8.5.2 OUT-OF-SCOPE when they do not affect the running bot.
-4. Wave-1 deploy may begin from this commit per `docs/_archive/governance/post-soak-close-rehearsal-checklist.md`.
-
-Signed (commit author): `<TBD>`
-Tag applied: `phase2-soak-closed`
-Wave-1 deploy ETA: `<TBD; nominally same-day as close commit>`
-
-## Fire-time agent instructions
-
-When this attestation file fires (active target 2026-05-15 close commit window):
-
-1. Read `logs/governance/decisions.jsonl` for the full soak window (2026-05-01T19:01Z → close time).
-2. Populate every `<TBD>` placeholder with live counts.
-3. Run `bash scripts/check_soak_invariant.sh --json` against close-time SHA. If non-empty, walk surfaced commits and append §8.5.2 invocation rows above.
-4. Manual review (gate 6): use `docs/_archive/governance/2026-05-06-gate-6-capacity-resolution-plan.md`, especially the Path 1 review-budget procedure and its concrete commands.
-5. Operator signs §"Operator attestation" + commits this file in same hunk as the close-day VERSION/CHANGELOG bump.
-6. Tag with `phase2-soak-closed`.
+1. the operator explicitly approves a cadence-equivalence carve-out for the three early fast-cycle deviations; or
+2. the clean stable-window reset reaches its 14-day floor and all gates are re-run.
 
 ## Cross-links
 
-- `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` — operator runbook + §8.5.2 invocation table
-- `docs/governance/PROFIT-PHASE2-001-early-close-attestation-template.md` — original blank template
-- `docs/_archive/governance/2026-05-04-day-4-mid-soak-confirmation.md` — Day-4 baseline
-- `docs/_archive/governance/2026-05-07-day-7-pre-soak-confirmation.md` — Day-7 fire-time skeleton (ARCHIVED Stream G R23)
-- `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` — Wave-1 deploy plan
-- `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation
-- `scripts/check_soak_invariant.sh` — gate-7 mechanism
+- `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` — gate definitions and §8.5.2 procedure.
+- `docs/governance/PROFIT-PHASE2-001-early-close-attestation-template.md` — blank pass-attestation template.
+- `scripts/check_soak_invariant.sh` — Gate 7 mechanism.
+- `scripts/governance_decision_review.py` — Gate 6 review tool.
+- `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation.
