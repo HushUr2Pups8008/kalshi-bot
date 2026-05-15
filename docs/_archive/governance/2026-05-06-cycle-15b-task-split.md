@@ -2,7 +2,7 @@
 
 **Type:** 10-task split per agent (Codex + Claude). Mirrors prior cycle prep pattern (cycle-12/13/14).
 **Drafted:** 2026-05-06 cycle-14 verdict landing.
-**Authority:** `docs/governance/cycle-15-conditional-charter-skeletons.md` §B; `docs/governance/edge-replay-cycle14-diagnosis.md` Claude appendix.
+**Authority:** `docs/_archive/governance/cycle-15-conditional-charter-skeletons.md` §B; `docs/_archive/governance/edge-replay-cycle14-diagnosis.md` Claude appendix.
 **Tracker:** PROFIT-EDGE-008.
 
 ## TL;DR
@@ -72,7 +72,7 @@ Operator does NOT change these criteria post-hoc.
 | L7 | **Re-ingestion atomicity review.** Review C9 re-ingestion pipeline for: idempotence (same input → same output), determinism (no wall-clock-dependent ordering), atomicity (re-run failure does not corrupt mid-state), pre-fix preservation (rollback path exists). Reference CLAUDE.md "DB transaction atomicity in `resolve_market()`" gotcha — analogous risk class. | Code review on C9 commit. | Atomicity findings filed; rollback path verified executable. |
 | L8 | **Pre-fix `paper_trades` cohort note.** Per skeleton §A.5 (transferable to §B): pre-fix paper-traded data is no longer ground truth for calibration. Append cohort note to `data/paper_trades.db` schema doc OR `docs/IMPLEMENTATION_CONTRACT.md` §16. Future replay runs must distinguish pre-Cycle-15B vs post-Cycle-15B trade cohorts. | Schema-or-doc note + reference from PROFIT-EDGE-008 entry. | Note landed; future replay tooling guidance is clear. |
 | L9 | **Cycle-15B post-verdict action checklist.** Mirror `cycle-14-post-verdict-action-checklist.md` pattern: pre-staged ROADMAP wording per Cycle-15B verdict (positive-EV slice surfaces / fixed-but-frontier-holds / extraction-rebuild-failed), EDGE_STATUS refresh template, debt-log close-and-file-successor template. Pre-stage BEFORE C10 lands. | `docs/governance/cycle-15b-post-verdict-action-checklist.md`. | Checklist landed pre-C10; verdict-to-wording maps cover the 3 outcome cases. |
-| L10 | **Conditional Cycle-16 skeletons.** If Cycle-15B C10 produces ≥1 positive-EV slice → Cycle-16 = Wave-2 candidate authoring (slice-specific feed onboarding with replay-gated acceptance). If extraction fixed but no slice → Cycle-16 = §C source-onboarding OR §F redesign per operator decision. Pre-stage skeletons analogous to `cycle-15-conditional-charter-skeletons.md`. | `docs/governance/cycle-16-conditional-charter-skeletons.md`. | Skeleton set covers 3 outcome branches; verdict-to-skeleton map present; pre-stages BEFORE Cycle-15B C10 verdict landing. |
+| L10 | **Conditional Cycle-16 skeletons.** If Cycle-15B C10 produces ≥1 positive-EV slice → Cycle-16 = Wave-2 candidate authoring (slice-specific feed onboarding with replay-gated acceptance). If extraction fixed but no slice → Cycle-16 = §C source-onboarding OR §F redesign per operator decision. Pre-stage skeletons analogous to `cycle-15-conditional-charter-skeletons.md`. | `docs/_archive/governance/cycle-16-conditional-charter-skeletons.md`. | Skeleton set covers 3 outcome branches; verdict-to-skeleton map present; pre-stages BEFORE Cycle-15B C10 verdict landing. |
 
 ## Sequencing
 
@@ -93,10 +93,10 @@ Strict: L8 cohort note lands BEFORE C10 reporting.
 
 ## Cross-links
 
-- `docs/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 verdict source.
-- `docs/governance/cycle-15-conditional-charter-skeletons.md` §B — extraction rebuild skeleton.
-- `docs/governance/cycle-14-post-verdict-action-checklist.md` — analogous post-verdict pattern.
-- `docs/governance/2026-05-06-cycle-14-sign-error-candidate-trace.md` — sites 2/3/6/7 prime trace targets.
+- `docs/_archive/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 verdict source.
+- `docs/_archive/governance/cycle-15-conditional-charter-skeletons.md` §B — extraction rebuild skeleton.
+- `docs/_archive/governance/cycle-14-post-verdict-action-checklist.md` — analogous post-verdict pattern.
+- `docs/_archive/governance/2026-05-06-cycle-14-sign-error-candidate-trace.md` — sites 2/3/6/7 prime trace targets.
 - `tests/fixtures/cycle14_synthetic_evidence.json` — 10 Lane B fixtures.
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs C10 acceptance).
 - `docs/profit_path_debt_log.md` `PROFIT-EDGE-008` — debt entry tracking this cycle.

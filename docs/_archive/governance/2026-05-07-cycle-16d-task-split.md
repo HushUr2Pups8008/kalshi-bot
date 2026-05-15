@@ -2,7 +2,7 @@
 
 **Type:** 10-task split per agent (Codex + Claude). Mirrors prior cycle prep pattern (cycle-12/13/14/15B).
 **Drafted:** 2026-05-07 cycle-15B verdict landing.
-**Authority:** `docs/governance/cycle-16-conditional-charter-skeletons.md` §D; `docs/governance/edge-replay-cycle15b-report.md` Claude appendix; PROFIT-EDGE-009.
+**Authority:** `docs/_archive/governance/cycle-16-conditional-charter-skeletons.md` §D; `docs/governance/edge-replay-cycle15b-report.md` Claude appendix; PROFIT-EDGE-009.
 **Tracker:** PROFIT-EDGE-009.
 
 ## TL;DR
@@ -74,7 +74,7 @@ If ≥ 1 slice surfaces: routes to cycle-16 skeleton §A (Wave-2 candidate slice
 | M6 | **Sub-cycle verdict appendix to Cycle-16D report.** Mirror cycle-14/15B Claude-appendix pattern. Independent voice on D8 IC §16 acceptance check; verify it matches locked criteria. If verdict differs from Codex's read, flag. Verdict consumption per cycle-16-skeleton verdict-to-skeleton map (positive-EV → §A; no slice → §B/§C; coverage failure → cycle-16D-extension). | Claude appendix in `docs/governance/edge-replay-cycle16d-report.md`. | Appendix landed; matches/disagreement recorded; downstream Cycle-17 routing decision authored. |
 | M7 | **Coverage threshold acceptance review.** When D5 lands, verify coverage fraction matches locked criterion (≥ 90%; flag <80% per-ticker; <70% overall = escalate). If approximation path: verify D7 error-bar methodology is in scope. | Section in M2 doc OR standalone `2026-05-07-cycle-16d-coverage-acceptance.md`. | Coverage verdict recorded; if escalation triggered, fresh-charter conversation flagged. |
 | M8 | **Cycle-16D post-verdict action checklist.** Mirror `cycle-15b-post-verdict-action-checklist.md` pattern: pre-staged ROADMAP wording per Cycle-16D verdict (positive-EV slice surfaces / no-signal-confirmed / coverage-failure / extension-needed), EDGE_STATUS refresh template, debt-log close-and-file-successor template. Pre-stage BEFORE D8 lands. | `docs/governance/cycle-16d-post-verdict-action-checklist.md`. | Checklist landed pre-D8; verdict-to-wording maps cover the 4 outcome cases. |
-| M9 | **Conditional Cycle-17 skeletons.** If Cycle-16D D8 produces ≥ 1 IC §16 slice → Cycle-17A = Wave-2 candidate slice deploy + replay validation (mirror cycle-16 §A). If 0 slices with prices verified → Cycle-17 routes to cycle-16 §B (source onboarding) or §C (redesign). If coverage failure → Cycle-17 = cycle-16D-extension OR fresh-charter scope. Pre-stage skeletons analogous to `cycle-16-conditional-charter-skeletons.md`. | `docs/governance/cycle-17-conditional-charter-skeletons.md`. | Skeleton set covers 3+ outcome branches; verdict-to-skeleton map present; pre-stages BEFORE D8 verdict landing. |
+| M9 | **Conditional Cycle-17 skeletons.** If Cycle-16D D8 produces ≥ 1 IC §16 slice → Cycle-17A = Wave-2 candidate slice deploy + replay validation (mirror cycle-16 §A). If 0 slices with prices verified → Cycle-17 routes to cycle-16 §B (source onboarding) or §C (redesign). If coverage failure → Cycle-17 = cycle-16D-extension OR fresh-charter scope. Pre-stage skeletons analogous to `cycle-16-conditional-charter-skeletons.md`. | `docs/_archive/governance/cycle-17-conditional-charter-skeletons.md`. | Skeleton set covers 3+ outcome branches; verdict-to-skeleton map present; pre-stages BEFORE D8 verdict landing. |
 | M10 | **PROFIT-EDGE-009 closure + PROFIT-EDGE-010 file.** Mirror cycle-15B Item 10 pattern. Status: COMPLETE (regardless of verdict; the cycle ran). Verdict + Cycle-17 scope reference in Notes. PROFIT-EDGE-010: title matches verdict (e.g., "Cycle-17A Wave-2 candidate slice deploy" / "Cycle-17 source-onboarding scope" / "Cycle-17 strategic-pivot decision" / "Cycle-16D-extension second backfill attempt"). | Append to `docs/profit_path_debt_log.md`. | Both entries landed in same commit as ROADMAP/EDGE_STATUS refresh. |
 
 ## Sequencing
@@ -101,7 +101,7 @@ Strict: **M6 verdict appendix fires AFTER D8 lands, BEFORE M10 closes PROFIT-EDG
 ## Cross-links
 
 - `docs/governance/edge-replay-cycle15b-report.md` — Cycle-15B verdict source.
-- `docs/governance/cycle-16-conditional-charter-skeletons.md` §D — price-reconstruction skeleton.
+- `docs/_archive/governance/cycle-16-conditional-charter-skeletons.md` §D — price-reconstruction skeleton.
 - `docs/governance/cycle-15b-post-verdict-action-checklist.md` — analogous post-verdict pattern (M8 mirrors).
 - `docs/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — L8 cohort note (D9 sentinel verification).
 - `data/dossier_updates_post_fix.db` — POST_FIX_REBUILT cohort (D6 input).

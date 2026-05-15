@@ -97,7 +97,7 @@ This spec is satisfied when:
 ## 8. Cross-links
 
 - `docs/governance/edge-004-closure-path-tldr.md` v2.2 (will become v3 post-Branch-D fire)
-- `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — defines branches A / C / option-A
+- `docs/_archive/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — defines branches A / C / option-A
 - `docs/superpowers/specs/2026-05-03-edge-004-lever-menu-design.md` §3 — original (closed) Lever D + nomenclature history
 - `docs/ROADMAP.md` Stage 4 P4-GATE Appendix A — alternate escalation path
 - `docs/profit_path_debt_log.md` PROFIT-EDGE-004 entry — receives the Branch-D fire log

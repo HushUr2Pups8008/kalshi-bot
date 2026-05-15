@@ -41,7 +41,7 @@
 | Smoke wrapper? | `scripts/wave1_post_deploy_smoke.sh` (cycle 2) |
 | Per-commit smoke? | `scripts/wave1_fire_time_smoke.sh` (cycle 4) |
 | Pre-deploy state baseline (4 reports)? | `docs/governance/2026-05-05-pre-wave1-{skipped-rate,opportunity-age,cooldown,trade-rate}-*.md` |
-| Baseline interpretation? | `docs/governance/2026-05-05-pre-wave1-baseline-interpretation.md` |
+| Baseline interpretation? | `docs/_archive/governance/2026-05-05-pre-wave1-baseline-interpretation.md` |
 | Per-commit acceptance audit? | `scripts/wave1_commit_chain_acceptance_audit.sh` (cycle 7) |
 | Per-commit strict-xfail sentinels? | `tests/test_wave1_commit{1-6}_*_post_deploy.py` (cycle 7) |
 
@@ -49,7 +49,7 @@
 
 | operator question | source-of-truth file |
 |---|---|
-| Branch A → C → option-A sequence? | `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` |
+| Branch A → C → option-A sequence? | `docs/_archive/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` |
 | Decision flowchart? | `docs/governance/2026-05-05-wave-2-decision-flow.md` |
 | Compact per-commit playbook? | `docs/governance/2026-05-05-wave-2-fire-time-per-commit-checklist.md` |
 | Locked commit order? | `docs/governance/wave-2-deploy-commit-order-decision.md` |
@@ -101,7 +101,7 @@
 | Implementation Contract (binding)? | `docs/IMPLEMENTATION_CONTRACT.md` |
 | Multi-cycle contract adherence audits? | `docs/governance/2026-05-05-cross-cycle-contract-adherence-review.md` + `2026-05-05-implementation-contract-cycle-4-5-review.md` + `docs/_archive/governance/2026-05-06-implementation-contract-cycle-6-7-review.md` (ARCHIVED Stream G R5) |
 | Production config capture invariants (cycle-8 incident codified)? | `docs/IMPLEMENTATION_CONTRACT.md` §15 |
-| Cycle-10 capture-incident decision + commit | `docs/governance/2026-05-05-launchd-plist-consolidation-decision.md` + commit `96e2995` (byte-faithful rewrite) |
+| Cycle-10 capture-incident decision + commit | `docs/_archive/governance/2026-05-05-launchd-plist-consolidation-decision.md` + commit `96e2995` (byte-faithful rewrite) |
 | Lever menu (post-2026-05-05 locks)? | `docs/_archive/specs/2026-05-03-edge-004-lever-menu-design.md` (§5.1 + §5.2) (ARCHIVED Stream G R31) |
 | Closure-path TLDR? | `docs/governance/edge-004-closure-path-tldr-v3.md` |
 | Unified debt log? | `docs/profit_path_debt_log.md` |

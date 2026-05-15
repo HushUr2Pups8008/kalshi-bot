@@ -6,7 +6,7 @@
 **Soak tracker:** `PROFIT-PHASE2-001`
 **Source:** `logs/governance/decisions.jsonl`
 **Reviewer:** Claude OR Codex (whoever is on cycle when fire-time arrives)
-**Predecessor:** `docs/governance/2026-05-04-day-4-mid-soak-confirmation.md` (model)
+**Predecessor:** `docs/_archive/governance/2026-05-04-day-4-mid-soak-confirmation.md` (model)
 
 ## TL;DR
 
@@ -79,7 +79,7 @@ Next step:
 
 ## Cross-links
 
-- `docs/governance/2026-05-04-day-4-mid-soak-confirmation.md` — day-4 predecessor
+- `docs/_archive/governance/2026-05-04-day-4-mid-soak-confirmation.md` — day-4 predecessor
 - `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` — §8.5.1 close gates
 - `docs/governance/PROFIT-PHASE2-001-early-close-attestation.md` — attestation template (gate 8)
 - `docs/governance/post-soak-close-rehearsal-checklist.md` — post-close deploy guide

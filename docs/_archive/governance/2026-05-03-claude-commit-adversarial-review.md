@@ -8,7 +8,7 @@ Scope:
 
 ## Executive Read
 
-The commits are useful and mostly safe during the soak. The highest-risk gap is the OBS-003 xfail harness: it tests the target behavior, but it does not yet pin the async logger call path (`write_trade_log_async(logger.log_skipped, ...)`) or the exact logger schema contract. The landing-order note also still treats MATCH-001 B′ as a 600-1,300 flip based on the spec estimate; the archive counterfactual in `docs/governance/2026-05-03-post-soak-landing-simulation.md` now estimates 1,076 suppressed match keys and a much larger OPPORTUNITY drop (260 → 87) than the sequence note implies.
+The commits are useful and mostly safe during the soak. The highest-risk gap is the OBS-003 xfail harness: it tests the target behavior, but it does not yet pin the async logger call path (`write_trade_log_async(logger.log_skipped, ...)`) or the exact logger schema contract. The landing-order note also still treats MATCH-001 B′ as a 600-1,300 flip based on the spec estimate; the archive counterfactual in `docs/_archive/governance/2026-05-03-post-soak-landing-simulation.md` now estimates 1,076 suppressed match keys and a much larger OPPORTUNITY drop (260 → 87) than the sequence note implies.
 
 ## Findings
 

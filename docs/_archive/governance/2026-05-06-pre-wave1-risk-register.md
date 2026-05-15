@@ -155,5 +155,5 @@ Per this risk register:
 - `docs/governance/2026-05-05-network-api-outage-runbook.md` (R3)
 - `docs/governance/post-soak-rollback-runbook.md` (R4-R8 mitigation)
 - `docs/governance/2026-05-05-wave-1-commit-by-commit-acceptance-matrix.md` (per-commit risk surface)
-- `docs/governance/2026-05-05-pre-wave1-baseline-interpretation.md` (R8 0-baseline rebase)
-- `docs/governance/2026-05-05-launchd-plist-consolidation-decision.md` (R10 mitigation plan)
+- `docs/_archive/governance/2026-05-05-pre-wave1-baseline-interpretation.md` (R8 0-baseline rebase)
+- `docs/_archive/governance/2026-05-05-launchd-plist-consolidation-decision.md` (R10 mitigation plan)

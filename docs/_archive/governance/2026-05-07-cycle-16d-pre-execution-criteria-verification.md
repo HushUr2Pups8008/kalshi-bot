@@ -131,10 +131,10 @@ D2 inventory should formally include the 4 missed candidates flagged above.
 ## Cross-links
 
 - `docs/governance/2026-05-07-cycle-16d-task-split.md` — M2 + M4 task definitions.
-- `docs/governance/cycle-16-conditional-charter-skeletons.md` §D — scope skeleton.
+- `docs/_archive/governance/cycle-16-conditional-charter-skeletons.md` §D — scope skeleton.
 - `docs/governance/edge-replay-cycle15b-report.md` — Cycle-15B verdict driving Cycle-16D.
 - `logs/edge_replay/cycle16d/endpoint_diagnosis.json` — Codex D1 output verified.
 - `scripts/edge_replay/endpoint_diagnosis.py` — Codex D1 script reviewed.
 - `tests/test_edge_replay_endpoint_diagnosis.py` — D1 test coverage (3 passed per Codex).
 - CLAUDE.md "Kalshi API: Signing algorithm is RSA-PSS/SHA-256" — load-bearing for D3/D4 (M3 review).
-- `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md` §"Historical price endpoint gap" — origin of the 404 finding.
+- `docs/_archive/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md` §"Historical price endpoint gap" — origin of the 404 finding.

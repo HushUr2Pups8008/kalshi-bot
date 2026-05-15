@@ -127,5 +127,5 @@ All gate-script values are already pre-staged in `2026-05-05-day-7-attestation-p
 - `docs/governance/2026-05-05-day-7-fire-time-compact-checklist.md` — fire-time playbook
 - `docs/governance/2026-05-05-day-7-attestation-prestage.md` — pre-staged values
 - `docs/governance/2026-05-05-day-7-walkthrough-dry-trace.md` — cycle-2 sibling validation
-- `docs/governance/2026-05-05-PROFIT-PHASE2-001-decision-distribution-analysis.md` — gate-6 accelerator
+- `docs/_archive/governance/2026-05-05-PROFIT-PHASE2-001-decision-distribution-analysis.md` — gate-6 accelerator
 - `scripts/check_soak_invariant.sh`, `governance_decision_review.py`, `pre_soak_close_branch_backup.sh`

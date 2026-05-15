@@ -3,7 +3,7 @@
 **Type:** ambiguity resolution (Claude task per Implementation Contract §9 — operator decision input).
 **Drafted:** 2026-05-05.
 **Audience:** operator picking 1-2 open-RSS legal-analyst feeds at Branch C deploy time (≥ 2026-05-29 if Branch A produces 0 legal-niche PAPER_TRADE in 14 d).
-**Companion:** `docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` (ARCHIVED Stream G R32); `docs/_archive/governance/2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` (Codex's probe-order audit `5e5849a`, ARCHIVED Stream G R6); `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md`.
+**Companion:** `docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` (ARCHIVED Stream G R32); `docs/_archive/governance/2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` (Codex's probe-order audit `5e5849a`, ARCHIVED Stream G R6); `docs/_archive/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md`.
 
 ## TL;DR
 
@@ -150,5 +150,5 @@ If 1+ PAPER_TRADE materializes with positive P&L: EDGE-004 closes via Branch C.
 - `docs/_archive/governance/2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` — Codex's probe-order audit `5e5849a` (ARCHIVED Stream G R6)
 - `docs/_archive/governance/2026-05-04-legal-niche-probe-order-domain-overlap.md` — domain-overlap empirical anchor (ARCHIVED Stream G R6)
 - `docs/_archive/governance/2026-05-05-vitallaw-direct-rss-probe.md` — VitalLaw.com Branch B kill (`a45c06c`) (ARCHIVED Stream G R22)
-- `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Branch A → C → D sequence
+- `docs/_archive/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Branch A → C → D sequence
 - `tests/test_lever_a1plus_feed_config.py` — pre-loaded xfail harness (covers both option-A and option-B/Branch-C)

@@ -47,7 +47,7 @@ The EDGE-004 lever menu's revised sequencing puts E third after A and B. Codex's
 
 **Distinction matters:** G2 catches "all evidence is news-class" (`Reuters` + `AP` both count as the same class). Lever E catches "all evidence is from a single source instance" (`Reuters` only, even across multiple classes). Single-source signals are vulnerable to the publisher's house style, framing bias, and rare-but-systematic editorial errors. Multi-source corroboration tightens the conviction floor.
 
-**Why Lever E sits *after* Lever B:** if B (G1 calibration) admits more candidates, the *aggregate* OPPORTUNITY pool grows; the multi-source threshold's cut becomes easier to size against the broader pool. Sequencing E before B would size against a narrower pool and risk over-tuning. Codex's earlier G1 admittance counterfactual (`docs/governance/2026-05-03-g1-admittance-counterfactual.md`) showed B doesn't lift trade rate directly; B's value to E is the broader attribution dataset, not new admit volume.
+**Why Lever E sits *after* Lever B:** if B (G1 calibration) admits more candidates, the *aggregate* OPPORTUNITY pool grows; the multi-source threshold's cut becomes easier to size against the broader pool. Sequencing E before B would size against a narrower pool and risk over-tuning. Codex's earlier G1 admittance counterfactual (`docs/_archive/governance/2026-05-03-g1-admittance-counterfactual.md`) showed B doesn't lift trade rate directly; B's value to E is the broader attribution dataset, not new admit volume.
 
 ## 2. The fix
 

@@ -2,7 +2,7 @@
 
 **Type:** focused single-deliverable cycle. Behavioral fix scope; replay-gated per IC §16.
 **Drafted:** 2026-05-06 (cycle-14 verdict landing).
-**Authority:** Cycle-14 verdict = `extraction_broken` (`docs/governance/edge-replay-cycle14-diagnosis.md`); skeleton §B (`docs/governance/cycle-15-conditional-charter-skeletons.md`); task split (`docs/governance/2026-05-06-cycle-15b-task-split.md`).
+**Authority:** Cycle-14 verdict = `extraction_broken` (`docs/_archive/governance/edge-replay-cycle14-diagnosis.md`); skeleton §B (`docs/_archive/governance/cycle-15-conditional-charter-skeletons.md`); task split (`docs/governance/2026-05-06-cycle-15b-task-split.md`).
 **Owner:** Codex (implementation, C1-C10); Claude (review + governance + scaffolding, L1-L10).
 **Tracker:** PROFIT-EDGE-008.
 **Status:** ACTIVE.
@@ -105,13 +105,13 @@ Cycle-16 scope derived FROM verdict via `cycle-16-conditional-charter-skeletons.
 
 ## Cross-links
 
-- `docs/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 verdict source.
-- `docs/governance/cycle-15-conditional-charter-skeletons.md` §B — extraction rebuild skeleton.
+- `docs/_archive/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 verdict source.
+- `docs/_archive/governance/cycle-15-conditional-charter-skeletons.md` §B — extraction rebuild skeleton.
 - `docs/governance/2026-05-06-cycle-15b-task-split.md` — 20-task split (10 Codex + 10 Claude).
 - `docs/governance/cycle-15b-post-verdict-action-checklist.md` — L9 post-verdict checklist (pre-staged).
-- `docs/governance/cycle-16-conditional-charter-skeletons.md` — L10 conditional Cycle-16 skeletons (pre-staged).
+- `docs/_archive/governance/cycle-16-conditional-charter-skeletons.md` — L10 conditional Cycle-16 skeletons (pre-staged).
 - `docs/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — L8 cohort note.
-- `docs/governance/2026-05-06-cycle-14-sign-error-candidate-trace.md` — sites 2/3/6/7 prime trace targets.
+- `docs/_archive/governance/2026-05-06-cycle-14-sign-error-candidate-trace.md` — sites 2/3/6/7 prime trace targets.
 - `tests/fixtures/cycle14_synthetic_evidence.json` — 10 Lane B fixtures.
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs C10 acceptance).
 - `docs/profit_path_debt_log.md` `PROFIT-EDGE-008` — debt entry tracking this cycle.

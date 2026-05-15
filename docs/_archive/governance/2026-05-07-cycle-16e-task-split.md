@@ -93,7 +93,7 @@ Operator does NOT change these criteria post-hoc.
 | N6 | **Sub-cycle verdict appendix to Cycle-16E report (post-E10).** Mirror cycle-15B L6 + cycle-16D M6 pattern. Independent voice on whether E10 verdict supports / contradicts cycle-16D operational reading. Verdict-vs-criteria check against locked 4 outcomes. Cycle-17 routing recommendation. | Claude appendix in `docs/governance/edge-replay-cycle16e-report.md`. | Appendix landed; matches/disagreement recorded; Cycle-17 routing authored. |
 | N7 | **Anti-regression test review (post-E9).** Verify E9 regression tests cover the 3 cycle-16D scorer concerns originally found by operator (readiness gating, YES-bias mechanism, price-unit invariant). If a future cycle reverts a correction, would the test catch it? | Section in N3 doc or standalone `2026-05-07-cycle-16e-anti-regression-test-review.md`. | Per-concern coverage table; gap flagged or absence confirmed. |
 | N8 | **Cycle-16E post-verdict action checklist.** Mirror cycle-15b/16d post-verdict pattern. Pre-stage 4 outcome paths + ROADMAP wording per outcome + EDGE_STATUS refresh + debt-log close + file successor. Pre-stage BEFORE E10 lands. | `docs/governance/cycle-16e-post-verdict-action-checklist.md`. | Checklist landed pre-E10; verdict-to-wording maps cover the 4 outcomes. |
-| N9 | **Conditional Cycle-17 skeleton refresh.** Update `cycle-17-conditional-charter-skeletons.md` to reflect Cycle-16E gating. Add §F = "Cycle-16F additional forensics" if Cycle-16E verdict = `scorer_fixed_but_anomalous_persists`. Update verdict-to-skeleton map authority section. | Edit `docs/governance/cycle-17-conditional-charter-skeletons.md` + commit reference. | §F added; verdict-to-skeleton map references Cycle-16E re-run output as gate. |
+| N9 | **Conditional Cycle-17 skeleton refresh.** Update `cycle-17-conditional-charter-skeletons.md` to reflect Cycle-16E gating. Add §F = "Cycle-16F additional forensics" if Cycle-16E verdict = `scorer_fixed_but_anomalous_persists`. Update verdict-to-skeleton map authority section. | Edit `docs/_archive/governance/cycle-17-conditional-charter-skeletons.md` + commit reference. | §F added; verdict-to-skeleton map references Cycle-16E re-run output as gate. |
 | N10 | **PROFIT-EDGE-010 closure + PROFIT-EDGE-011 file (post-E10 + N6 verdict).** Mirror prior closure pattern. Status: COMPLETE regardless of verdict. PROFIT-EDGE-011 title matches verdict (Cycle-17A / Cycle-17 §B/§C operator decision returned / Cycle-16F additional forensics / Cycle-16E-extension). | Append to `docs/profit_path_debt_log.md`. | Both entries landed in same commit as ROADMAP/EDGE_STATUS refresh. |
 
 ## Sequencing
@@ -130,7 +130,7 @@ E10 report produced + signed by both Codex and Claude. Verdict matches one of th
 ## Cross-links
 
 - `docs/governance/edge-replay-cycle16d-report.md` "Operator override (2026-05-07)" — origin of Cycle-16E.
-- `docs/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 routing (refreshed in N9).
+- `docs/_archive/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 routing (refreshed in N9).
 - `docs/governance/cycle-16d-post-verdict-action-checklist.md` — analogous post-verdict pattern (N8 mirrors).
 - `docs/_archive/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — L8 cohort note (POST_FIX_REBUILT intact) (ARCHIVED Stream G R18).
 - `data/dossier_updates_post_fix.db` — POST_FIX_REBUILT cohort (E6 input, unchanged).

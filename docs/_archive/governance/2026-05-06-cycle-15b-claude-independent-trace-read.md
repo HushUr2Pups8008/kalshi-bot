@@ -100,7 +100,7 @@ No same-class pathology between current Cycle-15B sub-fix and prior LLM-layer fi
 - `docs/governance/2026-05-06-cycle-15b-task-split.md` — L4 + L5 task definitions.
 - `docs/governance/2026-05-06-cycle-15b-pre-execution-criteria-verification.md` — L2 + L3 verifications.
 - `docs/governance/edge-replay-cycle15b-sub-fix-proposal.md` — Codex C6 sub-fix proposal (L6 appends Claude verdict).
-- `docs/governance/2026-05-06-cycle-14-sign-error-candidate-trace.md` — sites 3 + 7 narrowed via L4 read.
+- `docs/_archive/governance/2026-05-06-cycle-14-sign-error-candidate-trace.md` — sites 3 + 7 narrowed via L4 read.
 - `logs/edge_replay/cycle15b/zero_collapse_step.json` — C2 single-step finding.
 - `logs/edge_replay/cycle15b/keyword_audit.json` — C4 coverage gaps.
 - `logs/edge_replay/cycle15b/suppression_trace.json` — C5 (F8 over-emission surfaced here).

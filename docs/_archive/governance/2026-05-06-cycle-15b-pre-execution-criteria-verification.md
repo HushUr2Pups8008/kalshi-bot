@@ -63,7 +63,7 @@ Single_step finding is unambiguous: only `keyword_path` appears in `counts`. No 
 
 ### Cross-reference to cycle-14 sign-error candidate trace
 
-`docs/governance/2026-05-06-cycle-14-sign-error-candidate-trace.md` listed sites 2/3/6/7 as not-ruled-out by Lane A:
+`docs/_archive/governance/2026-05-06-cycle-14-sign-error-candidate-trace.md` listed sites 2/3/6/7 as not-ruled-out by Lane A:
 - Site 2 — LLM-path probability shift application (`signal_analyzer.py:578-581`).
 - Site 3 — keyword-path `net_shift` (`signal_analyzer.py:326`).
 - Site 6 — LLM `direction` field convention (PROMPT layer).
@@ -136,7 +136,7 @@ No findings blocking C3-C6. The discrepancy in §"Discrepancy noted" is document
 - `docs/governance/2026-05-06-cycle-15b-charter-extraction-rebuild.md` — locked criteria source.
 - `docs/governance/2026-05-06-cycle-15b-task-split.md` — L2 + L3 task definitions.
 - `docs/governance/cycle-15b-post-verdict-action-checklist.md` — L9 checklist (this is the L2 + L3 deliverable referenced there).
-- `docs/governance/2026-05-06-cycle-14-sign-error-candidate-trace.md` — sites 2/3/6/7 narrowed to keyword_path = sites 3 + 7.
+- `docs/_archive/governance/2026-05-06-cycle-14-sign-error-candidate-trace.md` — sites 2/3/6/7 narrowed to keyword_path = sites 3 + 7.
 - `scripts/edge_replay/per_step_extraction_trace.py` — Codex C1 harness.
 - `analysis/signal_analyzer.py` — Codex C1 instrumentation hooks.
 - `logs/edge_replay/cycle15b/zero_collapse_step.json` — Codex C2 output verified.

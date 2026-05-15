@@ -3,7 +3,7 @@
 **Type:** read-only walkthrough of `post-soak-close-rehearsal-checklist.md` against current pre-deploy repo state. Asserts each referenced command, file, line-number, and test class resolves cleanly. Surfaces gaps before the live deploy day.
 **Drafted:** 2026-05-06 (cycle 10).
 **Companion:** `docs/governance/post-soak-close-rehearsal-checklist.md` (the checklist under test).
-**Prior:** `docs/governance/2026-05-04-day-4-mid-soak-confirmation.md` (mid-soak gate-check pattern).
+**Prior:** `docs/_archive/governance/2026-05-04-day-4-mid-soak-confirmation.md` (mid-soak gate-check pattern).
 
 ## TL;DR
 

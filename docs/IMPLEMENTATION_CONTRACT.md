@@ -782,7 +782,7 @@ The Phase Gate Review (2026-04-19) issued PROCEED WITH CONDITIONS. All condition
 
 This section codifies the capture-discipline rules surfaced by the cycle-8 launchd plist consolidation incident (2026-05-05). When a task requires capturing production-machine configuration (installed launchd plists, live `.env` files, runtime config, etc.) into repo source-of-truth (templates, fixtures), the rules below are invariants — not guidelines.
 
-The incident in one sentence: Codex authored 4 launchd plist templates from spec/intent rather than from the installed plists, introducing material behavioral drift (PYTHONUNBUFFERED removed, 96× cadence increase, one-shot → recurring, etc.). The drift was caught before install via diff against installed state. Root cause: "capture" was interpreted as "create templates matching expected purpose" instead of "preserve installed behavior exactly." Rewrite landed at commit `96e2995`. Background: `docs/governance/2026-05-05-launchd-plist-consolidation-decision.md` (the cycle-7 consolidation directive that the cycle-8 incident bypassed).
+The incident in one sentence: Codex authored 4 launchd plist templates from spec/intent rather than from the installed plists, introducing material behavioral drift (PYTHONUNBUFFERED removed, 96× cadence increase, one-shot → recurring, etc.). The drift was caught before install via diff against installed state. Root cause: "capture" was interpreted as "create templates matching expected purpose" instead of "preserve installed behavior exactly." Rewrite landed at commit `96e2995`. Background: `docs/_archive/governance/2026-05-05-launchd-plist-consolidation-decision.md` (the cycle-7 consolidation directive that the cycle-8 incident bypassed).
 
 ### Rule 1 — No source, no template
 
@@ -853,7 +853,7 @@ These rules do NOT apply to: code modules under `/analysis`, `/tasks`, `/feeds`,
 - §9 Codex rule 5 — capture-is-byte-faithful enforcement
 - §9 Claude rule 4 — sandbox-blocked-read escalation
 - Commit `96e2995` — byte-faithful rewrite landing the post-incident captures
-- `docs/governance/2026-05-05-launchd-plist-consolidation-decision.md` — cycle-7 consolidation directive (the source-of-truth-policy decision that the cycle-8 incident bypassed)
+- `docs/_archive/governance/2026-05-05-launchd-plist-consolidation-decision.md` — cycle-7 consolidation directive (the source-of-truth-policy decision that the cycle-8 incident bypassed)
 - `ops/launchd/*.template` — current canonical captures (post-`96e2995`)
 - `tests/test_launchd_plist_template_render.py` — current rendering test (Rule 3 oracle is queued for cycle-10 Codex item 1; current test is structural-only)
 
@@ -861,7 +861,7 @@ These rules do NOT apply to: code modules under `/analysis`, `/tasks`, `/feeds`,
 
 ## 16. Replayed-EV Gate for Behavioral Deploys
 
-**Added cycle 11.5 (2026-05-06)** in response to the strategic redirect documented in `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`. Codifies the principle that deployment safety ≠ profit progress, and that behavioral changes deploy only when there is replayed-EV evidence to support them.
+**Added cycle 11.5 (2026-05-06)** in response to the strategic redirect documented in `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`. Codifies the principle that deployment safety ≠ profit progress, and that behavioral changes deploy only when there is replayed-EV evidence to support them.
 
 The incident in one sentence: 11 cycles of work shipped deployment safety, observability, and operator control while the bot accumulated 3 lifetime paper trades, lost all 3, and showed 89 % `edge +0.0000` on its OBS-003 SKIPPED stream — i.e., zero-edge production. Continuing to pre-stage Wave-2 / Wave-3 deploys without replay evidence was deploying hope, not edge.
 
@@ -905,7 +905,7 @@ Replayed-EV evidence is a per-(source × market_family × signal_type) table wit
 - Sharpe (or similar risk-adjusted measure)
 - explicit replay-window definition (date range, market-resolution criteria)
 
-A spec-side narrative claim ("this feed should help because X") is NOT replayed-EV evidence. The harness output (`docs/governance/edge-replay-cycle12-report.md` + sibling) IS.
+A spec-side narrative claim ("this feed should help because X") is NOT replayed-EV evidence. The harness output (`docs/_archive/governance/edge-replay-cycle12-report.md` + sibling) IS.
 
 ### Rule 5 — Negative replayed-EV evidence is also evidence
 
@@ -928,10 +928,10 @@ See `docs/_archive/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` 
 
 ### Cross-references
 
-- `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — incident origin
+- `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — incident origin
 - §11 Change Control — extended to require this evidence for behavioral changes
 - §1 INV-7 (Selectivity) — strengthens its enforcement (no degradation of selectivity = no loosening without replay)
-- `docs/governance/edge-replay-cycle12-report.md` — Cycle-12 deliverable; replay harness output
-- `docs/governance/edge-replay-cycle13-report.md` — Cycle-13 0-positive-EV verdict
-- `docs/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 `extraction_broken` verdict
+- `docs/_archive/governance/edge-replay-cycle12-report.md` — Cycle-12 deliverable; replay harness output
+- `docs/_archive/governance/edge-replay-cycle13-report.md` — Cycle-13 0-positive-EV verdict
+- `docs/_archive/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 `extraction_broken` verdict
 - `docs/_archive/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — Rule 6 cohort definitions (ARCHIVED Stream G R18)

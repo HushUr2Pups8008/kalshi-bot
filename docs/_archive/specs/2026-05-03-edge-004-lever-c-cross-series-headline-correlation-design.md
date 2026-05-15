@@ -1,6 +1,6 @@
 # PROFIT-EDGE-004 Lever C — cross-series headline correlation (EXEC-002 Approach 2)
 
-> **🛑 BLOCKED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** Wave-3 deploy is HALTED pending Cycle-12 replay harness output. Lever C is a SUPPRESSION lever (risk control, not edge production); its value preserves only IF the bot has positive-EV trading to suppress. With current data (3/3 lifetime trades lost, 89 % zero-edge SKIPPEDs), suppressing more trades reduces variance but the underlying expectation is already negative. Replay must establish a positive-EV baseline before this guard's variance reduction is meaningful. See `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` and IC §16.
+> **🛑 BLOCKED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** Wave-3 deploy is HALTED pending Cycle-12 replay harness output. Lever C is a SUPPRESSION lever (risk control, not edge production); its value preserves only IF the bot has positive-EV trading to suppress. With current data (3/3 lifetime trades lost, 89 % zero-edge SKIPPEDs), suppressing more trades reduces variance but the underlying expectation is already negative. Replay must establish a positive-EV baseline before this guard's variance reduction is meaningful. See `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` and IC §16.
 
 **Status:** BLOCKED PER IC §16 (was: design; Wave 3 of post-soak landing — earliest deploy gated on Lever A + Lever B verdicts AND on Codex's cross-series-single-headline overlap audit; earliest implementation 2026-06-20+)
 **Tracker:** `PROFIT-EDGE-004` (Lever C entry from `2026-05-03-edge-004-lever-menu-design.md`); also referenced in `PROFIT-EXEC-002` spec §11 as "Approach 2"
@@ -61,7 +61,7 @@ def _headline_hash(headline: str) -> str:
 - **Catches:** the §3.1 set + cosmetic variants (case, punctuation, trailing source-suffix, whitespace).
 - **Misses:** semantically-identical headlines with rewordings (paraphrases).
 - **Risk:** small false-positive rate (regex-based normalization can collide on edge cases).
-- **Verdict (revised post-Codex audit):** **v1 — Codex's 2026-05-03 audit (`docs/governance/2026-05-03-cross-series-headline-overlap-audit.md` + `scripts/simulations/cross_series_headline_overlap_audit.py`) validated this surface at 49.2 % overlap on the 13-day archive.** Use exactly the normalization rules in Codex's audit script so the production gate matches the empirical sizing.
+- **Verdict (revised post-Codex audit):** **v1 — Codex's 2026-05-03 audit (`docs/_archive/governance/2026-05-03-cross-series-headline-overlap-audit.md` + `scripts/simulations/cross_series_headline_overlap_audit.py`) validated this surface at 49.2 % overlap on the 13-day archive.** Use exactly the normalization rules in Codex's audit script so the production gate matches the empirical sizing.
 
 ### 3.3 Token-overlap-Jaccard hash (semantic)
 
@@ -76,7 +76,7 @@ Two headlines are "the same" if their token-set Jaccard similarity exceeds a thr
 
 ## 4. Sizing — DONE (Codex 2026-05-03 audit)
 
-`docs/governance/2026-05-03-cross-series-headline-overlap-audit.md` + `scripts/simulations/cross_series_headline_overlap_audit.py` (in the same Codex push as this spec). Replays the 13-day MacBook archive against §3.2 normalized-string hash:
+`docs/_archive/governance/2026-05-03-cross-series-headline-overlap-audit.md` + `scripts/simulations/cross_series_headline_overlap_audit.py` (in the same Codex push as this spec). Replays the 13-day MacBook archive against §3.2 normalized-string hash:
 
 | metric | value |
 |---|---:|

@@ -20,7 +20,7 @@ Pre-stage values reflect cumulative state through cycle-13 refresh (2026-05-06T2
 - [ ] **Gate 3: Safety counters.** KILL_SWITCH: 0, batch_aborted: 0, VALIDATION_ERROR: 0 as of cycle-13. PASS-PROJECTED (all must remain 0).
 - [ ] **Gate 4: PARSE_ERROR trailing 72 h.** Total PARSE_ERROR: 7 (all from days 1-2; first 48h of soak). Trailing-72h count at fire-time TBD; expected 0 since no recent PARSE_ERRORs.
 - [ ] **Gate 5: Cadence stability.** 69 fast cycles + cadence stable through cycle-13 (`bothealth.sh` reports GREEN with governance shadow invariant holding). Recompute max inter-cycle gap at fire-time.
-- [ ] **Gate 6: Manual review.** ⚠️ **AT RISK.** Cycle-13 capacity audit projection: 552 decisions across 5 days = 366 reviewable at 80/day = **0.663 reviewable fraction** (was 0.747 at Day-4). Day-6 peak (169) inflates per-day-cap denominator; trend is UP not down. **Path 3 (re-eval at close-time) likely fails.** Operator should plan on Path 1 (increase daily review budget to ≥ 169 to cover peak day) per `docs/governance/2026-05-06-gate-6-capacity-resolution-plan.md`. Path 1 = ~169-decision review on heaviest day, ~2× cycle-9's 67-decision review effort.
+- [ ] **Gate 6: Manual review.** ⚠️ **AT RISK.** Cycle-13 capacity audit projection: 552 decisions across 5 days = 366 reviewable at 80/day = **0.663 reviewable fraction** (was 0.747 at Day-4). Day-6 peak (169) inflates per-day-cap denominator; trend is UP not down. **Path 3 (re-eval at close-time) likely fails.** Operator should plan on Path 1 (increase daily review budget to ≥ 169 to cover peak day) per `docs/_archive/governance/2026-05-06-gate-6-capacity-resolution-plan.md`. Path 1 = ~169-decision review on heaviest day, ~2× cycle-9's 67-decision review effort.
 - [ ] **Gate 7: No mid-soak code change OR §8.5.2 policy-equivalence carve-out.** `bash scripts/check_soak_invariant.sh --json` against HEAD `e614b96`: status=fail, commit_count=5. Per cycle-13 audit, all 5 commits have §8.5.2 carve-out applicability — see refreshed table below.
 - [ ] **Gate 8: Attestation written.** This document committed.
 
@@ -78,7 +78,7 @@ When this attestation file fires (active target 2026-05-15 close commit window):
 1. Read `logs/governance/decisions.jsonl` for the full soak window (2026-05-01T19:01Z → close time).
 2. Populate every `<TBD>` placeholder with live counts.
 3. Run `bash scripts/check_soak_invariant.sh --json` against close-time SHA. If non-empty, walk surfaced commits and append §8.5.2 invocation rows above.
-4. Manual review (gate 6): use `docs/governance/2026-05-06-gate-6-capacity-resolution-plan.md`, especially the Path 1 review-budget procedure and its concrete commands.
+4. Manual review (gate 6): use `docs/_archive/governance/2026-05-06-gate-6-capacity-resolution-plan.md`, especially the Path 1 review-budget procedure and its concrete commands.
 5. Operator signs §"Operator attestation" + commits this file in same hunk as the close-day VERSION/CHANGELOG bump.
 6. Tag with `phase2-soak-closed`.
 
@@ -86,7 +86,7 @@ When this attestation file fires (active target 2026-05-15 close commit window):
 
 - `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` — operator runbook + §8.5.2 invocation table
 - `docs/governance/PROFIT-PHASE2-001-early-close-attestation-template.md` — original blank template
-- `docs/governance/2026-05-04-day-4-mid-soak-confirmation.md` — Day-4 baseline
+- `docs/_archive/governance/2026-05-04-day-4-mid-soak-confirmation.md` — Day-4 baseline
 - `docs/_archive/governance/2026-05-07-day-7-pre-soak-confirmation.md` — Day-7 fire-time skeleton (ARCHIVED Stream G R23)
 - `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` — Wave-1 deploy plan
 - `scripts/pre_soak_close_branch_backup.sh` — rollback-anchor automation

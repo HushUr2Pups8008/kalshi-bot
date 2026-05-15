@@ -23,7 +23,7 @@ The 3 actual paper trades had all-wrong-direction regardless, so the headline ca
 
 (yes/no thresholds 0.50/0.50 = no asymmetric admission requirement; production gate uses signed-edge ≥ min_edge as primary gate, not yes/no probability bracketing.)
 
-**Output:** append a §"Production-thresholds rerun" block to `docs/governance/edge-replay-cycle13-report.md`. Report:
+**Output:** append a §"Production-thresholds rerun" block to `docs/_archive/governance/edge-replay-cycle13-report.md`. Report:
 - moved-to-traded counter-fraction under production thresholds
 - left_on_table_would_have_won under production thresholds (vs Cycle-13's 0)
 - whether the verdict (`positive_ev_slices = 0`, `no_positive_ev_slice = True`) holds
@@ -86,9 +86,9 @@ Items 1 + 2 should clear today (2026-05-06) or tomorrow morning (2026-05-07) so 
 
 ## Cross-links
 
-- `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md` — Cycle-14 charter (downstream of this queue)
-- `docs/governance/2026-05-06-cycle-13-replay-harness-code-review.md` — code review surfaced item 1
-- `docs/governance/2026-05-06-gate-6-capacity-resolution-plan.md` — capacity resolution plan (item 2 background)
+- `docs/_archive/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md` — Cycle-14 charter (downstream of this queue)
+- `docs/_archive/governance/2026-05-06-cycle-13-replay-harness-code-review.md` — code review surfaced item 1
+- `docs/_archive/governance/2026-05-06-gate-6-capacity-resolution-plan.md` — capacity resolution plan (item 2 background)
 - `docs/governance/PROFIT-PHASE2-001-early-close-attestation.md` — gate-6 row updated by operator at item-2 decision
-- `docs/governance/edge-replay-cycle13-report.md` — Codex appends production-thresholds block per item 1
+- `docs/_archive/governance/edge-replay-cycle13-report.md` — Codex appends production-thresholds block per item 1
 - `scripts/edge_replay/fetch_historical_prices.py` + `kalshi/rest_client.py` — item-5 future-refinement candidates

@@ -1,12 +1,12 @@
 # Post-EDGE-004 escalation paths
 
-> **🛑 OBSOLETED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** This doc was framed under the assumption that Wave-2 + Wave-3 would deploy and either succeed or stall, with escalation paths (PROFIT-LLM-001, P4-GATE Appendix A, strategy pivot) gated on the stall condition. That sequencing is replaced by a single new gate: **all behavioral deploys (Wave-2, Wave-3, every escalation path) require replayed-EV evidence per IC §16 BEFORE landing.** The escalation paths below are still valid as future-state options, but each must clear the IC §16 evidence gate before deploy. The "Wave-1 + Wave-2 + Wave-3 all stall" condition is moot when Wave-2/3 are HALTED ab initio. See `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`.
+> **🛑 OBSOLETED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** This doc was framed under the assumption that Wave-2 + Wave-3 would deploy and either succeed or stall, with escalation paths (PROFIT-LLM-001, P4-GATE Appendix A, strategy pivot) gated on the stall condition. That sequencing is replaced by a single new gate: **all behavioral deploys (Wave-2, Wave-3, every escalation path) require replayed-EV evidence per IC §16 BEFORE landing.** The escalation paths below are still valid as future-state options, but each must clear the IC §16 evidence gate before deploy. The "Wave-1 + Wave-2 + Wave-3 all stall" condition is moot when Wave-2/3 are HALTED ab initio. See `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`.
 
 **Drafted:** 2026-05-04 (during PROFIT-PHASE2-001 soak; pre-staged operator decision aid)
 **Status:** OBSOLETED PER IC §16 (was: ROADMAP-tracked; activates only if Wave-1 + Wave-2 + Wave-3 all stall against the EDGE-004 closure target (≥ 5 % conversion over 14 d))
 **Companion docs:**
 
-- `docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md` — pre-deploy expected state across all waves
+- `docs/_archive/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md` — pre-deploy expected state across all waves
 - `docs/governance/edge-004-closure-path-tldr.md` (v2.1) — operator-facing TL;DR
 - `docs/profit_path_debt_log.md` — unified ROADMAP / debt tracker
 

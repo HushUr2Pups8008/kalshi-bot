@@ -1,6 +1,6 @@
 # PROFIT-EDGE-004 Lever A.1+1.5 — legal-analyst feed onboarding (option-B for first-feed deploy)
 
-> **🛑 BLOCKED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** Legal-analyst feed onboarding is the same speculation class as A.1+1 specialist-geopolitics — both Wave-2 candidates assume a feed-class will produce edge without replay validation. The bot's only TRADED source (VitalLaw — a legal niche) has 0/3 hit rate and -$7.50 P&L. Adding more legal-niche feeds without replay evidence would re-run that experiment at greater scale. Wave-2 deploy HALTED pending Cycle-12 replay harness. See `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`.
+> **🛑 BLOCKED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** Legal-analyst feed onboarding is the same speculation class as A.1+1 specialist-geopolitics — both Wave-2 candidates assume a feed-class will produce edge without replay validation. The bot's only TRADED source (VitalLaw — a legal niche) has 0/3 hit rate and -$7.50 P&L. Adding more legal-niche feeds without replay evidence would re-run that experiment at greater scale. Wave-2 deploy HALTED pending Cycle-12 replay harness. See `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`.
 
 **Status:** BLOCKED PER IC §16 (was: design; Wave 2 of post-soak landing — legal-analyst alternative to A.1+1 specialist-geopolitics)
 **Tracker:** `PROFIT-EDGE-004` Lever A → Stage A.1+ → option-B
@@ -9,15 +9,15 @@
 **Drafted:** 2026-05-04
 **Empirical context:**
 
-- `docs/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md` — per-source audit identifying `VitalLaw.com` as the load-bearing source (3/3 PAPER_TRADE)
-- `docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md` — unified forecast sizing both option-A and option-B
+- `docs/_archive/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md` — per-source audit identifying `VitalLaw.com` as the load-bearing source (3/3 PAPER_TRADE)
+- `docs/_archive/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md` — unified forecast sizing both option-A and option-B
 - `docs/governance/2026-05-03-claude-commits-728f3bd-cfc0b60-adversarial-review.md` F5 — flagged the per-source ranking gap that this spec closes
 
 ## 1. Why this spec exists
 
 The 2026-05-04 per-source audit revealed that `VitalLaw.com` (legal/regulatory analysis) produced **100 % of historical PAPER_TRADE in the specialist_analyst class** on the 13-day Mac archive (3/3). The original A.1+ spec (`2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md`) recommended a geopolitics-analyst pivot (war on the rocks / CSIS / ISW / CFR / Atlantic Council). Those candidates target a different sub-niche than `VitalLaw.com`.
 
-**Aggregator-path forensics (2026-05-04, `docs/governance/2026-05-04-vitallaw-aggregator-path-forensics.md`):** the Mac archive's VitalLaw records came via **Google News RSS** (`news.google.com/rss/articles/...?oc=5`), NOT a direct VitalLaw RSS feed. The Google News query family is **active in the current canonical config** (re-enabled 2026-04-23 per `config.py:DISABLED_SOURCE_FAMILIES`), and queries are derived dynamically from current market titles by `feeds/search_news_monitor.py`. Therefore the ingestion path IS already deployed — the question is not "re-onboard VitalLaw" but "why is Google News no longer surfacing VitalLaw articles for the current market mix."
+**Aggregator-path forensics (2026-05-04, `docs/_archive/governance/2026-05-04-vitallaw-aggregator-path-forensics.md`):** the Mac archive's VitalLaw records came via **Google News RSS** (`news.google.com/rss/articles/...?oc=5`), NOT a direct VitalLaw RSS feed. The Google News query family is **active in the current canonical config** (re-enabled 2026-04-23 per `config.py:DISABLED_SOURCE_FAMILIES`), and queries are derived dynamically from current market titles by `feeds/search_news_monitor.py`. Therefore the ingestion path IS already deployed — the question is not "re-onboard VitalLaw" but "why is Google News no longer surfacing VitalLaw articles for the current market mix."
 
 ## §1.5 — Decision-tree revision (post-aggregator-path forensics)
 
@@ -186,7 +186,7 @@ DEFERRED: pre-load of `TestSourceClassClassifierLeverA1Plus15LegalBranch` in `te
 ## 13. Cross-links
 
 - `docs/superpowers/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` — option-A (geopolitics) parent spec
-- `docs/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md` — per-source audit identifying VitalLaw concentration
-- `docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md` — unified forecast sizing both options
+- `docs/_archive/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md` — per-source audit identifying VitalLaw concentration
+- `docs/_archive/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md` — unified forecast sizing both options
 - `docs/governance/post-soak-close-rehearsal-checklist.md` §7 — operator decision point at deploy
 - `tests/test_lever_a1plus_feed_config.py::test_vital_law_or_legal_analyst_feed_present_post_a1plus` — the pre-loaded option-B xfail

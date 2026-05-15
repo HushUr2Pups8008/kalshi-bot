@@ -202,7 +202,7 @@ The most explicit rate-limit statement in the fetched corpus is in the gRPC over
   > X-PM-Timestamp: <timestamp-in-milliseconds>
   > X-PM-Signature: <base64-encoded-signature>
   > ```
-  > See [Authentication](/api/authentication) for details on request signing.
+  > See Polymarket's Authentication docs for details on request signing.
 
   Both per-stream pages repeat the same authoritative statement verbatim:
   > This WebSocket endpoint requires API key authentication in the connection handshake. See the Authentication guide for details.
@@ -426,7 +426,7 @@ The bot's existing safety posture is a **defense in depth** stack: paper-by-defa
 
 ## 8. Testing and Validation Strategy
 
-The project's existing replay-cohort sentinel pattern (`bot_state.p0_price_fix_deployed_ts` cited in `docs/governance/2026-05-13-v030x-data-runtime-alignment-audit.md`) is the template to apply to Polymarket onboarding. The cohort sentinel is the unique tool the codebase has to keep pre-onboarding evidence from contaminating post-onboarding analytics.
+The project's existing replay-cohort sentinel pattern (`bot_state.p0_price_fix_deployed_ts` cited in `docs/_archive/governance/2026-05-13-v030x-data-runtime-alignment-audit.md`) is the template to apply to Polymarket onboarding. The cohort sentinel is the unique tool the codebase has to keep pre-onboarding evidence from contaminating post-onboarding analytics.
 
 **Per-exchange fixtures:** `tests/fixtures/polymarket/` carries captured payloads for each REST shape (events, markets, market-by-slug, market-book, bbo, settlement, balances, positions, trade history, preview-order, insert-order success and reject) and each WebSocket message shape. Fixtures are committed alongside their fetch URL and capture timestamp in a sidecar `.meta.json`.
 
@@ -500,6 +500,6 @@ Three-bullet operator-decision summary.
 - **Authorize the first research-only task.** That task is the **Design** phase row of § 9: independent dual-agent design review of the `Market` Protocol, `ExchangeClient` Protocol, `Price` value type, and `SettlementSource` Protocol. No code changes; the deliverable is a design document landed in `docs/governance/`. Estimated cost: one design pass, one independent review pass, one reconciliation pass.
 - **Authorize the debt-log pointer.** Recommended pointer text for the operator to add to `docs/profit_path_debt_log.md` Current Status section if and when this investigation graduates from research to active work:
 
-  > **Polymarket US integration investigation (2026-05-14):** scoped planning artifact at [`docs/governance/2026-05-14-polymarket-us-integration-investigation.md`](governance/2026-05-14-polymarket-us-integration-investigation.md). Reuse classification distribution: 6 (a) / 12 (b) / 6 (c) / 1 (d) across 25 modules. Q1-Q3 resolution pass (2026-05-14): no public-developer sandbox exists (§ 2.13 / § 10.1 Q1); public-developer trading prices use a money-object envelope, not undocumented `int64` scaling (§ 2.6 / § 10.1 Q3); WebSocket auth is signed `X-PM-*` headers on the HTTP upgrade (§ 2.12 / § 10.1 Q7). Remaining gating risk: operator-executed first-touch protocol on live host since no sandbox exists. Status: research-only; awaiting operator decision on Design-phase authorization.
+  > **Polymarket US integration investigation (2026-05-14):** scoped planning artifact in this file. Reuse classification distribution: 6 (a) / 12 (b) / 6 (c) / 1 (d) across 25 modules. Q1-Q3 resolution pass (2026-05-14): no public-developer sandbox exists (§ 2.13 / § 10.1 Q1); public-developer trading prices use a money-object envelope, not undocumented `int64` scaling (§ 2.6 / § 10.1 Q3); WebSocket auth is signed `X-PM-*` headers on the HTTP upgrade (§ 2.12 / § 10.1 Q7). Remaining gating risk: operator-executed first-touch protocol on live host since no sandbox exists. Status: research-only; awaiting operator decision on Design-phase authorization.
 
   Per `CLAUDE.md` R-10, the artifact above is the sanctioned single landing surface for this work; the debt-log line is a pointer, not a parallel tracker. The pointer is added by the operator, not the agent.

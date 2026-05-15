@@ -1,5 +1,27 @@
 # Governance Operator Manual
 
+## Document status
+
+Active tracking belongs in `docs/profit_path_debt_log.md` and
+`docs/ROADMAP.md`. This directory keeps only current operator manuals,
+runbooks, active Phase 2 acceptance material, and current research notes.
+
+Historical cycle ledgers, replay reports, closed charters, and one-off audit
+artifacts live in `docs/_archive/governance/`. If an active document needs to
+reference one of those artifacts, point at the archive path directly instead
+of copying status text back into this directory.
+
+Current root files:
+
+- `README.md` — runtime-overrides operator manual.
+- `PHASE2_RUNBOOK.md` and `PROFIT-PHASE2-001-*` — active Phase 2 close-day
+  and early-close materials.
+- `2026-05-05-*-runbook.md` and `2026-05-13-kalshi-drift-halt-runbook.md` —
+  current operational incident runbooks.
+- `2026-05-14-polymarket-*` — current Polymarket public-track investigation
+  notes.
+- `PROFIT-PHASE2-002-onboarding.md` — next governance phase onboarding.
+
 This manual documents the runtime-overrides plumbing built in Phase 1 of
 the LLM governance agent project. Phase 1 ships *infrastructure*; the
 agent itself comes in Phase 2+. Until then, this file is a guide for

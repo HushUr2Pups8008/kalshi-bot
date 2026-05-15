@@ -397,7 +397,7 @@ Append-only, daily-rotated (`decisions.jsonl.YYYY-MM-DD` for archives, gzip-comp
 
 ### 8.5.1 Early-close addendum (added 2026-05-05 during PROFIT-PHASE2-001)
 
-The 14-day floor in §8.5 is a **calendar floor for confidence**, not a derivation from any specific cadence. PROFIT-PHASE2-001's day-4 mid-soak confirmation (`docs/governance/2026-05-04-day-4-mid-soak-confirmation.md`) showed the volume gate (≥ 30 decisions) cleared by 5.3× (158 decisions) and all four safety counters at zero. The marginal information from days 8-14 is bounded.
+The 14-day floor in §8.5 is a **calendar floor for confidence**, not a derivation from any specific cadence. PROFIT-PHASE2-001's day-4 mid-soak confirmation (`docs/_archive/governance/2026-05-04-day-4-mid-soak-confirmation.md`) showed the volume gate (≥ 30 decisions) cleared by 5.3× (158 decisions) and all four safety counters at zero. The marginal information from days 8-14 is bounded.
 
 **Early-close gates (all must hold for a day-N close where 7 ≤ N < 14):**
 

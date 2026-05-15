@@ -45,7 +45,7 @@ Cohort discriminator: `dossier_updates.created_at` (or equivalent timestamp colu
 
 ## Cross-links
 
-- `docs/governance/cycle-15-conditional-charter-skeletons.md` §A.5 — origin pattern (transferable to §B).
+- `docs/_archive/governance/cycle-15-conditional-charter-skeletons.md` §A.5 — origin pattern (transferable to §B).
 - `docs/governance/2026-05-06-cycle-15b-charter-extraction-rebuild.md` — charter referencing this note.
 - `docs/governance/2026-05-06-cycle-15b-task-split.md` C9 + L7 — re-ingestion pipeline + atomicity review.
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 Rule 4 — replay evidence reproducibility requirement.

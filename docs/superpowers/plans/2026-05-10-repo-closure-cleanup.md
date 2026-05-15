@@ -28,7 +28,7 @@ on commit `1d0f65a` (CI green, Stream G complete, Wave-1 flipped).
    - `PROFIT-EDGE-004` Sub-1 — wait for Cycle-17C E3 verdict (per
      no-additive-dev priority).
 8. **Wave-2/3 un-archive:** NOT performed. Lever specs live in active
-   `docs/governance/cycle-17-conditional-charter-skeletons.md` + ROADMAP
+   `docs/_archive/governance/cycle-17-conditional-charter-skeletons.md` + ROADMAP
    §2.3 lever map (per 2026-05-09 docs consolidation).
 
 ## Tier 0 — Working tree + reconciliation (this sprint)

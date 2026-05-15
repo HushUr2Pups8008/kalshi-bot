@@ -1,6 +1,6 @@
 # EDGE-004 closure-path TL;DR — v3 (2026-05-05 refresh)
 
-> **🛑 SUPERSEDED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** v3 framed Wave-2 / Wave-3 / Lever-D as the closure path. IC §16 added 2026-05-06 requires replayed-EV evidence before any behavioral deploy; Wave-2 + Wave-3 + Lever-D are HALTED pending Cycle-12 replay harness output. EDGE-004's closure path is now: Cycle-12 replay → IF positive-EV slice found, deploy that slice (NOT the speculative levers below); IF none found, strategic pivot. The lever menu in this doc is no longer authoritative for closure; Cycle-12's `docs/governance/edge-replay-cycle12-report.md` is. See `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`.
+> **🛑 SUPERSEDED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** v3 framed Wave-2 / Wave-3 / Lever-D as the closure path. IC §16 added 2026-05-06 requires replayed-EV evidence before any behavioral deploy; Wave-2 + Wave-3 + Lever-D are HALTED pending Cycle-12 replay harness output. EDGE-004's closure path is now: Cycle-12 replay → IF positive-EV slice found, deploy that slice (NOT the speculative levers below); IF none found, strategic pivot. The lever menu in this doc is no longer authoritative for closure; Cycle-12's `docs/_archive/governance/edge-replay-cycle12-report.md` is. See `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`.
 
 **Status:** SUPERSEDED PER IC §16 (was: operator-facing one-pager. Supersedes v2.2.)
 **Drafted:** 2026-05-05.
@@ -105,7 +105,7 @@ Probability of intake-side closure: ~30 % + (1 − 0.30) × 0.40 = **~58 %**. Re
 - `docs/superpowers/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md` — Lever C parent
 - `docs/superpowers/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — **Lever C v1 LOCK**
 - `docs/superpowers/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — **Branch D triggers**
-- `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Wave-2 operator decision input
+- `docs/_archive/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Wave-2 operator decision input
 - `docs/governance/wave-1-post-deploy-observation-plan.md` — 14-row regression watch
 - `docs/governance/PROFIT-PHASE2-002-onboarding.md` — next-soak setup
 - `docs/governance/2026-05-05-rollback-runbook-validation.md` — runbook drift findings (G1 env-revert fictional)

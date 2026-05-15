@@ -93,10 +93,10 @@ Pre-deploy sizing for the specific A.1+ URL candidates is locked (Codex `2a15d55
 - **`docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md`** — A.1+1.5 option-B spec (NEW)
 - `docs/superpowers/specs/2026-05-03-edge-004-lever-b-g1-calibration-design.md` — Lever B
 - `docs/superpowers/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md` — Lever C
-- `docs/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md` — per-source audit (Claude)
+- `docs/_archive/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md` — per-source audit (Claude)
 - `docs/governance/2026-05-04-lever-a1-plus-specialist-analyst-domain-normalized-audit.md` — per-source verification (Codex)
-- `docs/governance/2026-05-03-match001-bprime-false-suppression-audit.md` — orthogonality finding (Claude)
+- `docs/_archive/governance/2026-05-03-match001-bprime-false-suppression-audit.md` — orthogonality finding (Claude)
 - `docs/governance/2026-05-04-match001-bprime-spec-parity-verification.md` — spec-parity verification (Codex)
 - `docs/governance/2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` — option-B probe order (Codex)
-- `docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md` — unified forecast
+- `docs/_archive/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md` — unified forecast
 - `docs/governance/post-soak-close-rehearsal-checklist.md` §7 — operator decision-point at Day-14

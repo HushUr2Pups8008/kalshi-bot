@@ -22,7 +22,7 @@ Identify and execute non-conflicting `docs/` work in the **main worktree** while
 | `docs/superpowers/plans/2026-05-09-profit-obs-003-blendtask-skipped-emission.md` | Audit follows this for invariant + Task 6/7 closure |
 | `docs/superpowers/specs/2026-05-03-obs-003-blendtask-skipped-emission-design.md` | Spec §8 acceptance is the audit's exit criterion |
 | `docs/profit_path_debt_log.md` — `PROFIT-OBS-003` section + Header counts (lines around 31–34) + High-Risk Area #4 (line 43) + Recommended Execution Order (line 47) | Audit closure writes here; edits race the closure |
-| `docs/governance/2026-05-06-post-obs003-skipped-attribution-audit-refresh.md` | Quoted by audit invariant computation |
+| `docs/_archive/governance/2026-05-06-post-obs003-skipped-attribution-audit-refresh.md` | Quoted by audit invariant computation |
 | `docs/ROADMAP.md` — Wave-1 row (line ~105) + cycle-trail block | Audit closure may flip Wave-1 line; ROADMAP touches debt log cross-refs |
 | `docs/IMPLEMENTATION_CONTRACT.md` §16 | Audit cites IC §16 Rule 2 exemption |
 | `~/vscode/kalshi-bot-obs-003/**` (entire obs-003 worktree) | Audit's working tree |

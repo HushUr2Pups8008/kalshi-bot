@@ -84,7 +84,7 @@ Plus parallel-discretion option-A geopolitics specialist deploy (single commit; 
 ## Cross-links
 
 - `docs/governance/wave-1-deploy-commit-order-decision.md` — Wave-1 analog
-- `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — branch sequence + acceptance
+- `docs/_archive/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — branch sequence + acceptance
 - `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — Branch C feed selection (ARCHIVED Stream G R37)
 - `docs/governance/2026-05-05-wave-2-deploy-day-timing.md` — Wave-2 timing recommendation
 - `docs/governance/wave-2-wave-3-changelog-entries-prestaged.md` — pre-staged CHANGELOG entries

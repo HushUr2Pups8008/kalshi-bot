@@ -1,6 +1,6 @@
 # PROFIT-EDGE-004 Lever A.1+ — feed-onboarding (the only edge-production lever in EDGE-004 scope)
 
-> **🛑 BLOCKED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** Behavioral deploys require replayed-EV evidence. This lever was the canonical "deploy hope" candidate — onboarding speculative legal/geopolitics feeds without replay validation. Wave-2 deploy is HALTED pending Cycle-12 replay harness output. If the harness identifies a (source × market_family × signal_type) slice with positive replayed EV at 95 % CI, that slice — NOT the legal/geopolitics feeds spec'd below — becomes the Wave-2 candidate. See `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`.
+> **🛑 BLOCKED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06).** Behavioral deploys require replayed-EV evidence. This lever was the canonical "deploy hope" candidate — onboarding speculative legal/geopolitics feeds without replay validation. Wave-2 deploy is HALTED pending Cycle-12 replay harness output. If the harness identifies a (source × market_family × signal_type) slice with positive replayed EV at 95 % CI, that slice — NOT the legal/geopolitics feeds spec'd below — becomes the Wave-2 candidate. See `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`.
 
 **Status:** BLOCKED PER IC §16 (was: design; Wave 2 of post-soak landing — first feed deploy ≥ 2026-05-22 after A.1 classifier patch lands and stabilises)
 **Tracker:** `PROFIT-EDGE-004` Lever A → Stage A.1+
@@ -9,9 +9,9 @@
 **Drafted:** 2026-05-03
 **Empirical context:**
 - `docs/governance/2026-05-03-source-class-diversification-audit.md` (single-source rate; `news` 238 / `other` 122 / `official` 9 of OPP joins)
-- `docs/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md` (A.1 alone produces ~0 archive lift)
-- `docs/governance/2026-05-03-edge004-wave2-expected-state-ladder.md` (Codex's Wave-2 forecast)
-- `docs/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md` **(2026-05-04 update — REVISES §2 / §3.1 candidate ordering; see §2.5 callout below)**
+- `docs/_archive/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md` (A.1 alone produces ~0 archive lift)
+- `docs/_archive/governance/2026-05-03-edge004-wave2-expected-state-ladder.md` (Codex's Wave-2 forecast)
+- `docs/_archive/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md` **(2026-05-04 update — REVISES §2 / §3.1 candidate ordering; see §2.5 callout below)**
 
 ## §2.5 — 2026-05-04 per-source revision callout (LOAD-BEARING)
 
@@ -19,7 +19,7 @@ The 2026-05-04 per-source audit drilled into the specialist_analyst class and fo
 
 **Audit-of-the-audit + aggregator-path forensics (commit `37063d8`, 2026-05-04):** `VitalLaw.com` is NOT in canonical `config.py:RSS_FEEDS` and likely never was — the Mac archive's VitalLaw records came via the Google News query family (`feeds/search_news_monitor.py`), which dynamically derives RSS queries from current market titles. The Google News path is **active in current canonical config** (re-enabled 2026-04-23 per `config.py:DISABLED_SOURCE_FAMILIES`). Operator's first response at Day-14 is **passive observation** of whether VitalLaw / legal-niche surfaces under the current market-mix queries (Branch A); deployment is only required if 14 d of passive observation produces 0 legal-niche PAPER_TRADE (Branch C — open-RSS analogues per the A.1+1.5 spec). Codex's 2026-05-05 direct-RSS probe (`docs/governance/2026-05-05-vitallaw-direct-rss-probe.md`) confirmed Branch B (direct VitalLaw RSS) is infeasible.
 
-The §3.1 RSS-feed-list below is preserved as the geopolitics-sub-niche option-A; **the operator should consider §3.1bis (vital_law-niche option-B) FIRST** at deploy time, per `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md`. The unified Wave-1+2 forecast (`docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md`) sizes both pivots: option-A's expected lift is bounded above by the existing 0/18 conversion rate; option-B has the load-bearing-source profile but the deploy is harder (paywall friction higher in legal-analyst niche).
+The §3.1 RSS-feed-list below is preserved as the geopolitics-sub-niche option-A; **the operator should consider §3.1bis (vital_law-niche option-B) FIRST** at deploy time, per `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md`. The unified Wave-1+2 forecast (`docs/_archive/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md`) sizes both pivots: option-A's expected lift is bounded above by the existing 0/18 conversion rate; option-B has the load-bearing-source profile but the deploy is harder (paywall friction higher in legal-analyst niche).
 
 The strict-xfail harness `tests/test_lever_a1plus_feed_config.py` now covers BOTH paths: `test_at_least_one_specialist_analyst_url_in_rss_feeds` pins option-A; `test_vital_law_or_legal_analyst_feed_present_post_a1plus` pins option-B. Either xfail flipping xpass on the deploy commit forces marker removal, so the spec doesn't need to commit to one path pre-deploy.
 
@@ -37,7 +37,7 @@ This spec picks the **first concrete candidate** for A.1+. Subsequent feeds (A.1
 
 ## 2. First-feed candidate selection: SPECIALIST ANALYST (revised post-Codex 2026-05-03 empirics)
 
-**Codex's 2026-05-03 candidate-feed sizing audit** (`docs/governance/2026-05-03-lever-a1-plus-candidate-feed-sizing.md` + `scripts/simulations/lever_a1_plus_candidate_feed_sizing.py`, commit `2a15d55`) ranks the candidates empirically against the 13-day archive surface:
+**Codex's 2026-05-03 candidate-feed sizing audit** (`docs/_archive/governance/2026-05-03-lever-a1-plus-candidate-feed-sizing.md` + `scripts/simulations/lever_a1_plus_candidate_feed_sizing.py`, commit `2a15d55`) ranks the candidates empirically against the 13-day archive surface:
 
 | feed class | MATCH_DIAGNOSTIC | OPPORTUNITY | PAPER_TRADE | median age sec |
 |---|---:|---:|---:|---:|

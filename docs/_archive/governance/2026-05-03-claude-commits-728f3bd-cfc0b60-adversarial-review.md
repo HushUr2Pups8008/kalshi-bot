@@ -52,7 +52,7 @@ Snapshot 5 (`c02dc87`) does mention this. But the cross-link is one-way: snapsho
 
 ### F5 — A.1+ spec §3.1 lists URLs without ranking among them; checklist §7 inherits the gap (Watch)
 
-`docs/superpowers/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` §3.1 (commit `356a35c`) lists 5 candidate URLs (`warontherocks.com`, `csis.org`, `understandingwar.org`, `cfr.org`, `atlanticcouncil.org`) without specifying a deploy order or empirical ranking among them. Codex's candidate-feed sizing audit (`docs/governance/2026-05-03-lever-a1-plus-candidate-feed-sizing.md`) ranked the *class*, not individual sources within the class.
+`docs/superpowers/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md` §3.1 (commit `356a35c`) lists 5 candidate URLs (`warontherocks.com`, `csis.org`, `understandingwar.org`, `cfr.org`, `atlanticcouncil.org`) without specifying a deploy order or empirical ranking among them. Codex's candidate-feed sizing audit (`docs/_archive/governance/2026-05-03-lever-a1-plus-candidate-feed-sizing.md`) ranked the *class*, not individual sources within the class.
 
 This gap propagates to the rehearsal checklist (commit `cfc0b60`) §7, which says "verify each candidate feed URL" without specifying which to deploy first.
 

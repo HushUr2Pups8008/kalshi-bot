@@ -95,7 +95,7 @@ If deployed: same timing recipe as Branch C (UTC Mon-Thu 18:00-22:00; 24 h watch
 
 - `docs/governance/2026-05-05-wave-1-deploy-day-timing.md` — Wave-1 timing analog
 - `docs/governance/2026-05-05-wave-3-deploy-day-timing.md` — Wave-3 timing (this cycle)
-- `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Wave-2 sequence + acceptance criteria (post nomenclature cleanup)
+- `docs/_archive/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Wave-2 sequence + acceptance criteria (post nomenclature cleanup)
 - `docs/_archive/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — Branch C feed selection (ARCHIVED Stream G R37)
 - `docs/governance/wave-1-post-deploy-observation-plan.md` — observation plan template (Branch C deploy uses Wave-2-specific monitoring rows derived from this template)
 - `docs/_archive/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md` — Branch C parent spec (ARCHIVED Stream G R32)

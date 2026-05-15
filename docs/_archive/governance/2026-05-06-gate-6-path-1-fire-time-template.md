@@ -2,7 +2,7 @@
 
 **Type:** operator-fill template for close-day gate-6 attestation under Path 1 (raise daily review budget).
 **Drafted:** 2026-05-06 cycle 14 prep.
-**Authority:** `docs/governance/2026-05-06-gate-6-capacity-resolution-plan.md` Path 1 fallback after Path 3 failed.
+**Authority:** `docs/_archive/governance/2026-05-06-gate-6-capacity-resolution-plan.md` Path 1 fallback after Path 3 failed.
 **Companion:** `docs/governance/PROFIT-PHASE2-001-early-close-attestation.md` (gate-6 row this template fills).
 
 ## TL;DR
@@ -102,7 +102,7 @@ Per commit `9f8deef`, cycle-9 manual review of 67 day-1-to-day-3 decisions retur
 
 ## Cross-links
 
-- `docs/governance/2026-05-06-gate-6-capacity-resolution-plan.md` — Path 1/2/3 decision plan (cycle 11)
+- `docs/_archive/governance/2026-05-06-gate-6-capacity-resolution-plan.md` — Path 1/2/3 decision plan (cycle 11)
 - `docs/governance/PROFIT-PHASE2-001-early-close-attestation.md` — gate-6 row this template fills
 - `scripts/manual_review_capacity_audit.py` — capacity audit
 - `scripts/governance_decision_review.py` — bulk review tool

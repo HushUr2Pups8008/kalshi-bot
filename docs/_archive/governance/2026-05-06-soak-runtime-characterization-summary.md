@@ -129,9 +129,9 @@ All 5 dimensions support **proceeding with Day-7 close on 2026-05-08T19:01Z+:**
 ## Cross-links
 
 - `docs/governance/2026-05-06-pre-day7-dry-run-rehearsal.md` — gate-script dry-run
-- `docs/governance/2026-05-05-PROFIT-PHASE2-001-decision-distribution-analysis.md` — decision distribution source
-- `docs/governance/2026-05-05-pre-wave1-baseline-interpretation.md` — matcher baseline source
+- `docs/_archive/governance/2026-05-05-PROFIT-PHASE2-001-decision-distribution-analysis.md` — decision distribution source
+- `docs/_archive/governance/2026-05-05-pre-wave1-baseline-interpretation.md` — matcher baseline source
 - `docs/governance/2026-05-05-PROFIT-PHASE2-001-llm-throughput-baseline.md` — LLM throughput source
 - `docs/governance/2026-05-05-PROFIT-PHASE2-001-source-class-evolution-baseline.md` — source-class source
 - `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` — close gates
-- `docs/governance/2026-05-05-pre-wave1-baseline-interpretation.md` — Wave-1 deploy posture
+- `docs/_archive/governance/2026-05-05-pre-wave1-baseline-interpretation.md` — Wave-1 deploy posture

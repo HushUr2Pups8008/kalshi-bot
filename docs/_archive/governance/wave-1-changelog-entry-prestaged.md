@@ -111,7 +111,7 @@ recorded:
 - distinct-targets growth steady through day-7+
 
 Pre-deploy mid-soak reports:
-- [`docs/governance/2026-05-04-day-4-mid-soak-confirmation.md`](docs/governance/2026-05-04-day-4-mid-soak-confirmation.md)
+- [`docs/_archive/governance/2026-05-04-day-4-mid-soak-confirmation.md`](docs/_archive/governance/2026-05-04-day-4-mid-soak-confirmation.md)
 - `docs/governance/2026-05-07-day-7-pending-mid-soak-confirmation.md` (created at fire-time on 2026-05-07/08; pre-Wave-1-deploy this file does not yet exist)
 - snapshot-1 through snapshot-5 (day-1 through day-3)
 
@@ -165,4 +165,4 @@ git push origin main --tags
 - `docs/governance/post-soak-close-rehearsal-checklist.md` §5 — deploy commands
 - `docs/governance/post-soak-rollback-runbook.md` — incident-response runbook
 - `docs/governance/edge-004-closure-path-tldr.md` v2 — current EDGE-004 state
-- `docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md` — pre-deploy expected state
+- `docs/_archive/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md` — pre-deploy expected state

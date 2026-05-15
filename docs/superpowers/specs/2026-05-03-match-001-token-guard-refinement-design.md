@@ -110,7 +110,7 @@ _has_supporting_non_ticker_token = bool(non_ticker_overlap)
 
 `_tokenize` keeps hyphens (`re.sub(r"[^\w\s-]", " ", ...)` preserves `-`; `text.split()` splits only on whitespace). A Kalshi ticker therefore tokenizes to a single hyphenated string, which almost never matches any short overlap token (`trump`, `iran`, etc.). Under set-difference semantics, `non_ticker_overlap` is **always essentially the full overlap**, so `_has_supporting_non_ticker_token` is **almost always True**, so suppression is **almost always BLOCKED**. The spec as written produces a near-no-op fix.
 
-**Codex's 2026-05-03 sizing simulation** (`docs/governance/2026-05-03-match001-bprime-anchor-sizing.md` + `scripts/simulations/match001_bprime_anchor_sizing.py`) does NOT use this formulation. It uses **substring containment** against the raw ticker text:
+**Codex's 2026-05-03 sizing simulation** (`docs/_archive/governance/2026-05-03-match001-bprime-anchor-sizing.md` + `scripts/simulations/match001_bprime_anchor_sizing.py`) does NOT use this formulation. It uses **substring containment** against the raw ticker text:
 
 ```python
 # scripts/simulations/match001_bprime_anchor_sizing.py:bprime_suppresses
@@ -123,7 +123,7 @@ This produces 1,076 keys flip from kept → suppressed across the 13-day archive
 
 **The spec text and the simulation diverge on the predicate.** Both are functionally describing "all overlap tokens are inside the ticker text," but only the simulation correctly captures it under the existing `_tokenize`. The spec's set-difference form would produce ~0 flips because `_tokenize` doesn't split hyphenated tickers.
 
-**Codex 2026-05-03 tokenization-equivalence audit** (`docs/governance/2026-05-03-match001-tokenization-equivalence-audit.md` + `scripts/simulations/match001_tokenization_equivalence_audit.py`) independently confirmed the divergence on 2,838 archived `MATCH_DIAGNOSTIC` records:
+**Codex 2026-05-03 tokenization-equivalence audit** (`docs/_archive/governance/2026-05-03-match001-tokenization-equivalence-audit.md` + `scripts/simulations/match001_tokenization_equivalence_audit.py`) independently confirmed the divergence on 2,838 archived `MATCH_DIAGNOSTIC` records:
 
 | interpretation | suppressed keys |
 |---|---:|
@@ -172,7 +172,7 @@ Single-PR-equivalent change, lands as one commit:
 4. **Pre-deploy archive replay**:
    - One-shot script (committed under `scripts/simulations/match_b_prime_dry_run.py` or similar — soak-safe naming pattern) that replays the full `MATCH_DIAGNOSTIC` archive against the new predicate locally, counting how many records would flip from `survived → suppressed`.
    - Acceptance: post-fix flip count is in the 600–1,300 range (consistent with the 2026-05-02 forensic addendum's revised 1,207 estimate; the wider band tolerates archive-window drift).
-   - Acceptance: zero canonical-event *headlines* (paired with their canonical tickers KXSBUDGETRES-26APR-APR28, KXSBUDGETRES-26APR-APR25, KXTRUMPIRAN-26MAY01, KXPSL-26-PZA, KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH from PROFIT-OBS-003's positive-edge silent-exit) appear in the flip set. **Important:** the canonical *tickers* themselves WILL appear in `MATCH_SUPPRESSED` for non-canonical low-quality headlines, and that is correct behavior — Codex's 2026-05-03 anchor audit (`docs/governance/2026-05-03-match001-bprime-anchor-sizing.md`) found 399 legitimate low-quality suppressions on `KXTRUMPIRAN-26MAY01` alone. The guard is headline-level, not ticker-level.
+   - Acceptance: zero canonical-event *headlines* (paired with their canonical tickers KXSBUDGETRES-26APR-APR28, KXSBUDGETRES-26APR-APR25, KXTRUMPIRAN-26MAY01, KXPSL-26-PZA, KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH from PROFIT-OBS-003's positive-edge silent-exit) appear in the flip set. **Important:** the canonical *tickers* themselves WILL appear in `MATCH_SUPPRESSED` for non-canonical low-quality headlines, and that is correct behavior — Codex's 2026-05-03 anchor audit (`docs/_archive/governance/2026-05-03-match001-bprime-anchor-sizing.md`) found 399 legitimate low-quality suppressions on `KXTRUMPIRAN-26MAY01` alone. The guard is headline-level, not ticker-level.
 5. **Post-deploy 24-hour monitoring**:
    - `MATCH_SUPPRESSED` event count over the first 24 h post-deploy. Expected: ~1.5–2.5× the prior 24h rate (proportional to the ~498 → ~1,200–1,700 archive-rate scaling).
    - Confirm no canonical-event *headline* (paired with its canonical ticker) appears in `MATCH_SUPPRESSED` records. Any false-positive on a canonical *headline* (not just the ticker) is grounds for immediate revert.

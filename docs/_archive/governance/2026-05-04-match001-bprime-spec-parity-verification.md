@@ -80,6 +80,6 @@ Those should stay suppressed by the old gate and should **not** be suppressed by
 
 ## Cross-links
 
-- `docs/governance/2026-05-03-match001-bprime-false-suppression-audit.md`
-- `docs/governance/2026-05-03-match001-bprime-anchor-sizing.md`
+- `docs/_archive/governance/2026-05-03-match001-bprime-false-suppression-audit.md`
+- `docs/_archive/governance/2026-05-03-match001-bprime-anchor-sizing.md`
 - `docs/superpowers/specs/2026-05-03-match-001-token-guard-refinement-design.md`

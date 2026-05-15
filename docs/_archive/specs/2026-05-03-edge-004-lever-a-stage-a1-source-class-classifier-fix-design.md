@@ -6,13 +6,13 @@
 **Severity:** MEDIUM (revised down from HIGH after the archive replay showed standalone lift ≈ 0; severity reflects "prerequisite hygiene" not "edge-producing lever")
 **Drafted:** 2026-05-03
 **Last revision:** 2026-05-03 (same day) — revised scope post-Codex archive replay
-**Empirical basis:** `docs/governance/2026-05-03-source-class-diversification-audit.md` + `docs/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md` (Codex archive replay) + existing `main.py:_source_class_for_evidence` source.
+**Empirical basis:** `docs/governance/2026-05-03-source-class-diversification-audit.md` + `docs/_archive/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md` (Codex archive replay) + existing `main.py:_source_class_for_evidence` source.
 
 ## 0. Revised scope header (added 2026-05-03 post-Codex archive replay)
 
 The original spec framed Lever A.1 as a "first concrete action that arithmetically lifts the official count using feeds the bot is already polling" — predicting **≥ 30/260 official** post-fix on the 13-day archive. **Codex's 2026-05-03 archive replay falsified that prediction.**
 
-**Codex empirics** (`docs/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md`, commit `8001a16`):
+**Codex empirics** (`docs/_archive/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md`, commit `8001a16`):
 
 | surface | rows | flips under post-A.1 classifier | post-fix `official` |
 |---|---:|---|---:|
@@ -141,7 +141,7 @@ Plus tests:
 
 ## 4. Sizing methodology (OBSOLETE per §0 — Codex archive replay falsified the prediction)
 
-> **Superseded.** Codex's 2026-05-03 archive replay (`docs/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md`) found EVIDENCE_INGESTION rows do not carry raw source strings (0/248) and OPPORTUNITY surrogate replay shows post-A.1 official count stays at 1/260 — same as pre-fix. The methodology and target below are preserved as historical context only.
+> **Superseded.** Codex's 2026-05-03 archive replay (`docs/_archive/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md`) found EVIDENCE_INGESTION rows do not carry raw source strings (0/248) and OPPORTUNITY surrogate replay shows post-A.1 official count stays at 1/260 — same as pre-fix. The methodology and target below are preserved as historical context only.
 
 Original methodology (preserved):
 

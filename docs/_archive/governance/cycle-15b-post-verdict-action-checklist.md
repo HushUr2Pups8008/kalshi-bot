@@ -128,7 +128,7 @@ Acceptance criteria match the matching Cycle-16<X> skeleton acceptance section.
 
 - `docs/_archive/governance/2026-05-06-cycle-15b-charter-extraction-rebuild.md` — Cycle-15B charter (ARCHIVED Stream G R15)
 - `docs/_archive/governance/2026-05-06-cycle-15b-task-split.md` — Codex C1-C10 + Claude L1-L10 (ARCHIVED Stream G R15)
-- `docs/governance/cycle-16-conditional-charter-skeletons.md` — Cycle-16 skeletons (verdict-to-skeleton map)
+- `docs/_archive/governance/cycle-16-conditional-charter-skeletons.md` — Cycle-16 skeletons (verdict-to-skeleton map)
 - `docs/_archive/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — L8 cohort definitions (ARCHIVED Stream G R18)
 - `docs/governance/edge-replay-cycle15b-report.md` — Cycle-15B C10 report (FUTURE)
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-16 deploys)

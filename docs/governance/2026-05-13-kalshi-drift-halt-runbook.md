@@ -12,8 +12,8 @@ not recognize, [`kalshi/normalizer.py`](../../kalshi/normalizer.py)
 raises `UnsupportedPayloadContractError` at the parse boundary. The
 DriftCounter accumulates these events; when the absolute count crosses
 the threshold (LD-6: `>= 1` strict in v0.30.x), the counter writes
-[`data/runtime/kalshi_drift_halt.json`](../../data/runtime/) and the
-runtime fails closed for the remainder of the cycle.
+`data/runtime/kalshi_drift_halt.json` and the runtime fails closed for
+the remainder of the cycle.
 
 **Sentinel-file presence alone equals halted state** (LD-6b). The bot
 will not act on any cycle while the file exists. Clearance is **manual

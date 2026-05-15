@@ -132,7 +132,7 @@ This addendum does NOT authorize the prod-code change. Wave-3 territory.
 ## 6. Cross-links
 
 - `docs/superpowers/specs/2026-05-03-edge-004-lever-c-cross-series-headline-correlation-design.md` — parent spec
-- `docs/governance/2026-05-03-cross-series-headline-overlap-audit.md` — Codex's 49.2 % empirical anchor
+- `docs/_archive/governance/2026-05-03-cross-series-headline-overlap-audit.md` — Codex's 49.2 % empirical anchor
 - `docs/superpowers/specs/2026-05-03-exec-002-series-correlation-guard-design.md` — Wave-1 same-series guard (Lever C builds on this)
 - `tests/test_lever_c_cross_series_correlation.py` — pre-loaded harness (Codex expands per §3 above)
 - `docs/IMPLEMENTATION_CONTRACT.md` §1 (INV-6) + §5 + §11 — authority basis

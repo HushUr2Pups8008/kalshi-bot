@@ -29,8 +29,8 @@ repo-local paths.
 ## Notable backtick-style failures
 
 - `docs/governance/wave-1-changelog-entry-prestaged.md:107` -> `docs/governance/2026-05-07-day-7-pending-mid-soak-confirmation.md`
-- `docs/governance/2026-05-05-launchd-plist-drift-audit.md:34` -> `scripts/launchd/com.kalshi.db-backup.plist`
-- `docs/governance/2026-05-05-launchd-plist-drift-audit.md:38` -> `scripts/launchd/com.kalshi.db-backup.plist`
+- `docs/_archive/governance/2026-05-05-launchd-plist-drift-audit.md:34` -> `scripts/launchd/com.kalshi.db-backup.plist`
+- `docs/_archive/governance/2026-05-05-launchd-plist-drift-audit.md:38` -> `scripts/launchd/com.kalshi.db-backup.plist`
 - `docs/profit_path_debt_log.md:2254` -> `scripts/launchd/com.kalshi.db-backup.plist`
 - `docs/profit_path_debt_log.md:2255` -> `scripts/launchd/README.md`
 - `docs/profit_path_debt_log.md:3364` -> `tests/test_paper_trader_async.py`

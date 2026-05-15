@@ -69,7 +69,7 @@
 
 ### 2.0 v0.30.x Data/Runtime Alignment Audit (2026-05-13)
 
-Audit artifact: [`docs/governance/2026-05-13-v030x-data-runtime-alignment-audit.md`](governance/2026-05-13-v030x-data-runtime-alignment-audit.md)
+Audit artifact: [`docs/_archive/governance/2026-05-13-v030x-data-runtime-alignment-audit.md`](_archive/governance/2026-05-13-v030x-data-runtime-alignment-audit.md)
 
 Verdict: **PARTIALLY ALIGNED.** Producer paths fail-closed; observability gaps closed via F-01/F-04/F-12. Bot continues running.
 
@@ -187,7 +187,7 @@ Operator picks. PROFIT-EDGE-011 active.
 
 #### Are we near a Wave-2-eligible slice?
 
-**No.** Cycle-12 replay (paper-trade scope only, n=3) found 0 positive-EV slices. Cycle-13 will expand to 24 resolved markets in evidence_store; if still no slice with `ev_ci_95_lo > 0` AND `trades ≥ 10`, IC §16 Rule 5 triggers strategic-pivot playbook (`docs/governance/edge-replay-pivot-playbook.md`).
+**No.** Cycle-12 replay (paper-trade scope only, n=3) found 0 positive-EV slices. Cycle-13 will expand to 24 resolved markets in evidence_store; if still no slice with `ev_ci_95_lo > 0` AND `trades ≥ 10`, IC §16 Rule 5 triggers strategic-pivot playbook (`docs/_archive/governance/edge-replay-pivot-playbook.md`).
 
 **Cycle-13 leading indicator (cycle-13 dossier integrity audit):** 21 of 24 resolved-market dossiers stuck at `current_estimate = 0.5000` (the prior). Bot's belief model rarely exits the prior despite ingesting evidence. This is a calibration signal — most evidence is non-informative under current update logic. Replay verdict is bounded by this calibration regardless of feed onboarding.
 
@@ -273,9 +273,9 @@ Probability of intake-side closure: ~30 % + (1 − 0.30) × 0.40 = **~58 %**. Re
 ### 2.6 Cross-links
 
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate
-- `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — strategic redirect
-- `docs/governance/edge-replay-pivot-playbook.md` — IC §16 Rule 5 strategic-pivot diagnostic
-- `docs/governance/edge-replay-cycle12-report.md` — Cycle-12 replay output
+- `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — strategic redirect
+- `docs/_archive/governance/edge-replay-pivot-playbook.md` — IC §16 Rule 5 strategic-pivot diagnostic
+- `docs/_archive/governance/edge-replay-cycle12-report.md` — Cycle-12 replay output
 - `PROFIT-EDGE-005` (this file) — replay harness debt entry
 - `data/paper_trades.db` — 3-trade lifetime history
 - `data/evidence_store.db` — 266 evidence rows / 24 resolved markets
@@ -1668,12 +1668,12 @@ This is a multi-step problem and should not be bundled into one fix. A reasonabl
 - The Phase 2 governance agent (v0.29.55, in shadow mode through ~2026-05-11) is the longer-term architectural answer — dynamic source/keyword/series management instead of the current static `config.py` registries. EDGE-004's hypotheses 1 and 3 are exactly what governance is designed to manage. But until shadow mode closes and the agent is allowed to *modify production state*, the short-term levers are operator-driven.
 - The `KXMOCTRUMP25-26-MAY01` ticker as the sole OPPORTUNITY-emitting market is a strong tell. Inspect whether the bot's market-cache is over-indexed on a small set of long-horizon broad-trigger markets vs Kalshi's actual current event-series catalog. The matcher may be pairing many Trump-related headlines to this single market because it survives keyword filters with a low Jaccard floor, while other engaged markets in the same window are being skipped at earlier pipeline stages (suppression / dedup / pre-LLM diagnostics) and never producing OPPORTUNITY events.
 - **2026-05-03 source-class audit:** `docs/_archive/governance/2026-05-03-source-class-diversification-audit.md` (ARCHIVED Stream G R43) joins OPPORTUNITY → BLEND_DECISION → EVIDENCE_INGESTION over the 13-day MacBook archive. Result: source mix is news-heavy (`news` appears on 238 OPPORTUNITY joins; `official` only 9), but not purely single-class (109/260 OPPORTUNITY records have ≥2 known classes). Positive-edge cases are `other` x2 / `news` x1, not official-driven. This points to a source-mix + readiness/blending interaction, not a standalone "add official feeds" fix.
-- **2026-05-03 Lever D pre-LLM gate audit:** `docs/governance/2026-05-03-edge004-lever-d-pre-llm-gate-audit.md` sweeps archived `min_match_score` floors `{0.04, 0.05, 0.06, 0.08}` with the recorded pre-LLM gate diagnostics re-enabled. Result: 0.04-0.06 retain 67/260 OPPORTUNITY records and all 3 PAPER_TRADE records; 0.08 retains 56/260 and all 3 PAPER_TRADE records. The edge enrichment is real but volume-destructive and keeps the known losing FISA burst, so Lever D is a secondary noise/budget knob, not the first EDGE-004 Wave-2 fix.
-- **2026-05-03 Lever B G1-admittance sizing:** `docs/governance/2026-05-03-g1-admittance-counterfactual.md` replays archived `BLEND_DECISION` rows by lowering the G1 floor. Result: 0.04 admits 32/197 G1-killed candidates; 0.03 admits 65/197. Predicted edge remains mostly zero (only 1 candidate at 0.04 and 2 at 0.03 reach edge >= 0.02), so Lever B is an attribution/throughput lever to size post-OBS-003, not an immediate standalone edge-lift fix.
-- **2026-05-03 Lever C cross-series overlap sizing:** `docs/governance/2026-05-03-cross-series-headline-overlap-audit.md` groups archived OPPORTUNITY events by normalized exact headline and series prefix. Result: 128/260 OPPORTUNITY records (49.2%) share a headline across multiple series prefixes across 39 headline groups, dominated by `KXMOCTRUMP25` / `KXTRUMPIRAN` overlap. This clears the 5% sizing bar; EXEC-002 Approach 2 / Lever C stays in scope for a real spec.
+- **2026-05-03 Lever D pre-LLM gate audit:** `docs/_archive/governance/2026-05-03-edge004-lever-d-pre-llm-gate-audit.md` sweeps archived `min_match_score` floors `{0.04, 0.05, 0.06, 0.08}` with the recorded pre-LLM gate diagnostics re-enabled. Result: 0.04-0.06 retain 67/260 OPPORTUNITY records and all 3 PAPER_TRADE records; 0.08 retains 56/260 and all 3 PAPER_TRADE records. The edge enrichment is real but volume-destructive and keeps the known losing FISA burst, so Lever D is a secondary noise/budget knob, not the first EDGE-004 Wave-2 fix.
+- **2026-05-03 Lever B G1-admittance sizing:** `docs/_archive/governance/2026-05-03-g1-admittance-counterfactual.md` replays archived `BLEND_DECISION` rows by lowering the G1 floor. Result: 0.04 admits 32/197 G1-killed candidates; 0.03 admits 65/197. Predicted edge remains mostly zero (only 1 candidate at 0.04 and 2 at 0.03 reach edge >= 0.02), so Lever B is an attribution/throughput lever to size post-OBS-003, not an immediate standalone edge-lift fix.
+- **2026-05-03 Lever C cross-series overlap sizing:** `docs/_archive/governance/2026-05-03-cross-series-headline-overlap-audit.md` groups archived OPPORTUNITY events by normalized exact headline and series prefix. Result: 128/260 OPPORTUNITY records (49.2%) share a headline across multiple series prefixes across 39 headline groups, dominated by `KXMOCTRUMP25` / `KXTRUMPIRAN` overlap. This clears the 5% sizing bar; EXEC-002 Approach 2 / Lever C stays in scope for a real spec.
 - **2026-05-03 Lever E source/source-class corroboration sizing:** `docs/_archive/governance/2026-05-03-lever-e-source-corroboration-sizing.md` (ARCHIVED Stream G R43) joins OPPORTUNITY → BLEND_DECISION → EVIDENCE_INGESTION and counts distinct contributing source classes plus distinct source instances. Source-class distribution is `{0: 9, 1: 142, 2: 100, 3: 9}`; class N>=2 retains 109/260 OPPORTUNITY records and 0/3 PAPER_TRADE records. Source-instance distribution is `{0: 9, 1: 251}`; source N>=2 retains 0/260. Lever E is therefore a high-blast-radius corroboration gate, not a first-line EDGE-004 edge-lift lever without post-OBS-003 sizing.
-- **2026-05-03 Lever A.1 classifier replay + Wave-2 ladder:** `docs/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md` shows the exact EVIDENCE_INGESTION source-string replay is blocked by archive shape (0/248 rows carry raw `source`). OPPORTUNITY source-label surrogate stays at 1/260 official post-A.1, failing the ≥30/260 target; MATCH_DIAGNOSTIC feed-surface surrogate stays 63/2838 official and flips only 8 defense-feed rows from other→news. `docs/governance/2026-05-03-edge004-wave2-expected-state-ladder.md` therefore treats A.1 as a distribution/measurement fix with no archive-visible trade-rate lift; A.1+ new feeds remain the only Wave-2 edge-production lever.
-- **2026-05-03 Lever A.1+ candidate-feed sizing:** `docs/governance/2026-05-03-lever-a1-plus-candidate-feed-sizing.md` buckets archive-visible source labels into government bulletin / specialist analyst / market microstructure classes. Result: specialist analyst has the strongest non-mainstream archive surface (251 MATCH_DIAGNOSTIC, 21 OPPORTUNITY, 3 PAPER_TRADE, median age ~2240s), government bulletin is thinner (63 MATCH_DIAGNOSTIC, 1 OPPORTUNITY, 0 PAPER_TRADE), and market microstructure has no archive surface. This points A.1+ first-feed ROI toward specialist analyst feeds; live onboarding still needs per-feed freshness/auth probes.
+- **2026-05-03 Lever A.1 classifier replay + Wave-2 ladder:** `docs/_archive/governance/2026-05-03-lever-a1-source-classifier-counterfactual.md` shows the exact EVIDENCE_INGESTION source-string replay is blocked by archive shape (0/248 rows carry raw `source`). OPPORTUNITY source-label surrogate stays at 1/260 official post-A.1, failing the ≥30/260 target; MATCH_DIAGNOSTIC feed-surface surrogate stays 63/2838 official and flips only 8 defense-feed rows from other→news. `docs/_archive/governance/2026-05-03-edge004-wave2-expected-state-ladder.md` therefore treats A.1 as a distribution/measurement fix with no archive-visible trade-rate lift; A.1+ new feeds remain the only Wave-2 edge-production lever.
+- **2026-05-03 Lever A.1+ candidate-feed sizing:** `docs/_archive/governance/2026-05-03-lever-a1-plus-candidate-feed-sizing.md` buckets archive-visible source labels into government bulletin / specialist analyst / market microstructure classes. Result: specialist analyst has the strongest non-mainstream archive surface (251 MATCH_DIAGNOSTIC, 21 OPPORTUNITY, 3 PAPER_TRADE, median age ~2240s), government bulletin is thinner (63 MATCH_DIAGNOSTIC, 1 OPPORTUNITY, 0 PAPER_TRADE), and market microstructure has no archive surface. This points A.1+ first-feed ROI toward specialist analyst feeds; live onboarding still needs per-feed freshness/auth probes.
 - OBS-003 closed 2026-05-10 — per-gate kill attribution now available via SKIPPED reason field; cycle-17C E3+ replay analyses can join SKIPPED.reason against the readiness-gate enum directly.
 
 **Related**
@@ -1715,11 +1715,11 @@ Cutover note: this entry's "Evidence / Source" + this Follow-up section together
 
 The EDGE-004 lever menu's 2026-05-04 cycle produced four findings that change the operator-facing closure path:
 
-1. **Per-source audit** (`docs/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md`, commit `cca3cea`; Codex re-derivation `2bb0b09`): of the 21 OPP + 3 PAPER_TRADE in the specialist_analyst class, **all 3 PAPER_TRADE came from VitalLaw.com**. The geopolitics sub-niche feeds (Kyiv X / Times of Israel / Iran International / bellingcat / Defense News / Breaking Defense) produced 18 OPP + 0 PAPER_TRADE — 0 % conversion at the class-internal level. The proposed A.1+1 candidates (war on the rocks / CSIS / ISW / CFR / Atlantic Council) target the same 0 %-conversion sub-niche.
+1. **Per-source audit** (`docs/_archive/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md`, commit `cca3cea`; Codex re-derivation `2bb0b09`): of the 21 OPP + 3 PAPER_TRADE in the specialist_analyst class, **all 3 PAPER_TRADE came from VitalLaw.com**. The geopolitics sub-niche feeds (Kyiv X / Times of Israel / Iran International / bellingcat / Defense News / Breaking Defense) produced 18 OPP + 0 PAPER_TRADE — 0 % conversion at the class-internal level. The proposed A.1+1 candidates (war on the rocks / CSIS / ISW / CFR / Atlantic Council) target the same 0 %-conversion sub-niche.
 
-2. **Aggregator-path forensics** (`docs/governance/2026-05-04-vitallaw-aggregator-path-forensics.md`, commit `37063d8`; Codex coverage audit `bb015a5`): the 83 VitalLaw records in the Mac archive came via **Google News RSS** (`news.google.com/rss/articles/...`), NOT a direct VitalLaw RSS feed. Google News query family is **active in current canonical config** (re-enabled 2026-04-23). Therefore Branch A of the A.1+1.5 decision tree requires no code change: passive observation of whether VitalLaw / legal-niche surfaces under the current market-mix queries.
+2. **Aggregator-path forensics** (`docs/_archive/governance/2026-05-04-vitallaw-aggregator-path-forensics.md`, commit `37063d8`; Codex coverage audit `bb015a5`): the 83 VitalLaw records in the Mac archive came via **Google News RSS** (`news.google.com/rss/articles/...`), NOT a direct VitalLaw RSS feed. Google News query family is **active in current canonical config** (re-enabled 2026-04-23). Therefore Branch A of the A.1+1.5 decision tree requires no code change: passive observation of whether VitalLaw / legal-niche surfaces under the current market-mix queries.
 
-3. **MATCH-001 (B′) orthogonality** (`docs/governance/2026-05-03-match001-bprime-false-suppression-audit.md`, commit `83a9477`; Codex spec-parity `b56c261`): the post-fix B′ predicate is orthogonal to the existing pre-fix `MATCH_SUPPRESSED` logic (100 % flip rate). B′ deploy is empirically clean w.r.t. un-suppression of existing noise; combined with the 0-likely-false-negative finding from Codex's earlier audit, both directions of B′ deploy risk are sized at 0.
+3. **MATCH-001 (B′) orthogonality** (`docs/_archive/governance/2026-05-03-match001-bprime-false-suppression-audit.md`, commit `83a9477`; Codex spec-parity `b56c261`): the post-fix B′ predicate is orthogonal to the existing pre-fix `MATCH_SUPPRESSED` logic (100 % flip rate). B′ deploy is empirically clean w.r.t. un-suppression of existing noise; combined with the 0-likely-false-negative finding from Codex's earlier audit, both directions of B′ deploy risk are sized at 0.
 
 4. **VitalLaw direct-RSS infeasible** (Codex `a45c06c`, 2026-05-05): probed `vitallaw.com` for a public RSS endpoint; all obvious paths return SSO-redirect / 403 / 404 / RSS-error-HTML / connection failure. Branch B (direct VitalLaw RSS) is empirically dropped from the A.1+1.5 decision tree.
 
@@ -1746,9 +1746,9 @@ Total strict-xfail markers as of 2026-05-04: 26+ pinning the deploy lattice.
 - `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` — operator deploy guide (ARCHIVED Stream G R54; Wave-1 deploy + soak close complete)
 - `docs/_archive/governance/post-edge-004-escalation-paths.md` — Wave-3-stall escalation paths (ARCHIVED Stream G R53)
 
-**Honest read after 2026-05-04 cycle:** EDGE-004 closure is dominantly bound by **whether the Google News query family continues to surface legal-niche headlines** (Branch A passive observe), with Branch C as a fallback. Wave-1 base stack landings reduce conversion volume by design (260 OPP / 9 PAPER_TRADE pre-Wave-1 → 87 / 1 post-Wave-1 per simulation `f671468`); the ≥ 5 % closure target is measured against the post-Wave-1 base, not the pre-Wave-1 baseline. Modal scenario per the unified Wave-1+2 forecast (`docs/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md`, commit `2bf3da1`): Branch A produces some legal-niche surfacing within 14 d; if 0, Branch C deploys; if still 0, escalation fires.
+**Honest read after 2026-05-04 cycle:** EDGE-004 closure is dominantly bound by **whether the Google News query family continues to surface legal-niche headlines** (Branch A passive observe), with Branch C as a fallback. Wave-1 base stack landings reduce conversion volume by design (260 OPP / 9 PAPER_TRADE pre-Wave-1 → 87 / 1 post-Wave-1 per simulation `f671468`); the ≥ 5 % closure target is measured against the post-Wave-1 base, not the pre-Wave-1 baseline. Modal scenario per the unified Wave-1+2 forecast (`docs/_archive/governance/2026-05-03-edge004-wave1-plus-wave2-unified-trade-rate-forecast.md`, commit `2bf3da1`): Branch A produces some legal-niche surfacing within 14 d; if 0, Branch C deploys; if still 0, escalation fires.
 
-**2026-05-06 cycle-11.5 strategic redirect (IC §16):** EDGE-004 lever menu (A.1+, A.1+1.5, B, C) is **BLOCKED PENDING REPLAY EVIDENCE**. The "Wave-2 deploys feed onboarding → Wave-3 deploys Lever B/C → escalation paths fire on stall" sequencing is replaced by a single new gate: each behavioral deploy requires replayed-EV evidence per IC §16. The replay harness became the primary closure path and was delivered under `PROFIT-EDGE-005`/`PROFIT-EDGE-006`; see `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` for the redirect rationale (3 lifetime trades, 0 wins, -$7.50 P&L, 89% zero-edge SKIPPEDs).
+**2026-05-06 cycle-11.5 strategic redirect (IC §16):** EDGE-004 lever menu (A.1+, A.1+1.5, B, C) is **BLOCKED PENDING REPLAY EVIDENCE**. The "Wave-2 deploys feed onboarding → Wave-3 deploys Lever B/C → escalation paths fire on stall" sequencing is replaced by a single new gate: each behavioral deploy requires replayed-EV evidence per IC §16. The replay harness became the primary closure path and was delivered under `PROFIT-EDGE-005`/`PROFIT-EDGE-006`; see `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` for the redirect rationale (3 lifetime trades, 0 wins, -$7.50 P&L, 89% zero-edge SKIPPEDs).
 
 ---
 
@@ -1781,9 +1781,9 @@ This entry tracks the replay-harness deliverable that must produce edge evidence
 **Evidence / Source**
 
 - `data/paper_trades.db`: 3 trades / 0 wins / -$7.50 / 1 source / 1 series cluster.
-- `docs/governance/2026-05-06-post-obs003-skipped-attribution-audit-refresh.md`: 89% zero-edge SKIPPEDs.
-- `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`: redirect authority.
-- `docs/governance/2026-05-06-cycle-12-replay-readiness-inventory.md`: data + API readiness audit (24 of 36 evidence_store markets resolved; Kalshi has dual `settled`/`finalized` terminal states; no per-T historical price endpoint exposed).
+- `docs/_archive/governance/2026-05-06-post-obs003-skipped-attribution-audit-refresh.md`: 89% zero-edge SKIPPEDs.
+- `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md`: redirect authority.
+- `docs/_archive/governance/2026-05-06-cycle-12-replay-readiness-inventory.md`: data + API readiness audit (24 of 36 evidence_store markets resolved; Kalshi has dual `settled`/`finalized` terminal states; no per-T historical price endpoint exposed).
 - `docs/IMPLEMENTATION_CONTRACT.md` §16: replayed-EV gate codified.
 
 **Proposed Fix (Cycle-12 Codex deliverables)**
@@ -1792,7 +1792,7 @@ This entry tracks the replay-harness deliverable that must produce edge evidence
 2. `scripts/edge_replay/build_replay_dataset.py` — per-(market, decision-time) record from evidence_store + dossier_updates joined.
 3. `scripts/edge_replay/score_counterfactual_pnl.py` — per-(source × market_family × signal_type) table with trades / wins / EV / 95% CI / Sharpe per readiness-inventory schema.
 4. `tests/test_edge_replay_*.py` — at minimum: dataset-build determinism, P&L sign on synthetic input, source-aggregation, self-test against the 3 known paper trades (must reproduce 0 wins, -$7.50).
-5. `docs/governance/edge-replay-cycle12-report.md` — interpretation: ≥1 row with `ev_ci_95_lo > 0` AND `trades ≥ 10` (success) OR explicit "no slice has positive replayed EV at our sample size" (negative-result honest report).
+5. `docs/_archive/governance/edge-replay-cycle12-report.md` — interpretation: ≥1 row with `ev_ci_95_lo > 0` AND `trades ≥ 10` (success) OR explicit "no slice has positive replayed EV at our sample size" (negative-result honest report).
 
 **Acceptance Criteria**
 
@@ -1815,14 +1815,14 @@ This entry tracks the replay-harness deliverable that must produce edge evidence
 - `PROFIT-OBS-003` (closed Wave-1 deploy) — SKIPPED-emission attribution surface required for replay.
 - `PROFIT-PHASE2-001` (active close target 2026-05-15) — Wave-1 cleanup scope already descoped to OBS-003-only; Wave-2/3 HALTED.
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate.
-- `docs/governance/2026-05-06-cycle-12-replay-readiness-inventory.md` — Codex's data + API readiness map.
+- `docs/_archive/governance/2026-05-06-cycle-12-replay-readiness-inventory.md` — Codex's data + API readiness map.
 
 **2026-05-06 cycle-13 update:** harness PARTIALLY DELIVERED. 5 Cycle-12 deliverables landed (commit `aadd391`):
 - ✓ `scripts/edge_replay/fetch_resolved_markets.py` — paper-trades + manual-JSON sources; live-Kalshi flag pending Cycle-13.
 - ✓ `scripts/edge_replay/build_replay_dataset.py` — per-decision-time joins; historical-price reconstruction supported.
 - ✓ `scripts/edge_replay/score_counterfactual_pnl.py` — bootstrap CI; readiness-gate replay; left-on-table measure.
 - ✓ `tests/test_edge_replay_*.py` — 9 tests including synthetic +EV self-test (catches scorer-broken vs no-edge).
-- ✓ `docs/governance/edge-replay-cycle12-report.md` — first-pass result: 0 positive-EV slices; harness self-test reproduces 3-trade history.
+- ✓ `docs/_archive/governance/edge-replay-cycle12-report.md` — first-pass result: 0 positive-EV slices; harness self-test reproduces 3-trade history.
 
 First-pass result (3-market scope): 0 positive-EV slices, P&L -$7.50, win rate 0.00. Not proof no edge anywhere; sample is single-source / single-series / single-direction.
 
@@ -1853,13 +1853,13 @@ Cycle-12 ran replay against `paper_trades` scope only — 3 markets, 1 source, 1
 **Why it matters to profitability / safety / reliability**
 
 1. **Direct successor to PROFIT-EDGE-005.** Without scope expansion, Wave-2 stays HALTED indefinitely on insufficient sample.
-2. **Calibration diagnostic surface.** If 24-market replay still finds no positive-EV slice, IC §16 Rule 5 triggers `docs/governance/edge-replay-pivot-playbook.md` — calibration is the leading suspect per cycle-13 dossier audit.
+2. **Calibration diagnostic surface.** If 24-market replay still finds no positive-EV slice, IC §16 Rule 5 triggers `docs/_archive/governance/edge-replay-pivot-playbook.md` — calibration is the leading suspect per cycle-13 dossier audit.
 3. **Wave-2 candidate identification.** If positive-EV slice exists, that slice (NOT speculative legal/geopolitics feeds) becomes Wave-2.
 
 **Evidence / Source**
 
-- `docs/governance/2026-05-06-cycle-13-replay-scope-expansion-charter.md` — Codex's charter.
-- `docs/governance/edge-replay-cycle12-report.md` — Cycle-12 first-pass result.
+- `docs/_archive/governance/2026-05-06-cycle-13-replay-scope-expansion-charter.md` — Codex's charter.
+- `docs/_archive/governance/edge-replay-cycle12-report.md` — Cycle-12 first-pass result.
 - Cycle-13 dossier integrity audit (this entry's parent commit): 21/24 markets at 0.5000 prior.
 - Cycle-13 capacity audit: 552 decisions, 0.663 reviewable fraction at 80/day.
 
@@ -1879,15 +1879,15 @@ Cycle-12 ran replay against `paper_trades` scope only — 3 markets, 1 source, 1
 
 **Notes**
 
-- Operator coordination: live API call needs no special handling; existing `kalshi/rest_client.py` 0.12s rate-limit guard sufficient. See `docs/governance/2026-05-06-cycle-13-live-api-coordination.md`.
+- Operator coordination: live API call needs no special handling; existing `kalshi/rest_client.py` 0.12s rate-limit guard sufficient. See `docs/_archive/governance/2026-05-06-cycle-13-live-api-coordination.md`.
 - Out of scope per charter: new harness features, Wave-2/3 deploy work, Lever-D escalation, more HALT markers.
 
 **Related**
 
 - `PROFIT-EDGE-005` (closed; harness delivered) — direct parent; harness exists.
 - `PROFIT-EDGE-004` (open) — lever menu BLOCKED pending this expansion's output.
-- `docs/governance/2026-05-06-cycle-13-replay-scope-expansion-charter.md` — Cycle-13 charter.
-- `docs/governance/edge-replay-pivot-playbook.md` — IC §16 Rule 5 diagnostic playbook (fires on negative result).
+- `docs/_archive/governance/2026-05-06-cycle-13-replay-scope-expansion-charter.md` — Cycle-13 charter.
+- `docs/_archive/governance/edge-replay-pivot-playbook.md` — IC §16 Rule 5 diagnostic playbook (fires on negative result).
 - §Current Status (this file) — operator-facing dashboard; refreshed by replay verdict. (Was `docs/EDGE_STATUS.md` until 2026-05-09 consolidation.)
 
 **2026-05-06 cycle-13 update:** DELIVERED with negative result (commit `79e4d08`). 24 markets / 255 replay rows / 0 positive-EV slices / 0 left-on-table winners / -$7.50 P&L. IC §16 Rule 5 fires. Cycle-14 (PROFIT-EDGE-007 below) takes over as calibration kill-or-fix diagnostic.
@@ -1924,15 +1924,15 @@ This is **diagnosis-only**. No behavioral fixes ship in Cycle-14. Sole exception
 
 **Evidence / Source**
 
-- `docs/governance/edge-replay-cycle13-report.md` — replay verdict (0 positive-EV / 0 left-on-table-winners).
-- `docs/governance/2026-05-06-cycle-13-replay-harness-code-review.md` — code review (readiness-threshold finding feeds into LLM-called split diagnostic).
+- `docs/_archive/governance/edge-replay-cycle13-report.md` — replay verdict (0 positive-EV / 0 left-on-table-winners).
+- `docs/_archive/governance/2026-05-06-cycle-13-replay-harness-code-review.md` — code review (readiness-threshold finding feeds into LLM-called split diagnostic).
 - 21/24 dossiers at 0.5000 prior (cycle-13 audit).
 - 3/3 wrong-direction sized-bet trades.
 - `data/evidence_store.db` (266 rows) + `data/paper_trades.db` (3 trades) — diagnostic input.
 
 **Proposed Fix (Cycle-14 Codex deliverables — DIAGNOSIS-ONLY)**
 
-Per `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md`:
+Per `docs/_archive/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md`:
 
 1. `scripts/edge_replay/calibration_audit.py` — existing-outcome calibration audit (movement_rate, direction-correctness with [0.499, 0.501] denominator exclusion + count, Brier/log-loss with n=24 caveat, sized-bet-subset separate, moved vs unmoved EV/P&L).
 2. Per-source belief movement audit — extension of existing scorer.
@@ -1940,7 +1940,7 @@ Per `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md`:
 4. Synthetic high-info evidence injection — TWO LANES (downstream-of-extraction + real-extraction-in-loop) to discriminate update-model failure from extraction failure.
 5. Hard paper-mode-lock check post-Wave-1 — guardrail that OBS-005 unblock doesn't widen exposure.
 6. ROADMAP update — Wave-2/3/Branch-D rows: "HALTED AND POTENTIALLY OBSOLETE PENDING CYCLE-14 DIAGNOSIS."
-7. Written diagnosis doc — `docs/governance/edge-replay-cycle14-diagnosis.md` per the structured schema in charter.
+7. Written diagnosis doc — `docs/_archive/governance/edge-replay-cycle14-diagnosis.md` per the structured schema in charter.
 
 **Acceptance Criteria**
 
@@ -1964,9 +1964,9 @@ Per `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md`:
 - `PROFIT-EDGE-004` (open; lever menu OBSOLETE per cycle-14 verdict).
 - `PROFIT-EDGE-008` (active) — Cycle-15B extraction rebuild succeeds this entry.
 - `PROFIT-GOV-002` (closed) — same-class issue at LLM verdict layer (rubber-stamp bias); cycle-14 Lane B failure mode (zero movement on clear input) is the analogous pathology at the extraction layer.
-- `docs/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 diagnosis-doc with Claude appendix.
-- `docs/governance/cycle-15-conditional-charter-skeletons.md` §B — Cycle-15B skeleton (instantiates).
-- `docs/governance/cycle-14-post-verdict-action-checklist.md` — post-verdict execution checklist.
+- `docs/_archive/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 diagnosis-doc with Claude appendix.
+- `docs/_archive/governance/cycle-15-conditional-charter-skeletons.md` §B — Cycle-15B skeleton (instantiates).
+- `docs/_archive/governance/cycle-14-post-verdict-action-checklist.md` — post-verdict execution checklist.
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-15B fix).
 
 ---
@@ -1999,8 +1999,8 @@ This is calibration **inertness** at the extraction layer, not sign-inversion. T
 
 **Evidence / Source**
 
-- `docs/governance/edge-replay-cycle14-diagnosis.md` — verdict + Lane B numbers (model_prob=0.500 on both fixtures).
-- `docs/governance/2026-05-06-cycle-14-sign-error-candidate-trace.md` — sites 2/3/6/7 NOT ruled out by Lane A; prime trace targets.
+- `docs/_archive/governance/edge-replay-cycle14-diagnosis.md` — verdict + Lane B numbers (model_prob=0.500 on both fixtures).
+- `docs/_archive/governance/2026-05-06-cycle-14-sign-error-candidate-trace.md` — sites 2/3/6/7 NOT ruled out by Lane A; prime trace targets.
 - `tests/fixtures/cycle14_synthetic_evidence.json` — 10 synthetic fixtures available for Lane B per-step trace + post-fix Lane B verification.
 - `scripts/edge_replay/synthetic_injection_lanes.py` — Cycle-14 Lane B harness, reusable for post-fix verification.
 
@@ -2033,7 +2033,7 @@ This is calibration **inertness** at the extraction layer, not sign-inversion. T
 - `PROFIT-EDGE-009` (active) — Cycle-16D price-reconstruction prerequisite succeeds this entry.
 - `PROFIT-GOV-002` (closed) — same-class pathology (rubber-stamp bias at LLM verdict layer); orthogonal to keyword-map gap per Claude L5 cross-check.
 - `docs/_archive/governance/edge-replay-cycle15b-report.md` — Cycle-15B C10 report with Claude appendix + verdict (ARCHIVED Stream G R50).
-- `docs/governance/cycle-16-conditional-charter-skeletons.md` §D — Cycle-16D skeleton (instantiates).
+- `docs/_archive/governance/cycle-16-conditional-charter-skeletons.md` §D — Cycle-16D skeleton (instantiates).
 - `docs/_archive/governance/cycle-15b-post-verdict-action-checklist.md` — post-verdict checklist driving items 5/8/9/10 (ARCHIVED Stream G R21).
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-16D + post-reconstruction acceptance).
 
@@ -2068,7 +2068,7 @@ This is the same `/markets/{ticker}/trades` 404 issue surfaced in cycle-13's `fe
 **Evidence / Source**
 
 - `docs/_archive/governance/edge-replay-cycle15b-report.md` — verdict source: 0/272 rows with `market_yes_price` populated (ARCHIVED Stream G R50).
-- `docs/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md` §"Historical price endpoint gap" — earlier 404 finding.
+- `docs/_archive/governance/2026-05-06-cycle-14-charter-calibration-diagnosis.md` §"Historical price endpoint gap" — earlier 404 finding.
 - `data/dossier_updates_post_fix.db` — POST_FIX_REBUILT cohort intact; ready for re-run once prices land.
 - `logs/edge_replay/cycle13_live/historical_prices.json` — current price data (insufficient coverage).
 
@@ -2098,9 +2098,9 @@ This is the same `/markets/{ticker}/trades` 404 issue surfaced in cycle-13's `fe
 - `PROFIT-EDGE-008` (delivered) — direct parent (Cycle-15B verdict drove this scope).
 - `PROFIT-EDGE-005` / `PROFIT-EDGE-006` — replay harness infrastructure (Cycle-16D extended pricing layer).
 - `PROFIT-EDGE-010` (active) — Cycle-17 operator decision succeeds this entry.
-- `docs/governance/cycle-16-conditional-charter-skeletons.md` §D — scope skeleton.
+- `docs/_archive/governance/cycle-16-conditional-charter-skeletons.md` §D — scope skeleton.
 - `docs/_archive/governance/edge-replay-cycle16d-report.md` — Cycle-16D D8 report with Claude appendix + verdict (ARCHIVED Stream G R52).
-- `docs/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 skeletons (instantiates).
+- `docs/_archive/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 skeletons (instantiates).
 - `docs/_archive/governance/cycle-16d-post-verdict-action-checklist.md` — post-verdict checklist driving items 5/8/9/10 (ARCHIVED Stream G R21).
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-17+ acceptance).
 
@@ -2153,7 +2153,7 @@ Cycle-17 §B vs §C operator decision is **DEFERRED** until Cycle-16E scorer for
 
 **Acceptance Criteria**
 
-- Cycle-16E charter authored with locked criteria for each of the 5 checks above. **Delivered:** `docs/governance/2026-05-07-cycle-16e-scorer-forensics-charter.md`.
+- Cycle-16E charter authored with locked criteria for each of the 5 checks above. **Delivered:** `docs/_archive/governance/2026-05-07-cycle-16e-scorer-forensics-charter.md`.
 - Codex implementation of scorer corrections + D6 re-run produces revised counterfactual_scores.json. **Delivered:** `logs/edge_replay/cycle16e/counterfactual_scores_production_proxy.json`.
 - Claude review confirms:
   - Price-unit consistency end-to-end.
@@ -2179,11 +2179,11 @@ Cycle-17 §B vs §C operator decision is **DEFERRED** until Cycle-16E scorer for
 - `PROFIT-EDGE-008` / `PROFIT-EDGE-007` / `PROFIT-EDGE-006` / `PROFIT-EDGE-005` — full cycle trail.
 - `PROFIT-EDGE-011` (active) — Cycle-17 operator decision succeeds this entry.
 - `docs/_archive/governance/edge-replay-cycle16d-report.md` Operator override section — verdict withdrawal + concerns enumeration (ARCHIVED Stream G R52).
-- `docs/governance/edge-replay-cycle16e-scorer-forensics.md` — Codex E10 report with Claude N6 verdict appendix.
-- `docs/governance/2026-05-07-cycle-16e-claude-rescope-and-review.md` — N3+N4+N5+N7 consolidated review + rescope analysis.
-- `docs/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 §B/§C un-deferred per Cycle-16E delivery (2026-05-07 amendment section).
+- `docs/_archive/governance/edge-replay-cycle16e-scorer-forensics.md` — Codex E10 report with Claude N6 verdict appendix.
+- `docs/_archive/governance/2026-05-07-cycle-16e-claude-rescope-and-review.md` — N3+N4+N5+N7 consolidated review + rescope analysis.
+- `docs/_archive/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 §B/§C un-deferred per Cycle-16E delivery (2026-05-07 amendment section).
 - `docs/_archive/governance/cycle-16d-post-verdict-action-checklist.md` — checklist Item 5 + 8 + 9 + 10 amended for Cycle-16E (ARCHIVED Stream G R21).
-- `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — original strategic-redirect authority.
+- `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — original strategic-redirect authority.
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-17+ acceptance).
 - `trading/executor.py:200-244` — production gate single source of truth (verified faithfully ported in Cycle-16E).
 
@@ -2226,12 +2226,12 @@ Per `cycle-17-conditional-charter-skeletons.md` verdict-to-skeleton map, this ro
 
 **Evidence / Source**
 
-- `docs/governance/edge-replay-cycle16e-scorer-forensics.md` (Codex + Claude N6 appendix) — verdict source.
-- `docs/governance/2026-05-07-cycle-16e-claude-rescope-and-review.md` — N3+N4+N5+N7 verification + rescope analysis.
+- `docs/_archive/governance/edge-replay-cycle16e-scorer-forensics.md` (Codex + Claude N6 appendix) — verdict source.
+- `docs/_archive/governance/2026-05-07-cycle-16e-claude-rescope-and-review.md` — N3+N4+N5+N7 verification + rescope analysis.
 - `docs/_archive/governance/edge-replay-cycle16d-report.md` — Cycle-16D charter-locked verdict + operator override (ARCHIVED Stream G R52).
 - `docs/_archive/governance/edge-replay-cycle15b-report.md` — Cycle-15B verdict trail (ARCHIVED Stream G R50).
-- `docs/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 verdict trail.
-- `docs/governance/edge-replay-cycle13-report.md` — Cycle-13 verdict trail.
+- `docs/_archive/governance/edge-replay-cycle14-diagnosis.md` — Cycle-14 verdict trail.
+- `docs/_archive/governance/edge-replay-cycle13-report.md` — Cycle-13 verdict trail.
 - `data/paper_trades.db` — 3-trade lifetime history (PRE_FIX cohort).
 - `data/dossier_updates_post_fix.db` — 272-row POST_FIX_REBUILT corpus.
 - `logs/edge_replay/cycle16e/counterfactual_scores_production_proxy.json` — production-proxy 12 trades.
@@ -2268,9 +2268,9 @@ Operator picks. Subsequent debt entry filed (PROFIT-EDGE-012) per matching Cycle
 
 - `PROFIT-EDGE-010` (delivered) — direct parent (Cycle-16E verdict drove this entry).
 - `PROFIT-EDGE-009` / `PROFIT-EDGE-008` / `PROFIT-EDGE-007` / `PROFIT-EDGE-006` / `PROFIT-EDGE-005` — full cycle trail.
-- `docs/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 skeleton set (with 2026-05-07 amendment noting Cycle-16E delivery).
-- `docs/governance/edge-replay-cycle16e-scorer-forensics.md` Claude N6 appendix — verdict + recommendation rationale.
-- `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — original strategic-redirect authority.
+- `docs/_archive/governance/cycle-17-conditional-charter-skeletons.md` — Cycle-17 skeleton set (with 2026-05-07 amendment noting Cycle-16E delivery).
+- `docs/_archive/governance/edge-replay-cycle16e-scorer-forensics.md` Claude N6 appendix — verdict + recommendation rationale.
+- `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — original strategic-redirect authority.
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-17+ acceptance).
 
 ---
@@ -2283,7 +2283,7 @@ Operator picks. Subsequent debt entry filed (PROFIT-EDGE-012) per matching Cycle
 | **Title** | Cycle-17C single-variable redesign — execute hypothesis-locked experiments per charter |
 | **Category** | Profit-Path Integrity / Strategic Direction (succeeds PROFIT-EDGE-011 §C(b) operator pick on 2026-05-07) |
 | **Severity** | HIGH (gates all Wave-2/3/Branch-D deploys; gates whether bot has deployable signal under any of six redesign axes per first-axis-pick rationale) |
-| **Status** | ACTIVE (cycle-17C charter landed `cd4fa2a` 2026-05-07; E1 reverted, E2 axis-abandoned, E3 verdict = `revert_required_no_ic16_slice` 2026-05-10 (Clause A failure: 0 IC §16 slices on 12 admitted rows; clauses B/C/D technically pass but B + C pass mechanically — 1.005 excess matches mechanical-inversion ceiling, consistency vacuous on universal 12/12-monoculture). **Revert tracker: E1=1/3 (reverted), E2=axis-abandoned (does NOT count), E3=2/3 (reverted). One revert remaining before architectural-rethink rule fires.** **Cycle-17D amendment landed 2026-05-10** (charter authorizes broader-corpus replay; merged corpus = cycle13_live ∪ cycle13_local ∪ cycle15B ∪ cycle16D; revert budget reset 0/3; first sweep step = GO/NO-GO admission-count sweep, threshold = at least one 4-axis intersected bin has ≥10 admitted rows; E4 axis pick deferred until post-sweep; PAPER-ONLY unchanged). **Cycle-17D build script landed `1336fe2` 2026-05-10** (513 merged rows / 292 dropped duplicates / cohorts `{POST_FIX_REBUILT: 272, PRE_FIX: 241, POST_FIX_NEW: 0}`). **Cycle-17D schema-compatibility audit landed `6e626ea` 2026-05-10 — BLOCKER FOUND.** `production_proxy_ready: false`; PRE_FIX rows (cycle-13 vintages) are 0/241 admissible for production-proxy because 238/241 lack `market_yes_price` and Kalshi API backfill returns 404 (settled-market trade endpoint retired). Effective admissible cohort = POST_FIX_REBUILT only (237 rows; equivalent to or slightly smaller than the original 272-row cycle-16D corpus that produced the 12-row admission ceiling). The merged-corpus approach DID NOT lift the ceiling. SHA post-normalization patch (Codex added `market_family` field): `a0f5401b65acd9592e2dcc1c34bb0b9d0c76fe4718a2d714a9bc29160244f913` (supersedes pre-norm `ab9ae8e9...`; both pinned in charter amendment §4 Delta 1). Sequence HALTED at step 3 per architect's "operator decides next step on NO-GO" rule. **POST_FIX_NEW corpus-readiness audit landed 2026-05-10** (`docs/governance/2026-05-10-cycle-17d-post-fix-new-readiness-audit.md`) — read-only Phase-2 production-log audit per operator request before locking option (c). Findings: production accumulating at ~0.8 PT/day; ~33 corpus-eligible rows at Phase-2 close (2026-05-15); +30 days ~171 rows ("maybe useful"); +60 days ~298 rows (cycle-16D scale); +90 days ~424 rows (likely useful). Honest framing: option (c) is a 30-90 day wait, NOT a 5-day wait. Plus two filable corpus-builder bugs surfaced (unmapped `llm_confidence` in `_paper_trade_rows()`; key-name mismatches in `_log_rows()`) — would null-out production-proxy fields on POST_FIX_NEW rows even if volume materializes. Operator pick options unchanged: (a) declined; (b) broader-API-fetch corpus pivot (~3-5 days infrastructure); (c) pause 30-90 days for POST_FIX_NEW corpus + interim bug fixes; or (d) new option = fix corpus-builder bugs now (scorer-tooling-fix exception per charter) + pivot to (b) for faster path. Cycle-17C cycle-16D-frozen-baseline experiments remain dormant.) **Cycle-17D Stage 2 broader-API-fetch sub-amendment landed 2026-05-10** (`docs/governance/2026-05-10-cycle-17d-broader-api-fetch-sub-amendment.md`). Operator pick option (d) staged. Authorizes fresh-fetch corpus from live Kalshi API: window [2026-01-01T00:00:00Z, 2026-05-10T00:00:00Z]; filtered on evidence-store ticker set + sports-prefix blocklist + historical-price coverage; single cohort `POST_FIX_REBUILT` (same extraction provenance as cycle-16D). No redesign experiment authorized by this sub-amendment — authorizes ONLY corpus construction + schema audit + GO/NO-GO sweep. Halt criteria: (1) schema-audit fail (>5% rows missing production-proxy fields), (2) NO-GO sweep (no 4-axis bin with ≥10 admitted rows), or (3) revert-budget exhaustion. All five operator-locked invariants from parent charter preserved verbatim (IC §16, market-implied baseline, PAPER-ONLY, fixed pre-registered corpus, single-variable rule + revert default + criteria-lock-before-replay). Sequence: sub-amendment → build script (Codex) → SHA pin (Claude) → schema audit (Codex) → wrapper script (Codex) → GO/NO-GO sweep (Codex) → (if GO) E0'' baseline + E4 axis-pick deferral + E4 criteria-lock + E4 replay. **Stage 2 step 2 broader-fetch build landed `15f3d47` 2026-05-10** (566 rows / 24 markets with historical-price coverage; single cohort POST_FIX_REBUILT; SHA `917d04abcf8d4d45615ce2d328c164bcb98f4075a78ef26bd22c2b56fd32c102` pinned in sub-amendment §3). **SECOND STRUCTURAL BLOCKER detected pre-audit:** field completeness reported by build script: `confidence` 43.64%, `model_prob` 45.94%, `edge` 45.94%, `headline` 92.76% — all below the §4 95% threshold. Build script reused Stage-1-fixed `build_replay_dataset` so gaps are genuine historical-data sparsity, NOT a re-introduced bug. Effective production-proxy admissible cohort ≤ 247 rows, comparable to or worse than cycle-16D's 237. **CYCLE-17D HALTED 2026-05-10 (operator pick β)** per `docs/governance/2026-05-10-cycle-17d-halt-on-historical-corpus-degeneracy.md`: accept Stage 2 pre-audit as decisive; do NOT run Stage 4 formal audit or Stage 6 sweep to confirm a near-certain failure; do NOT lower the 95% threshold. Both Cycle-17D shapes converged on ~237-247 effective admissible (merged failed on PRE_FIX `market_yes_price` retired-API; broader-fetch failed on `confidence`/`model_prob`/`edge` historical sparsity). Pattern is structural: any frozen-historical corpus the bot has accumulated produces a similar cohort. Revert budget impact: **0/3 unchanged** (no criteria-lock reached; analogous to E2 axis-abandoned). All Stage 1 fixes + Stage 2 build artifacts + governance docs PRESERVED for future reuse. Primary path: POST_FIX_NEW accumulation with Stage-1-clean fields; resume conditions (≥200 production-proxy-complete rows + ≥1 4-axis bin ≥10 admissions + ≥95% completeness; earliest resume check 2026-06-14 = +30 days post-Phase-2-close). PAPER-ONLY unchanged. |
+| **Status** | ACTIVE (cycle-17C charter landed `cd4fa2a` 2026-05-07; E1 reverted, E2 axis-abandoned, E3 verdict = `revert_required_no_ic16_slice` 2026-05-10 (Clause A failure: 0 IC §16 slices on 12 admitted rows; clauses B/C/D technically pass but B + C pass mechanically — 1.005 excess matches mechanical-inversion ceiling, consistency vacuous on universal 12/12-monoculture). **Revert tracker: E1=1/3 (reverted), E2=axis-abandoned (does NOT count), E3=2/3 (reverted). One revert remaining before architectural-rethink rule fires.** **Cycle-17D amendment landed 2026-05-10** (charter authorizes broader-corpus replay; merged corpus = cycle13_live ∪ cycle13_local ∪ cycle15B ∪ cycle16D; revert budget reset 0/3; first sweep step = GO/NO-GO admission-count sweep, threshold = at least one 4-axis intersected bin has ≥10 admitted rows; E4 axis pick deferred until post-sweep; PAPER-ONLY unchanged). **Cycle-17D build script landed `1336fe2` 2026-05-10** (513 merged rows / 292 dropped duplicates / cohorts `{POST_FIX_REBUILT: 272, PRE_FIX: 241, POST_FIX_NEW: 0}`). **Cycle-17D schema-compatibility audit landed `6e626ea` 2026-05-10 — BLOCKER FOUND.** `production_proxy_ready: false`; PRE_FIX rows (cycle-13 vintages) are 0/241 admissible for production-proxy because 238/241 lack `market_yes_price` and Kalshi API backfill returns 404 (settled-market trade endpoint retired). Effective admissible cohort = POST_FIX_REBUILT only (237 rows; equivalent to or slightly smaller than the original 272-row cycle-16D corpus that produced the 12-row admission ceiling). The merged-corpus approach DID NOT lift the ceiling. SHA post-normalization patch (Codex added `market_family` field): `a0f5401b65acd9592e2dcc1c34bb0b9d0c76fe4718a2d714a9bc29160244f913` (supersedes pre-norm `ab9ae8e9...`; both pinned in charter amendment §4 Delta 1). Sequence HALTED at step 3 per architect's "operator decides next step on NO-GO" rule. **POST_FIX_NEW corpus-readiness audit landed 2026-05-10** (`docs/_archive/governance/2026-05-10-cycle-17d-post-fix-new-readiness-audit.md`) — read-only Phase-2 production-log audit per operator request before locking option (c). Findings: production accumulating at ~0.8 PT/day; ~33 corpus-eligible rows at Phase-2 close (2026-05-15); +30 days ~171 rows ("maybe useful"); +60 days ~298 rows (cycle-16D scale); +90 days ~424 rows (likely useful). Honest framing: option (c) is a 30-90 day wait, NOT a 5-day wait. Plus two filable corpus-builder bugs surfaced (unmapped `llm_confidence` in `_paper_trade_rows()`; key-name mismatches in `_log_rows()`) — would null-out production-proxy fields on POST_FIX_NEW rows even if volume materializes. Operator pick options unchanged: (a) declined; (b) broader-API-fetch corpus pivot (~3-5 days infrastructure); (c) pause 30-90 days for POST_FIX_NEW corpus + interim bug fixes; or (d) new option = fix corpus-builder bugs now (scorer-tooling-fix exception per charter) + pivot to (b) for faster path. Cycle-17C cycle-16D-frozen-baseline experiments remain dormant.) **Cycle-17D Stage 2 broader-API-fetch sub-amendment landed 2026-05-10** (`docs/_archive/governance/2026-05-10-cycle-17d-broader-api-fetch-sub-amendment.md`). Operator pick option (d) staged. Authorizes fresh-fetch corpus from live Kalshi API: window [2026-01-01T00:00:00Z, 2026-05-10T00:00:00Z]; filtered on evidence-store ticker set + sports-prefix blocklist + historical-price coverage; single cohort `POST_FIX_REBUILT` (same extraction provenance as cycle-16D). No redesign experiment authorized by this sub-amendment — authorizes ONLY corpus construction + schema audit + GO/NO-GO sweep. Halt criteria: (1) schema-audit fail (>5% rows missing production-proxy fields), (2) NO-GO sweep (no 4-axis bin with ≥10 admitted rows), or (3) revert-budget exhaustion. All five operator-locked invariants from parent charter preserved verbatim (IC §16, market-implied baseline, PAPER-ONLY, fixed pre-registered corpus, single-variable rule + revert default + criteria-lock-before-replay). Sequence: sub-amendment → build script (Codex) → SHA pin (Claude) → schema audit (Codex) → wrapper script (Codex) → GO/NO-GO sweep (Codex) → (if GO) E0'' baseline + E4 axis-pick deferral + E4 criteria-lock + E4 replay. **Stage 2 step 2 broader-fetch build landed `15f3d47` 2026-05-10** (566 rows / 24 markets with historical-price coverage; single cohort POST_FIX_REBUILT; SHA `917d04abcf8d4d45615ce2d328c164bcb98f4075a78ef26bd22c2b56fd32c102` pinned in sub-amendment §3). **SECOND STRUCTURAL BLOCKER detected pre-audit:** field completeness reported by build script: `confidence` 43.64%, `model_prob` 45.94%, `edge` 45.94%, `headline` 92.76% — all below the §4 95% threshold. Build script reused Stage-1-fixed `build_replay_dataset` so gaps are genuine historical-data sparsity, NOT a re-introduced bug. Effective production-proxy admissible cohort ≤ 247 rows, comparable to or worse than cycle-16D's 237. **CYCLE-17D HALTED 2026-05-10 (operator pick β)** per `docs/_archive/governance/2026-05-10-cycle-17d-halt-on-historical-corpus-degeneracy.md`: accept Stage 2 pre-audit as decisive; do NOT run Stage 4 formal audit or Stage 6 sweep to confirm a near-certain failure; do NOT lower the 95% threshold. Both Cycle-17D shapes converged on ~237-247 effective admissible (merged failed on PRE_FIX `market_yes_price` retired-API; broader-fetch failed on `confidence`/`model_prob`/`edge` historical sparsity). Pattern is structural: any frozen-historical corpus the bot has accumulated produces a similar cohort. Revert budget impact: **0/3 unchanged** (no criteria-lock reached; analogous to E2 axis-abandoned). All Stage 1 fixes + Stage 2 build artifacts + governance docs PRESERVED for future reuse. Primary path: POST_FIX_NEW accumulation with Stage-1-clean fields; resume conditions (≥200 production-proxy-complete rows + ≥1 4-axis bin ≥10 admissions + ≥95% completeness; earliest resume check 2026-06-14 = +30 days post-Phase-2-close). PAPER-ONLY unchanged. |
 | **Priority** | PAUSED (halted pending POST_FIX_NEW readiness; earliest resume check 2026-06-14) |
 | **Owner** | Codex (criteria-lock + implementation + replay + result report); Claude (hypothesis sketch + verdict appendix + ledger row maintenance); Operator (axis pick + criteria approval + final keep/revert call). |
 | **Depends On** | PROFIT-EDGE-011 (delivered with §C(b) pick). |
@@ -2323,16 +2323,16 @@ Six axes per first-axis-pick rationale (rank 1-6):
 
 **Evidence / Source**
 
-- `docs/governance/2026-05-07-cycle-17c-charter-single-variable-redesign.md` — charter (operating rule + 3-revert architectural rule + ~1 week time-box).
-- `docs/governance/2026-05-07-cycle-17c-experiment-ledger-schema.md` — ledger schema + populated rows (E0 baseline / E1 revert / E2 axis-abandoned).
-- `docs/governance/2026-05-07-cycle-17c-first-axis-pick-rationale.md` — info-gain ranking authority for axis selection.
-- `docs/governance/2026-05-07-cycle-17c-e1-criteria-lock-bayesian-log-odds.md` — E1 criteria-lock.
-- `docs/governance/edge-replay-cycle17c-e1-report.md` — E1 result report (`revert_required_no_ic16_slice`).
-- `docs/governance/2026-05-07-cycle-17c-e1-claude-verdict-appendix.md` — E1 Claude verdict + amended E2 axis menu + E3 menu.
-- `docs/governance/2026-05-08-cycle-17c-e2-g1-admission-sweep.md` — E2 G1 admission-count projection (outcome-blind; sweep proved G1 inert across 0.05→0.00).
-- `docs/governance/2026-05-08-cycle-17c-e3-side-inference-hypothesis-sketch.md` — E3 hypothesis sketch with sub-axis menu A/B/C and implementation-path options.
-- `docs/governance/2026-05-10-cycle-17c-e3-criteria-lock.md` — **E3 criteria lock (2026-05-10)**: Path 3 (post-processing diagnostic; new `scripts/edge_replay/side_flip_counterfactual.py`); acceptance bar tightened beyond IC §16 to require Clause B (trivial-inversion disqualification: `excess_wins_vs_market_flip > 0.5`) and Clause C (sub-slice consistency: per-axis bin comparisons p ≥ 0.20, no dominant-bin > 75%); operator hard requirement formalized; charter-binding (no unlock without operator sign-off). Verdict appendix template embedded.
-- `docs/governance/2026-05-10-cycle-17c-e3-flip-sign-counterfactual.md` — **E3 replay report + Claude verdict appendix (2026-05-10)**: Codex implementation `ac00903` (script + test + companion report; touch surface charter-clean per Clause D). Verdict = `revert_required_no_ic16_slice`: 12 admitted rows / 12 actual flip wins / 10.995 market-implied expected / 1.005 excess (= mechanical-inversion ceiling, NOT signal evidence) / 0 IC §16 slices. Substantive findings: Clause B's 0.5 threshold was set too loose for longshot-cohort math (excess of 1.005 IS the ceiling); Clause C consistency test is vacuous on universal monoculture. Side-inference axis ruled out as productive cycle-17C redesign axis on this corpus. Cohort-shape ceiling structural finding now confirmed by E2 + E3 in agreement.
+- `docs/_archive/governance/2026-05-07-cycle-17c-charter-single-variable-redesign.md` — charter (operating rule + 3-revert architectural rule + ~1 week time-box).
+- `docs/_archive/governance/2026-05-07-cycle-17c-experiment-ledger-schema.md` — ledger schema + populated rows (E0 baseline / E1 revert / E2 axis-abandoned).
+- `docs/_archive/governance/2026-05-07-cycle-17c-first-axis-pick-rationale.md` — info-gain ranking authority for axis selection.
+- `docs/_archive/governance/2026-05-07-cycle-17c-e1-criteria-lock-bayesian-log-odds.md` — E1 criteria-lock.
+- `docs/_archive/governance/edge-replay-cycle17c-e1-report.md` — E1 result report (`revert_required_no_ic16_slice`).
+- `docs/_archive/governance/2026-05-07-cycle-17c-e1-claude-verdict-appendix.md` — E1 Claude verdict + amended E2 axis menu + E3 menu.
+- `docs/_archive/governance/2026-05-08-cycle-17c-e2-g1-admission-sweep.md` — E2 G1 admission-count projection (outcome-blind; sweep proved G1 inert across 0.05→0.00).
+- `docs/_archive/governance/2026-05-08-cycle-17c-e3-side-inference-hypothesis-sketch.md` — E3 hypothesis sketch with sub-axis menu A/B/C and implementation-path options.
+- `docs/_archive/governance/2026-05-10-cycle-17c-e3-criteria-lock.md` — **E3 criteria lock (2026-05-10)**: Path 3 (post-processing diagnostic; new `scripts/edge_replay/side_flip_counterfactual.py`); acceptance bar tightened beyond IC §16 to require Clause B (trivial-inversion disqualification: `excess_wins_vs_market_flip > 0.5`) and Clause C (sub-slice consistency: per-axis bin comparisons p ≥ 0.20, no dominant-bin > 75%); operator hard requirement formalized; charter-binding (no unlock without operator sign-off). Verdict appendix template embedded.
+- `docs/_archive/governance/2026-05-10-cycle-17c-e3-flip-sign-counterfactual.md` — **E3 replay report + Claude verdict appendix (2026-05-10)**: Codex implementation `ac00903` (script + test + companion report; touch surface charter-clean per Clause D). Verdict = `revert_required_no_ic16_slice`: 12 admitted rows / 12 actual flip wins / 10.995 market-implied expected / 1.005 excess (= mechanical-inversion ceiling, NOT signal evidence) / 0 IC §16 slices. Substantive findings: Clause B's 0.5 threshold was set too loose for longshot-cohort math (excess of 1.005 IS the ceiling); Clause C consistency test is vacuous on universal monoculture. Side-inference axis ruled out as productive cycle-17C redesign axis on this corpus. Cohort-shape ceiling structural finding now confirmed by E2 + E3 in agreement.
 - `scripts/edge_replay/g1_admission_sweep.py` — E2 sweep script (reference pattern for any future outcome-blind sweep).
 
 **Acceptance Criteria**
@@ -2355,9 +2355,9 @@ Six axes per first-axis-pick rationale (rank 1-6):
 
 - `PROFIT-EDGE-011` (delivered) — direct parent (operator §C(b) pick drove this entry).
 - `PROFIT-EDGE-010` / `PROFIT-EDGE-009` / `PROFIT-EDGE-008` / earlier — full cycle trail.
-- `docs/governance/2026-05-07-cycle-17c-charter-single-variable-redesign.md` — charter authority.
-- `docs/governance/2026-05-07-cycle-17c-experiment-ledger-schema.md` — experiment-by-experiment ledger.
-- `docs/governance/2026-05-08-cycle-17c-e3-side-inference-hypothesis-sketch.md` — most recent governance artifact (E3 in progress).
+- `docs/_archive/governance/2026-05-07-cycle-17c-charter-single-variable-redesign.md` — charter authority.
+- `docs/_archive/governance/2026-05-07-cycle-17c-experiment-ledger-schema.md` — experiment-by-experiment ledger.
+- `docs/_archive/governance/2026-05-08-cycle-17c-e3-side-inference-hypothesis-sketch.md` — most recent governance artifact (E3 in progress).
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs Cycle-17C acceptance).
 - Memory: `feedback_market_implied_baseline.md` — cycle-16E baseline-correction lesson; informs all cycle-17C verdicts.
 - Memory: `feedback_audit_scorer_before_verdict.md` — verdict-time audit discipline.
@@ -2464,7 +2464,7 @@ The silent-exit rate is consistent across the entire 13-day window (92.3% lifeti
 
 **Per-gate kill attribution** (2026-05-03, Codex commit `e5440df`, full lifetime archive read)
 
-The 2026-05-02 forensic addendum below identified `tasks/blend_task.py:204` as the silent-exit boundary. The empirical follow-up — joining every `OPPORTUNITY` event in the full trade-log archive against its matching `BLEND_DECISION` and reading `trade_blocked_reason` — quantifies which gate accounts for what fraction of the 240 silent exits. Report at `docs/governance/2026-05-03-obs003-kill-attribution.md`.
+The 2026-05-02 forensic addendum below identified `tasks/blend_task.py:204` as the silent-exit boundary. The empirical follow-up — joining every `OPPORTUNITY` event in the full trade-log archive against its matching `BLEND_DECISION` and reading `trade_blocked_reason` — quantifies which gate accounts for what fraction of the 240 silent exits. Report at `docs/_archive/governance/2026-05-03-obs003-kill-attribution.md`.
 
 | trade_blocked_reason | count | % of silent exits |
 |---|---:|---:|
@@ -2539,7 +2539,7 @@ Pre-fix, the BLEND_DECISION → silent-OPPORTUNITY join is the empirical answer.
 
 **Closure-track attribution addendum** (2026-05-03, read-only full-archive join)
 
-`scripts/obs003_kill_attribution.py` now performs the confirmation-lever join over `mac_archive/macbook_2026-05-01_import/logs/trades/` plus Studio `logs/trades/`; markdown output is committed at `docs/governance/2026-05-03-obs003-kill-attribution.md`. Current full-archive totals are `OPPORTUNITY=264`, accounted exits `=23` (`SKIPPED=20`, `PAPER_TRADE=3`), silent exits `=240`, unattributed `=1`, and the accounting validation balances.
+`scripts/obs003_kill_attribution.py` now performs the confirmation-lever join over `mac_archive/macbook_2026-05-01_import/logs/trades/` plus Studio `logs/trades/`; markdown output is committed at `docs/_archive/governance/2026-05-03-obs003-kill-attribution.md`. Current full-archive totals are `OPPORTUNITY=264`, accounted exits `=23` (`SKIPPED=20`, `PAPER_TRADE=3`), silent exits `=240`, unattributed `=1`, and the accounting validation balances.
 
 Silent-exit kill attribution from matching `BLEND_DECISION.trade_blocked_reason`:
 
@@ -3051,7 +3051,7 @@ User + Codex aligned 2026-05-05 on accelerating PROFIT-PHASE2-001 from 14-day to
 - `docs/governance/PROFIT-PHASE2-001-early-close-attestation-template.md` — close-attestation skeleton
 - `docs/governance/PROFIT-PHASE2-001-day-7-close-day-walkthrough.md` — 11-step linear playbook
 - `docs/governance/PROFIT-PHASE2-001-close-day-decision-flow.md` — quick-look flowchart
-- `docs/governance/2026-05-05-PROFIT-PHASE2-001-decision-distribution-analysis.md` — gate-6 review accelerator (242 records: 99.6 % bulk-reviewable; 1 anomaly NYT World News)
+- `docs/_archive/governance/2026-05-05-PROFIT-PHASE2-001-decision-distribution-analysis.md` — gate-6 review accelerator (242 records: 99.6 % bulk-reviewable; 1 anomaly NYT World News)
 
 **Date shift:**
 
@@ -3074,7 +3074,7 @@ Second pass on 2026-05-05 (commits `b44dda2` + `80932cb` + this cycle's docs). I
 - `docs/_archive/governance/wave-1-post-deploy-observation-plan.md` — 14-row regression watch matrix with per-row CLI; 24h validation window per Wave-1 commit (ARCHIVED Stream G R54)
 - `docs/_archive/governance/2026-05-05-rollback-runbook-validation.md` — 1 HIGH drift (G1_CONFIDENCE_THRESHOLD env-revert row in §3 is fictional per Lever B spec §7) + 2 LOW (ARCHIVED Stream G R51)
 - `docs/governance/PROFIT-PHASE2-002-onboarding.md` — next-soak setup (90 min fast / 12 h deep cadence; decision-policy knobs frozen per `feedback_soak_acceleration_split.md`)
-- `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Branch A → C → D sequence; 42 d worst-case walk; 28 d compressed via A+C parallel
+- `docs/_archive/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Branch A → C → D sequence; 42 d worst-case walk; 28 d compressed via A+C parallel
 - `docs/_archive/specs/2026-05-05-edge-004-lever-b-g1-0.04-floor-lock-addendum.md` — Lever B floor LOCKED at 0.04; failsafe 0.08; 2× ratio invariant; lifts §11 harness deferral (ARCHIVED Stream G R34)
 - `docs/_archive/specs/2026-05-05-edge-004-lever-c-cross-series-v1-lock-addendum.md` — Lever C v1 LOCKED; §3.2 normalized hash; 3600 s default; gate-placement detail (record hash AFTER readiness gate pass); INV-6 boundary attestation (ARCHIVED Stream G R33)
 - `docs/_archive/specs/2026-05-05-edge-004-lever-d-escalation-criteria-design.md` — Branch D triggers + handoff to PROFIT-LLM-001 / P4-GATE Appendix A; nomenclature distinguishes lever-menu-Lever-D (closed) from closure-path-Branch-D (active) (ARCHIVED Stream G R35)
@@ -3101,8 +3101,8 @@ Third pass on 2026-05-05 (commits `a505a08` Claude + `3a400c1` Codex). Focused o
 **Claude artifacts (cycle 3; commit `a505a08`):**
 
 - `docs/governance/PROFIT-PHASE2-001-early-close-criteria.md` — §8.5.2 invocation table updated with all 7 surfaced commits including this-cycle doc/script artifacts (out-of-scope-for-§8.5.2). F1 fix from cycle-2 dry-trace closed.
-- `docs/governance/2026-05-05-lever-d-nomenclature-cleanup-audit.md` — 18-occurrence audit; 1 MEDIUM finding (`wave-2-a1plus-branch-decision-table.md` "Branch D" → "option-A" for geopolitics specialist).
-- `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — 6 Edits applying nomenclature fix per F1.
+- `docs/_archive/governance/2026-05-05-lever-d-nomenclature-cleanup-audit.md` — 18-occurrence audit; 1 MEDIUM finding (`wave-2-a1plus-branch-decision-table.md` "Branch D" → "option-A" for geopolitics specialist).
+- `docs/_archive/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — 6 Edits applying nomenclature fix per F1.
 - `docs/_archive/governance/2026-05-05-wave-2-deploy-day-timing.md` — Branch A passive (no deploy) + Branch C deploy windows (ARCHIVED Stream G R53).
 - `docs/_archive/governance/2026-05-05-wave-3-deploy-day-timing.md` — Lever B then Lever C; 14d inter-commit cadence (ARCHIVED Stream G R53).
 - `docs/_archive/governance/wave-2-deploy-commit-order-decision.md` — locked 2-commit Wave-2 order (ARCHIVED Stream G R53).
@@ -3528,13 +3528,13 @@ The discriminator is the *non-ticker-token* overlap count: keep the guard only w
 
 *2026-05-03 threshold-bisection result.* `docs/_archive/governance/2026-05-03-matcher-jaccard-threshold-bisection.md` (ARCHIVED Stream G R43) sweeps the 13-day MacBook `MATCH_DIAGNOSTIC` archive against raised score floors. A simple Jaccard-threshold raise is a poor EDGE-004 primary lever: threshold 0.08 retains all 3 paper trades but only 134/260 OPPORTUNITY records (51.5%), while threshold 0.10 retains only 72/260 (27.7%). MATCH-001 B′ remains the better-shaped post-soak fix because it targets single-entity noise rather than globally discarding opportunity-producing matches.
 
-*2026-05-03 post-soak stack simulation.* `docs/governance/2026-05-03-post-soak-landing-simulation.md` replays the 13-day archive through OBS-005 → MATCH-001 B′ → OBS-003 → EXEC-002. Key counterfactual: B′ suppresses 1,076 match keys and reduces retained OPPORTUNITY from 260 → 87 under a strict key-based estimate; OBS-003 would add 78 retained blocked-reason SKIPPED records; EXEC-002 would suppress 2 of the 3 FISA paper trades. Treat MATCH-001 B′ as a high-blast-radius post-soak landing despite its small code diff.
+*2026-05-03 post-soak stack simulation.* `docs/_archive/governance/2026-05-03-post-soak-landing-simulation.md` replays the 13-day archive through OBS-005 → MATCH-001 B′ → OBS-003 → EXEC-002. Key counterfactual: B′ suppresses 1,076 match keys and reduces retained OPPORTUNITY from 260 → 87 under a strict key-based estimate; OBS-003 would add 78 retained blocked-reason SKIPPED records; EXEC-002 would suppress 2 of the 3 FISA paper trades. Treat MATCH-001 B′ as a high-blast-radius post-soak landing despite its small code diff.
 
-*2026-05-03 regression-anchor pre-deploy sizing.* `docs/governance/2026-05-03-match001-bprime-anchor-sizing.md` packages the deploy-day B′ replay as a repeatable harness. Result: B′ still suppresses 1,076 match keys, retains 87/260 OPPORTUNITY records and 3/3 PAPER_TRADE records, and suppresses 0 exact canonical event headlines. However, a stricter ticker-level guard fails: 399 suppressed matches land on the canonical `KXTRUMPIRAN-26MAY01` ticker. The landing-order spec should guard exact canonical event tuples/headlines, not every future low-quality match on canonical tickers.
+*2026-05-03 regression-anchor pre-deploy sizing.* `docs/_archive/governance/2026-05-03-match001-bprime-anchor-sizing.md` packages the deploy-day B′ replay as a repeatable harness. Result: B′ still suppresses 1,076 match keys, retains 87/260 OPPORTUNITY records and 3/3 PAPER_TRADE records, and suppresses 0 exact canonical event headlines. However, a stricter ticker-level guard fails: 399 suppressed matches land on the canonical `KXTRUMPIRAN-26MAY01` ticker. The landing-order spec should guard exact canonical event tuples/headlines, not every future low-quality match on canonical tickers.
 
-*2026-05-03 tokenization-equivalence audit.* `docs/governance/2026-05-03-match001-tokenization-equivalence-audit.md` compares the B′ simulation's substring ticker-membership semantics with a literal production `_tokenize(ticker)` set-difference implementation. Result: the 1,076-key estimate depends on substring membership; `_tokenize("KXTRUMPIRAN-26MAY01")` returns one hyphenated token, so a literal tokenized set-diff suppresses 0 keys on the archive. The landing spec must codify substring membership or rerun sizing after changing tokenizer semantics.
+*2026-05-03 tokenization-equivalence audit.* `docs/_archive/governance/2026-05-03-match001-tokenization-equivalence-audit.md` compares the B′ simulation's substring ticker-membership semantics with a literal production `_tokenize(ticker)` set-difference implementation. Result: the 1,076-key estimate depends on substring membership; `_tokenize("KXTRUMPIRAN-26MAY01")` returns one hyphenated token, so a literal tokenized set-diff suppresses 0 keys on the archive. The landing spec must codify substring membership or rerun sizing after changing tokenizer semantics.
 
-*2026-05-03 substring false-negative audit.* `docs/governance/2026-05-03-match001-bprime-false-negative-audit.md` tests the complement risk for option (a): low-quality matches that escape because a ticker-substring token is present. Under the weak-support proxy, B′ shape total is 1,691, substring suppression catches 1,202, and ticker-substring escape / likely false-negative count is 0. This supports substring semantics as adequate on the archive, while preserving the caveat that it is heuristic rather than manual relevance labeling.
+*2026-05-03 substring false-negative audit.* `docs/_archive/governance/2026-05-03-match001-bprime-false-negative-audit.md` tests the complement risk for option (a): low-quality matches that escape because a ticker-substring token is present. Under the weak-support proxy, B′ shape total is 1,691, substring suppression catches 1,202, and ticker-substring escape / likely false-negative count is 0. This supports substring semantics as adequate on the archive, while preserving the caveat that it is heuristic rather than manual relevance labeling.
 
 *2026-05-03 Wave-1 forecast + OBS-003 synthesizer check.* `docs/_archive/governance/2026-05-03-wave1-acceptance-ladder-forecast.md` (ARCHIVED Stream G R42) sets the expected Wave-1 end state from the archive replay: 87 OPPORTUNITY, 89 SKIPPED, 1 PAPER_TRADE after OBS-005 → MATCH-001 B′ → OBS-003 → EXEC-002. `docs/_archive/governance/2026-05-03-obs003-skipped-synthesizer-reality-check.md` (ARCHIVED Stream G R42) confirms the OBS-003 synthetic SKIPPED fixture matches the post-soak simulation's BlendTask reason distribution (`G1=59`, `G6=14`, `G2=5`) plus 9 executor-side rows.
 
@@ -3761,7 +3761,7 @@ This entry tracks the Phase-3 spec work to redesign gate 6 as sample-based, not 
 **Evidence / Source**
 
 - `scripts/manual_review_capacity_audit.py` — mid-soak Day-4 result: 286/383 = 0.747 reviewable at 80/day; Day-5 peak 146 the dominant pressure.
-- `docs/governance/2026-05-06-gate-6-capacity-resolution-plan.md` — close-day resolution plan (Path 3 → Path 1 sequence; Path 2 = this entry).
+- `docs/_archive/governance/2026-05-06-gate-6-capacity-resolution-plan.md` — close-day resolution plan (Path 3 → Path 1 sequence; Path 2 = this entry).
 - `PROFIT-PHASE2-001-early-close-criteria.md` §8.5.1 gate 6 + body wording.
 - Distribution evidence: cycle-9 manual review of 67 day-1-to-day-3 decisions (commit `9f8deef`) returned 100 % reasonable across many distinct (target, reasoning) tuples — suggests low diversity (i.e., sampling-friendly population).
 
@@ -3791,7 +3791,7 @@ Phase-3 spec work, NOT close-day patch:
 
 - `PROFIT-PHASE2-001` — current soak; closes under exhaustive-review wording (Path 3 / Path 1 per resolution plan).
 - `PROFIT-GOV-002` — closed; same gate-6 area but addresses LLM-side rubber-stamp bias, not capacity.
-- `docs/governance/2026-05-06-gate-6-capacity-resolution-plan.md` — close-day resolution plan that DEFERS Path 2 to this entry.
+- `docs/_archive/governance/2026-05-06-gate-6-capacity-resolution-plan.md` — close-day resolution plan that DEFERS Path 2 to this entry.
 - Future spec: `docs/superpowers/specs/2026-XX-XX-gate-6-sample-based-redesign.md` (to be authored at Phase-3 spec time).
 
 ---
@@ -5067,7 +5067,7 @@ them.
   P0-gate evidence per the canonical roadmap §11.5 lockdown; do not
   edit them without re-capture and a new audit session.
 - The roadmap document at
-  `docs/governance/2026-05-11-kalshi-api-drift-pricing-correctness-roadmap.md`
+  `docs/_archive/governance/2026-05-11-kalshi-api-drift-pricing-correctness-roadmap.md`
   is the single canonical tracking surface for this work; per CLAUDE.md
   R-10 (no new tracking files), no separate P0 status file or per-day
   decision-log was created.
@@ -5116,7 +5116,7 @@ Versioning rule.
 
 **`market_yes_price` alias caller inventory (2026-05-13):** full
 inventory of the LD-10 / LD-17 deprecated-alias readers landed at
-[`docs/governance/2026-05-13-market-yes-price-alias-inventory.md`](governance/2026-05-13-market-yes-price-alias-inventory.md).
+[`docs/_archive/governance/2026-05-13-market-yes-price-alias-inventory.md`](_archive/governance/2026-05-13-market-yes-price-alias-inventory.md).
 Counts: **64 hits** across the live tree (excl. `__pycache__` /
 `.claude/worktrees` / `_archive`), distributed as: 7 production-runtime
 files (~40 hits), ~20 replay/offline scripts, ~20 test fixtures, 2 DB
@@ -5155,7 +5155,7 @@ reports:
   and `--min-tickers` (default 3) thresholds.
 
 Cycle-17D / PROFIT-EDGE-012 resume checks (earliest 2026-06-14 per
-`docs/governance/2026-05-10-cycle-17d-halt-on-historical-corpus-degeneracy.md`)
+`docs/_archive/governance/2026-05-10-cycle-17d-halt-on-historical-corpus-degeneracy.md`)
 should run this watcher first; a `NOT_READY` verdict means the
 post-hotfix corpus has not yet accumulated enough Stage-1-clean rows
 to justify a replay re-evaluation. Live readout 2026-05-13T00:55Z

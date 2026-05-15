@@ -50,6 +50,6 @@ This is now stale after the same commit closes E as structurally infeasible. It 
 
 ## Non-Findings / Checks
 
-- `cdbf6ef` MATCH-001 tokenization addendum correctly documents substring semantics and the `_tokenize(ticker)` gotcha. Codex's independent audit in `docs/governance/2026-05-03-match001-tokenization-equivalence-audit.md` agrees: substring suppresses 1,076 keys; literal `_tokenize(ticker)` set-diff suppresses 0.
+- `cdbf6ef` MATCH-001 tokenization addendum correctly documents substring semantics and the `_tokenize(ticker)` gotcha. Codex's independent audit in `docs/_archive/governance/2026-05-03-match001-tokenization-equivalence-audit.md` agrees: substring suppresses 1,076 keys; literal `_tokenize(ticker)` set-diff suppresses 0.
 - `4279bd2` correctly closes Lever E based on source-instance `{0: 9, 1: 251}` and source-class N>=2 retaining 0 historical paper trades.
 - `f786246` fixed the snapshot-2 time-axis mismatch and added a useful bothealth source-inspection xfail, even though F2 above remains.

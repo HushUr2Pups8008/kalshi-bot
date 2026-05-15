@@ -1,19 +1,19 @@
 # PROFIT-EDGE-004 Lever B — G1 calibration tightening
 
-> **🛑 BLOCKED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06) — COUNTERINDICATED.** Loosening G1 (0.05 → 0.04) absent replay evidence converts the existing 89 %-zero-edge floor into MORE low-quality trades. Per IC §16 Rule 3: "may increase trade rate" is NOT enough; "would have produced positive replayed EV" is required. Wave-3 deploy of this lever is HALTED pending Cycle-12 replay harness output that explicitly shows the additional admitted trades have positive EV. See `docs/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` and IC §16.
+> **🛑 BLOCKED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06) — COUNTERINDICATED.** Loosening G1 (0.05 → 0.04) absent replay evidence converts the existing 89 %-zero-edge floor into MORE low-quality trades. Per IC §16 Rule 3: "may increase trade rate" is NOT enough; "would have produced positive replayed EV" is required. Wave-3 deploy of this lever is HALTED pending Cycle-12 replay harness output that explicitly shows the additional admitted trades have positive EV. See `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` and IC §16.
 
 **Status:** BLOCKED PER IC §16 (was: design; Wave 2 of post-soak landing — earliest deploy ≥ 2026-06-06; gated on Lever A's verdict + ≥ 14 d post-OBS-003 attribution dataset)
 **Tracker:** `PROFIT-EDGE-004` (Lever B entry from `2026-05-03-edge-004-lever-menu-design.md`)
 **Owner:** Claude (design) + Codex (sizing — see §4)
 **Severity:** HIGH (parent EDGE-004 closure path; secondary lever in the revised A → B → E → C → D sequence)
 **Drafted:** 2026-05-03
-**Empirical basis:** `docs/governance/2026-05-03-obs003-kill-attribution.md` (Codex 2026-05-03) — 197/240 silent exits attributed to `G1_blended_confidence` (82.1 %).
+**Empirical basis:** `docs/_archive/governance/2026-05-03-obs003-kill-attribution.md` (Codex 2026-05-03) — 197/240 silent exits attributed to `G1_blended_confidence` (82.1 %).
 
 ## 1. Why this lever (revised post-Codex 2026-05-03 G1 counterfactual)
 
 The EDGE-004 lever menu's revised sequencing puts B as the secondary lever after A. The data-anchor for the *kill mass*: per Codex's per-gate kill attribution, **G1 dominates 197/240 silent exits (82.1 %)**. The G1 floor of 0.05 in `analysis/decision_blender.py` (`G1_CONFIDENCE_THRESHOLD`) is a hand-set constant from the original BSR landing; whether 0.05 is the right floor is empirically unknown.
 
-**Codex's 2026-05-03 G1 admittance counterfactual** (`docs/governance/2026-05-03-g1-admittance-counterfactual.md`, commit `e630e28`) sizes the trade-rate impact of relaxing the floor against archived `BLEND_DECISION` records:
+**Codex's 2026-05-03 G1 admittance counterfactual** (`docs/_archive/governance/2026-05-03-g1-admittance-counterfactual.md`, commit `e630e28`) sizes the trade-rate impact of relaxing the floor against archived `BLEND_DECISION` records:
 
 | floor | admitted | admission rate | edge ≥ 0.02 | edge ≥ 0.05 | mean predicted edge | p50 | p90 |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -62,7 +62,7 @@ Recommendation: **start at 0.04**. Half-step landings limit blast radius; if the
 
 ## 4. Sizing methodology
 
-**Codex's 2026-05-03 G1 admittance counterfactual** (`docs/governance/2026-05-03-g1-admittance-counterfactual.md` + `scripts/simulations/g1_admittance_counterfactual.py`, commit `e630e28`) already sizes the floor candidates against the 13-day archive. Headline numbers in §1 above. **No further pre-deploy sizing needed.**
+**Codex's 2026-05-03 G1 admittance counterfactual** (`docs/_archive/governance/2026-05-03-g1-admittance-counterfactual.md` + `scripts/simulations/g1_admittance_counterfactual.py`, commit `e630e28`) already sizes the floor candidates against the 13-day archive. Headline numbers in §1 above. **No further pre-deploy sizing needed.**
 
 The audit's stated limitation: archive `BLEND_DECISION` records store only the *first* readiness failure. Candidates admitted by a lower G1 floor may still fail G2/G3/G4/G5/G6 once the full gate re-evaluates. The 32/65 admittance numbers are upper bounds; actual paper-trade lift will be smaller.
 

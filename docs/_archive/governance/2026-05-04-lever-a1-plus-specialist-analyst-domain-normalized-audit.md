@@ -61,6 +61,6 @@ If the operator wants the highest-probability first-feed attempt, the decision t
 
 ## Cross-links
 
-- `docs/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md`
+- `docs/_archive/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md`
 - `docs/superpowers/specs/2026-05-03-edge-004-lever-a1plus-feed-onboarding-design.md`
 - `docs/superpowers/specs/2026-05-04-edge-004-lever-a1plus1-5-legal-analyst-design.md`

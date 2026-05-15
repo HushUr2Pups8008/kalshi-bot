@@ -18,7 +18,7 @@
 
 ### Operator decision artifacts (Claude tasks across cycles 2-5)
 
-- [x] `docs/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Branch A → C → option-A sequence (cycle 1; nomenclature cleaned cycle 3) ✅
+- [x] `docs/_archive/governance/2026-05-05-wave-2-a1plus-branch-decision-table.md` — Branch A → C → option-A sequence (cycle 1; nomenclature cleaned cycle 3) ✅
 - [x] `docs/governance/2026-05-05-a1plus1-5-branch-c-feed-selection-rubric.md` — Branch C feed selection (cycle 2) ✅
 - [x] `docs/governance/2026-05-05-wave-2-deploy-day-timing.md` — UTC timing windows (cycle 3) ✅
 - [x] `docs/governance/wave-2-deploy-commit-order-decision.md` — locked commit order (cycle 3) ✅
@@ -38,10 +38,10 @@
 
 ### Forensics + audit anchors
 
-- [x] `docs/governance/2026-05-04-vitallaw-aggregator-path-forensics.md` — VitalLaw direct-RSS infeasibility anchor (cycle 1 Branch B kill)
+- [x] `docs/_archive/governance/2026-05-04-vitallaw-aggregator-path-forensics.md` — VitalLaw direct-RSS infeasibility anchor (cycle 1 Branch B kill)
 - [x] `docs/governance/2026-05-04-legal-niche-probe-order-domain-overlap.md` — Branch C feed-candidate ranking
 - [x] `docs/governance/2026-05-04-lever-a1-plus-1-5-legal-analyst-feed-sizing.md` — Branch C archive evidence
-- [x] `docs/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md` — option-A archive evidence
+- [x] `docs/_archive/governance/2026-05-03-lever-a1-plus-specialist-analyst-per-source-sizing.md` — option-A archive evidence
 
 ### Closure-path TLDR + escalation
 

@@ -129,5 +129,5 @@ Fast/deep cadence halving is a load-test (90 min fast = 60 % more LLM calls per 
 - `docs/_archive/governance/post-soak-close-rehearsal-checklist.md` (historical day-7 close reference; ARCHIVED Stream G R54)
 - `docs/_archive/governance/post-soak-rollback-runbook.md` (ARCHIVED Stream G R54)
 - `scripts/pre_soak_close_branch_backup.sh`
-- `docs/governance/2026-05-04-day-4-mid-soak-confirmation.md` (the data point that justified §8.5.1)
+- `docs/_archive/governance/2026-05-04-day-4-mid-soak-confirmation.md` (the data point that justified §8.5.1)
 - `docs/governance/edge-004-closure-path-tldr.md` v2.2

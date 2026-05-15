@@ -2,7 +2,7 @@
 
 **Type:** focused single-deliverable cycle. Pure replay-harness scope; bot extraction code untouched.
 **Drafted:** 2026-05-07 cycle-15B verdict landing.
-**Authority:** Cycle-15B verdict = `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap` (`docs/governance/edge-replay-cycle15b-report.md`); skeleton §D (`docs/governance/cycle-16-conditional-charter-skeletons.md`); task split (`docs/governance/2026-05-07-cycle-16d-task-split.md`).
+**Authority:** Cycle-15B verdict = `extraction_fixed_but_ic_§16_scorer_blocked_by_price_gap` (`docs/governance/edge-replay-cycle15b-report.md`); skeleton §D (`docs/_archive/governance/cycle-16-conditional-charter-skeletons.md`); task split (`docs/governance/2026-05-07-cycle-16d-task-split.md`).
 **Owner:** Codex (implementation, D1-D10); Claude (review + governance + scaffolding, M1-M10).
 **Tracker:** PROFIT-EDGE-009.
 **Status:** ACTIVE.
@@ -90,15 +90,15 @@ D8 report produced + signed by both Codex and Claude. Verdict matches one of:
 - `cycle_16d_extension_needed` (D5 coverage < 90% but ≥ 70%; second backfill attempt)
 - `escalation_required` (D5 coverage < 70%; fresh-charter conversation)
 
-Cycle-17 scope derived FROM verdict via `docs/governance/cycle-17-conditional-charter-skeletons.md` (M9), not invented to fit a preferred path.
+Cycle-17 scope derived FROM verdict via `docs/_archive/governance/cycle-17-conditional-charter-skeletons.md` (M9), not invented to fit a preferred path.
 
 ## Cross-links
 
 - `docs/governance/edge-replay-cycle15b-report.md` — Cycle-15B verdict source.
-- `docs/governance/cycle-16-conditional-charter-skeletons.md` §D — price-reconstruction skeleton.
+- `docs/_archive/governance/cycle-16-conditional-charter-skeletons.md` §D — price-reconstruction skeleton.
 - `docs/governance/2026-05-07-cycle-16d-task-split.md` — 20-task split (10 Codex + 10 Claude).
 - `docs/governance/cycle-16d-post-verdict-action-checklist.md` — M8 post-verdict checklist (pre-staged).
-- `docs/governance/cycle-17-conditional-charter-skeletons.md` — M9 conditional Cycle-17 skeletons (pre-staged).
+- `docs/_archive/governance/cycle-17-conditional-charter-skeletons.md` — M9 conditional Cycle-17 skeletons (pre-staged).
 - `docs/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` — L8 cohort note (D9 sentinel).
 - `data/dossier_updates_post_fix.db` — POST_FIX_REBUILT cohort (D6 input).
 - `docs/IMPLEMENTATION_CONTRACT.md` §16 — replayed-EV gate (governs D8 acceptance).

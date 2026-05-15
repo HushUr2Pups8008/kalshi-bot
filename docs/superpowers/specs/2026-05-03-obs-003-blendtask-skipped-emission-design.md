@@ -10,7 +10,7 @@
 
 `OPPORTUNITY` events are logged at `main.py:772` *upstream* of `BlendTask.process_fast_lane_result`. When the blender or readiness gate produces a non-None `trade_blocked_reason`, the candidate is dropped at `tasks/blend_task.py:204` with a `BlendTaskResult(enqueued=False)` and **no SKIPPED record is emitted** — only a `BLEND_DECISION` record carrying the kill reason in its `trade_blocked_reason` field.
 
-Empirical impact, per the Codex 2026-05-03 attribution audit (`docs/governance/2026-05-03-obs003-kill-attribution.md`):
+Empirical impact, per the Codex 2026-05-03 attribution audit (`docs/_archive/governance/2026-05-03-obs003-kill-attribution.md`):
 
 - 264 OPPORTUNITY total → 23 accounted exits (20 SKIPPED + 3 PAPER_TRADE) + **240 silent exits** (100% attributed via BLEND_DECISION) + 1 unattributed
 - Silent-exit decomposition:
