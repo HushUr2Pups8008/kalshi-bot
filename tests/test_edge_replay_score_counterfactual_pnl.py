@@ -330,21 +330,53 @@ def test_readiness_gate_marks_left_on_table_when_model_would_have_won_without_pr
     assert scored["would_have_traded"] is False
 
 
-def test_score_candidate_accepts_canonical_entry_price_cents_without_legacy_key():
-    """F-11 P1-C: post-bounce JSONL records carry only ``entry_price_cents``
-    (no ``market_yes_price``). score_candidate must read the canonical key
-    via the new helper, infer side correctly, derive the contract price,
-    and produce a non-zero counterfactual PnL when the trade would
-    execute. If the helper regressed (e.g. only read ``market_yes_price``),
-    side inference would fall through to None and ``would_have_traded``
-    would be False -- this assertion would catch it.
+def test_score_candidate_fails_closed_when_only_entry_price_cents_and_no_side():
+    """F-11 P1-C reviewer finding #2: ``entry_price_cents`` is the
+    executed-side entry price by definition. Inferring side from
+    ``model_prob >= entry_price_cents / 100`` would mislabel NO trades as
+    YES whenever the executed (NO-side) price sits below the model
+    probability. When the only price source is the canonical key and no
+    explicit side field is present, side inference must fail closed --
+    side=None, would_have_traded=False, PnL=0 -- rather than guess.
+    """
+    canonical_row = {
+        "ticker": "KXENTRYNOSIDE",
+        "contracts": 1,
+        # Canonical post-P1-A key only; no legacy market_yes_price and no side hint.
+        "entry_price_cents": 40.0,
+        "model_prob": 0.62,
+        "edge": 0.20,
+        "resolved_yes": True,
+        "signal_source": "Reuters",
+        "series_ticker": "KXENTRYNOSIDE",
+        "signal_type": "llm",
+        "news_class": "publisher_rss",
+    }
+
+    scored = score_candidate(canonical_row, min_edge=0.02, default_contracts=1)
+
+    assert scored["side"] is None, (
+        "side must NOT be inferred from entry_price_cents (executed-side); "
+        "without an explicit side field the scorer must fail closed"
+    )
+    assert scored["would_have_traded"] is False
+    assert scored["counterfactual_pnl"] == 0.0
+
+
+def test_score_candidate_consumes_canonical_entry_price_cents_when_side_explicit():
+    """F-11 P1-C: with an explicit side, score_candidate must consume the
+    canonical ``entry_price_cents`` directly (no YES-midpoint flip) and
+    produce the correct executed-side PnL. Guards against a regression
+    that would force ``market_yes_price`` to be present for the canonical
+    key to take effect.
     """
     canonical_row = {
         "ticker": "KXENTRY",
+        "side": "yes",  # explicit side; bypasses _infer_side
         "contracts": 1,
         # Canonical post-P1-A key only; no legacy market_yes_price.
         "entry_price_cents": 40.0,
-        "model_prob": 0.62,  # >= 40/100 -> infer YES side
+        "model_prob": 0.62,
         "edge": 0.20,
         "resolved_yes": True,
         "signal_source": "Reuters",
@@ -355,14 +387,8 @@ def test_score_candidate_accepts_canonical_entry_price_cents_without_legacy_key(
 
     scored = score_candidate(canonical_row, min_edge=0.02, default_contracts=1)
 
-    assert scored["side"] == "yes", (
-        "side must be inferred from model_prob vs entry_price_cents/100 "
-        "when the canonical key is the only price source"
-    )
-    assert scored["would_have_traded"] is True, (
-        "score_candidate must consume canonical entry_price_cents; if only "
-        "market_yes_price was honored, would_have_traded would be False"
-    )
+    assert scored["side"] == "yes"
+    assert scored["would_have_traded"] is True
     assert scored["counterfactual_pnl"] == pytest.approx(0.60), (
         "PnL = (1 - 0.40) * 1 contract = 0.60 for a winning YES contract"
     )

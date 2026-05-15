@@ -16,7 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from scripts.edge_replay.build_replay_dataset import _log_rows, _paper_trade_rows
+from scripts.edge_replay.build_replay_dataset import (
+    _log_rows,
+    _paper_trade_rows,
+    apply_historical_prices,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -516,3 +520,143 @@ def test_log_row_confidence_absent_returns_none(tmp_path):
 
     assert len(rows) == 1
     assert rows[0]["confidence"] is None
+
+
+# ---------------------------------------------------------------------------
+# F-11 P1-C reviewer findings (2026-05-15)
+# ---------------------------------------------------------------------------
+
+
+def _make_paper_db_with_zero_price(path: Path) -> None:
+    """paper_trades fixture with market_yes_price=0.0 cents."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE paper_trades (
+                trade_id TEXT,
+                ts TEXT,
+                ticker TEXT,
+                side TEXT,
+                contracts INTEGER,
+                estimated_prob REAL,
+                market_yes_price REAL,
+                price_cents REAL,
+                edge REAL,
+                signal_source TEXT,
+                signal_type TEXT,
+                news_class TEXT,
+                signal_headline TEXT,
+                pnl_dollars REAL,
+                resolved INTEGER,
+                fast_lane_p REAL,
+                accumulation_p REAL,
+                structural_p REAL,
+                llm_confidence REAL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_trades VALUES (
+                't0', '2026-05-15T00:00:00+00:00', ?, 'no', 1,
+                0.95, 0.0, 50.0, 0.20, 'Reuters', 'llm', 'news',
+                'Headline', 0.0, 1, 0.0, 0.0, 0.0, 0.5
+            )
+            """,
+            (TICKER,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_paper_trade_row_preserves_explicit_zero_market_yes_price(tmp_path):
+    """F-11 P1-C reviewer finding #3: ``_paper_trade_rows`` must resolve
+    the entry price with _first_present(...) so an explicit 0.0 in the
+    canonical column survives. The previous truthy-``or`` chain
+    (``market_yes_price or price_cents``) silently dropped 0.0 and
+    promoted the fallback column.
+    """
+    db = tmp_path / "paper_trades.db"
+    _make_paper_db_with_zero_price(db)
+
+    rows = _paper_trade_rows(db, MARKETS)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["market_yes_price"] == pytest.approx(0.0), (
+        "explicit 0.0 must be preserved; truthy-`or` fallback would surface 50.0"
+    )
+    assert row["entry_price_cents"] == pytest.approx(0.0), (
+        "dual-emit must carry the same preserved 0.0"
+    )
+
+
+def test_apply_historical_prices_no_side_backfill_does_not_set_entry_price_cents():
+    """F-11 P1-C reviewer finding #1: ``apply_historical_prices`` reads
+    the historical YES-side midpoint via ``price_at_decision``. That
+    value must NOT be written to ``entry_price_cents``, which is the
+    executed-side entry price by contract. Writing YES-midpoint to the
+    canonical key silently breaks NO-trade scoring (``_contract_price``
+    skips the ``100 - yes_price`` flip when the canonical key is
+    populated). Only ``market_yes_price`` is allowed to receive the
+    historical YES-midpoint.
+    """
+    from datetime import datetime, timezone
+
+    decision_ts = "2026-05-10T00:00:00+00:00"
+    rows = [
+        {
+            "ticker": TICKER,
+            "decision_ts": decision_ts,
+            "side": "no",
+            "model_prob": 0.30,
+        }
+    ]
+    prices = {
+        TICKER: [
+            {"ts": datetime(2026, 5, 9, tzinfo=timezone.utc), "yes_price": 72.0},
+        ]
+    }
+
+    apply_historical_prices(rows, prices)
+
+    assert rows[0]["market_yes_price"] == pytest.approx(72.0), (
+        "historical YES-side midpoint must populate market_yes_price"
+    )
+    assert "entry_price_cents" not in rows[0] or rows[0]["entry_price_cents"] is None, (
+        "entry_price_cents must NOT be set from historical YES-midpoint; "
+        "the YES-midpoint is not an executed-side price"
+    )
+
+
+def test_apply_historical_prices_does_not_overwrite_existing_canonical_key():
+    """F-11 P1-C: a row that already carries ``entry_price_cents`` must
+    not have its canonical key altered by the historical-price backfill.
+    The early-return on existing-price rows still applies.
+    """
+    from datetime import datetime, timezone
+
+    rows = [
+        {
+            "ticker": TICKER,
+            "decision_ts": "2026-05-10T00:00:00+00:00",
+            "side": "yes",
+            "entry_price_cents": 42.0,
+        }
+    ]
+    prices = {
+        TICKER: [
+            {"ts": datetime(2026, 5, 9, tzinfo=timezone.utc), "yes_price": 72.0},
+        ]
+    }
+
+    apply_historical_prices(rows, prices)
+
+    assert rows[0]["entry_price_cents"] == pytest.approx(42.0), (
+        "existing canonical entry_price_cents must not be overwritten"
+    )
+    assert rows[0].get("market_yes_price") is None, (
+        "backfill must short-circuit when canonical key already present"
+    )

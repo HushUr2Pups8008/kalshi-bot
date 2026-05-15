@@ -242,7 +242,22 @@ def _field_completeness(rows: list[dict[str, Any]]) -> dict[str, dict[str, float
     total = len(rows)
     out: dict[str, dict[str, float | int]] = {}
     for field in REQUIRED_OUTPUT_FIELDS:
-        populated = sum(1 for row in rows if row.get(field) is not None and row.get(field) != "")
+        if field == "entry_price_cents":
+            # F-11 P1-C: ``apply_historical_prices`` no longer mirrors the
+            # YES-midpoint into ``entry_price_cents`` (that would mislabel
+            # YES-side market data as executed-side entry price). Treat
+            # presence of EITHER the canonical or legacy key as satisfying
+            # the completeness check while the legacy key still ships.
+            # Mirrors ``build_cycle17d_corpus._has_price``. P1-B's SQL
+            # rename will retire the legacy fallback.
+            populated = sum(
+                1
+                for row in rows
+                if (row.get("entry_price_cents") is not None and row.get("entry_price_cents") != "")
+                or (row.get("market_yes_price") is not None and row.get("market_yes_price") != "")
+            )
+        else:
+            populated = sum(1 for row in rows if row.get(field) is not None and row.get(field) != "")
         out[field] = {
             "populated": populated,
             "missing": total - populated,

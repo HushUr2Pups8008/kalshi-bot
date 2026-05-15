@@ -73,16 +73,21 @@ def _infer_side(row: dict[str, Any]) -> str | None:
             return side
     if _as_float(row.get("executable_price_cents")) is not None or _market_yes_price_is_executed_alias(row):
         return None
+    # F-11 P1-C: side inference (model_prob vs price/100) is only valid
+    # when the price is a YES-side midpoint. ``entry_price_cents`` is
+    # executed-side by definition -- comparing model_prob against it
+    # would mislabel NO trades as YES whenever the executed (NO-side)
+    # price happens to sit below the model probability. Fail closed if
+    # the only price source is the canonical entry_price_cents and no
+    # explicit side field is present; require ``market_yes_price`` (the
+    # YES-midpoint legacy key) for inference.
+    yes_price_cents = _as_float(row.get("market_yes_price"))
+    if yes_price_cents is None:
+        return None
     model_prob = _as_float(row.get("model_prob"))
-    # F-11 P1-C: prefer canonical `entry_price_cents`; the helper falls
-    # back to legacy `market_yes_price` when only the legacy key is set.
-    # Pre-P0 legacy rows used `market_yes_price` as the YES-side midpoint,
-    # so the side inference (model_prob vs price/100) carries the same
-    # semantics whether the value came from the canonical or legacy key.
-    price_cents = _entry_price_cents(row)
-    if model_prob is not None and price_cents is not None:
-        return "yes" if model_prob >= price_cents / 100.0 else "no"
-    return None
+    if model_prob is None:
+        return None
+    return "yes" if model_prob >= yes_price_cents / 100.0 else "no"
 
 
 def _market_yes_price_is_executed_alias(row: dict[str, Any]) -> bool:

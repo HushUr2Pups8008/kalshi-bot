@@ -120,6 +120,16 @@ def _paper_trade_rows(db_path: Path, markets: dict[str, dict[str, Any]]) -> list
         ticker = str(trade.get("ticker") or "")
         if ticker not in markets:
             continue
+        # F-11 P1-C: the source SQLite column is still named
+        # `market_yes_price` (rename is F-11 P1-B's job, gated on
+        # Bounce 2), but the VALUE in that column is the executed
+        # entry price for paper-trade rows. Emit BOTH keys on the
+        # generated replay row so downstream consumers can read
+        # either name. The two writes share one resolution and cannot
+        # drift at construction. _first_present is None-aware so an
+        # explicit 0.0 cent price is NOT silently dropped (legacy
+        # `a or b` truthy fallback would have collapsed 0.0 to b).
+        paper_entry_price = _as_float(_first_present(trade, "market_yes_price", "price_cents"))
         item = {
             **_market_fields(ticker, markets),
             "decision_ts": trade.get("ts"),
@@ -127,17 +137,8 @@ def _paper_trade_rows(db_path: Path, markets: dict[str, dict[str, Any]]) -> list
             "side": str(trade.get("side") or "").lower() or None,
             "contracts": trade.get("contracts"),
             "model_prob": _as_float(trade.get("estimated_prob")),
-            # F-11 P1-C: the source SQLite column is still named
-            # `market_yes_price` (rename is F-11 P1-B's job, gated on
-            # Bounce 2), but the VALUE in that column is the executed
-            # entry price for paper-trade rows. Emit BOTH keys on the
-            # generated replay row so downstream consumers can read
-            # either name. P1-B will let us drop the legacy emit; until
-            # then dual-emit keeps consumers schema-agnostic. The two
-            # writes share one `_as_float(...)` resolution and cannot
-            # drift at construction.
-            "market_yes_price": _as_float(trade.get("market_yes_price") or trade.get("price_cents")),
-            "entry_price_cents": _as_float(trade.get("market_yes_price") or trade.get("price_cents")),
+            "market_yes_price": paper_entry_price,
+            "entry_price_cents": paper_entry_price,
             "edge": _as_float(trade.get("edge")),
             "signal_source": trade.get("signal_source") or "unknown",
             "signal_type": trade.get("signal_type") or "unknown",
@@ -347,9 +348,15 @@ def apply_historical_prices(
         price = price_at_decision(prices, str(row.get("ticker") or ""), row.get("decision_ts"))
         if price is None:
             continue
-        # F-11 P1-C: emit both keys so pre-bounce and post-bounce consumers can read the price.
+        # F-11 P1-C: ``price_at_decision`` returns the historical YES-side
+        # midpoint, NOT an executed-side entry price. Writing this value
+        # to ``entry_price_cents`` would mislabel YES-midpoint as the
+        # executed price and silently break NO-trade scoring (the
+        # ``100 - yes_price`` flip in ``_contract_price`` is skipped when
+        # the canonical key is populated). Emit ONLY ``market_yes_price``;
+        # downstream consumers that need executed-side cost will read it
+        # through the YES-midpoint code path with the correct side flip.
         row["market_yes_price"] = price
-        row["entry_price_cents"] = price
         model_prob = _as_float(row.get("model_prob"))
         if model_prob is not None:
             row["edge"] = model_prob - (price / 100.0)
