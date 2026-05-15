@@ -132,6 +132,20 @@ def test_evidence_store_schema_creates_required_tables_and_indexes():
     } <= indexes
 
 
+def test_evidence_and_dossier_updates_include_p0_contract_version():
+    conn = _connect_with_schema()
+
+    evidence_cols = {
+        row["name"] for row in conn.execute("PRAGMA table_info(evidence)")
+    }
+    update_cols = {
+        row["name"] for row in conn.execute("PRAGMA table_info(dossier_updates)")
+    }
+
+    assert "p0_contract_version" in evidence_cols
+    assert "p0_contract_version" in update_cols
+
+
 def test_evidence_requires_parent_dossier():
     conn = _connect_with_schema()
 

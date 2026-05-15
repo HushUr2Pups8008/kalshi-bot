@@ -20,6 +20,7 @@ from feeds.gdelt_monitor import run_gdelt_monitor
 from feeds import NewsItem
 from kalshi import KalshiMarket
 from main import TradingBot, _signal_to_evidence, _source_class_for_evidence
+from trading.portfolio import Position
 
 
 def _make_bot_stub():
@@ -1113,6 +1114,40 @@ async def test_on_price_update_no_trigger_when_price_does_not_cross_thresholds()
     assert list(bot._ws_velocity["KXTEST-25DEC31"]) == [(100.0, 50.0), (101.0, 50.0)]
     bot._process_price_fade.assert_not_awaited()
     create_task_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_on_price_update_logs_position_drift_from_entry_price_cents():
+    bot = _make_bot_stub()
+    bot._process_price_fade = AsyncMock()
+    bot._trigger_targeted_search = AsyncMock()
+    bot.paper.portfolio.open_positions.return_value = [
+        Position(
+            trade_id="trade-1",
+            ticker="KXTEST-25DEC31",
+            side="yes",
+            contracts=1,
+            cost_dollars=0.50,
+            price_cents=50,
+            estimated_prob=0.60,
+            entry_price_cents=50.0,
+            ts="2026-05-15T00:00:00+00:00",
+        )
+    ]
+
+    with patch("main.time.monotonic", side_effect=[100.0, 101.0]), \
+         patch("main.PRICE_MOVE_THRESHOLD_CENTS", 999.0), \
+         patch("main.DRIFT_ALERT_CENTS", 2.0), \
+         patch("main.DRIFT_LOG_COOLDOWN_SECS", 0.0), \
+         patch("analysis.fade_signal.detect_price_fade", return_value=None), \
+         patch("utils.logger.trade_log.log_position_drift") as drift_mock:
+        await bot._on_price_update("KXTEST-25DEC31", 49.0, 51.0)
+        await bot._on_price_update("KXTEST-25DEC31", 52.0, 54.0)
+
+    drift_mock.assert_called_once()
+    assert drift_mock.call_args.kwargs["entry_price"] == pytest.approx(50.0)
+    assert drift_mock.call_args.kwargs["current_price"] == pytest.approx(53.0)
+    assert drift_mock.call_args.kwargs["drift_cents"] == pytest.approx(3.0)
 
 
 @pytest.mark.asyncio

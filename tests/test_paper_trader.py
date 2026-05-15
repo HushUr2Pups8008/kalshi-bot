@@ -775,6 +775,8 @@ class TestMigrations:
                 pt = PaperTrader(db_path=":memory:", startup_context="test")
 
             cols = pt._paper_trades_columns()
+            assert "entry_price_cents" in cols
+            assert "market_yes_price" not in cols
             # Columns added by _migrate_db
             for expected in ("series_ticker", "resolved_ts", "signal_type", "match_score",
                              "llm_direction", "llm_magnitude", "llm_confidence",
@@ -783,9 +785,10 @@ class TestMigrations:
 
             # series_ticker backfilled from market_snapshot JSON for historical row
             row = pt._conn.execute(
-                "SELECT series_ticker FROM paper_trades WHERE trade_id='legacy-1'"
+                "SELECT series_ticker, entry_price_cents FROM paper_trades WHERE trade_id='legacy-1'"
             ).fetchone()
             assert row["series_ticker"] == "KXLEG"
+            assert row["entry_price_cents"] == 50.0
         finally:
             keeper.close()
 
@@ -998,6 +1001,17 @@ class TestCalibrationEmission:
         ):
             assert col in after_cols
 
+    def test_record_trade_writes_entry_price_cents_column(self, trader):
+        """P1-B: live paper-trade writes use the canonical DB column name."""
+        analysis = _make_mock_analysis(ticker="KXP1B-ENTRY", yes_price=55, side="yes")
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXP1B"}):
+            trader.record_trade(analysis)
+
+        row = trader._conn.execute(
+            "SELECT entry_price_cents FROM paper_trades WHERE ticker='KXP1B-ENTRY'"
+        ).fetchone()
+        assert row["entry_price_cents"] == 55.0
+
 
 class TestConfirmGoLive:
     """`confirm_go_live` — sets DB flag and flips cfg.is_paper_trading off."""
@@ -1032,7 +1046,7 @@ class TestGoLiveAssessmentBranches:
             tid = uuid.uuid4().hex[:12]
             trader._conn.execute(
                 "INSERT INTO paper_trades (trade_id, ts, ticker, market_title, side, "
-                "contracts, price_cents, cost_dollars, estimated_prob, market_yes_price, "
+                "contracts, price_cents, cost_dollars, estimated_prob, entry_price_cents, "
                 "edge, kelly_dollars, capped_dollars, signal_headline, signal_source, "
                 "keywords_matched, reasoning, resolved, resolved_yes, pnl_dollars) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",

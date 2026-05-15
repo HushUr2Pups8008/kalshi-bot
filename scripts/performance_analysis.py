@@ -489,13 +489,15 @@ def section_placed_performance(entries, db_trades, resolution_map):
         rows = []
         for t in sorted(resolved, key=lambda x: x["ts"]):
             result = "YES" if t.get("resolved_yes") else "NO"
-            # v0.30.1 follow-up: render missing market_yes_price as "n/a"
+            # v0.30.1/F-11 follow-up: render missing entry price as "n/a"
             # rather than `"%.0fc" % (... or 0)` which silently displayed a
-            # missing price as "0c" (looks like a real 0¢ entry-price = audit
+            # missing price as "0c" (looks like a real 0c entry-price = audit
             # bug). Explicit 0 is preserved as "0c"; only None/missing renders
             # as "n/a". P-4 LD-2: no silent-50 (display-layer corollary: no
             # silent-0 either).
-            myp = t.get("market_yes_price")
+            myp = t.get("entry_price_cents")
+            if myp is None:
+                myp = t.get("market_yes_price")
             mkt_p_text = "n/a" if myp is None else "%.0fc" % myp
             rows.append(
                 [

@@ -80,6 +80,7 @@ event identifier and is globally unique.
 | `original_weight` | `REAL` | yes | Undecayed evidence weight; decay is applied at read time. |
 | `dossier_version_before` | `INTEGER` | no | Version before ingest/update. |
 | `dossier_version_after` | `INTEGER` | no | Version after ingest/update. |
+| `p0_contract_version` | `INTEGER` | no | Cohort discriminator; legacy pre-P0 rows migrate to `0`, new writes use `1`. |
 
 ### `dossier_updates`
 
@@ -101,6 +102,7 @@ to audit actual update outcomes without recomputing the dossier.
 | `llm_called` | `INTEGER` | no | Boolean `0/1`, aligns with `DOSSIER_UPDATE`. |
 | `drift_suspect` | `INTEGER` | no | Boolean `0/1`, post-update state. |
 | `in_recovery` | `INTEGER` | no | Boolean `0/1`, post-update state. |
+| `p0_contract_version` | `INTEGER` | no | Cohort discriminator; legacy pre-P0 rows migrate to `0`, new writes use `1`. |
 
 ### `dossier_update_evidence`
 

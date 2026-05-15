@@ -109,6 +109,85 @@ async def test_get_dossier_returns_none_for_missing_market(tmp_path: Path):
     assert await store.get_dossier("KXMISSING-26DEC31") is None
 
 
+def test_initialize_migrates_legacy_cohort_blind_rows(tmp_path: Path):
+    db_path = tmp_path / "evidence_store.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE evidence (
+                evidence_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                source TEXT NOT NULL,
+                source_class TEXT NOT NULL,
+                headline TEXT NOT NULL,
+                ingested_ts TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                update_type TEXT NOT NULL,
+                dossier_version_before INTEGER NOT NULL,
+                dossier_version_after INTEGER NOT NULL
+            );
+            CREATE TABLE dossier_updates (
+                market_ticker TEXT NOT NULL,
+                dossier_version INTEGER NOT NULL,
+                created_ts TEXT NOT NULL,
+                trigger_evidence_id TEXT NOT NULL,
+                prior_estimate REAL,
+                new_estimate REAL,
+                update_delta REAL NOT NULL,
+                confidence_before REAL NOT NULL,
+                confidence_after REAL NOT NULL,
+                update_type TEXT NOT NULL,
+                llm_called INTEGER NOT NULL DEFAULT 0,
+                drift_suspect INTEGER NOT NULL DEFAULT 0,
+                in_recovery INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (market_ticker, dossier_version)
+            );
+            INSERT INTO evidence (
+                evidence_id, market_ticker, source, source_class, headline,
+                ingested_ts, content_hash, update_type, dossier_version_before,
+                dossier_version_after
+            )
+            VALUES (
+                'legacy-ev', 'KXLEG-26DEC31', 'Reuters', 'wire', 'Legacy',
+                '2026-04-19T00:01:00+00:00', 'hash-legacy', 'state', 0, 1
+            );
+            INSERT INTO dossier_updates (
+                market_ticker, dossier_version, created_ts, trigger_evidence_id,
+                prior_estimate, new_estimate, update_delta, confidence_before,
+                confidence_after, update_type
+            )
+            VALUES (
+                'KXLEG-26DEC31', 1, '2026-04-19T00:02:00+00:00', 'legacy-ev',
+                0.50, 0.55, 0.05, 0.10, 0.20, 'state'
+            );
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    EvidenceStore(db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        evidence_row = conn.execute(
+            "SELECT p0_contract_version FROM evidence WHERE evidence_id = 'legacy-ev'"
+        ).fetchone()
+        update_row = conn.execute(
+            """
+            SELECT p0_contract_version FROM dossier_updates
+            WHERE market_ticker = 'KXLEG-26DEC31' AND dossier_version = 1
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert evidence_row["p0_contract_version"] == 0
+    assert update_row["p0_contract_version"] == 0
+
+
 @pytest.mark.asyncio
 async def test_update_dossier_persists_and_gets_current_state(tmp_path: Path):
     store = _store(tmp_path)
@@ -211,6 +290,7 @@ async def test_update_dossier_appends_update_history_and_contributing_links(tmp_
         ).fetchone()
 
     assert update_row["trigger_evidence_id"] == "ev-1"
+    assert update_row["p0_contract_version"] == 1
     assert link_row["evidence_id"] == "ev-1"
 
 

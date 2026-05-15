@@ -487,6 +487,206 @@ def test_build_replay_dataset_includes_evidence_store_dossier_updates(tmp_path):
     assert rows[0]["model_prob"] == 0.62
 
 
+def test_build_replay_dataset_preserves_evidence_store_p0_contract_version(tmp_path):
+    markets_path = tmp_path / "markets.json"
+    markets_path.write_text(
+        json.dumps([{"ticker": "KXTEST-26MAY13", "series_ticker": "KXTEST", "resolved_yes": True}]),
+        encoding="utf-8",
+    )
+    evidence_db = tmp_path / "evidence_store.db"
+    conn = sqlite3.connect(evidence_db)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE evidence (
+                evidence_id TEXT,
+                market_ticker TEXT,
+                source TEXT,
+                source_class TEXT,
+                headline TEXT,
+                ingested_ts TEXT,
+                update_type TEXT,
+                p0_contract_version INTEGER
+            );
+            CREATE TABLE dossier_updates (
+                market_ticker TEXT,
+                dossier_version INTEGER,
+                created_ts TEXT,
+                trigger_evidence_id TEXT,
+                prior_estimate REAL,
+                new_estimate REAL,
+                update_delta REAL,
+                confidence_before REAL,
+                confidence_after REAL,
+                update_type TEXT,
+                llm_called INTEGER,
+                p0_contract_version INTEGER
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO evidence VALUES (
+                'ev1', 'KXTEST-26MAY13', 'Reuters', 'publisher_rss',
+                'Headline', '2026-05-13T00:00:00+00:00', 'state', 1
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO dossier_updates VALUES (
+                'KXTEST-26MAY13', 1, '2026-05-13T00:01:00+00:00',
+                'ev1', 0.50, 0.62, 0.12, 0.20, 0.40, 'state', 1, 1
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = build_replay_dataset(
+        markets_path=markets_path,
+        paper_trades_db=None,
+        trade_logs=[],
+        evidence_store_db=evidence_db,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["p0_contract_version"] == 1
+
+
+def test_build_replay_dataset_reads_p0_contract_version_from_dossier_only_schema(tmp_path):
+    markets_path = tmp_path / "markets.json"
+    markets_path.write_text(
+        json.dumps([{"ticker": "KXTEST-26MAY14", "series_ticker": "KXTEST", "resolved_yes": True}]),
+        encoding="utf-8",
+    )
+    evidence_db = tmp_path / "evidence_store.db"
+    conn = sqlite3.connect(evidence_db)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE evidence (
+                evidence_id TEXT,
+                market_ticker TEXT,
+                source TEXT,
+                source_class TEXT,
+                headline TEXT,
+                ingested_ts TEXT,
+                update_type TEXT
+            );
+            CREATE TABLE dossier_updates (
+                market_ticker TEXT,
+                dossier_version INTEGER,
+                created_ts TEXT,
+                trigger_evidence_id TEXT,
+                prior_estimate REAL,
+                new_estimate REAL,
+                update_delta REAL,
+                confidence_before REAL,
+                confidence_after REAL,
+                update_type TEXT,
+                llm_called INTEGER,
+                p0_contract_version INTEGER
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO evidence VALUES (
+                'ev1', 'KXTEST-26MAY14', 'Reuters', 'publisher_rss',
+                'Headline', '2026-05-14T00:00:00+00:00', 'state'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO dossier_updates VALUES (
+                'KXTEST-26MAY14', 1, '2026-05-14T00:01:00+00:00',
+                'ev1', 0.50, 0.62, 0.12, 0.20, 0.40, 'state', 1, 2
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = build_replay_dataset(
+        markets_path=markets_path,
+        paper_trades_db=None,
+        trade_logs=[],
+        evidence_store_db=evidence_db,
+    )
+
+    assert rows[0]["p0_contract_version"] == 2
+
+
+def test_build_replay_dataset_falls_back_to_evidence_p0_contract_version(tmp_path):
+    markets_path = tmp_path / "markets.json"
+    markets_path.write_text(
+        json.dumps([{"ticker": "KXTEST-26MAY15", "series_ticker": "KXTEST", "resolved_yes": True}]),
+        encoding="utf-8",
+    )
+    evidence_db = tmp_path / "evidence_store.db"
+    conn = sqlite3.connect(evidence_db)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE evidence (
+                evidence_id TEXT,
+                market_ticker TEXT,
+                source TEXT,
+                source_class TEXT,
+                headline TEXT,
+                ingested_ts TEXT,
+                update_type TEXT,
+                p0_contract_version INTEGER
+            );
+            CREATE TABLE dossier_updates (
+                market_ticker TEXT,
+                dossier_version INTEGER,
+                created_ts TEXT,
+                trigger_evidence_id TEXT,
+                prior_estimate REAL,
+                new_estimate REAL,
+                update_delta REAL,
+                confidence_before REAL,
+                confidence_after REAL,
+                update_type TEXT,
+                llm_called INTEGER
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO evidence VALUES (
+                'ev1', 'KXTEST-26MAY15', 'Reuters', 'publisher_rss',
+                'Headline', '2026-05-15T00:00:00+00:00', 'state', 3
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO dossier_updates VALUES (
+                'KXTEST-26MAY15', 1, '2026-05-15T00:01:00+00:00',
+                'ev1', 0.50, 0.62, 0.12, 0.20, 0.40, 'state', 1
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = build_replay_dataset(
+        markets_path=markets_path,
+        paper_trades_db=None,
+        trade_logs=[],
+        evidence_store_db=evidence_db,
+    )
+
+    assert rows[0]["p0_contract_version"] == 3
+
+
 def test_build_replay_dataset_applies_decision_time_price_map(tmp_path):
     markets_path = tmp_path / "markets.json"
     markets_path.write_text(

@@ -891,8 +891,7 @@ class TradingBot:
             news_item=news,
             market=market,
             estimated_probability=estimated_prob,
-            # market_yes_price is the deprecated alias; __post_init__ will
-            # populate it from executed_price_cents when omitted.
+            # Post-P0 analysis carries the executed-side ask for the chosen side.
             executed_price_cents=executed_price_cents,
             edge=edge,
             side=side,
@@ -1091,13 +1090,13 @@ class TradingBot:
             last_drift = self._last_drift_logged.get(ticker, 0.0)
             if now_mono - last_drift >= DRIFT_LOG_COOLDOWN_SECS:
                 for pos in open_positions:
-                    drift = now_mid - pos.market_yes_price
+                    drift = now_mid - pos.entry_price_cents
                     if abs(drift) >= DRIFT_ALERT_CENTS:
                         self._last_drift_logged[ticker] = now_mono
                         from utils.logger import trade_log as _tl
                         _tl.log_position_drift(
                             ticker=ticker,
-                            entry_price=pos.market_yes_price,
+                            entry_price=pos.entry_price_cents,
                             current_price=now_mid,
                             drift_cents=drift,
                             side=pos.side,
@@ -1105,7 +1104,7 @@ class TradingBot:
                         )
                         log.info(
                             "[DRIFT] %s: entry=%.1fc now=%.1fc drift=%+.1fc (%s)",
-                            ticker, pos.market_yes_price, now_mid, drift, pos.side.upper(),
+                            ticker, pos.entry_price_cents, now_mid, drift, pos.side.upper(),
                         )
                         break  # one log event per ticker per cooldown period
 

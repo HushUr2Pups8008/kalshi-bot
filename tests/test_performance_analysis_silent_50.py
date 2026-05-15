@@ -155,6 +155,20 @@ def test_section_placed_performance_renders_missing_price_as_na():
             "signal_source": "test",
         },
         {
+            "trade_id": "t-canon",
+            "ticker": "KX-CANON",
+            "ts": "2026-05-13T00:30:03+00:00",
+            "side": "yes",
+            "edge": 0.05,
+            "estimated_prob": 0.55,
+            "entry_price_cents": 43.0,
+            "cost_dollars": 0.43,
+            "pnl_dollars": 0.10,
+            "resolved": True,
+            "resolved_yes": True,
+            "signal_source": "test",
+        },
+        {
             "trade_id": "t-zero",
             "ticker": "KX-ZERO",
             "ts": "2026-05-13T00:30:05+00:00",
@@ -176,5 +190,7 @@ def test_section_placed_performance_renders_missing_price_as_na():
 
     # KX-MISS row renders the missing-price column as "n/a".
     assert "n/a" in output, output
+    # KX-CANON row reads the post-P1-B canonical column.
+    assert "43c" in output, output
     # KX-ZERO row preserves the explicit "0c" — not coerced to "n/a".
     assert "0c" in output, output

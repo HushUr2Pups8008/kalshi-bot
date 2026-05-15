@@ -112,7 +112,7 @@ class TestPortfolioLoadFromDb:
                 cost_dollars REAL,
                 price_cents INTEGER,
                 estimated_prob REAL,
-                market_yes_price REAL,
+                entry_price_cents REAL,
                 ts TEXT,
                 resolved INTEGER
             )
@@ -122,7 +122,7 @@ class TestPortfolioLoadFromDb:
             """
             INSERT INTO paper_trades
             (trade_id, ticker, side, contracts, cost_dollars, price_cents,
-             estimated_prob, market_yes_price, ts, resolved)
+             estimated_prob, entry_price_cents, ts, resolved)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
@@ -137,3 +137,40 @@ class TestPortfolioLoadFromDb:
         p.load_from_db(conn)
 
         assert {pos.trade_id for pos in p.open_positions()} == {"t1", "t3"}
+
+    def test_load_from_db_tolerates_legacy_market_yes_price_column(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            CREATE TABLE paper_trades (
+                trade_id TEXT,
+                ticker TEXT,
+                side TEXT,
+                contracts INTEGER,
+                cost_dollars REAL,
+                price_cents INTEGER,
+                estimated_prob REAL,
+                market_yes_price REAL,
+                ts TEXT,
+                resolved INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_trades
+            (trade_id, ticker, side, contracts, cost_dollars, price_cents,
+             estimated_prob, market_yes_price, ts, resolved)
+            VALUES ('legacy', 'KXLEG', 'yes', 5, 10.0, 50, 0.6, 51.0,
+                    '2026-01-01T00:00:00+00:00', 0)
+            """
+        )
+        conn.commit()
+
+        p = Portfolio()
+        p.load_from_db(conn)
+
+        positions = p.open_positions("KXLEG")
+        assert len(positions) == 1
+        assert positions[0].entry_price_cents == 51.0

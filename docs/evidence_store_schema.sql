@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS evidence (
     original_weight REAL CHECK (original_weight IS NULL OR original_weight >= 0.0),
     dossier_version_before INTEGER NOT NULL CHECK (dossier_version_before >= 0),
     dossier_version_after INTEGER NOT NULL CHECK (dossier_version_after >= dossier_version_before),
+    p0_contract_version INTEGER NOT NULL DEFAULT 1 CHECK (p0_contract_version >= 0),
     FOREIGN KEY (market_ticker) REFERENCES dossiers(market_ticker)
         ON UPDATE RESTRICT ON DELETE RESTRICT,
     UNIQUE (market_ticker, evidence_id)
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS dossier_updates (
     llm_called INTEGER NOT NULL DEFAULT 0 CHECK (llm_called IN (0, 1)),
     drift_suspect INTEGER NOT NULL DEFAULT 0 CHECK (drift_suspect IN (0, 1)),
     in_recovery INTEGER NOT NULL DEFAULT 0 CHECK (in_recovery IN (0, 1)),
+    p0_contract_version INTEGER NOT NULL DEFAULT 1 CHECK (p0_contract_version >= 0),
     PRIMARY KEY (market_ticker, dossier_version),
     FOREIGN KEY (market_ticker) REFERENCES dossiers(market_ticker)
         ON UPDATE RESTRICT ON DELETE RESTRICT,

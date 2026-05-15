@@ -113,12 +113,12 @@ def test_paper_trade_row_confidence_is_none_when_db_column_is_null(tmp_path):
 
 
 def test_paper_trade_row_dual_emits_market_yes_price_and_entry_price_cents(tmp_path):
-    """F-11 P1-C: ``_paper_trade_rows`` reads from the live SQLite
-    ``paper_trades.market_yes_price`` column (rename pending P1-B) and must
-    emit BOTH the legacy ``market_yes_price`` key and the canonical
-    ``entry_price_cents`` key on the generated replay row, with identical
-    values. Downstream consumers that switched to the canonical key during
-    P1-C must find the value without backward-fallback overhead.
+    """F-11 P1-B/P1-C: ``_paper_trade_rows`` reads legacy SQLite
+    ``paper_trades.market_yes_price`` rows and must emit BOTH the legacy
+    ``market_yes_price`` key and the canonical ``entry_price_cents`` key on
+    the generated replay row, with identical values. Downstream consumers that
+    switched to the canonical key during P1-C must find the value without
+    backward-fallback overhead.
     """
     db = tmp_path / "paper_trades.db"
     _make_paper_db(db, llm_confidence=0.75)
@@ -127,7 +127,7 @@ def test_paper_trade_row_dual_emits_market_yes_price_and_entry_price_cents(tmp_p
 
     assert len(rows) == 1
     row = rows[0]
-    assert "market_yes_price" in row, "legacy key must be emitted (P1-B not yet landed)"
+    assert "market_yes_price" in row, "legacy key must still be emitted for replay consumers"
     assert "entry_price_cents" in row, "canonical key must be dual-emitted (F-11 P1-C)"
     assert row["market_yes_price"] == row["entry_price_cents"], (
         "dual-emit values must be byte-identical -- they share one _as_float() resolution"
@@ -135,6 +135,57 @@ def test_paper_trade_row_dual_emits_market_yes_price_and_entry_price_cents(tmp_p
     assert row["market_yes_price"] is not None, (
         "fixture seeds a non-null price; both keys must carry the value"
     )
+
+
+def test_paper_trade_row_reads_post_p1b_entry_price_cents_column(tmp_path):
+    """P1-B: canonical DB rows must not fall back to price_cents."""
+    db = tmp_path / "paper_trades.db"
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE paper_trades (
+                trade_id TEXT,
+                ts TEXT,
+                ticker TEXT,
+                side TEXT,
+                contracts INTEGER,
+                estimated_prob REAL,
+                entry_price_cents REAL,
+                price_cents INTEGER,
+                edge REAL,
+                signal_source TEXT,
+                signal_type TEXT,
+                news_class TEXT,
+                signal_headline TEXT,
+                pnl_dollars REAL,
+                resolved INTEGER,
+                fast_lane_p REAL,
+                accumulation_p REAL,
+                structural_p REAL,
+                llm_confidence REAL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_trades VALUES (
+                't1', '2026-05-10T00:00:00+00:00', ?, 'yes', 1,
+                0.70, 41.5, 41, 0.25, 'Reuters', 'llm', 'news',
+                'Headline', 0.50, 1, 0.65, 0.66, 0.67, 0.75
+            )
+            """,
+            (TICKER,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = _paper_trade_rows(db, MARKETS)
+
+    assert len(rows) == 1
+    assert rows[0]["entry_price_cents"] == 41.5
+    assert rows[0]["market_yes_price"] == 41.5
 
 
 # ---------------------------------------------------------------------------

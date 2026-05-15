@@ -27,10 +27,10 @@ class Position:
     ``"unavailable"`` / ``"none"`` for hydration of pre-P0 DB rows that
     lack the columns.
 
-    Note: the underlying DB column is still named ``market_yes_price``
-    (renamed to ``entry_price_cents`` in P1-B). The hydration layer maps
-    ``row["market_yes_price"] → entry_price_cents`` until that migration
-    lands.
+    P1-B renamed the underlying DB column from ``market_yes_price`` to
+    ``entry_price_cents``. The hydration layer still tolerates the legacy
+    column name for direct legacy-fixture loads, but PaperTrader migrates the
+    live DB before calling this method.
     """
     trade_id:          str
     ticker:            str
@@ -73,17 +73,18 @@ class Portfolio:
         # schemas continue to load.
         cols = {r[1] for r in conn.execute("PRAGMA table_info(paper_trades)").fetchall()}
         has_provenance = "price_source" in cols and "price_method" in cols
+        entry_price_col = "entry_price_cents" if "entry_price_cents" in cols else "market_yes_price"
         if has_provenance:
             select_sql = (
                 "SELECT trade_id, ticker, side, contracts, cost_dollars, price_cents, "
-                "       estimated_prob, market_yes_price, ts, "
+                f"       estimated_prob, {entry_price_col} AS entry_price_cents, ts, "
                 "       price_source, price_method "
                 "FROM paper_trades WHERE resolved = 0 ORDER BY ts ASC"
             )
         else:
             select_sql = (
                 "SELECT trade_id, ticker, side, contracts, cost_dollars, price_cents, "
-                "       estimated_prob, market_yes_price, ts "
+                f"       estimated_prob, {entry_price_col} AS entry_price_cents, ts "
                 "FROM paper_trades WHERE resolved = 0 ORDER BY ts ASC"
             )
         rows = conn.execute(select_sql).fetchall()
@@ -105,7 +106,7 @@ class Portfolio:
                 cost_dollars=row["cost_dollars"],
                 price_cents=row["price_cents"],
                 estimated_prob=row["estimated_prob"],
-                entry_price_cents=row["market_yes_price"],
+                entry_price_cents=row["entry_price_cents"],
                 ts=row["ts"],
                 price_source=_get("price_source", "unavailable"),
                 price_method=_get("price_method", "none"),

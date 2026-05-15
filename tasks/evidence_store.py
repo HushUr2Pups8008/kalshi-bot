@@ -73,6 +73,7 @@ class EvidenceRecord:
     correlation_discount_applied: bool = False
     quality_score: float | None = None
     original_weight: float | None = None
+    p0_contract_version: int = 1
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,7 @@ class DossierUpdateRecord:
     llm_called: bool = False
     drift_suspect: bool = False
     in_recovery: bool = False
+    p0_contract_version: int = 1
 
 
 @dataclass(frozen=True)
@@ -121,11 +123,22 @@ class EvidenceStore:
             self.initialize()
 
     def initialize(self) -> None:
-        """Create the S2.1 schema if needed. Does not perform migrations."""
+        """Create the S2.1 schema and run idempotent additive migrations."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         schema_sql = self.schema_path.read_text(encoding="utf-8")
         with self._connect() as conn:
             conn.executescript(schema_sql)
+            self._migrate_db(conn)
+
+    def _migrate_db(self, conn: sqlite3.Connection) -> None:
+        for table in ("evidence", "dossier_updates"):
+            cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if "p0_contract_version" not in cols:
+                conn.execute(
+                    f"ALTER TABLE {table} "
+                    "ADD COLUMN p0_contract_version INTEGER NOT NULL DEFAULT 0 "
+                    "CHECK (p0_contract_version >= 0)"
+                )
 
     async def get_dossier(self, market_ticker: str) -> DossierState | None:
         """Return current dossier state for ``market_ticker``, or None if absent."""
@@ -282,9 +295,9 @@ class EvidenceStore:
                         correlation_cluster_id, is_duplicate,
                         correlation_discount_applied, update_type, quality_score,
                         original_weight, dossier_version_before,
-                        dossier_version_after
+                        dossier_version_after, p0_contract_version
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         evidence.evidence_id,
@@ -306,6 +319,7 @@ class EvidenceStore:
                         evidence.original_weight,
                         evidence.dossier_version_before,
                         evidence.dossier_version_after,
+                        evidence.p0_contract_version,
                     ),
                 )
         except sqlite3.IntegrityError as exc:
@@ -365,9 +379,10 @@ class EvidenceStore:
                             market_ticker, dossier_version, created_ts,
                             trigger_evidence_id, prior_estimate, new_estimate,
                             update_delta, confidence_before, confidence_after,
-                            update_type, llm_called, drift_suspect, in_recovery
+                            update_type, llm_called, drift_suspect, in_recovery,
+                            p0_contract_version
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             update.market_ticker,
@@ -383,6 +398,7 @@ class EvidenceStore:
                             int(update.llm_called),
                             int(update.drift_suspect),
                             int(update.in_recovery),
+                            update.p0_contract_version,
                         ),
                     )
                     conn.executemany(
@@ -475,6 +491,7 @@ def _evidence_from_row(row: sqlite3.Row) -> EvidenceRecord:
         correlation_discount_applied=bool(row["correlation_discount_applied"]),
         quality_score=row["quality_score"],
         original_weight=row["original_weight"],
+        p0_contract_version=int(row["p0_contract_version"]),
     )
 
 

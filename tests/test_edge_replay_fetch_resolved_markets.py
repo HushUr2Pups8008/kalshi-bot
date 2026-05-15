@@ -67,7 +67,7 @@ def test_load_markets_from_paper_trades_db_extracts_resolved_rows(tmp_path):
                 series_ticker TEXT,
                 resolved INTEGER,
                 resolved_yes INTEGER,
-                market_yes_price REAL,
+                entry_price_cents REAL,
                 resolved_ts TEXT
             )
             """
@@ -98,6 +98,40 @@ def test_load_markets_from_paper_trades_db_extracts_resolved_rows(tmp_path):
             "close_time": "2026-05-01T00:00:00+00:00",
         }
     ]
+
+
+def test_load_markets_from_paper_trades_db_accepts_legacy_price_column(tmp_path):
+    db_path = tmp_path / "paper_trades.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE paper_trades (
+                ticker TEXT,
+                market_title TEXT,
+                series_ticker TEXT,
+                resolved INTEGER,
+                resolved_yes INTEGER,
+                market_yes_price REAL,
+                resolved_ts TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_trades VALUES (
+                'KXLEG-26MAY01', 'Legacy price?', 'KXLEG', 1, 0, 49.0,
+                '2026-05-01T00:00:00+00:00'
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = load_markets_from_paper_trades_db(db_path)
+
+    assert rows[0]["yes_price"] == 49.0
 
 
 def test_load_evidence_store_tickers_reads_distinct_market_tickers(tmp_path):

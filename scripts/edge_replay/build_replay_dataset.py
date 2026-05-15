@@ -120,16 +120,13 @@ def _paper_trade_rows(db_path: Path, markets: dict[str, dict[str, Any]]) -> list
         ticker = str(trade.get("ticker") or "")
         if ticker not in markets:
             continue
-        # F-11 P1-C: the source SQLite column is still named
-        # `market_yes_price` (rename is F-11 P1-B's job, gated on
-        # Bounce 2), but the VALUE in that column is the executed
-        # entry price for paper-trade rows. Emit BOTH keys on the
-        # generated replay row so downstream consumers can read
-        # either name. The two writes share one resolution and cannot
-        # drift at construction. _first_present is None-aware so an
-        # explicit 0.0 cent price is NOT silently dropped (legacy
-        # `a or b` truthy fallback would have collapsed 0.0 to b).
-        paper_entry_price = _as_float(_first_present(trade, "market_yes_price", "price_cents"))
+        # F-11 P1-B/P1-C: read the canonical DB column first, fall back to
+        # legacy rows, and keep dual-emitting both replay keys. _first_present
+        # is None-aware so an explicit 0.0 cent price is NOT silently dropped
+        # (legacy `a or b` truthy fallback would have collapsed 0.0 to b).
+        paper_entry_price = _as_float(
+            _first_present(trade, "entry_price_cents", "market_yes_price", "price_cents")
+        )
         item = {
             **_market_fields(ticker, markets),
             "decision_ts": trade.get("ts"),
@@ -253,8 +250,16 @@ def _evidence_store_rows(db_path: Path, markets: dict[str, dict[str, Any]]) -> l
         tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         if not {"dossier_updates", "evidence"}.issubset(tables):
             return []
+        update_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dossier_updates)")}
+        evidence_cols = {row["name"] for row in conn.execute("PRAGMA table_info(evidence)")}
+        if "p0_contract_version" in update_cols:
+            p0_select = "du.p0_contract_version"
+        elif "p0_contract_version" in evidence_cols:
+            p0_select = "ev.p0_contract_version"
+        else:
+            p0_select = "NULL"
         rows = conn.execute(
-            """
+            f"""
             SELECT
                 du.market_ticker,
                 du.dossier_version,
@@ -269,7 +274,8 @@ def _evidence_store_rows(db_path: Path, markets: dict[str, dict[str, Any]]) -> l
                 ev.source_class,
                 ev.headline,
                 ev.ingested_ts,
-                ev.update_type AS evidence_update_type
+                ev.update_type AS evidence_update_type,
+                {p0_select} AS p0_contract_version
             FROM dossier_updates du
             LEFT JOIN evidence ev
                 ON ev.evidence_id = du.trigger_evidence_id
@@ -299,6 +305,7 @@ def _evidence_store_rows(db_path: Path, markets: dict[str, dict[str, Any]]) -> l
                 "signal_type": update.get("dossier_update_type") or update.get("evidence_update_type") or "unknown",
                 "news_class": update.get("source_class") or "unknown",
                 "headline": update.get("headline"),
+                "p0_contract_version": update.get("p0_contract_version"),
                 "confidence": _as_float(update.get("confidence_after")),
                 "llm_called": _as_bool(update.get("llm_called")),
                 "dossier_version": update.get("dossier_version"),

@@ -79,6 +79,11 @@ def load_markets_from_paper_trades_db(path: Path) -> list[dict[str, Any]]:
             continue
         seen.add(ticker)
         resolved_yes = bool(trade.get("resolved_yes"))
+        price = trade.get("entry_price_cents")
+        if price is None:
+            price = trade.get("market_yes_price")
+        if price is None:
+            price = trade.get("price_cents")
         markets.append(
             {
                 "ticker": ticker,
@@ -87,7 +92,7 @@ def load_markets_from_paper_trades_db(path: Path) -> list[dict[str, Any]]:
                 "status": "settled",
                 "resolved_yes": resolved_yes,
                 "result": "yes" if resolved_yes else "no",
-                "yes_price": _as_float(trade.get("market_yes_price") or trade.get("price_cents")),
+                "yes_price": _as_float(price),
                 "close_time": trade.get("resolved_ts"),
             }
         )

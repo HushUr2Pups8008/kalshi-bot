@@ -96,8 +96,8 @@ class TradeCandidate:
     The ``entry_price_cents`` field is the float mirror used by the executor
     and historical-event readers; the deprecated ``market_yes_price`` alias
     has been removed in P1-A. Field name matches Position.entry_price_cents
-    for in-process consistency; the DB column remains ``market_yes_price``
-    until P1-B's schema migration.
+    for in-process consistency; F-11 P1-B carries the same canonical name into
+    the paper trade DB column.
     """
 
     fast_lane_analysis: SignalAnalysis

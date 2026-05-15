@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     price_cents             INTEGER NOT NULL,
     cost_dollars            REAL NOT NULL,
     estimated_prob          REAL NOT NULL,
-    market_yes_price        REAL NOT NULL,
+    entry_price_cents       REAL NOT NULL,
     edge                    REAL NOT NULL,
     kelly_dollars           REAL NOT NULL,
     capped_dollars          REAL NOT NULL,
@@ -355,6 +355,23 @@ class PaperTrader:
         """Add columns introduced after initial schema without dropping existing data."""
         cols = self._paper_trades_columns()
         added_cols: list[str] = []
+        # F-11 P1-B: carry the canonical executed-entry field name through
+        # storage while keeping direct legacy fixture loads survivable.
+        if "market_yes_price" in cols and "entry_price_cents" not in cols:
+            self._conn.execute(
+                "ALTER TABLE paper_trades RENAME COLUMN market_yes_price TO entry_price_cents"
+            )
+            self._conn.commit()
+            cols = self._paper_trades_columns()
+            added_cols.append("entry_price_cents")
+        elif "market_yes_price" in cols and "entry_price_cents" in cols:
+            self._conn.execute(
+                """UPDATE paper_trades
+                   SET entry_price_cents = market_yes_price
+                   WHERE entry_price_cents IS NULL"""
+            )
+            self._conn.commit()
+
         if "market_snapshot" not in cols and self._ensure_paper_trades_column("market_snapshot", "TEXT", cols):
             added_cols.append("market_snapshot")
 
@@ -695,7 +712,7 @@ class PaperTrader:
         self._conn.execute(
             """INSERT INTO paper_trades
                (trade_id, ts, ticker, market_title, side, contracts, price_cents,
-                cost_dollars, estimated_prob, market_yes_price, edge, kelly_dollars,
+                cost_dollars, estimated_prob, entry_price_cents, edge, kelly_dollars,
                 capped_dollars, signal_headline, signal_source, keywords_matched,
                 reasoning, source_multiplier, notional_bankroll_before, notional_bankroll_after,
                 market_snapshot, series_ticker, signal_type, match_score,
