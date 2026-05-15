@@ -100,6 +100,30 @@ Workoff status (snapshot 2026-05-13T23:56Z):
 - Schedule next bot bounce window for F-07 / F-08 / F-11 / F-15 cluster.
 - Whether to escalate F-08 ahead of F-07 — executor silent-attrition is the higher operator-visibility win once F-06 watcher confirms which candidates are being dropped. The F-06 live readout at watcher-deploy time was `verdict=ALARM, opportunity_count=4, paper_trade_count=0, hours_elapsed=11.57`, which is consistent with the silent-attrition hypothesis F-08 is intended to fix.
 
+### 2.0a Polymarket US Integration Investigation (2026-05-14)
+
+Research-only artifact: [`docs/governance/2026-05-14-polymarket-us-integration-investigation.md`](governance/2026-05-14-polymarket-us-integration-investigation.md)
+
+Scope: deep investigation into a future Polymarket US (`polymarket.us`, public-developer Ed25519 track) integration alongside the primary Kalshi pipeline. **Investigation only — no code or runtime changes.** Operator decision: target the public-developer track first; institutional Auth0/JWT/FIX/gRPC track deferred unless the public track is proven insufficient.
+
+Headline findings (Q1–Q3 resolved 2026-05-14 against `docs.polymarket.us`):
+
+- **No public-track sandbox exists.** Triangulated against three doc pages; institutional dev/preprod/prod hosts are not available on the Ed25519 public track. Operational consequence: PAPER-ONLY is structurally necessary (not preferential) on day one, and the first live REST POST is a live order — operator-executed first-touch only.
+- **No `int64`-pricing contamination class on the public track.** SDK quickstarts confirm trading-create accepts `{value: "0.55", currency: "USD"}` money objects. The `int64`-string price representation in the OpenAPI fragment is scoped to the institutional track the bot is not targeting. The PROFIT-API-001 silent-50 transfer-risk does not apply here.
+- **WebSocket auth is a direct topological port from Kalshi** — signed `X-PM-*` headers on the HTTP upgrade handshake (not post-connect auth). Only the signature primitive (Ed25519 vs RSA-PSS) and header names differ.
+
+Per-module reuse classification (25 modules, public track):
+- 6 reuse-as-is (`(a)`), 12 thin-adapter (`(b)`), 6 extract-shared-abstraction (`(c)`), 1 parallel-build (`(d)`).
+- The 1 `(d)` is `governance/agent.py` — governance shadow-soak stays Kalshi-only for Phase 2/3 per operator scope.
+
+Outstanding open items (research-track, not blocking):
+- Numeric WS heartbeat interval (operationally tolerable; confirm at integration time).
+- `orderPriceMinTickSize` decimal vs implicit 1¢ tick reconciliation.
+- SDK `quantity: 100` integer scaling (likely whole contracts).
+- WS `subscriptionType` string-enum vs integer-enum interchangeability.
+
+No code path or runtime state was touched. The investigation artifact remains uncommitted; this pointer establishes its location and the single-tracker linkage per R-9 / R-10.
+
 ### 2.1 Edge Verdict
 
 | metric | value |
