@@ -13,7 +13,7 @@ def _row(
     price: float = 20.0,
     model_prob: float = 0.80,
     edge: float = 0.60,
-    side: str | None = None,
+    side: str | None = "yes",
 ) -> dict[str, object]:
     return {
         "ticker": ticker,
@@ -120,6 +120,42 @@ def test_admission_row_accepts_legacy_market_yes_price_key():
         "_admission_row must resolve price from market_yes_price when entry_price_cents is absent"
     )
     assert admission["market_yes_price"] == 30.0
+
+
+def test_admission_row_reconstructs_yes_midpoint_for_canonical_no_entry_price():
+    """Canonical entry_price_cents is executed-side cost, not YES midpoint."""
+    canonical_no_row = {
+        "ticker": "KX-NO",
+        "decision_ts": "2026-05-01T00:00:00+00:00",
+        "model_prob": 0.40,
+        "confidence": 0.10,
+        "entry_price_cents": 40.0,
+        "edge": -0.20,
+        "side": "no",
+    }
+
+    admission = sweep._admission_row(canonical_no_row, g1_threshold=0.05)
+
+    assert admission["side"] == "no"
+    assert admission["entry_price_cents"] == 40.0
+    assert admission["market_yes_price"] == 60.0
+    assert admission["signed_edge"] is True
+
+
+def test_admission_row_does_not_infer_side_from_canonical_entry_price():
+    canonical_row = {
+        "ticker": "KX-AMBIG",
+        "decision_ts": "2026-05-01T00:00:00+00:00",
+        "model_prob": 0.40,
+        "confidence": 0.10,
+        "entry_price_cents": 40.0,
+        "edge": -0.20,
+    }
+
+    admission = sweep._admission_row(canonical_row, g1_threshold=0.05)
+
+    assert admission["side"] is None
+    assert admission["signed_edge"] is False
 
 
 def test_cli_writes_report_with_projection_disclaimer(tmp_path):

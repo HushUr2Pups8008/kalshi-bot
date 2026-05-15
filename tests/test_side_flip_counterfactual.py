@@ -5,6 +5,8 @@ import importlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 
 def _base_row(index: int, *, resolved_yes: bool, signal_source: str = "source-a") -> dict[str, object]:
     decision_ts = datetime(2026, 4, 20, tzinfo=timezone.utc) + timedelta(hours=5 * index)
@@ -162,3 +164,20 @@ def test_ic16_positive_consistent_excess_wins_keeps_candidate(tmp_path, capsys):
     assert payload["verdict"] == "keep_candidate"
     assert payload["ic16_slice_count"] >= 1
     assert payload["excess_wins_vs_market"] > 0.5
+
+
+def test_score_flip_row_uses_complement_for_canonical_no_entry_price():
+    side_flip_counterfactual = importlib.import_module("scripts.edge_replay.side_flip_counterfactual")
+    row = {
+        **_base_row(0, resolved_yes=False),
+        "side": "no",
+        "_original_side": "no",
+        "entry_price_cents": 40.0,
+    }
+    row.pop("market_yes_price")
+
+    scored = side_flip_counterfactual._score_flip_row(row)
+
+    assert scored["flip_side"] == "yes"
+    assert scored["market_implied_win_prob_flip"] == pytest.approx(0.60)
+    assert scored["counterfactual_pnl"] == pytest.approx(-0.60)

@@ -53,14 +53,35 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
-def _entry_price_cents(row: dict) -> float | None:
-    # F-11 P1-C: prefer canonical post-P1-A key; fall back to the legacy
-    # `market_yes_price` key for pre-bounce JSONL records and historical
-    # replay corpora. Missing stays missing -- do NOT default to 0 or 50.
-    val = row.get("entry_price_cents")
-    if val is None:
-        val = row.get("market_yes_price")
-    return _as_float(val)
+def _normalize_side(value: Any) -> str | None:
+    side = str(value or "").lower()
+    return side if side in {"yes", "no"} else None
+
+
+def _market_yes_price_cents(row: dict, side: str | None = None) -> float | None:
+    entry_price = _as_float(row.get("entry_price_cents"))
+    if entry_price is not None:
+        if side == "yes":
+            return entry_price
+        if side == "no":
+            return 100.0 - entry_price
+        return None
+    return _as_float(row.get("market_yes_price"))
+
+
+def _entry_price_cents(row: dict, side: str | None = None) -> float | None:
+    # Canonical entry_price_cents is already executed-side. Legacy
+    # market_yes_price is a YES midpoint, so NO-side entry cost is its
+    # complement once side is known.
+    entry_price = _as_float(row.get("entry_price_cents"))
+    if entry_price is not None:
+        return entry_price
+    yes_price = _as_float(row.get("market_yes_price"))
+    if yes_price is None:
+        return None
+    if side == "no":
+        return 100.0 - yes_price
+    return yes_price
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -92,46 +113,43 @@ def _guard_result_shape(value: Any) -> None:
             _guard_result_shape(item)
 
 
-def _infer_side(row: dict[str, Any]) -> str:
-    side = str(row.get("side") or "").lower()
-    if side in {"yes", "no"}:
+def _infer_side(row: dict[str, Any]) -> str | None:
+    side = _normalize_side(row.get("side"))
+    if side is not None:
         return side
+    if _as_float(row.get("entry_price_cents")) is not None:
+        return None
     model_prob = _as_float(row.get("model_prob"))
-    price = _entry_price_cents(row)
-    if model_prob is not None and price is not None:
-        return "yes" if model_prob >= price / 100.0 else "no"
-    return "yes"
+    yes_price = _market_yes_price_cents(row)
+    if model_prob is not None and yes_price is not None:
+        return "yes" if model_prob >= yes_price / 100.0 else "no"
+    return None
 
 
 def _admission_row(row: dict[str, Any], *, g1_threshold: float) -> dict[str, Any]:
     edge = _as_float(row.get("edge")) or 0.0
-    price = _entry_price_cents(row)
     confidence = _as_float(row.get("confidence"))
     model_prob = _as_float(row.get("model_prob"))
     side = _infer_side(row)
+    entry_price = _entry_price_cents(row, side)
+    market_yes_price = _market_yes_price_cents(row, side)
+    signed_edge = (edge >= PAPER_MIN_EDGE if side == "yes" else edge <= -PAPER_MIN_EDGE) if side is not None else False
     return {
         "ticker": str(row.get("ticker") or ""),
         "decision_ts": str(row.get("decision_ts") or ""),
         "model_prob": model_prob,
-        # F-11 P1-C: this internal admission record dict deliberately keeps the
-        # legacy "market_yes_price" key. The dict is consumed only by sibling
-        # internal functions in this module (e.g. `_production_proxy_count`),
-        # never serialized to JSONL output, and the value stored here is the
-        # already-resolved canonical price (the helper at line 100 honors both
-        # source keys). Renaming would require a coordinated update to every
-        # internal consumer with no external benefit; a future refactor PR can
-        # rename together with `side_flip_counterfactual.py`'s parallel dict.
-        "market_yes_price": price,
+        "entry_price_cents": entry_price,
+        "market_yes_price": market_yes_price,
         "side": side,
-        "candidate": price is not None and abs(edge) >= PAPER_MIN_EDGE,
+        "candidate": entry_price is not None and abs(edge) >= PAPER_MIN_EDGE,
         "readiness": (
             confidence is not None
             and model_prob is not None
             and confidence >= g1_threshold
             and (model_prob >= READINESS_YES_THRESHOLD or model_prob <= READINESS_NO_THRESHOLD)
         ),
-        "paper_price": price is not None and PAPER_PRICE_FLOOR_CENTS <= price <= PAPER_PRICE_CEIL_CENTS,
-        "signed_edge": (edge >= PAPER_MIN_EDGE if side == "yes" else edge <= -PAPER_MIN_EDGE),
+        "paper_price": entry_price is not None and PAPER_PRICE_FLOOR_CENTS <= entry_price <= PAPER_PRICE_CEIL_CENTS,
+        "signed_edge": signed_edge,
     }
 
 
@@ -198,7 +216,7 @@ def _production_proxy_count(rows: list[dict[str, Any]]) -> tuple[int, Counter[st
                 skipped["opposing_position"] += 1
                 continue
             prob_delta = abs((position["model_prob"] or 0.0) - (row["model_prob"] or 0.0))
-            price_delta = abs((position["market_yes_price"] or 0.0) - (row["market_yes_price"] or 0.0))
+            price_delta = abs((position["entry_price_cents"] or 0.0) - (row["entry_price_cents"] or 0.0))
             if PAPER_BLOCK_SAME_SIDE_DUPLICATE and prob_delta < PAPER_DUPLICATE_PROB_DELTA and price_delta < PAPER_DUPLICATE_PRICE_DELTA:
                 skipped["paper_duplicate_position"] += 1
                 continue
@@ -212,7 +230,7 @@ def _production_proxy_count(rows: list[dict[str, Any]]) -> tuple[int, Counter[st
         open_position[ticker] = {
             "side": row["side"],
             "model_prob": row["model_prob"],
-            "market_yes_price": row["market_yes_price"],
+            "entry_price_cents": row["entry_price_cents"],
         }
 
     return accepted, skipped

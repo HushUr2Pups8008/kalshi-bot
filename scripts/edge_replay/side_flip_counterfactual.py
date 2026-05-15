@@ -106,13 +106,25 @@ def _axis_value(row: dict[str, Any], axis: str) -> str:
     return str(row.get(axis) or "unknown")
 
 
-def _pnl(side: str, yes_price_cents: float, contracts: int, resolved_yes: bool) -> float:
-    yes_cost = yes_price_cents / 100.0
+def _pnl(side: str, price_cents: float, contracts: int, resolved_yes: bool) -> float:
+    cost = price_cents / 100.0
     if side == "yes":
-        per_contract = (1.0 - yes_cost) if resolved_yes else -yes_cost
+        per_contract = (1.0 - cost) if resolved_yes else -cost
     else:
-        per_contract = -(1.0 - yes_cost) if resolved_yes else yes_cost
+        per_contract = -cost if resolved_yes else (1.0 - cost)
     return per_contract * contracts
+
+
+def _contract_price_cents(row: dict[str, Any], *, target_side: str, original_side: str) -> float | None:
+    canonical = _as_float(row.get("entry_price_cents"))
+    if canonical is not None:
+        if original_side in {"yes", "no"} and target_side != original_side:
+            return 100.0 - canonical
+        return canonical
+    yes_price = _as_float(row.get("market_yes_price"))
+    if yes_price is None:
+        return None
+    return yes_price if target_side == "yes" else 100.0 - yes_price
 
 
 def _production_proxy_rows(raw_rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -194,7 +206,7 @@ def _production_proxy_rows(raw_rows: list[dict[str, Any]]) -> tuple[list[dict[st
 def _score_flip_row(row: dict[str, Any]) -> dict[str, Any]:
     original_side = str(row.get("_original_side") or g1._infer_side(row))
     flip_side = "no" if original_side == "yes" else "yes"
-    price = _entry_price_cents(row)
+    price = _contract_price_cents(row, target_side=flip_side, original_side=original_side)
     resolved_yes = _as_bool(row.get("resolved_yes"))
     contracts = int(_as_float(row.get("contracts")) or 1)
     if price is None or resolved_yes is None:
@@ -209,7 +221,7 @@ def _score_flip_row(row: dict[str, Any]) -> dict[str, Any]:
         "would_have_traded": True,
         "would_have_won": flip_win,
         "counterfactual_pnl": _pnl(flip_side, price, contracts, resolved_yes),
-        "market_implied_win_prob_flip": (price / 100.0) if flip_side == "yes" else (1.0 - price / 100.0),
+        "market_implied_win_prob_flip": price / 100.0,
     }
     scored.pop("_original_side", None)
     return scored
