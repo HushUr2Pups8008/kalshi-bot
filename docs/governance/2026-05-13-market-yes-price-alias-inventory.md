@@ -5,6 +5,16 @@
 **Authority:** v0.30.0 vertical-integration audit recommendation #6.
 **Related:** `PROFIT-API-001` (debt log); LD-10 + LD-17 deprecation decision in `docs/governance/2026-05-11-kalshi-api-drift-pricing-correctness-roadmap.md` §11.
 
+**Workoff update (2026-05-15):** P1-A landed in `bb9cc95`; P1-B and
+P1-C landed in `c982ef5` and were activated by the Bounce 2 restart at
+`2026-05-15T14:08:20Z`. The live `paper_trades` schema now has
+`entry_price_cents` and no `market_yes_price`. Runtime dataclasses, paper
+DB writes, hydration, replay dataset generation, resolved-market fetch, and
+performance-analysis display paths now use the canonical name while selected
+offline readers still dual-emit/read the legacy JSONL key for historical
+corpus compatibility. Line-number references below are retained as the
+original 2026-05-13 inventory evidence, not current source coordinates.
+
 ## Why this inventory exists
 
 LD-10 / LD-17 retain `SignalAnalysis.market_yes_price` and
