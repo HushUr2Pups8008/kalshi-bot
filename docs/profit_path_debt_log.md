@@ -124,6 +124,21 @@ Outstanding open items (research-track, not blocking):
 
 No code path or runtime state was touched. The investigation artifact remains uncommitted; this pointer establishes its location and the single-tracker linkage per R-9 / R-10.
 
+#### 2.0a.1 Active PR queue (Polymarket public-track paper-only rollout)
+
+Per R-9 single-tracker rule: this table is the work-state record for the 10-PR rollout defined in [`docs/governance/2026-05-14-polymarket-public-track-paper-only-design.md`](governance/2026-05-14-polymarket-public-track-paper-only-design.md) § 9. PR rows are added as each PR is authorized; rows transition `OPEN` → `IN_PROGRESS` on first commit (R-1) and `COMPLETE` only when every acceptance criterion in the design § 9 row is satisfied (R-2). Closing transitions cite the merge commit (R-4).
+
+| ID | Status | Owner | Branch | MR | Second-agent review | Operator gate | Restart req. | Depends on | Spec |
+|---|---|---|---|---|---|---|---|---|---|
+| PR-1 — scaffolding (signed-HTTP client skeleton) | **OPEN** | Either (bias Claude Code) | `feat/polymarket-pr1-signed-http-skeleton` (not yet created) | — | yes (signing/credentials surface per agent_collaboration.md) | merge only | no | — | design § 3 + § 9 PR-1 row |
+
+Rules specific to this queue:
+
+- A row may not transition to `IN_PROGRESS` until its `Depends on` predecessors are `COMPLETE`. PR-1 has no predecessor.
+- A row may not transition to `COMPLETE` until the matching design § 9 acceptance criteria are satisfied AND a second-agent adversarial review has approved the diff.
+- The Day-1 invariants in design § 8 must be enforceable before PR-1 merges (in particular: `PolymarketSignedHttpClient.post(...)` raises `NotImplementedError`; `_allow_post: bool = False` constructor kwarg with no caller setting True; sign-failure raises rather than returning partial headers; ASCII-only runtime strings; no credential reads from `.env`; no new env vars; no Kalshi-side refactor).
+- Live-capable transitions (lifting the `NotImplementedError` raise; introducing `POLYMARKET_LIVE_TRADING_ENABLED`; first POST against the Polymarket REST API) are operator-gated per design § 11 and require dual-agent adversarial review per CLAUDE.md agent-collaboration policy.
+
 ### 2.1 Edge Verdict
 
 | metric | value |
