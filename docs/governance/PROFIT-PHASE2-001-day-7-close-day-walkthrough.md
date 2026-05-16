@@ -77,28 +77,13 @@ print(f'PARSE_ERROR in trailing 72 h: {n}')
 ## 5. Gate-5: cadence stability
 
 ```bash
-.venv/bin/python -c "
-import json
-from datetime import datetime
-prev = None
-gaps = []
-for line in open('logs/governance/decisions.jsonl'):
-    try: r = json.loads(line)
-    except: continue
-    if r.get('type') != 'GOVERNANCE_CYCLE_START': continue
-    ts = r.get('started_at','')
-    try: t = datetime.fromisoformat(ts.replace('Z','+00:00'))
-    except: continue
-    if prev is not None:
-        gaps.append((t - prev).total_seconds() / 3600)
-    prev = t
-print(f'gaps n={len(gaps)} max={max(gaps):.2f}h min={min(gaps):.2f}h')
-print(f'> 3h gaps: {sum(1 for g in gaps if g > 3.0)}')
-print(f'cadence-deviation > ±10% of 2.0h fast: {sum(1 for g in gaps if not (1.8 <= g <= 2.2))}')
-"
+.venv/bin/python scripts/governance_cadence_audit.py \
+  --manual-cycle-id gc_2026-05-02_041248 \
+  --phase-reset-cycle-id gc_2026-05-03_152836 \
+  --pretty
 ```
 
-- [ ] Max gap ≤ 3 h. **Record.** Cadence-deviation count > 0 is acceptable IF the deviations are deep-cycle wall-clock-aligned (24 h gap).
+- [ ] Status is `pass`. **Record.** Manual/smoke cycles are not scheduled cadence evidence. Pass `--manual-cycle-id` or `--phase-reset-cycle-id` only when the operator has documented the cycle in the close attestation.
 
 ## 6. Gate-6: ≥ 85 % reasonable on manual review (operator ONLY)
 

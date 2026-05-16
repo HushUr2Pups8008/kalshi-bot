@@ -82,18 +82,27 @@ launchctl print gui/$(id -u)/com.kalshi.governance.fast | head -20
 ```
 
 The plist's `RunAtLoad` is `false` for the fast cadence so install does
-not immediately fire a cycle. To trigger a fast cycle on demand:
+not immediately fire a cycle. During active Gate 5 evidence windows, do
+not use `launchctl kickstart` for smoke validation: launchd exposes no
+timer-vs-kickstart reason to the process, so a kickstarted cycle logs as
+`run_source=launchd` and must be explicitly excluded by cycle id if it is
+used.
 
 ```bash
 launchctl kickstart gui/$(id -u)/com.kalshi.governance.fast
 ```
+
+Prefer the manual CLI smoke commands below for validation. If a
+kickstart is unavoidable, record the resulting `cycle_id` in the close
+attestation and pass it to `scripts/governance_cadence_audit.py` as
+`--manual-cycle-id <cycle_id>`.
 
 ## Smoke-test (manual, before enabling launchd)
 
 ```bash
 cd "$KALSHI_HOME"
 GOVERNANCE_DISABLED=false \
-  ./.venv/bin/python -m governance --cadence fast --llm fake
+  ./.venv/bin/python -m governance --cadence fast --llm fake --run-source smoke
 ```
 
 Expected: exit 0; new entries in `logs/governance/decisions.jsonl`
@@ -105,12 +114,21 @@ response matches the prompt hash; intended).
 To verify the real LLM path:
 
 ```bash
-./.venv/bin/python -m governance --cadence fast --llm qwen
+./.venv/bin/python -m governance --cadence fast --llm qwen --run-source manual
 ```
 
 Expected: exit 0; one or more `GOVERNANCE_DECISION` records in the
 decisions log; every record's `shadow_mode` is `true` and `applied`
 is `false` (shadow mode invariant).
+
+Manual and smoke runs share the audit log, but they are not scheduled
+cadence evidence. For Gate 5, use `scripts/governance_cadence_audit.py`
+and count only scheduled launchd cycles. The installed governance
+launchd plists pass `--run-source launchd`; manual commands must pass
+`--run-source manual` or `--run-source smoke` when the intent is
+operator validation rather than scheduled cadence. Any manually
+kickstarted launchd cycle must be documented and excluded with
+`--manual-cycle-id`.
 
 ## Kill switches
 

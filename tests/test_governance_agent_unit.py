@@ -143,9 +143,15 @@ def test_run_cycle_emits_start_and_end_events_with_zero_candidates(tmp_path, mon
     log_files = sorted(decisions_dir.glob("decisions.jsonl*"))
     assert log_files, "audit logger did not write any decisions log file"
     body = log_files[-1].read_text(encoding="utf-8").strip().splitlines()
-    types = [json.loads(line)["type"] for line in body]
+    records = [json.loads(line) for line in body]
+    types = [record["type"] for record in records]
     assert "GOVERNANCE_CYCLE_START" in types
     assert "GOVERNANCE_CYCLE_END" in types
+    start = next(record for record in records if record["type"] == "GOVERNANCE_CYCLE_START")
+    end = next(record for record in records if record["type"] == "GOVERNANCE_CYCLE_END")
+    assert start["run_source"] == "manual"
+    assert end["run_source"] == "manual"
+    assert end["cadence"] == "fast"
 
 
 def test_run_cycle_iterates_candidates_and_records_decisions(tmp_path, monkeypatch):

@@ -124,6 +124,8 @@ def test_print_emits_both_plists():
     out = _run_print()
     assert "<string>com.kalshi.governance.fast</string>" in out
     assert "<string>com.kalshi.governance.deep</string>" in out
+    assert out.count("<string>--run-source</string>") >= 2
+    assert out.count("<string>launchd</string>") >= 2
 
 
 def test_print_output_is_valid_plist_xml(tmp_path: Path):

@@ -17,7 +17,7 @@ PROFIT-PHASE2-001's volume gate was met by 5.3× (158 decisions vs 30 floor) by 
 | 2 | Active close calendar floor satisfied | first cycle 2026-05-01T19:01Z → active close target 2026-05-15T19:01Z |
 | 3 | 0 KILL_SWITCH / batch_aborted / VALIDATION_ERROR | full-window grep across all event types |
 | 4 | 0 PARSE_ERROR in trailing 72 h | filter by `decided_at >= close_ts - 72h` |
-| 5 | Cadence stability ±10 % | inter-cycle-gap audit; no gap > 3 h |
+| 5 | Cadence stability ±10 % | `scripts/governance_cadence_audit.py`; scheduled launchd cycles only; no scheduled gap > 3 h |
 | 6 | ≥ 85 % reasonable on manual review | operator decision review (subjective; original §8.5 gate) |
 | 7 | No mid-soak code change OR §8.5.2 policy-equivalence carve-out invoked | `bash scripts/check_soak_invariant.sh` returns 0 (clean) OR each surfaced commit has a §8.5.2 carve-out attestation |
 | 8 | Written attestation | `docs/governance/PROFIT-PHASE2-001-early-close-attestation.md` (this template's sibling) |

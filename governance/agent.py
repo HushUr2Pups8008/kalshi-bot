@@ -106,6 +106,7 @@ from governance.llm import LLMClient
 def run_cycle(
     *,
     cadence: str,
+    run_source: str = "manual",
     loaded_state: AgentLoadedState,
     adapter: GovernanceAdapter,
     llm: LLMClient | None,
@@ -133,6 +134,7 @@ def run_cycle(
         "type": "GOVERNANCE_CYCLE_START",
         "cycle_id": cycle_id,
         "cadence": cadence,
+        "run_source": run_source,
         "mode": loaded_state.mode,
         "started_at": now.isoformat(),
     })
@@ -243,6 +245,8 @@ def run_cycle(
     audit_logger.append({
         "type": "GOVERNANCE_CYCLE_END",
         "cycle_id": cycle_id,
+        "cadence": cadence,
+        "run_source": run_source,
         "duration_sec": duration_sec,
         "decisions_made": decisions_made,
         "decisions_applied": decisions_applied,
@@ -311,6 +315,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Run cycle but skip writing the audit log final flush "
              "(used by smoke tests).",
     )
+    parser.add_argument(
+        "--run-source",
+        choices=["launchd", "manual", "smoke"],
+        default=os.getenv("GOVERNANCE_RUN_SOURCE", "manual"),
+        help=(
+            "Operational source for cycle audit records. launchd cycles are "
+            "eligible for Gate 5 cadence metrics; manual/smoke cycles are "
+            "operator evidence only."
+        ),
+    )
     args = parser.parse_args(argv)
 
     overrides_path = Path(os.getenv("GOVERNANCE_OVERRIDES_PATH", str(DEFAULT_OVERRIDES_PATH)))
@@ -336,6 +350,7 @@ def main(argv: list[str] | None = None) -> int:
 
     return run_cycle(
         cadence=args.cadence,
+        run_source=args.run_source,
         loaded_state=loaded,
         adapter=adapter,
         llm=llm,

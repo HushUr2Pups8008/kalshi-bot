@@ -17,7 +17,7 @@
 - [ ] **Gate 2: Calendar floor.** Continuous shadow-mode runtime: _____ d _____ h (≥ 7 d required)
 - [ ] **Gate 3: Safety counters.** KILL_SWITCH: ___, batch_aborted: ___, VALIDATION_ERROR: ___ (all must be 0)
 - [ ] **Gate 4: PARSE_ERROR trailing 72 h.** Count in last 72 h: ___ (must be 0)
-- [ ] **Gate 5: Cadence stability.** Max inter-cycle gap: _____ h (must be ≤ 3 h); cadence-deviation > 10 %: ___ events (must be 0)
+- [ ] **Gate 5: Cadence stability.** `scripts/governance_cadence_audit.py` status: _____; scheduled max inter-cycle gap: _____ h (must be ≤ 3 h); fast/deep cadence-deviation > 10 %: ___ events (must be 0). Manual/smoke cycles are excluded only when tagged with `run_source=manual|smoke` or explicitly documented with `--manual-cycle-id` (including launchctl kickstarts).
 - [ ] **Gate 6: Manual review.** Decisions reviewed: ___ / ___; reasonable count: ___; reasonable rate: ___ % (≥ 85 % required)
 - [ ] **Gate 7: No mid-soak code change OR §8.5.2 policy-equivalence carve-out.** `bash scripts/check_soak_invariant.sh` returned: ___ (0 = clean; non-zero = reconcile each surfaced commit in the §8.5.2 section below)
 - [ ] **Gate 8: Attestation written.** This document committed.

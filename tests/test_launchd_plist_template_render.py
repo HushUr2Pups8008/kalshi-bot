@@ -46,6 +46,11 @@ def test_all_launchd_templates_render_valid_plists():
         assert "@VENV_PYTHON@" not in str(plist), label
         assert "@GOVERNANCE_LLM_MODEL@" not in str(plist), label
 
+    for label in ("com.kalshi.governance.fast", "com.kalshi.governance.deep"):
+        args = rendered[label]["ProgramArguments"]
+        assert "--run-source" in args, label
+        assert args[args.index("--run-source") + 1] == "launchd", label
+
 
 def test_launchd_templates_match_installed_plists_when_present():
     installed_dir = Path.home() / "Library/LaunchAgents"
