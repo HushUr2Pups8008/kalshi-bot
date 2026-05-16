@@ -44,7 +44,7 @@ Per cycle-3 EDGE-004 closure path (lever map archived to [`docs/profit_path_debt
 
 ---
 
-## Governance Agent (Phase 2 shadow soak in progress on Mac Studio)
+## Governance Agent (Phase 2 closed on Mac Studio)
 
 **Purpose:** Replace the operator's diagnostic→edit→commit→restart loop with
 an LLM-driven process that decides what sources/keywords/thresholds to
@@ -421,7 +421,7 @@ P2 COMPLETE → P3.1 → P3.2 → P3.3 → P3.4 (P3-GATE)
 
 5. **Phase 4 (live trading) is explicitly gated on measurable non-zero edge in paper mode.** No timeline. If edge does not form after P3 improvements, escalation is required — not more operational changes.
 
-6. **PROFIT-PHASE2-001 close-attestation path + Wave-1/2/3 deploy infrastructure landed 2026-05-05.** §8.5.1 day-7 early-close gates are historical; active close target is 2026-05-15 per `PHASE2_RUNBOOK.md`. §8.5.2 policy-equivalence carve-out admits mid-soak hot-fixes under bounded conditions. Wave-1 → Wave-3 deploy sequence consolidated in [`docs/profit_path_debt_log.md`](profit_path_debt_log.md) §Current Status §2.3 (absorbed `edge-004-closure-path-tldr-v3.md` on 2026-05-09) with locked v1 implementation choices for Lever B (G1=0.04) and Lever C (§3.2 normalized hash). Branch D escalation criteria + bounded sizing-scope specs for PROFIT-LLM-001 (4 axes) and P4-GATE Appendix A (3 axes) landed cycle 3.
+6. **PROFIT-PHASE2-001 close-attestation path + Wave-1/2/3 deploy infrastructure landed 2026-05-05; Phase 2 closed 2026-05-16.** §8.5.1 day-7 early-close gates are historical; the active close completed under tag `phase2-soak-closed`. §8.5.2 policy-equivalence carve-out admits mid-soak hot-fixes under bounded conditions. Wave-1 → Wave-3 deploy sequence consolidated in [`docs/profit_path_debt_log.md`](profit_path_debt_log.md) §Current Status §2.3 (absorbed `edge-004-closure-path-tldr-v3.md` on 2026-05-09) with locked v1 implementation choices for Lever B (G1=0.04) and Lever C (§3.2 normalized hash). Branch D escalation criteria + bounded sizing-scope specs for PROFIT-LLM-001 (4 axes) and P4-GATE Appendix A (3 axes) landed cycle 3.
 
 ---
 
