@@ -1,0 +1,650 @@
+{
+  "actual_flip_losses": 0,
+  "actual_flip_wins": 12,
+  "admitted_rows": 12,
+  "artifact_context": {
+    "coverage_keys": [
+      "anomalies",
+      "cohort_sentinel",
+      "escalations",
+      "input",
+      "missing_examples",
+      "overall",
+      "per_ticker",
+      "thresholds"
+    ],
+    "price_ticker_count": 23,
+    "scores_rows": 272
+  },
+  "charter": {
+    "forbidden_touch_surfaces": [
+      "analysis/signal_analyzer.py",
+      "scripts/edge_replay/scorer_forensics_audit.py",
+      "logs/edge_replay/cycle16d/*",
+      "tasks/blend_task.py",
+      "executor.py",
+      "tasks/trade_readiness_gate.py",
+      "governance/prompts.py"
+    ],
+    "permitted_output_artifacts": [
+      "scripts/edge_replay/side_flip_counterfactual.py",
+      "tests/test_side_flip_counterfactual.py",
+      "docs/governance/2026-05-10-cycle-17c-e3-flip-sign-counterfactual.md",
+      "logs/edge_replay/cycle17c-e3/side_flip_summary.json",
+      "logs/edge_replay/cycle17c-e3/side_flip_per_row.jsonl"
+    ],
+    "script_mutates_production_or_frozen_artifacts": false
+  },
+  "clause_pass": {
+    "A_ic16_baseline": false,
+    "B_trivial_inversion": true,
+    "C_sub_slice_consistency": true,
+    "D_charter_compliance": true
+  },
+  "consistency": {
+    "market_family": {
+      "axis": "market_family",
+      "bins": [
+        {
+          "bin": "KXMOCTRUMP25",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 5,
+          "win_share": 0.4166666666666667,
+          "wins": 5
+        },
+        {
+          "bin": "KXNEWDEAL",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 1,
+          "win_share": 0.08333333333333333,
+          "wins": 1
+        },
+        {
+          "bin": "KXPARDONSTRUMP",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 3,
+          "win_share": 0.25,
+          "wins": 3
+        },
+        {
+          "bin": "KXVANCEPAKISTAN",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 2,
+          "win_share": 0.16666666666666666,
+          "wins": 2
+        },
+        {
+          "bin": "KXVOTESAVEAMERICA",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 1,
+          "win_share": 0.08333333333333333,
+          "wins": 1
+        }
+      ],
+      "dominant_bin_win_share": 0.4166666666666667,
+      "min_pairwise_p_value": 1.0,
+      "pairwise": [
+        {
+          "left": "KXMOCTRUMP25",
+          "p_value": 1.0,
+          "right": "KXNEWDEAL"
+        },
+        {
+          "left": "KXMOCTRUMP25",
+          "p_value": 1.0,
+          "right": "KXPARDONSTRUMP"
+        },
+        {
+          "left": "KXMOCTRUMP25",
+          "p_value": 1.0,
+          "right": "KXVANCEPAKISTAN"
+        },
+        {
+          "left": "KXMOCTRUMP25",
+          "p_value": 1.0,
+          "right": "KXVOTESAVEAMERICA"
+        },
+        {
+          "left": "KXNEWDEAL",
+          "p_value": 1.0,
+          "right": "KXPARDONSTRUMP"
+        },
+        {
+          "left": "KXNEWDEAL",
+          "p_value": 1.0,
+          "right": "KXVANCEPAKISTAN"
+        },
+        {
+          "left": "KXNEWDEAL",
+          "p_value": 1.0,
+          "right": "KXVOTESAVEAMERICA"
+        },
+        {
+          "left": "KXPARDONSTRUMP",
+          "p_value": 1.0,
+          "right": "KXVANCEPAKISTAN"
+        },
+        {
+          "left": "KXPARDONSTRUMP",
+          "p_value": 1.0,
+          "right": "KXVOTESAVEAMERICA"
+        },
+        {
+          "left": "KXVANCEPAKISTAN",
+          "p_value": 1.0,
+          "right": "KXVOTESAVEAMERICA"
+        }
+      ],
+      "passed": true
+    },
+    "news_class": {
+      "axis": "news_class",
+      "bins": [
+        {
+          "bin": "news",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 9,
+          "win_share": 0.75,
+          "wins": 9
+        },
+        {
+          "bin": "other",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 3,
+          "win_share": 0.25,
+          "wins": 3
+        }
+      ],
+      "dominant_bin_win_share": 0.75,
+      "min_pairwise_p_value": 1.0,
+      "pairwise": [
+        {
+          "left": "news",
+          "p_value": 1.0,
+          "right": "other"
+        }
+      ],
+      "passed": true
+    },
+    "signal_source": {
+      "axis": "signal_source",
+      "bins": [
+        {
+          "bin": "AOL.com",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 1,
+          "win_share": 0.08333333333333333,
+          "wins": 1
+        },
+        {
+          "bin": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 1,
+          "win_share": 0.08333333333333333,
+          "wins": 1
+        },
+        {
+          "bin": "France 24 - International breaking news, top stories and headlines",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 1,
+          "win_share": 0.08333333333333333,
+          "wins": 1
+        },
+        {
+          "bin": "Kyiv Post",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 2,
+          "win_share": 0.16666666666666666,
+          "wins": 2
+        },
+        {
+          "bin": "Middle East and north Africa | The Guardian",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 3,
+          "win_share": 0.25,
+          "wins": 3
+        },
+        {
+          "bin": "NYT > World News",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 2,
+          "win_share": 0.16666666666666666,
+          "wins": 2
+        },
+        {
+          "bin": "Reuters",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 1,
+          "win_share": 0.08333333333333333,
+          "wins": 1
+        },
+        {
+          "bin": "World news | The Guardian",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 1,
+          "win_share": 0.08333333333333333,
+          "wins": 1
+        }
+      ],
+      "dominant_bin_win_share": 0.25,
+      "min_pairwise_p_value": 1.0,
+      "pairwise": [
+        {
+          "left": "AOL.com",
+          "p_value": 1.0,
+          "right": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera"
+        },
+        {
+          "left": "AOL.com",
+          "p_value": 1.0,
+          "right": "France 24 - International breaking news, top stories and headlines"
+        },
+        {
+          "left": "AOL.com",
+          "p_value": 1.0,
+          "right": "Kyiv Post"
+        },
+        {
+          "left": "AOL.com",
+          "p_value": 1.0,
+          "right": "Middle East and north Africa | The Guardian"
+        },
+        {
+          "left": "AOL.com",
+          "p_value": 1.0,
+          "right": "NYT > World News"
+        },
+        {
+          "left": "AOL.com",
+          "p_value": 1.0,
+          "right": "Reuters"
+        },
+        {
+          "left": "AOL.com",
+          "p_value": 1.0,
+          "right": "World news | The Guardian"
+        },
+        {
+          "left": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+          "p_value": 1.0,
+          "right": "France 24 - International breaking news, top stories and headlines"
+        },
+        {
+          "left": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+          "p_value": 1.0,
+          "right": "Kyiv Post"
+        },
+        {
+          "left": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+          "p_value": 1.0,
+          "right": "Middle East and north Africa | The Guardian"
+        },
+        {
+          "left": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+          "p_value": 1.0,
+          "right": "NYT > World News"
+        },
+        {
+          "left": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+          "p_value": 1.0,
+          "right": "Reuters"
+        },
+        {
+          "left": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+          "p_value": 1.0,
+          "right": "World news | The Guardian"
+        },
+        {
+          "left": "France 24 - International breaking news, top stories and headlines",
+          "p_value": 1.0,
+          "right": "Kyiv Post"
+        },
+        {
+          "left": "France 24 - International breaking news, top stories and headlines",
+          "p_value": 1.0,
+          "right": "Middle East and north Africa | The Guardian"
+        },
+        {
+          "left": "France 24 - International breaking news, top stories and headlines",
+          "p_value": 1.0,
+          "right": "NYT > World News"
+        },
+        {
+          "left": "France 24 - International breaking news, top stories and headlines",
+          "p_value": 1.0,
+          "right": "Reuters"
+        },
+        {
+          "left": "France 24 - International breaking news, top stories and headlines",
+          "p_value": 1.0,
+          "right": "World news | The Guardian"
+        },
+        {
+          "left": "Kyiv Post",
+          "p_value": 1.0,
+          "right": "Middle East and north Africa | The Guardian"
+        },
+        {
+          "left": "Kyiv Post",
+          "p_value": 1.0,
+          "right": "NYT > World News"
+        },
+        {
+          "left": "Kyiv Post",
+          "p_value": 1.0,
+          "right": "Reuters"
+        },
+        {
+          "left": "Kyiv Post",
+          "p_value": 1.0,
+          "right": "World news | The Guardian"
+        },
+        {
+          "left": "Middle East and north Africa | The Guardian",
+          "p_value": 1.0,
+          "right": "NYT > World News"
+        },
+        {
+          "left": "Middle East and north Africa | The Guardian",
+          "p_value": 1.0,
+          "right": "Reuters"
+        },
+        {
+          "left": "Middle East and north Africa | The Guardian",
+          "p_value": 1.0,
+          "right": "World news | The Guardian"
+        },
+        {
+          "left": "NYT > World News",
+          "p_value": 1.0,
+          "right": "Reuters"
+        },
+        {
+          "left": "NYT > World News",
+          "p_value": 1.0,
+          "right": "World news | The Guardian"
+        },
+        {
+          "left": "Reuters",
+          "p_value": 1.0,
+          "right": "World news | The Guardian"
+        }
+      ],
+      "passed": true
+    },
+    "signal_type": {
+      "axis": "signal_type",
+      "bins": [
+        {
+          "bin": "confidence",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 5,
+          "win_share": 0.4166666666666667,
+          "wins": 5
+        },
+        {
+          "bin": "state",
+          "flip_win_rate": 1.0,
+          "losses": 0,
+          "trades": 7,
+          "win_share": 0.5833333333333334,
+          "wins": 7
+        }
+      ],
+      "dominant_bin_win_share": 0.5833333333333334,
+      "min_pairwise_p_value": 1.0,
+      "pairwise": [
+        {
+          "left": "confidence",
+          "p_value": 1.0,
+          "right": "state"
+        }
+      ],
+      "passed": true
+    }
+  },
+  "excess_wins_vs_market": 1.0050000000000008,
+  "excess_wins_vs_market_flip": 1.0050000000000008,
+  "ic16_slice_count": 0,
+  "ic16_slices": [],
+  "input_rows": 272,
+  "market_implied_expected_wins_flip": 10.995,
+  "production_proxy_skipped": {
+    "baseline_not_trade": 35,
+    "paper_duplicate_position": 43,
+    "paper_price_sanity": 119,
+    "paper_ticker_cooldown": 8,
+    "readiness_not_admitted": 55
+  },
+  "raw_positive_ev_slice_count": 10,
+  "slices": [
+    {
+      "avg_pnl_per_trade": 0.16,
+      "ev_ci_95_hi": 0.16,
+      "ev_ci_95_lo": 0.16,
+      "ev_mean": 0.16,
+      "group": {
+        "market_family": "KXVANCEPAKISTAN",
+        "news_class": "news",
+        "signal_source": "Middle East and north Africa | The Guardian",
+        "signal_type": "state"
+      },
+      "ic16_eligible": false,
+      "losses": 0,
+      "pnl": 0.16,
+      "sharpe_like": null,
+      "trades": 1,
+      "win_rate": 1.0,
+      "wins": 1
+    },
+    {
+      "avg_pnl_per_trade": 0.1,
+      "ev_ci_95_hi": 0.1,
+      "ev_ci_95_lo": 0.1,
+      "ev_mean": 0.1,
+      "group": {
+        "market_family": "KXMOCTRUMP25",
+        "news_class": "news",
+        "signal_source": "Middle East and north Africa | The Guardian",
+        "signal_type": "state"
+      },
+      "ic16_eligible": false,
+      "losses": 0,
+      "pnl": 0.1,
+      "sharpe_like": null,
+      "trades": 1,
+      "win_rate": 1.0,
+      "wins": 1
+    },
+    {
+      "avg_pnl_per_trade": 0.1,
+      "ev_ci_95_hi": 0.1,
+      "ev_ci_95_lo": 0.1,
+      "ev_mean": 0.1,
+      "group": {
+        "market_family": "KXNEWDEAL",
+        "news_class": "news",
+        "signal_source": "Reuters",
+        "signal_type": "state"
+      },
+      "ic16_eligible": false,
+      "losses": 0,
+      "pnl": 0.1,
+      "sharpe_like": null,
+      "trades": 1,
+      "win_rate": 1.0,
+      "wins": 1
+    },
+    {
+      "avg_pnl_per_trade": 0.1,
+      "ev_ci_95_hi": 0.1,
+      "ev_ci_95_lo": 0.1,
+      "ev_mean": 0.1,
+      "group": {
+        "market_family": "KXVANCEPAKISTAN",
+        "news_class": "news",
+        "signal_source": "Al Jazeera \u2013 Breaking News, World News and Video from Al Jazeera",
+        "signal_type": "confidence"
+      },
+      "ic16_eligible": false,
+      "losses": 0,
+      "pnl": 0.1,
+      "sharpe_like": null,
+      "trades": 1,
+      "win_rate": 1.0,
+      "wins": 1
+    },
+    {
+      "avg_pnl_per_trade": 0.07,
+      "ev_ci_95_hi": 0.07,
+      "ev_ci_95_lo": 0.07,
+      "ev_mean": 0.07,
+      "group": {
+        "market_family": "KXMOCTRUMP25",
+        "news_class": "news",
+        "signal_source": "Middle East and north Africa | The Guardian",
+        "signal_type": "confidence"
+      },
+      "ic16_eligible": false,
+      "losses": 0,
+      "pnl": 0.07,
+      "sharpe_like": null,
+      "trades": 1,
+      "win_rate": 1.0,
+      "wins": 1
+    },
+    {
+      "avg_pnl_per_trade": 0.064,
+      "ev_ci_95_hi": 0.064,
+      "ev_ci_95_lo": 0.064,
+      "ev_mean": 0.064,
+      "group": {
+        "market_family": "KXPARDONSTRUMP",
+        "news_class": "news",
+        "signal_source": "France 24 - International breaking news, top stories and headlines",
+        "signal_type": "state"
+      },
+      "ic16_eligible": false,
+      "losses": 0,
+      "pnl": 0.064,
+      "sharpe_like": null,
+      "trades": 1,
+      "win_rate": 1.0,
+      "wins": 1
+    },
+    {
+      "avg_pnl_per_trade": 0.08549999999999999,
+      "ev_ci_95_hi": 0.11,
+      "ev_ci_95_lo": 0.061,
+      "ev_mean": 0.08549999999999999,
+      "group": {
+        "market_family": "KXPARDONSTRUMP",
+        "news_class": "other",
+        "signal_source": "Kyiv Post",
+        "signal_type": "state"
+      },
+      "ic16_eligible": false,
+      "losses": 0,
+      "pnl": 0.17099999999999999,
+      "sharpe_like": 3.4897959183673466,
+      "trades": 2,
+      "win_rate": 1.0,
+      "wins": 2
+    },
+    {
+      "avg_pnl_per_trade": 0.05,
+      "ev_ci_95_hi": 0.05,
+      "ev_ci_95_lo": 0.05,
+      "ev_mean": 0.05,
+      "group": {
+        "market_family": "KXVOTESAVEAMERICA",
+        "news_class": "other",
+        "signal_source": "AOL.com",
+        "signal_type": "state"
+      },
+      "ic16_eligible": false,
+      "losses": 0,
+      "pnl": 0.05,
+      "sharpe_like": null,
+      "trades": 1,
+      "win_rate": 1.0,
+      "wins": 1
+    },
+    {
+      "avg_pnl_per_trade": 0.08499999999999999,
+      "ev_ci_95_hi": 0.15,
+      "ev_ci_95_lo": 0.02,
+      "ev_mean": 0.08499999999999999,
+      "group": {
+        "market_family": "KXMOCTRUMP25",
+        "news_class": "news",
+        "signal_source": "NYT > World News",
+        "signal_type": "confidence"
+      },
+      "ic16_eligible": false,
+      "losses": 0,
+      "pnl": 0.16999999999999998,
+      "sharpe_like": 1.3076923076923075,
+      "trades": 2,
+      "win_rate": 1.0,
+      "wins": 2
+    },
+    {
+      "avg_pnl_per_trade": 0.02,
+      "ev_ci_95_hi": 0.02,
+      "ev_ci_95_lo": 0.02,
+      "ev_mean": 0.02,
+      "group": {
+        "market_family": "KXMOCTRUMP25",
+        "news_class": "news",
+        "signal_source": "World news | The Guardian",
+        "signal_type": "confidence"
+      },
+      "ic16_eligible": false,
+      "losses": 0,
+      "pnl": 0.02,
+      "sharpe_like": null,
+      "trades": 1,
+      "win_rate": 1.0,
+      "wins": 1
+    }
+  ],
+  "top_slice": {
+    "avg_pnl_per_trade": 0.16,
+    "ev_ci_95_hi": 0.16,
+    "ev_ci_95_lo": 0.16,
+    "ev_mean": 0.16,
+    "group": {
+      "market_family": "KXVANCEPAKISTAN",
+      "news_class": "news",
+      "signal_source": "Middle East and north Africa | The Guardian",
+      "signal_type": "state"
+    },
+    "ic16_eligible": false,
+    "losses": 0,
+    "pnl": 0.16,
+    "sharpe_like": null,
+    "trades": 1,
+    "win_rate": 1.0,
+    "wins": 1
+  },
+  "total_slices": 10,
+  "verdict": "revert_required_no_ic16_slice",
+  "verdict_label": "revert_required_no_ic16_slice"
+}
