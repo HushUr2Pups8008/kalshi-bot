@@ -5132,9 +5132,25 @@ reports:
 - the failed-start carve-out interval `[sentinel, clean_start)` row
   count (must be excluded from readiness — these may be 400-storm or
   bootout-interval rows),
-- post-clean-start paper-trade count + distinct ticker count,
-- `READY` / `NOT_READY` verdict against `--min-trades` (default 10)
-  and `--min-tickers` (default 3) thresholds.
+- post-clean-start paper-trade count + distinct ticker count for
+  observability/backward-compatible bothealth output,
+- production-proxy-complete post-clean-start row count,
+- production-proxy completeness ratio,
+- qualifying 4-axis bins
+  (`signal_source × market_family × signal_type × news_class`) counted
+  from admitted rows. For current production `paper_trades` rows, the
+  watcher derives `market_family` from `market_family` if present,
+  otherwise `series_ticker` / `ticker`; missing `news_class` is reported
+  as `unknown`, matching replay-tool grouping behavior for absent fields.
+  If a persisted `readiness_admitted` flag is absent, the watcher mirrors
+  the replay admission predicate: confidence ≥0.85 and model probability
+  ≥0.60 or ≤0.40,
+- `READY` / `NOT_READY` verdict against the documented
+  `PROFIT-EDGE-012` resume gate: `--min-trades` default 200
+  production-proxy-complete rows, `--min-bin-admissions` default 10 in
+  at least one 4-axis bin, and `--min-completeness-ratio` default 0.95.
+  `--min-tickers` remains exposed for legacy compatibility and defaults
+  to 0.
 
 Cycle-17D / PROFIT-EDGE-012 resume checks (earliest 2026-06-14 per
 `docs/_archive/governance/2026-05-10-cycle-17d-halt-on-historical-corpus-degeneracy.md`)
@@ -5144,11 +5160,12 @@ to justify a replay re-evaluation. Live readout 2026-05-13T00:55Z
 post-hotfix: `NOT_READY` (0 / 10 trades since clean-start; bot has
 not yet emitted a PAPER_TRADE event in the post-hotfix window).
 
-Live readout 2026-05-16: still `NOT_READY`. The watcher reports
+Live readout 2026-05-16: still `NOT_READY`. The hardened watcher reports
 sentinel `2026-05-12T23:50:04.422696+00:00`, clean start
 `2026-05-13T00:02:37+00:00`, carve-out rows 0, post-clean-start rows
-0 / 10 under the watcher default, and 0 / 200 under the strict
-Cycle-17D resume floor. The DB has 9 total paper trades through
+0, production-proxy-complete rows 0 / 200 under the default
+`PROFIT-EDGE-012` resume floor, completeness 0.000 / 0.950, and
+qualifying 4-axis bins 0. The DB has 9 total paper trades through
 2026-05-11, all before the post-P0 clean-start boundary; therefore
 production-proxy-complete POST_FIX_NEW rows = 0, qualifying 4-axis bins
 = 0, and completeness is not meaningful yet. All 9 historical trade
