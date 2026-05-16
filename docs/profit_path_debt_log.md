@@ -23,7 +23,7 @@
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-05-16 (PROFIT-CUTOVER-001 closed from live Studio evidence; PROFIT-PHASE2-001 already closed and governance launchd now tags cycles with `run_source=launchd`) |
+| Last Updated | 2026-05-16 (PROFIT-CUTOVER-001 / PROFIT-PHASE2-001 closed; active edge queue pointer corrected to PROFIT-EDGE-012 POST_FIX_NEW readiness) |
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
@@ -48,8 +48,8 @@
 
 ### Recommended Execution Order
 
-1. ~~`PROFIT-OBS-003`~~ — **CLOSED 2026-05-10.** The OPPORTUNITY → SKIPPED/PAPER accounting stream is now complete enough for downstream EDGE-004 attribution.
-2. `PROFIT-EDGE-004` — **NEXT HIGH/NOW engineering target.** Operationally surfaced after the EDGE-001/002/003 stack landed; sequenced investigation remains matcher audit → pre-LLM-gate re-eval → market-mix audit → Appendix A re-eval. With OBS-003 closed, EDGE-004 can quote per-gate kill counts rather than the prior aggregate. Until this advances, paper trades remain effectively zero (the FISAEXTEND emission notwithstanding — same source, same series, single losing pattern).
+1. `PROFIT-EDGE-012` — **ACTIVE edge tracker.** Next safe work is read-only POST_FIX_NEW readiness audit, not a behavioral deploy. Resume remains gated on ≥200 production-proxy-complete POST_FIX_NEW rows, ≥1 4-axis bin with ≥10 admissions, and ≥95% completeness; earliest scheduled re-check remains 2026-06-14.
+2. `PROFIT-EDGE-004` — **root-cause cluster / historical parent.** Operationally surfaced after the EDGE-001/002/003 stack landed, but the old matcher / pre-LLM / market-mix / source-mix branch plan was superseded by the IC §16 replayed-EV gate and rolled forward into `PROFIT-EDGE-012`.
 3. ~~`PROFIT-OBS-004`~~ — **CLOSED 2026-05-02**. Fix landed in `trading/paper_trader.py:record_trade` (executed-side edge persistence) + 3 historical KXFISAEXTEND rows backfilled. See entry for closure detail.
 4. ~~`PROFIT-PHASE2-001`~~ — **CLOSED 2026-05-16**. Gate 5 reattempt passed under scheduled-cycle semantics with `scripts/governance_cadence_audit.py` (185 scheduled cycles, max gap 2.00834h, fast/deep deviations 0; one documented legacy manual cycle excluded, one phase-reset transition documented). Gate 6 review stayed 100.0% reasonable; safety counters remained 0. Governance launchd now tags scheduled cycles with `run_source=launchd`.
 5. ~~`PROFIT-CUTOVER-001`~~ — **CLOSED 2026-05-16**. Live Studio evidence now satisfies both closure paths: Phase 2 §8.5 closed, and the Studio paper DB contains resolved post-cutover trades with bankroll continuity (`bot_state.notional_bankroll=37.5`) while VitalLaw remains preserved at `0W/3L/0.5x`.
@@ -5144,6 +5144,18 @@ to justify a replay re-evaluation. Live readout 2026-05-13T00:55Z
 post-hotfix: `NOT_READY` (0 / 10 trades since clean-start; bot has
 not yet emitted a PAPER_TRADE event in the post-hotfix window).
 
+Live readout 2026-05-16: still `NOT_READY`. The watcher reports
+sentinel `2026-05-12T23:50:04.422696+00:00`, clean start
+`2026-05-13T00:02:37+00:00`, carve-out rows 0, post-clean-start rows
+0 / 10 under the watcher default, and 0 / 200 under the strict
+Cycle-17D resume floor. The DB has 9 total paper trades through
+2026-05-11, all before the post-P0 clean-start boundary; therefore
+production-proxy-complete POST_FIX_NEW rows = 0, qualifying 4-axis bins
+= 0, and completeness is not meaningful yet. All 9 historical trade
+rows still carry `price_method='none'` / `price_source='unavailable'`;
+that provenance gap is excluded from the POST_FIX_NEW readiness count
+because there are no post-clean-start rows.
+
 ---
 
 ## Execution Views
@@ -5152,15 +5164,16 @@ not yet emitted a PAPER_TRADE event in the post-hotfix window).
 
 ### A. Current Profit-Path Fix Queue
 
-Open or blocked items, ordered for safe sequential execution. **Updated 2026-05-16 post-Phase-2 close** to remove closed cutover/soak/OBS-003/OBS-004 items and restore `PROFIT-EDGE-004` as the next HIGH/NOW engineering target.
+Open or blocked items, ordered for safe sequential execution. **Updated 2026-05-16 post-Phase-2 close and POST_FIX_NEW readiness audit** to remove closed cutover/soak/OBS-003/OBS-004 items and route active edge work through `PROFIT-EDGE-012`.
 
 | Order | ID | Title | Why this order |
 |-------|----|-------|---------------|
-| 1 | PROFIT-EDGE-004 | Pipeline reaches executor with `edge = 0.0`; matcher / market-mix / source-mix root cause | NEXT HIGH/NOW item. OBS-003 and CUTOVER-001 are closed, so EDGE-004 can now use Studio-side attribution evidence directly. |
-| 2 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible; needed before P4-GATE. |
-| 3 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Blocked on contract decision for rejected-evidence intake semantics. |
-| 4 | PROFIT-STRUCT-002 | Verify EDGE-002 sub-fix #4 runtime cause-emission format | Verification-only; small observability gap; can run in parallel with higher-priority read-only audits. |
-| 5 | PROFIT-CAL-001 follow-up sample | Calibration outcome feedback | Core item complete; next footnote milestone is ≥10-resolution sample with ≥2 distinct lanes populated, which depends on EDGE-004 progress. |
+| 1 | PROFIT-EDGE-012 | Cycle-17C/D redesign halted pending POST_FIX_NEW corpus readiness | ACTIVE edge tracker. 2026-05-16 read-only audit: `NOT_READY` (0 post-clean-start rows; strict floor 200). Next action is scheduled re-check / watcher hardening, not deploy. |
+| 2 | PROFIT-EDGE-004 | Pipeline reaches executor with `edge = 0.0`; matcher / market-mix / source-mix root cause | Historical parent/root-cause cluster. Active execution moved to `PROFIT-EDGE-012` after IC §16 replayed-EV gate and Cycle-17D halt. |
+| 3 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible; needed before P4-GATE. |
+| 4 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Blocked on contract decision for rejected-evidence intake semantics. |
+| 5 | PROFIT-STRUCT-002 | Verify EDGE-002 sub-fix #4 runtime cause-emission format | Verification-only; small observability gap; can run in parallel with higher-priority read-only audits. |
+| 6 | PROFIT-CAL-001 follow-up sample | Calibration outcome feedback | Core item complete; next footnote milestone is ≥10-resolution sample with ≥2 distinct lanes populated, which depends on EDGE-012 / EDGE-004 progress. |
 
 **Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence. **Cutover-specific note (2026-05-01):** items 3–10 are all Mac Studio work — do not re-run any of them on the MacBook. The MacBook is read-only archive after 2026-05-01T13:05:54Z.
 
