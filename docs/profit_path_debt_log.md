@@ -158,11 +158,11 @@ Cycle-16D charter-locked verdict label `extraction_fixed_but_information_frontie
 
 **Cycle-16E delivered by Codex (`c913ffd`); Claude N3+N4+N5+N6+N7+N9+N10 review complete.** Production-proxy gates ported faithfully line-by-line vs `executor.py:200-244`. Verdict per locked task-split outcome 2: `scorer_fixed_no_signal_confirmed`. **Cycle-17 §B/§C operator decision RESTORED (un-deferred).**
 
-Per cycle-17 skeletons, Cycle-17 routing:
+Per cycle-17 skeletons, Cycle-17 routing was restored after Cycle-16E:
 - §B source onboarding (2-4 weeks; mandatory pre-onboarding re-trace requirement RELAXED since anti-correlation hypothesis withdrawn)
 - §C strategic redesign / pause / paper-only research
 
-Operator picks. PROFIT-EDGE-011 active.
+Operator picked §C(b). `PROFIT-EDGE-011` is closed; execution moved to `PROFIT-EDGE-012`, which remains halted pending POST_FIX_NEW readiness (≥200 production-proxy-complete rows, ≥1 four-axis bin with ≥10 admissions, ≥95% completeness; earliest re-check 2026-06-14).
 
 #### Replay verdict log
 
