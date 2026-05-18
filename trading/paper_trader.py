@@ -796,6 +796,7 @@ class PaperTrader:
             "reasoning": analysis.reasoning,
             "signal_headline": analysis.news_item.headline,
             "signal_source": analysis.news_item.source,
+            "bankroll_delta_dollars": bankroll_after - bankroll_before,
         }
         signal_meta = vars(analysis).get("signal_meta")
         if signal_meta:
@@ -925,6 +926,7 @@ class PaperTrader:
                 ticker=ticker,
                 resolved_yes=resolved_yes,
                 pnl_dollars=pnl,
+                bankroll_delta_dollars=payout,
             )
             log.info(
                 "[RESOLVED] %s %s YES=%s | pnl=$%+.2f | bankroll=$%.2f",
