@@ -609,6 +609,7 @@ class TradeLogger:
         signal_headline: str,
         signal_source: str,
         signal_meta: dict[str, Any] | None = None,
+        bankroll_delta_dollars: float | None = None,
     ) -> None:
         record = {
             "type": "PAPER_TRADE",
@@ -629,6 +630,8 @@ class TradeLogger:
         }
         if signal_meta:
             record["signal_meta"] = signal_meta
+        if bankroll_delta_dollars is not None:
+            record["bankroll_delta_dollars"] = round(bankroll_delta_dollars, 2)
         self._write(record)
 
     def log_paper_resolution(
@@ -638,14 +641,18 @@ class TradeLogger:
         ticker: str,
         resolved_yes: bool,
         pnl_dollars: float,
+        bankroll_delta_dollars: float | None = None,
     ) -> None:
-        self._write({
+        record = {
             "type": "PAPER_RESOLUTION",
             "trade_id": trade_id,
             "ticker": ticker,
             "resolved_yes": resolved_yes,
             "pnl_dollars": round(pnl_dollars, 2),
-        })
+        }
+        if bankroll_delta_dollars is not None:
+            record["bankroll_delta_dollars"] = round(bankroll_delta_dollars, 2)
+        self._write(record)
 
     def log_live_order(
         self,
