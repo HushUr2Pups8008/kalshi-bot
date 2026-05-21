@@ -70,6 +70,15 @@ def _resolve_keyword_override_mode() -> str:
     return "all_required"
 
 
+def _resolve_market_source_hints_mode() -> str:
+    """Resolve default-off MarketSourceHints diagnostics mode from env."""
+    return os.getenv("MARKET_SOURCE_HINTS_MODE", "off").strip().lower() or "off"
+
+
+def _parse_bool_env(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _parse_string_tuple(value: str | None, *, default: tuple[str, ...]) -> tuple[str, ...]:
     text = str(value or "").strip()
     if not text:
@@ -1182,6 +1191,12 @@ class BotConfig:
             )
         )
     )
+    market_source_hints_mode: str = field(
+        default_factory=lambda: _resolve_market_source_hints_mode()
+    )
+    market_source_hints_emit_records: bool = field(
+        default_factory=lambda: _parse_bool_env("MARKET_SOURCE_HINTS_EMIT_RECORDS", "false")
+    )
     enable_startup_observability_probe: bool = field(
         default_factory=lambda: os.getenv("ENABLE_STARTUP_OBSERVABILITY_PROBE", "true").strip().lower() in {"1", "true", "yes", "on"}
     )
@@ -1227,6 +1242,11 @@ class BotConfig:
             errors.append(
                 "PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_MIN_SIGNAL must be non-negative, "
                 f"got {self.pre_llm_match_gate_keyword_override_min_signal}"
+            )
+        if self.market_source_hints_mode not in {"off", "shadow", "advisory"}:
+            errors.append(
+                "MARKET_SOURCE_HINTS_MODE must be one of off|shadow|advisory, "
+                f"got '{self.market_source_hints_mode}'"
             )
         if self.kalshi_env not in ("demo", "prod"):
             errors.append(

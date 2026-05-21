@@ -62,6 +62,16 @@ class SourceTargetLogRecord:
     shadow_only: bool
 
 
+@dataclass(frozen=True)
+class MarketSourceHintDiagnostics:
+    ticker: str
+    mode: str
+    shadow_only: bool
+    plan: MarketSourceTargetPlan
+    counters: dict[str, dict[str, int | None]]
+    log_records: list[dict[str, object]]
+
+
 @dataclass
 class _CounterState:
     hits: int = 0
@@ -357,6 +367,63 @@ def build_market_source_target_plan(
         shadow_only=True,
         targets=tuple(targets),
         rejected_labels=hints.rejected_labels,
+    )
+
+
+def build_market_source_hint_diagnostics(
+    market: object,
+    *,
+    mode: str = "off",
+    emit_records: bool = False,
+    feed_url_builders: Mapping[str, Callable[[str], str]] | None = None,
+    local_mastheads: Mapping[str, str] | None = None,
+) -> MarketSourceHintDiagnostics:
+    """Build default-off, shadow-only MarketSourceHints operator diagnostics.
+
+    The wrapper is intentionally pure and config-independent: callers pass an
+    already-validated mode and record flag. ``off`` returns an empty diagnostic
+    surface without building source plans or invoking feed URL builders.
+    ``shadow`` and ``advisory`` expose only in-memory diagnostics; they do not
+    poll, fetch, write DBs, affect readiness/admission/scoring/routing, or
+    create executable/trading signals. No hit/miss log records are emitted here
+    because this helper does not perform observations.
+    """
+    normalized_mode = mode.strip().lower()
+    if normalized_mode not in {"off", "shadow", "advisory"}:
+        raise ValueError(
+            "mode must be one of off|shadow|advisory, "
+            f"got '{mode}'"
+        )
+
+    if normalized_mode == "off":
+        plan = MarketSourceTargetPlan(
+            ticker=getattr(market, "ticker"),
+            shadow_only=True,
+            targets=(),
+            rejected_labels={},
+        )
+        return MarketSourceHintDiagnostics(
+            ticker=plan.ticker,
+            mode=normalized_mode,
+            shadow_only=True,
+            plan=plan,
+            counters={},
+            log_records=[],
+        )
+
+    plan = build_market_source_target_plan(
+        market,
+        feed_url_builders=feed_url_builders,
+        local_mastheads=local_mastheads,
+    )
+    counters = SourceTargetCounters(plan)
+    return MarketSourceHintDiagnostics(
+        ticker=plan.ticker,
+        mode=normalized_mode,
+        shadow_only=True,
+        plan=plan,
+        counters=counters.snapshot(),
+        log_records=counters.log_records() if emit_records else [],
     )
 
 

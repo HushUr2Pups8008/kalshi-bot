@@ -1,9 +1,14 @@
 from pathlib import Path
 
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+
 from kalshi.source_hints import (
     SourceClass,
     SourceRegistry,
     SourceTargetCounters,
+    build_market_source_hint_diagnostics,
     build_market_source_hints,
     build_market_source_target_plan,
     canonicalize_source_label,
@@ -13,6 +18,32 @@ from kalshi.normalizer import normalize_market_detail
 from feeds.search_news_monitor import _markets_to_queries
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "market_source_hints"
+
+
+def _generate_valid_pem() -> str:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+
+
+def _market_with_source_metadata() -> KalshiMarket:
+    return KalshiMarket(
+        ticker="KXTRUMPIRAN-27JAN01",
+        title="Will Trump announce military action against Iran?",
+        yes_bid=49.0,
+        yes_ask=51.0,
+        yes_price=50.0,
+        volume=100,
+        open_interest=200,
+        close_time="2026-12-31T23:59:59Z",
+        status="active",
+        series_ticker="KXTRUMPIRAN",
+        price_available=True,
+        market_metadata={"rules_text": "Resolution source: Reuters and AP."},
+    )
 
 
 def test_market_source_hints_extracts_canonical_structured_plan_from_rules_fixture():
@@ -216,24 +247,90 @@ def test_source_target_counters_emit_shadow_hit_miss_and_freshness_log_records()
 
 
 def test_market_source_target_plan_does_not_change_default_search_query_path():
-    market = KalshiMarket(
-        ticker="KXTRUMPIRAN-27JAN01",
-        title="Will Trump announce military action against Iran?",
-        yes_bid=49.0,
-        yes_ask=51.0,
-        yes_price=50.0,
-        volume=100,
-        open_interest=200,
-        close_time="2026-12-31T23:59:59Z",
-        status="active",
-        series_ticker="KXTRUMPIRAN",
-        price_available=True,
-        market_metadata={"rules_text": "Resolution source: Reuters and AP."},
-    )
+    market = _market_with_source_metadata()
 
     _ = build_market_source_target_plan(market)
 
     assert _markets_to_queries([market]) == ["trump announce military action"]
+
+
+def test_market_source_hint_diagnostics_default_off_no_builder_calls_or_records():
+    called_queries: list[str] = []
+
+    def build_feed_url(query: str) -> str:
+        called_queries.append(query)
+        return f"unexpected:{query}"
+
+    market = _market_with_source_metadata()
+
+    diagnostics = build_market_source_hint_diagnostics(
+        market,
+        mode="off",
+        emit_records=True,
+        feed_url_builders={"future_fetcher": build_feed_url},
+    )
+
+    assert diagnostics.mode == "off"
+    assert diagnostics.shadow_only is True
+    assert diagnostics.plan.shadow_only is True
+    assert diagnostics.plan.targets == ()
+    assert diagnostics.counters == {}
+    assert diagnostics.log_records == []
+    assert called_queries == []
+    assert _markets_to_queries([market]) == ["trump announce military action"]
+
+
+def test_market_source_hint_diagnostics_shadow_and_advisory_are_shadow_only_without_fake_hits():
+    market = _market_with_source_metadata()
+
+    shadow = build_market_source_hint_diagnostics(market, mode="shadow", emit_records=True)
+    advisory = build_market_source_hint_diagnostics(market, mode="advisory", emit_records=True)
+
+    for diagnostics in (shadow, advisory):
+        assert diagnostics.mode in {"shadow", "advisory"}
+        assert diagnostics.shadow_only is True
+        assert diagnostics.plan.shadow_only is True
+        assert [target.source.canonical_name for target in diagnostics.plan.targets] == [
+            "Associated Press",
+            "Reuters",
+        ]
+        assert diagnostics.counters == {
+            "Associated Press": {
+                "hits": 0,
+                "misses": 0,
+                "freshest_age_seconds": None,
+            },
+            "Reuters": {
+                "hits": 0,
+                "misses": 0,
+                "freshest_age_seconds": None,
+            },
+        }
+        assert diagnostics.log_records == []
+
+
+def test_market_source_hints_config_defaults_and_rejects_invalid_mode(monkeypatch):
+    from config import BotConfig
+
+    monkeypatch.setenv("KALSHI_API_KEY_ID", "test-key-id")
+    monkeypatch.setenv("KALSHI_API_KEY_SECRET", _generate_valid_pem())
+    monkeypatch.delenv("MARKET_SOURCE_HINTS_MODE", raising=False)
+    monkeypatch.delenv("MARKET_SOURCE_HINTS_EMIT_RECORDS", raising=False)
+    default_config = BotConfig()
+
+    assert default_config.market_source_hints_mode == "off"
+    assert default_config.market_source_hints_emit_records is False
+
+    monkeypatch.setenv("MARKET_SOURCE_HINTS_MODE", "advisory")
+    monkeypatch.setenv("MARKET_SOURCE_HINTS_EMIT_RECORDS", "true")
+    advisory_config = BotConfig()
+
+    assert advisory_config.market_source_hints_mode == "advisory"
+    assert advisory_config.market_source_hints_emit_records is True
+
+    monkeypatch.setenv("MARKET_SOURCE_HINTS_MODE", "readiness_candidate")
+    with pytest.raises(SystemExit):
+        BotConfig()
 
 
 def test_unvalidated_or_missing_source_hints_fail_closed_without_fetch_targets():
