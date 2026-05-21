@@ -952,6 +952,28 @@ class TradeLogger:
             record["market_specificity_score"] = round(market_specificity_score, 4)
         self._write(record)
 
+    def log_market_source_hint_diagnostic(
+        self,
+        *,
+        ticker: str,
+        mode: str,
+        shadow_only: bool,
+        targets: list[dict[str, Any]],
+        counters: dict[str, dict[str, int | None]],
+        rejected_labels: dict[str, str],
+        log_records: list[dict[str, object]],
+    ) -> None:
+        self._write({
+            "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+            "ticker": ticker,
+            "mode": mode,
+            "shadow_only": shadow_only,
+            "targets": targets,
+            "counters": counters,
+            "rejected_labels": rejected_labels,
+            "log_records": log_records,
+        })
+
     def log_blend_decision(
         self,
         *,

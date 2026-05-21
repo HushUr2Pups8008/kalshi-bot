@@ -10,6 +10,9 @@ MarketSourceHints is safe for shadow rollout when all of the following remain tr
 - The only approved diagnostic modes are `off`, `shadow`, and `advisory`; invalid or promotion-style modes must be rejected at config validation.
 - `off` mode does not build source-target plans, does not call feed/search URL builders, and emits no records.
 - `shadow` and `advisory` modes remain operator diagnostics only; they keep `shadow_only=True` and must not fabricate source-hint hits.
+- Runtime diagnostic wiring is confined to the candidate analysis diagnostic path after status/price/staleness guards and before probability estimation; it logs/summarizes source-hint plans but never changes the candidate, estimate, blend, watch, execution, or trading path.
+- With `MARKET_SOURCE_HINTS_EMIT_RECORDS=false`, runtime shadow/advisory mode builds only in-memory diagnostics plus app-log visibility; it does not append structured trade-log records.
+- With `MARKET_SOURCE_HINTS_EMIT_RECORDS=true`, runtime emits `MARKET_SOURCE_HINT_DIAGNOSTIC` records containing plan summaries and any shadow log-record dictionaries, all with `shadow_only=True`; these records are diagnostic-only and not consumed by readiness/admission/scoring/routing/trading code.
 - `MarketSourceHints.shadow_only` and `MarketSourceTargetPlan.shadow_only` are `True`.
 - `SourceTargetCounters.log_records()` emits records with `shadow_only=True` and `type="MARKET_SOURCE_HINT_SHADOW"`.
 - The default search path remains unchanged: building a source target plan must not change `_markets_to_queries` output.
@@ -32,6 +35,17 @@ Run the broader relevant regression set used for the shadow rollout:
 
 ```bash
 .venv/bin/python -m pytest tests/test_market_source_hints.py tests/test_kalshi_normalizer_p0.py tests/test_main_pipeline.py -q
+```
+
+Runtime diagnostic wiring coverage is in `tests/test_main_pipeline.py`:
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_main_pipeline.py::test_market_source_hint_runtime_default_off_is_noop \
+  tests/test_main_pipeline.py::test_market_source_hint_runtime_shadow_builds_in_memory_only \
+  tests/test_main_pipeline.py::test_market_source_hint_runtime_advisory_emits_shadow_only_record_when_enabled \
+  tests/test_main_pipeline.py::test_market_source_hint_runtime_failure_does_not_block_candidate \
+  -q
 ```
 
 The operator-doc coverage test is:
@@ -80,8 +94,9 @@ Evidence is sufficient for operator review when:
 1. The targeted test suite passes.
 2. The broader regression command passes.
 3. The default-path guard passes, especially the assertion that `_markets_to_queries([market])` remains unchanged after calling `build_market_source_target_plan(market)`.
-4. Counter/log records are in-memory diagnostics only and are not wired into admission, readiness, execution, order placement, cancellation, or trading state transitions.
-5. Rejected labels remain visible via `rejected_labels` so operators can identify unsafe or unvalidated source text without silently using it.
+4. Runtime diagnostics remain default-off. When enabled, failures are logged and ignored, `shadow` stays app-log/in-memory only unless record emission is explicitly enabled, and emitted `MARKET_SOURCE_HINT_DIAGNOSTIC` records are not consumed by behavioral paths.
+5. Counter/log records are in-memory diagnostics only and are not wired into admission, readiness, execution, order placement, cancellation, or trading state transitions.
+6. Rejected labels remain visible via `rejected_labels` so operators can identify unsafe or unvalidated source text without silently using it.
 
 ## Operator interpretation
 

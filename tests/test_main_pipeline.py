@@ -19,6 +19,7 @@ from feeds.search_news_monitor import run_search_news_monitor
 from feeds.gdelt_monitor import run_gdelt_monitor
 from feeds import NewsItem
 from kalshi import KalshiMarket
+from kalshi.source_hints import MarketSourceHintDiagnostics, MarketSourceTargetPlan
 from main import TradingBot, _signal_to_evidence, _source_class_for_evidence
 from trading.portfolio import Position
 
@@ -128,6 +129,27 @@ def _analysis_for_evidence(news: NewsItem | None = None) -> SignalAnalysis:
     )
 
 
+def _empty_source_hint_diagnostics(
+    market: KalshiMarket,
+    *,
+    mode: str = "shadow",
+    records: list[dict[str, object]] | None = None,
+) -> MarketSourceHintDiagnostics:
+    return MarketSourceHintDiagnostics(
+        ticker=market.ticker,
+        mode=mode,
+        shadow_only=True,
+        plan=MarketSourceTargetPlan(
+            ticker=market.ticker,
+            shadow_only=True,
+            targets=(),
+            rejected_labels={},
+        ),
+        counters={},
+        log_records=records or [],
+    )
+
+
 def test_signal_to_evidence_uses_deterministic_id():
     news = _make_news()
     news.published = datetime(2026, 4, 20, 1, 2, 3, tzinfo=timezone.utc)
@@ -150,6 +172,108 @@ def test_signal_to_evidence_preserves_source_class_diversity():
     assert _source_class_for_evidence("White House official statement") == "official"
     assert _source_class_for_evidence("price_fade") == "market"
     assert _source_class_for_evidence("Reuters") == "news"
+
+
+@pytest.mark.asyncio
+async def test_market_source_hint_runtime_default_off_is_noop(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_mode", "off")
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_emit_records", False)
+    bot = _make_bot_stub()
+    market = _make_market()
+
+    with patch("main.build_market_source_hint_diagnostics") as diagnostics_mock, \
+         patch("utils.logger.trade_log.log_market_source_hint_diagnostic") as log_mock:
+        await bot._emit_market_source_hint_diagnostics(market)
+
+    diagnostics_mock.assert_not_called()
+    log_mock.assert_not_called()
+    bot.ws.watch.assert_not_called()
+    bot._blend_task.process_fast_lane_result.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_market_source_hint_runtime_shadow_builds_in_memory_only(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_mode", "shadow")
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_emit_records", False)
+    bot = _make_bot_stub()
+    market = _make_market()
+    diagnostic = _empty_source_hint_diagnostics(market, mode="shadow")
+
+    with patch("main.build_market_source_hint_diagnostics", return_value=diagnostic) as diagnostics_mock, \
+         patch("utils.logger.trade_log.log_market_source_hint_diagnostic") as log_mock:
+        await bot._emit_market_source_hint_diagnostics(market)
+
+    diagnostics_mock.assert_called_once_with(
+        market,
+        mode="shadow",
+        emit_records=False,
+    )
+    log_mock.assert_not_called()
+    bot.ws.watch.assert_not_called()
+    bot._blend_task.process_fast_lane_result.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_market_source_hint_runtime_advisory_emits_shadow_only_record_when_enabled(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_mode", "advisory")
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_emit_records", True)
+    bot = _make_bot_stub()
+    market = _make_market()
+    diagnostic = _empty_source_hint_diagnostics(
+        market,
+        mode="advisory",
+        records=[{
+            "type": "MARKET_SOURCE_HINT_SHADOW",
+            "ticker": market.ticker,
+            "source": "Reuters",
+            "domain": "reuters.com",
+            "hit": False,
+            "freshness_age_seconds": None,
+            "shadow_only": True,
+        }],
+    )
+
+    with patch("main.build_market_source_hint_diagnostics", return_value=diagnostic), \
+         patch("utils.logger.trade_log.log_market_source_hint_diagnostic") as log_mock:
+        await bot._emit_market_source_hint_diagnostics(market)
+
+    log_mock.assert_called_once_with(
+        ticker=market.ticker,
+        mode="advisory",
+        shadow_only=True,
+        targets=[],
+        counters={},
+        rejected_labels={},
+        log_records=diagnostic.log_records,
+    )
+    bot.ws.watch.assert_not_called()
+    bot._blend_task.process_fast_lane_result.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_market_source_hint_runtime_failure_does_not_block_candidate(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_mode", "shadow")
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_emit_records", False)
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
+    monkeypatch.setattr(_cfg_module.cfg, "min_bet_dollars", 2.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_half_life", 14.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_floor", 0.20)
+    monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
+    bot = _make_bot_stub()
+    news = _make_news()
+    market = _make_market()
+
+    with patch("main.build_market_source_hint_diagnostics", side_effect=RuntimeError("diagnostic boom")), \
+         patch("main.estimate_probability", new=AsyncMock(return_value=(
+             0.65, 0.8, ["missile strike"], "test reasoning", "yes", "moderate", 0.8
+         ))), patch("main.kelly_bet", return_value=(0.12, 15.0, 12.0)), \
+         patch("utils.logger.trade_log.log_signal"), \
+         patch("utils.logger.trade_log.log_opportunity"):
+        await bot._process_candidate(news, market, 0.42, {})
+
+    bot._blend_task.process_fast_lane_result.assert_awaited_once()
+    bot.ws.watch.assert_called_with([market.ticker])
 
 
 @pytest.mark.asyncio
