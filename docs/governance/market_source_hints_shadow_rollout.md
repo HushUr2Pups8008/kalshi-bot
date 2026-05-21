@@ -6,6 +6,10 @@ This runbook covers the shadow-only MarketSourceHints layer. It is diagnostic su
 
 MarketSourceHints is safe for shadow rollout when all of the following remain true:
 
+- Config defaults are fail-closed: `MARKET_SOURCE_HINTS_MODE=off` and `MARKET_SOURCE_HINTS_EMIT_RECORDS=false` unless an operator explicitly enables diagnostics.
+- The only approved diagnostic modes are `off`, `shadow`, and `advisory`; invalid or promotion-style modes must be rejected at config validation.
+- `off` mode does not build source-target plans, does not call feed/search URL builders, and emits no records.
+- `shadow` and `advisory` modes remain operator diagnostics only; they keep `shadow_only=True` and must not fabricate source-hint hits.
 - `MarketSourceHints.shadow_only` and `MarketSourceTargetPlan.shadow_only` are `True`.
 - `SourceTargetCounters.log_records()` emits records with `shadow_only=True` and `type="MARKET_SOURCE_HINT_SHADOW"`.
 - The default search path remains unchanged: building a source target plan must not change `_markets_to_queries` output.
