@@ -46,6 +46,7 @@ Runtime diagnostic wiring coverage is in `tests/test_main_pipeline.py`:
   tests/test_main_pipeline.py::test_market_source_hint_runtime_advisory_emits_shadow_only_record_when_enabled \
   tests/test_main_pipeline.py::test_market_source_hint_runtime_failure_does_not_block_candidate \
   tests/test_paper_trader.py::TestMarketSourceHintsReportSection \
+  tests/test_market_source_hints_diagnostics.py \
   -q
 ```
 
@@ -96,6 +97,16 @@ Each target includes:
 - It summarizes diagnostic record count, shadow-only count, observed modes, top hinted sources, top tickers, rejected labels, and child `MARKET_SOURCE_HINT_SHADOW` records.
 - It ignores malformed lines and unrelated record types.
 - It is diagnostic-only and not consumed by readiness, admission, scoring, routing, execution, paper trading, or live trading.
+
+## Detailed diagnostic CLI
+
+For a deeper read-only analysis of emitted records, run:
+
+```bash
+.venv/bin/python scripts/market_source_hints_diagnostics.py --path logs/trades/live/trades.jsonl --exclude-test
+```
+
+The script scans only `MARKET_SOURCE_HINT_DIAGNOSTIC` records and reports lines scanned, malformed lines skipped, diagnostic/shadow-only counts, non-shadow safety warnings, target/rejection counts, observed modes, hinted sources/domains, tickers, rejected-label reasons, and recent examples. It uses the shared trade-log reader, supports `--since`, `--until`, `--top`, `--recent`, and `--exclude-test`, and remains read-only.
 
 ## What proves shadow mode is safe
 
