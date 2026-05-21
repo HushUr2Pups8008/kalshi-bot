@@ -1,6 +1,7 @@
 import json
 
 from scripts.market_source_hints_diagnostics import (
+    filter_examples_by_bucket,
     format_json_summary,
     parse_date_end,
     parse_date_start,
@@ -247,6 +248,129 @@ def test_format_json_summary_respects_top_and_recent_limits():
         assert len(payload["counters"]["by_source"]) == 1
         assert len(payload["examples"]) == 1
         assert payload["examples"][0]["ticker"] == "KX2"
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_filter_examples_by_bucket_keeps_only_matching_rows():
+    tmp = make_tmp_dir("market_source_hints_diagnostics")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXHEALTHY",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [{"source": "Reuters", "domain": "reuters.com", "query_count": 1, "feed_url_count": 0}],
+                    "rejected_labels": {},
+                    "ts": "2026-04-12T10:00:00+00:00",
+                },
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXREJECT",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [],
+                    "rejected_labels": {"blogs": "generic_or_unverifiable_label"},
+                    "ts": "2026-04-12T10:01:00+00:00",
+                },
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXBAD",
+                    "mode": "shadow",
+                    "shadow_only": False,
+                    "targets": [],
+                    "rejected_labels": {},
+                    "ts": "2026-04-12T10:02:00+00:00",
+                },
+            ],
+        )
+        stats = summarize(path, since=None, until=None)
+
+        rejected = filter_examples_by_bucket(stats["examples"], "rejected_source_labels_present")
+        safety = filter_examples_by_bucket(stats["examples"], "safety_anomaly")
+
+        assert [row["ticker"] for row in rejected] == ["KXREJECT"]
+        assert [row["ticker"] for row in safety] == ["KXBAD"]
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_json_summary_marks_selected_bucket_and_filters_examples():
+    tmp = make_tmp_dir("market_source_hints_diagnostics")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXHEALTHY",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [{"source": "Reuters", "domain": "reuters.com", "query_count": 1, "feed_url_count": 0}],
+                    "rejected_labels": {},
+                    "ts": "2026-04-12T10:00:00+00:00",
+                },
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXBAD",
+                    "mode": "shadow",
+                    "shadow_only": False,
+                    "targets": [],
+                    "rejected_labels": {},
+                    "ts": "2026-04-12T10:01:00+00:00",
+                },
+            ],
+        )
+        stats = summarize(path, since=None, until=None)
+        payload = json.loads(format_json_summary(stats, top=5, recent=5, bucket="safety_anomaly"))
+
+        assert payload["selected_bucket"] == "safety_anomaly"
+        assert [row["ticker"] for row in payload["examples"]] == ["KXBAD"]
+        assert payload["operator_review_buckets"]["healthy_shadow_signal"]["count"] == 1
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_print_summary_marks_bucket_filtered_examples(capsys):
+    tmp = make_tmp_dir("market_source_hints_diagnostics")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXHEALTHY",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [{"source": "Reuters", "domain": "reuters.com", "query_count": 1, "feed_url_count": 0}],
+                    "rejected_labels": {},
+                    "ts": "2026-04-12T10:00:00+00:00",
+                },
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXBAD",
+                    "mode": "shadow",
+                    "shadow_only": False,
+                    "targets": [],
+                    "rejected_labels": {},
+                    "ts": "2026-04-12T10:01:00+00:00",
+                },
+            ],
+        )
+        stats = summarize(path, since=None, until=None)
+
+        print_summary(stats, top=5, recent=5, bucket="safety_anomaly")
+        output = capsys.readouterr().out
+
+        assert "Recent examples (bucket=safety_anomaly)" in output
+        assert "ticker=KXBAD" in output
+        assert "ticker=KXHEALTHY" not in output
     finally:
         cleanup_tmp_dir(tmp)
 
