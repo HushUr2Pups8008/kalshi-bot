@@ -49,6 +49,7 @@ _LEGACY_CENTS_FIELDS = (
 # Side/price keywords used to detect unrecognized "drift" price contracts.
 _SIDE_TOKENS = ("yes", "no")
 _PRICE_TOKENS = ("bid", "ask", "price")
+_MARKET_METADATA_KEY_TERMS = ("rules", "source", "resolution", "settlement")
 
 
 class UnsupportedPayloadContractError(ValueError):
@@ -78,6 +79,18 @@ def _hash_payload(payload: dict) -> str:
     """SHA-256 of a deterministic JSON serialization (LD-16)."""
     serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _extract_market_metadata(payload: dict) -> dict[str, str]:
+    """Preserve public rules/source/resolution text without affecting execution."""
+    metadata: dict[str, str] = {}
+    for key, value in payload.items():
+        if not isinstance(key, str) or not isinstance(value, str) or value == "":
+            continue
+        key_lower = key.lower()
+        if any(term in key_lower for term in _MARKET_METADATA_KEY_TERMS):
+            metadata[key] = value
+    return metadata
 
 
 def _to_cents(dollar_value: Any) -> int:
@@ -329,6 +342,7 @@ def _build_market(
         series_ticker=str(payload.get("series_ticker", "")),
         subtitle=str(payload.get("subtitle", "")),
         result=str(payload.get("result", "")),
+        market_metadata=_extract_market_metadata(payload),
         yes_bid_cents=yes_bid_cents,
         yes_ask_cents=yes_ask_cents,
         no_bid_cents=no_bid_cents,
