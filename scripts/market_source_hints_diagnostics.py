@@ -36,6 +36,13 @@ from utils.reporting_helpers import DEFAULT_CURRENT_STATE_WINDOW_HOURS
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
 DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "live" / "trades.jsonl"
+BUCKET_DESCRIPTIONS = {
+    "healthy_shadow_signal": "shadow-only records with validated source targets and no rejected labels",
+    "no_validated_source_hints": "shadow-only records that produced no validated source targets",
+    "rejected_source_labels_present": "records with rejected source labels that may need metadata/extraction review",
+    "safety_anomaly": "non-shadow MarketSourceHints diagnostic records",
+    "low_coverage": "records with no validated source targets",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,6 +65,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         dest="json_output",
         help="Emit machine-readable JSON diagnostics instead of the human-readable report",
+    )
+    parser.add_argument(
+        "--bucket",
+        choices=sorted(BUCKET_DESCRIPTIONS),
+        help="Filter recent examples to one operator review bucket; aggregate counts remain unchanged",
     )
     add_exclude_test_arg(
         parser,
@@ -111,19 +123,7 @@ def _classify_operator_review_buckets(rows: list[dict[str, Any]]) -> dict[str, d
     consumed by readiness, admission, scoring, routing, or trading behavior.
     """
 
-    buckets = {
-        "healthy_shadow_signal": _empty_bucket(
-            "shadow-only records with validated source targets and no rejected labels"
-        ),
-        "no_validated_source_hints": _empty_bucket(
-            "shadow-only records that produced no validated source targets"
-        ),
-        "rejected_source_labels_present": _empty_bucket(
-            "records with rejected source labels that may need metadata/extraction review"
-        ),
-        "safety_anomaly": _empty_bucket("non-shadow MarketSourceHints diagnostic records"),
-        "low_coverage": _empty_bucket("records with no validated source targets"),
-    }
+    buckets = {name: _empty_bucket(description) for name, description in BUCKET_DESCRIPTIONS.items()}
     tickers_by_bucket: dict[str, set[str]] = {name: set() for name in buckets}
 
     def add(bucket_name: str, row: dict[str, Any]) -> None:
@@ -153,6 +153,29 @@ def _classify_operator_review_buckets(rows: list[dict[str, Any]]) -> dict[str, d
     return buckets
 
 
+def _row_matches_bucket(row: dict[str, Any], bucket: str) -> bool:
+    shadow_only = row.get("shadow_only") is True
+    target_count = int(row.get("target_count") or 0)
+    rejected_label_count = int(row.get("rejected_label_count") or 0)
+    if bucket == "healthy_shadow_signal":
+        return shadow_only and target_count > 0 and rejected_label_count == 0
+    if bucket == "no_validated_source_hints":
+        return shadow_only and target_count == 0
+    if bucket == "rejected_source_labels_present":
+        return rejected_label_count > 0
+    if bucket == "safety_anomaly":
+        return not shadow_only
+    if bucket == "low_coverage":
+        return target_count == 0
+    raise ValueError(f"unknown operator review bucket: {bucket}")
+
+
+def filter_examples_by_bucket(rows: list[dict[str, Any]], bucket: str | None) -> list[dict[str, Any]]:
+    if bucket is None:
+        return list(rows)
+    return [row for row in rows if _row_matches_bucket(row, bucket)]
+
+
 def _fmt_bucket(bucket: dict[str, Any], *, max_tickers: int = 5) -> str:
     tickers = bucket.get("tickers") or []
     ticker_text = ", ".join(tickers[:max_tickers]) if tickers else "n/a"
@@ -175,15 +198,22 @@ def _json_example(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def format_json_summary(stats: dict[str, Any], top: int = 10, recent: int = 10) -> str:
+def format_json_summary(
+    stats: dict[str, Any],
+    top: int = 10,
+    recent: int = 10,
+    bucket: str | None = None,
+) -> str:
     """Return machine-readable diagnostics without changing any runtime behavior."""
 
     top = max(1, top)
     recent = max(0, recent)
+    examples = filter_examples_by_bucket(stats.get("examples") or [], bucket)
     payload = {
         "schema_version": 1,
         "diagnostic_only": True,
         "non_consumption": "not consumed by readiness/admission/scoring/routing/trading",
+        "selected_bucket": bucket,
         "path": str(stats["path"]),
         "counts": {
             "lines_total": int(stats["lines_total"]),
@@ -206,7 +236,7 @@ def format_json_summary(stats: dict[str, Any], top: int = 10, recent: int = 10) 
             "by_rejected_reason": _counter_to_dict(stats["by_rejected_reason"], top),
         },
         "operator_review_buckets": stats.get("operator_review_buckets", {}),
-        "examples": [_json_example(row) for row in (stats.get("examples") or [])[:recent]],
+        "examples": [_json_example(row) for row in examples[:recent]],
     }
     return json.dumps(payload, indent=2, sort_keys=True)
 
@@ -307,7 +337,7 @@ def summarize(
     return stats
 
 
-def print_summary(stats: dict[str, Any], top: int = 10, recent: int = 10) -> None:
+def print_summary(stats: dict[str, Any], top: int = 10, recent: int = 10, bucket: str | None = None) -> None:
     total = int(stats["diagnostic_records"])
     shadow = int(stats["shadow_only_records"])
     shadow_pct = (100 * shadow / total) if total else 0.0
@@ -342,11 +372,12 @@ def print_summary(stats: dict[str, Any], top: int = 10, recent: int = 10) -> Non
     print()
     print("Operator review buckets")
     print("  Diagnostic only -- classifications do not affect readiness/admission/trading")
-    for name, bucket in stats.get("operator_review_buckets", {}).items():
-        print(f"  {name}: {_fmt_bucket(bucket)}")
+    for name, bucket_info in stats.get("operator_review_buckets", {}).items():
+        print(f"  {name}: {_fmt_bucket(bucket_info)}")
     print()
-    print("Recent examples")
-    examples = stats.get("examples") or []
+    examples = filter_examples_by_bucket(stats.get("examples") or [], bucket)
+    heading = "Recent examples" if bucket is None else f"Recent examples (bucket={bucket})"
+    print(heading)
     if not examples:
         print("  n/a")
         return
@@ -368,9 +399,9 @@ def main() -> int:
         exclude_test=args.exclude_test,
     )
     if args.json_output:
-        print(format_json_summary(stats, top=max(1, args.top), recent=max(0, args.recent)))
+        print(format_json_summary(stats, top=max(1, args.top), recent=max(0, args.recent), bucket=args.bucket))
     else:
-        print_summary(stats, top=max(1, args.top), recent=max(0, args.recent))
+        print_summary(stats, top=max(1, args.top), recent=max(0, args.recent), bucket=args.bucket)
     return 0
 
 
