@@ -1,4 +1,7 @@
+import json
+
 from scripts.market_source_hints_diagnostics import (
+    format_json_summary,
     parse_date_end,
     parse_date_start,
     print_summary,
@@ -174,6 +177,76 @@ def test_summarize_classifies_operator_review_buckets():
         assert "KXHEALTHY" in buckets["healthy_shadow_signal"]["tickers"]
         assert "KXNOMETA" in buckets["no_validated_source_hints"]["tickers"]
         assert "KXREJECT" in buckets["rejected_source_labels_present"]["tickers"]
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_format_json_summary_is_machine_readable_and_diagnostic_only():
+    tmp = make_tmp_dir("market_source_hints_diagnostics")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXJSON",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [{"source": "Reuters", "domain": "reuters.com", "query_count": 1, "feed_url_count": 0}],
+                    "rejected_labels": {},
+                    "ts": "2026-04-12T10:00:00+00:00",
+                }
+            ],
+        )
+
+        stats = summarize(path, since=None, until=None)
+        payload = json.loads(format_json_summary(stats, top=5, recent=5))
+
+        assert payload["schema_version"] == 1
+        assert payload["diagnostic_only"] is True
+        assert payload["non_consumption"] == "not consumed by readiness/admission/scoring/routing/trading"
+        assert payload["path"] == str(path)
+        assert payload["counts"]["diagnostic_records"] == 1
+        assert payload["counters"]["by_source"] == {"Reuters": 1}
+        assert payload["operator_review_buckets"]["healthy_shadow_signal"]["count"] == 1
+        assert payload["examples"][0]["ts"] == "2026-04-12T10:00:00+00:00"
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_format_json_summary_respects_top_and_recent_limits():
+    tmp = make_tmp_dir("market_source_hints_diagnostics")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KX1",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [{"source": "Reuters", "domain": "reuters.com", "query_count": 1, "feed_url_count": 0}],
+                    "ts": "2026-04-12T10:00:00+00:00",
+                },
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KX2",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [{"source": "Associated Press", "domain": "apnews.com", "query_count": 1, "feed_url_count": 0}],
+                    "ts": "2026-04-12T10:01:00+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(path, since=None, until=None)
+        payload = json.loads(format_json_summary(stats, top=1, recent=1))
+
+        assert len(payload["counters"]["by_source"]) == 1
+        assert len(payload["examples"]) == 1
+        assert payload["examples"][0]["ticker"] == "KX2"
     finally:
         cleanup_tmp_dir(tmp)
 
