@@ -108,6 +108,14 @@ For a deeper read-only analysis of emitted records, run:
 
 The script scans only `MARKET_SOURCE_HINT_DIAGNOSTIC` records and reports lines scanned, malformed lines skipped, diagnostic/shadow-only counts, non-shadow safety warnings, target/rejection counts, observed modes, hinted sources/domains, tickers, rejected-label reasons, and recent examples. It uses the shared trade-log reader, supports `--since`, `--until`, `--top`, `--recent`, and `--exclude-test`, and remains read-only.
 
+The CLI also prints operator review buckets. These are deterministic summaries for human review only and are not consumed by readiness, admission, scoring, routing, execution, paper trading, or live trading:
+
+- `healthy_shadow_signal`: shadow-only records with validated source targets and no rejected labels.
+- `no_validated_source_hints`: shadow-only records that produced no validated source targets.
+- `rejected_source_labels_present`: records with rejected source labels that may need metadata/extraction review.
+- `safety_anomaly`: non-shadow MarketSourceHints diagnostic records, surfaced as warnings only.
+- `low_coverage`: records with no validated source targets.
+
 ## What proves shadow mode is safe
 
 Evidence is sufficient for operator review when:

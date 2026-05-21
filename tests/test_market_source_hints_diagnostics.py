@@ -116,6 +116,108 @@ def test_summarize_respects_date_filter_and_exclude_test():
         cleanup_tmp_dir(tmp)
 
 
+def test_summarize_classifies_operator_review_buckets():
+    tmp = make_tmp_dir("market_source_hints_diagnostics")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXHEALTHY",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [{"source": "Reuters", "domain": "reuters.com", "query_count": 1, "feed_url_count": 0}],
+                    "rejected_labels": {},
+                    "ts": "2026-04-12T10:00:00+00:00",
+                },
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXNOMETA",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [],
+                    "rejected_labels": {},
+                    "ts": "2026-04-12T10:01:00+00:00",
+                },
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXREJECT",
+                    "mode": "advisory",
+                    "shadow_only": True,
+                    "targets": [],
+                    "rejected_labels": {"blogs": "generic_or_unverifiable_label"},
+                    "ts": "2026-04-12T10:02:00+00:00",
+                },
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXBAD",
+                    "mode": "shadow",
+                    "shadow_only": False,
+                    "targets": [],
+                    "rejected_labels": {},
+                    "ts": "2026-04-12T10:03:00+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(path, since=None, until=None)
+        buckets = stats["operator_review_buckets"]
+
+        assert buckets["safety_anomaly"]["count"] == 1
+        assert buckets["healthy_shadow_signal"]["count"] == 1
+        assert buckets["no_validated_source_hints"]["count"] == 2
+        assert buckets["rejected_source_labels_present"]["count"] == 1
+        assert buckets["low_coverage"]["count"] == 3
+        assert "KXBAD" in buckets["safety_anomaly"]["tickers"]
+        assert "KXHEALTHY" in buckets["healthy_shadow_signal"]["tickers"]
+        assert "KXNOMETA" in buckets["no_validated_source_hints"]["tickers"]
+        assert "KXREJECT" in buckets["rejected_source_labels_present"]["tickers"]
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_print_summary_includes_operator_review_buckets(capsys):
+    tmp = make_tmp_dir("market_source_hints_diagnostics")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXHEALTHY",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [{"source": "Reuters", "domain": "reuters.com", "query_count": 1, "feed_url_count": 0}],
+                    "rejected_labels": {},
+                    "ts": "2026-04-12T10:00:00+00:00",
+                },
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXBAD",
+                    "mode": "shadow",
+                    "shadow_only": False,
+                    "targets": [],
+                    "rejected_labels": {},
+                    "ts": "2026-04-12T10:01:00+00:00",
+                },
+            ],
+        )
+        stats = summarize(path, since=None, until=None)
+
+        print_summary(stats, top=5, recent=5)
+        output = capsys.readouterr().out
+
+        assert "Operator review buckets" in output
+        assert "healthy_shadow_signal" in output
+        assert "safety_anomaly" in output
+        assert "Diagnostic only -- classifications do not affect readiness/admission/trading" in output
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
 def test_print_summary_includes_safety_sections(capsys):
     tmp = make_tmp_dir("market_source_hints_diagnostics")
     try:
