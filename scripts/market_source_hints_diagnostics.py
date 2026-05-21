@@ -93,6 +93,66 @@ def _rejected_reasons(record: dict[str, Any]) -> list[str]:
     return [str(reason or "unknown") for reason in rejected.values()]
 
 
+def _empty_bucket(description: str) -> dict[str, Any]:
+    return {"description": description, "count": 0, "tickers": []}
+
+
+def _classify_operator_review_buckets(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Classify diagnostic rows into operator review buckets only.
+
+    These buckets summarize what humans may want to inspect next; they are not
+    consumed by readiness, admission, scoring, routing, or trading behavior.
+    """
+
+    buckets = {
+        "healthy_shadow_signal": _empty_bucket(
+            "shadow-only records with validated source targets and no rejected labels"
+        ),
+        "no_validated_source_hints": _empty_bucket(
+            "shadow-only records that produced no validated source targets"
+        ),
+        "rejected_source_labels_present": _empty_bucket(
+            "records with rejected source labels that may need metadata/extraction review"
+        ),
+        "safety_anomaly": _empty_bucket("non-shadow MarketSourceHints diagnostic records"),
+        "low_coverage": _empty_bucket("records with no validated source targets"),
+    }
+    tickers_by_bucket: dict[str, set[str]] = {name: set() for name in buckets}
+
+    def add(bucket_name: str, row: dict[str, Any]) -> None:
+        buckets[bucket_name]["count"] += 1
+        ticker = str(row.get("ticker") or "").strip()
+        if ticker:
+            tickers_by_bucket[bucket_name].add(ticker)
+
+    for row in rows:
+        shadow_only = row.get("shadow_only") is True
+        target_count = int(row.get("target_count") or 0)
+        rejected_label_count = int(row.get("rejected_label_count") or 0)
+
+        if not shadow_only:
+            add("safety_anomaly", row)
+        if shadow_only and target_count > 0 and rejected_label_count == 0:
+            add("healthy_shadow_signal", row)
+        if shadow_only and target_count == 0:
+            add("no_validated_source_hints", row)
+        if rejected_label_count > 0:
+            add("rejected_source_labels_present", row)
+        if target_count == 0:
+            add("low_coverage", row)
+
+    for name, tickers in tickers_by_bucket.items():
+        buckets[name]["tickers"] = sorted(tickers)
+    return buckets
+
+
+def _fmt_bucket(bucket: dict[str, Any], *, max_tickers: int = 5) -> str:
+    tickers = bucket.get("tickers") or []
+    ticker_text = ", ".join(tickers[:max_tickers]) if tickers else "n/a"
+    extra = "" if len(tickers) <= max_tickers else f", +{len(tickers) - max_tickers} more"
+    return f"{bucket['count']} — {bucket['description']} — tickers: {ticker_text}{extra}"
+
+
 def summarize(
     path: Path,
     since: datetime | None,
@@ -185,6 +245,7 @@ def summarize(
         key=lambda row: row["ts"] or datetime.min.replace(tzinfo=timezone.utc),
         reverse=True,
     )
+    stats["operator_review_buckets"] = _classify_operator_review_buckets(rows)
     return stats
 
 
@@ -220,6 +281,11 @@ def print_summary(stats: dict[str, Any], top: int = 10, recent: int = 10) -> Non
     print(f"  {_fmt_counter(stats['by_ticker'], top)}")
     print("Rejected label reasons")
     print(f"  {_fmt_counter(stats['by_rejected_reason'], top)}")
+    print()
+    print("Operator review buckets")
+    print("  Diagnostic only -- classifications do not affect readiness/admission/trading")
+    for name, bucket in stats.get("operator_review_buckets", {}).items():
+        print(f"  {name}: {_fmt_bucket(bucket)}")
     print()
     print("Recent examples")
     examples = stats.get("examples") or []
