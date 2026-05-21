@@ -104,12 +104,15 @@ For a deeper read-only analysis of emitted records, run:
 
 ```bash
 .venv/bin/python scripts/market_source_hints_diagnostics.py --path logs/trades/live/trades.jsonl --exclude-test
+.venv/bin/python scripts/market_source_hints_diagnostics.py --path logs/trades/live/trades.jsonl --exclude-test --since-hours 24
 .venv/bin/python scripts/market_source_hints_diagnostics.py --path logs/trades/live/trades.jsonl --exclude-test --json
 .venv/bin/python scripts/market_source_hints_diagnostics.py --path logs/trades/live/trades.jsonl --exclude-test --bucket safety_anomaly
 .venv/bin/python scripts/market_source_hints_diagnostics.py --path logs/trades/live/trades.jsonl --exclude-test --json --bucket rejected_source_labels_present
 ```
 
-The script scans only `MARKET_SOURCE_HINT_DIAGNOSTIC` records and reports lines scanned, malformed lines skipped, diagnostic/shadow-only counts, non-shadow safety warnings, target/rejection counts, observed modes, hinted sources/domains, tickers, rejected-label reasons, and recent examples. It uses the shared trade-log reader, supports `--since`, `--until`, `--top`, `--recent`, `--exclude-test`, `--json`, and `--bucket`, and remains read-only.
+The script scans only `MARKET_SOURCE_HINT_DIAGNOSTIC` records and reports lines scanned, malformed lines skipped, diagnostic/shadow-only counts, non-shadow safety warnings, target/rejection counts, observed modes, hinted sources/domains, tickers, rejected-label reasons, and recent examples. It uses the shared trade-log reader, supports `--since`, `--until`, `--since-hours`, `--top`, `--recent`, `--exclude-test`, `--json`, and `--bucket`, and remains read-only.
+
+`--since-hours` applies a rolling lookback window only when `--since` is not provided. It is a review-scope filter for existing log records and does not start services, fetch markets, or change runtime behavior.
 
 `--json` emits a schema-versioned machine-readable payload for dashboards or archived review artifacts. The payload includes `diagnostic_only: true` and `non_consumption: "not consumed by readiness/admission/scoring/routing/trading"`; it must not be used as a runtime input to readiness, admission, scoring, routing, execution, paper trading, or live trading.
 
