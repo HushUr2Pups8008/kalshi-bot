@@ -693,6 +693,71 @@ class TestMatchQualityReportSection:
         _ = real_open
 
 
+class TestMarketSourceHintsReportSection:
+    """MarketSourceHints report section is read-only and diagnostic-only."""
+
+    def test_returns_placeholder_when_no_market_source_hint_records(self, monkeypatch, tmp_path):
+        from trading import paper_trader as pt_module
+        empty = tmp_path / "empty.jsonl"
+        empty.write_text("", encoding="utf-8")
+        monkeypatch.setattr(pt_module, "TRADE_LOG_FILE", empty)
+
+        lines = pt_module._market_source_hints_report_section()
+
+        assert lines[0] == "MARKET SOURCE HINTS  (shadow-only diagnostics)"
+        assert "No MARKET_SOURCE_HINT_DIAGNOSTIC records yet" in lines[1]
+
+    def test_summarizes_market_source_hint_diagnostics_without_behavioral_claims(self, monkeypatch, tmp_path):
+        import json as _json
+        from trading import paper_trader as pt_module
+
+        records = [
+            {
+                "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                "ticker": "KXIRAN",
+                "mode": "shadow",
+                "shadow_only": True,
+                "targets": [
+                    {"source": "Reuters", "domain": "reuters.com", "query_count": 1, "feed_url_count": 0},
+                    {"source": "Associated Press", "domain": "apnews.com", "query_count": 1, "feed_url_count": 0},
+                ],
+                "rejected_labels": {"news outlets": "generic_or_unverifiable_label"},
+                "log_records": [],
+            },
+            {
+                "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                "ticker": "KXIRAN",
+                "mode": "advisory",
+                "shadow_only": True,
+                "targets": [
+                    {"source": "Reuters", "domain": "reuters.com", "query_count": 1, "feed_url_count": 0},
+                ],
+                "rejected_labels": {},
+                "log_records": [{"type": "MARKET_SOURCE_HINT_SHADOW", "shadow_only": True}],
+            },
+            {"type": "OTHER", "ticker": "ignored"},
+            "not-json",
+        ]
+        path = tmp_path / "trades.jsonl"
+        path.write_text(
+            "\n".join(r if isinstance(r, str) else _json.dumps(r) for r in records) + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(pt_module, "TRADE_LOG_FILE", path)
+
+        lines = pt_module._market_source_hints_report_section()
+        text = "\n".join(lines)
+
+        assert "Diagnostic records:       2" in text
+        assert "Shadow-only records:      2 (100%)" in text
+        assert "Modes observed:           advisory(1), shadow(1)" in text
+        assert "Top hinted sources:       Reuters(2), Associated Press(1)" in text
+        assert "Top tickers:              KXIRAN(2)" in text
+        assert "Rejected labels:          1" in text
+        assert "Child shadow records:     1" in text
+        assert "diagnostic only -- not consumed by readiness/admission/trading" in text
+
+
 class TestValidateStartupContext:
     """`_validate_startup_context` — rejects unsupported values."""
 

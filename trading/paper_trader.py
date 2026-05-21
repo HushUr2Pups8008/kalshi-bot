@@ -232,6 +232,85 @@ def _match_quality_report_section() -> list[str]:
     return lines
 
 
+def _market_source_hints_report_section() -> list[str]:
+    """Return a compact MarketSourceHints section for the daily report.
+
+    Reads MARKET_SOURCE_HINT_DIAGNOSTIC records from trades.jsonl (read-only).
+    Diagnostic only -- no readiness/admission/scoring/routing/trading behavior
+    is affected by these metrics.
+    """
+    heading = "MARKET SOURCE HINTS  (shadow-only diagnostics)"
+    if not TRADE_LOG_FILE.exists():
+        return [heading, "  No trades.jsonl found.", ""]
+
+    from collections import Counter
+
+    total = 0
+    shadow_only = 0
+    child_shadow_records = 0
+    rejected_label_count = 0
+    mode_counts: Counter[str] = Counter()
+    source_counts: Counter[str] = Counter()
+    ticker_counts: Counter[str] = Counter()
+    try:
+        with TRADE_LOG_FILE.open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") != "MARKET_SOURCE_HINT_DIAGNOSTIC":
+                    continue
+                total += 1
+                if ev.get("shadow_only") is True:
+                    shadow_only += 1
+                mode = str(ev.get("mode") or "unknown").strip() or "unknown"
+                mode_counts[mode] += 1
+                ticker = str(ev.get("ticker") or "").strip()
+                if ticker:
+                    ticker_counts[ticker] += 1
+                for target in ev.get("targets") or []:
+                    if isinstance(target, dict):
+                        source = str(target.get("source") or "").strip()
+                        if source:
+                            source_counts[source] += 1
+                rejected_labels = ev.get("rejected_labels") or {}
+                if isinstance(rejected_labels, dict):
+                    rejected_label_count += len(rejected_labels)
+                for record in ev.get("log_records") or []:
+                    if isinstance(record, dict) and record.get("shadow_only") is True:
+                        child_shadow_records += 1
+    except OSError:
+        return [heading, "  Could not read trades.jsonl.", ""]
+
+    if total == 0:
+        return [heading, "  No MARKET_SOURCE_HINT_DIAGNOSTIC records yet.", ""]
+
+    shadow_pct = 100 * shadow_only / total
+    lines = [
+        heading,
+        "  diagnostic only -- not consumed by readiness/admission/trading",
+        f"  Diagnostic records:       {total}",
+        f"  Shadow-only records:      {shadow_only} ({shadow_pct:.0f}%)",
+    ]
+    if mode_counts:
+        modes = ", ".join(f"{mode}({count})" for mode, count in sorted(mode_counts.items()))
+        lines.append(f"  Modes observed:           {modes}")
+    if source_counts:
+        sources = ", ".join(f"{source}({count})" for source, count in source_counts.most_common(5))
+        lines.append(f"  Top hinted sources:       {sources}")
+    if ticker_counts:
+        tickers = ", ".join(f"{ticker}({count})" for ticker, count in ticker_counts.most_common(5))
+        lines.append(f"  Top tickers:              {tickers}")
+    lines.append(f"  Rejected labels:          {rejected_label_count}")
+    lines.append(f"  Child shadow records:     {child_shadow_records}")
+    lines.append("")
+    return lines
+
+
 class PaperTrader:
     """Paper trading engine backed by SQLite."""
 
@@ -1059,6 +1138,7 @@ class PaperTrader:
         ]
 
         lines += _match_quality_report_section()
+        lines += _market_source_hints_report_section()
 
         # Resolved trades table (last 20)
         if resolved:

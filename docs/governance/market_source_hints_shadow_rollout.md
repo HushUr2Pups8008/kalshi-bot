@@ -45,6 +45,7 @@ Runtime diagnostic wiring coverage is in `tests/test_main_pipeline.py`:
   tests/test_main_pipeline.py::test_market_source_hint_runtime_shadow_builds_in_memory_only \
   tests/test_main_pipeline.py::test_market_source_hint_runtime_advisory_emits_shadow_only_record_when_enabled \
   tests/test_main_pipeline.py::test_market_source_hint_runtime_failure_does_not_block_candidate \
+  tests/test_paper_trader.py::TestMarketSourceHintsReportSection \
   -q
 ```
 
@@ -86,6 +87,15 @@ Each target includes:
 - `hit`: whether the source-target query/feed observation hit.
 - `freshness_age_seconds`: observed age for hit results, or `None`.
 - `shadow_only`: must be `True`.
+
+## Daily report section
+
+`python main.py --report` includes a read-only `MARKET SOURCE HINTS` section after `MATCH QUALITY` when it can read `trades.jsonl`:
+
+- It scans only `MARKET_SOURCE_HINT_DIAGNOSTIC` records.
+- It summarizes diagnostic record count, shadow-only count, observed modes, top hinted sources, top tickers, rejected labels, and child `MARKET_SOURCE_HINT_SHADOW` records.
+- It ignores malformed lines and unrelated record types.
+- It is diagnostic-only and not consumed by readiness, admission, scoring, routing, execution, paper trading, or live trading.
 
 ## What proves shadow mode is safe
 
