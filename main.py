@@ -85,6 +85,7 @@ from feeds.reddit_monitor import run_reddit_monitor
 from feeds.rss_monitor import run_rss_monitor
 from kalshi.rest_client import KalshiRestClient
 from kalshi.websocket_client import KalshiWebSocketClient
+from kalshi.source_hints import build_market_source_hint_diagnostics
 from analysis.evidence_types import Evidence
 from tasks.accumulation_task import AccumulationTask
 from tasks.blend_task import BlendTask, TradeCandidate
@@ -672,6 +673,68 @@ class TradingBot:
         for market, match_score, match_meta in candidates:
             await self._process_candidate(news, market, match_score, match_meta)
 
+    async def _emit_market_source_hint_diagnostics(self, market) -> None:
+        """Emit default-off, shadow-only MarketSourceHints diagnostics.
+
+        This path is intentionally non-behavioral: it never changes readiness,
+        admission, scoring, routing, fetch cadence, websocket watches, order
+        flow, DB state, or paper/live trading decisions. Diagnostic failures are
+        logged and ignored so the candidate pipeline continues unchanged.
+        """
+        mode = getattr(cfg, "market_source_hints_mode", "off")
+        emit_records = bool(getattr(cfg, "market_source_hints_emit_records", False))
+        if mode == "off":
+            return
+        try:
+            diagnostic = build_market_source_hint_diagnostics(
+                market,
+                mode=mode,
+                emit_records=emit_records,
+            )
+        except Exception as exc:  # pragma: no cover - tested via behavior, not log text
+            log.warning(
+                "[MARKET_SOURCE_HINTS] diagnostic build failed ticker=%s mode=%s: %s",
+                getattr(market, "ticker", "unknown"),
+                mode,
+                exc,
+            )
+            return
+
+        targets = [
+            {
+                "source": target.source.canonical_name,
+                "domain": target.source.domain,
+                "source_class": target.source.source_class.value,
+                "query_count": len(target.search_queries),
+                "feed_url_count": len(target.feed_urls),
+            }
+            for target in diagnostic.plan.targets
+        ]
+        log_fn = log.info if diagnostic.mode == "advisory" else log.debug
+        log_fn(
+            "[MARKET_SOURCE_HINTS] ticker=%s mode=%s shadow_only=%s targets=%d "
+            "rejected_labels=%d emit_records=%s",
+            diagnostic.ticker,
+            diagnostic.mode,
+            diagnostic.shadow_only,
+            len(targets),
+            len(diagnostic.plan.rejected_labels),
+            emit_records,
+        )
+        if emit_records:
+            from utils.logger import trade_log
+
+            await write_trade_log_async(
+                trade_log.log_market_source_hint_diagnostic,
+                ticker=diagnostic.ticker,
+                mode=diagnostic.mode,
+                shadow_only=diagnostic.shadow_only,
+                targets=targets,
+                counters=diagnostic.counters,
+                rejected_labels=diagnostic.plan.rejected_labels,
+                log_records=diagnostic.log_records,
+            )
+
     async def _process_candidate(self, news: NewsItem, market, match_score: float, match_meta: dict | None = None) -> None:
         from utils.logger import trade_log
         # P-7: per-market status guard. Upstream of price-availability and
@@ -736,6 +799,7 @@ class TradingBot:
             market.yes_price,
             market_yes_price,
         )
+        await self._emit_market_source_hint_diagnostics(market)
 
         estimated_prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
             await estimate_probability(news, market, keyword_stats=self.keyword_stats, match_meta=match_meta)
