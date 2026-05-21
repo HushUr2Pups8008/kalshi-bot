@@ -13,7 +13,7 @@ import argparse
 import json
 import sys
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +58,11 @@ def parse_args() -> argparse.Namespace:
     )
     add_since_arg(parser, help_text="Inclusive start date in YYYY-MM-DD")
     add_until_arg(parser, help_text="Inclusive end date in YYYY-MM-DD")
+    parser.add_argument(
+        "--since-hours",
+        type=float,
+        help="Rolling lookback window in hours when --since is not provided",
+    )
     add_top_arg(parser, default=10, help_text="Max rows in grouped sections")
     parser.add_argument("--recent", type=int, default=10, help="Max recent diagnostic examples")
     parser.add_argument(
@@ -76,6 +81,26 @@ def parse_args() -> argparse.Namespace:
         help_text="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
     )
     return parser.parse_args()
+
+
+def resolve_since_filter(
+    since_arg: str | None,
+    since_hours: float | None,
+    *,
+    now: datetime | None = None,
+) -> datetime | None:
+    """Resolve CLI start-time filters without changing runtime behavior."""
+
+    if since_arg:
+        return parse_date_start(since_arg)
+    if since_hours is None:
+        return None
+    if since_hours <= 0:
+        raise ValueError("--since-hours must be greater than 0")
+    reference = now or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    return reference.astimezone(timezone.utc) - timedelta(hours=since_hours)
 
 
 def _safe_int(value: Any) -> int:
@@ -392,9 +417,14 @@ def print_summary(stats: dict[str, Any], top: int = 10, recent: int = 10, bucket
 
 def main() -> int:
     args = parse_args()
+    try:
+        since = resolve_since_filter(args.since, args.since_hours)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     stats = summarize(
         Path(args.path),
-        since=parse_date_start(args.since),
+        since=since,
         until=parse_date_end(args.until),
         exclude_test=args.exclude_test,
     )

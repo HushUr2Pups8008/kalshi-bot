@@ -1,10 +1,12 @@
 import json
+from datetime import datetime, timezone
 
 from scripts.market_source_hints_diagnostics import (
     filter_examples_by_bucket,
     format_json_summary,
     parse_date_end,
     parse_date_start,
+    resolve_since_filter,
     print_summary,
     summarize,
 )
@@ -116,6 +118,62 @@ def test_summarize_respects_date_filter_and_exclude_test():
         assert stats["by_ticker"]["KXNEW"] == 1
         assert "KXOLD" not in stats["by_ticker"]
         assert "KXTEST-SYNTH" not in stats["by_ticker"]
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_resolve_since_filter_uses_rolling_since_hours_when_no_date_since():
+    now = datetime(2026, 4, 12, 12, 0, tzinfo=timezone.utc)
+
+    since = resolve_since_filter(since_arg=None, since_hours=6, now=now)
+
+    assert since == datetime(2026, 4, 12, 6, 0, tzinfo=timezone.utc)
+
+
+def test_resolve_since_filter_keeps_explicit_date_since_over_since_hours():
+    now = datetime(2026, 4, 12, 12, 0, tzinfo=timezone.utc)
+
+    since = resolve_since_filter(since_arg="2026-04-11", since_hours=6, now=now)
+
+    assert since == parse_date_start("2026-04-11")
+
+
+def test_summarize_supports_rolling_since_hours_filter():
+    tmp = make_tmp_dir("market_source_hints_diagnostics")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXOLD",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [],
+                    "ts": "2026-04-12T05:59:59+00:00",
+                },
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXRECENT",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [],
+                    "ts": "2026-04-12T06:00:00+00:00",
+                },
+            ],
+        )
+        since = resolve_since_filter(
+            since_arg=None,
+            since_hours=6,
+            now=datetime(2026, 4, 12, 12, 0, tzinfo=timezone.utc),
+        )
+
+        stats = summarize(path, since=since, until=None)
+
+        assert stats["diagnostic_records"] == 1
+        assert stats["by_ticker"]["KXRECENT"] == 1
+        assert "KXOLD" not in stats["by_ticker"]
     finally:
         cleanup_tmp_dir(tmp)
 
