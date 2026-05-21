@@ -19,6 +19,7 @@ class KalshiMarket:
     subtitle:         str = ""
     result:           str = ""
     regime_weights:   dict[str, float] = field(default_factory=dict)
+    market_metadata:  dict[str, str] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # Post-P0 pricing surface (LD-2). All Optional with defaults so legacy
