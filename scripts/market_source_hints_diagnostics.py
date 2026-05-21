@@ -10,6 +10,7 @@ endpoints, or feed readiness/admission/trading decisions.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -52,6 +53,12 @@ def parse_args() -> argparse.Namespace:
     add_until_arg(parser, help_text="Inclusive end date in YYYY-MM-DD")
     add_top_arg(parser, default=10, help_text="Max rows in grouped sections")
     parser.add_argument("--recent", type=int, default=10, help="Max recent diagnostic examples")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit machine-readable JSON diagnostics instead of the human-readable report",
+    )
     add_exclude_test_arg(
         parser,
         help_text="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
@@ -151,6 +158,57 @@ def _fmt_bucket(bucket: dict[str, Any], *, max_tickers: int = 5) -> str:
     ticker_text = ", ".join(tickers[:max_tickers]) if tickers else "n/a"
     extra = "" if len(tickers) <= max_tickers else f", +{len(tickers) - max_tickers} more"
     return f"{bucket['count']} — {bucket['description']} — tickers: {ticker_text}{extra}"
+
+
+def _counter_to_dict(counter: Counter[str], top: int) -> dict[str, int]:
+    return {key: count for key, count in counter.most_common(top)}
+
+
+def _json_example(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ts": row["ts"].astimezone(timezone.utc).isoformat() if row.get("ts") is not None else None,
+        "ticker": row.get("ticker") or "",
+        "mode": row.get("mode") or "unknown",
+        "shadow_only": row.get("shadow_only") is True,
+        "target_count": int(row.get("target_count") or 0),
+        "rejected_label_count": int(row.get("rejected_label_count") or 0),
+    }
+
+
+def format_json_summary(stats: dict[str, Any], top: int = 10, recent: int = 10) -> str:
+    """Return machine-readable diagnostics without changing any runtime behavior."""
+
+    top = max(1, top)
+    recent = max(0, recent)
+    payload = {
+        "schema_version": 1,
+        "diagnostic_only": True,
+        "non_consumption": "not consumed by readiness/admission/scoring/routing/trading",
+        "path": str(stats["path"]),
+        "counts": {
+            "lines_total": int(stats["lines_total"]),
+            "lines_malformed": int(stats["lines_malformed"]),
+            "records_kept": int(stats["records_kept"]),
+            "diagnostic_records": int(stats["diagnostic_records"]),
+            "shadow_only_records": int(stats["shadow_only_records"]),
+            "non_shadow_records": int(stats["non_shadow_records"]),
+            "records_with_targets": int(stats["records_with_targets"]),
+            "records_with_rejected_labels": int(stats["records_with_rejected_labels"]),
+            "child_shadow_records": int(stats["child_shadow_records"]),
+            "target_query_count": int(stats["target_query_count"]),
+            "target_feed_url_count": int(stats["target_feed_url_count"]),
+        },
+        "counters": {
+            "by_mode": _counter_to_dict(stats["by_mode"], top),
+            "by_source": _counter_to_dict(stats["by_source"], top),
+            "by_source_domain": _counter_to_dict(stats["by_source_domain"], top),
+            "by_ticker": _counter_to_dict(stats["by_ticker"], top),
+            "by_rejected_reason": _counter_to_dict(stats["by_rejected_reason"], top),
+        },
+        "operator_review_buckets": stats.get("operator_review_buckets", {}),
+        "examples": [_json_example(row) for row in (stats.get("examples") or [])[:recent]],
+    }
+    return json.dumps(payload, indent=2, sort_keys=True)
 
 
 def summarize(
@@ -309,7 +367,10 @@ def main() -> int:
         until=parse_date_end(args.until),
         exclude_test=args.exclude_test,
     )
-    print_summary(stats, top=max(1, args.top), recent=max(0, args.recent))
+    if args.json_output:
+        print(format_json_summary(stats, top=max(1, args.top), recent=max(0, args.recent)))
+    else:
+        print_summary(stats, top=max(1, args.top), recent=max(0, args.recent))
     return 0
 
 
