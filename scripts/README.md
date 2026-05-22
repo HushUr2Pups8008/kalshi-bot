@@ -44,6 +44,7 @@ Common read-only operator entrypoints are exposed through `make`:
 | `daily_review.py` | Pipeline-shaped daily review report. |
 | `decision_funnel_summary.py` | Concise decision funnel summary for structured trade logs. |
 | `freshness_diagnostics.py` | Source freshness / latency diagnostics. |
+| `market_source_hints_diagnostics.py` | MarketSourceHints diagnostic-only review aid for shadow/advisory records; exposed as `make msh-diagnostics`. |
 | `match_quality_diagnostics.py` | Headline-to-market match quality diagnostics. |
 | `match_suppression_audit.py` | Audit for `MATCH_SUPPRESSION_CANDIDATE` events. |
 | `observability_completeness_review.py` | Observability completeness review for Stage 4.2. |

@@ -32,7 +32,6 @@ from utils.diagnostics_script_helpers import (
     parse_date_start,
     parse_iso_ts,
 )
-from utils.reporting_helpers import DEFAULT_CURRENT_STATE_WINDOW_HOURS
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
 DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "live" / "trades.jsonl"
@@ -53,7 +52,7 @@ def parse_args() -> argparse.Namespace:
         help_text=(
             "Path to trade-log file or root "
             "(default: logs/trades/live/trades.jsonl; pass logs/trades/ for archive scans; "
-            f"default window: last {DEFAULT_CURRENT_STATE_WINDOW_HOURS} hours when dates omitted)"
+            "use --since or --since-hours to apply a review window)"
         ),
     )
     add_since_arg(parser, help_text="Inclusive start date in YYYY-MM-DD")

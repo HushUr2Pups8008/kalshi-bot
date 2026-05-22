@@ -1,5 +1,8 @@
 import json
-from datetime import datetime, timezone
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from scripts.market_source_hints_diagnostics import (
     filter_examples_by_bucket,
@@ -11,6 +14,124 @@ from scripts.market_source_hints_diagnostics import (
     summarize,
 )
 from tests._helpers import cleanup_tmp_dir, make_tmp_dir, write_jsonl
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MSH_DIAGNOSTIC_TOKEN = "MARKET_SOURCE_HINT_DIAGNOSTIC"
+
+
+def test_cli_help_does_not_claim_an_implicit_default_time_window():
+    result = subprocess.run(
+        [sys.executable, "scripts/market_source_hints_diagnostics.py", "--help"],
+        cwd=REPO_ROOT,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    normalized_help = " ".join(result.stdout.split())
+
+    assert "default window" not in normalized_help
+    assert "Rolling lookback window in hours when --since is not provided" in normalized_help
+
+
+def test_cli_since_hours_filters_json_summary_to_recent_diagnostic_records():
+    tmp = make_tmp_dir("market_source_hints_cli_since_hours")
+    try:
+        path = tmp / "trades.jsonl"
+        now = datetime.now(timezone.utc)
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXOLD",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [],
+                    "ts": (now - timedelta(hours=2)).isoformat(),
+                },
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXRECENT",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [],
+                    "ts": now.isoformat(),
+                },
+            ],
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "scripts/market_source_hints_diagnostics.py",
+                "--path",
+                str(path),
+                "--since-hours",
+                "1",
+                "--json",
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+        payload = json.loads(result.stdout)
+        assert payload["counts"]["diagnostic_records"] == 1
+        assert payload["counters"]["by_ticker"] == {"KXRECENT": 1}
+        assert payload["examples"][0]["ticker"] == "KXRECENT"
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_cli_since_hours_rejects_non_positive_values_before_scanning():
+    tmp = make_tmp_dir("market_source_hints_cli_since_hours")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(path, [])
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "scripts/market_source_hints_diagnostics.py",
+                "--path",
+                str(path),
+                "--since-hours",
+                "0",
+                "--json",
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+        )
+
+        assert result.returncode == 2
+        assert "--since-hours must be greater than 0" in result.stderr
+        assert result.stdout == ""
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_market_source_hint_diagnostics_stay_out_of_behavioral_consumers():
+    allowed_paths = {
+        Path("main.py"),
+        Path("trading/paper_trader.py"),
+        Path("utils/logger.py"),
+        Path("scripts/market_source_hints_diagnostics.py"),
+        Path("tests/test_main_pipeline.py"),
+        Path("tests/test_market_source_hints.py"),
+        Path("tests/test_market_source_hints_diagnostics.py"),
+        Path("tests/test_paper_trader.py"),
+    }
+    observed_paths = {
+        path.relative_to(REPO_ROOT)
+        for path in REPO_ROOT.rglob("*.py")
+        if MSH_DIAGNOSTIC_TOKEN in path.read_text(encoding="utf-8", errors="ignore")
+    }
+
+    assert observed_paths <= allowed_paths
 
 
 def test_summarize_collects_shadow_only_source_hint_diagnostics():
