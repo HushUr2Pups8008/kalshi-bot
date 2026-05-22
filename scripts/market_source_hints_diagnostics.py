@@ -53,7 +53,7 @@ def parse_args() -> argparse.Namespace:
         help_text=(
             "Path to trade-log file or root "
             "(default: logs/trades/live/trades.jsonl; pass logs/trades/ for archive scans; "
-            f"default window: last {DEFAULT_CURRENT_STATE_WINDOW_HOURS} hours when dates omitted)"
+            "use --since or --since-hours to apply a review window)"
         ),
     )
     add_since_arg(parser, help_text="Inclusive start date in YYYY-MM-DD")

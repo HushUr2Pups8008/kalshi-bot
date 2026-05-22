@@ -100,11 +100,12 @@ Each target includes:
 
 ## Detailed diagnostic CLI
 
-For a deeper read-only analysis of emitted records, run:
+For a deeper read-only analysis of emitted records, use this diagnostic-only review aid:
 
 ```bash
 .venv/bin/python scripts/market_source_hints_diagnostics.py --path logs/trades/live/trades.jsonl --exclude-test
 .venv/bin/python scripts/market_source_hints_diagnostics.py --path logs/trades/live/trades.jsonl --exclude-test --since-hours 24
+make msh-diagnostics
 .venv/bin/python scripts/market_source_hints_diagnostics.py --path logs/trades/live/trades.jsonl --exclude-test --json
 .venv/bin/python scripts/market_source_hints_diagnostics.py --path logs/trades/live/trades.jsonl --exclude-test --bucket safety_anomaly
 .venv/bin/python scripts/market_source_hints_diagnostics.py --path logs/trades/live/trades.jsonl --exclude-test --json --bucket rejected_source_labels_present

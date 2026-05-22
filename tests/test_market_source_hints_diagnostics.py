@@ -1,5 +1,7 @@
 import json
+import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 
 from scripts.market_source_hints_diagnostics import (
     filter_examples_by_bucket,
@@ -11,6 +13,45 @@ from scripts.market_source_hints_diagnostics import (
     summarize,
 )
 from tests._helpers import cleanup_tmp_dir, make_tmp_dir, write_jsonl
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MSH_DIAGNOSTIC_TOKEN = "MARKET_SOURCE_HINT_DIAGNOSTIC"
+
+
+def test_cli_help_does_not_claim_an_implicit_default_time_window():
+    result = subprocess.run(
+        ["python3", "scripts/market_source_hints_diagnostics.py", "--help"],
+        cwd=REPO_ROOT,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    normalized_help = " ".join(result.stdout.split())
+
+    assert "default window" not in normalized_help
+    assert "Rolling lookback window in hours when --since is not provided" in normalized_help
+
+
+def test_market_source_hint_diagnostics_stay_out_of_behavioral_consumers():
+    allowed_paths = {
+        Path("main.py"),
+        Path("trading/paper_trader.py"),
+        Path("utils/logger.py"),
+        Path("scripts/market_source_hints_diagnostics.py"),
+        Path("tests/test_main_pipeline.py"),
+        Path("tests/test_market_source_hints.py"),
+        Path("tests/test_market_source_hints_diagnostics.py"),
+        Path("tests/test_paper_trader.py"),
+    }
+    observed_paths = {
+        path.relative_to(REPO_ROOT)
+        for path in REPO_ROOT.rglob("*.py")
+        if MSH_DIAGNOSTIC_TOKEN in path.read_text(encoding="utf-8", errors="ignore")
+    }
+
+    assert observed_paths <= allowed_paths
 
 
 def test_summarize_collects_shadow_only_source_hint_diagnostics():

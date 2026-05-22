@@ -389,6 +389,9 @@ def test_operator_shadow_rollout_doc_covers_diagnostics_and_safety_contract():
         "fail closed to empty targets or rejected labels",
         "never broaden search or create executable signals",
         "_markets_to_queries",
+        "scripts/market_source_hints_diagnostics.py",
+        "msh-diagnostics",
+        "diagnostic-only review aid",
     ]
     for phrase in required_phrases:
         assert phrase in text

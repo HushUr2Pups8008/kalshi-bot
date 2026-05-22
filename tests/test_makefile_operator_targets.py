@@ -37,3 +37,10 @@ def test_makefile_exposes_phase2_and_governance_operator_targets():
     assert "scripts/governance_decision_review.py" in _make_dry_run("governance-review")
     assert "bash scripts/check_soak_invariant.sh" in _make_dry_run("soak-invariant")
     assert "bash scripts/precommit_hook_health_audit.sh" in _make_dry_run("hook-health")
+
+
+def test_makefile_exposes_market_source_hints_diagnostics_target():
+    out = _make_dry_run("msh-diagnostics")
+
+    assert ".venv/bin/python scripts/market_source_hints_diagnostics.py" in out
+    assert "--exclude-test" in out
