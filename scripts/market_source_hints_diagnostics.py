@@ -32,7 +32,6 @@ from utils.diagnostics_script_helpers import (
     parse_date_start,
     parse_iso_ts,
 )
-from utils.reporting_helpers import DEFAULT_CURRENT_STATE_WINDOW_HOURS
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
 DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades" / "live" / "trades.jsonl"
