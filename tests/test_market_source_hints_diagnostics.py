@@ -1,6 +1,7 @@
 import json
 import subprocess
-from datetime import datetime, timezone
+import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from scripts.market_source_hints_diagnostics import (
@@ -21,7 +22,7 @@ MSH_DIAGNOSTIC_TOKEN = "MARKET_SOURCE_HINT_DIAGNOSTIC"
 
 def test_cli_help_does_not_claim_an_implicit_default_time_window():
     result = subprocess.run(
-        ["python3", "scripts/market_source_hints_diagnostics.py", "--help"],
+        [sys.executable, "scripts/market_source_hints_diagnostics.py", "--help"],
         cwd=REPO_ROOT,
         check=True,
         text=True,
@@ -32,6 +33,85 @@ def test_cli_help_does_not_claim_an_implicit_default_time_window():
 
     assert "default window" not in normalized_help
     assert "Rolling lookback window in hours when --since is not provided" in normalized_help
+
+
+def test_cli_since_hours_filters_json_summary_to_recent_diagnostic_records():
+    tmp = make_tmp_dir("market_source_hints_cli_since_hours")
+    try:
+        path = tmp / "trades.jsonl"
+        now = datetime.now(timezone.utc)
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXOLD",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [],
+                    "ts": (now - timedelta(hours=2)).isoformat(),
+                },
+                {
+                    "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                    "ticker": "KXRECENT",
+                    "mode": "shadow",
+                    "shadow_only": True,
+                    "targets": [],
+                    "ts": now.isoformat(),
+                },
+            ],
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "scripts/market_source_hints_diagnostics.py",
+                "--path",
+                str(path),
+                "--since-hours",
+                "1",
+                "--json",
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+        payload = json.loads(result.stdout)
+        assert payload["counts"]["diagnostic_records"] == 1
+        assert payload["counters"]["by_ticker"] == {"KXRECENT": 1}
+        assert payload["examples"][0]["ticker"] == "KXRECENT"
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_cli_since_hours_rejects_non_positive_values_before_scanning():
+    tmp = make_tmp_dir("market_source_hints_cli_since_hours")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(path, [])
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "scripts/market_source_hints_diagnostics.py",
+                "--path",
+                str(path),
+                "--since-hours",
+                "0",
+                "--json",
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+        )
+
+        assert result.returncode == 2
+        assert "--since-hours must be greater than 0" in result.stderr
+        assert result.stdout == ""
+    finally:
+        cleanup_tmp_dir(tmp)
 
 
 def test_market_source_hint_diagnostics_stay_out_of_behavioral_consumers():
