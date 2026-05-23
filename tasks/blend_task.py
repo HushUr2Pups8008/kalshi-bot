@@ -24,7 +24,10 @@ from kalshi import KalshiMarket
 from tasks import evidence_store
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
 from tasks.trade_readiness_gate import ReadinessDecision, evaluate_readiness
-from utils.logger import trade_log, write_trade_log_async
+from utils.logger import get_logger, trade_log, write_trade_log_async
+
+
+log = get_logger("blend_task")
 
 
 class BlendTaskError(Exception):
@@ -273,6 +276,10 @@ class BlendTask:
         try:
             await self._trading_queue.put(candidate)
         except Exception as exc:
+            log.warning(
+                "EXEC-002 reverting series guard for %s after queue failure: %s",
+                series_prefix, exc,
+            )
             self._recent_series_enqueues.pop(series_prefix, None)
             raise QueueInsertionError(f"failed to enqueue {ticker}: {exc}") from exc
 
