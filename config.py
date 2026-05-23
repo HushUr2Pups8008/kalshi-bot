@@ -1083,10 +1083,12 @@ class BotConfig:
     # about to enqueue a candidate, it checks whether another candidate
     # from the same Kalshi series prefix enqueued within this window;
     # if so, the new candidate is suppressed with reason
-    # `series_correlation_in_window`. Default 1h; setting `=0` disables
-    # the guard entirely (operator escape hatch).
+    # `series_correlation_in_window`. Default 1h; any value `<= 0`
+    # disables the guard entirely (operator escape hatch). Negative
+    # env values are clamped to 0 so `-300` cannot silently bypass the
+    # guard via the `window > 0` short-circuit at tasks/blend_task.py.
     series_correlation_window_seconds: int = field(
-        default_factory=lambda: int(os.getenv("SERIES_CORRELATION_WINDOW_SECONDS", "3600"))
+        default_factory=lambda: max(0, int(os.getenv("SERIES_CORRELATION_WINDOW_SECONDS", "3600")))
     )
 
     # Go-live gate thresholds -- evaluated by --go-live before allowing confirmation.
