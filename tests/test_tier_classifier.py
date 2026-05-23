@@ -259,6 +259,19 @@ def test_tier_of_path_handles_absolute_paths(tmp_path, monkeypatch):
     assert tier_of_path(abs_path, repo_root=repo_root) == "T3"
 
 
+def test_tier_of_path_absolute_path_outside_repo_root_returns_t3(tmp_path):
+    """An absolute path that does NOT live under the configured repo_root
+    cannot be reduced to a repo-relative path and so matches no rule.
+    The classifier must fail-safe to T3 in that branch (per project rule
+    'when in doubt, route to T3'). Without this test, the first time the
+    branch fires in production — e.g. a tooling bug passes a stray /tmp
+    path — the classification would silently default but the gap would
+    not have been exercised at build time, weakening the fail-safe
+    guarantee for the I-13 framework readiness integration test."""
+    outside_abs = Path("/tmp/totally_outside_the_repo/some_module.py")
+    assert tier_of_path(outside_abs, repo_root=tmp_path) == "T3"
+
+
 def test_tier_of_path_specific_known_files(tmp_path, monkeypatch):
     """Spot-check the canonical mappings from §2 / §3 I-5 to catch
     accidental rule reordering. Each entry here corresponds to a load-

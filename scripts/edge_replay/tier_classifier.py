@@ -57,7 +57,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Final, Iterable, Literal
 
 __all__ = [
     "PATH_TIER_RULES",
@@ -268,8 +268,9 @@ PATH_TIER_RULES: list[dict[str, Any]] = [
 # Sentinel returned for "no rule matched"; the public classifier resolves
 # this to T3 (fail-safe direction). Keeping the sentinel separate from "T3"
 # lets the audit log distinguish "unknown path defaulted to T3" from
-# "matched a T3 rule explicitly".
-_UNKNOWN_PATH: Tier = "T3"
+# "matched a T3 rule explicitly". The tighter Literal annotation makes the
+# fail-safe target explicit to future readers.
+_UNKNOWN_PATH: Final[Literal["T3"]] = "T3"
 
 
 # ---------------------------------------------------------------------------
@@ -479,8 +480,9 @@ def classify_tier(
         rule_matched = "semantic:" + "+".join(reasons) + "->T3"
         max_tier_path = ""
     else:
-        rule_matched = f"path:{max_path_entry[0] or '<empty>'}->" + max_path_entry[1]
-        if max_path_entry[2] not in ("unknown_path_default", "empty_changed_paths_default"):
+        if max_path_entry[2] in ("unknown_path_default", "empty_changed_paths_default"):
+            rule_matched = f"path:{max_path_entry[0] or '<empty>'}->{max_path_entry[1]}"
+        else:
             rule_matched = f"path:{max_path_entry[2]}->{max_path_entry[1]}"
         max_tier_path = max_path_entry[0]
 
