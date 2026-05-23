@@ -55,7 +55,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Final
+from typing import Any, Callable, Final, Literal
 
 __all__ = ["capture_llm_response"]
 
@@ -206,16 +206,25 @@ def _get_hardware_backend_class() -> str | None:
 
 
 def _canonical_json(obj: Any) -> str:
-    """Order-stable, separator-stable JSON for content-addressing."""
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    """Order-stable, separator-stable JSON for content-addressing.
+
+    ``allow_nan=False`` ensures NaN / Infinity in a captured response raise
+    immediately rather than producing non-standard JSON tokens that strict
+    parsers (downstream I-2 reader, JavaScript JSON.parse, Go encoding/json)
+    cannot round-trip. Fail-fast is safer than silent corruption per
+    Codex / security-reviewer Q9.
+    """
+    return json.dumps(
+        obj,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
 
 
 def _sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _hash_text(text: str) -> str:
-    return _sha256_hex(text)
 
 
 def _hash_canonical(obj: Any) -> str:
@@ -267,6 +276,17 @@ def _ensure_parent_dir(path: Path) -> None:
 
 
 def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
+    """Append a single JSONL record to ``path``.
+
+    Single-writer assumption: POSIX guarantees atomic writes only for
+    payloads under ``PIPE_BUF`` (4096 bytes on Linux) on pipes, NOT on
+    regular files. A large captured response may exceed this, so two
+    concurrent multi-process writers can interleave partial lines and
+    produce corrupt JSON. kalshi-bot is single-process by deployment
+    (one launchd job ``com.jake.kalshi-bot``), so this is acceptable
+    for Phase 1. The I-2 SQLite migration with WAL mode fixes this
+    structurally and is the correct fix for any multi-writer future.
+    """
     line = json.dumps(record, ensure_ascii=False, sort_keys=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(line + "\n")
@@ -283,7 +303,7 @@ def capture_llm_response(
     prompt_template: str,
     prompt_filled: str,
     model_id: str,
-    endpoint_type: str,
+    endpoint_type: Literal["openai_compat", "native"],
     request_payload: dict[str, Any],
     response: Any,
     repeat_call: Callable[[], Any] | None = None,
@@ -344,8 +364,8 @@ def capture_llm_response(
         # Sampler + prompt hashes.
         # ------------------------------------------------------------------
         sampler_fields = _extract_sampler_fields(request_payload)
-        prompt_template_hash = _hash_text(prompt_template)
-        prompt_filled_hash = _hash_text(prompt_filled)
+        prompt_template_hash = _sha256_hex(prompt_template)
+        prompt_filled_hash = _sha256_hex(prompt_filled)
         response_hash = _hash_canonical(response)
 
         # ------------------------------------------------------------------

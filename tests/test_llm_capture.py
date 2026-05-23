@@ -568,3 +568,66 @@ def test_capture_appends_one_line_per_call(monkeypatch, tmp_path):
         )
     rows = _read_jsonl(tmp_path / "llm_capture.jsonl")
     assert [r["row_id"] for r in rows] == ["r0", "r1", "r2", "r3", "r4"]
+
+
+# ---------------------------------------------------------------------------
+# Response-type coverage (python-reviewer LOW: bare-string response path).
+# ---------------------------------------------------------------------------
+
+
+def test_capture_handles_string_response(monkeypatch, tmp_path):
+    """signal_analyzer passes ``response_text`` (extracted string) as
+    ``response``. The capture record must preserve the string verbatim
+    and compute ``response_hash`` over its canonical-JSON serialization
+    (a quoted JSON string literal). This locks the I-2 reader contract
+    for the string-response path that production exercises today."""
+    import hashlib
+    import json as _json
+
+    mod = _fresh_module(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "_lookup_model_digest", lambda model_id: "d")
+    monkeypatch.setattr(mod, "_lookup_ollama_version", lambda: "v")
+    monkeypatch.setattr(mod, "_lookup_hardware_backend_class", lambda: "h")
+
+    payload_text = "plain text from LLM"
+    mod.capture_llm_response(
+        row_id="str-resp",
+        prompt_template="t",
+        prompt_filled="p",
+        model_id="m",
+        endpoint_type="openai_compat",
+        request_payload={},
+        response=payload_text,
+    )
+    rec = _read_jsonl(tmp_path / "llm_capture.jsonl")[0]
+    assert rec["response"] == payload_text
+    expected_hash = hashlib.sha256(
+        _json.dumps(payload_text, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False, allow_nan=False).encode("utf-8")
+    ).hexdigest()
+    assert rec["response_hash"] == expected_hash
+
+
+def test_capture_rejects_nan_in_response(monkeypatch, tmp_path):
+    """Per security-reviewer Q9: NaN / Infinity in a response must
+    fail-fast inside the capture path rather than produce non-standard
+    JSON that the I-2 reader (or external JSON.parse) cannot consume.
+    The fail-soft outer handler swallows the resulting ValueError so
+    production behavior is unchanged."""
+    mod = _fresh_module(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "_lookup_model_digest", lambda model_id: "d")
+    monkeypatch.setattr(mod, "_lookup_ollama_version", lambda: "v")
+    monkeypatch.setattr(mod, "_lookup_hardware_backend_class", lambda: "h")
+
+    mod.capture_llm_response(
+        row_id="nan-resp",
+        prompt_template="t",
+        prompt_filled="p",
+        model_id="m",
+        endpoint_type="native",
+        request_payload={},
+        response={"bad": float("nan")},
+    )
+    # The capture should have swallowed the ValueError raised by
+    # allow_nan=False; no JSONL line should be written.
+    assert not (tmp_path / "llm_capture.jsonl").exists()

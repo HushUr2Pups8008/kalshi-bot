@@ -27,6 +27,7 @@ logs/trades/
 logs/service/
 logs/tests/
 logs/governance/
+logs/edge_replay/
 
 # Test temp directories
 tests/_tmp_*/

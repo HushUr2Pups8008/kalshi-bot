@@ -170,8 +170,11 @@ def parse_llm_response_to_decision(
 
 
 import hashlib
+import logging as _i3_logging
 import time
 import urllib.request
+
+_i3_log = _i3_logging.getLogger(__name__)
 
 
 def _i3_capture_governance_llm_call(
@@ -192,7 +195,11 @@ def _i3_capture_governance_llm_call(
     its own re-invocation policy for governance native endpoint).
 
     Row-id is constructed from a sha256 of (system+user) plus a
-    millisecond timestamp so concurrent governance calls do not collide.
+    nanosecond timestamp (``time.time_ns()``) so concurrent governance
+    calls within the same millisecond do not collide on the same row_id.
+    The I-2 SQLite migration may treat row_id as a unique key, so
+    collision avoidance is a forward-compatibility requirement.
+
     Endpoint type is ``"native"`` because this caller uses Ollama's
     ``/api/generate`` (NOT ``/chat/completions``); CLAUDE.md gotcha:
     ``think: False`` only works on the native endpoint, so cache-key
@@ -202,7 +209,7 @@ def _i3_capture_governance_llm_call(
         from scripts.edge_replay.llm_capture import capture_llm_response
 
         content_hash = hashlib.sha256((system + "\n" + user).encode("utf-8")).hexdigest()[:12]
-        row_id = f"gov::{content_hash}::{int(time.time() * 1000)}"
+        row_id = f"gov::{content_hash}::{time.time_ns()}"
         capture_llm_response(
             row_id=row_id,
             prompt_template=system,
@@ -212,9 +219,10 @@ def _i3_capture_governance_llm_call(
             request_payload=payload,
             response=response_text,
             repeat_call=None,
+            logger=_i3_log,
         )
-    except Exception:  # noqa: BLE001 — additive hook, never fail production
-        pass
+    except Exception as exc:  # noqa: BLE001 — additive hook, never fail production
+        _i3_log.debug("I-3 governance capture wrapper swallowed: %s", exc)
 
 
 class LocalQwenLLM:
