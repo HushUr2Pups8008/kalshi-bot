@@ -678,31 +678,51 @@ class MarketMatcher:
             )
 
             if ENABLE_MATCH_SUPPRESSION_DEBUG and _meets_suppression_criteria:
-                await write_trade_log_async(
-                    trade_log.log_match_suppression_candidate,
-                    source=news.source,
-                    headline=news.headline,
-                    ticker=market.ticker,
-                    match_score=score,
-                    overlap_count=len(overlap),
-                    overlap_ratio=overlap_ratio,
-                    heuristic_flags=heuristic_flags,
-                    matched_tokens=sorted(overlap),
-                )
+                # MATCH-001 (operator-directed swallow-with-warning):
+                # observability write must not abort find_candidates.
+                # Matches series-fetch precedent at line ~460.
+                try:
+                    await write_trade_log_async(
+                        trade_log.log_match_suppression_candidate,
+                        source=news.source,
+                        headline=news.headline,
+                        ticker=market.ticker,
+                        match_score=score,
+                        overlap_count=len(overlap),
+                        overlap_ratio=overlap_ratio,
+                        heuristic_flags=heuristic_flags,
+                        matched_tokens=sorted(overlap),
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "MATCH-001 diagnostic write failed for %s: %s",
+                        market.ticker,
+                        exc,
+                    )
 
             if ENABLE_LOW_QUALITY_MATCH_SUPPRESSION and _meets_suppression_criteria:
                 reason = "+".join(sorted(flag_set))
-                await write_trade_log_async(
-                    trade_log.log_match_suppressed,
-                    source=news.source,
-                    headline=news.headline,
-                    ticker=market.ticker,
-                    market_title=market.title,
-                    match_score=score,
-                    matched_tokens=sorted(overlap),
-                    heuristic_flags=heuristic_flags,
-                    reason=reason,
-                )
+                # MATCH-001 (operator-directed swallow-with-warning):
+                # suppression-write must not abort the matching loop;
+                # the `continue` below still fires on the success path.
+                try:
+                    await write_trade_log_async(
+                        trade_log.log_match_suppressed,
+                        source=news.source,
+                        headline=news.headline,
+                        ticker=market.ticker,
+                        market_title=market.title,
+                        match_score=score,
+                        matched_tokens=sorted(overlap),
+                        heuristic_flags=heuristic_flags,
+                        reason=reason,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "MATCH-001 suppression write failed for %s: %s",
+                        market.ticker,
+                        exc,
+                    )
                 log.debug(
                     "[SUPPRESSED] %s -> %s (score=%.3f flags=%s)",
                     news.headline[:60], market.ticker, score, reason,
