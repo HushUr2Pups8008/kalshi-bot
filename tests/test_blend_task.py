@@ -922,6 +922,16 @@ def test_series_prefix_extraction(ticker: str, expected_prefix: str) -> None:
     assert helper(ticker) == expected_prefix
 
 
+def test_series_prefix_raises_on_empty_ticker() -> None:
+    """Empty ticker must raise rather than return "" (silent-failure-hunter EXEC-002)."""
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
+        _bt_mod.BlendTask, "_series_prefix", None
+    )
+    assert helper is not None
+    with pytest.raises(ValueError):
+        helper("")
+
+
 @pytest.mark.asyncio
 async def test_fisa_replay_three_same_series_only_one_enqueues() -> None:
     """The 2026-05-01 FISA case (3 trades within 7s) must collapse to 1."""

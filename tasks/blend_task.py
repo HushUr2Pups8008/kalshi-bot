@@ -577,7 +577,14 @@ def _series_prefix(ticker: str) -> str:
     - `KXTRUMPIRAN-26MAY01` → `KXTRUMPIRAN`
     """
     if not ticker:
-        return ""
+        # Per rules/risk_review.md "prefer raising over swallowing on
+        # money-movement paths": an empty ticker would silently produce
+        # an empty-string guard key that would collide with other
+        # malformed tickers and create ambiguous suppression behavior.
+        # In production, ticker is never empty (KalshiMarket validation
+        # upstream); this raise surfaces invariant violations instead
+        # of masking them. (silent-failure-hunter finding 1 / EXEC-002.)
+        raise ValueError(f"_series_prefix: empty or null ticker: {ticker!r}")
     return ticker.split("-", 1)[0]
 
 
