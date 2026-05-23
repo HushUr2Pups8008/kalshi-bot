@@ -260,15 +260,21 @@ class BlendTask:
             regime_weights=regime_weights,
             regime_confidence=regime_confidence,
         )
+        # PROFIT-EXEC-002: record this enqueue as the latest for the series
+        # prefix BEFORE the queue put so the guard reflects state-on-attempt.
+        # If we recorded AFTER the put, a CancelledError (or other exception)
+        # between put and record would leave the candidate enqueued but the
+        # guard state unrecorded -- the next same-series candidate within the
+        # window would pass the guard, re-introducing the FISA multi-trade
+        # failure mode. Revert on enqueue failure via .pop() (tolerates
+        # already-reverted state) to keep dict consistent with the queue.
+        # (silent-failure-hunter finding 3 / EXEC-002.)
+        self._recent_series_enqueues[series_prefix] = time.monotonic()
         try:
             await self._trading_queue.put(candidate)
         except Exception as exc:
+            self._recent_series_enqueues.pop(series_prefix, None)
             raise QueueInsertionError(f"failed to enqueue {ticker}: {exc}") from exc
-
-        # PROFIT-EXEC-002: record this enqueue as the latest for the series
-        # prefix so subsequent same-series candidates within the window
-        # are suppressed.
-        self._recent_series_enqueues[series_prefix] = time.monotonic()
 
         return BlendTaskResult(
             market_ticker=ticker,
