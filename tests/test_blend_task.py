@@ -928,7 +928,7 @@ def test_series_prefix_raises_on_empty_ticker() -> None:
         _bt_mod.BlendTask, "_series_prefix", None
     )
     assert helper is not None
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"empty or null ticker"):
         helper("")
 
 
