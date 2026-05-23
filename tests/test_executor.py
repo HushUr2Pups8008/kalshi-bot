@@ -1084,7 +1084,6 @@ class TestCooldownSentinelOBS005:
     PROFIT-OBS-005 lands. The set-on-trade write at line ~171 is unaffected.
     """
 
-    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
     def test_all_last_traded_get_call_sites_use_neg_inf_sentinel(self):
         """Every `_last_traded.get(ticker, <default>)` must default to float('-inf')."""
         sites = _last_traded_get_lines()
@@ -1103,7 +1102,6 @@ class TestCooldownSentinelOBS005:
             + "\n".join(f"  line {ln}: {tx}" for ln, tx in bad_sites)
         )
 
-    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
     def test_paper_cooldown_call_site_uses_neg_inf(self):
         """Paper path (executor.py:208 area) — sentinel pinned for the paper site."""
         sites = _last_traded_get_lines()
@@ -1118,7 +1116,6 @@ class TestCooldownSentinelOBS005:
                 return
         pytest.fail("could not locate paper-mode `_last_traded.get(...)` call site")
 
-    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
     def test_live_cooldown_call_site_uses_neg_inf(self):
         """Live path (executor.py:276 area) — sentinel pinned for the live site."""
         sites = _last_traded_get_lines()
@@ -1132,7 +1129,6 @@ class TestCooldownSentinelOBS005:
                 return
         pytest.fail("could not locate live-mode `_last_traded.get(...)` call site")
 
-    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
     def test_paper_never_traded_runtime_behavior_under_small_monotonic(self, monkeypatch):
         """F1 (Codex review): runtime-behavior pin to complement the source-inspection pins.
 
@@ -1171,7 +1167,6 @@ class TestCooldownSentinelOBS005:
             f"(no cooldown trip and no sibling-branch regression); got: {result!r}"
         )
 
-    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
     def test_ci_conftest_no_longer_zeroes_cooldowns(self):
         """Spec §7 acceptance: tests/conftest.py:_ci_stub_env must drop the
         PAPER_TICKER_COOLDOWN=0 / LIVE_TICKER_COOLDOWN=0 stubs once the fix lands.

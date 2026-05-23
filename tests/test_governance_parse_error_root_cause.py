@@ -2,19 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import pytest
-
 from scripts import governance_monitor
 from tests.test_governance_monitor import _write_jsonl
 
 
-@pytest.mark.xfail(
-    reason=(
-        "PROFIT-GOV-003 not deployed: governance_monitor.py does not yet count "
-        "GOVERNANCE_DECISION_PARSE_ERROR missing_required_fields rows."
-    ),
-    strict=True,
-)
 def test_missing_required_fields_parse_error_counts_against_day_budget(tmp_path):
     log = tmp_path / "decisions.jsonl"
     _write_jsonl(

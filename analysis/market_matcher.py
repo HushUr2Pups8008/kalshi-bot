@@ -641,7 +641,20 @@ class MarketMatcher:
 
             flag_set = set(heuristic_flags)
             ticker_lower = market.ticker.lower()
-            _token_not_in_ticker = not any(token in ticker_lower for token in overlap)
+            # PROFIT-MATCH-001 (B') asymmetry fix: pre-fix predicate blocked
+            # suppression whenever ANY overlap token sat in the ticker — which
+            # preserved every entity-prefix-ticker match (e.g. `trump` ↔
+            # `KXMOCTRUMP25`) regardless of off-topic headlines. Post-fix:
+            # suppression is only blocked when at least ONE matched token is
+            # OUTSIDE the ticker text. Pure entity-in-ticker matches now
+            # suppress; coherent topic matches with non-ticker support tokens
+            # still survive. Substring containment over `ticker_lower` per
+            # spec §5.1 (NOT set-difference against `_tokenize(ticker)`, which
+            # fails because Kalshi tickers tokenize to a single hyphenated
+            # string).
+            _has_supporting_non_ticker_token = any(
+                token not in ticker_lower for token in overlap
+            )
             # Path A (original): near-threshold score + structural weakness.
             # Catches fragile matches that barely passed the score floor.
             _near_threshold_weak = (
@@ -660,36 +673,56 @@ class MarketMatcher:
             )
             _meets_suppression_criteria = (
                 bool(heuristic_flags)
-                and _token_not_in_ticker
+                and not _has_supporting_non_ticker_token
                 and (_near_threshold_weak or _pure_single_entity)
             )
 
             if ENABLE_MATCH_SUPPRESSION_DEBUG and _meets_suppression_criteria:
-                await write_trade_log_async(
-                    trade_log.log_match_suppression_candidate,
-                    source=news.source,
-                    headline=news.headline,
-                    ticker=market.ticker,
-                    match_score=score,
-                    overlap_count=len(overlap),
-                    overlap_ratio=overlap_ratio,
-                    heuristic_flags=heuristic_flags,
-                    matched_tokens=sorted(overlap),
-                )
+                # MATCH-001 (operator-directed swallow-with-warning):
+                # observability write must not abort find_candidates.
+                # Matches series-fetch precedent at line ~460.
+                try:
+                    await write_trade_log_async(
+                        trade_log.log_match_suppression_candidate,
+                        source=news.source,
+                        headline=news.headline,
+                        ticker=market.ticker,
+                        match_score=score,
+                        overlap_count=len(overlap),
+                        overlap_ratio=overlap_ratio,
+                        heuristic_flags=heuristic_flags,
+                        matched_tokens=sorted(overlap),
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "MATCH-001 diagnostic write failed for %s: %s",
+                        market.ticker,
+                        exc,
+                    )
 
             if ENABLE_LOW_QUALITY_MATCH_SUPPRESSION and _meets_suppression_criteria:
                 reason = "+".join(sorted(flag_set))
-                await write_trade_log_async(
-                    trade_log.log_match_suppressed,
-                    source=news.source,
-                    headline=news.headline,
-                    ticker=market.ticker,
-                    market_title=market.title,
-                    match_score=score,
-                    matched_tokens=sorted(overlap),
-                    heuristic_flags=heuristic_flags,
-                    reason=reason,
-                )
+                # MATCH-001 (operator-directed swallow-with-warning):
+                # suppression-write must not abort the matching loop;
+                # the `continue` below still fires on the success path.
+                try:
+                    await write_trade_log_async(
+                        trade_log.log_match_suppressed,
+                        source=news.source,
+                        headline=news.headline,
+                        ticker=market.ticker,
+                        market_title=market.title,
+                        match_score=score,
+                        matched_tokens=sorted(overlap),
+                        heuristic_flags=heuristic_flags,
+                        reason=reason,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "MATCH-001 suppression write failed for %s: %s",
+                        market.ticker,
+                        exc,
+                    )
                 log.debug(
                     "[SUPPRESSED] %s -> %s (score=%.3f flags=%s)",
                     news.headline[:60], market.ticker, score, reason,

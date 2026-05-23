@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import math
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable, Protocol
@@ -23,7 +24,10 @@ from kalshi import KalshiMarket
 from tasks import evidence_store
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
 from tasks.trade_readiness_gate import ReadinessDecision, evaluate_readiness
-from utils.logger import trade_log, write_trade_log_async
+from utils.logger import get_logger, trade_log, write_trade_log_async
+
+
+log = get_logger("blend_task")
 
 
 class BlendTaskError(Exception):
@@ -157,6 +161,12 @@ class BlendTask:
             cfg.is_paper_trading if is_paper_mode is None else is_paper_mode
         )
         self._now = now if now is not None else lambda: datetime.now(UTC)
+        # PROFIT-EXEC-002 series-correlation guard state. Maps series prefix
+        # (e.g. "KXFISAEXTEND") to the `time.monotonic()` value at which a
+        # candidate from that series was last successfully enqueued. The
+        # guard suppresses subsequent candidates from the same prefix
+        # within `cfg.series_correlation_window_seconds`.
+        self._recent_series_enqueues: dict[str, float] = {}
 
     async def process_fast_lane_result(
         self,
@@ -199,6 +209,22 @@ class BlendTask:
             blend_result.trade_blocked_reason
             or readiness.trade_blocked_reason
         )
+
+        # PROFIT-EXEC-002 series-correlation guard. Only fires if no upstream
+        # block already exists; the first candidate in a same-series burst
+        # still trades, subsequent ones within the configured window are
+        # suppressed via the OBS-003 SKIPPED stream.
+        series_prefix = _series_prefix(ticker)
+        if trade_blocked_reason is None:
+            window = cfg.series_correlation_window_seconds
+            if window > 0:
+                last_enqueued_ts = self._recent_series_enqueues.get(series_prefix)
+                if (
+                    last_enqueued_ts is not None
+                    and time.monotonic() - last_enqueued_ts < window
+                ):
+                    trade_blocked_reason = "series_correlation_in_window"
+
         evidence_ids = _evidence_ids_for_blend(
             recent_records=recent_records,
             trigger_evidence_id=(fast_lane_result.signal_meta or {}).get("trigger_evidence_id"),
@@ -237,9 +263,24 @@ class BlendTask:
             regime_weights=regime_weights,
             regime_confidence=regime_confidence,
         )
+        # PROFIT-EXEC-002: record this enqueue as the latest for the series
+        # prefix BEFORE the queue put so the guard reflects state-on-attempt.
+        # If we recorded AFTER the put, a CancelledError (or other exception)
+        # between put and record would leave the candidate enqueued but the
+        # guard state unrecorded -- the next same-series candidate within the
+        # window would pass the guard, re-introducing the FISA multi-trade
+        # failure mode. Revert on enqueue failure via .pop() (tolerates
+        # already-reverted state) to keep dict consistent with the queue.
+        # (silent-failure-hunter finding 3 / EXEC-002.)
+        self._recent_series_enqueues[series_prefix] = time.monotonic()
         try:
             await self._trading_queue.put(candidate)
         except Exception as exc:
+            log.warning(
+                "EXEC-002 reverting series guard for %s after queue failure: %s",
+                series_prefix, exc,
+            )
+            self._recent_series_enqueues.pop(series_prefix, None)
             raise QueueInsertionError(f"failed to enqueue {ticker}: {exc}") from exc
 
         return BlendTaskResult(
@@ -538,6 +579,26 @@ def _trade_candidate(
         readiness_decision=readiness,
         executed_price_cents=canonical_cents,
     )
+
+
+def _series_prefix(ticker: str) -> str:
+    """PROFIT-EXEC-002 — extract the Kalshi series prefix from a ticker.
+
+    Splits on `-` and returns the first component. Examples:
+    - `KXFISAEXTEND-26APR-MAY01` → `KXFISAEXTEND`
+    - `KXMOCTRUMP25-26-APR24` → `KXMOCTRUMP25`
+    - `KXTRUMPIRAN-26MAY01` → `KXTRUMPIRAN`
+    """
+    if not ticker:
+        # Per rules/risk_review.md "prefer raising over swallowing on
+        # money-movement paths": an empty ticker would silently produce
+        # an empty-string guard key that would collide with other
+        # malformed tickers and create ambiguous suppression behavior.
+        # In production, ticker is never empty (KalshiMarket validation
+        # upstream); this raise surfaces invariant violations instead
+        # of masking them. (silent-failure-hunter finding 1 / EXEC-002.)
+        raise ValueError(f"_series_prefix: empty or null ticker: {ticker!r}")
+    return ticker.split("-", 1)[0]
 
 
 def _regime_weights(market: KalshiMarket) -> dict[str, float]:
