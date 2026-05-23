@@ -23,7 +23,8 @@
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-05-16 (PROFIT-CUTOVER-001 / PROFIT-PHASE2-001 closed; active edge queue pointer corrected to PROFIT-EDGE-012 POST_FIX_NEW readiness) |
+| Last Updated | 2026-05-23 (Wave-1 backup-branch replay shipped via v0.30.2 / PR #16 — closes the open-fix bookkeeping flagged by `8b2473e` 2026-05-10; 5 backup-branch commits + 6 reviewer-driven follow-on remediations landed on `main`; 4 post-deploy observation canaries remain xfail-strict until soak completes; backup branch retained as forensic anchor through soak. See §2.2 Wave-1 Replay Closure for full SHA map.) |
+| Previously Updated | 2026-05-16 (PROFIT-CUTOVER-001 / PROFIT-PHASE2-001 closed; active edge queue pointer corrected to PROFIT-EDGE-012 POST_FIX_NEW readiness) |
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
@@ -179,7 +180,7 @@ Operator picked §C(b). `PROFIT-EDGE-011` is closed; execution moved to `PROFIT-
 
 | wave | status | gate |
 |---|---|---|
-| Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **HISTORICAL PLAN — original 2026-05-08 cleanup/observability bundle descoped; OBS-003 only shipped 2026-05-09; does NOT claim edge** | exempt under IC §16 Rule 2 (mechanical / observability / governance) |
+| Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **SHIPPED 2026-05-23 via v0.30.2** — 5 backup-branch commits replayed on `main` (PR #16 merged commit `d108558`; tag `v0.30.2` on `7dbfb47`). OBS-003 was already on main via `92b1d11`. Cluster does NOT claim edge — replay closes the open-fix bookkeeping flagged by `8b2473e` (2026-05-10 backup-branch verify). 4 post-deploy observation canaries (24h/48h/72h/7d) remain xfail-strict; close at soak completion. | exempt under IC §16 Rule 2 (mechanical / observability / governance) |
 | Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED POST-VERDICT** | Cycle-17 operator decision is closed; resume is gated on POST_FIX_NEW accumulation clearing IC §16 (earliest readiness re-check 2026-06-14). |
 | Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED POST-VERDICT — Lever B counterindicated** | loosening admission on a model with 0 IC §16-eligible slices on audited scorer widens losses without expected gain; same POST_FIX_NEW readiness gate as Wave-2. |
 | Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED POST-VERDICT** | each candidate fix needs replay evidence under audited scorer; same POST_FIX_NEW readiness gate as Wave-2. |
@@ -212,6 +213,43 @@ When that row exists, the slice it identifies (e.g., "Reuters × KXTRUMPCHINA ×
 | Bot health | GREEN (`scripts/bothealth.sh` cycle-13) |
 | Gate-6 capacity | **AT RISK** — 0.663 reviewable fraction at 80/day budget; needs Path 1 (raise budget to ≥169) per `2026-05-06-gate-6-capacity-resolution-plan.md` |
 | §8.5.2 carve-out commits surfaced | 5 (3 INVOKED, 2 OUT-OF-SCOPE; gate 7 clean via attestation) |
+
+#### Wave-1 Replay Closure (2026-05-23 — v0.30.2)
+
+Closes the open-fix bookkeeping flagged by `8b2473e` ("backup-branch verify" Task B.4, 2026-05-10), which audited `origin/backup/wave-1-dry-run-2026-05-05` and found 5 of 6 commits still missing on `main`.
+
+**Replay path (PR #16, merged `d108558`, tag `v0.30.2` on release commit `7dbfb47`):**
+
+| Backup SHA | Ticket | Replay SHA on main | Notes |
+|---|---|---|---|
+| `e3d4e8d` | PROFIT-GOV-003 | `2b2c5fa` | `governance_monitor` path + event-type-set fix |
+| `0531367` | PROFIT-OBS-005 | `fd5d87a` | cooldown sentinel `0.0` → `float("-inf")` |
+| `edf38c1` | PROFIT-MATCH-001 (B') | `b50d6d3` | token-guard predicate inversion |
+| `5828ad2` | PROFIT-EDGE-004 A.1 | `cdfec79` | source-class classifier 10-token expansion (partial cherry-pick — VERSION/CHANGELOG/README hunks stripped because main already at 0.30.1) |
+| `9d6cce3` | PROFIT-EXEC-002 | `540ef54` | new series-correlation guard in BlendTask |
+| `921c275` | PROFIT-OBS-003 | already landed via `92b1d11` | skipped — equivalent on main since 2026-05-09 |
+
+**Reviewer-driven follow-on remediations landed on the same branch before merge** (silent-failure-hunter findings; operator-elected against the silent-failure-hunter's recommendations on MATCH-001):
+- `0127f84` — clamp `series_correlation_window_seconds` to non-negative (3-reviewer consensus)
+- `8117591` — `_series_prefix` raises on empty ticker (`risk_review.md` enforcement)
+- `1eb65aa` — record series enqueue BEFORE queue put with `.pop(prefix, None)` revert-on-fail (closes the `CancelledError` window that could re-introduce the FISA multi-trade scenario)
+- `a498d8b` — wrap MATCH-001 (B') suppression-writes in `try/except` (operator override matching pre-existing series-fetch precedent at `market_matcher.py:460`)
+- `76a571b` — pin empty-ticker `pytest.raises` via `match=` (python-reviewer nit)
+- `95fe040` — `log.warning` before guard revert (python-reviewer nit; adds module-level `log = get_logger("blend_task")`)
+
+**Wave-1 does not claim edge.** The cluster is mechanical/observability/governance per IC §16 Rule 2; the replay restores already-specced behavior that should have been on `main` since the original 2026-05-04 authorship. Edge claims remain gated on the POST_FIX_NEW corpus per row 2.2 above.
+
+**Post-deploy observation canaries** in `tests/test_wave1_postdeploy_validation_windows.py` remain `xfail-strict`. Operator closes each by appending the `<TICKET> Nh validation: PASS` line to `docs/_archive/governance/wave-1-post-deploy-observation-plan.md` then removing the corresponding decorator:
+- OBS-005 24h
+- OBS-003 48h
+- MATCH-001 72h
+- EXEC-002 7d
+
+**Backup branch `backup/wave-1-dry-run-2026-05-05` retained.** Slated for deletion only after the EXEC-002 7d observation window passes (earliest 2026-05-30 + soak success). Provides the only forensic anchor for the replay path if a rollback becomes necessary.
+
+**Known follow-ups deferred** (silent-failure-hunter findings filed but not blocking; paper-mode only, no live-money exposure):
+- `_recent_series_enqueues` unbounded growth in long-uptime processes (bounded by Kalshi ~9k series; reset on restart).
+- Pre-existing DB state-poisoning DoS at `trading/executor.py:98` (portfolio-seed writer with future-timestamp `latest_ts` could permanently block a ticker until restart). Surfaced by OBS-005 security review; NOT introduced by the replay.
 
 ### 2.3 EDGE-004 Closure Path
 
