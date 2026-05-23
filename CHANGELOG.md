@@ -19,6 +19,111 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.30.2] - 2026-05-23
+
+### Added
+
+- **PROFIT-EDGE-004 Lever A.1** — Source-class classifier in
+  [`main.py:_source_class_for_evidence`](main.py) gained 10 token
+  additions covering RSS feeds that had been silently bucketing as
+  `other`. Eight tokens land in the `official` branch (`department of
+  war`, `department of defense`, `un news`, `united nations`,
+  `european commission`, `press releases`, `international atomic
+  energy agency`, `iaea`) and two in the `news` branch (`defense
+  news`, `breaking defense`). The misclassification was actively
+  affecting `evidence_scorer` quality multipliers, the G2
+  source-diversity gate in `trade_readiness_gate`, and the MSH
+  telemetry surface added in PR #15 (2026-05-21). Phase 1a verdict on
+  2026-05-23 confirmed `REPLAY_AS_IS` after re-audit.
+- **PROFIT-EXEC-002** — Series-correlation guard in
+  [`tasks/blend_task.py`](tasks/blend_task.py) suppresses duplicate
+  same-series enqueues within a configurable window. Default
+  `SERIES_CORRELATION_WINDOW_SECONDS=3600` (1h);
+  `<= 0` disables the guard. Negative env values are clamped to 0 so
+  `-300` cannot silently bypass via the `window > 0` short-circuit
+  (silent-failure-hunter / python-reviewer / security-reviewer
+  consensus, addressed on-branch before merge). Eliminates the
+  FISA-style multi-trade scenario where three same-series candidates
+  fire within seconds of one another.
+
+### Fixed
+
+- **PROFIT-GOV-003** — `scripts/governance_monitor.py` path
+  construction no longer mis-uses the `KALSHI_HOME` env override;
+  event-type counters now match the `GOVERNANCE_DECISION_*` prefixed
+  names emitted in JSONL records (counters previously read zero on
+  all buckets). Adds `batch_aborted` boolean-field handling on
+  `GOVERNANCE_CYCLE_END` records. Deploy-canary
+  `test_missing_required_fields_parse_error_counts_against_day_budget`
+  closed (xfail removed).
+- **PROFIT-OBS-005** — Cooldown sentinel default in
+  [`trading/executor.py`](trading/executor.py) changed from `0.0` to
+  `float("-inf")` at both paper-mode (line 228) and live-mode
+  (line 306) cooldown lookup sites. Eliminates intermittent false
+  cooldown trips for never-traded tickers caused by
+  `time.monotonic() - 0.0` undercounting at process startup.
+  Removed 38 lines of CI-stub fixtures from `tests/conftest.py` that
+  were working around this exact bug; promoted 5 strict-xfail tests
+  in `TestCooldownSentinelOBS005` to unconditional passes. Deploy
+  canary closed (path + assertion bugs in the canary itself also
+  fixed: `executor.py` → `trading/executor.py`,
+  `.get(ticker, ...)` → `.get(analysis.market.ticker, ...)`).
+- **PROFIT-MATCH-001 (B')** — Token-guard predicate in
+  [`analysis/market_matcher.py`](analysis/market_matcher.py) inverted
+  from `_token_not_in_ticker = not any(token in ticker_lower for
+  token in overlap)` to `_has_supporting_non_ticker_token =
+  any(token not in ticker_lower for token in overlap)` (consumed via
+  `not _has_supporting_non_ticker_token`). Pure entity-in-ticker
+  matches (e.g., `trump` → `KXTRUMP-25A` with no other support
+  token) now correctly suppress; only when a non-ticker support
+  token is present does suppression block. Removes 7 strict-xfail
+  markers from `TestSuppressionTokenGuardMATCH001` and drops a dead
+  `_MATCH001_XFAIL_REASON` constant. The two new
+  `write_trade_log_async` calls (suppression-write + match-diagnostic)
+  are wrapped in `try/except` per operator override of the project
+  `prefer raising` rule, matching the series-fetch handler precedent.
+
+### Operational
+
+- `_series_prefix(ticker)` in `tasks/blend_task.py` now raises
+  `ValueError` on empty input rather than returning `""`. Defensive
+  raise consistent with `~/.claude/rules/risk_review.md`
+  (money-movement path) — production callers never produce empty
+  tickers, but the silent fallback would have masked upstream
+  invariant violations.
+- `_recent_series_enqueues[series_prefix] = time.monotonic()` is
+  now recorded BEFORE the trading-queue `put()` with a
+  `.pop(prefix, None)` revert in the except path. Closes the
+  `CancelledError` window where a candidate was enqueued but the
+  guard state was not recorded, which would have allowed the next
+  same-series candidate within the window to bypass EXEC-002 and
+  re-introduce the FISA multi-trade failure. Operator-visible
+  `log.warning` fires on the revert path.
+
+### Notes
+
+- This release replays five backup-branch commits from
+  `backup/wave-1-dry-run-2026-05-05` (authored 2026-05-04) that
+  never merged to `main` due to a stale 2026-05-10 closure audit
+  (`8b2473e`). Phase 0 fresh audit on 2026-05-23 confirmed five of
+  six commits still missing; PROFIT-OBS-003 was already landed on
+  `main` via `b775a99` / `92b1d11` / `c9df364` and was skipped.
+- The original 2026-05-04 backup-branch commit (`5828ad2`) also
+  carried a VERSION bump to `0.30.0`. That bump was stripped from
+  the replay because `main` had already shipped `0.30.1` (the
+  v0.30.0 published-broken hotfix path documented above). The
+  consolidated bump to `0.30.2` ships here.
+- The `v0.31.0` reservation in
+  [`docs/ROADMAP.md`](docs/ROADMAP.md) (first non-neutral LLM output
+  producing non-zero edge) is preserved.
+- Each replayed commit was reviewed by spec-compliance, python-quality
+  and (for high-risk commits) security-review + silent-failure-hunter
+  agents per `~/.claude/rules/agent_collaboration.md`. Findings
+  flagged as non-blocking nits during review were either addressed
+  on-branch or filed for follow-up.
+
+---
+
 ## [0.30.1] - 2026-05-13
 
 ### Fixed (P-7 status-filter regression)
