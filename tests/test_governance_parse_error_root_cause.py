@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import pytest
-
 from scripts import governance_monitor
 from tests.test_governance_monitor import _write_jsonl
 
