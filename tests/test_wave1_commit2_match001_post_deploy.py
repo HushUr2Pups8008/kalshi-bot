@@ -2,16 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="PROFIT-MATCH-001 deploy has not landed; token-guard xfail markers still exist.",
-)
 def test_match001_post_deploy_token_guard_marker_cleanup():
     tests = (ROOT / "tests/test_market_matcher.py").read_text()
     start = tests.index("class TestSuppressionTokenGuardMATCH001")
