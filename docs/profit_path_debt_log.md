@@ -251,6 +251,14 @@ Closes the open-fix bookkeeping flagged by `8b2473e` ("backup-branch verify" Tas
 - `_recent_series_enqueues` unbounded growth in long-uptime processes (bounded by Kalshi ~9k series; reset on restart).
 - Pre-existing DB state-poisoning DoS at `trading/executor.py:98` (portfolio-seed writer with future-timestamp `latest_ts` could permanently block a ticker until restart). Surfaced by OBS-005 security review; NOT introduced by the replay.
 
+#### v0.30.2 OOS Cohort Marker (2026-05-23T21:22:16Z)
+
+The bot restarted on the v0.30.2 release commit at **2026-05-23T21:22:16Z** (PID 19702, kickstart via launchctl after PR #16 merge). This timestamp is the formal start of the **post-v0.30.2 OOS cohort window** that the rapid-learning framework v2 (`docs/superpowers/specs/2026-05-23-paper-mode-rapid-learning-framework-design.md` §3 Q9) needs for an out-of-period replay corpus.
+
+The eventual I-1 corpus builder will consume this window. Until then, a minimal read-only seed extractor lives at `scripts/edge_replay/oos_corpus_seed.py` and produces a JSONL annotated with cohort metadata (`cohort_tag="POST_V030_2_OOS_SEED"`, `corpus_window_start_utc="2026-05-23T21:22:16Z"`, `oos_seed_version=1`). Operator runs the extractor whenever a snapshot is needed; the script is idempotent.
+
+**Status as of 2026-05-23:** bot accumulating rows organically. Run `python scripts/edge_replay/oos_corpus_seed.py` at any time to capture the current state. Per framework v2 stamped default Q1 (≥500 rows across corpora used in a gate) the seed is gating-usable only when the row count crosses that threshold; expect ~30+ days at current ~0.8 trade/day rate, faster if v0.30.2 fixes increase the trade rate.
+
 ### 2.3 EDGE-004 Closure Path
 
 > **Note:** Lever map and probability ranking below pre-date Cycle-16E (2026-05-07). v3 source (`docs/governance/edge-004-closure-path-tldr-v3.md` — archived 2026-05-09 to `docs/_archive/2026-05-09-docs-consolidation/`) carried a top banner declaring SUPERSEDED PER IC §16 (cycle-11.5 strategic redirect, 2026-05-06): closure path is now Cycle-12+ replay → IF positive-EV slice found, deploy that slice (NOT speculative levers); IF none found, strategic pivot. Lever map retained as historical context for Cycle-17 §B/§C decision-input.
