@@ -957,6 +957,43 @@ def _ollama_extract_and_validate(text, market, t0, http_round_trip_ms, prompt_te
     )
 
 
+def _i3_capture_signal_llm_call(*, news, market, prompt_text, payload, response_text):
+    """I-3 capture hook for the signal-analyzer LLM path.
+
+    Additive: any exception inside the capture layer is swallowed by
+    ``capture_llm_response`` itself. This wrapper exists so the call site
+    in ``_ollama_estimate_detailed`` stays a single line, and so the
+    response-parsing failure (``response_text`` is JSON-extracted text, not
+    a structured dict) is also fail-soft.
+
+    The ``response`` field handed to the capture layer is the raw response
+    text — preserving operator visibility into the actual bytes the model
+    emitted. The repeat-call for verification is intentionally disabled
+    here for now; enabling it requires routing an HTTP-bound re-post
+    through the same circuit-breaker as ``_ollama_post`` (deferred to a
+    follow-up: I-3 ships the WRITE path; I-2 wires the read+replay path).
+    """
+    try:
+        from scripts.edge_replay.llm_capture import capture_llm_response
+
+        row_id = f"signal::{getattr(market, 'ticker', 'unknown')}::{getattr(news, 'id', '')}"
+        capture_llm_response(
+            row_id=row_id,
+            prompt_template=_LLM_SYSTEM_PROMPT,
+            prompt_filled=prompt_text,
+            model_id=cfg.ollama_model,
+            endpoint_type="openai_compat",
+            request_payload=payload,
+            response=response_text,
+            repeat_call=None,
+            logger=log,
+        )
+    except Exception:  # noqa: BLE001 — additive hook, never fail production
+        # capture_llm_response is itself fail-soft, but defend against import
+        # errors / unforeseen failures (e.g. cfg.ollama_model missing).
+        pass
+
+
 async def _ollama_estimate_detailed(news, market):
     """
     Call local Ollama server (OpenAI-compatible endpoint).
@@ -996,6 +1033,20 @@ async def _ollama_estimate_detailed(news, market):
             _ollama_down_until = 0.0
         log.debug("Ollama: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
                   result[3], result[4], result[1], result[0], market.ticker)
+
+        # I-3 capture (rapid-learning v3) — additive only. Failures inside
+        # capture_llm_response are swallowed; production return path is
+        # untouched. Endpoint type is "openai_compat" per CLAUDE.md gotcha:
+        # this path posts to /v1/chat/completions and `think: False` does
+        # NOT apply here.
+        _i3_capture_signal_llm_call(
+            news=news,
+            market=market,
+            prompt_text=prompt_text,
+            payload=payload,
+            response_text=text,
+        )
+
         return result, meta
 
     except aiohttp.ClientConnectorError:

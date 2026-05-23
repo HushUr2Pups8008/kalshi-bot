@@ -183,7 +183,12 @@ def test_local_qwen_llm_posts_to_ollama_and_returns_response_text(monkeypatch):
     from governance import llm as llm_module
     from governance.llm import LocalQwenLLM
 
-    captured = {}
+    # I-3 capture hook (additive) issues secondary urlopen calls to
+    # /api/show + /api/version to populate the cache key. Track ALL
+    # urlopen invocations so we can assert on the LocalQwenLLM call
+    # (always the FIRST one) without coupling to the capture hook's
+    # background lookups.
+    calls: list[dict] = []
 
     class _StubResponse:
         def __init__(self, body): self._body = body
@@ -192,17 +197,21 @@ def test_local_qwen_llm_posts_to_ollama_and_returns_response_text(monkeypatch):
         def read(self): return self._body
 
     def _stub_urlopen(req, timeout):
-        captured["url"] = req.full_url
-        captured["body"] = req.data
-        captured["headers"] = dict(req.headers)
+        entry = {"url": getattr(req, "full_url", str(req)),
+                 "body": getattr(req, "data", None),
+                 "headers": dict(getattr(req, "headers", {}))}
+        calls.append(entry)
         return _StubResponse(json.dumps({"response": '{"action": "no_action"}'}).encode("utf-8"))
 
     monkeypatch.setattr(llm_module.urllib.request, "urlopen", _stub_urlopen)
 
     out = LocalQwenLLM(model="qwen3:14b").complete("sys", "user")
     assert out == '{"action": "no_action"}'
-    assert captured["url"].endswith("/api/generate")
-    payload = json.loads(captured["body"])
+
+    # First urlopen call is always the LocalQwenLLM request to /api/generate.
+    first = calls[0]
+    assert first["url"].endswith("/api/generate")
+    payload = json.loads(first["body"])
     assert payload["model"] == "qwen3:14b"
     assert payload["system"] == "sys"
     assert payload["prompt"] == "user"
