@@ -524,11 +524,6 @@ class TestKalshiMarketsRequestFilterContract:
 # Low-quality match suppression
 # ---------------------------------------------------------------------------
 
-_MATCH001_XFAIL_REASON = (
-    "PROFIT-MATCH-001 (B'): ticker-guard predicate not yet refined. "
-    "Lands post-soak per docs/superpowers/specs/2026-05-03-match-001-token-guard-refinement-design.md."
-)
-
 
 class TestLowQualityMatchSuppression:
     """Suppression is config-gated (ENABLE_LOW_QUALITY_MATCH_SUPPRESSION).
@@ -573,7 +568,6 @@ class TestLowQualityMatchSuppression:
 
         assert results, "candidate should be returned when suppression is off"
 
-    @pytest.mark.xfail(reason=_MATCH001_XFAIL_REASON, strict=True)
     @pytest.mark.asyncio
     async def test_suppression_on_keeps_single_entity_with_supporting_non_ticker_token(self, matcher):
         """B' keeps a weak match when the overlap token is outside the ticker.
@@ -608,7 +602,6 @@ class TestLowQualityMatchSuppression:
         assert results, "supporting non-ticker token must block suppression under B'"
         assert suppressed_calls == [], "MATCH_SUPPRESSED must not be logged when non-ticker support exists"
 
-    @pytest.mark.xfail(reason=_MATCH001_XFAIL_REASON, strict=True)
     @pytest.mark.asyncio
     async def test_suppression_diagnostic_always_logged(self, matcher):
         """MATCH_DIAGNOSTIC is always logged, even when B' keeps the candidate.
@@ -676,7 +669,6 @@ class TestLowQualityMatchSuppression:
         assert results, "high-quality match must not be suppressed"
         assert suppressed_calls == [], "no MATCH_SUPPRESSED event for high-quality match"
 
-    @pytest.mark.xfail(reason=_MATCH001_XFAIL_REASON, strict=True)
     @pytest.mark.asyncio
     async def test_path_b_keeps_pure_single_entity_with_supporting_non_ticker_token(self, matcher):
         """B' keeps Path B when the single overlap token is outside the ticker.
@@ -721,7 +713,6 @@ class TestLowQualityMatchSuppression:
         # MATCH_DIAGNOSTIC must still be logged (observability preserved)
         assert len(diag_calls) == 1
 
-    @pytest.mark.xfail(reason=_MATCH001_XFAIL_REASON, strict=True)
     @pytest.mark.asyncio
     async def test_path_b_suppresses_when_overlap_only_appears_in_ticker(self, matcher):
         """B' suppresses a single-entity match with no non-ticker support.
@@ -793,7 +784,6 @@ class TestLowQualityMatchSuppression:
         assert results, "multi-token overlap must NOT be suppressed by Path B"
         assert suppressed_calls == [], "no MATCH_SUPPRESSED for multi-token match"
 
-    @pytest.mark.xfail(reason=_MATCH001_XFAIL_REASON, strict=True)
     @pytest.mark.asyncio
     async def test_suppression_fires_when_only_overlap_token_is_in_ticker(self, matcher):
         """B' suppresses when the only semantic overlap already appears in the ticker.
@@ -861,8 +851,9 @@ class TestSuppressionTokenGuardMATCH001:
     Pre-fix: the predicate uses `_token_not_in_ticker` — a binary
     "no matched token is a substring of the ticker" guard joined with AND.
     Post-fix: the predicate uses `_has_supporting_non_ticker_token` derived
-    from `overlap - ticker_tokens`, so any matched token outside the ticker
-    blocks suppression (the asymmetry fix).
+    from `any(token not in ticker_lower for token in overlap)` (substring
+    containment per spec §5.1, not set difference), so any matched token
+    outside the ticker blocks suppression (the asymmetry fix).
     """
 
     def test_post_fix_supporting_non_ticker_token_symbol_exists(self):
