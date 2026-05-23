@@ -377,17 +377,30 @@ def _source_class_for_evidence(source: str) -> str:
         return "social"
     if lower == "price_fade" or lower.startswith("kalshi://"):
         return "market"
+    # PROFIT-EDGE-004 Lever A.1 — recover already-wired official feeds
+    # that pre-fix silently bucketed as `other` because the token list did
+    # not cover their RSS `<title>` strings (Department of War, UN News,
+    # European Commission press releases, IAEA). Adding `defense news` /
+    # `breaking defense` lifts industry-press wires from `other` to `news`.
     if any(token in lower for token in (
         ".gov",
         "white house",
         "state department",
         "defense department",
+        "department of war",
+        "department of defense",
         "federal reserve",
         "supreme court",
         "congress",
         "parliament",
         "ministry",
         "official",
+        "un news",
+        "united nations",
+        "european commission",
+        "press releases",
+        "international atomic energy agency",
+        "iaea",
     )):
         return "official"
     if source_text.endswith(" - Google News") or source_text.endswith(" - BingNews"):
@@ -407,6 +420,8 @@ def _source_class_for_evidence(source: str) -> str:
         "politico",
         "politics",
         "just in news",
+        "defense news",
+        "breaking defense",
     )):
         return "news"
     return "other"
