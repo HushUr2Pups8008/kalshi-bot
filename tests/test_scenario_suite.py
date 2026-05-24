@@ -131,7 +131,11 @@ def _discover_scenarios() -> list[tuple[dict[str, Any], Path, int]]:
         return []
     discovered: list[tuple[dict[str, Any], Path, int]] = []
     for path in sorted(SCENARIOS_DIR.glob("*.jsonl")):
-        with path.open("r", encoding="utf-8") as fh:
+        # utf-8-sig transparently strips a Windows BOM if present and is a
+        # no-op on BOM-free files; without this, JSONDecodeError on line 1
+        # of a Windows-edited file mis-attributes the failure to schema
+        # rather than encoding (python-reviewer M2).
+        with path.open("r", encoding="utf-8-sig") as fh:
             for line_no, raw in enumerate(fh, start=1):
                 line = raw.strip()
                 if not line:
@@ -262,6 +266,17 @@ def _run_signal_analyzer_scenario(record: dict[str, Any]) -> None:
 
     # Stub heuristics for live-asserted rows. These are observable
     # invariants the production analyzer is contractually required to honor.
+    #
+    # KNOWN LIMITATION (python-reviewer M3): for the kwflip_004 path
+    # ("Iran mentioned 3 times in Treasury report (no policy change)"),
+    # `has_explicit_negation` fires on the substring "no policy change"
+    # via the `\bno [a-z]+ change\b` alternation — the stub passes for
+    # the syntactic right reason but does NOT actually probe the
+    # CLAUDE.md invariant "keywords are a gate, not a probability
+    # input." Post-I-4 wiring should verify this case with a live LLM
+    # call whose input has no negation tokens, so the test fails on
+    # the actual keyword-blending bug rather than on the stub
+    # heuristic shortcut.
     has_explicit_negation = bool(
         re.search(
             r"\bwill not\b|\bdid not\b|\bdoes not\b|\bdo not\b|"
@@ -327,9 +342,12 @@ def _run_governance_scenario(record: dict[str, Any]) -> None:
         re.DOTALL,
     )
     assert polarity_match is not None, (
-        "governance/prompts.py: anchor_rate polarity block missing — "
-        "PROFIT-GOV-002 regression. Expected 'Interpreting disable_source "
-        "evidence:' header followed by HIGH/LOW/MID lines."
+        "governance/prompts.py: polarity block delimiter not found — "
+        "either 'Interpreting disable_source evidence:' or "
+        "'Decision criteria:' header was renamed (delimiter failure) "
+        "OR the polarity block was removed (PROFIT-GOV-002 regression). "
+        "Inspect both headers + anchor_003 literal-string assertions "
+        "before concluding which failure mode applies."
     )
     polarity_block = polarity_match.group(1)
 
@@ -433,6 +451,26 @@ def test_scenarios_directory_present() -> None:
     assert SCENARIOS_DIR.is_dir(), (
         "tests/scenarios/ missing — I-6 corpus must exist for the "
         "adversarial regression catalog to function."
+    )
+
+
+def test_scenario_ids_unique() -> None:
+    """Per python-reviewer M4: scenario_id must be globally unique so
+    pytest collection produces stable test identifiers. A duplicate
+    scenario_id would silently disambiguate via pytest suffixes and
+    mask the underlying corpus-curation error. The append-only
+    governance contract (Q3) only works if collisions are loud."""
+    seen: dict[str, list[Path]] = {}
+    for record, source, _ in _discover_scenarios():
+        seen.setdefault(record["scenario_id"], []).append(source)
+    duplicates = {sid: paths for sid, paths in seen.items() if len(paths) > 1}
+    assert not duplicates, (
+        "Duplicate scenario_id detected — append-only governance "
+        "violated. Rename the offending row(s). Collisions: "
+        + ", ".join(
+            f"{sid} in {[str(p) for p in paths]}"
+            for sid, paths in duplicates.items()
+        )
     )
 
 
