@@ -11,12 +11,121 @@ always initialized against the temp path, never the runtime bot.log path.
 """
 
 import os
+import re
 import shutil
 import tempfile
+from pathlib import Path
 
 import pytest
 
 _KALSHI_TEST_LOG_DIR: str = ""
+
+# ---------------------------------------------------------------------------
+# I-8 Wave-1 automated closure plugin
+# ---------------------------------------------------------------------------
+# Replaces manual wave-1 canary closure (operator writes PASS line + removes
+# xfail decorator) with evidence-driven automated closure. The source-file
+# xfail decorators stay; this plugin removes them dynamically from the
+# in-memory pytest item when the evidence file shows the canary has passed.
+#
+# Spec: docs/superpowers/specs/2026-05-23-paper-mode-rapid-learning-framework
+#       -design.md §3 I-8.
+# Stand-in source: docs/_archive/governance/wave-1-post-deploy-observation-
+#   plan.md. I-7 (variance gate calculator, Phase 4) will eventually replace
+#   this markdown source with a structured signal.
+# ---------------------------------------------------------------------------
+
+_WAVE1_OBSERVATION_PLAN = Path(
+    "docs/_archive/governance/wave-1-post-deploy-observation-plan.md"
+)
+
+# Wave-1 canary ticket prefixes. Keys are the prefix as it appears in the
+# xfail-reason string; values are the prefix as it appears on a PASS line in
+# the evidence file. The two happen to coincide today but the indirection
+# documents the contract and makes a future rename safe.
+_WAVE1_CANARY_TICKETS: dict[str, str] = {
+    "OBS-005": "OBS-005",
+    "MATCH-001": "MATCH-001",
+    "OBS-003": "OBS-003",
+    "EXEC-002": "EXEC-002",
+}
+
+# A wave-1 xfail reason looks like:
+#   "OBS-005 deploy not landed; 24h cooldown validation window ..."
+# We match the canary ticket prefix anchored to the literal phrase
+# "deploy not landed" so that an unrelated xfail mentioning a ticket name
+# in some other context is not mis-stripped.
+_WAVE1_REASON_RE = re.compile(
+    r"\b(OBS-005|MATCH-001|OBS-003|EXEC-002)\b.*?\bdeploy\s+not\s+landed\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# A wave-1 PASS line looks like:
+#   "OBS-005 24h validation: PASS"
+# We accept any duration of the form \d+[hd] (hours/days) and tolerate extra
+# whitespace + arbitrary case. Format-string template is filled per ticket
+# below.
+_WAVE1_PASS_LINE_TEMPLATE = r"\b{ticket}\s+\d+[hd]\s+validation:\s*PASS\b"
+
+
+def _wave1_evidence_text() -> str:
+    """Return the observation-plan markdown text, or ``""`` if missing /
+    unreadable / not valid UTF-8.
+
+    Fail-soft by design: a missing or corrupt evidence file must not raise
+    during pytest collection. The downstream effect is that no canary is
+    closed, so the xfail-strict marks remain in place and the suite
+    continues with the safe pre-closure behaviour.
+    """
+    try:
+        return _WAVE1_OBSERVATION_PLAN.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _wave1_canaries_passing(evidence_text: str) -> set[str]:
+    """Return the set of wave-1 canary ticket prefixes whose PASS line
+    appears anywhere in ``evidence_text``.
+    """
+    passing: set[str] = set()
+    if not evidence_text:
+        return passing
+    for reason_ticket, evidence_ticket in _WAVE1_CANARY_TICKETS.items():
+        pattern = _WAVE1_PASS_LINE_TEMPLATE.format(ticket=re.escape(evidence_ticket))
+        if re.search(pattern, evidence_text, re.IGNORECASE):
+            passing.add(reason_ticket)
+    return passing
+
+
+def pytest_collection_modifyitems(
+    config: object, items: list[pytest.Item]
+) -> None:
+    """I-8: strip xfail-strict marks from wave-1 canaries when the
+    evidence file contains the matching ``<TICKET> Nh validation: PASS``
+    line.
+
+    Idempotent and side-effect-free except for mutating the in-memory
+    ``item.own_markers`` list. The source-file ``@pytest.mark.xfail``
+    decorator is not touched.
+    """
+    passing = _wave1_canaries_passing(_wave1_evidence_text())
+    if not passing:
+        return
+    for item in items:
+        marker = item.get_closest_marker("xfail")
+        if marker is None:
+            continue
+        reason = marker.kwargs.get("reason")
+        if not isinstance(reason, str) and marker.args:
+            reason = marker.args[0] if isinstance(marker.args[0], str) else None
+        if not isinstance(reason, str):
+            continue
+        match = _WAVE1_REASON_RE.search(reason)
+        if match is None:
+            continue
+        ticket = match.group(1).upper()
+        if ticket in passing:
+            item.own_markers = [m for m in item.own_markers if m.name != "xfail"]
 
 
 def _ci_stub_env() -> None:
