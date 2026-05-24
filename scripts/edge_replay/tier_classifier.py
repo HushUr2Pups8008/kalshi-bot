@@ -394,6 +394,8 @@ def classify_tier(
     prompt_template_diff: bool = False,
     model_manifest_diff: bool = False,
     schema_migrations: Iterable[str | Path] = (),
+    *,
+    write_ledger: bool = True,
 ) -> Tier:
     """Classify a change set into one of {T0, T1, T2, T3}.
 
@@ -498,7 +500,12 @@ def classify_tier(
         "max_tier_path": max_tier_path,
         "rule_matched": rule_matched,
     }
-    _write_audit(entry)
+    # `write_ledger=False` lets read-only consumers (e.g. T0-budget check)
+    # replay classification across historical commits without polluting the
+    # runtime ledger with phantom entries indistinguishable from live
+    # decisions. Default remains True so live call sites stay unchanged.
+    if write_ledger:
+        _write_audit(entry)
 
     return final_tier
 
