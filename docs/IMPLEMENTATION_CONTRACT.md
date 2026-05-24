@@ -961,11 +961,21 @@ Per the paper-mode rapid-learning framework v3 (`docs/superpowers/specs/2026-05-
 - Mandatory 30-day framework review: owner = operator; threshold = any single signal in framework v3 §5 acceptance criteria out-of-target → framework suspension; pre-amendment IC §16 resumes.
 - T1 retrospective (I-11 Phase 3): sign-divergence > 25 % suspends the framework.
 
-**§16.7 status as of 2026-05-24:**
+**§16.7 status as of 2026-05-24 (post-PROFIT-PHASE3-001):**
 - Phase 1 (I-1, I-2, I-3, I-5, I-10, I-12): SHIPPED.
 - Phase 2 (I-4, I-6, I-8, I-13): SHIPPED. This amendment is the gating doc deliverable.
-- Phase 3 (activation + I-11 retrospective cron): pending.
-- Phase 4 (I-7 variance gate + first OOS corpus + 30-day review): pending; T1 uses fixed 72h paper observation with the stamped variance metric (decision-rate stability + unexpected-SKIPPED-bucket per framework v3 §3 I-7 / §8 Q4) until I-7 ships.
+- **Phase 3 activation: SHIPPED.** `.github/workflows/replay-ci-gate.yml` runs
+  `scripts.edge_replay.ci_entry` on every PR. I-5 tier classification routes
+  candidates by blast radius; T1+ changes get a Rule 4 verdict before
+  merge. Operator override via `REPLAY_GATE_OVERRIDE=1` env / workflow
+  input is logged in gate output for audit. I-11 retrospective cron
+  remains Phase 4 deferred; T1 retrospective is operator-run via
+  `python -m scripts.edge_replay.replay_gate` until the cron lands.
+- Phase 4 (I-7 variance gate + I-11 retrospective cron + first OOS
+  corpus refresh + 30-day review): pending; T1 uses fixed 72h paper
+  observation with the stamped variance metric (decision-rate
+  stability + unexpected-SKIPPED-bucket per framework v3 §3 I-7 /
+  §8 Q4) until I-7 ships.
 
 ### Cross-references
 

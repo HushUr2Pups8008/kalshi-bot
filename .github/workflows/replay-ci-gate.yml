@@ -1,0 +1,86 @@
+name: replay-ci-gate
+
+# PROFIT-PHASE3-001 — Phase 3 framework activation
+#
+# Runs the replay-CI gate on every PR. Routes by tier:
+#   T0 (mechanical/docs/tests-only): no replay needed, auto-pass
+#   T1 (paper-mode replay-decidable): Rule 4 table generated + EV check
+#   T2 (paper-mode replay-indeterminate, prompt/LLM): Rule 4 + manual review
+#   T3 (live/sizing/runtime-infra): operator gate; replay is informational
+#
+# Operator override: set repo variable / env REPLAY_GATE_OVERRIDE=1 to force-pass.
+# Override decisions are logged to the gate output and reviewed at merge.
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      override:
+        description: "Force-pass the gate (operator override)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: replay-ci-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay-ci-gate:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.2.2 — must fetch full history for git diff
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+
+      # actions/setup-python v5.6.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip wheel
+          .venv/bin/pip install -r requirements-dev.txt
+
+      - name: Run replay-CI gate
+        id: gate
+        env:
+          REPLAY_GATE_OVERRIDE: ${{ github.event.inputs.override == 'true' && '1' || '' }}
+        run: |
+          set +e
+          .venv/bin/python -m scripts.edge_replay.ci_entry \
+            --base origin/${{ github.base_ref || 'main' }} \
+            --commit-sha ${{ github.sha }} \
+            | tee gate_output.txt
+          echo "gate_exit=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+
+      - name: Upload Rule 4 artifact
+        if: always()
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: replay-ci-gate-${{ github.sha }}
+          path: |
+            gate_output.txt
+            logs/edge_replay/ci_runs/${{ github.sha }}/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Enforce gate verdict
+        run: |
+          if [ "${{ steps.gate.outputs.gate_exit }}" != "0" ]; then
+            echo "::error::replay-CI gate FAILED. Review the Rule 4 table in the gate_output artifact."
+            echo "Operator override: re-run this job with workflow_dispatch input 'override=true' if justified."
+            exit 1
+          fi
+          echo "::notice::replay-CI gate PASSED."
