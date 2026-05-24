@@ -260,46 +260,93 @@ class TestSeriesClassification:
 
 
 # ── Time-based classification ─────────────────────────────────────────────────
+#
+# PROFIT-PRIORS-002 (2026-05-24): `_time_prior` is the fallback for series
+# with NO `_SERIES_PRIORS` entry. The pre-fix code returned interpretation/
+# structural-dominant weights for medium- and long-dated markets on the
+# theory that "longer time-to-close means structural priors should matter
+# more." That reasoning is sound IF the structural lane has data — but the
+# bot's data infrastructure for uninstrumented series is fast-lane only
+# (news LLM); interpretation/structural lanes have no dossier or external-
+# prior service wired up for series outside `_SERIES_PRIORS`. The pre-fix
+# shape silently diluted high-confidence LLM signals on every new Kalshi
+# listing, making every uninstrumented series effectively untradeable.
+#
+# The pinned contract is now: `_time_prior` produces fast-dominant priors
+# for ALL ≥1-day buckets, matching where data actually lives.
+#
+# Series with real structural/interpretation infrastructure (CPI, central
+# bank, polling, sports) override via explicit `_SERIES_PRIORS` entries.
 
 class TestTimePrior:
     def test_very_short_horizon_is_fast(self):
+        """≤6h: fast-dominant (preserved from pre-fix; news-reactive)."""
         f, i, s = _time_prior(0.1)
         assert f > 0.80
         assert f > i > s
 
     def test_intraday_is_fast_dominant(self):
+        """6h-1d: fast-dominant (preserved from pre-fix)."""
         f, i, s = _time_prior(0.5)
         assert f > 0.60
 
-    def test_one_to_three_days_is_mixed(self):
-        f, i, s = _time_prior(2.0)
-        assert f > 0.35
-        assert i > 0.35
+    def test_all_multiday_buckets_are_fast_dominant(self):
+        """PROFIT-PRIORS-002 load-bearing contract: ≥1-day uninstrumented
+        markets must be fast-dominant so the LLM signal reaches the
+        blender without dilution.
 
-    def test_three_to_seven_days_is_interpretation_dominant(self):
-        f, i, s = _time_prior(5.0)
-        assert i > 0.40
-        assert i > f
+        If a future refactor restores interp/structural-dominant fallbacks
+        for these buckets (the pre-fix shape), this test catches it before
+        merge. The fix exists because that shape silently broke every new
+        Kalshi listing — operators were not catching it manually.
+        """
+        for days in (2.0, 5.0, 10.0, 20.0, 60.0):
+            f, i, s = _time_prior(days)
+            assert f >= 0.50, (
+                f"days={days}: fast weight {f} must be ≥0.50 — "
+                "uninstrumented series have only fast-lane data and "
+                "non-fast-dominant priors silently dilute the LLM signal."
+            )
+            assert f > i, (
+                f"days={days}: f={f} not > i={i}; fast lane must dominate"
+            )
+            assert f > s, (
+                f"days={days}: f={f} not > s={s}; fast lane must dominate"
+            )
 
-    def test_one_to_two_weeks_is_mixed_interpretation_structural(self):
-        f, i, s = _time_prior(10.0)
-        assert i >= s
-        assert f < 0.20
+    def test_all_buckets_clear_g4_threshold(self):
+        """Every `_time_prior` bucket must produce regime_confidence ≥
+        G4=0.20 so unprioritized markets are NEVER trapped in fail-safe
+        mode purely because of the time-bucket fallback. Without this
+        contract, a new Kalshi series with no explicit prior would be
+        unable to clear G4 and would never reach normal-mode G1."""
+        import math
+        from tasks.trade_readiness_gate import G4_REGIME_CONFIDENCE_THRESHOLD
+        for days in (0.1, 0.5, 2.0, 5.0, 10.0, 20.0, 60.0):
+            w = _time_prior(days)
+            ent = -sum(v * math.log(v) for v in w if v > 0)
+            rc = 1.0 - ent / math.log(3)
+            assert rc >= G4_REGIME_CONFIDENCE_THRESHOLD, (
+                f"days={days}: rc={rc:.4f} below G4={G4_REGIME_CONFIDENCE_THRESHOLD}; "
+                f"weights={w}. Uninstrumented series would be trapped in fail-safe."
+            )
 
-    def test_long_horizon_is_structural_dominant(self):
-        f, i, s = _time_prior(20.0)
-        assert s > 0.55
-        assert s > i > f
-
-    def test_monotone_structural_increase_with_days(self):
-        days_seq = [0.2, 1.0, 3.0, 7.0, 14.0, 21.0]
-        structural_seq = [_time_prior(d)[2] for d in days_seq]
-        assert structural_seq == sorted(structural_seq), "Structural weight should increase with days"
-
-    def test_monotone_fast_decrease_with_days(self):
-        days_seq = [0.2, 1.0, 3.0, 7.0, 14.0, 21.0]
+    def test_fast_weight_does_not_decrease_with_days_for_multiday(self):
+        """Sanity: across all ≥1-day buckets the fast weight is at least
+        as high as the previous bucket. Pre-fix code had decreasing fast
+        weight with days (because it assumed structural lane had data).
+        Post-fix all multi-day buckets share the same fast-dominant
+        shape, so fast weight is non-decreasing in the multi-day range."""
+        days_seq = [1.5, 3.0, 7.0, 14.0, 30.0, 60.0]
         fast_seq = [_time_prior(d)[0] for d in days_seq]
-        assert fast_seq == sorted(fast_seq, reverse=True), "Fast weight should decrease with days"
+        assert all(
+            fast_seq[i] >= fast_seq[i - 1] - 1e-9
+            for i in range(1, len(fast_seq))
+        ), (
+            f"fast weights {fast_seq} must be non-decreasing across ≥1d "
+            "buckets post-PROFIT-PRIORS-002. A future refactor that drops "
+            "fast weight on longer windows reintroduces the dilution bug."
+        )
 
 
 # ── Title keyword nudges ──────────────────────────────────────────────────────
@@ -390,7 +437,17 @@ class TestComputeRegimeWeights:
         assert _weights_valid(w)
         assert w[FAST] > 0.35
 
-    def test_geo_political_long_horizon_structural_dominant(self):
+    def test_geo_political_long_horizon_uninstrumented_is_fast_dominant(self):
+        """PROFIT-PRIORS-002 (2026-05-24): long-horizon UNINSTRUMENTED
+        series (no `_SERIES_PRIORS` entry) now default to fast-dominant
+        weights. Pre-fix this test asserted structural-dominant — that
+        shape silently broke every new Kalshi listing because the
+        structural lane has no data infrastructure outside the
+        explicit `_SERIES_PRIORS` entries. Series with real structural
+        infrastructure (CPI, central bank) override via explicit
+        entries; see `test_fed_rate_decision_market` below for that
+        contract.
+        """
         w = compute_regime_weights(_market(
             ticker="KXIRANLONG-1",
             series_ticker="",
@@ -398,7 +455,10 @@ class TestComputeRegimeWeights:
             days=60.0,
         ))
         assert _weights_valid(w)
-        assert w[STRUCTURAL] > 0.55
+        assert w[FAST] >= 0.50, (
+            f"long-horizon uninstrumented must be fast-dominant: got {w}"
+        )
+        assert w[FAST] > w[STRUCTURAL]
 
     def test_fed_rate_decision_market(self):
         w = compute_regime_weights(_market(

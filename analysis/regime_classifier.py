@@ -204,18 +204,44 @@ def _series_prior(market: KalshiMarket) -> Optional[tuple[float, float, float]]:
 
 
 def _time_prior(days: float) -> tuple[float, float, float]:
-    """Return (fast, interpretation, structural) based on days to close."""
-    if days <= 0.25:    # ≤ 6 hours
+    """Return (fast, interpretation, structural) for a market with no
+    `_SERIES_PRIORS` entry — i.e. a series the bot has not been
+    explicitly calibrated for.
+
+    PROFIT-PRIORS-002 (2026-05-24): the pre-fix `_time_prior` returned
+    interpretation/structural-dominant weights for medium- and long-
+    dated markets on the theory that "longer time-to-close means
+    structural priors should matter more." That reasoning is sound in
+    principle but the bot's production data infrastructure only feeds
+    the FAST lane (news LLM) for uninstrumented series. The
+    interpretation lane (dossier accumulator) and structural lane
+    (external base-rate service) have not been wired for series that
+    aren't in `_SERIES_PRIORS`. As a result, the pre-fix prior shape
+    silently diluted high-confidence LLM signals into near-zero
+    blended_confidence on every new Kalshi listing — operator would
+    have to manually inspect each new series to fix this.
+
+    Post-fix: short-window buckets (≤3d) preserve the existing time-
+    decay reasoning since fast lane was already dominant there. The
+    3-7d, 7-14d, and >14d buckets are re-shaped to fast-dominant
+    `(0.65, 0.25, 0.10)` matching the event-driven cluster in
+    `_SERIES_PRIORS`. Result: new Kalshi listings automatically receive
+    a prior that lets the LLM signal reach the blender without
+    dilution. No manual per-series work needed.
+
+    Explicit `_SERIES_PRIORS` entries continue to override this
+    default — operators can still pin specific shapes for series with
+    actual structural/interpretation infrastructure (CPI, central
+    bank, polling, sports).
+    """
+    if days <= 0.25:    # ≤ 6 hours — fast already dominant
         return (0.85, 0.10, 0.05)
-    if days <= 1.0:     # 6 h – 1 day
+    if days <= 1.0:     # 6 h – 1 day — fast already dominant
         return (0.70, 0.22, 0.08)
-    if days <= 3.0:     # 1 – 3 days
-        return (0.45, 0.40, 0.15)
-    if days <= 7.0:     # 3 – 7 days
-        return (0.20, 0.50, 0.30)
-    if days <= 14.0:    # 7 – 14 days
-        return (0.10, 0.45, 0.45)
-    return (0.10, 0.25, 0.65)  # > 14 days
+    # ≥1 day: fast-lane-dominant default for uninstrumented series.
+    # rc≈0.22 clears G4 (0.20); fast weight 0.65 lets LLM confidence
+    # propagate to blended_confidence without dilution.
+    return (0.65, 0.25, 0.10)
 
 
 def _apply_title_nudge(
