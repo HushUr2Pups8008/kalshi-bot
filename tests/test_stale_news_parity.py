@@ -42,9 +42,13 @@ class TestAnalyzerIntakeParityInvariant:
         ):
             override = _early_max_news_age_seconds_for_source(source)
             assert override == config.EARLY_MAX_NEWS_AGE_BY_SOURCE[source]
-            assert override > config.EARLY_MAX_NEWS_AGE_SECONDS, (
-                f"{source}: per-source override must exceed the default; "
-                f"otherwise it is pointless"
+            assert override >= config.EARLY_MAX_NEWS_AGE_SECONDS, (
+                f"{source}: per-source override must be at least the global "
+                f"default. Post-PROFIT-STALE-002 (2026-05-24) the default rose "
+                f"from 300s to 1800s to remove per-source-list maintenance; "
+                f"overrides may now equal the default and remain as "
+                f"documentation of intent. They must never DROP below it — "
+                f"that would silently shorten the window for a curated source."
             )
 
     def test_per_source_map_contains_expected_geopolitical_sources(self):

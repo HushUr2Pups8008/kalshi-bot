@@ -19,6 +19,69 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.31.2] - 2026-05-24
+
+### Changed
+
+- **PROFIT-STALE-002 — `EARLY_MAX_NEWS_AGE_SECONDS` default raised
+  300s → 1800s.** The 7-day funnel diagnostic (post-PROFIT-PHASE3-003
+  follow-up) found 681 items at 5-15m age being rejected at the
+  `EARLY_STALE_DROP` boundary because their per-entry publisher
+  attribution (e.g. "The Washington Post", "Bloomberg.com", "The
+  Hill", "South China Morning Post", "BBC", "France 24", "CNBC")
+  arrived via the `google_news_query` family (re-enabled 2026-04-23
+  in `feeds/search_news_monitor.py`) and had no entry in
+  `EARLY_MAX_NEWS_AGE_BY_SOURCE`, falling through to the 300s
+  default.
+
+  Per operator feedback: explicitly adding 9 new per-source entries
+  would re-introduce the maintenance burden PROFIT-STALE-001 was
+  supposed to remove. Bumping the global default to 1800s applies the
+  longer window to every publisher without a per-source list to
+  maintain.
+
+  The existing per-source entries in `EARLY_MAX_NEWS_AGE_BY_SOURCE`
+  remain as documentation of intent but no longer need to be
+  exhaustive — new publishers benefit automatically.
+
+  Cost analysis: LLM is local (Ollama qwen3), so additional throughput
+  is wallclock-only, not $$. Downstream `source_class` /
+  `source_multiplier` / `MATCH_SUPPRESSED` guards continue to filter
+  spurious matches.
+
+### Tests
+
+- `TestRuntimeThresholdOverride::test_global_default_is_1800s` pins
+  the new default and asserts unlisted sources inherit it. Catches
+  any future revert.
+- `test_geopolitical_sources_get_per_source_override` relaxed from
+  strict `>` to `>=` against the global default. Per-source entries
+  may now equal the default; they remain as documentation, but a
+  per-source entry BELOW the default would still be a regression
+  (silent shortening for a curated publisher).
+- `test_process_candidate_skips_stale_news_before_estimation` updated
+  to age news 2000s past published (was 600s) so the test case stays
+  stale under the new default. Comment links to PROFIT-STALE-002.
+
+### Notes
+
+- This is Phase C of the operator's 2026-05-24 "execute all three"
+  goal (Phase A = priors audit, COMPLETE / already shipped via PR #43
+  + commits 72a382e/f5295cf; Phase C = stale-news, THIS RELEASE;
+  Phase B = LLM `magnitude=none` audit, next).
+- 7-day diagnostic also surfaced that 23/34 BD `G1_blended_confidence`
+  failures in the May 17-24 archive were on `KXTXRUNOFFENDORSE-*` —
+  but that data PRE-DATES PR #43's explicit prior addition for the
+  same series. Smoke-tested live: classifier produces `rc=0.2201`
+  (G4 PASS) for all 6 series including KXTXRUNOFFENDORSE,
+  KXUSAIRANAGREEMENT, KXNEWTARIFFS, KXCHINAANNOUNCE, KXNEWDEAL,
+  KXTRUMPIRAN. Phase A is closed; no additional priors-side work
+  needed.
+- Full suite: **2300 passed** / 4 skipped / 71 xfailed (+1 from
+  baseline 2299; net is +1 added test, -0 removed). Ruff: clean.
+- No env mutation. No threshold-override-map changes. No G1-G6
+  threshold changes.
+
 ## [0.31.1] - 2026-05-24
 
 ### Fixed
