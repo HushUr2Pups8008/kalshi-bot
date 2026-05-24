@@ -389,7 +389,56 @@ if [[ "$POST_DEPLOY" == "1" ]]; then
     codeblock_end
 fi
 
-# ── 8. Verdict line ───────────────────────────────────────────────────────────
+# ── 9. Opportunity-vs-trade drift ─────────────────────────────────────────────
+# Wired per operator goal "fix kalshi-bot bugs to enable paper-trade
+# evaluation" (Step 4): the watcher at scripts/observability/
+# opportunity_trade_drift.py was authored 2026-05-13 (commit 72fdf4a)
+# specifically to surface the silent-attrition condition where
+# OPPORTUNITY events emit but paper_trades stays flat. It shipped without
+# a delivery contract -- no scheduled surface invoked it. Wiring it here
+# gives daily operator visibility into executor-boundary attrition; this
+# watcher is downstream of the market-universe-shape failure mode the
+# 2026-05-12 incident exposed, and is intentionally complementary to it.
+# Section emits only; the verdict cascade is NOT extended in this commit
+# so the existing GREEN/YELLOW/RED logic stays load-bearing-stable.
+section "9. Opportunity-vs-trade drift"
+codeblock_start
+WATCHER_PY="$(python_bin)" || true
+DRIFT_VERDICT="UNAVAILABLE"
+if [[ -n "$WATCHER_PY" ]]; then
+    WATCHER_SCRIPT="$REPO_ROOT/scripts/observability/opportunity_trade_drift.py"
+    if [[ -f "$WATCHER_SCRIPT" ]]; then
+        WATCHER_OUT="$("$WATCHER_PY" \
+            "$WATCHER_SCRIPT" \
+            --db "$PAPER_DB" \
+            --trade-log-live "$TRADES_LOG" \
+            --trade-log-archive-dir "$REPO_ROOT/logs/trades/archive" \
+            --json 2>&1)"
+        WATCHER_EXIT=$?
+        printf '%s\n' "$WATCHER_OUT" >>"$REPORT"
+        if (( WATCHER_EXIT == 0 )); then
+            DRIFT_VERDICT="$(printf '%s' "$WATCHER_OUT" \
+                | "$WATCHER_PY" -c 'import sys,json
+try:
+    print(json.load(sys.stdin).get("verdict","UNKNOWN"))
+except Exception:
+    print("UNKNOWN")' 2>/dev/null || echo "UNKNOWN")"
+        else
+            printf '\nwatcher exit_status=%s\n' "$WATCHER_EXIT" >>"$REPORT"
+            DRIFT_VERDICT="WATCHER_ERROR"
+        fi
+    else
+        printf 'watcher script missing at %s\n' "$WATCHER_SCRIPT" >>"$REPORT"
+        DRIFT_VERDICT="UNAVAILABLE"
+    fi
+else
+    printf 'python not available; skipping drift watcher\n' >>"$REPORT"
+    DRIFT_VERDICT="UNAVAILABLE"
+fi
+printf '\ndrift_verdict=%s\n' "$DRIFT_VERDICT" >>"$REPORT"
+codeblock_end
+
+# ── 10. Verdict line ──────────────────────────────────────────────────────────
 section "Verdict"
 {
     if [[ "$KALSHI_DRIFT_STATUS" == kalshi_drift=HALT* ]]; then
