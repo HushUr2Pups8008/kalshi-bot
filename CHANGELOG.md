@@ -19,6 +19,73 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.30.9] - 2026-05-24
+
+### Fixed
+
+- **PROFIT-PRIORS-002 — `_time_prior` fallback now fast-dominant for ≥1d
+  buckets.** The pre-fix `_time_prior` (the fallback for series with no
+  explicit `_SERIES_PRIORS` entry) returned interpretation/structural-
+  dominant weights for medium- and long-dated markets on the principle
+  that "longer time-to-close means structural priors should matter
+  more." That reasoning is sound IF the structural lane has data — but
+  the bot's data infrastructure for uninstrumented series is fast-lane
+  only (news LLM); interpretation/structural lanes have no dossier or
+  external-prior service wired up for series outside `_SERIES_PRIORS`.
+  The pre-fix shape silently diluted high-confidence LLM signals on
+  EVERY new Kalshi listing — operators would have had to manually
+  inspect each one to discover and fix it (see PROFIT-PRIORS-001 in
+  v0.30.8 for one such manual fix on 3 series).
+
+  Post-fix:
+    - `≤6h` and `6h-1d` buckets unchanged — they were already fast-dominant.
+    - `1-3d`, `3-7d`, `7-14d`, `>14d` all collapse to
+      **`(0.65, 0.25, 0.10)`** matching the event-driven cluster in
+      `_SERIES_PRIORS`. `rc ≈ 0.22` clears G4 (0.20).
+
+  Result: every new Kalshi listing automatically receives a prior shape
+  that lets LLM signals reach the blender without dilution. No more
+  manual per-series sweeps. Series with real structural infrastructure
+  (CPI, central bank, polling) continue to override via explicit
+  `_SERIES_PRIORS` entries.
+
+### Added
+
+- `TestTimePrior::test_all_multiday_buckets_are_fast_dominant` —
+  load-bearing pin. Asserts every `≥1d` bucket returns `fast ≥ 0.50`
+  and `fast > interp` and `fast > structural`. If a future refactor
+  restores interp/structural-dominant fallbacks, this catches it
+  before merge.
+- `TestTimePrior::test_all_buckets_clear_g4_threshold` — every bucket's
+  `regime_confidence ≥ 0.20`. Without this, an uninstrumented series
+  could be trapped in fail-safe mode.
+- `TestTimePrior::test_fast_weight_does_not_decrease_with_days_for_multiday`
+  — replaces the pre-fix `test_monotone_structural_increase_with_days`.
+  Post-fix the fast weight is non-decreasing across multi-day buckets.
+
+### Removed (replaced)
+
+- `TestTimePrior::test_one_to_three_days_is_mixed`,
+  `test_three_to_seven_days_is_interpretation_dominant`,
+  `test_one_to_two_weeks_is_mixed_interpretation_structural`,
+  `test_long_horizon_is_structural_dominant`,
+  `test_monotone_structural_increase_with_days`,
+  `test_monotone_fast_decrease_with_days` — all pinned the pre-fix
+  reasoning. The replacements above pin the post-fix contract.
+- `TestComputeRegimeWeights::test_geo_political_long_horizon_structural_dominant`
+  renamed to `test_geo_political_long_horizon_uninstrumented_is_fast_dominant`
+  with assertion flipped.
+
+### Notes
+
+- **No G1 threshold change. No G4 threshold change. No new env vars.**
+  No regime_confidence math changes. Only the `_time_prior` table values
+  for the ≥1d buckets.
+- Series with explicit `_SERIES_PRIORS` entries are unaffected.
+- Bot picks up changes on next launchd restart.
+- Full suite: **2243 passed** / 4 skipped / 71 xfailed.
+- Ruff: clean.
+
 ## [0.30.8] - 2026-05-24
 
 ### Fixed
