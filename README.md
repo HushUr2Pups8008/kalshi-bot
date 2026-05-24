@@ -1,6 +1,6 @@
 # kalshi-bot
 
-[![Version](https://img.shields.io/badge/version-0.30.2-blue)](CHANGELOG.md) [![Tests](https://img.shields.io/badge/tests-1424%20passing-brightgreen)](tests/) [![Mode](https://img.shields.io/badge/mode-paper-yellow)](#paper-trading)
+[![Version](https://img.shields.io/badge/version-0.30.3-blue)](CHANGELOG.md) [![Tests](https://img.shields.io/badge/tests-1424%20passing-brightgreen)](tests/) [![Mode](https://img.shields.io/badge/mode-paper-yellow)](#paper-trading)
 
 A 24/7 automated paper/live trading bot for [Kalshi](https://kalshi.com) geopolitical prediction markets.
 
@@ -29,7 +29,7 @@ See [CLAUDE.md](CLAUDE.md) for project-local agent rules + critical gotchas (Kal
 | **Simulation harness** | [`scripts/simulations/README.md`](scripts/simulations/README.md) | Captured simulations (G1/G4 calibration, readiness gate, executor) and the seven-harness pipeline buildout (PROFIT-EDGE-004) |
 | **Recent dated plans** | [`docs/superpowers/plans/`](docs/superpowers/plans/) | Governance Phase 1/2; simulation buildout |
 | **Archive** | [`docs/_archive/`](docs/_archive/) | Closed plans + investigations; not load-bearing |
-| **Release history** | [`CHANGELOG.md`](CHANGELOG.md) | Current through v0.30.2 |
+| **Release history** | [`CHANGELOG.md`](CHANGELOG.md) | Current through v0.30.3 |
 | **Platform matrix** | [`PLATFORMS.md`](PLATFORMS.md) | Windows / macOS / Linux support notes |
 
 ---
