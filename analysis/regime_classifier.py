@@ -86,6 +86,9 @@ _SERIES_PRIORS: dict[str, tuple[float, float, float]] = {
     "KXVOTESAVEAMERICA": (0.05, 0.60, 0.35),  # Save America vote events (rc≈0.24)
     "KXEFFTARIFF":   (0.05, 0.60, 0.35),  # Effective tariff schedule (rc≈0.24)
     "KXMOCTRUMP25":  (0.10, 0.65, 0.25),  # Trump month-of-action calendar windows (rc≈0.22)
+    "KXTXRUNOFFENDORSE": (0.10, 0.65, 0.25),  # Texas Senate runoff endorsement events (rc≈0.22)
+    "KXUSAIRANAGREEMENT": (0.05, 0.55, 0.40),  # US-Iran nuclear deal — slow process, structural anchor (rc≈0.23)
+    "KXNEWTARIFFS":  (0.05, 0.65, 0.30),  # "New tariffs this month?" calendar-window policy events (rc≈0.28)
     # Macroeconomic data releases — known calendar, structural prior dominates,
     # interpretation handles the surprise-vs-consensus read-through. Same
     # shape as the existing KXCBDECISION prior (rc≈0.28).

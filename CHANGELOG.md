@@ -19,6 +19,57 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.30.4] - 2026-05-24
+
+### Added
+
+- **Categorical priors for three previously-fail-safe policy series** —
+  Diagnostic of the 2026-05-12 → 2026-05-24 zero-trade window
+  (Path A funnel + A1 splits) surfaced that all BLEND_DECISIONs
+  reaching the blender were on series lacking entries in
+  `analysis/regime_classifier._SERIES_PRIORS` (specifically:
+  KXTXRUNOFFENDORSE, KXUSAIRANAGREEMENT, KXNEWTARIFFS — note
+  KXTRUMPIRAN already has a prior). Without a categorical prior, those
+  markets fell through to `_time_prior(days_to_close)`, which returns
+  near-uniform weights for the 3-7d and 7-14d buckets — yielding
+  regime_confidence values of 0.0628 / 0.1363 / 0.0803, all below the
+  G4 threshold of 0.20. Failing G4 forces fail-safe mode (G1 threshold
+  0.10 vs normal 0.05), and the resulting scaled_confidence
+  (`blended_confidence × regime_confidence`) was uniformly below 0.10.
+  This is the proximate downstream cause of the zero-trade window.
+
+  Added priors:
+    - `KXTXRUNOFFENDORSE` — `(0.10, 0.65, 0.25)` → rc≈0.22.
+      Texas Senate runoff endorsement events. Calendar-fixed
+      electoral; interpretation-heavy because "does this endorsement
+      count" is the read-through. Mirrors the KXMOCTRUMP25 shape.
+    - `KXUSAIRANAGREEMENT` — `(0.05, 0.55, 0.40)` → rc≈0.23.
+      US-Iran nuclear deal. Slow diplomatic process; interpretation
+      handles the "did this announcement constitute progress"
+      decoding; structural lane higher than KXMOCTRUMP25 because the
+      negotiation timeline is itself a multi-week structural anchor.
+    - `KXNEWTARIFFS` — `(0.05, 0.65, 0.30)` → rc≈0.28. "New tariffs
+      this month?" — calendar-window tariff-action market. Same
+      shape as KXEFFTARIFF (tariff schedule).
+
+  Locked by extension of the existing
+  `test_post_PROFIT-EDGE-002_priors_clear_G4` test in
+  `tests/test_regime_classifier.py`.
+
+### Notes
+
+- **Operator authorization gate.** This change directly affects trade
+  selectivity (markets that previously could not clear G4/G1 now can).
+  Per `~/.claude/rules/domain_constraints.md`, changes that alter
+  trade selectivity require explicit operator approval; PR is opened
+  as draft. The chosen weight shapes are conservative (all clear G4
+  by ≥0.02 margin) and consistent with existing
+  legislative/policy-event patterns in `_SERIES_PRIORS`; operator
+  may adjust any shape before merge.
+- No G1 / G4 threshold changes. No `_time_prior` table changes.
+  No fail-safe semantics changes. Only the three named
+  `_SERIES_PRIORS` entries are added.
+
 ## [0.30.3] - 2026-05-24
 
 ### Fixed
