@@ -19,6 +19,41 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.30.11] - 2026-05-24
+
+### Added
+
+- **PROFIT-PRIORS-003 — explicit priors for KXCHINAANNOUNCE +
+  KXNEWDEAL.** Surfaced by the v0.30.10 miss-pattern audit. The two
+  series had historical BDs but no entry in `_SERIES_PRIORS`. PR #41's
+  `_time_prior` default already covers them (rc≈0.22 via the post-1d
+  `(0.65, 0.25, 0.10)` fallback), but adding explicit entries pins the
+  behavior in tests and surfaces the cluster to operators. Both
+  classified as news-driven event markets — same shape as KXTRUMPACT
+  / KXTRUMPENDORSE / KXTRUMPCHINA / KXTXRUNOFFENDORSE /
+  KXUSAIRANAGREEMENT / KXNEWTARIFFS.
+
+### Notes
+
+- This is the only PR opened from the four-PR miss-pattern audit
+  goal. PRs A (widen fallback heuristic), C (MATCH_SUPPRESSED), and D
+  (no_keywords) all completed their data audits and concluded **no
+  code change was warranted by the data**:
+    - PR A: sweep of `|p-0.5|` tolerance from 0.02→0.10 yielded only +1
+      additional G1-flip across 151 historical BDs. Not meaningful.
+    - PR C: 8,647 MATCH_SUPPRESSED events are 100% legitimate noise
+      rejection (82% single-token "china" against macro markets).
+      MATCH-001 B' working as designed.
+    - PR D: 992 no_keywords rejections trace to the LLM returning
+      `magnitude='none'` on 91% of analyzed news. The analyzer code is
+      correct; the lever is the LLM prompt itself. Per IC §16, prompt
+      changes are T2 (replay-indeterminate) scope and require the
+      Phase 3 replay-CI gate before deploy.
+- No env mutation. No threshold changes. No G1/G2/G3/G4/G5/G6
+  changes. Backward-compat preserved (`_time_prior` default still
+  applies to any series not in `_SERIES_PRIORS`).
+- Full suite: **2259 passed** / 4 skipped / 71 xfailed. Ruff: clean.
+
 ## [0.30.10] - 2026-05-24
 
 ### Added

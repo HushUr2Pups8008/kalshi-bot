@@ -152,7 +152,13 @@ class TestSeriesClassification:
                        # the LLM signal during blending (observed live
                        # 2026-05-24: bc≈0.12 on a 90/10-edge market).
                        "KXTXRUNOFFENDORSE", "KXUSAIRANAGREEMENT",
-                       "KXNEWTARIFFS"):
+                       "KXNEWTARIFFS",
+                       # PROFIT-PRIORS-003 (2026-05-24): surfaced by the
+                       # v0.30.10 miss-pattern audit — historical BDs on
+                       # these series existed but had no explicit prior.
+                       # `_time_prior` default already covers them, but
+                       # explicit entries here pin behavior in tests.
+                       "KXCHINAANNOUNCE", "KXNEWDEAL"):
             w = compute_regime_weights(_market(series_ticker=prefix))
             assert w[FAST] > w[INTERPRETATION], f"{prefix}: {w}"
             assert w[FAST] > w[STRUCTURAL], f"{prefix}: {w}"
@@ -231,6 +237,8 @@ class TestSeriesClassification:
             # _time_prior fallback. See docs/CONTRACT_KALSHI_API.md §7 and
             # docs/profit_path_debt_log.md PROFIT-EDGE-005 (TBD).
             "KXTXRUNOFFENDORSE", "KXUSAIRANAGREEMENT", "KXNEWTARIFFS",
+            # PROFIT-PRIORS-003 additions
+            "KXCHINAANNOUNCE", "KXNEWDEAL",
         )
         for prefix in new_prefixes:
             w = compute_regime_weights(_market(series_ticker=prefix))

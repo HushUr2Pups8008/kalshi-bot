@@ -105,6 +105,13 @@ _SERIES_PRIORS: dict[str, tuple[float, float, float]] = {
     "KXTXRUNOFFENDORSE": (0.65, 0.25, 0.10),  # Texas Senate runoff endorsement events (rc≈0.22)
     "KXUSAIRANAGREEMENT": (0.65, 0.25, 0.10),  # US-Iran nuclear deal news-driven via LLM (rc≈0.22)
     "KXNEWTARIFFS":  (0.65, 0.25, 0.10),  # "New tariffs this month?" news-driven via LLM (rc≈0.22)
+    # PROFIT-PRIORS-003 (2026-05-24): surfaced by the v0.30.10 miss-pattern
+    # audit. Two news-driven event series were producing BDs (historical) but
+    # had no explicit `_SERIES_PRIORS` entry. The PR #41 `_time_prior` default
+    # already gives them (0.65, 0.25, 0.10), but explicit entries here pin
+    # the behavior in tests + make the operator-visible cluster complete.
+    "KXCHINAANNOUNCE": (0.65, 0.25, 0.10),  # China-side announcement events (rc≈0.22)
+    "KXNEWDEAL":     (0.65, 0.25, 0.10),  # "When will Trump announce a new trade deal?" (rc≈0.22)
     # Macroeconomic data releases — known calendar, structural prior dominates,
     # interpretation handles the surprise-vs-consensus read-through. Same
     # shape as the existing KXCBDECISION prior (rc≈0.28).
