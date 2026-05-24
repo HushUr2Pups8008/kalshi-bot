@@ -19,6 +19,77 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.31.0] - 2026-05-24
+
+### Added
+
+- **PROFIT-PHASE3-001 — Replay-CI Gate framework ACTIVATED.** Phase 3
+  of the rapid-learning framework (spec at
+  `docs/superpowers/specs/2026-05-23-paper-mode-rapid-learning-framework-design.md`)
+  is now wired into the PR workflow. Previously: changes shipped on
+  manual replay analysis and operator gating. Now: every PR runs the
+  replay-CI gate automatically and gets a Rule 4 verdict before merge.
+
+  Pipeline:
+  1. `.github/workflows/replay-ci-gate.yml` triggers on PR open / update.
+  2. Workflow runs `python -m scripts.edge_replay.ci_entry` with the
+     PR's diff vs base.
+  3. `ci_entry.py` derives semantic-scope flags (config_diff,
+     prompt_template_diff, model_manifest_diff, schema_migrations)
+     from changed paths.
+  4. Flags + paths feed `run_replay_gate` which calls the I-5 tier
+     classifier and runs the full Rule 4 EV evaluation against the
+     `all_diverse` corpus.
+  5. Verdict printed to job log + artifact uploaded for audit.
+  6. Exit code 0 (pass) / 1 (fail) sets the PR check status.
+
+  **Tier routing:**
+    - **T0** (mechanical / docs / tests-only) — Rule 2 exempt, auto-pass.
+    - **T1** (paper-mode replay-decidable) — full Rule 4 EV check;
+      `ev_ci_95_lo ≥ 0` required for pass.
+    - **T2** (paper-mode replay-indeterminate; prompt / LLM / signal
+      analyzer changes) — Rule 4 + operator review of replay-EV.
+    - **T3** (live-mode / sizing / runtime-infrastructure) — operator
+      gate; replay is informational.
+
+  **Operator override:** set `REPLAY_GATE_OVERRIDE=1` env or
+  `workflow_dispatch` input `override=true` to force-pass. Override
+  decision is logged in the gate output for audit trail.
+
+  **Unblocks T2 work safely.** The next significant performance lever
+  (LLM prompt calibration — the 91% `magnitude='none'` rate identified
+  in the v0.30.10 miss-pattern audit) is now within reach because
+  prompt changes can be replayed against historical EV before deploy.
+
+- `scripts/edge_replay/ci_entry.py` — CLI wrapper for `run_replay_gate`.
+  Single integration point between GitHub Actions and the gate. Adds:
+    - changed-file detection via `git diff <base>...HEAD`
+    - semantic-flag derivation from file paths
+    - human-readable verdict summary
+    - operator-override gate
+- `.github/workflows/replay-ci-gate.yml` — workflow runs on every PR.
+- `tests/test_replay_ci_entry.py` — 11 tests pinning semantic-flag
+  detection (7), operator override (3), exit-code mapping (1).
+- `docs/IMPLEMENTATION_CONTRACT.md` §16.7 status updated: Phase 3
+  marked SHIPPED. I-11 retrospective cron remains Phase 4 deferred.
+
+### Notes
+
+- This is **Phase 3 activation** only — no T2 changes shipped in this
+  PR. Future T2 work (LLM prompt calibration) flows through the new
+  gate.
+- I-11 retrospective auto-cron (post-deploy 7-day sign-divergence
+  monitor) remains Phase 4 work; T1 retrospective is operator-run via
+  `python -m scripts.edge_replay.replay_gate` until the cron lands.
+- I-7 variance gate (decision-rate stability across 72h paper window)
+  remains Phase 4 work. T1 currently uses the fixed-72h variance
+  metric until I-7 ships.
+- Version bump to **0.31.0** marks the framework-activation milestone.
+- No env mutation. No threshold changes. No G1-G6 changes. No prior
+  changes. Pure CI/workflow addition.
+- Full suite: **2297 passed** / 4 skipped / 71 xfailed (was 2286;
+  +11 new). Ruff: clean.
+
 ## [0.30.12] - 2026-05-24
 
 ### Added
