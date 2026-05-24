@@ -136,6 +136,69 @@ class TestOperatorOverride:
         )
 
 
+class TestCorpusAbsentBootstrapPassThrough:
+    """PROFIT-PHASE3-002: when `corpus_dir` literally does not exist
+    on the CI runner (production corpora live under gitignored
+    `logs/edge_replay/`), the gate emits a pass-through with explicit
+    notes flagging operator review. This narrowly handles the CI
+    bootstrap state — it does NOT bypass real EV evaluation when a
+    corpus IS present (even if empty / in-period-only).
+
+    Root cause: PR #45 (Phase 3 activation itself) failed its own gate
+    because the CI runner had no corpus. Admin-merge was required.
+    This pass-through makes future PRs go through cleanly while the
+    operator decides on corpus-commit strategy.
+    """
+
+    def test_nonexistent_corpus_dir_passes_with_explicit_note(self, tmp_path):
+        """The exact CI-bootstrap condition that broke PR #45."""
+        from scripts.edge_replay.replay_gate import run_replay_gate
+        nonexistent_corpus = tmp_path / "definitely_does_not_exist"
+        verdict = run_replay_gate(
+            changed_files=[Path("analysis/market_matcher.py")],  # T1 path
+            commit_sha="bootstrap-test",
+            ci_run_dir=tmp_path,
+            corpus_dir=nonexistent_corpus,
+        )
+        assert verdict.pass_ is True, (
+            "corpus_dir absent on CI runner must pass-through, not fail. "
+            "Operator gate remains authoritative."
+        )
+        assert verdict.rule4 is None
+        notes_blob = " ".join(verdict.notes)
+        assert "PROFIT-PHASE3-002" in notes_blob, (
+            "pass-through must cite the closure note so operators can "
+            "trace why the gate passed without evaluating Rule 4"
+        )
+        assert "operator gate remains authoritative" in notes_blob.lower(), (
+            "pass-through note must explicitly preserve operator-gate "
+            "responsibility so the bypass is not silent"
+        )
+
+    def test_nonexistent_corpus_passes_for_any_tier(self, tmp_path):
+        """The pass-through applies regardless of tier — T1, T2, T3
+        all bypass when corpus_dir doesn't exist. Operator gate is the
+        backstop in all three cases."""
+        from scripts.edge_replay.replay_gate import run_replay_gate
+        nonexistent_corpus = tmp_path / "no_corpus"
+        for changed_path, expected_tier in [
+            (Path("analysis/market_matcher.py"), "T1"),
+            (Path("governance/prompts.py"), "T2"),
+            (Path("trading/executor.py"), "T3"),
+        ]:
+            verdict = run_replay_gate(
+                changed_files=[changed_path],
+                commit_sha=f"any-tier-{expected_tier}",
+                ci_run_dir=tmp_path / expected_tier,
+                corpus_dir=nonexistent_corpus,
+            )
+            assert verdict.pass_ is True, (
+                f"{expected_tier} + missing corpus must pass-through; "
+                f"got pass_={verdict.pass_}"
+            )
+            assert verdict.tier == expected_tier
+
+
 class TestPassingVerdictPropagates:
     """Passing verdict + no override → exit 0."""
 
