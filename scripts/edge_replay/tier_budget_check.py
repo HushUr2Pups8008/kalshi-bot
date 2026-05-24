@@ -71,6 +71,14 @@ DEFAULT_WINDOW_DAYS: int = 14
 DEFAULT_T0_CAP: float = 0.40
 DEFAULT_DEADLOCK_DAYS: int = 7
 
+# Per-commit `git show` is O(N) subprocess calls. At a 14-day window with
+# daily commits this is negligible; at 365d on a busy repo it can block CI
+# for tens of seconds with no progress indication. Cap fails-loud (exit 2)
+# so an accidental `--window-days 365` against a 5k-commit history halts
+# immediately instead of running for minutes. Raise this constant if a
+# real workflow needs it; do not silently widen.
+MAX_COMMITS_SAFETY: int = 500
+
 # Memo glob — operators date the file for readability; the gate keys off
 # the suffix so a typo'd date prefix doesn't silently disable the memo.
 _MEMO_SUFFIX: str = "-t1-deadlock-escalation-memo.md"
@@ -241,6 +249,17 @@ def _find_active_memo(
     Returns (path_or_None, active_bool). A memo is active iff its mtime is
     within `window_days` of `now_utc`. This window-relative freshness is
     load-bearing: a single old memo must not permanently disable the gate.
+
+    **CI-safety caveat** (python-reviewer nit 2): mtime is reset by
+    ``git checkout`` / ``git pull`` to the checkout time, not the commit
+    time. In a CI environment where the worker checks out the repo fresh
+    per run, every memo's mtime is roughly "now," meaning even ancient
+    memos may register as active for one run after checkout. Memo authors
+    in CI should ``touch`` the file after checkout if they want explicit
+    freshness, OR the operator should rely on the memo's content (the
+    dated filename prefix) rather than the mtime to judge currency. The
+    JSON output's notes block surfaces a ``memo_mtime_age_days`` field
+    so operators can spot mtime-vs-filename mismatches.
     """
     glob_pattern = _MEMO_GLOB
     matches = list(repo_path.glob(glob_pattern))
@@ -302,6 +321,20 @@ def compute_budget_report(
     # Filter to window in case the runner returned extras (tests do).
     in_window = [(sha, ts, subj) for sha, ts, subj in raw_commits if ts >= window_start]
 
+    # Safety valve (python-reviewer nit 3): walking >MAX_COMMITS via
+    # per-commit `git show` becomes O(N) subprocess calls. At 14-day
+    # window with daily commits this is negligible; at 365d on a busy
+    # repo it can block CI for tens of seconds with no progress signal.
+    # Cap fails-loud with exit-2 routing so an accidental
+    # `--window-days 365` against a 5k-commit window halts immediately.
+    if len(in_window) > MAX_COMMITS_SAFETY:
+        raise RuntimeError(
+            f"window contains {len(in_window)} commits; max safety cap is "
+            f"{MAX_COMMITS_SAFETY}. Reduce --window-days or pass a smaller "
+            "rolling window. (Cap exists to prevent runaway CI cost; raise "
+            "MAX_COMMITS_SAFETY if your workflow genuinely needs more.)"
+        )
+
     # ---- Classify each commit -------------------------------------------------
     classified: list[CommitTier] = []
     for sha, ts, subject in in_window:
@@ -312,7 +345,11 @@ def compute_budget_report(
         # check is an aggregate signal anyway — under-estimating T3 by one
         # tier here biases toward more T0 in the count, which makes the
         # cap *harder* to satisfy (conservative direction for the safeguard).
-        tier = classify_tier(files)
+        # write_ledger=False: this is a replay over historical commits for
+        # reporting, NOT a live runtime decision. Polluting the
+        # tier_classifications.jsonl ledger with phantom entries would
+        # corrupt the operational signal that downstream tooling reads.
+        tier = classify_tier(files, write_ledger=False)
         classified.append(
             CommitTier(
                 sha=sha,

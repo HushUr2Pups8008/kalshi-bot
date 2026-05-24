@@ -382,3 +382,30 @@ def test_self_classification_not_logged_as_t0(tmp_path, monkeypatch):
     # Tracker: also confirm os.getcwd is the tmp_path (test-isolation
     # sanity check; if this fails subsequent assertions are meaningless).
     assert os.getcwd() == str(tmp_path)
+
+
+def test_classify_tier_write_ledger_false_skips_audit_log(tmp_path, monkeypatch):
+    """T0-budget check (final Phase 2 deliverable) replays classification
+    across historical commits as a read-only reporting exercise. Per
+    python-reviewer concern #1: those replay calls must NOT pollute the
+    runtime ledger with phantom entries indistinguishable from live
+    decisions. write_ledger=False suppresses the audit-log write while
+    preserving the returned tier."""
+    monkeypatch.chdir(tmp_path)
+    log_path = tmp_path / "logs" / "edge_replay" / "tier_classifications.jsonl"
+
+    # write_ledger=True (default) → log written.
+    tier_true = classify_tier(["analysis/market_matcher.py"])
+    assert tier_true == "T1"
+    assert log_path.exists(), "default write_ledger=True must write"
+    lines_after_true = len(log_path.read_text().splitlines())
+
+    # write_ledger=False → no new lines.
+    tier_false = classify_tier(
+        ["analysis/market_matcher.py"], write_ledger=False
+    )
+    assert tier_false == "T1", "classification result unchanged by write_ledger"
+    lines_after_false = len(log_path.read_text().splitlines())
+    assert lines_after_false == lines_after_true, (
+        "write_ledger=False must not append to the audit log"
+    )

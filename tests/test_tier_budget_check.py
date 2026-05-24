@@ -17,6 +17,7 @@ The check has three meaningful verdicts:
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -146,8 +147,7 @@ def test_all_t0_with_active_memo_warns(tmp_path, monkeypatch):
     memo.write_text("operator memo\n", encoding="utf-8")
     # Force the mtime within the window (default 14d).
     fresh_ts = (NOW - timedelta(days=2)).timestamp()
-    import os as _os
-    _os.utime(memo, (fresh_ts, fresh_ts))
+    os.utime(memo, (fresh_ts, fresh_ts))
 
     commits = [
         {
@@ -182,8 +182,7 @@ def test_stale_memo_does_not_unlock(tmp_path, monkeypatch):
     memo = gov / "2026-04-01-t1-deadlock-escalation-memo.md"
     memo.write_text("ancient memo\n", encoding="utf-8")
     stale_ts = (NOW - timedelta(days=30)).timestamp()
-    import os as _os
-    _os.utime(memo, (stale_ts, stale_ts))
+    os.utime(memo, (stale_ts, stale_ts))
 
     commits = [
         {
@@ -297,8 +296,7 @@ def test_over_cap_with_active_memo_warns(tmp_path, monkeypatch):
     memo = gov / "2026-05-20-t1-deadlock-escalation-memo.md"
     memo.write_text("ack\n", encoding="utf-8")
     fresh_ts = (NOW - timedelta(days=3)).timestamp()
-    import os as _os
-    _os.utime(memo, (fresh_ts, fresh_ts))
+    os.utime(memo, (fresh_ts, fresh_ts))
 
     commits = []
     for i in range(9):
@@ -385,8 +383,7 @@ def test_memo_glob_matches_arbitrary_date_prefix(tmp_path, monkeypatch):
     memo = gov / "operator-jp-quick-note-t1-deadlock-escalation-memo.md"
     memo.write_text("ack\n", encoding="utf-8")
     fresh_ts = (NOW - timedelta(days=1)).timestamp()
-    import os as _os
-    _os.utime(memo, (fresh_ts, fresh_ts))
+    os.utime(memo, (fresh_ts, fresh_ts))
 
     commits = [
         {
