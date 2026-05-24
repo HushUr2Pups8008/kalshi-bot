@@ -997,10 +997,15 @@ class TestExpectedPolicyFamilyCoverage:
     Operator-mandated: never silently zero-trade because of a missing
     family the catalog actually advertised."""
 
-    def test_warning_fires_when_catalog_lists_family_but_intake_drops_it(self, caplog):
+    def test_kalshi_empty_response_does_not_warn_after_refinement(self, caplog):
         """KXCPIYOY appears in the series catalog and is geo-matched, but
-        the per-series fetch returns zero markets. This is the operator-
-        named failure mode and must surface as a warning."""
+        the per-series fetch returns zero markets (Kalshi-side empty).
+
+        Pre-refinement: this raised WARN ("missing from intake").
+        Post-refinement: this is correctly classified as a legitimate
+        Kalshi-side condition and emits DEBUG, not WARN. The true intake-
+        bug case is now covered by `test_warning_still_fires_for_true_intake_bug`.
+        """
         rest = MagicMock()
         rest.get_all_series.return_value = [
             {"ticker": "KXCPIYOY", "title": "Inflation"},
@@ -1013,11 +1018,19 @@ class TestExpectedPolicyFamilyCoverage:
         rest.get_markets.side_effect = _per_series
         matcher = MarketMatcher(rest)
 
-        caplog.set_level(_logging.WARNING, logger="market_matcher")
+        caplog.set_level(_logging.DEBUG, logger="market_matcher")
         matcher._cache._fetch_geo_markets()
         warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
-        assert warnings, "missing expected policy family must emit warning"
-        assert any("KXCPIYOY" in r.message for r in warnings)
+        assert not any("KXCPIYOY" in r.message for r in warnings), (
+            "post-refinement: Kalshi-empty must not be reported as WARN — "
+            "see `test_warning_still_fires_for_true_intake_bug` for the "
+            "actual intake-bug surface"
+        )
+        debugs = [r for r in caplog.records if r.levelno == _logging.DEBUG]
+        assert any(
+            "zero open markets" in r.message and "KXCPIYOY" in r.message
+            for r in debugs
+        )
 
     def test_no_warning_when_family_genuinely_retired_from_catalog(self, caplog):
         """If KXCPIYOY is not in the series catalog at all (Kalshi retired
@@ -1063,4 +1076,108 @@ class TestExpectedPolicyFamilyCoverage:
         assert not warnings, (
             "happy path: warning must not fire when all expected families "
             "in the catalog also reach intake"
+        )
+
+    # ── refined: distinguish three causes of "missing from cache" ──────────────
+    # WARN false-positives observed during the 2026-05-24 audit:
+    #   KXSBUDGETRES — series in catalog, ZERO open markets (all finalized)
+    #   KXEFFTARIFF  — series in catalog, has open markets but ALL exceed
+    #                  MAX_MARKET_DAYS_TO_EXPIRY=30 so downstream filter drops
+    # Refined helper distinguishes these from a TRUE intake-path bug
+    # (eligible markets exist but never reach the cache).
+
+    def test_no_warning_when_series_has_zero_open_markets(self, caplog):
+        """Kalshi-side legitimate: catalog advertises the series but the
+        per-series fetch returns zero open markets (all finalized or no
+        cycle currently listed). Should DEBUG, not WARN."""
+        rest = MagicMock()
+        rest.get_all_series.return_value = [
+            {"ticker": "KXCPIYOY", "title": "Inflation"},
+        ]
+        rest.get_markets.return_value = ([], None)
+        matcher = MarketMatcher(rest)
+
+        caplog.set_level(_logging.DEBUG, logger="market_matcher")
+        matcher._cache._fetch_geo_markets()
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert not any("KXCPIYOY" in r.message for r in warnings), (
+            "refined: zero-open-markets must NOT warn — it's a legitimate "
+            "Kalshi-side condition, not an intake bug"
+        )
+        debugs = [r for r in caplog.records if r.levelno == _logging.DEBUG]
+        assert any(
+            "zero open markets" in r.message and "KXCPIYOY" in r.message
+            for r in debugs
+        ), "refined: zero-open-markets case must be DEBUG-logged with the family name"
+
+    def test_no_warning_when_all_open_markets_filtered_by_downstream(self, caplog):
+        """Per-series fetch returns markets but all exceed
+        MAX_MARKET_DAYS_TO_EXPIRY=30 and are filtered downstream. Should
+        DEBUG, not WARN — the days filter is intentional bot policy."""
+        rest = MagicMock()
+        rest.get_all_series.return_value = [
+            {"ticker": "KXEFFTARIFF", "title": "Effective tariff"},
+        ]
+        rest.get_markets.return_value = (
+            [_make_market(
+                "KXEFFTARIFF-FAR",
+                "Effective tariff far-dated",
+                series_ticker="KXEFFTARIFF",
+                days_to_close=90,
+            )],
+            None,
+        )
+        matcher = MarketMatcher(rest)
+
+        caplog.set_level(_logging.DEBUG, logger="market_matcher")
+        matcher._cache._fetch_geo_markets()
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert not any("KXEFFTARIFF" in r.message for r in warnings), (
+            "refined: all-filtered-downstream must NOT warn — the days "
+            "filter is intentional bot policy, not an intake bug"
+        )
+        debugs = [r for r in caplog.records if r.levelno == _logging.DEBUG]
+        assert any(
+            "downstream filters" in r.message and "KXEFFTARIFF" in r.message
+            for r in debugs
+        ), "refined: all-filtered case must be DEBUG-logged with the family name"
+
+    def test_warning_still_fires_for_true_intake_bug(self, caplog):
+        """If `per_series_counts` indicates eligible markets exist but the
+        cache state shows the family is missing, that's a real intake-path
+        bug and the WARN must fire. This pins the load-bearing case the
+        2026-05-12 incident would have surfaced."""
+        from analysis.market_matcher import _warn_on_missing_expected_families
+
+        caplog.set_level(_logging.WARNING, logger="market_matcher")
+        _warn_on_missing_expected_families(
+            [],
+            geo_tickers_set={"KXCPIYOY"},
+            per_series_counts={"KXCPIYOY": (5, 3)},
+        )
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert warnings, (
+            "load-bearing: when eligible markets exist but cache is empty, "
+            "the bot must emit the operator-visible intake-bug WARN"
+        )
+        assert any(
+            "KXCPIYOY" in r.message and "Series-targeted fetch path" in r.message
+            for r in warnings
+        ), "WARN message must name the missing family and the suspected fix-site"
+
+    def test_backward_compat_without_per_series_counts(self, caplog):
+        """When `per_series_counts` is None, helper falls back to original
+        behavior and warns on any missing family in the catalog. Preserves
+        PR #33 behavior for any caller that has not been updated."""
+        from analysis.market_matcher import _warn_on_missing_expected_families
+
+        caplog.set_level(_logging.WARNING, logger="market_matcher")
+        _warn_on_missing_expected_families(
+            [],
+            geo_tickers_set={"KXCPIYOY"},
+        )
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert any("KXCPIYOY" in r.message for r in warnings), (
+            "back-compat: without per_series_counts the helper must warn "
+            "on any catalog-but-missing family (preserves PR #33 behavior)"
         )

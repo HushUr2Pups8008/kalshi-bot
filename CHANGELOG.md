@@ -19,6 +19,55 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.30.5] - 2026-05-24
+
+### Fixed
+
+- **Coverage WARN false-positives** —
+  `analysis/market_matcher._warn_on_missing_expected_families` previously
+  flagged any expected policy family that appeared in the Kalshi series
+  catalog but was absent from the geo-markets cache. Two legitimate
+  conditions produced false positives in the 2026-05-24 audit:
+    - `KXSBUDGETRES` — series advertised in catalog, but ALL current
+      markets are `status="finalized"` (no open cycle right now). The
+      per-series fetch returns 0 open markets, which is a Kalshi-side
+      condition, not an intake bug.
+    - `KXEFFTARIFF` — series advertised, has 5 open markets, but all
+      close 67d out. `MAX_MARKET_DAYS_TO_EXPIRY=30` correctly filters
+      them downstream. This is intentional bot policy, not an intake bug.
+
+  The helper now accepts a `per_series_counts: dict[str, (raw, eligible)]`
+  argument from `_fetch_geo_markets` and distinguishes three causes:
+    - `raw == 0` → DEBUG ("zero open markets")
+    - `raw > 0 and eligible == 0` → DEBUG ("downstream filters")
+    - `eligible > 0 but family not in cache` → **WARN** (true intake bug)
+
+  WARN is now reserved for the load-bearing intake-bug case, preserving
+  operator-visible signal quality. `per_series_counts=None` keeps the
+  PR #33 backward-compat behavior for any caller that has not been updated.
+
+### Added
+
+- 4 new tests in `tests/test_market_matcher.py`:
+  - `test_no_warning_when_series_has_zero_open_markets`
+  - `test_no_warning_when_all_open_markets_filtered_by_downstream`
+  - `test_warning_still_fires_for_true_intake_bug`
+  - `test_backward_compat_without_per_series_counts`
+
+  The first two pin the false-positive suppression. The third pins the
+  load-bearing WARN behavior that the 2026-05-12 zero-trade incident
+  would have surfaced if it had been a true intake bug.
+  `test_kalshi_empty_response_does_not_warn_after_refinement` replaces
+  the pre-refinement `test_warning_fires_when_catalog_lists_family_but_intake_drops_it`
+  (the old test's premise — "any catalog-but-missing = WARN" — was the
+  false-positive source the refinement fixes).
+
+### Notes
+
+- No env mutation. No service restart performed. No G1 / G4 threshold
+  changes. No regime-prior changes. Patch is scoped to coverage-WARN
+  logic + tests.
+
 ## [0.30.4] - 2026-05-24
 
 ### Added

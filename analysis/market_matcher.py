@@ -417,30 +417,74 @@ def _warn_on_missing_expected_families(
     markets: list[KalshiMarket],
     *,
     geo_tickers_set: set[str],
+    per_series_counts: dict[str, tuple[int, int]] | None = None,
 ) -> None:
     """Emit operator-visible warning if expected policy families are missing.
 
     A family is treated as "expected" only when (a) it is in
     `_EXPECTED_POLICY_SERIES` and (b) the series-discovery pass surfaced its
-    ticker — i.e. Kalshi currently lists the series. This prevents false
-    alarms when Kalshi has legitimately retired a series.
+    ticker — i.e. Kalshi currently lists the series.
+
+    `per_series_counts` maps series_ticker -> (raw_open_count,
+    eligible_after_filter_count). When provided, the helper distinguishes
+    three causes of "missing from cache" so operators don't see false-
+    positive warnings for legitimate Kalshi-side conditions:
+
+      1. raw_open_count == 0   — series advertised but has zero open markets
+         (e.g. all finalized). LEGITIMATE; emit at DEBUG, not WARN.
+      2. raw_open_count > 0 and eligible == 0 — open markets exist but all
+         exceed MAX_MARKET_DAYS_TO_EXPIRY or fail test-market exclusion.
+         LEGITIMATE downstream-filter; emit at DEBUG, not WARN.
+      3. eligible > 0 and family still not in cache — true intake-path
+         bug. WARN at operator-visible level.
+
+    Without `per_series_counts` (backward-compat path), the function
+    falls back to the original logic and warns on any missing family
+    that's in the catalog.
     """
     expected_present_in_discovery = [
         s for s in _EXPECTED_POLICY_SERIES if s in geo_tickers_set
     ]
     if not expected_present_in_discovery:
         return
-    missing = [
-        prefix for prefix in expected_present_in_discovery
-        if not any(_market_belongs_to_series(m, prefix) for m in markets)
-    ]
-    if missing:
+
+    truly_missing: list[str] = []
+    series_empty: list[str] = []
+    all_filtered: list[str] = []
+    for prefix in expected_present_in_discovery:
+        in_cache = any(_market_belongs_to_series(m, prefix) for m in markets)
+        if in_cache:
+            continue
+        if per_series_counts is None:
+            truly_missing.append(prefix)
+            continue
+        raw, eligible = per_series_counts.get(prefix, (0, 0))
+        if raw == 0:
+            series_empty.append(prefix)
+        elif eligible == 0:
+            all_filtered.append(prefix)
+        else:
+            truly_missing.append(prefix)
+
+    if series_empty:
+        log.debug(
+            "Expected policy families with zero open markets (Kalshi-side, "
+            "legitimate): %s",
+            ",".join(series_empty),
+        )
+    if all_filtered:
+        log.debug(
+            "Expected policy families with open markets all excluded by "
+            "downstream filters (MAX_MARKET_DAYS_TO_EXPIRY or test-market): "
+            "%s",
+            ",".join(all_filtered),
+        )
+    if truly_missing:
         log.warning(
             "Expected policy families absent from intake despite being in "
-            "Kalshi series catalog: %s. Kalshi listing is present but no "
-            "markets reached the geo-markets cache — check series-targeted "
-            "fetch path.",
-            ",".join(missing),
+            "Kalshi series catalog AND having eligible open markets: %s. "
+            "Series-targeted fetch path may be broken — investigate.",
+            ",".join(truly_missing),
         )
 
 
@@ -511,6 +555,7 @@ class MarketCache:
         )
 
         filtered = []
+        per_series_counts: dict[str, tuple[int, int]] = {}
         for series_ticker in geo_tickers:
             try:
                 # Kalshi /markets has TWO different `status` contracts:
@@ -528,17 +573,24 @@ class MarketCache:
                     series_ticker=series_ticker,
                     limit=200,
                 )
+                raw_count = len(page)
+                eligible_count = 0
                 for m in page:
                     if _is_excluded_test_market(m):
                         continue
                     days = _days_to_close(m.close_time)
                     if days is None or 0 < days <= MAX_MARKET_DAYS_TO_EXPIRY:
                         filtered.append(_attach_regime_weights(m))
+                        eligible_count += 1
+                per_series_counts[series_ticker] = (raw_count, eligible_count)
             except Exception as exc:
                 log.debug("Skipping series %s: %s", series_ticker, exc)
+                per_series_counts[series_ticker] = (0, 0)
 
         _warn_on_missing_expected_families(
-            filtered, geo_tickers_set=set(geo_tickers),
+            filtered,
+            geo_tickers_set=set(geo_tickers),
+            per_series_counts=per_series_counts,
         )
 
         return filtered, len(geo_tickers)
