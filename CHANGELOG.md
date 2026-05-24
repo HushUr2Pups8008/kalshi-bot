@@ -19,6 +19,71 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.30.8] - 2026-05-24
+
+### Fixed
+
+- **PROFIT-PRIORS-001 — re-shape KXUSAIRANAGREEMENT / KXTXRUNOFFENDORSE
+  / KXNEWTARIFFS priors from interpretation-dominant to fast-dominant.**
+  PR #35 (v0.30.4) added these three series with interpretation-heavy
+  priors `(0.05-0.10, 0.55-0.65, 0.25-0.40)` because the LLM's reasoning
+  task involves interpretation. That conflated *"what the LLM does"*
+  with *"which blender lane receives the signal"*. In production the
+  bot only has fast-lane (news LLM) data on these markets — the
+  interpretation and structural lanes have no dossier / structural-prior
+  infrastructure wired for these series yet. The heavy interp/structural
+  weights silently diluted high-confidence LLM signals
+  (fast_lane_confidence=0.85) down to `blended_confidence ≈ 0.12`,
+  causing G1 to block even on real 90/10 edge cases — confirmed live on
+  2026-05-24 BD against `KXUSAIRANAGREEMENT-27-26JUN`:
+
+  ```
+  market_price (YES) : 90 cents     (market implies YES ≈ 90%)
+  fast_lane_p        : 0.05         (LLM said YES ≈ 5%)
+  fast_lane_conf     : 0.85         (LLM IS confident)
+  blended_p          : 0.1109
+  blended_confidence : 0.1162       (diluted to ~14% of fast_lane_conf)
+  scaled_confidence  : 0.0268       (bc × rc = 0.1162 × 0.2307)
+  G1 threshold       : 0.05
+  result             : BLOCKED      ← but the side='no' edge was 0.79
+  ```
+
+  Re-shaped to `(0.65, 0.25, 0.10)` matching the existing event-driven
+  political cluster (KXTRUMPACT, KXTRUMPENDORSE, KXTRUMPCHINA, etc.).
+  `rc≈0.22` unchanged — no G4 movement. **No G1 threshold change.**
+  Same confidence floor, just lane weighting that matches the
+  infrastructure that actually exists.
+
+  Expected post-fix on the same incident: with fast-lane weight=0.65,
+  `bc ≈ 0.65 × 0.85 = 0.55`, scaled ≈ `0.55 × 0.22 = 0.12` → clears
+  G1 (0.05) by 2.4×. Bot can now act on its own high-confidence signals
+  on these markets when the LLM is confident.
+
+### Added
+
+- Moved KXTXRUNOFFENDORSE / KXUSAIRANAGREEMENT / KXNEWTARIFFS from
+  `test_legislative_calendar_priors_are_interpretation_dominant` into
+  `test_event_driven_political_priors_are_fast_dominant`. Pins the new
+  lane shape.
+
+- New `test_profit_priors_001_lane_shape_unblocks_g1` — load-bearing
+  contract: for these three series, a high-confidence fast-lane signal
+  (proxy: fast_lane_confidence=0.80) must produce scaled_confidence
+  well above G1=0.05. If a future refactor drifts the lane weights back
+  toward interp-dominant, this test catches it before merge.
+
+### Notes
+
+- This is a **calibration fix**, not a G1 relaxation. No env mutation.
+  No threshold-value changes. No regime-confidence math changes. Only
+  lane weighting changes on three series.
+- Per `~/.claude/rules/domain_constraints.md`, this affects trade
+  selectivity. Operator explicitly authorized the re-shape in this turn.
+- Full suite: **2246 passed** / 4 skipped / 71 xfailed (was 2239; +7
+  through PR rebases; new contract pin added inside the existing
+  test class). Ruff: clean.
+- Bot picks up changes on next launchd restart.
+
 ## [0.30.7] - 2026-05-24
 
 ### Added
