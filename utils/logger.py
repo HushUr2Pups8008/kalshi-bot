@@ -775,6 +775,7 @@ class TradeLogger:
         headline: str,
         match_score: float,
         age_seconds: float | None = None,
+        threshold_seconds: int | None = None,
     ) -> None:
         record = {
             "type": "ANALYSIS_REJECTED",
@@ -786,6 +787,8 @@ class TradeLogger:
         }
         if age_seconds is not None:
             record["age_seconds"] = round(age_seconds, 2)
+        if threshold_seconds is not None:
+            record["threshold_seconds"] = int(threshold_seconds)
         self._write(record)
 
     def log_early_stale_drop(
