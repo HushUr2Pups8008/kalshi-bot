@@ -52,6 +52,21 @@ request-vs-response status contract that the P-7 author misread.
     pass-through applies for T1/T2/T3 alike (operator gate is the
     backstop in all three cases).
 
+### Documentation
+
+- IC §16.7 — added "Operator override (`REPLAY_GATE_OVERRIDE=1`)"
+  sub-block. Specifies who may set the override (operator only, not
+  agents unsupervised), when it is appropriate (corpus bootstrap,
+  documented incident, tooling failure, gate-self-fix), when it is
+  NOT appropriate (schedule pressure on routine behavioral changes),
+  audit obligations (PR cite, CHANGELOG enumeration, surfaced at the
+  next 30-day framework review), and non-overridable invariants
+  (max-wins tier rule, semantic-scope expansion, temperature=0 pin,
+  cache-key extension, repeat-verification — the override does NOT
+  silence these). Distinguishes the operator override from the
+  PROFIT-PHASE3-002 bootstrap pass-through (different channel,
+  different scope). Closes operator recommendation #3.
+
 ### Notes
 
 - All existing `tests/test_replay_gate_smoke.py` tests (which exercise
