@@ -164,8 +164,20 @@ MAX_NEWS_AGE_SECONDS: int = int(os.getenv("MAX_NEWS_AGE_SECONDS", "300"))  # 5 m
 # path. This is an optimization only; _process_candidate() still enforces the
 # authoritative stale-news guard with MAX_NEWS_AGE_SECONDS.
 EARLY_MAX_NEWS_AGE_SECONDS: int = int(
-    os.getenv("EARLY_MAX_NEWS_AGE_SECONDS", "300")
-)  # 5 min default
+    os.getenv("EARLY_MAX_NEWS_AGE_SECONDS", "1800")
+)  # 30 min default — PROFIT-STALE-002 (2026-05-24): raised from 300s to
+   # match the per-source-override value (1800s) for all curated publishers.
+   # The 7-day funnel showed 681 items at 5-15m age killed because their
+   # source string had no explicit override and fell to the old 300s default.
+   # The existing per-source entries below remain as documentation of intent
+   # but no longer need to be exhaustive — new publishers (Washington Post,
+   # Bloomberg, The Hill, South China Morning Post, NYT direct via Google
+   # News, BBC short form, France 24 short form, CNBC, Times of India)
+   # benefit automatically. Lower-trust aggregator sources (MSN, Forbes,
+   # Reddit) also receive the longer window; LLM-side filtering and the
+   # downstream source_class / source_multiplier guards continue to suppress
+   # spurious signals. Cost analysis: LLM is local (Ollama qwen3), so the
+   # extra throughput is wallclock, not $$.
 
 # Curated per-source overrides for the early freshness pre-filter.
 # Exact source strings are preferred for predictability; main.py also does a

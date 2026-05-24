@@ -455,12 +455,14 @@ async def test_process_candidate_skips_stale_news_before_estimation(monkeypatch)
     # threshold via _early_max_news_age_seconds_for_source(news.source).
     # _make_news() defaults to source="Reuters", which is not in the
     # EARLY_MAX_NEWS_AGE_BY_SOURCE override map; it falls through to
-    # EARLY_MAX_NEWS_AGE_SECONDS=300. Aging news 600s past published keeps
-    # this case stale under the new parity policy.
+    # EARLY_MAX_NEWS_AGE_SECONDS.
+    # PROFIT-STALE-002 (2026-05-24): default raised 300s → 1800s. Age the
+    # news 2000s past published so this case stays stale under the new
+    # default. If the default changes again, bump this offset.
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     bot = _make_bot_stub()
     news = _make_news()
-    news.published = datetime.now(timezone.utc) - timedelta(seconds=600)
+    news.published = datetime.now(timezone.utc) - timedelta(seconds=2000)
     market = _make_market()
 
     with patch("main.estimate_probability", new=AsyncMock()) as estimate_mock, \
@@ -477,7 +479,7 @@ async def test_process_candidate_skips_stale_news_before_estimation(monkeypatch)
     assert kwargs["source"] == news.source
     assert kwargs["headline"] == news.headline
     assert kwargs["match_score"] == 0.20
-    assert kwargs["age_seconds"] == pytest.approx(600.0, abs=5.0)
+    assert kwargs["age_seconds"] == pytest.approx(2000.0, abs=5.0)
 
 
 @pytest.mark.asyncio
@@ -1713,6 +1715,31 @@ class TestRuntimeThresholdOverride:
     must take precedence over the static EARLY_MAX_NEWS_AGE_BY_SOURCE
     map. Without a reader registered, behavior is identical to pre-Phase-1.
     """
+
+    def test_global_default_is_1800s(self):
+        """PROFIT-STALE-002 — global default EARLY_MAX_NEWS_AGE_SECONDS
+        must be 1800s, not the legacy 300s. Reverting to 300s silently
+        re-introduces the ~97/day loss of premium-publisher items
+        attributed via google_news_query (Washington Post, Bloomberg,
+        The Hill, etc.) that 7-day funnel diagnostic 2026-05-24 found.
+
+        The per-source map in config.EARLY_MAX_NEWS_AGE_BY_SOURCE is
+        now documentation-of-intent rather than the exhaustive list of
+        what gets the longer window; bumping the default removes the
+        per-source-list-maintenance burden the operator flagged.
+        """
+        import config
+        from utils import runtime_overrides as ro
+        ro._global_reader = None
+        from main import _early_max_news_age_seconds_for_source
+        assert config.EARLY_MAX_NEWS_AGE_SECONDS == 1800, (
+            "Global default regressed below 1800s. The per-source-override "
+            "approach replaced by PROFIT-STALE-002 is now load-bearing — "
+            "do not revert without an explicit operator sign-off and an "
+            "audit of the funnel-loss numbers."
+        )
+        # An unlisted source must inherit the new default.
+        assert _early_max_news_age_seconds_for_source("Some Unlisted Publisher") == 1800
 
     def test_runtime_threshold_overrides_static_value(self, monkeypatch):
         from utils import runtime_overrides as ro
