@@ -86,9 +86,25 @@ _SERIES_PRIORS: dict[str, tuple[float, float, float]] = {
     "KXVOTESAVEAMERICA": (0.05, 0.60, 0.35),  # Save America vote events (rc≈0.24)
     "KXEFFTARIFF":   (0.05, 0.60, 0.35),  # Effective tariff schedule (rc≈0.24)
     "KXMOCTRUMP25":  (0.10, 0.65, 0.25),  # Trump month-of-action calendar windows (rc≈0.22)
-    "KXTXRUNOFFENDORSE": (0.10, 0.65, 0.25),  # Texas Senate runoff endorsement events (rc≈0.22)
-    "KXUSAIRANAGREEMENT": (0.05, 0.55, 0.40),  # US-Iran nuclear deal — slow process, structural anchor (rc≈0.23)
-    "KXNEWTARIFFS":  (0.05, 0.65, 0.30),  # "New tariffs this month?" calendar-window policy events (rc≈0.28)
+    # PROFIT-PRIORS-001 (2026-05-24): the three series below were initially
+    # given interpretation-dominant priors in PR #35 because the LLM's
+    # reasoning task involves interpretation. That conflated "what the LLM
+    # does" with "which blender lane receives the signal." In production
+    # the bot only has fast-lane (news LLM) data on these markets — the
+    # interpretation and structural lanes have no dossier / structural-
+    # prior infrastructure wired for these series yet. Heavy interp/
+    # structural weights diluted high-confidence LLM signals (fast_lane_
+    # confidence=0.85) down to blended_confidence≈0.12, which failed G1
+    # even on real 90/10 edge cases (see 2026-05-24 BD on KXUSAIRAN-
+    # AGREEMENT-27-26JUN where the bot picked side='no' correctly with
+    # signed_diff=-0.79 but G1 blocked on bc×rc=0.027 < 0.05). Re-shaped
+    # to fast-dominant matching the event-driven political cluster below
+    # (KXTRUMPACT, KXTRUMPENDORSE, etc.) where data lives in the same
+    # lane. rc unchanged at ≈0.22 — no G4 movement, no G1 threshold
+    # change, only lane weighting.
+    "KXTXRUNOFFENDORSE": (0.65, 0.25, 0.10),  # Texas Senate runoff endorsement events (rc≈0.22)
+    "KXUSAIRANAGREEMENT": (0.65, 0.25, 0.10),  # US-Iran nuclear deal news-driven via LLM (rc≈0.22)
+    "KXNEWTARIFFS":  (0.65, 0.25, 0.10),  # "New tariffs this month?" news-driven via LLM (rc≈0.22)
     # Macroeconomic data releases — known calendar, structural prior dominates,
     # interpretation handles the surprise-vs-consensus read-through. Same
     # shape as the existing KXCBDECISION prior (rc≈0.28).

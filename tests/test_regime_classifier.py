@@ -141,10 +141,68 @@ class TestSeriesClassification:
     def test_event_driven_political_priors_are_fast_dominant(self):
         for prefix in ("KXTRUMPACT", "KXTRUMPENDORSE", "KXTRUMPCHINA",
                        "KXTRUMPCRYPTOCONF", "KXVANCEPAKISTAN",
-                       "KXVISITVENEZUELA"):
+                       "KXVISITVENEZUELA",
+                       # PROFIT-PRIORS-001 (2026-05-24): moved here from
+                       # the legislative/calendar interpretation-dominant
+                       # cluster. These markets are news-driven via the
+                       # LLM fast lane; the interpretation/structural
+                       # lanes have no dossier/structural-prior
+                       # infrastructure wired for them yet, so
+                       # interpretation-dominant priors silently zeroed
+                       # the LLM signal during blending (observed live
+                       # 2026-05-24: bc≈0.12 on a 90/10-edge market).
+                       "KXTXRUNOFFENDORSE", "KXUSAIRANAGREEMENT",
+                       "KXNEWTARIFFS"):
             w = compute_regime_weights(_market(series_ticker=prefix))
             assert w[FAST] > w[INTERPRETATION], f"{prefix}: {w}"
             assert w[FAST] > w[STRUCTURAL], f"{prefix}: {w}"
+
+    def test_profit_priors_001_lane_shape_unblocks_g1(self):
+        """The three markets re-shaped in PROFIT-PRIORS-001 must produce
+        scaled_confidence (bc × rc) high enough to clear G1=0.05 when the
+        LLM signal is high-confidence.
+
+        Load-bearing: the 2026-05-24 BD on KXUSAIRANAGREEMENT-27-26JUN
+        had LLM fast_lane_confidence=0.85 (strong signal) but
+        blended_confidence diluted to 0.1162 because the prior weighted
+        the fast lane at only 0.05. scaled_confidence = 0.027 failed G1.
+        Post-re-shape (fast=0.65, interp=0.25, structural=0.10), even
+        the same LLM confidence produces a much higher blended_confidence
+        because the lane carrying the signal now has dominant weight.
+
+        This test pins the contract: for these three series, a high-
+        confidence fast-lane signal must produce scaled_confidence well
+        above G1=0.05.
+        """
+        import math
+        from tasks.trade_readiness_gate import G1_CONFIDENCE_THRESHOLD
+        from analysis.regime_classifier import _SERIES_PRIORS
+
+        for prefix in ("KXUSAIRANAGREEMENT", "KXTXRUNOFFENDORSE",
+                       "KXNEWTARIFFS"):
+            weights = _SERIES_PRIORS[prefix]
+            # Confirm fast-lane has the dominant weight ≥ 0.50 so that
+            # any single-lane signal can clear G1 with reasonable confidence.
+            assert weights[0] >= 0.50, (
+                f"{prefix}: fast-lane weight={weights[0]} must be ≥0.50 "
+                "to ensure LLM signals reach blender without dilution"
+            )
+            # rc derived from the new prior shape
+            ent = -sum(w * math.log(w) for w in weights if w > 0)
+            rc = 1.0 - ent / math.log(3)
+            # Assume realistic high-LLM-confidence scenario: fast_lane_confidence=0.80
+            # Conservative model: when only fast lane has data,
+            # blended_confidence ≈ fast_lane_confidence × fast_weight
+            #                     = 0.80 × weights[0]
+            # scaled_confidence = blended_confidence × rc
+            #                   = (0.80 × weights[0]) × rc
+            bc_proxy = 0.80 * weights[0]
+            scaled_proxy = bc_proxy * rc
+            assert scaled_proxy > G1_CONFIDENCE_THRESHOLD, (
+                f"{prefix}: with LLM conf=0.80, scaled={scaled_proxy:.4f} "
+                f"must exceed G1={G1_CONFIDENCE_THRESHOLD}. weights={weights}, "
+                f"rc={rc:.4f}, bc_proxy={bc_proxy:.4f}"
+            )
 
     def test_conflict_priors_are_strongly_fast_dominant(self):
         for prefix in ("KXTRUMPIRAN", "KXARMOMINF", "KXELECTIONEMERGENCY"):
