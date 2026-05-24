@@ -1937,14 +1937,17 @@ class TestSourceClassClassifierLeverA1PlusAnalysisBranch:
     def test_kyiv_post_already_lands_in_known_class_today(self):
         """Positive control: Kyiv Post (currently in RSS_FEEDS) is one of
         the specialist analyst sources Codex's audit credited with 3/3
-        historical PAPER_TRADE. It currently buckets as `other` (no token
-        match). The A.1+ analysis-branch addition should bucket it as
-        `analysis` too — but that's not pinned here because Kyiv Post is
-        in the news-adjacent ambiguous zone (some operators may classify
-        as `news` instead). Pinned looser to avoid over-constraining."""
+        historical PAPER_TRADE. Multiple defensible buckets exist:
+          - `other` (pre-Lever-A.1 / pre-PROFIT-EDGE-006 fallback)
+          - `analysis` (the A.1+ analysis-branch goal)
+          - `news` (operators classifying it as a news-adjacent source)
+          - `regional` (PROFIT-EDGE-006: foreign-bureau classification)
+        Pinned looser to avoid over-constraining as the taxonomy evolves.
+        """
         result = _source_class_for_evidence("Kyiv Post")
-        assert result in {"other", "analysis", "news"}, (
-            f"Kyiv Post must bucket as one of other/analysis/news; got {result!r}"
+        assert result in {"other", "analysis", "news", "regional"}, (
+            f"Kyiv Post must bucket as one of other/analysis/news/regional; "
+            f"got {result!r}"
         )
 
 

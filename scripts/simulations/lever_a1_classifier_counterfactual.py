@@ -62,11 +62,16 @@ from main import _source_class_for_evidence as classify_pre_fix  # noqa: E402
 # ---------------------------------------------------------------------------
 
 def classify_post_fix(source: str) -> str:
-    """Reference implementation of the post-Lever-A.1 classifier.
+    """Reference implementation of the post-Lever-A.1 + PROFIT-EDGE-006 classifier.
 
-    Mirrors `main.py:_source_class_for_evidence` *with* the spec §2.1 / §2.2
-    token-list expansions. The production fix should produce identical
-    output to this function on every input.
+    Mirrors `main.py:_source_class_for_evidence` *with* the
+      - PROFIT-EDGE-004 Lever A.1 spec §2.1 / §2.2 token-list expansions
+      - PROFIT-EDGE-006 (2026-05-24) extensions: new `regional` class for
+        foreign-bureau publications + expanded news-source token list
+        recovering 29% of live evidence previously bucketed as `other`.
+
+    The production fix should produce identical output to this function on
+    every input.
     """
     source_text = (source or "").strip()
     lower = source_text.lower()
@@ -79,22 +84,45 @@ def classify_post_fix(source: str) -> str:
         "white house",
         "state department",
         "defense department",
-        "department of war",            # NEW (§2.1)
-        "department of defense",        # NEW (§2.1)
+        "department of war",
+        "department of defense",
         "federal reserve",
         "supreme court",
         "congress",
         "parliament",
         "ministry",
         "official",
-        "un news",                      # NEW (§2.1)
-        "united nations",               # NEW (§2.1)
-        "european commission",          # NEW (§2.1)
-        "press releases",               # NEW (§2.1) — broad; positioned after specific
-        "international atomic energy agency",  # NEW (§2.1)
-        "iaea",                         # NEW (§2.1)
+        "un news",
+        "united nations",
+        "european commission",
+        "press releases",
+        "international atomic energy agency",
+        "iaea",
     )):
         return "official"
+    # PROFIT-EDGE-006: regional foreign-bureau publications
+    if any(token in lower for token in (
+        "times of israel",
+        "kyiv post",
+        "kyiv independent",
+        "iran international",
+        "anadolu ajansı",
+        "anadolu ajansi",
+        "anadolu agency",
+        "shafaq news",
+        "newagebd",
+        "global banking",
+        "the daily nk",
+        "asia times",
+        "asahi shimbun",
+        "yomiuri shimbun",
+        "japan times",
+        "south china morning post",
+        "haaretz",
+        "jerusalem post",
+        "tehran times",
+    )):
+        return "regional"
     if source_text.endswith(" - Google News") or source_text.endswith(" - BingNews"):
         return "news"
     if any(token in lower for token in (
@@ -112,8 +140,36 @@ def classify_post_fix(source: str) -> str:
         "politico",
         "politics",
         "just in news",
-        "defense news",                 # NEW (§2.2)
-        "breaking defense",             # NEW (§2.2)
+        "defense news",
+        "breaking defense",
+        # PROFIT-EDGE-006 additional US/UK news publications
+        "the new york times",
+        "the washington post",
+        "washingtonpost",
+        "wapo",
+        "aol.com",
+        "msn",
+        "usa today",
+        "newsweek",
+        "the independent",
+        "wral",
+        "bloomberg",
+        "axios",
+        "the hill",
+        "cnn",
+        "abc news",
+        "nbc news",
+        "cbs news",
+        "fox news",
+        "huffpost",
+        "huffington post",
+        "the atlantic",
+        "wired",
+        "vox",
+        "vice news",
+        "buzzfeed",
+        "salon.com",
+        "slate",
     )):
         return "news"
     return "other"
