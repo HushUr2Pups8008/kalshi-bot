@@ -476,6 +476,17 @@ class PaperTrader:
             ("accumulation_confidence", "REAL"),
             ("structural_p",            "REAL"),
             ("structural_confidence",   "REAL"),
+            # I-10 (framework v3, closes Codex blocker E): cohort_extension
+            # holds the contamination-window tag
+            # ``contamination_window:<change_id>:<window_id>`` for paper
+            # trades written while a T1/T2 observation window is active
+            # (see scripts/edge_replay/contamination_corpus_manager.py).
+            # Nullable: a NULL value means the trade is part of the normal
+            # corpus and is eligible for pre-deploy gates; a non-NULL value
+            # means the I-1 corpus builder must exclude the row by default
+            # but the I-11 retrospective consumes it as the gold-standard
+            # OOS measurement for the named change.
+            ("cohort_extension",        "TEXT"),
         ]
         for col, col_type in new_cols:
             if col not in cols and self._ensure_paper_trades_column(col, col_type, cols):
@@ -508,6 +519,44 @@ class PaperTrader:
 
     def _paper_trades_columns(self) -> set[str]:
         return {row[1] for row in self._conn.execute("PRAGMA table_info(paper_trades)")}
+
+    @staticmethod
+    def _resolve_cohort_extension() -> str | None:
+        """Return the active contamination-window tag, or ``None``.
+
+        I-10 (framework v3, closes Codex blocker E). Imports the
+        contamination manager lazily so a missing or broken module never
+        blocks the trade write. The entire body is wrapped in a single
+        ``try/except Exception`` -> ``None`` for the same reason: this
+        helper is observational machinery and must never break the
+        money-path INSERT. See ``rules/risk_review.md``: observability
+        write paths should not silently swallow exceptions, but here we
+        explicitly accept the silent-skip tradeoff because the alternative
+        (raising) would block paper-trade persistence. The contamination
+        machinery is best-effort label propagation, not a safety gate.
+        """
+        try:
+            from scripts.edge_replay.contamination_corpus_manager import (
+                cohort_extension_tag,
+                get_active_window,
+            )
+
+            window = get_active_window()
+            if window is None:
+                return None
+            return cohort_extension_tag(window)
+        except Exception:
+            # Per python-reviewer MEDIUM: warn on swallow so a corrupt
+            # sentinel or import failure is distinguishable from
+            # "no active window" in production logs. The paper-trade
+            # persistence guarantee is unaffected; only observability
+            # improves. Using the module-level `log` keeps the message
+            # in the trade-path log stream where operators look first.
+            log.warning(
+                "[I-10] _resolve_cohort_extension failed; labeling skipped",
+                exc_info=True,
+            )
+            return None
 
     def _ensure_paper_trades_column(self, col: str, col_type: str, cols: set[str]) -> bool:
         try:
@@ -788,6 +837,13 @@ class PaperTrader:
         lane_struct_p    = _lane_float("structural_p")
         lane_struct_conf = _lane_float("structural_confidence")
 
+        # I-10 (framework v3, closes Codex blocker E): stamp the contamination
+        # tag on every paper trade taken under an active observation window.
+        # Additive label only — does not change any decision logic. Fail-soft:
+        # the helper swallows every exception and returns None so trade
+        # persistence is never blocked by sentinel-file machinery.
+        cohort_extension = self._resolve_cohort_extension()
+
         self._conn.execute(
             """INSERT INTO paper_trades
                (trade_id, ts, ticker, market_title, side, contracts, price_cents,
@@ -799,8 +855,8 @@ class PaperTrader:
                 fast_lane_p, fast_lane_confidence, accumulation_p, accumulation_confidence,
                 structural_p, structural_confidence,
                 price_source, price_method, price_retrieved_at, raw_payload_hash,
-                p0_contract_version)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                p0_contract_version, cohort_extension)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 trade_id,
                 datetime.now(timezone.utc).isoformat(),
@@ -841,6 +897,7 @@ class PaperTrader:
                 provenance_retrieved_str,
                 provenance_hash,
                 1,
+                cohort_extension,
             ),
         )
         self._conn.commit()

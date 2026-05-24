@@ -65,6 +65,14 @@ from typing import Any
 
 CORPUS_BUILDER_VERSION = 1
 
+# I-10 (framework v3, closes Codex blocker E). Mirrors
+# scripts.edge_replay.contamination_corpus_manager.CONTAMINATION_PREFIX.
+# Duplicated as a literal here so the corpus builder has no import-time
+# dependency on the contamination module (avoids a build-time cycle and
+# keeps the corpus builder runnable in environments where the
+# contamination manager module is absent).
+_CONTAMINATION_TAG_PREFIX = "contamination_window:"
+
 DEFAULT_DB = Path("data/paper_trades.db")
 DEFAULT_REGIMES_DOC = Path("docs/governance/corpus-regimes.md")
 DEFAULT_OUTPUT_DIR = Path("logs/edge_replay")
@@ -209,6 +217,13 @@ def _stamp_row(
     stamped["market_families"] = list(market_families)
     stamped["corpus_builder_version"] = CORPUS_BUILDER_VERSION
     stamped["built_at_utc"] = built_at_utc
+    # I-10: surface contamination membership on every row so consumers
+    # that read JSONL (replay runners, retrospective scripts) do not
+    # have to reparse the cohort_extension string themselves.
+    tag = stamped.get("cohort_extension") or ""
+    stamped["contamination_window"] = (
+        isinstance(tag, str) and tag.startswith(_CONTAMINATION_TAG_PREFIX)
+    )
     return stamped
 
 
@@ -241,12 +256,25 @@ def build_corpus(
     evidence_store_db: Path | None = None,  # noqa: ARG001 — reserved for I-2/I-4
     regimes_doc_path: Path | None = None,
     built_at_utc: str | None = None,
+    include_contamination: bool = False,
 ) -> BuildResult:
     """Build a replay corpus from ``paper_trades.db`` for one window+regime.
 
     See module docstring for the OOS standard, blocker-C rationale, and
     the JSONL row contract. Raises :class:`UnregisteredRegimeError` if
     ``regime_label`` is not declared in the regimes doc.
+
+    I-10 (framework v3, closes Codex blocker E):
+    ``include_contamination=False`` (default) excludes rows tagged with
+    ``cohort_extension LIKE 'contamination_window:%'`` so the pre-deploy
+    gates for OTHER changes are not polluted by observation-window rows.
+    ``include_contamination=True`` returns ALL rows and is the path used
+    by the I-11 T1 retrospective when it needs the gold-standard
+    "this is what the bot did under candidate code" measurement.
+
+    Each emitted JSONL row gains a ``contamination_window`` boolean
+    field (derived from ``cohort_extension``) so downstream consumers
+    can distinguish contamination rows when they are included.
     """
     if not market_families:
         raise ValueError("market_families must be a non-empty list")
@@ -285,6 +313,7 @@ def build_corpus(
 
     # Read paper_trades read-only.
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    excluded_contamination_count = 0
     try:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA query_only = ON")
@@ -296,23 +325,53 @@ def build_corpus(
                 "(corpus builder expects the canonical schema)"
             )
 
-        rows = conn.execute(
-            "SELECT * FROM paper_trades "
-            "WHERE ts >= ? AND ts < ? ORDER BY ts ASC, trade_id ASC",
-            (window_start, window_end),
-        ).fetchall()
+        # I-10 contamination filter: only apply the LIKE exclusion when
+        # both (a) the caller wants the default exclusion and (b) the
+        # cohort_extension column actually exists. Pre-migration DBs
+        # must continue to build corpora cleanly — every row is
+        # implicitly non-contamination there.
+        cohort_extension_present = "cohort_extension" in cols
+        if include_contamination or not cohort_extension_present:
+            rows = conn.execute(
+                "SELECT * FROM paper_trades "
+                "WHERE ts >= ? AND ts < ? ORDER BY ts ASC, trade_id ASC",
+                (window_start, window_end),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM paper_trades "
+                "WHERE ts >= ? AND ts < ? "
+                "AND (cohort_extension IS NULL "
+                "     OR cohort_extension NOT LIKE ?) "
+                "ORDER BY ts ASC, trade_id ASC",
+                (window_start, window_end, f"{_CONTAMINATION_TAG_PREFIX}%"),
+            ).fetchall()
+            # Count what we excluded so the BuildResult.notes can report
+            # it. Cheap COUNT(*) on the same read connection.
+            excluded_contamination_count = conn.execute(
+                "SELECT COUNT(*) FROM paper_trades "
+                "WHERE ts >= ? AND ts < ? "
+                "AND cohort_extension LIKE ?",
+                (window_start, window_end, f"{_CONTAMINATION_TAG_PREFIX}%"),
+            ).fetchone()[0]
     finally:
         conn.close()
 
     # Filter to rows that match at least one of the requested families.
     matched_rows: list[tuple[dict[str, Any], list[str]]] = []
     distinct_families_present: set[str] = set()
+    contamination_row_count = 0
     for raw in rows:
         row_dict = _row_to_dict(raw)
         matches = _row_families(row_dict, market_families)
         if matches:
             matched_rows.append((row_dict, matches))
             distinct_families_present.update(matches)
+            tag = row_dict.get("cohort_extension") or ""
+            if isinstance(tag, str) and tag.startswith(
+                _CONTAMINATION_TAG_PREFIX
+            ):
+                contamination_row_count += 1
 
     in_period = len(distinct_families_present) < 2
     notes: list[str] = []
@@ -322,6 +381,20 @@ def build_corpus(
             "families filtered through; downstream I-4 must refuse to gate "
             "T1 deploys with only IN_PERIOD corpora."
         )
+    # I-10: surface the filter behavior in the build notes so operators
+    # see how many rows the contamination-window filter excluded (or
+    # included, when include_contamination=True).
+    if cohort_extension_present:
+        if include_contamination:
+            notes.append(
+                f"include_contamination=True: {contamination_row_count} "
+                "contamination rows retained (I-11 retrospective mode)."
+            )
+        elif excluded_contamination_count:
+            notes.append(
+                f"{excluded_contamination_count} contamination rows "
+                "filtered (include_contamination=False default)."
+            )
 
     # Write JSONL atomically by writing then renaming.
     tmp_path = resolved_output.with_name(resolved_output.name + ".tmp")
@@ -397,6 +470,16 @@ def _build_argparser() -> argparse.ArgumentParser:
         default=DEFAULT_REGIMES_DOC,
         help=f"Path to corpus-regimes.md (default: {DEFAULT_REGIMES_DOC})",
     )
+    parser.add_argument(
+        "--include-contamination",
+        action="store_true",
+        default=False,
+        help=(
+            "I-10: include rows tagged contamination_window:*. Default "
+            "excludes them so pre-deploy gates for OTHER changes are not "
+            "polluted. Enable for the I-11 T1 retrospective."
+        ),
+    )
     return parser
 
 
@@ -426,6 +509,7 @@ def main(argv: list[str] | None = None) -> int:
             output_path=args.output,
             paper_trades_db=args.db,
             regimes_doc_path=args.regimes_doc,
+            include_contamination=args.include_contamination,
         )
     except FileNotFoundError as exc:
         print(f"[build_corpus] {exc}", file=sys.stderr)
