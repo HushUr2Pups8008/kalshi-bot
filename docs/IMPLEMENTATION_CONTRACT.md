@@ -977,6 +977,67 @@ Per the paper-mode rapid-learning framework v3 (`docs/superpowers/specs/2026-05-
   stability + unexpected-SKIPPED-bucket per framework v3 §3 I-7 /
   §8 Q4) until I-7 ships.
 
+**Operator override (`REPLAY_GATE_OVERRIDE=1`).** The replay-CI gate
+supports a single operator-controlled override channel. This block
+specifies who can use it, when it's appropriate, how it audits, and
+what post-merge obligations attach. Agents must NOT set this variable
+unsupervised; it is operator-only authority.
+
+- **Mechanism.** Set `REPLAY_GATE_OVERRIDE=1` as an environment
+  variable on the CI run (workflow-dispatch input, repo/org secret
+  override, or job env block). The override is consumed by
+  `scripts/edge_replay/ci_entry.py`; the gate still EVALUATES Rule 4
+  and writes the verdict to `logs/edge_replay/ci_runs/<commit>/`, but
+  the CI exit code is forced to 0 regardless of pass/fail. The
+  verdict file always records the original pass/fail so the override
+  is non-destructive to the audit trail.
+- **Bootstrap pass-through (separate channel, PROFIT-PHASE3-002).**
+  Distinct from the operator override: when `corpus_dir` literally
+  does not exist on the runner (e.g., gitignored production corpus
+  not present on a fresh CI checkout), `run_replay_gate` emits a
+  pass-through verdict with explicit notes citing PROFIT-PHASE3-002
+  and "operator gate remains authoritative". The pass-through is
+  scoped narrowly to nonexistent corpus_dir — present-but-empty
+  corpora continue to fail per Rule 2. See
+  `scripts/edge_replay/replay_gate.py` and
+  `tests/test_replay_ci_entry.py::TestCorpusAbsentBootstrapPassThrough`.
+- **When override is appropriate** (operator judgment, not exhaustive):
+  - Wave-1 cutover where the replay corpus itself is the artifact
+    being changed (the gate cannot self-evaluate).
+  - Documented incident response where waiting on a fresh corpus
+    build would extend the live failure window.
+  - Tooling/CI infrastructure failure where the gate is broken in a
+    way unrelated to the PR's behavioral content (operator must
+    confirm by re-running locally per the operator-run replay
+    workflow).
+  - PR whose entire purpose is to fix the replay gate itself
+    (chicken-and-egg; same pattern as PR #45 admin-merge).
+- **When override is NOT appropriate.** Schedule pressure on a
+  routine T1/T2/T3 behavioral change is not a valid override reason;
+  the correct response is to either narrow the change to T0, run the
+  replay locally and attach the verdict, or wait for the gate. The
+  override is a safety valve, not a velocity tool.
+- **Audit obligations** (operator-owned, gate-enforced where
+  mechanical):
+  1. The PR description must cite "operator override" with a one-line
+     reason and a link to the affected `logs/edge_replay/ci_runs/<commit>/`
+     verdict.
+  2. The override appears in `CHANGELOG.md` under the released
+     version with the original gate verdict (pass/fail) and the
+     reason class (bootstrap / incident / tooling / gate-fix).
+  3. Every override is enumerated at the next 30-day framework
+     review (§16.7 above). Repeat overrides for the same reason
+     class are an operator-judgment signal that either the
+     tier-classifier seam is wrong or a real T0/T1 gate is missing;
+     the operator decides whether a root-cause memo at
+     `docs/governance/<date>-<topic>-memo.md` is warranted.
+- **Non-overridable items remain non-overridable.** Per §16.7 above:
+  max-wins tier rule, semantic-scope expansion, temperature=0 pin,
+  cache-key extension, and repeat-verification requirement cannot be
+  bypassed by `REPLAY_GATE_OVERRIDE`. The override forces only the
+  CI exit code; it does not silence verdict logging or relax the
+  underlying invariants.
+
 ### Cross-references
 
 - `docs/_archive/governance/2026-05-06-strategic-redirect-edge-replay-priority.md` — incident origin

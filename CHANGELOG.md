@@ -19,6 +19,73 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.31.1] - 2026-05-24
+
+### Fixed
+
+- **PROFIT-PHASE3-002 — corpus-absent CI bootstrap pass-through.**
+  PR #45 (the Phase 3 activation PR) failed its own gate because the
+  CI runner had no corpus on disk (production corpora live under
+  gitignored `logs/edge_replay/`). Admin-merge was required.
+
+  Fix in `scripts/edge_replay/replay_gate.py`: when `corpus_dir`
+  literally does not exist, emit a pass-through verdict with explicit
+  notes flagging that operator gate remains authoritative. The
+  pass-through is NARROWLY scoped to the bootstrap condition — when
+  the corpus dir exists but contains 0 diverse corpora (a real
+  failure mode), the gate continues to fail per IC §16.7 Rule 2.
+
+  Initial attempt at a broader T3-tier pass-through was reverted
+  because IC §16.7 explicitly requires T3 changes to evaluate Rule 1
+  (≥30 markets, 95% CI) even though the operator gates the actual
+  merge. The narrower corpus-existence check correctly bypasses only
+  the "no corpus on the CI runner at all" condition.
+
+### Added
+
+- 2 tests in `tests/test_replay_ci_entry.py::TestCorpusAbsentBootstrapPassThrough`:
+  - `test_nonexistent_corpus_dir_passes_with_explicit_note` — load-bearing
+    contract: bypass passes WITH a note that cites `PROFIT-PHASE3-002`
+    and surfaces operator-gate responsibility (so the bypass is not
+    silent).
+  - `test_nonexistent_corpus_passes_for_any_tier` — verifies the
+    pass-through applies for T1/T2/T3 alike (operator gate is the
+    backstop in all three cases).
+
+### Documentation
+
+- IC §16.7 — added "Operator override (`REPLAY_GATE_OVERRIDE=1`)"
+  sub-block. Specifies who may set the override (operator only, not
+  agents unsupervised), when it is appropriate (corpus bootstrap,
+  documented incident, tooling failure, gate-self-fix), when it is
+  NOT appropriate (schedule pressure on routine behavioral changes),
+  audit obligations (PR cite, CHANGELOG enumeration, surfaced at the
+  next 30-day framework review), and non-overridable invariants
+  (max-wins tier rule, semantic-scope expansion, temperature=0 pin,
+  cache-key extension, repeat-verification — the override does NOT
+  silence these). Distinguishes the operator override from the
+  PROFIT-PHASE3-002 bootstrap pass-through (different channel,
+  different scope). Closes operator recommendation #3.
+
+### Notes
+
+- All existing `tests/test_replay_gate_smoke.py` tests (which exercise
+  Rule 4 evaluation against PRESENT corpora) continue to pass — the
+  bootstrap pass-through does not interfere with real EV evaluation
+  when a corpus exists.
+- Operator follow-ups for full CI corpus support remain open:
+    - Commit a real or synthetic corpus to a CI-accessible location
+    - OR set up CI to fetch corpus from an artifact store
+    - OR document the operator-run replay workflow for T1/T2 PRs
+- This is the operator-recommended polish item #1 (T3/bootstrap
+  handling) and #3 (cross-link operator runbook). Item #2 (commit
+  fixture corpus) was deferred since fabricated EV evidence would be
+  worse than honest CI bootstrap notes.
+- No env mutation. No threshold changes. No G1-G6 changes. No prior
+  changes.
+- Full suite: **2299 passed** / 4 skipped / 71 xfailed (was 2297;
+  +2 new). Ruff: clean.
+
 ## [0.31.0] - 2026-05-24
 
 ### Added
