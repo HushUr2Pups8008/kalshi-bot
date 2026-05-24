@@ -893,7 +893,6 @@ class TestSuppressionTokenGuardMATCH001:
 import logging as _logging
 from analysis.market_matcher import (
     _FETCH_MAX_PAGES,
-    _FETCH_MAX_ROWS,
     _EXPECTED_POLICY_SERIES,
 )
 
@@ -956,7 +955,7 @@ class TestFetchAllMarketsPaginationContract:
         is exactly the failure class we are blocking."""
         def _always_cursor(*args, **kwargs):
             return (
-                [_make_market(f"KXNBA-x", "x", series_ticker="KXNBA")],
+                [_make_market("KXNBA-x", "x", series_ticker="KXNBA")],
                 "next",
             )
         rest = MagicMock()
