@@ -168,6 +168,11 @@ class TestSeriesClassification:
             "KXTRUMPCRYPTOCONF", "KXVANCEPAKISTAN", "KXVISITVENEZUELA",
             "KXPARDONSTRUMP", "KXLTGOVGANOMR",
             "KXTRUMPIRAN", "KXARMOMINF", "KXELECTIONEMERGENCY",
+            # Post-incident additions — 2026-05-12 zero-trade collapse diagnostic
+            # surfaced these series reaching BD and failing G4 (rc<0.20) via
+            # _time_prior fallback. See docs/CONTRACT_KALSHI_API.md §7 and
+            # docs/profit_path_debt_log.md PROFIT-EDGE-005 (TBD).
+            "KXTXRUNOFFENDORSE", "KXUSAIRANAGREEMENT", "KXNEWTARIFFS",
         )
         for prefix in new_prefixes:
             w = compute_regime_weights(_market(series_ticker=prefix))
