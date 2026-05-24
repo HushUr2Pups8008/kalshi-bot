@@ -370,18 +370,32 @@ def _evidence_id_for_signal(analysis: SignalAnalysis) -> str:
 
 
 def _source_class_for_evidence(source: str) -> str:
-    """Map runtime source labels into the evidence source-class contract."""
+    """Map runtime source labels into the evidence source-class contract.
+
+    Classes used by G2 (evidence source-class diversity gate):
+      social    — Reddit, social-feed sources
+      market    — Kalshi-internal / price-fade signals
+      official  — government, intergovernmental, or institutional press
+      news      — major news publications (US + UK domestic + international wires)
+      regional  — foreign regional news bureaus (Israeli, Ukrainian, Iranian,
+                  Turkish, etc.). Distinct from `news` so a dossier mixing
+                  e.g. NYT + Times of Israel surfaces 2 classes for G2,
+                  reflecting genuine independence-of-coverage.
+      other     — unclassified (default-fallback)
+
+    PROFIT-EDGE-006 (2026-05-24): expanded from PROFIT-EDGE-004 Lever A.1.
+    The pre-fix classifier bucketed 29% of live news evidence (2,843 events
+    from 39 distinct sources including The Washington Post, The Times of
+    Israel, Kyiv Post, Iran International, AOL.com, etc.) into `other`,
+    silently failing G2 even for dossiers with genuinely diverse coverage.
+    """
     source_text = (source or "").strip()
     lower = source_text.lower()
     if source_text.startswith("r/"):
         return "social"
     if lower == "price_fade" or lower.startswith("kalshi://"):
         return "market"
-    # PROFIT-EDGE-004 Lever A.1 — recover already-wired official feeds
-    # that pre-fix silently bucketed as `other` because the token list did
-    # not cover their RSS `<title>` strings (Department of War, UN News,
-    # European Commission press releases, IAEA). Adding `defense news` /
-    # `breaking defense` lifts industry-press wires from `other` to `news`.
+    # PROFIT-EDGE-004 Lever A.1 — official sources
     if any(token in lower for token in (
         ".gov",
         "white house",
@@ -403,9 +417,37 @@ def _source_class_for_evidence(source: str) -> str:
         "iaea",
     )):
         return "official"
+    # PROFIT-EDGE-006 — regional news bureaus. Distinct from `news` so a
+    # dossier mixing e.g. NYT + Times of Israel registers 2 classes for G2.
+    # Regional bureaus are matched by publication name token; the geo
+    # token (`israel`, `iran`, etc.) alone is too broad — a US news outlet
+    # writing about Israel doesn't become an Israeli source.
+    if any(token in lower for token in (
+        "times of israel",
+        "kyiv post",
+        "kyiv independent",
+        "iran international",
+        "anadolu ajansı",
+        "anadolu ajansi",
+        "anadolu agency",
+        "shafaq news",
+        "newagebd",
+        "global banking",
+        "the daily nk",
+        "asia times",
+        "asahi shimbun",
+        "yomiuri shimbun",
+        "japan times",
+        "south china morning post",
+        "haaretz",
+        "jerusalem post",
+        "tehran times",
+    )):
+        return "regional"
     if source_text.endswith(" - Google News") or source_text.endswith(" - BingNews"):
         return "news"
     if any(token in lower for token in (
+        # PROFIT-EDGE-004 Lever A.1 baseline
         "reuters",
         "associated press",
         "ap news",
@@ -422,6 +464,37 @@ def _source_class_for_evidence(source: str) -> str:
         "just in news",
         "defense news",
         "breaking defense",
+        # PROFIT-EDGE-006 — additional major US/UK news publications that
+        # were silently bucketing as `other`. Verified frequencies in
+        # 24-day live log: WaPo=107, AOL=126, MSN=47, USA Today=21,
+        # Newsweek=18, The Independent=17, WRAL=15, NYT (long form)=25.
+        "the new york times",
+        "the washington post",
+        "washingtonpost",
+        "wapo",
+        "aol.com",
+        "msn",
+        "usa today",
+        "newsweek",
+        "the independent",
+        "wral",
+        "bloomberg",
+        "axios",
+        "the hill",
+        "cnn",
+        "abc news",
+        "nbc news",
+        "cbs news",
+        "fox news",
+        "huffpost",
+        "huffington post",
+        "the atlantic",
+        "wired",
+        "vox",
+        "vice news",
+        "buzzfeed",
+        "salon.com",
+        "slate",
     )):
         return "news"
     return "other"

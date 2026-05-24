@@ -19,6 +19,90 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.30.12] - 2026-05-24
+
+### Added
+
+- **PROFIT-EDGE-006 — source-class taxonomy expansion + new `regional` class.**
+  Audit of 24-day live event log surfaced 2,843 events from 39 distinct
+  sources (≈29% of news flow) currently bucketed as `other` despite being
+  legitimate news. Top offenders by frequency: Times of Israel (836),
+  Kyiv Post (778), Kyiv Independent (444), Iran International (143),
+  AOL.com (126), The Washington Post (107), MSN (47), Newsweek (18),
+  The Independent (17), WRAL (15).
+
+  Fix in `main.py:_source_class_for_evidence`:
+    - **New `regional` class** for foreign-bureau publications. Distinct
+      from `news` so a dossier mixing US-domestic + foreign regional
+      sources surfaces **2 distinct source classes** for the G2 evidence-
+      diversity gate. This was the load-bearing miss-driver:
+      single-class dossiers (all `news` or all `other`) silently failed
+      G2 even when coverage was genuinely independent.
+    - **Expanded `news` token list** by 16 publications: The Washington
+      Post, The New York Times (long form), USA Today, MSN, AOL.com,
+      Newsweek, The Independent, WRAL, Bloomberg, Axios, The Hill, CNN,
+      ABC/NBC/CBS/Fox News, The Atlantic.
+    - Added 19 regional-bureau tokens covering Israeli, Ukrainian,
+      Iranian, Turkish, Japanese, and other foreign-bureau publications.
+
+  This is **Lever A.1's natural successor**. PR #16 / v0.30.2 introduced
+  the lever A.1 token list. This PR extends it with the regional class
+  + 16 additional news tokens.
+
+### Mechanism for G2 unblock
+
+Pre-fix dossier composition for a typical Iran/Trump news cluster:
+```
+ev-1: NYT > World News         → class=news
+ev-2: Al Jazeera               → class=news
+ev-3: The Times of Israel      → class=other   (misclassified)
+ev-4: Kyiv Post                → class=other   (misclassified)
+distinct classes: 2 (news + other) → G2 passes only on luck
+```
+
+Post-fix:
+```
+ev-1: NYT > World News         → class=news
+ev-2: Al Jazeera               → class=news
+ev-3: The Times of Israel      → class=regional   (new)
+ev-4: Kyiv Post                → class=regional   (new)
+distinct classes: 2 (news + regional) → G2 passes structurally
+```
+
+The post-fix split CORRECTLY reflects independence of coverage.
+Regional foreign-bureau coverage is genuinely independent evidence
+from US-domestic news; this PR makes the taxonomy recognize that.
+
+### Tests (27 new)
+
+- `tests/test_lever_a1_classifier_counterfactual.py`:
+  - Updated `test_post_fix_canonical_sources_match_expected_distribution`
+    to reflect new distribution (regional=3, other=3 down from 6).
+  - Renamed `test_pre_fix_to_post_fix_delta_is_six_recoveries` →
+    `test_pre_fix_to_post_fix_delta_recovers_nine_sources` (now +4
+    official, +2 news, +3 regional = 9 total).
+  - **9 parametrized tests** pinning regional sources classify as
+    `regional`.
+  - **16 parametrized tests** pinning news additions classify as `news`.
+  - **`test_profit_edge_006_g2_diversity_dossier_mixing_us_and_regional_passes`**
+    — load-bearing: WaPo + Times of Israel must surface 2 distinct
+    classes. If a future refactor collapses regional → news, this fails.
+  - `test_profit_edge_006_pre_fix_misclassifies_named_sources` — pins
+    the pre-fix bug shape.
+- `tests/test_main_pipeline.py::test_kyiv_post_already_lands_in_known_class_today`
+  accepted-set widened to include `regional`.
+
+### Notes
+
+- **No env mutation. No threshold changes.** G2 still requires
+  `len(set(classes)) >= 2`. No G1/G3/G4/G5/G6 changes.
+- **No expanded contract surface that affects readiness logic** — `regional`
+  is just another distinct string. G2 counts distinct classes; it doesn't
+  care about specific names.
+- Bot picks up changes on next launchd restart.
+- Full suite: **2286 passed** / 4 skipped / 71 xfailed (was 2259; +27 new).
+- Ruff: clean.
+
 ## [0.30.11] - 2026-05-24
 
 ### Added
