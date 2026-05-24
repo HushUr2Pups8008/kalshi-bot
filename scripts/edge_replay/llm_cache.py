@@ -77,6 +77,7 @@ import json
 import logging
 import sqlite3
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -376,6 +377,12 @@ def _ensure_i12_columns(conn: sqlite3.Connection) -> None:
     # The index is in _SCHEMA_SQL, but a pre-I-12 DB never executed that
     # statement against the column. Re-emit it idempotently.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_poisoned ON llm_responses(poisoned)")
+    # Commit the DDL explicitly per python-reviewer MEDIUM. SQLite implicitly
+    # commits on DDL but Python's sqlite3 module leaves the connection in a
+    # deferred-transaction state until the caller commits. Making the
+    # migration self-contained avoids a hypothetical mid-call crash leaving
+    # ALTER TABLE staged but uncommitted.
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -1005,8 +1012,6 @@ def scan_integrity(
     a scan against a pre-I-12 DB transparently migrates the schema
     before scanning.
     """
-    import time
-
     eff_logger = logger or logging.getLogger(__name__)
     dst = Path(db_path) if db_path is not None else _DEFAULT_DB_PATH
 
@@ -1165,6 +1170,13 @@ def _build_argparser() -> argparse.ArgumentParser:
     s.add_argument("--db", type=Path, default=None)
     # mark-poison vs report-only as a single flag pair so the operator
     # cannot accidentally fall into an unintended write mode.
+    #
+    # Default behavior when NEITHER flag is supplied: `--mark-poisoned`
+    # wins via its `default=True`. `argparse` mutual-exclusion only
+    # rejects supplying BOTH simultaneously; it does NOT require exactly
+    # one. The default-write path is intentional — the spec-stated
+    # purpose of `scan` is to quarantine drift, and report-only is the
+    # opt-in for an operator who wants to inspect first.
     poison_group = s.add_mutually_exclusive_group()
     poison_group.add_argument(
         "--mark-poisoned",
