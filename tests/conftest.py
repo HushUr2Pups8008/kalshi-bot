@@ -35,6 +35,14 @@ _KALSHI_TEST_LOG_DIR: str = ""
 #   this markdown source with a structured signal.
 # ---------------------------------------------------------------------------
 
+# Relative path is INTENTIONAL — resolved against the process CWD at
+# read_text() time so the pytester sandbox tests can shadow the real
+# evidence file by writing to `pytester.path / docs/_archive/...`. An
+# absolute __file__-anchored path would always resolve to the real
+# repo's evidence file and bypass the sandbox. The bot's launchd job
+# and pytest both run from the repo root, so production resolution is
+# correct. Per python-reviewer nit 2: documented (not changed) because
+# the __file__-anchored alternative would break test isolation.
 _WAVE1_OBSERVATION_PLAN = Path(
     "docs/_archive/governance/wave-1-post-deploy-observation-plan.md"
 )
@@ -125,6 +133,11 @@ def pytest_collection_modifyitems(
             continue
         ticket = match.group(1).upper()
         if ticket in passing:
+            # `item.own_markers` is a documented public list in pytest >=7;
+            # list-replacement is the canonical mutation pattern for
+            # pytest_collection_modifyitems hooks (per python-reviewer nit 1).
+            # If pytest internals shift in a future major, the alternative
+            # is item.iter_markers + a fresh add_marker() round-trip.
             item.own_markers = [m for m in item.own_markers if m.name != "xfail"]
 
 
