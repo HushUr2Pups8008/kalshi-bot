@@ -19,6 +19,65 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.30.7] - 2026-05-24
+
+### Added
+
+- **PROFIT-UNIVERSE-001 — universe-shape watcher.** Implements the spec
+  at `docs/superpowers/specs/2026-05-24-universe-shape-watcher-design.md`.
+  Per-refresh structured INFO line with aggregate universe diagnostics,
+  plus an operator-visible WARN on ALARM verdict. Catches the cumulative
+  failure mode the 2026-05-12 → 05-24 zero-trade incident demonstrated
+  (sports-only effective universe with no operator-visible signal),
+  complementary to the per-family coverage WARN from PR #33/#37.
+
+  New helper `_emit_universe_shape_diagnostic` invoked from
+  `MarketCache._fetch_geo_markets` after the existing per-series fetch
+  loop. Pure function over the in-memory cache state — no extra Kalshi
+  calls, no DB writes.
+
+  Verdict ladder:
+    - **ALARM** when `g4_eligible == 0` OR
+      `expected_present_ratio < UNIVERSE_WATCH_MIN_EXPECTED_PRESENT_RATIO`
+      (default 0.50) OR `sports_share > UNIVERSE_WATCH_MAX_SPORTS_SHARE`
+      (default 0.95) on a non-zero universe.
+    - **DEGRADED** when `g4_eligible < UNIVERSE_WATCH_MIN_G4_ELIGIBLE`
+      (default 5) OR `prior_covered_ratio < UNIVERSE_WATCH_MIN_PRIOR_COVERED_RATIO`
+      (default 0.10) OR any expected family is absent.
+    - **NORMAL** otherwise.
+
+  All four thresholds env-var tunable. Phase 1 is alert-only (no
+  soft-halt of trade flow); operator may opt into soft-halt in a
+  follow-up after observing thresholds for ≥7 days.
+
+- 8 tests in `tests/test_universe_shape_watcher.py`:
+    - `test_normal_universe_emits_NORMAL_verdict`
+    - `test_zero_g4_eligible_emits_ALARM`
+    - `test_sports_dominant_universe_emits_ALARM`
+    - `test_low_expected_present_emits_ALARM`
+    - `test_below_prior_coverage_ratio_emits_DEGRADED`
+    - `test_env_overrides_thresholds`
+    - `test_watcher_emits_once_per_refresh`
+    - `test_simulated_5_12_universe_would_have_emitted_ALARM` —
+      **load-bearing regression pin** that synthesizes the 2026-05-12
+      universe shape and asserts ALARM. If this test fails, the watcher
+      would not have caught the very incident it was built to prevent.
+
+- New module helpers `_is_sports_family` (centralizes the sports-prefix
+  check against `MARKET_SERIES_BLOCKLIST_PREFIXES`) and
+  `_regime_confidence_of` (mirrors `tasks.blend_task._regime_confidence`
+  so the watcher predicts G4 eligibility without invoking the full
+  blender; returns 0.0 on any failure — diagnostic must not affect
+  intake flow).
+
+### Notes
+
+- No env mutation. No threshold-value changes elsewhere. No G1 / G4
+  changes. No regime priors changed. Watcher is observability-only
+  (Phase 1). Bot picks up changes on next launchd restart.
+- Full suite: **2239 passed** / 4 skipped / 71 xfailed (was 2237; +8 new).
+- Ruff: clean.
+
 ## [0.30.6] - 2026-05-24
 
 ### Fixed

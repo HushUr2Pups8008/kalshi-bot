@@ -11,6 +11,8 @@ The market list is cached and refreshed every MARKET_CACHE_TTL_SECONDS.
 """
 
 import asyncio
+import math
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -365,6 +367,25 @@ _FETCH_MAX_PAGES = 1000
 _FETCH_MAX_ROWS = 200_000
 _FETCH_TIMEOUT_SECONDS = 60.0
 
+# ── Universe-shape watcher thresholds (PROFIT-UNIVERSE-001) ───────────────────
+# Aggregate population-shape drift detection. Complementary to the per-family
+# coverage WARN below — this catches the *cumulative* failure mode the
+# 2026-05-12 zero-trade incident demonstrated, where the bot's effective
+# universe became sports-only without any operator-visible signal. Spec lives
+# at docs/superpowers/specs/2026-05-24-universe-shape-watcher-design.md.
+_UNIVERSE_WATCH_MIN_G4_ELIGIBLE = int(
+    os.getenv("UNIVERSE_WATCH_MIN_G4_ELIGIBLE", "5")
+)
+_UNIVERSE_WATCH_MIN_PRIOR_COVERED_RATIO = float(
+    os.getenv("UNIVERSE_WATCH_MIN_PRIOR_COVERED_RATIO", "0.10")
+)
+_UNIVERSE_WATCH_MAX_SPORTS_SHARE = float(
+    os.getenv("UNIVERSE_WATCH_MAX_SPORTS_SHARE", "0.95")
+)
+_UNIVERSE_WATCH_MIN_EXPECTED_PRESENT_RATIO = float(
+    os.getenv("UNIVERSE_WATCH_MIN_EXPECTED_PRESENT_RATIO", "0.50")
+)
+
 # Operator-mandated policy families whose presence is asserted at refresh
 # time. These are the geo/policy/macro families with priors registered in
 # analysis/regime_classifier._SERIES_PRIORS, plus a few operator-named
@@ -411,6 +432,148 @@ def _market_belongs_to_series(market: KalshiMarket, series_prefix: str) -> bool:
         return True
     ticker = (market.ticker or "").upper()
     return ticker.startswith(prefix + "-") or ticker == prefix
+
+
+def _is_sports_family(series_ticker: str) -> bool:
+    """Return True if the series ticker matches a known sports prefix.
+
+    Uses `MARKET_SERIES_BLOCKLIST_PREFIXES` from config — the same list the
+    matcher uses to drop sports series at intake. Centralizing the check
+    here keeps the watcher's sports-share metric aligned with the
+    blocklist's semantics.
+    """
+    upper = (series_ticker or "").upper()
+    return any(upper.startswith(p) for p in MARKET_SERIES_BLOCKLIST_PREFIXES)
+
+
+def _regime_confidence_of(market: KalshiMarket) -> float:
+    """Compute regime_confidence for a market via compute_regime_weights.
+
+    Mirrors the math in tasks/blend_task._regime_confidence so callers
+    that need to predict G4 eligibility (rc >= 0.20) without invoking
+    the full blender can do so cheaply. Returns 0.0 on any failure
+    rather than raising — this helper is a diagnostic and must not
+    affect intake flow.
+    """
+    try:
+        weights = market.regime_weights or compute_regime_weights(market)
+    except Exception:
+        return 0.0
+    if not weights:
+        return 0.0
+    try:
+        entropy = -sum(
+            w * math.log(w) for w in weights.values() if w > 0
+        )
+    except Exception:
+        return 0.0
+    max_entropy = math.log(3)
+    if max_entropy <= 0:
+        return 0.0
+    return max(0.0, min(1.0, 1.0 - entropy / max_entropy))
+
+
+def _emit_universe_shape_diagnostic(
+    markets: list[KalshiMarket],
+    *,
+    n_series_discovered: int,
+    geo_tickers_set: set[str],
+) -> None:
+    """Emit a single structured INFO line per cache refresh with universe-
+    shape diagnostics, plus an operator-visible WARN on ALARM verdict.
+
+    PROFIT-UNIVERSE-001 spec:
+    docs/superpowers/specs/2026-05-24-universe-shape-watcher-design.md.
+
+    This is the cumulative-drift signal the 2026-05-12 incident would
+    have surfaced at hour 1 instead of day 13. Different signal from the
+    per-family coverage WARN: that one flags individual missing series;
+    this one flags aggregate population shape.
+
+    Verdict ladder (first match wins):
+      ALARM    g4_eligible == 0  OR  expected_present_ratio < min OR
+               sports_share > max (with non-zero universe)
+      DEGRADED g4_eligible < min  OR  prior_covered_ratio < min  OR
+               any expected family missing
+      NORMAL   otherwise
+
+    Read-only — no Kalshi calls, no DB writes; pure function over the
+    cache state already in memory.
+    """
+    geo_market_count = len(markets)
+    prior_covered_count = sum(
+        1 for m in markets if m.regime_weights
+    )
+    expected_in_catalog = [
+        s for s in _EXPECTED_POLICY_SERIES if s in geo_tickers_set
+    ]
+    expected_present_in_cache = [
+        s for s in expected_in_catalog
+        if any(_market_belongs_to_series(m, s) for m in markets)
+    ]
+    expected_missing = [
+        s for s in expected_in_catalog
+        if s not in expected_present_in_cache
+    ]
+    sports_market_count = sum(
+        1 for m in markets if _is_sports_family(
+            getattr(m, "series_ticker", "") or m.ticker
+        )
+    )
+    sports_share = (
+        sports_market_count / geo_market_count if geo_market_count > 0 else 0.0
+    )
+    g4_eligible_count = sum(
+        1 for m in markets if _regime_confidence_of(m) >= 0.20
+    )
+
+    expected_present_ratio = (
+        len(expected_present_in_cache) / len(expected_in_catalog)
+        if expected_in_catalog
+        else 1.0
+    )
+    prior_covered_ratio = (
+        prior_covered_count / geo_market_count if geo_market_count > 0 else 0.0
+    )
+
+    if (
+        g4_eligible_count == 0
+        or (
+            expected_in_catalog
+            and expected_present_ratio < _UNIVERSE_WATCH_MIN_EXPECTED_PRESENT_RATIO
+        )
+        or (
+            sports_share > _UNIVERSE_WATCH_MAX_SPORTS_SHARE
+            and geo_market_count > 0
+        )
+    ):
+        verdict = "ALARM"
+    elif (
+        g4_eligible_count < _UNIVERSE_WATCH_MIN_G4_ELIGIBLE
+        or prior_covered_ratio < _UNIVERSE_WATCH_MIN_PRIOR_COVERED_RATIO
+        or expected_missing
+    ):
+        verdict = "DEGRADED"
+    else:
+        verdict = "NORMAL"
+
+    log.info(
+        "universe-shape: geo_markets=%d series=%d prior_covered=%d "
+        "expected_present=%d/%d expected_missing=%d sports_share=%.2f "
+        "g4_eligible=%d verdict=%s",
+        geo_market_count, n_series_discovered, prior_covered_count,
+        len(expected_present_in_cache), len(expected_in_catalog),
+        len(expected_missing), sports_share, g4_eligible_count, verdict,
+    )
+    if verdict == "ALARM":
+        log.warning(
+            "universe-shape ALARM: bot's effective universe has lost "
+            "tradeable shape. g4_eligible=%d (min=%d) expected_present=%d/%d "
+            "sports_share=%.2f (max=%.2f) — investigate intake immediately.",
+            g4_eligible_count, _UNIVERSE_WATCH_MIN_G4_ELIGIBLE,
+            len(expected_present_in_cache), len(expected_in_catalog),
+            sports_share, _UNIVERSE_WATCH_MAX_SPORTS_SHARE,
+        )
 
 
 def _warn_on_missing_expected_families(
@@ -587,10 +750,16 @@ class MarketCache:
                 log.debug("Skipping series %s: %s", series_ticker, exc)
                 per_series_counts[series_ticker] = (0, 0)
 
+        geo_tickers_set = set(geo_tickers)
         _warn_on_missing_expected_families(
             filtered,
-            geo_tickers_set=set(geo_tickers),
+            geo_tickers_set=geo_tickers_set,
             per_series_counts=per_series_counts,
+        )
+        _emit_universe_shape_diagnostic(
+            filtered,
+            n_series_discovered=len(geo_tickers),
+            geo_tickers_set=geo_tickers_set,
         )
 
         return filtered, len(geo_tickers)
