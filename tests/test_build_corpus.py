@@ -251,9 +251,10 @@ def test_pragma_query_only_db_unchanged(tmp_path: Path) -> None:
     _write_regimes_doc(tmp_path)
 
     pre_mtime = db.stat().st_mtime
-    pre_count = sqlite3.connect(db).execute(
-        "SELECT COUNT(*) FROM paper_trades"
-    ).fetchone()[0]
+    with sqlite3.connect(db) as _pre_conn:
+        pre_count = _pre_conn.execute(
+            "SELECT COUNT(*) FROM paper_trades"
+        ).fetchone()[0]
 
     start, end = _start_end()
     out = tmp_path / "out.jsonl"
@@ -269,9 +270,10 @@ def test_pragma_query_only_db_unchanged(tmp_path: Path) -> None:
     )
 
     post_mtime = db.stat().st_mtime
-    post_count = sqlite3.connect(db).execute(
-        "SELECT COUNT(*) FROM paper_trades"
-    ).fetchone()[0]
+    with sqlite3.connect(db) as _post_conn:
+        post_count = _post_conn.execute(
+            "SELECT COUNT(*) FROM paper_trades"
+        ).fetchone()[0]
     assert pre_mtime == post_mtime
     assert pre_count == post_count
 
@@ -449,3 +451,33 @@ def test_unregistered_regime_error_message_is_actionable(tmp_path: Path) -> None
         assert "corpus-regimes.md" in msg
     else:  # pragma: no cover
         raise AssertionError("expected UnregisteredRegimeError")
+
+
+def test_inverted_window_bounds_raise_value_error(tmp_path: Path) -> None:
+    """Inverted start/end silently match zero rows under the SQL filter,
+    producing a misleading empty corpus with in_period_validation_only=True.
+    Per python-reviewer MEDIUM: fail fast on inverted bounds so the
+    operator notices the typo rather than acts on a falsely-quiet window."""
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db(db)
+    _write_regimes_doc(tmp_path)
+
+    start = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 1, tzinfo=timezone.utc)  # before start!
+
+    try:
+        build_corpus.build_corpus(
+            start_utc=start,
+            end_utc=end,
+            market_families=["KXTRUMPIRAN"],
+            cohort_tag="POST_V030_2_OOS_SEED",
+            regime_label="post_v030_2_oos_seed",
+            output_path=tmp_path / "out.jsonl",
+            paper_trades_db=db,
+            regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        assert "start_utc must be strictly before end_utc" in msg
+    else:  # pragma: no cover
+        raise AssertionError("expected ValueError on inverted bounds")

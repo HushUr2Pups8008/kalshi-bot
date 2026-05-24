@@ -57,10 +57,11 @@ import argparse
 import json
 import sqlite3
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 CORPUS_BUILDER_VERSION = 1
 
@@ -262,6 +263,13 @@ def build_corpus(
 
     if not db_path.exists():
         raise FileNotFoundError(f"paper_trades DB not found: {db_path}")
+
+    if start_utc >= end_utc:
+        raise ValueError(
+            "start_utc must be strictly before end_utc; got "
+            f"start={start_utc!r}, end={end_utc!r}. Inverted bounds silently "
+            "match zero rows and yield a misleading empty corpus."
+        )
 
     window_start = _to_iso_z(start_utc)
     window_end = _to_iso_z(end_utc)
