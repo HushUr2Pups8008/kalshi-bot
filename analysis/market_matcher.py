@@ -356,6 +356,34 @@ def _is_geo_series(series: dict) -> bool:
 _REFRESH_DEBOUNCE_SECONDS = 60  # min seconds between back-to-back refreshes
 _TEST_MARKET_TICKER_PREFIX = "KXTEST"
 
+# Pagination safety caps for _fetch_all_markets. Kalshi's /markets response
+# can exceed 200k rows (predominantly sports MVE markets) and is not ordered
+# in a way callers can rely on; never depend on response ordering — if a
+# specific family/series matters, fetch it directly via series_ticker= or
+# prove complete pagination reached it.
+_FETCH_MAX_PAGES = 1000
+_FETCH_MAX_ROWS = 200_000
+_FETCH_TIMEOUT_SECONDS = 60.0
+
+# Operator-mandated policy families whose presence is asserted at refresh
+# time. These are the geo/policy/macro families with priors registered in
+# analysis/regime_classifier._SERIES_PRIORS, plus a few operator-named
+# series. If any of these are returned by Kalshi but missed by the bot,
+# we want an operator-visible warning rather than silent zero-trade.
+_EXPECTED_POLICY_SERIES: tuple[str, ...] = (
+    "KXCPIYOY",
+    "KXCPICOREYOY",
+    "KXMOCTRUMP25",
+    "KXFISAEXTEND",
+    "KXTRUMPACT",
+    "KXAPRPOTUS",
+    "KXPOLLPOTUS",
+    "KXTRUMPSAY",
+    "KXSBUDGETRES",
+    "KXEFFTARIFF",
+    "KXVOTESAVEAMERICA",
+)
+
 
 def _is_excluded_test_market(market: KalshiMarket) -> bool:
     """Return True for explicit test-market tickers that must never enter shared caches."""
@@ -365,6 +393,55 @@ def _is_excluded_test_market(market: KalshiMarket) -> bool:
 def _attach_regime_weights(market: KalshiMarket) -> KalshiMarket:
     market.regime_weights = compute_regime_weights(market)
     return market
+
+
+def _market_belongs_to_series(market: KalshiMarket, series_prefix: str) -> bool:
+    """Return True if `market` belongs to `series_prefix`.
+
+    Matches via the dedicated `series_ticker` attribute first (exact or
+    `prefix-...` form), then falls back to the market ticker itself
+    (`prefix-...` form). Mirrors the precedence used by
+    `analysis.regime_classifier._series_prior`, which treats `series_ticker`
+    as authoritative when present and only consults the market ticker as a
+    fallback.
+    """
+    prefix = series_prefix.upper()
+    series_ticker = (getattr(market, "series_ticker", "") or "").upper()
+    if series_ticker == prefix or series_ticker.startswith(prefix + "-"):
+        return True
+    ticker = (market.ticker or "").upper()
+    return ticker.startswith(prefix + "-") or ticker == prefix
+
+
+def _warn_on_missing_expected_families(
+    markets: list[KalshiMarket],
+    *,
+    geo_tickers_set: set[str],
+) -> None:
+    """Emit operator-visible warning if expected policy families are missing.
+
+    A family is treated as "expected" only when (a) it is in
+    `_EXPECTED_POLICY_SERIES` and (b) the series-discovery pass surfaced its
+    ticker — i.e. Kalshi currently lists the series. This prevents false
+    alarms when Kalshi has legitimately retired a series.
+    """
+    expected_present_in_discovery = [
+        s for s in _EXPECTED_POLICY_SERIES if s in geo_tickers_set
+    ]
+    if not expected_present_in_discovery:
+        return
+    missing = [
+        prefix for prefix in expected_present_in_discovery
+        if not any(_market_belongs_to_series(m, prefix) for m in markets)
+    ]
+    if missing:
+        log.warning(
+            "Expected policy families absent from intake despite being in "
+            "Kalshi series catalog: %s. Kalshi listing is present but no "
+            "markets reached the geo-markets cache — check series-targeted "
+            "fetch path.",
+            ",".join(missing),
+        )
 
 
 class MarketCache:
@@ -460,6 +537,10 @@ class MarketCache:
             except Exception as exc:
                 log.debug("Skipping series %s: %s", series_ticker, exc)
 
+        _warn_on_missing_expected_families(
+            filtered, geo_tickers_set=set(geo_tickers),
+        )
+
         return filtered, len(geo_tickers)
 
     async def get_all_markets(self) -> list[KalshiMarket]:
@@ -489,20 +570,49 @@ class MarketCache:
 
     def _fetch_all_markets(self) -> list[KalshiMarket]:
         """
-        Synchronous: page through all active markets (up to 10 pages × 200 = 2000).
+        Synchronous: page through all active markets via cursor-complete
+        pagination, with safety caps (page cap, row cap, wallclock timeout).
         Applies the same days-to-expiry filter as the geo cache.
         Runs in a thread pool executor.
+
+        Never depends on Kalshi response ordering. Kalshi may return up to
+        ~200k markets (predominantly sports MVE) and the response order is
+        not stable; the prior 10-page (2000-row) cap silently truncated the
+        universe when sports volume crossed that threshold, producing a
+        sports-only effective cache. Callers needing a specific family must
+        fetch it directly via `_fetch_geo_markets`' per-series query rather
+        than relying on this stream.
+
+        Emits a structured INFO log on every refresh and a WARNING when any
+        safety cap halts pagination before cursor exhaustion.
         """
-        markets = []
-        cursor  = None
-        for _ in range(10):
-            # `status="open"` is the request-parameter contract (see geo
-            # path above for the full explanation). The response field
-            # `KalshiMarket.status` reports tradeable rows as `"active"`,
-            # which downstream readers filter on separately.
+        markets: list[KalshiMarket] = []
+        cursor: str | None = None
+        pages_fetched = 0
+        markets_seen = 0
+        cursor_exhausted = False
+        cap_reached: str | None = None
+        start = time.monotonic()
+
+        # `status="open"` is the request-parameter contract (see geo path
+        # above for the full explanation). Response `KalshiMarket.status`
+        # reports tradeable rows as `"active"`, gated separately downstream.
+        while True:
+            if pages_fetched >= _FETCH_MAX_PAGES:
+                cap_reached = "max_pages"
+                break
+            if markets_seen >= _FETCH_MAX_ROWS:
+                cap_reached = "max_rows"
+                break
+            if time.monotonic() - start >= _FETCH_TIMEOUT_SECONDS:
+                cap_reached = "timeout"
+                break
+
             page, cursor = self._client.get_markets(
                 status="open", cursor=cursor, limit=200
             )
+            pages_fetched += 1
+            markets_seen += len(page)
             for m in page:
                 if _is_excluded_test_market(m):
                     continue
@@ -510,7 +620,26 @@ class MarketCache:
                 if days is None or 0 < days <= MAX_MARKET_DAYS_TO_EXPIRY:
                     markets.append(_attach_regime_weights(m))
             if not cursor:
+                cursor_exhausted = True
                 break
+
+        log.info(
+            "All-markets fetch: pages_fetched=%d markets_seen=%d kept=%d "
+            "cursor_exhausted=%s cap_reached=%s elapsed=%.1fs",
+            pages_fetched, markets_seen, len(markets),
+            cursor_exhausted, cap_reached, time.monotonic() - start,
+        )
+        if cap_reached is not None:
+            # Reaching a safety cap before cursor exhaustion means the
+            # effective universe is a truncated sample of whatever order
+            # Kalshi returned. Downstream callers cannot rely on family
+            # coverage; operator must triage.
+            log.warning(
+                "All-markets pagination halted early: cap=%s after %d pages / "
+                "%d rows. Effective universe is a Kalshi-order-dependent "
+                "prefix; family coverage is not guaranteed.",
+                cap_reached, pages_fetched, markets_seen,
+            )
         return markets
 
 

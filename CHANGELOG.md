@@ -19,6 +19,47 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.30.3] - 2026-05-24
+
+### Fixed
+
+- **P0 intake pagination silent truncation** — `MarketCache._fetch_all_markets`
+  previously used `for _ in range(10)` (max 10 pages × 200 = 2000 rows) before
+  terminating, regardless of cursor state. Kalshi's `/markets` response is
+  sports-MVE-heavy (200k+ open markets at snapshot time, ~99% sports) and
+  response order is not stable; once sports volume crossed 2000 rows the cap
+  silently truncated the universe to a sports-only effective sample. Replaced
+  with cursor-complete pagination subject to explicit safety caps
+  (`_FETCH_MAX_PAGES=1000`, `_FETCH_MAX_ROWS=200_000`,
+  `_FETCH_TIMEOUT_SECONDS=60.0`). Emits structured INFO log with
+  `pages_fetched`, `markets_seen`, `cursor_exhausted`, `cap_reached`,
+  `elapsed`, and an operator-visible WARNING when any cap halts pagination
+  before cursor exhaustion. Locked behind regression test
+  `test_sports_first_ordering_reaches_policy_markets_after_page_10`.
+
+### Added
+
+- **Expected-policy-family coverage warning** — `_fetch_geo_markets` now
+  emits a WARNING when any series in `_EXPECTED_POLICY_SERIES` is present
+  in the Kalshi series catalog but produces zero markets in the geo cache.
+  Catches the silent-zero-trade failure class without false-alarming on
+  legitimate Kalshi-side series retirement (a family is only flagged when
+  Kalshi advertises it). Expected families seed list: KXCPIYOY,
+  KXCPICOREYOY, KXMOCTRUMP25, KXFISAEXTEND, KXTRUMPACT, KXAPRPOTUS,
+  KXPOLLPOTUS, KXTRUMPSAY, KXSBUDGETRES, KXEFFTARIFF, KXVOTESAVEAMERICA.
+
+### Notes
+
+- The 2026-05-12 zero-trade incident root cause is a tier-2 calibration gap
+  (BD reaches blender but fails G1 because incoming policy markets are
+  unprioritized short-dated series), not the pagination cap fixed here.
+  This patch is defensive — it removes the silent-truncation failure mode
+  documented in the diagnostic and adds the operator-visible signal that
+  was absent during the 13-day collapse. Series-prior expansion for the
+  markets actually reaching the blender (KXTXRUNOFFENDORSE,
+  KXUSAIRANAGREEMENT, KXTRUMPIRAN, KXNEWTARIFFS) is tracked separately and
+  is the proximate unblocker for paper-trade evaluation.
+
 ## [0.30.2] - 2026-05-23
 
 ### Added

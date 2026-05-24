@@ -877,3 +877,190 @@ class TestSuppressionTokenGuardMATCH001:
             "post-fix invariant: `_token_not_in_ticker` must be removed from "
             "analysis/market_matcher.py once `_has_supporting_non_ticker_token` lands"
         )
+
+
+# ---------------------------------------------------------------------------
+# Intake pagination contract — fix/intake-pagination-fix
+# ---------------------------------------------------------------------------
+# Kalshi /markets returns 200k+ rows (predominantly sports MVE) and the
+# response order is not stable. The previous `range(10)` cap in
+# `_fetch_all_markets` silently truncated the universe to the first 2000
+# rows; once sports volume crossed 2000, downstream callers saw a
+# sports-only effective cache and produced zero non-sports trades for 13
+# days. These tests pin the new cursor-complete contract.
+
+
+import logging as _logging
+from analysis.market_matcher import (
+    _FETCH_MAX_PAGES,
+    _EXPECTED_POLICY_SERIES,
+)
+
+
+class TestFetchAllMarketsPaginationContract:
+    """`_fetch_all_markets` must paginate to cursor exhaustion subject to
+    explicit safety caps, never silently truncate, and emit structured
+    log fields callers/operators can grep on."""
+
+    def test_terminates_on_cursor_exhaustion(self):
+        rest = MagicMock()
+        rest.get_markets.side_effect = [
+            ([_make_market("KXNBA-1", "g1", series_ticker="KXNBA")], "cur2"),
+            ([_make_market("KXNBA-2", "g2", series_ticker="KXNBA")], "cur3"),
+            ([_make_market("KXNBA-3", "g3", series_ticker="KXNBA")], None),
+        ]
+        matcher = MarketMatcher(rest)
+        markets = matcher._cache._fetch_all_markets()
+        assert [m.ticker for m in markets] == ["KXNBA-1", "KXNBA-2", "KXNBA-3"]
+        assert rest.get_markets.call_count == 3
+
+    def test_sports_first_ordering_reaches_policy_markets_after_page_10(self, caplog):
+        """Regression test for the 2026-05-12 zero-trade incident.
+
+        Pre-fix `range(10)` cap stopped after 10 pages. Kalshi sorted sports
+        MVE first. Policy markets at page 11+ were silently dropped, leaving
+        a sports-only effective universe. Post-fix the loop continues to
+        cursor exhaustion, so a policy market deposited at page 12 must
+        surface in the result.
+        """
+        pages = []
+        for i in range(11):
+            pages.append((
+                [_make_market(f"KXMVESPORT-{i}-{n}", "s", series_ticker="KXMVESPORT") for n in range(2)],
+                f"c{i+1}",
+            ))
+        # Page 12 finally yields a policy market with cursor=None.
+        pages.append(([_make_market("KXCPIYOY-1", "Inflation YoY", series_ticker="KXCPIYOY")], None))
+        rest = MagicMock()
+        rest.get_markets.side_effect = pages
+        matcher = MarketMatcher(rest)
+
+        caplog.set_level(_logging.INFO, logger="market_matcher")
+        markets = matcher._cache._fetch_all_markets()
+        tickers = [m.ticker for m in markets]
+        assert "KXCPIYOY-1" in tickers, (
+            "post-fix: policy market on page 12 must reach the cache; "
+            "pre-fix range(10) silently dropped it"
+        )
+        assert rest.get_markets.call_count == 12
+        # Structured log line must surface enough state for operator triage.
+        joined = "\n".join(r.message for r in caplog.records)
+        assert "pages_fetched=12" in joined
+        assert "cursor_exhausted=True" in joined
+        assert "cap_reached=None" in joined
+
+    def test_max_pages_cap_emits_operator_visible_warning(self, caplog):
+        """When pagination halts on the page cap before cursor exhaustion,
+        the bot must emit a WARNING that names the cap. Silent truncation
+        is exactly the failure class we are blocking."""
+        def _always_cursor(*args, **kwargs):
+            return (
+                [_make_market("KXNBA-x", "x", series_ticker="KXNBA")],
+                "next",
+            )
+        rest = MagicMock()
+        rest.get_markets.side_effect = _always_cursor
+        matcher = MarketMatcher(rest)
+
+        caplog.set_level(_logging.WARNING, logger="market_matcher")
+        matcher._cache._fetch_all_markets()
+        assert rest.get_markets.call_count == _FETCH_MAX_PAGES
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert warnings, "post-fix: cap_reached must emit log.warning"
+        assert any("max_pages" in r.message for r in warnings)
+
+    def test_max_rows_cap_emits_operator_visible_warning(self, caplog):
+        """Row cap is the second guard; behaves the same as the page cap."""
+        def _full_page(*args, **kwargs):
+            page = [
+                _make_market(f"KXNBA-{i}", "x", series_ticker="KXNBA")
+                for i in range(200)
+            ]
+            return (page, "next")
+        rest = MagicMock()
+        rest.get_markets.side_effect = _full_page
+        matcher = MarketMatcher(rest)
+
+        caplog.set_level(_logging.WARNING, logger="market_matcher")
+        matcher._cache._fetch_all_markets()
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert warnings, "post-fix: row cap must emit log.warning"
+        assert any(
+            "max_rows" in r.message or "max_pages" in r.message
+            for r in warnings
+        ), "warning must name the cap that tripped"
+
+
+class TestExpectedPolicyFamilyCoverage:
+    """`_fetch_geo_markets` must warn when a policy family is in the
+    Kalshi series catalog but does not surface any markets in the cache.
+    Operator-mandated: never silently zero-trade because of a missing
+    family the catalog actually advertised."""
+
+    def test_warning_fires_when_catalog_lists_family_but_intake_drops_it(self, caplog):
+        """KXCPIYOY appears in the series catalog and is geo-matched, but
+        the per-series fetch returns zero markets. This is the operator-
+        named failure mode and must surface as a warning."""
+        rest = MagicMock()
+        rest.get_all_series.return_value = [
+            {"ticker": "KXCPIYOY", "title": "Inflation"},
+            {"ticker": "KXIRAN", "title": "Iran"},
+        ]
+        def _per_series(*, status, series_ticker, limit, **_kw):
+            if series_ticker == "KXIRAN":
+                return ([_make_market("KXIRAN-1", "Iran q?", series_ticker="KXIRAN")], None)
+            return ([], None)
+        rest.get_markets.side_effect = _per_series
+        matcher = MarketMatcher(rest)
+
+        caplog.set_level(_logging.WARNING, logger="market_matcher")
+        matcher._cache._fetch_geo_markets()
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert warnings, "missing expected policy family must emit warning"
+        assert any("KXCPIYOY" in r.message for r in warnings)
+
+    def test_no_warning_when_family_genuinely_retired_from_catalog(self, caplog):
+        """If KXCPIYOY is not in the series catalog at all (Kalshi retired
+        it this cycle), absence from intake is NOT a bug and no warning
+        should fire — false alarms train operators to ignore the signal."""
+        rest = MagicMock()
+        rest.get_all_series.return_value = [
+            {"ticker": "KXIRAN", "title": "Iran"},
+        ]
+        rest.get_markets.return_value = (
+            [_make_market("KXIRAN-1", "Iran q?", series_ticker="KXIRAN")],
+            None,
+        )
+        matcher = MarketMatcher(rest)
+
+        caplog.set_level(_logging.WARNING, logger="market_matcher")
+        matcher._cache._fetch_geo_markets()
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert not any(
+            any(p in r.message for p in _EXPECTED_POLICY_SERIES)
+            for r in warnings
+        ), "warning must not fire when family is absent from Kalshi catalog"
+
+    def test_no_warning_when_all_expected_families_present_in_intake(self, caplog):
+        """Happy path: every expected family that Kalshi advertises also
+        reaches the cache. No warning should fire."""
+        rest = MagicMock()
+        rest.get_all_series.return_value = [
+            {"ticker": "KXCPIYOY", "title": "Inflation"},
+            {"ticker": "KXMOCTRUMP25", "title": "Trump month of action"},
+        ]
+        def _per_series(*, status, series_ticker, limit, **_kw):
+            return (
+                [_make_market(f"{series_ticker}-1", "x", series_ticker=series_ticker)],
+                None,
+            )
+        rest.get_markets.side_effect = _per_series
+        matcher = MarketMatcher(rest)
+
+        caplog.set_level(_logging.WARNING, logger="market_matcher")
+        matcher._cache._fetch_geo_markets()
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert not warnings, (
+            "happy path: warning must not fire when all expected families "
+            "in the catalog also reach intake"
+        )
