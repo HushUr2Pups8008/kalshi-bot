@@ -1,8 +1,8 @@
-"""I-2 SQLite-backed LLM response cache reader (rapid-learning v3).
+"""I-2 + I-12 SQLite-backed LLM response cache (rapid-learning v3).
 
 Reference spec:
     docs/superpowers/specs/2026-05-23-paper-mode-rapid-learning-framework-design.md
-    §3 row I-2 + §4 §16.7.
+    §3 row I-2 + I-12 + §4 §16.7.
 
 Purpose
 -------
@@ -21,10 +21,13 @@ Public API
 ``CacheKey``                       — 13-field dataclass
 ``CacheHit``                       — wrapper for a successful lookup
 ``CacheMissError``                 — no row matched the 13-field key
-``CacheCorruptionError``           — integrity-check failure (I-12 seed)
+``CacheCorruptionError``           — single-read hash-vs-payload mismatch
+``CachePoisonedError``             — durable poisoned-row mark hit (I-12)
 ``CoverageReport``                 — output of ``compute_cache_coverage``
+``ScanReport``                     — output of ``scan_integrity`` (I-12)
 ``compute_cache_coverage``         — pre-gate ratio check
 ``migrate_jsonl_to_sqlite``        — one-shot JSONL → SQLite migration
+``scan_integrity``                 — one-shot DB-wide integrity scan (I-12)
 
 Design constraints
 ------------------
@@ -44,13 +47,26 @@ Design constraints
   call would re-introduce the non-determinism the cache exists to
   defeat.
 
-Integrity check
----------------
+Integrity check (I-12)
+----------------------
 
-``LLMReplayCache.get`` recomputes ``sha256(canonical_json(response))``
-and compares it to the stored ``response_hash``. Any mismatch raises
-``CacheCorruptionError``. This is the seed for I-12's broader integrity
-contract.
+Two layers, distinct on purpose:
+
+1. **Single-read recompute (I-2 seed).** ``LLMReplayCache.get`` recomputes
+   ``sha256(canonical_json(response))`` and compares to the stored
+   ``response_hash``. Mismatch → ``CacheCorruptionError`` (in-flight
+   corruption a scan has not yet seen).
+2. **Durable poison mark (I-12).** Two columns — ``poisoned INTEGER`` and
+   ``poisoned_reason TEXT`` — quarantine a row from the gate-eligible
+   pool. Poison is set by either:
+   * ``scan_integrity`` finding an integrity mismatch, or
+   * ``migrate_jsonl_to_sqlite`` seeing ``repeat_verification ==
+     'nondeterministic'`` at migration time (per Codex blocker D —
+     Ollama+qwen3 multi-slot drift is durable evidence the row cannot
+     be trusted to gate paper-mode deploys).
+   Poisoned rows raise ``CachePoisonedError`` from ``get`` BEFORE the
+   live recompute and report ``False`` from ``has`` so
+   ``compute_cache_coverage`` excludes them from gate-eligible hits.
 """
 
 from __future__ import annotations
@@ -71,10 +87,13 @@ __all__ = [
     "CacheHit",
     "CacheKey",
     "CacheMissError",
+    "CachePoisonedError",
     "CoverageReport",
     "LLMReplayCache",
+    "ScanReport",
     "compute_cache_coverage",
     "migrate_jsonl_to_sqlite",
+    "scan_integrity",
 ]
 
 
@@ -127,7 +146,28 @@ class CacheMissError(Exception):
 class CacheCorruptionError(Exception):
     """Raised when an integrity hash mismatch is detected on read.
 
-    Seed for the I-12 broader integrity-check contract.
+    This is the *single-read* recompute failure: we just hashed the stored
+    payload and it does not match the stored hash. It is NOT a durable
+    mark — the next read will recompute and may raise again, or may
+    succeed if the underlying storage was repaired. Pair with
+    ``scan_integrity`` + ``CachePoisonedError`` for the durable form.
+    """
+
+
+class CachePoisonedError(Exception):
+    """Raised when ``LLMReplayCache.get`` hits a row marked ``poisoned=1``.
+
+    Distinct from ``CacheCorruptionError`` (single-read recompute failure).
+    Poison is a *durable* mark set by ``scan_integrity`` or by
+    ``migrate_jsonl_to_sqlite`` when ``repeat_verification ==
+    'nondeterministic'``. Poisoned rows are structurally excluded from
+    gate-eligible hits: ``has`` returns False on them so
+    ``compute_cache_coverage`` counts them as misses, and ``get`` raises
+    this exception BEFORE running the on-the-fly recompute.
+
+    The two-error split lets the operator tell a quarantined row
+    (recorded fact: this row failed scan at time T) from a freshly-failed
+    one (this read just disagreed with storage).
     """
 
 
@@ -190,6 +230,40 @@ class CoverageReport:
     missing_row_ids: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class ScanReport:
+    """Output of ``scan_integrity`` (I-12).
+
+    Fields
+    ------
+    total_rows:
+        Every row visited (poisoned and clean).
+    integrity_mismatches:
+        Rows whose ``sha256(canonical_json(response_json))`` did not equal
+        the stored ``response_hash`` at scan time.
+    already_poisoned:
+        Rows that were already ``poisoned=1`` before the scan started.
+        Included so a re-run reports the steady-state quarantine size.
+    newly_poisoned:
+        Rows the scan promoted from clean to poisoned. Always 0 when
+        ``mark_poisoned=False``.
+    repeat_verification_nondeterministic:
+        Rows whose ``repeat_verification`` column is ``'nondeterministic'``.
+        Reported separately so the operator can confirm the
+        migration-time auto-poison covered them.
+    scan_duration_ms:
+        Wall-clock duration of the scan in milliseconds. Helpful for
+        capacity planning if the cache grows.
+    """
+
+    total_rows: int
+    integrity_mismatches: int
+    already_poisoned: int
+    newly_poisoned: int
+    repeat_verification_nondeterministic: int
+    scan_duration_ms: float
+
+
 # ---------------------------------------------------------------------------
 # Canonical-JSON helpers (must match I-3's _canonical_json exactly)
 # ---------------------------------------------------------------------------
@@ -234,6 +308,12 @@ def _now_utc_iso() -> str:
 # safely. A non-deterministic re-run produces a different ``response_hash``
 # and lands as a distinct row — which is the correct behavior for
 # I-12 / non-determinism diagnostics.
+#
+# I-12 columns (``poisoned``, ``poisoned_reason``) are present in the fresh
+# CREATE TABLE for new DBs. For existing DBs that pre-date I-12, the
+# ``_ensure_i12_columns`` migration step issues ``ALTER TABLE ADD COLUMN``
+# defensively — SQLite has no ``ADD COLUMN IF NOT EXISTS``, so we inspect
+# PRAGMA table_info first to keep the call idempotent.
 _SCHEMA_SQL: Final[str] = """
 CREATE TABLE IF NOT EXISTS llm_responses (
     row_id                   TEXT NOT NULL,
@@ -253,6 +333,8 @@ CREATE TABLE IF NOT EXISTS llm_responses (
     repeat_verification      TEXT NOT NULL CHECK (repeat_verification IN ('verified', 'nondeterministic', 'skipped')),
     captured_at_utc          TEXT NOT NULL,
     migrated_at_utc          TEXT NOT NULL,
+    poisoned                 INTEGER NOT NULL DEFAULT 0,
+    poisoned_reason          TEXT,
     PRIMARY KEY (row_id, prompt_template_hash, prompt_filled_hash, model_id,
                  endpoint_type, sampler_options_hash, response_hash)
 );
@@ -260,6 +342,40 @@ CREATE TABLE IF NOT EXISTS llm_responses (
 CREATE INDEX IF NOT EXISTS idx_row_id ON llm_responses(row_id);
 CREATE INDEX IF NOT EXISTS idx_response_hash ON llm_responses(response_hash);
 """
+# Note: the ``idx_poisoned`` index lives in ``_ensure_i12_columns`` rather
+# than ``_SCHEMA_SQL`` so it runs AFTER the ``ALTER TABLE`` step. SQLite
+# evaluates ``executescript`` top-to-bottom against the live schema, and a
+# pre-I-12 DB does not yet have the column at script-evaluation time.
+
+
+# I-12 poison-reason taxonomy. ``manual`` is reserved for future operator-set
+# poison; today only the first two are written by this module.
+POISON_REASON_INTEGRITY_MISMATCH: Final[str] = "integrity_mismatch"
+POISON_REASON_REPEAT_NONDETERMINISTIC: Final[str] = "repeat_nondeterministic"
+POISON_REASON_MANUAL: Final[str] = "manual"
+
+
+def _ensure_i12_columns(conn: sqlite3.Connection) -> None:
+    """Idempotently add the I-12 ``poisoned`` / ``poisoned_reason`` columns.
+
+    SQLite has no ``ALTER TABLE ADD COLUMN IF NOT EXISTS``, so we inspect
+    ``PRAGMA table_info`` and only issue the ``ADD COLUMN`` when the column
+    is absent. This makes the migration safe to run against:
+      * a freshly created DB (CREATE TABLE already includes the columns),
+      * a pre-I-12 DB (ADD COLUMN runs once, then is a no-op forever).
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(llm_responses)")}
+    if "poisoned" not in existing:
+        conn.execute(
+            "ALTER TABLE llm_responses ADD COLUMN poisoned INTEGER NOT NULL DEFAULT 0"
+        )
+    if "poisoned_reason" not in existing:
+        conn.execute(
+            "ALTER TABLE llm_responses ADD COLUMN poisoned_reason TEXT"
+        )
+    # The index is in _SCHEMA_SQL, but a pre-I-12 DB never executed that
+    # statement against the column. Re-emit it idempotently.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_poisoned ON llm_responses(poisoned)")
 
 
 # ---------------------------------------------------------------------------
@@ -273,12 +389,17 @@ def _open_writer(db_path: Path) -> sqlite3.Connection:
     WAL mode persists in the database file header, so subsequent reader
     connections will also see WAL-mode semantics (concurrent reads while
     writes happen, no `database is locked` on read).
+
+    Also runs the I-12 ``ALTER TABLE`` step to add the ``poisoned`` /
+    ``poisoned_reason`` columns on pre-I-12 DBs. Idempotent — re-opening
+    an already-migrated DB does nothing.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(_SCHEMA_SQL)
+    _ensure_i12_columns(conn)
     return conn
 
 
@@ -321,8 +442,24 @@ def _validate_record(record: dict[str, Any]) -> None:
 
 
 def _record_to_params(record: dict[str, Any], migrated_at: str) -> tuple[Any, ...]:
-    """Convert a JSONL record into a parameter tuple for INSERT OR REPLACE."""
+    """Convert a JSONL record into a parameter tuple for INSERT OR REPLACE.
+
+    I-12 auto-poison rule (per spec §3 row I-12 v3 extension and Codex
+    blocker D): when ``repeat_verification == 'nondeterministic'``, the
+    row is durably marked ``poisoned=1`` with reason
+    ``repeat_nondeterministic``. Ollama+qwen3 multi-slot GPU drift produced
+    these rows in I-3; they MUST NOT be allowed to satisfy a paper-mode
+    deploy gate, so we encode the quarantine at migration time rather than
+    relying on operator memo discipline at read time.
+    """
     response_json = _canonical_json(record["response"])
+    repeat_verification = record.get("repeat_verification", "skipped")
+    if repeat_verification == "nondeterministic":
+        poisoned = 1
+        poisoned_reason: str | None = POISON_REASON_REPEAT_NONDETERMINISTIC
+    else:
+        poisoned = 0
+        poisoned_reason = None
     return (
         record["row_id"],
         record["prompt_template_hash"],
@@ -338,9 +475,11 @@ def _record_to_params(record: dict[str, Any], migrated_at: str) -> tuple[Any, ..
         record.get("hardware_backend_class"),
         record["response_hash"],
         response_json,
-        record.get("repeat_verification", "skipped"),
+        repeat_verification,
         record["captured_at_utc"],
         migrated_at,
+        poisoned,
+        poisoned_reason,
     )
 
 
@@ -349,8 +488,9 @@ INSERT OR REPLACE INTO llm_responses (
     row_id, prompt_template_hash, prompt_filled_hash, model_id,
     model_digest, ollama_version, endpoint_type, seed, temperature, num_ctx,
     sampler_options_hash, hardware_backend_class, response_hash, response_json,
-    repeat_verification, captured_at_utc, migrated_at_utc
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    repeat_verification, captured_at_utc, migrated_at_utc,
+    poisoned, poisoned_reason
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -383,6 +523,11 @@ def migrate_jsonl_to_sqlite(
     are logged at WARNING level and skipped, not raised. The migration
     is idempotent — re-running with the same JSONL produces the same DB
     state.
+
+    **I-12 auto-poison.** Rows with ``repeat_verification ==
+    'nondeterministic'`` are written with ``poisoned=1``,
+    ``poisoned_reason='repeat_nondeterministic'`` so they are structurally
+    excluded from gate-eligible reads. See ``_record_to_params``.
 
     Parameters
     ----------
@@ -499,8 +644,31 @@ def _open_reader(db_path: Path) -> sqlite3.Connection:
 # and NULL=value to FALSE in a single SQL primitive. Doing this with `=` would
 # silently fail to match NULL-bearing rows because `NULL = NULL` is NULL.
 _LOOKUP_WHERE: Final[str] = " AND ".join(f"{col} IS ?" for col in _CACHE_KEY_COLUMNS)
+# I-12: SELECT also pulls ``poisoned`` + ``poisoned_reason`` so ``get`` can
+# raise ``CachePoisonedError`` BEFORE running the live integrity recompute.
+# This avoids spending CPU on a row the operator has already quarantined.
 _LOOKUP_SQL: Final[str] = f"""
-SELECT response_json, captured_at_utc, repeat_verification
+SELECT response_json, captured_at_utc, repeat_verification, poisoned, poisoned_reason
+FROM llm_responses
+WHERE {_LOOKUP_WHERE}
+LIMIT 1
+"""
+
+# ``has`` excludes poisoned rows by construction so ``compute_cache_coverage``
+# counts them as misses (a poisoned row cannot satisfy a gate). The
+# additional WHERE clause is added to ``_LOOKUP_WHERE`` rather than checking
+# the row in Python so the predicate is evaluated inside SQLite.
+_HAS_SQL: Final[str] = f"""
+SELECT 1
+FROM llm_responses
+WHERE {_LOOKUP_WHERE} AND poisoned = 0
+LIMIT 1
+"""
+
+# ``is_poisoned`` ignores ``poisoned`` filtering — we want to report on a
+# row whether it is healthy or poisoned. Returns NULL if the row is absent.
+_IS_POISONED_SQL: Final[str] = f"""
+SELECT poisoned
 FROM llm_responses
 WHERE {_LOOKUP_WHERE}
 LIMIT 1
@@ -568,8 +736,28 @@ class LLMReplayCache:
         return int(row[0])
 
     def has(self, key: CacheKey) -> bool:
-        row = self._conn.execute(_LOOKUP_SQL, _key_to_params(key)).fetchone()
+        """Return True iff a NON-POISONED row matches ``key``.
+
+        Poisoned rows are excluded by construction so that
+        ``compute_cache_coverage`` counts them as misses — a poisoned row
+        cannot satisfy a gate. Call ``is_poisoned`` if you need to
+        distinguish "absent" from "quarantined".
+        """
+        row = self._conn.execute(_HAS_SQL, _key_to_params(key)).fetchone()
         return row is not None
+
+    def is_poisoned(self, key: CacheKey) -> bool:
+        """Return True iff a row matches ``key`` AND is marked poisoned.
+
+        Returns False for both "row absent" and "row present, not poisoned".
+        Use ``has`` for the gate-eligible check; this is the diagnostic
+        used to explain WHY ``has`` returned False on a row that
+        ``LLMReplayCache.count`` would otherwise include.
+        """
+        row = self._conn.execute(_IS_POISONED_SQL, _key_to_params(key)).fetchone()
+        if row is None:
+            return False
+        return bool(row[0])
 
     def get(self, key: CacheKey) -> CacheHit:
         """Return the cached response for ``key`` or raise.
@@ -578,15 +766,36 @@ class LLMReplayCache:
         ------
         CacheMissError
             No row matches all 13 cache-key fields.
+        CachePoisonedError
+            A matching row exists but has ``poisoned=1`` (durable mark set
+            by ``scan_integrity`` or by ``migrate_jsonl_to_sqlite`` for
+            ``repeat_verification='nondeterministic'``). Raised BEFORE the
+            live recompute so we never spend CPU re-hashing a row the
+            operator has already quarantined.
         CacheCorruptionError
             The stored ``response_json`` does not hash to the stored
-            ``response_hash``. This is the I-12 integrity-check seed.
+            ``response_hash`` on this read. Distinct from
+            ``CachePoisonedError`` — this is a single-read recompute
+            failure, not a durable mark. ``scan_integrity`` is the
+            companion tool that promotes such rows to poisoned.
         """
         row = self._conn.execute(_LOOKUP_SQL, _key_to_params(key)).fetchone()
         if row is None:
             raise CacheMissError(f"no cache row for key row_id={key.row_id!r}")
 
-        response_json, captured_at_utc, repeat_verification = row
+        response_json, captured_at_utc, repeat_verification, poisoned, poisoned_reason = row
+
+        # I-12: poisoned-row gate runs BEFORE the live recompute. A
+        # poisoned row is durable evidence the operator has already
+        # quarantined this entry; re-running the hash would be wasted
+        # CPU and would surface the wrong error type (CacheCorruption
+        # implies in-flight surprise; CachePoisoned implies recorded fact).
+        if poisoned:
+            raise CachePoisonedError(
+                f"poisoned cache row for row_id={key.row_id!r}: "
+                f"reason={poisoned_reason!r}"
+            )
+
         # json.loads only — NEVER eval/exec/pickle. The payload is
         # adversarial-by-default (see class docstring).
         try:
@@ -597,7 +806,8 @@ class LLMReplayCache:
             ) from exc
 
         # Integrity check: recompute the canonical-JSON hash and compare.
-        # Mismatch is corruption — seed for I-12 broader integrity contract.
+        # Mismatch is single-read corruption — pair with ``scan_integrity``
+        # to durably mark all such rows as poisoned in a single pass.
         computed = _hash_canonical(response)
         if computed != key.response_hash:
             raise CacheCorruptionError(
@@ -702,7 +912,17 @@ def compute_cache_coverage(
         else:
             misses += 1
             if len(missing_row_ids) < _MAX_MISSING_ROW_IDS:
-                missing_row_ids.append(key.row_id)
+                # I-12: distinguish absent rows from poisoned (quarantined)
+                # rows in operator output. ``has`` already excludes
+                # poisoned rows, but the operator needs to know WHY a
+                # gate failed — "poisoned" is fixable by re-capture or
+                # by un-poisoning after the underlying nondeterminism
+                # is understood; a missing row needs the capture pipeline
+                # to be re-run.
+                if cache.is_poisoned(key):
+                    missing_row_ids.append(f"{key.row_id} [poisoned]")
+                else:
+                    missing_row_ids.append(key.row_id)
 
     ratio = hits / total
     return CoverageReport(
@@ -717,6 +937,206 @@ def compute_cache_coverage(
 
 
 # ---------------------------------------------------------------------------
+# scan_integrity (I-12)
+# ---------------------------------------------------------------------------
+
+
+# Composite-PK component columns identify a row for UPDATE. Including the
+# full PK in the WHERE clause is the safest way to mutate exactly one row.
+_SCAN_SELECT_SQL: Final[str] = """
+SELECT
+    row_id, prompt_template_hash, prompt_filled_hash, model_id,
+    endpoint_type, sampler_options_hash, response_hash,
+    response_json, repeat_verification, poisoned
+FROM llm_responses
+"""
+
+_SCAN_POISON_SQL: Final[str] = """
+UPDATE llm_responses
+SET poisoned = 1, poisoned_reason = ?
+WHERE row_id = ?
+  AND prompt_template_hash = ?
+  AND prompt_filled_hash = ?
+  AND model_id = ?
+  AND endpoint_type = ?
+  AND sampler_options_hash = ?
+  AND response_hash = ?
+"""
+
+
+def scan_integrity(
+    db_path: Path | None = None,
+    *,
+    mark_poisoned: bool = True,
+    logger: logging.Logger | None = None,
+) -> ScanReport:
+    """Walk every row in the cache and verify ``response_hash`` integrity.
+
+    For each row, recompute ``sha256(canonical_json(response_json))`` and
+    compare to the stored ``response_hash``. Mismatches are integrity
+    failures. When ``mark_poisoned`` is True (default), they are
+    durably marked ``poisoned=1`` with reason ``integrity_mismatch``.
+
+    Returns a ``ScanReport`` summarising what was found. Always reports
+    the count of pre-existing poisoned rows and rows tagged with
+    ``repeat_verification='nondeterministic'`` so the operator can
+    distinguish:
+
+      * fresh integrity damage (``newly_poisoned > 0``),
+      * the steady-state quarantine size (``already_poisoned``), and
+      * the migration-time auto-poison coverage
+        (``repeat_verification_nondeterministic``).
+
+    Parameters
+    ----------
+    db_path:
+        Target SQLite file. Defaults to ``logs/edge_replay/llm_cache.sqlite``.
+    mark_poisoned:
+        When True (default), promote integrity-mismatch rows to
+        ``poisoned=1``. When False, report only — no DB writes.
+    logger:
+        Optional logger. Defaults to the module logger.
+
+    Notes
+    -----
+
+    Uses the writer connection so it can both SELECT and UPDATE under one
+    transaction. ``_open_writer`` runs ``_ensure_i12_columns`` first, so
+    a scan against a pre-I-12 DB transparently migrates the schema
+    before scanning.
+    """
+    import time
+
+    eff_logger = logger or logging.getLogger(__name__)
+    dst = Path(db_path) if db_path is not None else _DEFAULT_DB_PATH
+
+    if not dst.exists():
+        raise FileNotFoundError(
+            f"LLM cache DB does not exist: {dst}. "
+            f"Run migrate_jsonl_to_sqlite() first."
+        )
+
+    started_at = time.perf_counter()
+    conn = _open_writer(dst)
+    try:
+        total = 0
+        integrity_mismatches = 0
+        already_poisoned = 0
+        newly_poisoned = 0
+        repeat_nondeterministic = 0
+
+        # Materialise rows first so the UPDATE in the loop body doesn't
+        # mutate the iterator (SQLite SELECT cursors are forward-only,
+        # and we'd otherwise risk seeing the same row twice or skipping
+        # one). The cache is bounded by capture-corpus size (≤1k rows
+        # per cycle artifact), so the memory cost is trivial.
+        rows = list(conn.execute(_SCAN_SELECT_SQL))
+        total = len(rows)
+
+        # Track rows we already marked in this scan so a (degenerate)
+        # duplicate-pk situation doesn't double-count newly_poisoned.
+        promoted_keys: set[tuple[Any, ...]] = set()
+
+        for row in rows:
+            (
+                row_id,
+                prompt_template_hash,
+                prompt_filled_hash,
+                model_id,
+                endpoint_type,
+                sampler_options_hash,
+                response_hash,
+                response_json,
+                repeat_verification,
+                poisoned,
+            ) = row
+
+            if repeat_verification == "nondeterministic":
+                repeat_nondeterministic += 1
+
+            if poisoned:
+                already_poisoned += 1
+                # An already-poisoned row may also be integrity-damaged;
+                # we don't care for the gate-eligibility decision (it
+                # was already excluded), but we still report it so the
+                # operator can spot a second failure mode on the same row.
+                # Skip the recompute to keep the scan O(unpoisoned).
+                continue
+
+            try:
+                parsed = json.loads(response_json)
+            except json.JSONDecodeError as exc:
+                integrity_mismatches += 1
+                eff_logger.warning(
+                    "scan_integrity: row_id=%r has non-JSON response_json (%s); "
+                    "poisoning",
+                    row_id,
+                    exc,
+                )
+                if mark_poisoned:
+                    pk = (
+                        row_id,
+                        prompt_template_hash,
+                        prompt_filled_hash,
+                        model_id,
+                        endpoint_type,
+                        sampler_options_hash,
+                        response_hash,
+                    )
+                    if pk not in promoted_keys:
+                        conn.execute(
+                            _SCAN_POISON_SQL,
+                            (POISON_REASON_INTEGRITY_MISMATCH, *pk),
+                        )
+                        promoted_keys.add(pk)
+                        newly_poisoned += 1
+                continue
+
+            computed = _hash_canonical(parsed)
+            if computed != response_hash:
+                integrity_mismatches += 1
+                eff_logger.warning(
+                    "scan_integrity: row_id=%r integrity mismatch "
+                    "(stored=%s computed=%s)",
+                    row_id,
+                    response_hash,
+                    computed,
+                )
+                if mark_poisoned:
+                    pk = (
+                        row_id,
+                        prompt_template_hash,
+                        prompt_filled_hash,
+                        model_id,
+                        endpoint_type,
+                        sampler_options_hash,
+                        response_hash,
+                    )
+                    if pk not in promoted_keys:
+                        conn.execute(
+                            _SCAN_POISON_SQL,
+                            (POISON_REASON_INTEGRITY_MISMATCH, *pk),
+                        )
+                        promoted_keys.add(pk)
+                        newly_poisoned += 1
+
+        if mark_poisoned:
+            conn.commit()
+
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        return ScanReport(
+            total_rows=total,
+            integrity_mismatches=integrity_mismatches,
+            already_poisoned=already_poisoned,
+            newly_poisoned=newly_poisoned,
+            repeat_verification_nondeterministic=repeat_nondeterministic,
+            scan_duration_ms=elapsed_ms,
+        )
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -724,7 +1144,7 @@ def compute_cache_coverage(
 def _build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="llm_cache",
-        description="I-2 LLM cache reader + JSONL → SQLite migration",
+        description="I-2 LLM cache reader + JSONL → SQLite migration + I-12 scan",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -737,6 +1157,27 @@ def _build_argparser() -> argparse.ArgumentParser:
     c.add_argument("--corpus", type=Path, required=True, nargs="+")
     c.add_argument("--db", type=Path, default=None)
     c.add_argument("--threshold", type=float, default=0.95)
+
+    s = sub.add_parser(
+        "scan",
+        help="I-12: walk every row and verify response_hash integrity",
+    )
+    s.add_argument("--db", type=Path, default=None)
+    # mark-poison vs report-only as a single flag pair so the operator
+    # cannot accidentally fall into an unintended write mode.
+    poison_group = s.add_mutually_exclusive_group()
+    poison_group.add_argument(
+        "--mark-poisoned",
+        action="store_true",
+        default=True,
+        help="Promote integrity-mismatch rows to poisoned=1 (default)",
+    )
+    poison_group.add_argument(
+        "--report-only",
+        dest="mark_poisoned",
+        action="store_false",
+        help="Walk the DB and report findings without writing",
+    )
 
     return p
 
@@ -797,6 +1238,30 @@ def main(argv: list[str] | None = None) -> int:
             indent=2,
         ))
         return 0 if report.passes_threshold else 1
+
+    if args.cmd == "scan":
+        scan_report = scan_integrity(
+            db_path=args.db,
+            mark_poisoned=args.mark_poisoned,
+        )
+        print(json.dumps(
+            {
+                "total_rows": scan_report.total_rows,
+                "integrity_mismatches": scan_report.integrity_mismatches,
+                "already_poisoned": scan_report.already_poisoned,
+                "newly_poisoned": scan_report.newly_poisoned,
+                "repeat_verification_nondeterministic": (
+                    scan_report.repeat_verification_nondeterministic
+                ),
+                "scan_duration_ms": scan_report.scan_duration_ms,
+                "mark_poisoned": args.mark_poisoned,
+            },
+            indent=2,
+        ))
+        # Exit 1 on any integrity mismatch regardless of --mark-poisoned,
+        # so CI / cron observers can detect freshly-failed rows without
+        # parsing the JSON. The poison-write happens as a side effect.
+        return 0 if scan_report.integrity_mismatches == 0 else 1
 
     return 2  # pragma: no cover — argparse requires a subcommand
 
