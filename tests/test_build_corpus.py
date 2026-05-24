@@ -481,3 +481,215 @@ def test_inverted_window_bounds_raise_value_error(tmp_path: Path) -> None:
         assert "start_utc must be strictly before end_utc" in msg
     else:  # pragma: no cover
         raise AssertionError("expected ValueError on inverted bounds")
+
+
+# ---------------------------------------------------------------------------
+# I-10: contamination-window filter
+# ---------------------------------------------------------------------------
+
+
+def _make_paper_trades_db_with_cohort(path: Path) -> None:
+    """Like ``_make_paper_trades_db`` but the table carries the I-10
+    cohort_extension column so rows can be tagged with the
+    ``contamination_window:*`` prefix."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE paper_trades (
+                trade_id        TEXT PRIMARY KEY,
+                ts              TEXT NOT NULL,
+                ticker          TEXT NOT NULL,
+                side            TEXT NOT NULL,
+                price_cents     INTEGER NOT NULL,
+                series_ticker   TEXT,
+                cohort_extension TEXT
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO paper_trades VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                # Two clean rows across two families (satisfies the
+                # 2-distinct-families OOS check).
+                ("t1", "2026-05-24T00:00:00Z", "KXTRUMPIRAN-A", "yes", 50,
+                 "KXTRUMPIRAN", None),
+                ("t2", "2026-05-24T01:00:00Z", "KXMOCTRUMP25-A", "no", 40,
+                 "KXMOCTRUMP25", None),
+                # Two contamination-tagged rows (same change_id).
+                ("t3", "2026-05-24T02:00:00Z", "KXTRUMPIRAN-B", "yes", 55,
+                 "KXTRUMPIRAN",
+                 "contamination_window:EXEC-002-v2:20260524T010000Z"),
+                ("t4", "2026-05-24T03:00:00Z", "KXMOCTRUMP25-B", "no", 45,
+                 "KXMOCTRUMP25",
+                 "contamination_window:EXEC-002-v2:20260524T010000Z"),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _i10_window() -> tuple[datetime, datetime]:
+    return (
+        datetime(2026, 5, 23, 23, 0, 0, tzinfo=timezone.utc),
+        datetime(2026, 5, 25, 0, 0, 0, tzinfo=timezone.utc),
+    )
+
+
+def test_include_contamination_false_filters_tagged_rows(tmp_path: Path) -> None:
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db_with_cohort(db)
+    _write_regimes_doc(tmp_path)
+
+    start, end = _i10_window()
+    out = tmp_path / "out.jsonl"
+    result = build_corpus.build_corpus(
+        start_utc=start,
+        end_utc=end,
+        market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+        cohort_tag="POST_V030_2_OOS_SEED",
+        regime_label="post_v030_2_oos_seed",
+        output_path=out,
+        paper_trades_db=db,
+        regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+    )
+
+    assert result.row_count == 2
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    trade_ids = sorted(r["trade_id"] for r in rows)
+    assert trade_ids == ["t1", "t2"]
+    for row in rows:
+        assert row["contamination_window"] is False
+
+
+def test_include_contamination_true_returns_all_rows(tmp_path: Path) -> None:
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db_with_cohort(db)
+    _write_regimes_doc(tmp_path)
+
+    start, end = _i10_window()
+    out = tmp_path / "out.jsonl"
+    result = build_corpus.build_corpus(
+        start_utc=start,
+        end_utc=end,
+        market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+        cohort_tag="POST_V030_2_OOS_SEED",
+        regime_label="post_v030_2_oos_seed",
+        output_path=out,
+        paper_trades_db=db,
+        regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+        include_contamination=True,
+    )
+
+    assert result.row_count == 4
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    trade_ids = sorted(r["trade_id"] for r in rows)
+    assert trade_ids == ["t1", "t2", "t3", "t4"]
+    by_id = {r["trade_id"]: r for r in rows}
+    assert by_id["t1"]["contamination_window"] is False
+    assert by_id["t3"]["contamination_window"] is True
+
+
+def test_contamination_window_field_present_on_every_row(tmp_path: Path) -> None:
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db_with_cohort(db)
+    _write_regimes_doc(tmp_path)
+
+    start, end = _i10_window()
+    out = tmp_path / "out.jsonl"
+    build_corpus.build_corpus(
+        start_utc=start,
+        end_utc=end,
+        market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+        cohort_tag="POST_V030_2_OOS_SEED",
+        regime_label="post_v030_2_oos_seed",
+        output_path=out,
+        paper_trades_db=db,
+        regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+        include_contamination=True,
+    )
+
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert rows  # sanity
+    for row in rows:
+        assert "contamination_window" in row
+        assert isinstance(row["contamination_window"], bool)
+
+
+def test_build_corpus_safe_when_cohort_extension_column_missing(
+    tmp_path: Path,
+) -> None:
+    """Pre-migration DBs must still build corpora cleanly — the missing
+    column is treated as 'no contamination present' rather than an
+    error. Mirrors the corpus builder's pre-I-10 contract."""
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db(db)  # legacy schema, no cohort_extension
+    _write_regimes_doc(tmp_path)
+
+    start, end = _start_end()
+    out = tmp_path / "out.jsonl"
+    result = build_corpus.build_corpus(
+        start_utc=start,
+        end_utc=end,
+        market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+        cohort_tag="POST_V030_2_OOS_SEED",
+        regime_label="post_v030_2_oos_seed",
+        output_path=out,
+        paper_trades_db=db,
+        regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+    )
+
+    # Build succeeds even when filter cannot apply; per-row field still
+    # gets stamped (False, because the column does not exist in the
+    # source row).
+    assert result.row_count >= 1
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    for row in rows:
+        assert row["contamination_window"] is False
+
+
+def test_buildresult_notes_reports_contamination_filter_count(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db_with_cohort(db)
+    _write_regimes_doc(tmp_path)
+
+    start, end = _i10_window()
+    result = build_corpus.build_corpus(
+        start_utc=start,
+        end_utc=end,
+        market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+        cohort_tag="POST_V030_2_OOS_SEED",
+        regime_label="post_v030_2_oos_seed",
+        output_path=tmp_path / "out.jsonl",
+        paper_trades_db=db,
+        regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+    )
+
+    joined = " ".join(result.notes)
+    assert "2 contamination rows filtered" in joined
+
+
+def test_buildresult_notes_reports_inclusion_count(tmp_path: Path) -> None:
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db_with_cohort(db)
+    _write_regimes_doc(tmp_path)
+
+    start, end = _i10_window()
+    result = build_corpus.build_corpus(
+        start_utc=start,
+        end_utc=end,
+        market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+        cohort_tag="POST_V030_2_OOS_SEED",
+        regime_label="post_v030_2_oos_seed",
+        output_path=tmp_path / "out.jsonl",
+        paper_trades_db=db,
+        regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+        include_contamination=True,
+    )
+
+    joined = " ".join(result.notes)
+    assert "include_contamination=True" in joined
+    assert "2 contamination rows retained" in joined
