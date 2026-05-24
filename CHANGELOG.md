@@ -19,6 +19,77 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.31.3] - 2026-05-24
+
+### Fixed
+
+- **PROFIT-LLM-002 — LLM internal-consistency-rule converse enforced
+  in code.** The signal-analyzer prompt at
+  `analysis/signal_analyzer.py:_LLM_SYSTEM_PROMPT` enforces ONE side
+  of the consistency rule (`new_information=false` →
+  `direction="neutral"` AND `magnitude="none"`) but does NOT enforce
+  the converse.
+
+  In production, ~3% of LLM runs (10/372 over 7 days, all on
+  `KXTXRUNOFFENDORSE-26MAY26-DJT-JCOR` outcome contracts) emit
+  `direction in {yes, no}` with `confidence=0.95` BUT
+  `magnitude="none"` — silently zeroing out the shift via
+  `_MAGNITUDE_SHIFT["none"]=0.0`. The Trump-endorses-Paxton-over-Cornyn
+  news was the resolution-grade event for the JCOR outcome; the LLM
+  read it correctly (direction=no, 0.95 confidence) but the bot
+  produced zero edge → zero trade.
+
+  Fix in `analysis/signal_analyzer._parse_llm_response`: when
+  `direction in {"yes", "no"}` AND `magnitude == "none"` AND
+  `confidence >= 0.6`, bump magnitude to `"small"`. Restores the
+  minimum-credible 8 pp × confidence shift. Confidence floor 0.6
+  chosen because the production anomalies cluster at 0.95; 0.6
+  leaves room for variants without admitting low-conviction
+  directionals.
+
+  Volume impact estimate: 10 missed trades over 7 days = 1.4/day.
+  Bot lifetime resolved-trade volume is 8 over 13 days (0.6/day).
+  This single fix has the potential to ~2x the resolved-trade flow.
+
+### Tests
+
+- `test_magnitude_none_with_high_confidence_bumped_to_small` pins
+  the bump triggers correctly. Asserts `magnitude=="small"` and the
+  shift produces `prob == 0.474` (= 0.55 - 0.08*0.95) for the
+  Paxton/Cornyn-style input. Comment cites the production miss
+  pattern explicitly so future readers see the failure mode.
+- `test_magnitude_none_with_low_confidence_returns_market_price`
+  pins the lower-bound: `confidence=0.55 < 0.6` floor keeps the
+  LLM's "none" intact. Prevents the bump from converting
+  low-conviction directionals into spurious shifts.
+- `test_magnitude_none_with_neutral_direction_not_bumped` pins the
+  upper-bound: `direction="neutral"` never triggers the bump even
+  at high confidence. Prevents true-neutral responses from
+  inadvertently becoming directional bets.
+- Replaces (renames) the previous `test_magnitude_none_returns_market_price`
+  which pinned the old behavior. Behavior change is intentional
+  and documented in this CHANGELOG entry.
+
+### Notes
+
+- Phase B of operator's 2026-05-24 "execute all three" goal.
+  Phase A (priors audit) and Phase C (stale-news default 1800s,
+  v0.31.2) precede this.
+- Downstream `paper_trades.llm_magnitude` and
+  `SIGNAL_ANALYSIS_DETAIL.llm_magnitude` will now record the
+  upgraded magnitude (`"small"`) rather than the raw LLM string
+  (`"none"`). The raw LLM output is still captured in
+  `logs/edge_replay/llm_capture.jsonl` (PROFIT-PHASE3-001 I-3
+  deliverable) for audit trail purposes.
+- T2 scope per IC §16.7 (prompt/LLM behavior). Replay-CI gate
+  currently passes via PROFIT-PHASE3-002 bootstrap pass-through
+  (no corpus on CI runner). Operator gate is the substantive
+  review.
+- No env mutation. No threshold-override-map changes. No G1-G6
+  threshold changes. No execution-path changes.
+- Full suite: **2301 passed** / 4 skipped / 71 xfailed (+2 net new
+  tests). Ruff: clean.
+
 ## [0.31.2] - 2026-05-24
 
 ### Changed

@@ -745,6 +745,33 @@ def _parse_llm_response(parsed: dict, market) -> tuple[float, float, str, str, s
     direction  = parsed.get("direction", "neutral")
     magnitude  = parsed.get("magnitude", "none")
 
+    # PROFIT-LLM-002 (2026-05-24): Reconcile internally-inconsistent LLM
+    # output. The prompt enforces ONE side of the consistency rule
+    # (new_information=false → direction="neutral" AND magnitude="none")
+    # but does NOT enforce the converse. In production, ~3% of LLM runs
+    # emit direction in {yes, no} with high confidence (≥0.6) BUT
+    # magnitude="none" — silently zeroing out the shift. 7-day funnel
+    # diagnostic (2026-05-24) found 10 such records, ALL on
+    # KXTXRUNOFFENDORSE markets where Trump's Paxton-over-Cornyn
+    # endorsement was the resolution-grade news the bot saw, parsed
+    # correctly as direction=no with confidence=0.95, but produced no
+    # trade because magnitude was "none". Upgrading to "small" here
+    # restores the minimum-credible shift (8 pp * confidence) when the
+    # LLM is confident enough in a direction. Threshold 0.6 chosen
+    # because the production anomalies cluster at confidence=0.95;
+    # 0.6 leaves room for variants without admitting low-conviction
+    # directions. NOTE: this modifies the magnitude returned by this
+    # function, so downstream stores in paper_trades + SIGNAL_ANALYSIS_DETAIL
+    # will record the upgraded magnitude ("small"). The raw LLM output
+    # is captured in llm_capture.jsonl (PROFIT-PHASE3-001) for audit;
+    # see scripts/edge_replay/llm_capture.py.
+    if (
+        direction in ("yes", "no")
+        and magnitude == "none"
+        and confidence >= 0.6
+    ):
+        magnitude = "small"
+
     if not relevant or not new_info or direction == "neutral" or magnitude == "none":
         prob = market.yes_prob
     else:
