@@ -70,7 +70,7 @@ from analysis.signal_analyzer import estimate_probability
 from tasks.stats.source_stats import SourceStats
 from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, VERSION,
                     FADE_TWEET_FEED_URLS,
-                    MARKET_SERIES_BLOCKLIST_PREFIXES, MAX_NEWS_AGE_SECONDS,
+                    MARKET_SERIES_BLOCKLIST_PREFIXES,
                     EARLY_MAX_NEWS_AGE_SECONDS, EARLY_MAX_NEWS_AGE_BY_SOURCE,
                     EARLY_DROP_IF_NO_TIMESTAMP, SOURCE_PRIORITY_TIERS,
                     FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD,
@@ -779,10 +779,23 @@ class TradingBot:
             )
             return
         # Staleness check: skip if the article is too old when we process it.
-        # With a queue, items can sit for several minutes; old news is already priced in.
+        # With a queue, items can sit for several minutes; old news is already
+        # priced in.
+        #
+        # PARITY INVARIANT (PROFIT-STALE-001, fix/stale-news-source-aware-analyzer):
+        # the analyzer-stage threshold MUST equal the intake-stage threshold
+        # for the same source. The pre-fix code used a flat
+        # MAX_NEWS_AGE_SECONDS=300, while intake admits items under the
+        # per-source EARLY_MAX_NEWS_AGE_BY_SOURCE override (1800s for ~25
+        # geopolitical sources). The result was a 19% analyzer-stage stale-
+        # loss in the 2026-05-24 audit — items that intake legitimately
+        # admitted then failed analyzer's stricter check with no recourse.
+        # See docs/profit_path_debt_log.md (PROFIT-STALE-001) for the audit
+        # data. Sharing the helper enforces the invariant in code.
+        threshold_secs = _early_max_news_age_seconds_for_source(news.source)
         age_secs = (datetime.now(timezone.utc) - news.published).total_seconds()
         market_yes_price = market.yes_price
-        if age_secs > MAX_NEWS_AGE_SECONDS:
+        if age_secs > threshold_secs:
             await write_trade_log_async(
                 trade_log.log_analysis_rejected,
                 reason="stale_news",
@@ -791,10 +804,11 @@ class TradingBot:
                 headline=news.headline,
                 match_score=match_score,
                 age_seconds=age_secs,
+                threshold_seconds=threshold_secs,
             )
             log.debug(
-                "Stale news skipped (%.0fs > %ds): %s",
-                age_secs, MAX_NEWS_AGE_SECONDS, news.headline[:60],
+                "Stale news skipped (%.0fs > %ds for %s): %s",
+                age_secs, threshold_secs, news.source, news.headline[:60],
             )
             return
 

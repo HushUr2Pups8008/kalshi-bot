@@ -451,8 +451,13 @@ async def test_process_candidate_still_rejects_when_neither_signal_source_speaks
 
 @pytest.mark.asyncio
 async def test_process_candidate_skips_stale_news_before_estimation(monkeypatch):
+    # PROFIT-STALE-001: analyzer-stage stale check now uses the per-source
+    # threshold via _early_max_news_age_seconds_for_source(news.source).
+    # _make_news() defaults to source="Reuters", which is not in the
+    # EARLY_MAX_NEWS_AGE_BY_SOURCE override map; it falls through to
+    # EARLY_MAX_NEWS_AGE_SECONDS=300. Aging news 600s past published keeps
+    # this case stale under the new parity policy.
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
-    monkeypatch.setattr("main.MAX_NEWS_AGE_SECONDS", 300)
     bot = _make_bot_stub()
     news = _make_news()
     news.published = datetime.now(timezone.utc) - timedelta(seconds=600)

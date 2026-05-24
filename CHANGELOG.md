@@ -19,6 +19,66 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.30.6] - 2026-05-24
+
+### Fixed
+
+- **PROFIT-STALE-001 — analyzer-stage stale check now honors per-source
+  policy.** The pre-fix code compared news age against a flat
+  `MAX_NEWS_AGE_SECONDS=300` at the analyzer stage (`main.py`), while
+  intake admits items under the per-source `EARLY_MAX_NEWS_AGE_BY_SOURCE`
+  override map (1800s for ~25 geopolitical sources). The 2026-05-24
+  audit measured **342 / 1783 = 19% of analyzer-stage matches stale-
+  rejected** purely because of the threshold mismatch: items that intake
+  legitimately admitted under per-source policy then failed the
+  analyzer's stricter flat check with no recourse.
+
+  The analyzer's stale check now calls the same
+  `_early_max_news_age_seconds_for_source(news.source)` helper that
+  intake uses. The parity invariant is now: for any source `s`, the
+  analyzer threshold equals the intake threshold. Items intake admits
+  cannot be analyzer-rejected for staleness under the same source's
+  policy.
+
+### Added
+
+- `threshold_seconds` field on `ANALYSIS_REJECTED` records emitted by
+  the analyzer-stage stale check. Operators can now see which threshold
+  a stale rejection hit, distinguishing per-source overrides from the
+  default. Schema extension only — back-compat preserved via
+  `threshold_seconds: int | None = None` default on
+  `TradeLogger.log_analysis_rejected`.
+
+- `tests/test_stale_news_parity.py` — 6 tests pinning the parity invariant:
+    - `test_default_source_returns_default_threshold` — unknown sources
+      fall through to `EARLY_MAX_NEWS_AGE_SECONDS=300`.
+    - `test_geopolitical_sources_get_per_source_override` — spot-check
+      that NYT / Guardian / Middle East sources get >300s overrides.
+    - `test_per_source_map_contains_expected_geopolitical_sources` —
+      pin the set so accidental removal surfaces.
+    - `test_analyzer_call_site_uses_per_source_helper` — load-bearing
+      textual pin: analyzer block must contain `PARITY INVARIANT` marker
+      AND call `_early_max_news_age_seconds_for_source(news.source)`.
+    - `test_per_source_threshold_strictly_greater_than_or_equal_to_default`
+      — sanity invariant on the override map.
+    - `test_log_analysis_rejected_accepts_threshold_seconds_kwarg` — pin
+      the new field on the trade-log schema with back-compat default.
+
+- Updated existing
+  `tests/test_main_pipeline.py::test_process_candidate_skips_stale_news_before_estimation`
+  — removed obsolete `monkeypatch.setattr("main.MAX_NEWS_AGE_SECONDS", 300)`
+  (analyzer no longer references the flat constant). Test now exercises the
+  per-source helper directly with `_make_news()` source="Reuters" → falls
+  through to default 300s → 600s news → stale.
+
+### Notes
+
+- No env mutation. No threshold-value changes; just the source of the
+  threshold lookup. No G1 / G4 changes. No regime priors changed.
+- Bot picks up changes on next launchd restart.
+- Full suite: **2237 passed** / 4 skipped / 71 xfailed (was 2231; +6 new tests).
+- Ruff: clean.
+
 ## [0.30.5] - 2026-05-24
 
 ### Fixed
