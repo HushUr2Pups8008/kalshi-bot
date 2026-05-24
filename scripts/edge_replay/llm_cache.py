@@ -157,7 +157,19 @@ class CacheKey:
 
 @dataclass(frozen=True)
 class CacheHit:
-    """Successful cache lookup. ``response`` is opaque untrusted data."""
+    """Successful cache lookup. ``response`` is opaque UNTRUSTED data.
+
+    The ``response`` field carries whatever the LLM returned, including
+    potentially prompt-injected content from a hostile news headline.
+    Callers must treat it as plain JSON-decoded data — ``dict``, ``list``,
+    ``str``, ``int``, ``float``, ``bool``, or ``None`` — and MUST NOT
+    ``eval``/``exec``/``pickle.load`` or attribute-access on it. The
+    ``response_hash`` is an integrity anchor; do not re-derive trust
+    from a hash match alone.
+
+    The annotation is ``Any`` because JSON's value space is genuinely
+    heterogeneous, not because anything goes.
+    """
 
     key: CacheKey
     response: Any
@@ -519,6 +531,11 @@ class LLMReplayCache:
     The connection is opened in read-only mode via ``file:?mode=ro``.
     Attempts to write through this connection raise ``OperationalError``.
 
+    **Not thread-safe.** SQLite connections default to ``check_same_thread=True``;
+    create one ``LLMReplayCache`` instance per thread. If I-4 ever parallelises
+    corpus rows across a ``ThreadPoolExecutor``, sharing a single instance
+    will produce silent corruption or ``ProgrammingError``.
+
     Use as a context manager:
 
         with LLMReplayCache() as cache:
@@ -645,6 +662,13 @@ def compute_cache_coverage(
     This function is intended as a pre-gate check: I-4 replay-as-CI must
     refuse to open a T1 observation window if coverage is below the
     threshold.
+
+    Implementation note (per python-reviewer): we materialise ``corpus_rows``
+    into a list rather than stream it. The signature accepts ``Iterable``
+    for API ergonomics, but materialisation is the simpler implementation
+    at current corpus scale (≤1k rows per cycle-17d artifact). I-4 may
+    revisit if corpora ever cross 100k rows; today the trade-off favours
+    code clarity over a streaming counter + bounded missing-list buffer.
     """
     rows = list(corpus_rows)
     total = len(rows)
@@ -718,14 +742,24 @@ def _build_argparser() -> argparse.ArgumentParser:
 
 
 def _load_corpus_rows(paths: list[Path]) -> list[dict[str, Any]]:
+    """Read JSONL corpus files into a list. Per python-reviewer MEDIUM:
+    malformed lines must surface the (filename, line-number, parser-error)
+    context — the migrator's silent-skip pattern is wrong for a one-shot
+    operator-invoked coverage check where a malformed corpus is itself
+    the signal the operator needs to see."""
     rows: list[dict[str, Any]] = []
     for path in paths:
         with open(path, "r", encoding="utf-8") as f:
-            for raw in f:
+            for lineno, raw in enumerate(f, start=1):
                 stripped = raw.strip()
                 if not stripped:
                     continue
-                rows.append(json.loads(stripped))
+                try:
+                    rows.append(json.loads(stripped))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"malformed JSON in corpus {path}:{lineno}: {exc}"
+                    ) from exc
     return rows
 
 
