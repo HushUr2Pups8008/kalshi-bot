@@ -48,8 +48,10 @@ import argparse
 import dataclasses
 import json
 import math
+import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -382,24 +384,51 @@ def _corpus_window(rows: list[dict[str, Any]]) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
+# Bounds the scenario-suite subprocess. A hung pytest (deadlocked fixture,
+# stuck import) would otherwise block CI indefinitely. 300s is generous for
+# the current ~22-scenario suite (sub-second runtime today) but cheap to
+# raise. Surfaced as a TimeoutExpired -> non-zero return so the gate
+# fails-closed rather than masquerading as a pass.
+_SCENARIO_SUITE_TIMEOUT_SECONDS = 300
+
+
 def _run_scenario_suite(
     scenario_path: Path = DEFAULT_SCENARIO_SUITE,
     runner: Sequence[str] | None = None,
+    *,
+    timeout_seconds: float = _SCENARIO_SUITE_TIMEOUT_SECONDS,
 ) -> tuple[int, str]:
     """Invoke the I-6 scenario suite via pytest and return (exit_code, captured_output).
 
     The runner defaults to ``[sys.executable, "-m", "pytest", "-q"]``. Tests
     monkeypatch this function (or override ``runner``) to avoid spawning a
     real subprocess per unit-test.
+
+    A ``TimeoutExpired`` is translated to a non-zero exit code so the gate
+    fails-closed on a hung pytest process. Per python-reviewer M1: a hung
+    scenario subprocess would otherwise block CI indefinitely.
     """
     cmd = list(runner) if runner is not None else [sys.executable, "-m", "pytest", "-q"]
     cmd.append(str(scenario_path))
-    proc = subprocess.run(  # noqa: S603 — controlled runner list
-        cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(  # noqa: S603 — controlled runner list
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        combined = (
+            f"scenario suite TIMED OUT after {timeout_seconds}s (gate fail-closed)\n"
+            f"cmd: {cmd}\n"
+            f"partial_stdout: {(exc.stdout or b'').decode('utf-8', 'replace')}\n"
+            f"partial_stderr: {(exc.stderr or b'').decode('utf-8', 'replace')}\n"
+        )
+        # Exit code 124 mirrors GNU `timeout(1)`'s convention for timed-out
+        # commands; any non-zero value triggers the gate's ScenarioFailureError
+        # path, so the specific number is operator-readable rather than load-bearing.
+        return 124, combined
     combined = (proc.stdout or "") + (proc.stderr or "")
     return proc.returncode, combined
 
@@ -480,13 +509,41 @@ def _dataclass_to_json(obj: Any) -> Any:
 
 
 def _write_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    _atomic_write_text(path, json.dumps(data, indent=2, sort_keys=True))
 
 
 def _write_text(path: Path, text: str) -> None:
+    _atomic_write_text(path, text)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Atomically write text to ``path`` via tmp-file + Path.replace().
+
+    Per python-reviewer M2: a process kill between writing
+    ``verdict.json`` and ``notes.md`` would otherwise leave the CI
+    run directory with some files present and some absent. I-13
+    (next Phase 2 deliverable) treats directory presence as a
+    completion signal; partial writes would mislead it.
+
+    ``Path.replace()`` is atomic on POSIX (rename(2)) and on NTFS
+    when source and destination live on the same volume — which
+    they do here, since the .tmp sibling is created in
+    ``path.parent`` via ``tempfile.mkstemp(dir=...)``.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent),
+        prefix=path.name + ".",
+        suffix=".tmp",
+    )
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        tmp.replace(path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _write_outputs(
@@ -573,6 +630,12 @@ def run_replay_gate(
     spec = gate_spec or GateSpec()
     sha = (commit_sha or _git_head_sha()).strip() or "unknown"
     output_dir = ci_run_dir / sha
+    # Notes accumulate in execution order. Per python-reviewer M3:
+    # ordering is INTENTIONALLY insertion-order, not sorted, so the
+    # operator can reconstruct the gate's reasoning path from top to
+    # bottom. If I-13 ever diffs notes across runs, sort before
+    # writing in _write_outputs; today this is acceptable because
+    # the order is deterministic for a given code path.
     notes: list[str] = [f"commit_sha={sha}", f"timestamp_utc={_now_iso_z()}"]
 
     # ----- Tier classification (I-5) -----
