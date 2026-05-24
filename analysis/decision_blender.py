@@ -45,6 +45,22 @@ BlendMode = Literal[
     "structural_tier2_veto",
 ]
 
+# PROFIT-BLENDER-001 (2026-05-24): three-state lane classification for the
+# lane-aware blend filter. Spec at
+# docs/superpowers/specs/2026-05-24-lane-aware-blender-design.md.
+#
+#   real        — lane has real signal derived from actual data. Always
+#                 contributes to blend.
+#   weak_prior  — lane has a low-evidence prior (e.g. `_time_prior`-derived
+#                 weight, IRON_CAP base rate). Real but low-confidence;
+#                 contributes to blend. NOT a fallback.
+#   fallback    — lane returned a default-neutral value because it has NO
+#                 data (e.g. dossier with no evidence rows returning
+#                 p=0.5, conf~0). Excluded from blend when at least one
+#                 real or weak_prior lane exists; included only when all
+#                 lanes are fallback (degraded equal-weight blend).
+SignalKind = Literal["real", "weak_prior", "fallback"]
+
 
 @dataclass(frozen=True)
 class LaneInput:
@@ -53,6 +69,7 @@ class LaneInput:
     p: float          # probability estimate, 0..1
     confidence: float # raw lane confidence, 0..1
     lane_id: str      # "fast" | "accumulation" | "structural"
+    signal_kind: SignalKind = "real"  # PROFIT-BLENDER-001
 
 
 @dataclass(frozen=True)
@@ -89,11 +106,26 @@ def blend(
 
     Lanes passed as None are excluded from blending (DER-1 note on absent lanes).
     When only one lane is present it is adopted directly (degenerates gracefully).
-    """
-    active: list[LaneInput] = [ln for ln in (fast, accumulation, structural) if ln is not None]
 
-    if not active:
+    PROFIT-BLENDER-001 (2026-05-24): in addition to None-lane exclusion, lanes
+    with `signal_kind="fallback"` are excluded from the weighted-blend math
+    when at least one `real` or `weak_prior` lane is present. A fallback lane
+    carries no real information — including it dilutes the signals from
+    lanes that DO have data. If ALL lanes are fallback the function
+    degrades gracefully and blends them with equal weight (better than
+    crashing or producing arbitrary output). Spec at
+    `docs/superpowers/specs/2026-05-24-lane-aware-blender-design.md`.
+    """
+    raw_active: list[LaneInput] = [ln for ln in (fast, accumulation, structural) if ln is not None]
+
+    if not raw_active:
         raise ValueError("blend() requires at least one non-None lane input")
+
+    # PROFIT-BLENDER-001: filter out fallback lanes when ≥1 non-fallback
+    # (real or weak_prior) lane exists. The blender is the only consumer
+    # of signal_kind metadata — callers don't need to special-case.
+    non_fallback = [ln for ln in raw_active if ln.signal_kind != "fallback"]
+    active: list[LaneInput] = non_fallback if non_fallback else raw_active
 
     eff_conf = _effective_confidences(active, regime_weights, regime_confidence)
 

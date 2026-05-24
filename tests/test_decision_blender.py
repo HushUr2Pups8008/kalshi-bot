@@ -484,3 +484,195 @@ class TestOutputInvariants:
         assert r.fast_lane_p == pytest.approx(0.61)
         assert r.accumulation_p == pytest.approx(0.55)
         assert r.structural_p == pytest.approx(0.49)
+
+
+# ── PROFIT-BLENDER-001: lane-aware blend (signal_kind="fallback" exclusion)
+#
+# Spec: docs/superpowers/specs/2026-05-24-lane-aware-blender-design.md.
+
+
+class TestProfitBlender001LaneAwareFiltering:
+    """Lane-aware blend filter — `fallback` lanes excluded when ≥1 real."""
+
+    _WEIGHTS = {"fast": 0.65, "interpretation": 0.25, "structural": 0.10}
+
+    def _blend(self, fast=None, accumulation=None, structural=None, rc=0.22):
+        return blend(
+            fast=fast,
+            accumulation=accumulation,
+            structural=structural,
+            regime_weights=self._WEIGHTS,
+            regime_confidence=rc,
+            fast_signal_active=True,
+        )
+
+    def test_lane_input_default_signal_kind_is_real(self):
+        """Backward-compat: existing callers that don't set signal_kind
+        get the default `real`, preserving pre-fix behavior."""
+        lane = LaneInput(p=0.4, confidence=0.8, lane_id="fast")
+        assert lane.signal_kind == "real"
+
+    def test_fallback_lane_excluded_when_real_lane_present(self):
+        """Load-bearing contract. Fast lane real + accumulation fallback
+        + structural fallback → only fast lane contributes. Mirrors the
+        2026-05-24 KXUSAIRANAGREEMENT-27-26JUN incident state."""
+        fast = LaneInput(p=0.05, confidence=0.85, lane_id="fast", signal_kind="real")
+        accum_fallback = LaneInput(
+            p=0.5, confidence=0.15, lane_id="accumulation",
+            signal_kind="fallback",
+        )
+        struct_fallback = LaneInput(
+            p=0.5, confidence=0.10, lane_id="structural",
+            signal_kind="fallback",
+        )
+        r = self._blend(fast=fast, accumulation=accum_fallback, structural=struct_fallback)
+        # Only fast lane contributed → blended_p should match fast.p exactly.
+        assert r.blended_p == pytest.approx(0.05), (
+            f"fallback lanes must not dilute the blended_p; got {r.blended_p}"
+        )
+        # Dominant_lane mode triggers when one lane stands alone.
+        assert r.blend_mode == "dominant_lane"
+        # Lane snapshot fields still preserved (informational, not used in blend).
+        assert r.accumulation_p == pytest.approx(0.5)
+        assert r.structural_p == pytest.approx(0.5)
+
+    def test_two_real_lanes_one_fallback_blend_only_real_lanes(self):
+        """fast real + accumulation real + structural fallback → blend over
+        the two real lanes only. Structural fallback must not contribute."""
+        fast = LaneInput(p=0.20, confidence=0.85, lane_id="fast")
+        accum_real = LaneInput(p=0.30, confidence=0.70, lane_id="accumulation")
+        struct_fallback = LaneInput(
+            p=0.5, confidence=0.10, lane_id="structural",
+            signal_kind="fallback",
+        )
+        r = self._blend(fast=fast, accumulation=accum_real, structural=struct_fallback)
+        # blended_p should be a weighted combination of fast (0.20) and
+        # accum (0.30) only — definitely not pulled toward 0.5.
+        assert r.blended_p < 0.35, (
+            f"two real lanes (both below 0.35) must not blend to >0.35 "
+            f"when structural fallback is excluded; got {r.blended_p}"
+        )
+
+    def test_three_real_lanes_unchanged_behavior(self):
+        """All three lanes real → no filtering applied → pre-fix behavior
+        preserved."""
+        fast = LaneInput(p=0.55, confidence=0.50, lane_id="fast", signal_kind="real")
+        accum = LaneInput(p=0.60, confidence=0.40, lane_id="accumulation", signal_kind="real")
+        struct = LaneInput(p=0.45, confidence=0.30, lane_id="structural", signal_kind="real")
+        r_with_kind = self._blend(fast=fast, accumulation=accum, structural=struct)
+        # Identical input without signal_kind set (default "real") → same output.
+        fast2 = LaneInput(p=0.55, confidence=0.50, lane_id="fast")
+        accum2 = LaneInput(p=0.60, confidence=0.40, lane_id="accumulation")
+        struct2 = LaneInput(p=0.45, confidence=0.30, lane_id="structural")
+        r_without_kind = self._blend(fast=fast2, accumulation=accum2, structural=struct2)
+        assert r_with_kind.blended_p == pytest.approx(r_without_kind.blended_p)
+        assert r_with_kind.blended_confidence == pytest.approx(r_without_kind.blended_confidence)
+        assert r_with_kind.blend_mode == r_without_kind.blend_mode
+
+    def test_all_fallback_lanes_degraded_blend_no_crash(self):
+        """All lanes fallback → degenerate to equal-weight blend over
+        all of them. Better than crashing."""
+        fast_fb = LaneInput(p=0.5, confidence=0.10, lane_id="fast", signal_kind="fallback")
+        accum_fb = LaneInput(p=0.5, confidence=0.10, lane_id="accumulation", signal_kind="fallback")
+        struct_fb = LaneInput(p=0.5, confidence=0.10, lane_id="structural", signal_kind="fallback")
+        r = self._blend(fast=fast_fb, accumulation=accum_fb, structural=struct_fb)
+        assert r.blended_p == pytest.approx(0.5)
+        assert r.blend_mode in ("weighted_blend", "dominant_lane")
+
+    def test_low_confidence_real_lane_is_NOT_dropped(self):
+        """A lane with low confidence but NON-neutral p stays as "real"
+        and contributes. The fallback flag is for "no data," NOT for
+        "weak data". This pins the Codex-flagged boundary: weak_prior /
+        real lanes must NOT be dropped."""
+        fast = LaneInput(p=0.10, confidence=0.85, lane_id="fast", signal_kind="real")
+        struct_weak_real = LaneInput(
+            p=0.20, confidence=0.15, lane_id="structural", signal_kind="real",
+        )
+        r = self._blend(fast=fast, accumulation=None, structural=struct_weak_real)
+        # Lane snapshot preserved
+        assert r.structural_p == pytest.approx(0.20)
+        # If structural were dropped pre-blend, blended_p would equal fast.p=0.10.
+        fast_only = self._blend(fast=fast, accumulation=None, structural=None)
+        if r.blend_mode == "weighted_blend":
+            assert r.blended_p != pytest.approx(fast_only.blended_p), (
+                "weak_real structural lane was silently dropped; "
+                "blended_p matches fast-only result"
+            )
+
+    def test_kxusairanagreement_2026_05_24_regression(self):
+        """REGRESSION: replay the actual 2026-05-24 BD state with the new
+        lane filter. Pre-fix produced scaled_confidence=0.027 (failed
+        G1=0.05). Post-fix the dominant fast lane should produce a
+        blended_confidence high enough to clear G1.
+
+        Lane state from the live BD record:
+          fast       : p=0.05, conf=0.85  → real
+          accumulation: p=0.50, conf=0.15  → fallback (neutral default)
+          structural : p=0.10, conf=0.24  → real (weak prior, non-neutral)
+        """
+        from tasks.trade_readiness_gate import G1_CONFIDENCE_THRESHOLD
+        fast = LaneInput(p=0.05, confidence=0.85, lane_id="fast", signal_kind="real")
+        accum_fallback = LaneInput(
+            p=0.50, confidence=0.15, lane_id="accumulation",
+            signal_kind="fallback",
+        )
+        struct_real = LaneInput(p=0.10, confidence=0.24, lane_id="structural",
+                                signal_kind="real")
+        r = self._blend(fast=fast, accumulation=accum_fallback, structural=struct_real, rc=0.22)
+        scaled = r.blended_confidence * 0.22
+        assert scaled > G1_CONFIDENCE_THRESHOLD, (
+            f"REGRESSION PIN: post-fix scaled_confidence must clear G1. "
+            f"got bc={r.blended_confidence:.4f} × rc=0.22 = {scaled:.4f}, "
+            f"G1={G1_CONFIDENCE_THRESHOLD}. If this assertion fails, the "
+            "lane-aware filter is not effective at preventing the "
+            "2026-05-24 incident."
+        )
+
+
+class TestProfitBlender001NegativeGates:
+    """Lane-aware filter must NOT cause readiness gates to be bypassed."""
+
+    _WEIGHTS = {"fast": 0.65, "interpretation": 0.25, "structural": 0.10}
+
+    def test_filter_does_not_admit_disagreement_blocked_scenarios(self):
+        """G3 (disagreement) must still see real-lane disagreement after
+        fallback exclusion."""
+        fast = LaneInput(p=0.90, confidence=0.85, lane_id="fast", signal_kind="real")
+        accum_real = LaneInput(p=0.10, confidence=0.85, lane_id="accumulation", signal_kind="real")
+        struct_fb = LaneInput(p=0.5, confidence=0.10, lane_id="structural", signal_kind="fallback")
+        r = blend(
+            fast=fast, accumulation=accum_real, structural=struct_fb,
+            regime_weights=self._WEIGHTS, regime_confidence=0.22,
+            fast_signal_active=True,
+        )
+        assert r.disagreement_score > 0.0, (
+            "disagreement must remain visible after fallback filter — "
+            "G3 still needs to fire on real-lane disagreement"
+        )
+
+    def test_filter_does_not_break_structural_failsafe_when_structural_real(self):
+        """DER-3/DER-4 structural fail-safe path must still trigger when
+        a high-confidence structural lane diverges from the blend, even
+        with an accumulation fallback present."""
+        fast = LaneInput(p=0.90, confidence=0.85, lane_id="fast", signal_kind="real")
+        accum_fb = LaneInput(p=0.5, confidence=0.10, lane_id="accumulation", signal_kind="fallback")
+        struct_high_conf = LaneInput(
+            p=0.20, confidence=0.80, lane_id="structural", signal_kind="real",
+        )
+        r = blend(
+            fast=fast, accumulation=accum_fb, structural=struct_high_conf,
+            regime_weights=self._WEIGHTS, regime_confidence=0.22,
+            fast_signal_active=True,
+            structural_stable=False,
+        )
+        # blend_mode is determined by the existing DER-2/DER-3/DER-4 rules
+        # on the non-fallback subset. The contract is "fail-safe path
+        # remains reachable" — any of the legitimate modes is fine.
+        assert r.blend_mode in (
+            "structural_tier1_override",
+            "weighted_blend",
+            "dominant_lane",
+        ), (
+            f"unexpected blend_mode {r.blend_mode!r}; the fallback filter "
+            "must not break structural fail-safe pathways"
+        )

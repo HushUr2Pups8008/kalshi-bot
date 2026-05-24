@@ -314,29 +314,27 @@ class BlendTask:
         default_min_edge: float,
         structural_stable: bool,
     ) -> BlendResult:
+        # PROFIT-BLENDER-001 (2026-05-24): mark accumulation/structural lanes
+        # `signal_kind="fallback"` when they returned a default-neutral value
+        # (p≈0.5 with low confidence). The blender uses this flag to exclude
+        # them from the weighted-blend math when ≥1 real lane exists, so a
+        # high-confidence fast-lane signal isn't diluted by lanes that have
+        # no real data. The fast lane is always "real" — if there's no fast-
+        # lane signal, the lane is None (excluded entirely).
+        #
+        # Heuristic thresholds tight by design: only flag lanes that are
+        # clearly neutral defaults. A legitimately low-confidence real
+        # signal at p≠0.5 stays classified as real and continues to
+        # contribute. Spec: docs/superpowers/specs/2026-05-24-lane-aware-
+        # blender-design.md.
         fast = LaneInput(
             p=fast_lane_result.estimated_probability,
             confidence=fast_lane_result.confidence * self._calibration_scale("fast"),
             lane_id="fast",
+            signal_kind="real",
         )
-        accumulation = (
-            LaneInput(
-                p=dossier.current_estimate,
-                confidence=dossier.confidence * self._calibration_scale("accumulation"),
-                lane_id="accumulation",
-            )
-            if dossier is not None and dossier.current_estimate is not None
-            else None
-        )
-        structural = (
-            LaneInput(
-                p=structural_prior.prior_estimate,
-                confidence=structural_prior.confidence * self._calibration_scale("structural"),
-                lane_id="structural",
-            )
-            if structural_prior is not None and structural_prior.prior_estimate is not None
-            else None
-        )
+        accumulation = self._build_accumulation_lane(dossier)
+        structural = self._build_structural_lane(structural_prior)
         try:
             return self._blender(
                 fast=fast,
@@ -357,6 +355,58 @@ class BlendTask:
         if self._calibration is None:
             return 1.0
         return self._calibration.get_scaling_factor(lane)
+
+    # PROFIT-BLENDER-001 fallback heuristics. Tight thresholds by design:
+    # a lane is flagged "fallback" only when p is very near 0.5 AND
+    # confidence is low — i.e. the producer's "no data" default-neutral
+    # branch. Legitimately low-confidence real signals at non-neutral p
+    # stay classified as "real" and contribute to the blend.
+    _FALLBACK_NEAR_NEUTRAL_TOLERANCE = 0.02
+    _FALLBACK_CONFIDENCE_CEILING = 0.20
+
+    def _classify_lane_signal_kind(
+        self,
+        p: float,
+        confidence: float,
+    ) -> str:
+        """Return "fallback" if the lane returned a default-neutral value
+        with low confidence, else "real". Used by accumulation and
+        structural lanes — fast lane is always "real" when present."""
+        near_neutral = abs(p - 0.5) < self._FALLBACK_NEAR_NEUTRAL_TOLERANCE
+        low_confidence = confidence < self._FALLBACK_CONFIDENCE_CEILING
+        return "fallback" if (near_neutral and low_confidence) else "real"
+
+    def _build_accumulation_lane(
+        self,
+        dossier: DossierState | None,
+    ) -> LaneInput | None:
+        if dossier is None or dossier.current_estimate is None:
+            return None
+        confidence = dossier.confidence * self._calibration_scale("accumulation")
+        return LaneInput(
+            p=dossier.current_estimate,
+            confidence=confidence,
+            lane_id="accumulation",
+            signal_kind=self._classify_lane_signal_kind(
+                dossier.current_estimate, confidence,
+            ),
+        )
+
+    def _build_structural_lane(
+        self,
+        structural_prior: StructuralPriorRecord | None,
+    ) -> LaneInput | None:
+        if structural_prior is None or structural_prior.prior_estimate is None:
+            return None
+        confidence = structural_prior.confidence * self._calibration_scale("structural")
+        return LaneInput(
+            p=structural_prior.prior_estimate,
+            confidence=confidence,
+            lane_id="structural",
+            signal_kind=self._classify_lane_signal_kind(
+                structural_prior.prior_estimate, confidence,
+            ),
+        )
 
     async def _structural_stable(self, market_ticker: str) -> bool:
         if self._structural_stability_resolver is None:

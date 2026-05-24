@@ -1089,3 +1089,116 @@ async def test_window_override_zero_disables_guard(monkeypatch) -> None:
 # deque, injected guard object, or module-level helper would have failed even with
 # correct FISA-replay behavior. Behavior is already pinned by the runtime tests
 # above (FISA replay + cross-series + window-expiry + window-override).
+
+
+# ── PROFIT-BLENDER-001 caller-side flag setting ─────────────────────────────────
+#
+# Spec: docs/superpowers/specs/2026-05-24-lane-aware-blender-design.md.
+#
+# These tests pin that `_build_accumulation_lane` and `_build_structural_lane`
+# correctly set `signal_kind="fallback"` when the upstream producer returned a
+# default-neutral value (p≈0.5 with low confidence), and `signal_kind="real"`
+# otherwise. The blender filter consumes these flags downstream — the
+# load-bearing contract is set HERE, not in the blender.
+
+import asyncio as _asyncio
+
+
+def _make_minimal_task() -> BlendTask:
+    """Construct a BlendTask with empty fake-store. We only invoke the
+    helper methods directly; the queue/logger/calibration are stubs."""
+    return BlendTask(
+        trading_queue=_asyncio.Queue(),
+        store=FakeStore(),  # empty stub
+        logger=None,
+        is_paper_mode=True,
+    )
+
+
+class TestProfitBlender001CallerFlagSetting:
+    """Pin that `_build_accumulation_lane` and `_build_structural_lane`
+    correctly classify lanes per the PROFIT-BLENDER-001 contract."""
+
+    def test_dossier_with_real_signal_yields_real_lane(self):
+        """Dossier with non-neutral estimate + meaningful confidence
+        produces a `signal_kind="real"` lane."""
+        task = _make_minimal_task()
+        dossier = _dossier(current_estimate=0.30, confidence=0.70)
+        lane = task._build_accumulation_lane(dossier)
+        assert lane is not None
+        assert lane.signal_kind == "real"
+        assert lane.p == pytest.approx(0.30)
+
+    def test_dossier_with_neutral_default_yields_fallback_lane(self):
+        """Dossier returning p≈0.5 with low confidence is treated as
+        a fallback — the producer's "no data" branch. This is the
+        condition that produced the 2026-05-24 incident."""
+        task = _make_minimal_task()
+        # mimic: thin dossier returns p=0.50 (uniform neutral default) at
+        # low confidence (0.15) — common when an empty/near-empty dossier
+        # exposes no real evidence yet.
+        dossier = _dossier(current_estimate=0.50, confidence=0.15)
+        lane = task._build_accumulation_lane(dossier)
+        assert lane is not None
+        assert lane.signal_kind == "fallback", (
+            f"neutral default dossier must be classified as fallback; "
+            f"got signal_kind={lane.signal_kind!r}"
+        )
+
+    def test_dossier_with_low_confidence_NON_neutral_stays_real(self):
+        """Codex-flagged boundary: a low-confidence signal that is NOT
+        near 0.5 carries real information and must stay classified as
+        real. The fallback flag is for "no data," not "weak data."""
+        task = _make_minimal_task()
+        dossier = _dossier(current_estimate=0.25, confidence=0.15)
+        lane = task._build_accumulation_lane(dossier)
+        assert lane is not None
+        assert lane.signal_kind == "real"
+
+    def test_structural_prior_with_real_signal_yields_real_lane(self):
+        """A structural prior with non-neutral estimate (e.g. IRON_CAP
+        base rate of 0.1) is real even at modest confidence — it carries
+        a meaningful prior."""
+        task = _make_minimal_task()
+        prior = StructuralPriorRecord(
+            market_ticker="KXTEST-1",
+            prior_estimate=0.10,
+            confidence=0.25,
+            computed_ts="2026-05-24T00:00:00+00:00",
+            recompute_trigger="initial",
+            input_source_count=1,
+            llm_called=False,
+        )
+        lane = task._build_structural_lane(prior)
+        assert lane is not None
+        assert lane.signal_kind == "real"
+
+    def test_structural_prior_neutral_default_yields_fallback_lane(self):
+        """Structural prior returning p=0.5 at low confidence (no
+        external data) is a fallback. Must be excluded from blend."""
+        task = _make_minimal_task()
+        prior = StructuralPriorRecord(
+            market_ticker="KXTEST-1",
+            prior_estimate=0.50,
+            confidence=0.10,
+            computed_ts="2026-05-24T00:00:00+00:00",
+            recompute_trigger="initial",
+            input_source_count=0,
+            llm_called=False,
+        )
+        lane = task._build_structural_lane(prior)
+        assert lane is not None
+        assert lane.signal_kind == "fallback"
+
+    def test_none_inputs_produce_none_lane_no_classification(self):
+        """None inputs produce no lane (caller behavior pre-fix preserved)."""
+        task = _make_minimal_task()
+        assert task._build_accumulation_lane(None) is None
+        assert task._build_structural_lane(None) is None
+
+    def test_dossier_with_null_current_estimate_yields_no_lane(self):
+        """Pre-fix invariant preserved: dossier with no current_estimate
+        produces no lane at all."""
+        task = _make_minimal_task()
+        dossier = _dossier(current_estimate=None)
+        assert task._build_accumulation_lane(dossier) is None
