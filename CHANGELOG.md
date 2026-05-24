@@ -19,6 +19,86 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.30.10] - 2026-05-24
+
+### Added
+
+- **PROFIT-BLENDER-001 — lane-aware blender (Option B from
+  `docs/superpowers/specs/2026-05-24-lane-aware-blender-design.md`).**
+  The blender previously combined all lanes that passed non-None
+  `LaneInput`, regardless of whether each lane had real signal.
+  Live evidence from the 2026-05-24 KXUSAIRANAGREEMENT-27-26JUN BD:
+  the accumulation lane returned a default-neutral `p=0.50,
+  confidence=0.15` (thin dossier, no real evidence) and the blender
+  weighted it in alongside a high-confidence LLM fast-lane signal —
+  diluting `blended_confidence` from a potential 0.55 down to 0.116,
+  which failed G1 (scaled = 0.027 < 0.05) on a 90/10-edge market.
+
+  **`LaneInput` now carries `signal_kind: Literal["real", "weak_prior",
+  "fallback"]`** (default `"real"`). The blender excludes `fallback`
+  lanes from weighted-blend math when at least one `real` or
+  `weak_prior` lane is present. When all lanes are fallback the
+  blender degrades gracefully (equal-weight blend over all of them —
+  no crash, no admission spike).
+
+  **Caller-side classification** added in `tasks/blend_task.py`:
+  - `_build_accumulation_lane(dossier)` flags `fallback` when
+    `|current_estimate - 0.5| < 0.02 AND confidence < 0.20` — the
+    canonical "empty/near-empty dossier" output.
+  - `_build_structural_lane(structural_prior)` same heuristic.
+  - Fast lane is always `"real"` when present (no fast signal → lane
+    is None, excluded entirely).
+  - Low-confidence but NON-neutral lanes stay classified as `"real"` —
+    the fallback flag is for "no data," NOT "weak data." Codex-flagged
+    boundary; explicit test pin.
+
+### Tests added (16 total)
+
+`tests/test_decision_blender.py`:
+- `TestProfitBlender001LaneAwareFiltering` (7 tests):
+  - `test_lane_input_default_signal_kind_is_real` — back-compat
+  - `test_fallback_lane_excluded_when_real_lane_present` — load-bearing
+  - `test_two_real_lanes_one_fallback_blend_only_real_lanes`
+  - `test_three_real_lanes_unchanged_behavior` — pre-fix preserved
+  - `test_all_fallback_lanes_degraded_blend_no_crash`
+  - `test_low_confidence_real_lane_is_NOT_dropped` — Codex boundary
+  - `test_kxusairanagreement_2026_05_24_regression` — **replay**
+    against the actual 2026-05-24 BD state asserts post-fix scaled
+    confidence > G1.
+- `TestProfitBlender001NegativeGates` (2 tests):
+  - `test_filter_does_not_admit_disagreement_blocked_scenarios` —
+    G3 still fires on real-lane disagreement after filter
+  - `test_filter_does_not_break_structural_failsafe_when_structural_real`
+    — DER-3/4 fail-safe path unaffected
+
+`tests/test_blend_task.py`:
+- `TestProfitBlender001CallerFlagSetting` (7 tests):
+  - `test_dossier_with_real_signal_yields_real_lane`
+  - `test_dossier_with_neutral_default_yields_fallback_lane` — load-bearing
+  - `test_dossier_with_low_confidence_NON_neutral_stays_real` — Codex boundary
+  - `test_structural_prior_with_real_signal_yields_real_lane`
+  - `test_structural_prior_neutral_default_yields_fallback_lane`
+  - `test_none_inputs_produce_none_lane_no_classification`
+  - `test_dossier_with_null_current_estimate_yields_no_lane`
+
+### Notes
+
+- **Risk: signal-flow semantics changed.** Per
+  `~/.claude/rules/domain_constraints.md` this requires explicit
+  operator approval before merge. Operator authorized in the goal
+  text for this turn.
+- **No G1 / G2 / G3 / G4 / G5 / G6 threshold changes.** No env vars.
+  No regime_confidence math changes. No prior-shape changes.
+- The filter narrows what reaches the weighted-blend math; downstream
+  readiness gates still apply unchanged. Pin-tested via
+  `TestProfitBlender001NegativeGates`.
+- Backward-compat: existing callers that don't set `signal_kind` get
+  the default `"real"` and behave exactly as before. No automatic
+  migration.
+- Bot picks up changes on next launchd restart.
+- Full suite: **2259 passed** / 4 skipped / 71 xfailed (was 2243; +16
+  new tests). Ruff: clean.
+
 ## [0.30.9] - 2026-05-24
 
 ### Fixed
