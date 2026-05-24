@@ -180,19 +180,87 @@ class TestParseLlmResponse:
         assert prob == pytest.approx(0.45, abs=0.001)
         assert direction == "neutral"
 
-    def test_magnitude_none_returns_market_price(self):
+    def test_magnitude_none_with_low_confidence_returns_market_price(self):
+        """Low-confidence directional + magnitude=none stays as the LLM
+        emitted it: prob = market.yes_prob unchanged, magnitude = "none".
+
+        PROFIT-LLM-002 (2026-05-24): the magnitude-bump for the converse
+        consistency rule fires only when confidence >= 0.6. Below that
+        threshold, the LLM's "none" is preserved to avoid converting
+        low-conviction directionals into spurious shifts.
+        """
         parsed = {
             "relevant": True,
             "new_information": True,
             "direction": "yes",
             "magnitude": "none",
-            "confidence": 0.8,
-            "reasoning": "no impact",
+            "confidence": 0.55,  # below 0.6 floor
+            "reasoning": "weak signal",
         }
         market = _make_market(55.0)
         prob, _, _, _, magnitude = _parse_llm_response(parsed, market)
         assert prob == pytest.approx(0.55, abs=0.001)
         assert magnitude == "none"
+
+    def test_magnitude_none_with_high_confidence_bumped_to_small(self):
+        """PROFIT-LLM-002 (2026-05-24): when the LLM returns
+        direction in {yes, no} with confidence >= 0.6 BUT
+        magnitude="none", reconcile the internally-inconsistent output
+        by bumping magnitude to "small". This restores the minimum-
+        credible shift (8 pp * confidence) when the LLM is confident
+        enough in a direction.
+
+        Load-bearing failure mode: the 2026-05-24 7-day funnel found
+        10 LLM responses on KXTXRUNOFFENDORSE markets with
+        direction="no", confidence=0.95, magnitude="none" — the
+        Paxton-over-Cornyn endorsement was the resolution-grade news
+        for the JCOR outcome contracts, the LLM read it correctly,
+        but magnitude="none" silently zeroed out the shift and no
+        trade emitted. Without this test, a future revert of the
+        magnitude bump would silently reintroduce that miss pattern.
+        """
+        parsed = {
+            "relevant": True,
+            "new_information": True,
+            "direction": "no",
+            "magnitude": "none",
+            "confidence": 0.95,
+            "reasoning": "Trump endorsed Paxton, not Cornyn",
+        }
+        market = _make_market(55.0)
+        prob, _, _, direction, magnitude = _parse_llm_response(parsed, market)
+        # Bumped to "small" → shift = 0.08 * 0.95 = 0.076 → prob = 0.55 - 0.076 = 0.474
+        assert prob == pytest.approx(0.474, abs=0.001), (
+            "expected magnitude bump from 'none' to 'small' for "
+            "direction=no, confidence=0.95"
+        )
+        assert direction == "no"
+        assert magnitude == "small", (
+            "expected magnitude bumped from 'none' to 'small'. If this "
+            "fails, PROFIT-LLM-002 magnitude-bump has regressed."
+        )
+
+    def test_magnitude_none_with_neutral_direction_not_bumped(self):
+        """The magnitude bump fires ONLY when direction in {yes, no}.
+        With direction='neutral' (LLM signaled no actionable view),
+        the bump must NOT fire — magnitude stays "none" and prob is
+        unchanged. This prevents the bump from inadvertently turning
+        true-neutral responses into directional bets."""
+        parsed = {
+            "relevant": True,
+            "new_information": True,
+            "direction": "neutral",
+            "magnitude": "none",
+            "confidence": 0.95,
+            "reasoning": "no clear direction",
+        }
+        market = _make_market(55.0)
+        prob, _, _, direction, magnitude = _parse_llm_response(parsed, market)
+        assert prob == pytest.approx(0.55, abs=0.001)
+        assert direction == "neutral"
+        assert magnitude == "none", (
+            "neutral direction must NEVER trigger the magnitude bump"
+        )
 
     def test_prob_clamped_at_0_95(self):
         parsed = {
