@@ -489,6 +489,21 @@ def test_framework_readiness_summary() -> None:
     for merging the IC §16 amendment. The summary asserts each non-deferred
     deliverable's readiness sentinel was recorded by the per-deliverable
     tests above.
+
+    Order assumption (per python-reviewer M1): pytest collects tests in
+    file order by default. The summary relies on every per-deliverable
+    test running BEFORE this summary. If a future run uses
+    ``pytest-randomly`` or ``--randomly-seed``, the summary may report
+    false-missing sentinels. Mitigation if/when that happens: add
+    ``@pytest.mark.order(last=True)`` here via the ``pytest-ordering``
+    plugin, or restructure the summary to re-introspect each module
+    inline instead of reading shared state.
+
+    Missing-vs-failed-vs-skipped (per python-reviewer M2): a missing
+    sentinel means the per-deliverable test EITHER failed before its
+    ``_mark_ready`` call OR was skipped by a plugin / xfail. The error
+    message below cannot distinguish the two — operators must scroll
+    up to the per-deliverable test's status to disambiguate.
     """
     expected = {
         "I-1",
@@ -505,7 +520,9 @@ def test_framework_readiness_summary() -> None:
     missing = expected - set(_READINESS.keys())
     assert not missing, (
         f"framework v3 readiness sentinels not recorded for: {sorted(missing)}. "
-        f"IC §16 amendment merge remains BLOCKED."
+        f"IC §16 amendment merge remains BLOCKED. "
+        f"(A missing sentinel means the per-deliverable test either failed "
+        f"or was skipped — check the per-deliverable status above.)"
     )
     # All recorded sentinels must be True.
     failed = {k for k, v in _READINESS.items() if not v}
