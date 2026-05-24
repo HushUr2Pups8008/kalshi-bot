@@ -23,19 +23,19 @@
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-05-23 (Wave-1 backup-branch replay shipped via v0.30.2 / PR #16 — closes the open-fix bookkeeping flagged by `8b2473e` 2026-05-10; 5 backup-branch commits + 6 reviewer-driven follow-on remediations landed on `main`; 4 post-deploy observation canaries remain xfail-strict until soak completes; backup branch retained as forensic anchor through soak. See §2.2 Wave-1 Replay Closure for full SHA map.) |
-| Previously Updated | 2026-05-16 (PROFIT-CUTOVER-001 / PROFIT-PHASE2-001 closed; active edge queue pointer corrected to PROFIT-EDGE-012 POST_FIX_NEW readiness) |
+| Last Updated | 2026-05-24 (PROFIT-PHASE3-003 registered as DEFERRED — first OOS corpus build blocked on paper-trade volume. Operator picked path A1 over A2/A3/A4 and over option B (storage cost). Schema audit found `cohort_extension` column already present — no migration work needed. Current state: 8/30 resolved paper trades = 27% of Rule 1 floor; pipeline (`build_corpus.py` → `replay_gate.py` → `ci_entry.py` → `.github/workflows/replay-ci-gate.yml`) wired end-to-end and verified by PR #46. PROFIT-PHASE3-002 pass-through is the operational interim; every CI run auto-passes with explicit "operator gate remains authoritative" note until A1 closes. Recent unblocks (PR #41-#44) may move the resolution rate enough to clear the 30-row threshold before the IC §16.7 30-day framework-review deadline; operator decides.) |
+| Previously Updated | 2026-05-23 (Wave-1 backup-branch replay shipped via v0.30.2 / PR #16 — closes the open-fix bookkeeping flagged by `8b2473e` 2026-05-10; 5 backup-branch commits + 6 reviewer-driven follow-on remediations landed on `main`; 4 post-deploy observation canaries remain xfail-strict until soak completes; backup branch retained as forensic anchor through soak. See §2.2 Wave-1 Replay Closure for full SHA map.) |
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 67 |
+| Total Items | 68 |
 | Last Updated (P0 closure) | 2026-05-12 (PROFIT-API-001 — Kalshi API Contract Stabilization P0 closure landed on `feature/kalshi-api-contract-p0`; VERSION 0.29.59 → 0.30.0; P-1 through P-10 complete; PAPER-ONLY posture preserved) |
 | Open — HIGH | 3 |
 | Open — MEDIUM | 1 |
 | Open — LOW | 1 |
 | Items IN_PROGRESS | 0 |
 | Items ACTIVE | 1 (PROFIT-EDGE-012 — active tracker entry; Cycle-17D HALTED 2026-05-10 pre-experiment per operator pick β; earliest readiness re-check 2026-06-14) |
-| Items BLOCKED | 1 (PROFIT-EVID-001 — awaiting contract decision on non-trading evidence intake) |
+| Items BLOCKED | 2 (PROFIT-EVID-001 — awaiting contract decision on non-trading evidence intake; PROFIT-PHASE3-003 — first OOS corpus build deferred / blocked on paper-trade volume crossing the ≥30 resolved Rule 1 floor) |
 | Items RESOLVED | 3 (PROFIT-SEC-001 — Kalshi signing fail-fast, Phase-2 commit `ce70924`; PROFIT-OBS-006 — subreddit selector observability, Phase-2 commit `1d0714c`; PROFIT-DOC-001 — governance LLM gotchas in CLAUDE.md, Phase-2 commit `b1e1a0c`) |
 | Items COMPLETE | 54 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-VALID-001, PROFIT-STARTUP-001, PROFIT-CFG-001, PROFIT-STRUCT-001, PROFIT-STRUCT-002, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-EDGE-005, PROFIT-EDGE-006, PROFIT-EDGE-007, PROFIT-EDGE-008, PROFIT-EDGE-009, PROFIT-EDGE-010, PROFIT-EDGE-011, PROFIT-DOSSIER-001, PROFIT-GOV-001, PROFIT-GOV-002, PROFIT-DOC-002, PROFIT-OBS-003, PROFIT-OBS-004, PROFIT-CUTOVER-001, PROFIT-PHASE2-001, PROFIT-DEBT-OQ1-SHIM, PROFIT-SOURCE-001, PROFIT-DEBT-WAVE1-DRAFTS) |
 | Consolidated From | `docs/EDGE_STATUS.md` (merged 2026-05-09 → §Current Status); `docs/governance/edge-004-closure-path-tldr-v3.md` (lever map + EDGE-004 closure criteria merged 2026-05-09 → §Current Status §2.3) |
@@ -5218,6 +5218,137 @@ production-proxy-complete POST_FIX_NEW rows = 0, qualifying 4-axis bins
 rows still carry `price_method='none'` / `price_source='unavailable'`;
 that provenance gap is excluded from the POST_FIX_NEW readiness count
 because there are no post-clean-start rows.
+
+---
+
+### PROFIT-PHASE3-003
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-PHASE3-003 |
+| **Title** | First OOS corpus build — wait for paper-trade volume to cross Rule 1 floor |
+| **Category** | Replay-CI gate / Framework activation completeness |
+| **Severity** | LOW (operational; framework is shipped + active; only the EV-evaluation arm is on pass-through until volume accumulates) |
+| **Status** | DEFERRED — blocked on paper-trade volume (operator-chosen path A1, 2026-05-24) |
+| **Priority** | n/a (deferred; resumed when volume crosses threshold) |
+| **Owner** | Operator (gating decision); Claude / Codex (corpus-build execution when volume crosses) |
+| **Depends On** | PROFIT-PHASE3-001 (framework activation, COMPLETE), PROFIT-PHASE3-002 (corpus-absent CI pass-through, COMPLETE) |
+| **Blocks** | First real Rule 4 EV verdict in CI on any T1/T2/T3 PR. While DEFERRED, every CI run passes via PROFIT-PHASE3-002 pass-through; operator gate remains the only behavioral-regression check. |
+
+**Context**
+
+The paper-mode rapid-learning framework v3 (IC §16.7) ships the
+replay-CI gate as the canonical Rule 4 EV evaluator. The gate auto-
+discovers I-1-format corpora under `logs/edge_replay/corpus_*.jsonl`
+and computes per-corpus EV with a 95% CI. The gate is wired end-to-end
+(`build_corpus.py` → `replay_gate.py` → `ci_entry.py` →
+`.github/workflows/replay-ci-gate.yml`), but on 2026-05-24 the first
+real CI invocation revealed two simultaneous reasons it could not
+evaluate real EV:
+
+1. **No corpus on the runner.** Production corpora live under
+   gitignored `logs/edge_replay/`. Fixed for CI plumbing by
+   PROFIT-PHASE3-002 (bootstrap pass-through when `corpus_dir`
+   literally does not exist on disk).
+2. **No corpus exists to ship.** `data/paper_trades.db` carried **9
+   total / 8 resolved** rows across the entire 13-day archive (May 1–11
+   trades, no resolved rows post-May-11). Rule 1's floor is **≥30
+   markets, 95% CI**. We're at 27% of the floor. The pipeline is
+   wired; the input data is missing.
+
+**Why A1 (wait), not A2 / A3**
+
+Operator considered four sub-paths (2026-05-24 transcript):
+
+- **A1.** Schema migrate + wait for ≥30 resolved trades, then build.
+  Chosen. Schema audit found `cohort_extension` column already exists
+  on `paper_trades` (idx 43); `build_corpus.py` reads it as an
+  exclusion filter and tolerates pre-migration NULL via the
+  `cohort_extension_present` guard at line 333 of `build_corpus.py`.
+  No schema work needed. Pipeline is ready; only paper-trade volume
+  is missing.
+- **A2.** Synthesize an I-1 corpus from legacy `logs/edge_replay/cycle*/replay_dataset.jsonl`
+  files (cycle13/14/15b/16d/16e/17c/17d ≈ 5.7 MB on disk, 272+ rows
+  per cycle). Rejected — `pnl_dollars` in those files is a
+  retrospective `model_prob × resolution` estimate, not actual paper-
+  trade settlement. The same dossier probabilities the bot uses to
+  decide would be scoring themselves, which is self-affirming
+  evidence under Rule 4. (Also: gate explicitly does not recurse
+  subdirectories — see `replay_gate.py:254` "legacy / hand-built
+  artifacts that pre-date the I-1 contract".)
+- **A3.** Commit a placeholder synthetic corpus (≥30 obviously fake
+  rows) so the gate exercises Rule 4 machinery on every PR. Rejected
+  — exercises plumbing but produces an honestly-failing verdict on
+  every PR, which is no different from the pass-through except more
+  noise.
+- **A4.** Stay on PROFIT-PHASE3-002 pass-through indefinitely.
+  Rejected as a permanent state — that is the gap A1 closes — but is
+  the current operational state until A1's volume threshold is met.
+- **Option B** (CI fetches corpus from an artifact store) was
+  considered first and abandoned 2026-05-24 because storage cost
+  isn't currently in budget. Re-opens if A1 generates a corpus large
+  enough that committing it to the repo becomes a repo-bloat problem
+  (the first real corpus is likely small, so this is years away).
+
+**Acceptance criteria**
+
+A1 closes when ALL of the following hold:
+
+1. `data/paper_trades.db` has **≥30 resolved rows** (i.e.,
+   `SELECT COUNT(*) FROM paper_trades WHERE pnl_dollars IS NOT NULL >= 30`).
+2. The 30+ rows span **≥2 distinct market families** per IC §16.7
+   ("Corpus diversity standard" — calendar-only diversity is not
+   OOS).
+3. The 30+ rows fall under a **registered regime label** in
+   `docs/governance/corpus-regimes.md` (current candidates:
+   `pre_p0`, `post_p0_hotfix`, `post_v030_2_oos_seed`; new regime
+   label requires operator memo entry per existing convention).
+4. `python -m scripts.edge_replay.build_corpus --start-ts <…> --end-ts <…>
+   --market-families <…> --cohort-tag <…> --regime-label <…>` writes
+   a `logs/edge_replay/corpus_*.jsonl` file at the **repo root path**
+   that `replay_gate._discover_all_diverse_corpora` actually scans
+   (not a subdirectory).
+5. That corpus is **force-added** via `git add -f logs/edge_replay/corpus_*.jsonl`
+   (overriding the `.gitignore` entry at `.gitignore:30`) in a PR
+   labeled `PROFIT-PHASE3-003`. CHANGELOG entry documents the
+   cohort_tag, regime_label, start_ts/end_ts, row count, families,
+   and Rule 4 verdict from the first CI run.
+6. CHANGELOG entry must also note that the PROFIT-PHASE3-002
+   pass-through remains in `replay_gate.py` but is now dormant on
+   `main` because `corpus_dir` exists with diverse corpora present.
+   Pass-through is NOT removed (keeps the dev-checkout path working
+   when `logs/edge_replay/` is gitignored locally).
+
+**Operational interim while DEFERRED**
+
+- PROFIT-PHASE3-002 pass-through fires on every CI run.
+  Every T1/T2/T3 PR shows `replay-ci-gate ✓` automatically; the gate
+  output explicitly notes operator gate remains authoritative.
+- Operator-gate workflow is the *only* behavioral-regression check
+  in CI until A1 closes. This is acceptable for paper-mode but is
+  the gap the framework was built to close — repeat-overrides via
+  `REPLAY_GATE_OVERRIDE=1` should NOT be used to paper over this;
+  the pass-through is the intended safety valve.
+- 30-day framework review (per IC §16.7 framework v3 §5): if
+  paper-trade resolution rate stays at ~0/week, the framework's
+  acceptance criteria are out-of-target and §16.7 calls for
+  framework suspension. Operator decides whether the recent
+  unblocks (PR #41-#44: lane-aware blender, source-class taxonomy,
+  fast-dominant priors, fallback widening) move resolution rate
+  enough to clear the threshold before the review fires.
+
+**Cross-references**
+
+- IC §16.7 — Blast-tier routing (operator override sub-block adds
+  language about the bootstrap pass-through being a separate channel
+  from the override; this entry is the back-pointer)
+- CHANGELOG `[0.31.0]` — PROFIT-PHASE3-001 framework activation
+- CHANGELOG `[0.31.1]` — PROFIT-PHASE3-002 corpus-absent pass-through
+- `scripts/edge_replay/build_corpus.py` — wired, awaits volume
+- `scripts/edge_replay/replay_gate.py` — `_discover_all_diverse_corpora`
+  is the discovery surface
+- `docs/governance/corpus-regimes.md` — regime registry
+- `data/paper_trades.db` — source of truth for resolved-row count
 
 ---
 
