@@ -412,3 +412,85 @@ def test_cli_export_writes_file(
     assert output.exists()
     lines = output.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
+
+
+# ---------------------------------------------------------------------------
+# Post-review hardening (python-reviewer M1 + security-reviewer #2, #6)
+# ---------------------------------------------------------------------------
+
+
+def test_open_window_rejects_like_wildcard_in_change_id(tmp_path: Path) -> None:
+    """``%`` in change_id is a SQL LIKE wildcard. Reject at write-time
+    so bad input never lands in the sentinel or cohort_extension column."""
+    sentinel = tmp_path / "sentinel.json"
+    try:
+        ccm.open_window("EXEC%-002", duration_seconds=60, sentinel_path=sentinel)
+    except ValueError as exc:
+        assert "%" in str(exc) or "forbidden token" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected ValueError on LIKE-wildcard change_id")
+    assert not sentinel.exists()
+
+
+def test_open_window_rejects_path_traversal_in_change_id(tmp_path: Path) -> None:
+    """``..`` / ``/`` / ``\\`` in change_id would traverse the corpus dir
+    when interpolated into the export path. Reject at write-time."""
+    sentinel = tmp_path / "sentinel.json"
+    for bad in ("../etc/passwd", "abs/path", "back\\slash", ".."):
+        try:
+            ccm.open_window(bad, duration_seconds=60, sentinel_path=sentinel)
+        except ValueError as exc:
+            assert "forbidden token" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(
+                f"expected ValueError on traversal change_id: {bad!r}"
+            )
+        assert not sentinel.exists()
+
+
+def test_open_window_rejects_whitespace_in_change_id(tmp_path: Path) -> None:
+    """Whitespace survives JSON round-trips invisibly and produces
+    confusing operator-visible labels."""
+    sentinel = tmp_path / "sentinel.json"
+    for bad in ("with space", "with\ttab", "with\nnewline"):
+        try:
+            ccm.open_window(bad, duration_seconds=60, sentinel_path=sentinel)
+        except ValueError as exc:
+            assert "forbidden token" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(
+                f"expected ValueError on whitespace change_id: {bad!r}"
+            )
+
+
+def test_open_window_allows_underscore_in_change_id(tmp_path: Path) -> None:
+    """``_`` is a SQL LIKE wildcard too, but it is permitted because it
+    is extremely common in identifiers and the startswith post-filter
+    rescues correctness of the emitted output."""
+    sentinel = tmp_path / "sentinel.json"
+    window = ccm.open_window(
+        "test_window_with_underscore",
+        duration_seconds=60,
+        sentinel_path=sentinel,
+    )
+    assert window.change_id == "test_window_with_underscore"
+    assert sentinel.exists()
+
+
+def test_default_export_path_rejects_traversal(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Security-reviewer item 6: defense-in-depth containment guard on
+    the export path. Even if _validate_change_id is bypassed (e.g.,
+    export invoked without an open_window first), the export must
+    not write outside the corpus directory."""
+    corpora_dir = tmp_path / "contamination_corpora"
+    corpora_dir.mkdir(parents=True)
+    monkeypatch.setattr(ccm, "CONTAMINATION_CORPORA_DIR", corpora_dir)
+
+    try:
+        ccm._default_export_path("../../../etc/passwd")
+    except ValueError as exc:
+        assert "outside the corpus directory" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected ValueError on traversal export path")

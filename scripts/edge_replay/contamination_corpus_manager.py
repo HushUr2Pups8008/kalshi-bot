@@ -80,6 +80,14 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# Relative-path constants — resolve against the process CWD. The bot's
+# launchd job sets WorkingDirectory to the repo root, so the production
+# write path always finds the sentinel here. Tests inject explicit
+# `sentinel_path=` overrides via the public API. CLI invocations from
+# arbitrary CWDs see the wrong location with no error — the operator
+# should always run the CLI from the repo root or pass `--sentinel`.
+# (python-reviewer LOW 4: documented; injecting via env var is the
+# upgrade path if non-repo-root CLI invocations become common.)
 CONTAMINATION_SENTINEL_PATH = Path(
     "logs/edge_replay/active_contamination_window.json"
 )
@@ -203,8 +211,14 @@ def open_window(
         raise ValueError("change_id must be a non-empty string")
     if duration_seconds <= 0:
         raise ValueError("duration_seconds must be positive")
+    _validate_change_id(change_id)
 
     path = _resolve_sentinel(sentinel_path)
+    # NOTE: TOCTOU between path.exists() and tmp.replace(path) is acceptable
+    # for Phase 1 — this is an operator-only CLI with no automation
+    # concurrency. If Phase 2 introduces automated window management,
+    # wrap the exist-check + replace pair in `fcntl.flock` on a lockfile
+    # (e.g. <sentinel>.lock) to make the open atomic.
     if path.exists():
         raise ContaminationWindowAlreadyOpenError(
             f"contamination sentinel already exists at {path}; "
@@ -268,10 +282,64 @@ def cohort_extension_tag(window: ContaminationWindow) -> str:
 # ---------------------------------------------------------------------------
 
 
+_CHANGE_ID_FORBIDDEN_TOKENS = ("%", "/", "\\", "..", " ", "\t", "\n", "\r")
+
+
+def _validate_change_id(change_id: str) -> None:
+    """Reject the LIKE wildcard ``%`` plus path-traversal tokens.
+
+    ``%`` is a SQL ``LIKE`` wildcard: an unescaped ``%`` in ``change_id``
+    would make :func:`export_contamination_corpus` over-fetch rows
+    belonging to other change_ids. The ``startswith`` post-filter at
+    line 337 keeps emitted JSONL correct even on over-match, but the
+    scan is wasteful and ``build_corpus`` notes can over-count.
+
+    ``_`` is also a LIKE wildcard (matches one char) but is permitted
+    here because it is extremely common in identifiers and the same
+    ``startswith`` post-filter rescues correctness of the emitted
+    output. The trade-off is a tiny over-fetch on the DB scan for
+    change_ids containing ``_``, which is acceptable at current scale.
+
+    ``/``, ``\\``, ``..`` are path-separator / traversal tokens: the
+    default export path interpolates ``change_id`` into a filename
+    (``logs/edge_replay/contamination_corpora/<change_id>.jsonl``); a
+    traversal here writes outside the corpus directory. Defense-in-depth
+    is in :func:`_default_export_path` (Path.resolve() containment),
+    but rejecting at write-time keeps the bad input out of the sentinel
+    file and the cohort_extension column.
+
+    Whitespace is rejected because it survives JSON round-trips
+    invisibly and produces confusing operator-visible labels.
+    """
+    for forbidden in _CHANGE_ID_FORBIDDEN_TOKENS:
+        if forbidden in change_id:
+            raise ValueError(
+                f"change_id contains forbidden token {forbidden!r}; "
+                "reserved for SQL LIKE wildcard (%), path separators "
+                "(/, \\, ..), and whitespace. "
+                f"got: {change_id!r}"
+            )
+
+
 def _default_export_path(change_id: str) -> Path:
-    # Preserve the change_id verbatim; operators choose the id and own
-    # any filesystem-safety implications.
-    return CONTAMINATION_CORPORA_DIR / f"{change_id}.jsonl"
+    """Compute default export path with containment guard.
+
+    Resolves the candidate path and verifies it remains under
+    ``CONTAMINATION_CORPORA_DIR`` per security-reviewer item 6.
+    Even with :func:`_validate_change_id` rejecting traversal tokens
+    at write-time, this defense-in-depth catches the case where
+    ``export_contamination_corpus`` is invoked directly with an
+    operator-supplied change_id that bypassed the open-window path.
+    """
+    candidate = CONTAMINATION_CORPORA_DIR / f"{change_id}.jsonl"
+    base = CONTAMINATION_CORPORA_DIR.resolve()
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(base):
+        raise ValueError(
+            f"change_id resolves outside the corpus directory: "
+            f"candidate={resolved}, base={base}"
+        )
+    return candidate
 
 
 def _row_to_jsonable(row: sqlite3.Row) -> dict:

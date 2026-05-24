@@ -546,6 +546,16 @@ class PaperTrader:
                 return None
             return cohort_extension_tag(window)
         except Exception:
+            # Per python-reviewer MEDIUM: warn on swallow so a corrupt
+            # sentinel or import failure is distinguishable from
+            # "no active window" in production logs. The paper-trade
+            # persistence guarantee is unaffected; only observability
+            # improves. Using the module-level `log` keeps the message
+            # in the trade-path log stream where operators look first.
+            log.warning(
+                "[I-10] _resolve_cohort_extension failed; labeling skipped",
+                exc_info=True,
+            )
             return None
 
     def _ensure_paper_trades_column(self, col: str, col_type: str, cols: set[str]) -> bool:
