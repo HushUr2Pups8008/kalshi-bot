@@ -1894,3 +1894,76 @@ class TestLogMatchLlmReview:
         assert rec["verdict"] == "false_positive_neutral"
         assert rec["llm_confidence"] == 0.85
         assert rec["llm_relevant"] is False
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-ALIGN-002 (2026-05-25) — log_calibration_observation schema
+# ---------------------------------------------------------------------------
+
+class TestLogCalibrationObservation:
+    """Schema pin for trade_log.log_calibration_observation. Emitted once
+    per resolved paper trade by paper_trader._resolve_market_sync. Downstream
+    aggregator computes Brier score / calibration curve per archetype."""
+
+    def test_log_calibration_writes_expected_keys(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KALSHI_LOG_ROOT", str(tmp_path))
+        import importlib, utils.logger as logger_mod
+        importlib.reload(logger_mod)
+        tl = logger_mod.TradeLogger(tmp_path / "trades.jsonl")
+        tl.log_calibration_observation(
+            trade_id="abc123",
+            ticker="KXTRUMPIRAN-26JUN01",
+            market_prefix="KXTRUMPIRAN",
+            side="no",
+            estimated_probability=0.95,
+            realized_outcome=1,
+            entry_price_cents=92.0,
+            pnl_dollars=0.40,
+            cost_dollars=4.60,
+            llm_magnitude="small",
+            llm_confidence=0.85,
+            signal_source="NYT > World News",
+            ts_entry="2026-05-25T18:36:44+00:00",
+            ts_resolved="2026-06-01T12:00:00+00:00",
+        )
+        import json
+        line = (tmp_path / "trades.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1]
+        rec = json.loads(line)
+        assert rec["type"] == "CALIBRATION_OBSERVATION"
+        assert rec["trade_id"] == "abc123"
+        assert rec["market_prefix"] == "KXTRUMPIRAN"
+        assert rec["side"] == "no"
+        assert rec["estimated_probability"] == 0.95
+        assert rec["realized_outcome"] == 1
+        assert rec["pnl_dollars"] == 0.40
+        assert rec["llm_magnitude"] == "small"
+        assert rec["llm_confidence"] == 0.85
+
+    def test_log_calibration_with_null_llm_fields(self, tmp_path, monkeypatch):
+        """Some legacy trades may have null LLM fields. Writer must tolerate."""
+        monkeypatch.setenv("KALSHI_LOG_ROOT", str(tmp_path))
+        import importlib, utils.logger as logger_mod
+        importlib.reload(logger_mod)
+        tl = logger_mod.TradeLogger(tmp_path / "trades.jsonl")
+        tl.log_calibration_observation(
+            trade_id="legacy1",
+            ticker="KXOLD-26MAY01",
+            market_prefix="KXOLD",
+            side="yes",
+            estimated_probability=0.65,
+            realized_outcome=0,
+            entry_price_cents=55.0,
+            pnl_dollars=-2.75,
+            cost_dollars=2.75,
+            llm_magnitude=None,
+            llm_confidence=None,
+            signal_source="r/test",
+            ts_entry="2026-05-01T00:00:00+00:00",
+            ts_resolved="2026-05-15T00:00:00+00:00",
+        )
+        import json
+        line = (tmp_path / "trades.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1]
+        rec = json.loads(line)
+        assert rec["llm_magnitude"] is None
+        assert rec["llm_confidence"] is None
+        assert rec["realized_outcome"] == 0

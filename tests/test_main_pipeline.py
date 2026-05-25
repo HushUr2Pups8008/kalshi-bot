@@ -2059,3 +2059,69 @@ class TestSourceClassClassifierLeverA1Plus15LegalBranch:
         token in the legal branch over-claims and shadows the generic
         Reuters wire which currently buckets as `news`."""
         assert _source_class_for_evidence("Reuters") == "news"
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-ALIGN-003 (2026-05-25) — _is_floor_clamp_suspected
+# ---------------------------------------------------------------------------
+
+class TestFloorClampSuspected:
+    """Pins the floor-clamp detector. Trade-audit (2026-05-25,
+    KXUSAIRANAGREEMENT-27-26JUN) showed the bot's edge anchored against the
+    0.05 floor, manufacturing a 3pp edge from a 6.8pp LLM shift. Detector
+    enables Kelly halving on clamped trades."""
+
+    def test_no_directional_returns_false(self):
+        from main import _is_floor_clamp_suspected
+        assert not _is_floor_clamp_suspected("neutral", "small", 0.05)
+        assert not _is_floor_clamp_suspected(None, "moderate", 0.05)
+
+    def test_no_magnitude_returns_false(self):
+        from main import _is_floor_clamp_suspected
+        assert not _is_floor_clamp_suspected("yes", "none", 0.95)
+        assert not _is_floor_clamp_suspected("no", None, 0.05)
+
+    def test_floor_at_no_side(self):
+        from main import _is_floor_clamp_suspected
+        assert _is_floor_clamp_suspected("no", "small", 0.05)
+        assert _is_floor_clamp_suspected("no", "moderate", 0.05)
+        assert _is_floor_clamp_suspected("no", "large", 0.05)
+
+    def test_floor_at_yes_side(self):
+        from main import _is_floor_clamp_suspected
+        assert _is_floor_clamp_suspected("yes", "small", 0.95)
+        assert _is_floor_clamp_suspected("yes", "large", 0.95)
+
+    def test_unclamped_returns_false(self):
+        from main import _is_floor_clamp_suspected
+        # Bot estimated 0.30 — clearly unclamped
+        assert not _is_floor_clamp_suspected("yes", "moderate", 0.30)
+        assert not _is_floor_clamp_suspected("no", "large", 0.62)
+
+    def test_within_tolerance(self):
+        from main import _is_floor_clamp_suspected
+        # Float exact-match with small tolerance (1e-6)
+        assert _is_floor_clamp_suspected("no", "small", 0.0500001)
+        assert not _is_floor_clamp_suspected("no", "small", 0.06)
+        assert not _is_floor_clamp_suspected("no", "small", 0.04)
+
+
+class TestFloorClampHalvingConfig:
+    """Pins the cfg.floor_clamp_kelly_multiplier default. Operator can
+    override via FLOOR_CLAMP_KELLY_MULTIPLIER env var; default = 0.5."""
+
+    def test_default_is_in_valid_range(self):
+        # Read the current attribute. Env may have been set externally;
+        # assert it's a finite number in (0, 1]. Default is 0.5.
+        # NOTE: do NOT importlib.reload(config) — reloading pollutes
+        # module-level singletons consumed by other test files
+        # (test_main_startup.py, test_paper_trader.py mode-selection).
+        import config as cfg_mod
+        m = cfg_mod.cfg.floor_clamp_kelly_multiplier
+        assert isinstance(m, float)
+        assert 0.0 < m <= 1.0
+
+    def test_max_open_positions_per_prefix_default(self):
+        import config as cfg_mod
+        assert isinstance(cfg_mod.cfg.max_open_positions_per_prefix, int)
+        assert cfg_mod.cfg.max_open_positions_per_prefix >= 0

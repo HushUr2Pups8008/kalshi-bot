@@ -138,6 +138,26 @@ class Portfolio:
         """All tickers with at least one open position."""
         return set(self._positions.keys())
 
+    def open_positions_by_prefix(self, market_prefix: str) -> list[Position]:
+        """PROFIT-ALIGN-004 (2026-05-25): all open positions whose ticker
+        starts with the given market_prefix.
+
+        The matcher can produce multiple outcome-contract matches in the same
+        series (e.g. KXTXRUNOFFENDORSE-DJT-BOTH / -KPAX / -JCOR). Same-signal
+        guard works per-ticker; this method enables a per-prefix concentration
+        cap so one news event can't trigger N concurrent bets on the same
+        underlying topic.
+        """
+        if not market_prefix:
+            return []
+        # Match `<prefix>` exact OR `<prefix>-...` (avoid KXFOO matching KXFOOBAR)
+        return [
+            pos
+            for ticker, bucket in self._positions.items()
+            if ticker == market_prefix or ticker.startswith(f"{market_prefix}-")
+            for pos in bucket
+        ]
+
     def exposure(self, ticker: str) -> float:
         """Total dollars deployed across all open positions for a ticker."""
         return sum(p.cost_dollars for p in self._positions.get(ticker, []))

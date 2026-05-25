@@ -23,17 +23,18 @@
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-05-24 (PROFIT-PHASE3-003 registered as DEFERRED — first OOS corpus build blocked on paper-trade volume. Operator picked path A1 over A2/A3/A4 and over option B (storage cost). Schema audit found `cohort_extension` column already present — no migration work needed. Current state: 8/30 resolved paper trades = 27% of Rule 1 floor; pipeline (`build_corpus.py` → `replay_gate.py` → `ci_entry.py` → `.github/workflows/replay-ci-gate.yml`) wired end-to-end and verified by PR #46. PROFIT-PHASE3-002 pass-through is the operational interim; every CI run auto-passes with explicit "operator gate remains authoritative" note until A1 closes. Recent unblocks (PR #41-#44) may move the resolution rate enough to clear the 30-row threshold before the IC §16.7 30-day framework-review deadline; operator decides.) |
-| Previously Updated | 2026-05-23 (Wave-1 backup-branch replay shipped via v0.30.2 / PR #16 — closes the open-fix bookkeeping flagged by `8b2473e` 2026-05-10; 5 backup-branch commits + 6 reviewer-driven follow-on remediations landed on `main`; 4 post-deploy observation canaries remain xfail-strict until soak completes; backup branch retained as forensic anchor through soak. See §2.2 Wave-1 Replay Closure for full SHA map.) |
+| Last Updated | 2026-05-25 (PROFIT-ALIGN-001 registered — comprehensive architecture-review cluster of 12 items derived from independent audit of first paper trade post-PROFIT-MATCH-DYNAMIC (KXUSAIRANAGREEMENT-27-26JUN). 3 sub-items shipped this PR (PROFIT-ALIGN-002 calibration observation emission; PROFIT-ALIGN-003 floor-clamp Kelly halving; PROFIT-ALIGN-004 per-market-prefix open-position cap). 8 sub-items DEFERRED with tracking notes; 1 cross-linked to existing PROFIT-PHASE3-003. Operator goal `align kalshi-bot behavior with your analysis` partly satisfied — sizing safeguards live, calibration observability live; data-driven recalibration of magnitude constants + lane simplification + LLM dedup remain DEFERRED pending volume.) |
+| Previously Updated | 2026-05-24 (PROFIT-PHASE3-003 registered as DEFERRED — first OOS corpus build blocked on paper-trade volume. Operator picked path A1 over A2/A3/A4 and over option B (storage cost). Schema audit found `cohort_extension` column already present — no migration work needed. Current state: 8/30 resolved paper trades = 27% of Rule 1 floor; pipeline (`build_corpus.py` → `replay_gate.py` → `ci_entry.py` → `.github/workflows/replay-ci-gate.yml`) wired end-to-end and verified by PR #46. PROFIT-PHASE3-002 pass-through is the operational interim; every CI run auto-passes with explicit "operator gate remains authoritative" note until A1 closes. Recent unblocks (PR #41-#44) may move the resolution rate enough to clear the 30-row threshold before the IC §16.7 30-day framework-review deadline; operator decides.) |
+| Previously Updated (older) | 2026-05-23 (Wave-1 backup-branch replay shipped via v0.30.2 / PR #16 — closes the open-fix bookkeeping flagged by `8b2473e` 2026-05-10; 5 backup-branch commits + 6 reviewer-driven follow-on remediations landed on `main`; 4 post-deploy observation canaries remain xfail-strict until soak completes; backup branch retained as forensic anchor through soak. See §2.2 Wave-1 Replay Closure for full SHA map.) |
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 68 |
+| Total Items | 69 |
 | Last Updated (P0 closure) | 2026-05-12 (PROFIT-API-001 — Kalshi API Contract Stabilization P0 closure landed on `feature/kalshi-api-contract-p0`; VERSION 0.29.59 → 0.30.0; P-1 through P-10 complete; PAPER-ONLY posture preserved) |
 | Open — HIGH | 3 |
 | Open — MEDIUM | 1 |
 | Open — LOW | 1 |
-| Items IN_PROGRESS | 0 |
+| Items IN_PROGRESS | 1 (PROFIT-ALIGN-001 — architecture-review cluster; 3/12 sub-items shipped 2026-05-25, 8/12 DEFERRED with tracking, 1/12 cross-linked) |
 | Items ACTIVE | 1 (PROFIT-EDGE-012 — active tracker entry; Cycle-17D HALTED 2026-05-10 pre-experiment per operator pick β; earliest readiness re-check 2026-06-14) |
 | Items BLOCKED | 2 (PROFIT-EVID-001 — awaiting contract decision on non-trading evidence intake; PROFIT-PHASE3-003 — first OOS corpus build deferred / blocked on paper-trade volume crossing the ≥30 resolved Rule 1 floor) |
 | Items RESOLVED | 3 (PROFIT-SEC-001 — Kalshi signing fail-fast, Phase-2 commit `ce70924`; PROFIT-OBS-006 — subreddit selector observability, Phase-2 commit `1d0714c`; PROFIT-DOC-001 — governance LLM gotchas in CLAUDE.md, Phase-2 commit `b1e1a0c`) |
@@ -5349,6 +5350,101 @@ A1 closes when ALL of the following hold:
   is the discovery surface
 - `docs/governance/corpus-regimes.md` — regime registry
 - `data/paper_trades.db` — source of truth for resolved-row count
+
+---
+
+### PROFIT-ALIGN-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-ALIGN-001 |
+| **Title** | Architecture-review alignment cluster (12 items: 6 missing / 3 too-complicated / 3 too-simple) |
+| **Category** | Sizing / calibration / architecture / observability |
+| **Severity** | MEDIUM (each individual item is medium-leverage; cluster is the entire roadmap distilled by independent 2026-05-25 trade-audit) |
+| **Status** | IN_PROGRESS — sub-items shipped + deferred per the table below (2026-05-25) |
+| **Priority** | Mixed — see per-sub-item priority |
+| **Owner** | Mixed — Claude (Opus 4.7) audit + implementation; operator gate at merge for behavior changes |
+| **Depends On** | PROFIT-PHASE3-003 (calibration evidence needs paper-trade volume) |
+| **Blocks** | Future LLM-prompt / sizing / lane / gate tuning that should be data-driven rather than gut-feel |
+
+**Background**
+
+2026-05-25 operator asked for independent audit of the first paper trade
+post-PROFIT-MATCH-DYNAMIC (KXUSAIRANAGREEMENT-27-26JUN, $4.60 NO bet at
+92¢, +$0.15 EV). Audit raised three concerns:
+  (A) floor-clamping in `_parse_llm_response` manufactures NO-side edge
+      on low-priced YES markets
+  (B) magnitude=small shift of 6.8pp may be too aggressive for one
+      headline (single-data-point Bayesian update normally smaller)
+  (C) bot may concentrate bets on KXUSAIRANAGREEMENT-style markets
+      with similar polysemy/news-flow signature, compounding loss
+
+Operator then asked for comprehensive architecture review +
+"align kalshi-bot behavior with your analysis" (no waiting 14d).
+Architecture review surfaced 12 items across 3 buckets.
+
+**The 12 items and their status**
+
+*Missing (6 items)*
+
+| Item | Description | Status (2026-05-25) | Tracking |
+|---|---|---|---|
+| 1 | **Calibration measurement.** Bot has been paper-trading for weeks; we have 8 resolved trades and no calibration curve. Biggest gap. | **SHIPPED** as PROFIT-ALIGN-002 (commit 2/3) — `CALIBRATION_OBSERVATION` emission on every resolved trade | This entry + PR (v0.32.x) |
+| 2 | **EV-by-archetype tracking.** No bucket-level EV stats by (market_prefix × magnitude × side). | DEFERRED — depends on (1) accumulating ≥30 resolved trades. Aggregator script `scripts/calibration_aggregator.py` is the natural consumer | New entry post-volume |
+| 3 | **Floor-aware sizing.** `_parse_llm_response` clamps prob at 0.05/0.95; bot computes edge against the floor → manufactured edge. | **SHIPPED** as PROFIT-ALIGN-003 (commit 1/3) — `_is_floor_clamp_suspected` heuristic + `cfg.floor_clamp_kelly_multiplier` halve | This entry + PR |
+| 4 | **Position-concentration tracking by prefix.** Same-signal-guard catches exact ticker but not multi-outcome series. | **SHIPPED** as PROFIT-ALIGN-004 (commit 1/3) — `Portfolio.open_positions_by_prefix` + `cfg.max_open_positions_per_prefix=2` cap | This entry + PR |
+| 5 | **Position exit logic.** Bot holds positions until resolution; no signal-update path. New contradicting news doesn't act. | DEFERRED — substantial design work. Needs (1) calibration evidence + (2) drift-detection methodology. Out of scope for this PR | New entry when calibration enables data-driven design |
+| 6 | **Per-source predictive-value Bayesian.** `source_credibility` exists but coarse (per-source multiplier). No joint P(market-mover | source × topic) estimate. | DEFERRED — needs ≥100 resolved trades across ≥10 sources for stable Bayesian estimates. Tracked by source_credibility evolution + future expansion | New entry when volume sufficient |
+
+*Too complicated (3 items)*
+
+| Item | Description | Status (2026-05-25) | Tracking |
+|---|---|---|---|
+| 7 | **Three-lane blender computed for every market.** Accumulation + structural lanes contribute meaningfully on a minority of trades; fast lane dominates 80%+. Theater + compute. | DEFERRED — PR #42 lane-aware blender already collapses to dominant lane when one is strong (`blend_mode="dominant_lane"`), which is the visible 80% path. Further simplification (e.g. skip-compute when no data) is a refactor not a behavior change. | Pending operator decision on theater-vs-future-flexibility |
+| 8 | **18 gates total (G1-G6 + E1-E12).** Some redundant (G4 is real binding constraint, surfaced as G1 per CLAUDE.md gotcha). | DEFERRED — consolidation requires careful diff against blender outputs; existing CLAUDE.md gotcha documents the G4-via-G1 reporting quirk so operators can read past it. Net leverage low. | New entry if a gate ever gets touched for other reasons |
+| 9 | **Series priors as hand-curated lookup.** 30+ priors hand-curated; doesn't scale. Could be derived from market metadata (resolution type, calendar window). | DEFERRED — adding the auto-derived "default cluster by metadata" needs a small classifier. Current path: continue hand-curation as new market families surface (per PROFIT-PRIORS-001/002/003 pattern). Reasonable for ~50-100 active series. | Re-evaluate at ~150 series |
+
+*Too simple (3 items)*
+
+| Item | Description | Status (2026-05-25) | Tracking |
+|---|---|---|---|
+| 10 | **Single-shot LLM call per (headline, market).** Same headline at 3 sources → 3 LLM calls on identical content. No ensemble / cross-check. | DEFERRED — natural fix is content-hash-keyed cache (PROFIT-PHASE3-001 I-2 already has `llm_cache.sqlite` for replay-CI determinism; extend to production runtime). Wallclock + electricity savings. | New entry as `PROFIT-ALIGN-009` |
+| 11 | **Constant `_MAGNITUDE_SHIFT` table.** `{none:0, small:0.08, moderate:0.15, large:0.25}` operator-set, not data-driven. | DEFERRED — calibration evidence (item 1) is the input. Once mean(realized) per magnitude bucket is known with ≥20 samples per bucket, re-tune. Until then, the floor-clamp halving (item 3) is the conservative interim. | Re-evaluate post-PROFIT-ALIGN-002 evidence |
+| 12 | **No backtest-on-deploy.** PROFIT-PHASE3 framework is wired but waiting on volume. | TRACKED separately under [[PROFIT-PHASE3-003]] (corpus-volume blocker). | PROFIT-PHASE3-003 |
+
+**This PR's deliverables (PROFIT-ALIGN commits 1-3 of 3)**
+
+1. `feat(align): floor-clamp Kelly halving + per-prefix position cap` —
+   PROFIT-ALIGN-003 + PROFIT-ALIGN-004. Conservative bot-sizing changes
+   addressing concerns (A) and (C). Tests: 16 new.
+2. `feat(align): CALIBRATION_OBSERVATION emission on resolution` —
+   PROFIT-ALIGN-002. Pure observability for concern (B) and future
+   data-driven tuning. Tests: 2 new.
+3. `docs(debt-log): PROFIT-ALIGN-001 + VERSION 0.32.0 → 0.32.1` —
+   this entry, CHANGELOG update, README sync.
+
+**Acceptance criteria** for this entry to close:
+
+1. Items 1, 3, 4 shipped (this PR — done).
+2. Items 2, 5, 6, 7, 8, 9, 10, 11 have follow-on entries in this
+   debt log when prioritized (this PR documents but does not ship).
+3. Item 12 cross-linked to PROFIT-PHASE3-003 (done).
+4. Operator reviews the calibration-observation evidence after ≥10
+   resolved trades; tightens the floor-clamp / magnitude / position-
+   cap defaults from gut-feel constants to empirical ones.
+
+**Cross-references**
+
+- 2026-05-25 trade audit conversation in operator session (KXUSAIRANAGREEMENT-27-26JUN
+  bet inspection + 12-item architecture review)
+- CHANGELOG `[0.32.1]` — PROFIT-ALIGN-002/003/004
+- `analysis/signal_analyzer._parse_llm_response` — floor-clamp source
+- `main._is_floor_clamp_suspected` — detector
+- `trading/portfolio.open_positions_by_prefix` — per-prefix query
+- `trading/executor._validate` — per-prefix cap site
+- `trading/paper_trader._resolve_market_sync` — calibration-observation emission site
+- `utils/logger.log_calibration_observation` — schema
+- `data/paper_trades.db` + `logs/trades/live/trades.jsonl` — paired evidence sources
 
 ---
 

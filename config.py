@@ -1074,6 +1074,27 @@ class BotConfig:
         default_factory=lambda: float(os.getenv("MIN_BET_DOLLARS", "2.0"))
     )
 
+    # PROFIT-ALIGN-001/003 (2026-05-25): trade-audit driven safeguards.
+    # See docs/profit_path_debt_log.md PROFIT-ALIGN-001 for the full design.
+    #
+    # Floor-clamp Kelly multiplier: when _parse_llm_response clamps the
+    # estimated probability at 0.05 / 0.95 (i.e. LLM wanted more extreme
+    # but the function floor caught it), the bot's true certainty about the
+    # exact prob is fuzzy. Multiply the Kelly stake by this factor to
+    # reduce exposure on clamped trades. 0.5 = halve. Set to 1.0 to disable.
+    floor_clamp_kelly_multiplier: float = field(
+        default_factory=lambda: float(os.getenv("FLOOR_CLAMP_KELLY_MULTIPLIER", "0.5"))
+    )
+    # Per-market-prefix open-position cap (PROFIT-ALIGN-004). The matcher
+    # can correctly bridge multiple outcome contracts in the same series
+    # (e.g. KXTXRUNOFFENDORSE-DJT-BOTH / -KPAX / -JCOR). Without a cap,
+    # one piece of news can cause N concurrent bets against the same
+    # underlying topic — losses compound if the bot's read is wrong.
+    # Default 2 simultaneous open positions per prefix.
+    max_open_positions_per_prefix: int = field(
+        default_factory=lambda: int(os.getenv("MAX_OPEN_POSITIONS_PER_PREFIX", "2"))
+    )
+
     # Time discount parameters -- passed through to kelly_bet() to penalise bets
     # that lock up capital for months. Exponential decay with a configurable floor.
     time_discount_half_life: float = field(

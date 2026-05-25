@@ -1064,6 +1064,52 @@ class PaperTrader:
                 pnl_dollars=pnl,
                 bankroll_delta_dollars=payout,
             )
+            # PROFIT-ALIGN-002 (2026-05-25): per-resolved-trade calibration
+            # observation. The biggest missing-piece flagged in the
+            # 2026-05-25 architecture review: bot has been paper-trading
+            # for weeks but we have no calibration curve / Brier score.
+            # Emit one observation row per resolved trade; downstream
+            # aggregator (scripts/calibration_aggregator.py, follow-on)
+            # rolls these into per-(market_prefix × magnitude_bucket)
+            # calibration metrics.
+            #
+            # realized_outcome = 1 iff the bot's chosen side won.
+            # estimated_probability is the bot's stated probability for
+            # its chosen side (already conditional on side in
+            # paper_trades.estimated_prob).
+            try:
+                # paper_trades.estimated_prob stores the bot's YES-side
+                # probability estimate; the chosen-side probability is
+                # estimated_prob for side=yes, (1 - estimated_prob) for
+                # side=no. Mirror that convention so the calibration
+                # tracker's "p̂ for our bet" semantics are clean.
+                est_yes_prob = float(t["estimated_prob"])
+                est_chosen_side_prob = (
+                    est_yes_prob if t["side"] == "yes" else (1.0 - est_yes_prob)
+                )
+                trade_log.log_calibration_observation(
+                    trade_id=t["trade_id"],
+                    ticker=ticker,
+                    market_prefix=series_ticker,
+                    side=t["side"],
+                    estimated_probability=est_chosen_side_prob,
+                    realized_outcome=int(won),
+                    entry_price_cents=float(t["entry_price_cents"] or 0.0),
+                    pnl_dollars=pnl,
+                    cost_dollars=float(t["cost_dollars"] or 0.0),
+                    llm_magnitude=t["llm_magnitude"] if "llm_magnitude" in t.keys() else None,
+                    llm_confidence=(
+                        t["llm_confidence"] if "llm_confidence" in t.keys() else None
+                    ),
+                    signal_source=t["signal_source"] or "",
+                    ts_entry=t["ts"] or "",
+                    ts_resolved=now_ts,
+                )
+            except Exception as exc:  # noqa: BLE001 — observability must not break resolve
+                log.warning(
+                    "PROFIT-ALIGN-002: calibration observation emit failed for %s: %s",
+                    t["trade_id"], exc,
+                )
             log.info(
                 "[RESOLVED] %s %s YES=%s | pnl=$%+.2f | bankroll=$%.2f",
                 t["trade_id"], ticker, resolved_yes, pnl,

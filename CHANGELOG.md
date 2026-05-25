@@ -19,6 +19,109 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.32.1] - 2026-05-25
+
+### Added
+
+- **PROFIT-ALIGN cluster — architecture-review alignment.** Derived
+  from independent 2026-05-25 audit of the first paper trade post-
+  PROFIT-MATCH-DYNAMIC (KXUSAIRANAGREEMENT-27-26JUN). Audit raised 3
+  concerns (floor-clamp manufactured edge / magnitude-shift aggression
+  / position concentration on similar archetype) and a comprehensive
+  architecture review surfaced 12 items across "missing /
+  too-complicated / too-simple" buckets. This release ships 3 of the
+  12; remaining 8 documented in `docs/profit_path_debt_log.md`
+  PROFIT-ALIGN-001 with concrete designs + deferred-tracking notes.
+  Operator goal `align kalshi-bot behavior with your analysis` partly
+  satisfied — sizing safeguards + calibration observability live;
+  data-driven recalibration of LLM-shift constants + lane
+  simplification + LLM dedup remain DEFERRED pending paper-trade
+  volume (cross-link to PROFIT-PHASE3-003).
+
+### Fixed (sizing safeguards from trade audit)
+
+- **PROFIT-ALIGN-003 — Floor-clamp Kelly halving.**
+  `analysis/signal_analyzer._parse_llm_response` clamps the estimated
+  probability at 0.05 (NO-side) / 0.95 (YES-side). When clamp fires,
+  the LLM wanted to push further but the floor caught it — true
+  certainty about exact prob is fuzzy. Trade-audit example:
+  KXUSAIRANAGREEMENT-27-26JUN showed prob=0.05 vs market=0.08 = 3pp
+  edge, but the underlying LLM shift was 6.8pp (mag=small × conf=0.85),
+  clamped to 3pp by the floor.
+
+  New helper `main._is_floor_clamp_suspected()`: True iff LLM
+  direction in {yes, no} AND magnitude is non-trivial AND final
+  estimated_probability is exactly 0.05 / 0.95 (1e-6 tolerance).
+  When True, kelly_dollars + capped_dollars are multiplied by
+  `cfg.floor_clamp_kelly_multiplier` (default 0.5; env override
+  `FLOOR_CLAMP_KELLY_MULTIPLIER`). Conservative; affects only
+  clamped trades. Rare organic 0.05/0.95 coincidences over-halved.
+
+- **PROFIT-ALIGN-004 — Per-market-prefix open-position cap.** The
+  matcher can produce multiple outcome-contract candidates in the
+  same series (e.g. KXTXRUNOFFENDORSE-DJT-{BOTH,KPAX,JCOR,NONE}).
+  Same-signal-guard catches exact-ticker but not multi-outcome.
+  Without a cap, one news event could open N concurrent bets against
+  the same underlying topic.
+
+  New `Portfolio.open_positions_by_prefix(prefix)`. Executor
+  `_validate` blocks the Nth open when count reaches
+  `cfg.max_open_positions_per_prefix` (default 2; env override
+  `MAX_OPEN_POSITIONS_PER_PREFIX`). Setting to 0 disables the gate.
+
+### Added (observability for future data-driven tuning)
+
+- **PROFIT-ALIGN-002 — `CALIBRATION_OBSERVATION` emission on resolve.**
+  Biggest missing piece flagged in the 2026-05-25 architecture review:
+  bot has been paper-trading for weeks with no calibration curve.
+  `paper_trader._resolve_market_sync` now emits one
+  `CALIBRATION_OBSERVATION` per resolved trade carrying: trade_id,
+  ticker, market_prefix, side, estimated_probability (CHOSEN-side,
+  not YES-side — clean "p̂ for our bet" semantics), realized_outcome
+  (1 iff bot's side won), entry_price_cents, pnl_dollars,
+  cost_dollars, llm_magnitude, llm_confidence, signal_source,
+  ts_entry, ts_resolved. Wrapped in try/except so observability
+  cannot break bankroll-credit atomicity. Downstream aggregator
+  (`scripts/calibration_aggregator.py`, future PR) consumes into
+  Brier-score-per-archetype metrics.
+
+### Tests
+
+- 18 new from PROFIT-ALIGN-002/003/004:
+  - `TestOpenPositionsByPrefix` (5)
+  - `TestPerPrefixPositionCap` (4)
+  - `TestFloorClampSuspected` (6)
+  - `TestFloorClampHalvingConfig` (2)
+  - `TestLogCalibrationObservation` (2; null-LLM-fields tolerance)
+- 2 test isolation fixes (test_market_matcher.py /
+  test_simulations_smoke.py) to mock
+  `analysis.match_feedback.load_weights → {}` so matcher tests don't
+  depend on aggregator-mutated runtime weights file.
+
+### Documentation
+
+- New debt-log entry `PROFIT-ALIGN-001` with the full 12-item table:
+  6 missing / 3 too-complicated / 3 too-simple, each annotated with
+  current status (SHIPPED / DEFERRED / cross-linked) + the rationale
+  for the defer.
+
+### Notes
+
+- Behavior changes are conservative: per-prefix cap fires only on
+  Nth open against the same prefix; floor-clamp halving only fires
+  on clamped trades. No new trades are unblocked, no existing
+  trades become more aggressive.
+- T2 scope per IC §16.7 (sizing affects execution decisions).
+  Replay-CI gate passes via PROFIT-PHASE3-002 pass-through. Operator
+  gate is substantive review.
+- No env mutation. No threshold-override-map changes. No G1-G6
+  readiness-gate threshold changes. No execution-path-API changes
+  beyond the new `_validate` skip-reason.
+- Full suite: **2359 passed** / 4 skipped / 71 xfailed (+19 from
+  baseline 2340). Ruff: clean.
+- VERSION: 0.32.0 → 0.32.1 (PATCH — non-breaking behavior tightening
+  + observability addition).
+
 ## [0.32.0] - 2026-05-24
 
 ### Added

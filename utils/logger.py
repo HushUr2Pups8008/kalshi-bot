@@ -1170,6 +1170,61 @@ class TradeLogger:
             record["matched_tokens"] = matched_tokens
         self._write(record)
 
+    def log_calibration_observation(
+        self,
+        *,
+        trade_id: str,
+        ticker: str,
+        market_prefix: str,
+        side: str,
+        estimated_probability: float,
+        realized_outcome: int,
+        entry_price_cents: float,
+        pnl_dollars: float,
+        cost_dollars: float,
+        llm_magnitude: str | None,
+        llm_confidence: float | None,
+        signal_source: str,
+        ts_entry: str,
+        ts_resolved: str,
+    ) -> None:
+        """PROFIT-ALIGN-002 (2026-05-25): per-resolved-trade calibration observation.
+
+        Emitted once per resolved paper trade as the primary feedback signal
+        for the calibration tracker (the largest missing piece flagged in the
+        2026-05-25 architecture review). Downstream aggregator computes
+        Brier score / calibration curve per (market_prefix, magnitude_bucket)
+        archetype; surfaces in daily_review.
+
+        ``realized_outcome`` is 1 if the bot's chosen side won (got paid),
+        0 otherwise — i.e. it's the probability the BOT'S BET realizes, not
+        the YES probability. This makes the Brier score `(p̂ - 1)²` on wins
+        and `(p̂ - 0)²` on losses where p̂ is the bot's stated probability
+        for its chosen side. Calibration target: mean(p̂) ≈ mean(realized).
+
+        Schema is forward-compatible — the aggregator tolerates absent
+        magnitude/confidence fields by bucketing them as "unknown".
+        """
+        self._write({
+            "type": "CALIBRATION_OBSERVATION",
+            "trade_id": trade_id,
+            "ticker": ticker,
+            "market_prefix": market_prefix,
+            "side": side,
+            "estimated_probability": round(float(estimated_probability), 4),
+            "realized_outcome": int(realized_outcome),
+            "entry_price_cents": round(float(entry_price_cents), 2),
+            "pnl_dollars": round(float(pnl_dollars), 2),
+            "cost_dollars": round(float(cost_dollars), 2),
+            "llm_magnitude": llm_magnitude,
+            "llm_confidence": (
+                round(float(llm_confidence), 4) if llm_confidence is not None else None
+            ),
+            "signal_source": signal_source,
+            "ts_entry": ts_entry,
+            "ts_resolved": ts_resolved,
+        })
+
     def log_match_llm_review(
         self,
         *,
