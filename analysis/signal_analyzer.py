@@ -617,8 +617,28 @@ def keyword_estimate(
 
 # ── Optional LLM estimation ───────────────────────────────────────────────────
 
-# Magnitude -> probability shift mapping (applied in code, not by the LLM)
-_MAGNITUDE_SHIFT = {"none": 0.0, "small": 0.08, "moderate": 0.15, "large": 0.25}
+# Magnitude -> probability shift mapping (applied in code, not by the LLM).
+# PROFIT-ALIGN-011 (2026-05-25): make the table runtime-tunable via cfg so
+# operators can recalibrate from empirical CALIBRATION_OBSERVATION evidence
+# (PROFIT-ALIGN-002) without code changes. Defaults preserve the historical
+# constants. Env overrides: MAGNITUDE_SHIFT_SMALL / _MODERATE / _LARGE.
+def _magnitude_shift_table() -> dict[str, float]:
+    """Return the magnitude→shift table from cfg (env-overridable).
+
+    Re-read on every call so an operator override via runtime_overrides
+    (future) or env-reload picks up immediately. Performance-trivial.
+    """
+    return {
+        "none":     0.0,
+        "small":    float(getattr(cfg, "magnitude_shift_small", 0.08)),
+        "moderate": float(getattr(cfg, "magnitude_shift_moderate", 0.15)),
+        "large":    float(getattr(cfg, "magnitude_shift_large", 0.25)),
+    }
+
+
+# Legacy module-level mapping retained for tests + existing call sites that
+# import `_MAGNITUDE_SHIFT` directly. Reflects current cfg defaults.
+_MAGNITUDE_SHIFT = _magnitude_shift_table()
 
 _LLM_SYSTEM_PROMPT = """You are a geopolitical prediction market analyst.
 
@@ -775,7 +795,7 @@ def _parse_llm_response(parsed: dict, market) -> tuple[float, float, str, str, s
     if not relevant or not new_info or direction == "neutral" or magnitude == "none":
         prob = market.yes_prob
     else:
-        base_shift = _MAGNITUDE_SHIFT.get(magnitude, 0.0)
+        base_shift = _magnitude_shift_table().get(magnitude, 0.0)
         shift = base_shift * confidence
         if direction == "yes":
             prob = min(0.95, market.yes_prob + shift)
@@ -1334,8 +1354,39 @@ async def estimate_probability(
         )
         llm_result = None
     else:
-        # Try LLM if available
-        llm_result, llm_meta = await llm_estimate_detailed(news, market)
+        # PROFIT-ALIGN-010 (2026-05-25): runtime LLM dedup cache. Same
+        # headline+market+price-bucket within TTL → reuse prior result,
+        # skip the LLM call. Distinct from the replay-CI llm_cache.sqlite
+        # (deterministic-replay only). See analysis/llm_dedup_cache.py.
+        from analysis.llm_dedup_cache import (
+            lookup as _llm_dedup_lookup,
+            store as _llm_dedup_store,
+        )
+        _cache_ttl = int(getattr(cfg, "llm_dedup_cache_ttl_seconds", 0))
+        _cached = _llm_dedup_lookup(
+            headline=getattr(news, "headline", None),
+            market_title=getattr(market, "title", None),
+            market_yes_price=getattr(market, "yes_prob", None),
+            ttl_seconds=_cache_ttl,
+        )
+        if _cached is not None:
+            llm_result = _cached
+            llm_meta = _llm_meta(
+                attempted=False,
+                status="llm_dedup_cache_hit",
+                provider="cache",
+                result_used=True,
+            )
+        else:
+            llm_result, llm_meta = await llm_estimate_detailed(news, market)
+            if llm_result is not None:
+                _llm_dedup_store(
+                    headline=getattr(news, "headline", None),
+                    market_title=getattr(market, "title", None),
+                    market_yes_price=getattr(market, "yes_prob", None),
+                    result=llm_result,
+                    ttl_seconds=_cache_ttl,
+                )
         _emit_llm_prompt_response_debug(
             llm_meta,
             news=news,

@@ -210,6 +210,70 @@ def _series_prior(market: KalshiMarket) -> Optional[tuple[float, float, float]]:
     return None
 
 
+def _derive_series_prior_from_metadata(
+    market: KalshiMarket,
+) -> Optional[tuple[float, float, float]]:
+    """PROFIT-ALIGN-009 (2026-05-25): heuristic auto-derivation of a regime
+    prior from market metadata when no `_SERIES_PRIORS` entry exists.
+
+    Opt-in via `cfg.enable_derived_series_priors`. Default OFF — falls back
+    to `_time_prior` (post-PR-#41 fast-dominant). Operator can enable
+    after validating against historical BDs that the derivation produces
+    sensible weights.
+
+    Heuristic rules (cheapest first):
+
+      1. Ticker contains "POLL" / "APR" / "POTUS" / sport prefixes →
+         polling/sport pattern → structural-dominant (slow-moving) /
+         fast-dominant (live event) per the existing _SERIES_PRIORS
+         cluster averages.
+      2. Ticker contains "CPI" / "GDP" / "PMI" / "RATE" → macro data →
+         structural-dominant (calendar).
+      3. Ticker contains "TRUMP" / "BIDEN" / a known political figure →
+         event-driven fast-dominant.
+      4. Ticker contains "EARTHQUAKE" / "HURRICANE" / "WEATHER" →
+         weather/disaster → structural-dominant (base rate).
+      5. Otherwise: return None and let _time_prior handle it.
+
+    This is intentionally conservative — it covers the "obvious clusters"
+    where today's hand-curated _SERIES_PRIORS shows a clear pattern.
+    Anything novel still falls through to _time_prior with its post-fix
+    fast-dominant default.
+
+    No side effects. Pure function. Tested in tests/test_regime_classifier.py.
+    """
+    if market is None:
+        return None
+    candidate = (market.ticker or market.series_ticker or "").upper()
+    if not candidate:
+        return None
+
+    # Rule 1: polling / approval markets (slow, structural)
+    if any(tok in candidate for tok in ("POLL", "APPROVE", "POTUS", "APRPOTUS")):
+        return (0.05, 0.25, 0.70)
+
+    # Rule 2: macro data releases (calendar, structural)
+    if any(tok in candidate for tok in ("CPI", "GDP", "PMI", "RATE", "FOMC", "JOBS")):
+        return (0.05, 0.30, 0.65)
+
+    # Rule 3: political event markets (fast)
+    if any(tok in candidate for tok in (
+        "TRUMP", "BIDEN", "VANCE", "RUBIO", "HARRIS", "ENDORSE", "PARDON",
+        "ELECTION", "VOTE", "SENATE", "HOUSE", "CONGRESS",
+    )):
+        return (0.65, 0.25, 0.10)
+
+    # Rule 4: weather / disaster (base-rate dominated)
+    if any(tok in candidate for tok in ("WEATHER", "TEMP", "RAIN", "STORM", "QUAKE")):
+        return (0.10, 0.25, 0.65)
+
+    # Rule 5: crypto (fast, interpretation-heavy)
+    if any(tok in candidate for tok in ("BTC", "ETH", "CRYPTO", "DOGE", "XRP", "SOL")):
+        return (0.65, 0.28, 0.07)
+
+    return None
+
+
 def _time_prior(days: float) -> tuple[float, float, float]:
     """Return (fast, interpretation, structural) for a market with no
     `_SERIES_PRIORS` entry — i.e. a series the bot has not been
@@ -296,19 +360,32 @@ def compute_regime_weights(market: KalshiMarket) -> dict[str, float]:
     """Return regime weight vector {fast, interpretation, structural} summing to 1.0.
 
     Classification order:
-      1. Series-ticker prefix match  → categorical prior
-      2. Time to close               → continuous fallback
-      3. Market title keyword nudge  → minor directional adjustment
+      1. Series-ticker prefix match              → categorical prior
+      2. (Opt-in PROFIT-ALIGN-009) derived       → metadata-heuristic prior
+      3. Time to close                           → continuous fallback
+      4. Market title keyword nudge              → minor directional adjustment
     """
-    # Step 1: series-ticker prior
+    # Step 1: series-ticker prior (highest precedence — hand-curated)
     raw = _series_prior(market)
 
-    # Step 2: time-based fallback
+    # Step 2 (PROFIT-ALIGN-009 2026-05-25): opt-in metadata-derived prior
+    # for series not in _SERIES_PRIORS. Default OFF — falls through to
+    # _time_prior as today. Operator validates against historical BDs
+    # before enabling via ENABLE_DERIVED_SERIES_PRIORS=true.
+    if raw is None:
+        try:
+            from config import cfg as _cfg
+            if getattr(_cfg, "enable_derived_series_priors", False):
+                raw = _derive_series_prior_from_metadata(market)
+        except Exception:
+            pass
+
+    # Step 3: time-based fallback
     if raw is None:
         days = _days_to_close(market.close_time)
         raw = _time_prior(days) if days is not None else (0.33, 0.34, 0.33)
 
-    # Step 3: title keyword nudge (applied to both series and time priors)
+    # Step 4: title keyword nudge (applied to both series and time priors)
     title = f"{market.title} {market.subtitle}"
     raw = _apply_title_nudge(raw, title)
 

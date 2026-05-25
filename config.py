@@ -1095,6 +1095,61 @@ class BotConfig:
         default_factory=lambda: int(os.getenv("MAX_OPEN_POSITIONS_PER_PREFIX", "2"))
     )
 
+    # PROFIT-ALIGN-011 (2026-05-25): magnitude→shift table moved from
+    # hardcoded constants in analysis/signal_analyzer.py to cfg. Defaults
+    # preserve historical behavior. Operator can recalibrate once
+    # PROFIT-ALIGN-002 CALIBRATION_OBSERVATION evidence accumulates (≥30
+    # resolved trades, then bucket by magnitude and measure realized vs
+    # predicted shift). Env overrides: MAGNITUDE_SHIFT_{SMALL,MODERATE,LARGE}.
+    magnitude_shift_small: float = field(
+        default_factory=lambda: float(os.getenv("MAGNITUDE_SHIFT_SMALL", "0.08"))
+    )
+    magnitude_shift_moderate: float = field(
+        default_factory=lambda: float(os.getenv("MAGNITUDE_SHIFT_MODERATE", "0.15"))
+    )
+    magnitude_shift_large: float = field(
+        default_factory=lambda: float(os.getenv("MAGNITUDE_SHIFT_LARGE", "0.25"))
+    )
+
+    # PROFIT-ALIGN-007 (2026-05-25): position-drift observability threshold.
+    # When a held position's current_price drifts by more than this fraction
+    # from entry_price, emit a POSITION_DRIFT event (already-wired logger
+    # method `log_position_drift`). Pure observability — does NOT auto-exit.
+    # Real exit logic is deferred until calibration evidence informs the
+    # drift-vs-resolution trade-off. Set to 1.0 to disable emission.
+    position_drift_alert_threshold: float = field(
+        default_factory=lambda: float(os.getenv("POSITION_DRIFT_ALERT_THRESHOLD", "0.15"))
+    )
+
+    # PROFIT-ALIGN-010 (2026-05-25): LLM content-hash dedup cache for the
+    # runtime signal-analyzer. Distinct from the replay-CI llm_cache.sqlite
+    # (deterministic-replay only). When the same (headline_text, market_title,
+    # market_yes_price_bucket) combo is analyzed within this TTL, return the
+    # cached result instead of issuing a new LLM call. Wallclock saving;
+    # local Ollama wallclock is the only cost since model is on-host. Set to
+    # 0 to disable (forces per-call LLM evaluation).
+    llm_dedup_cache_ttl_seconds: int = field(
+        default_factory=lambda: int(os.getenv("LLM_DEDUP_CACHE_TTL_SECONDS", "900"))
+    )
+
+    # PROFIT-ALIGN-007 (3-lane simplification): when True, lanes with no
+    # contributing evidence (e.g. accumulation lane with zero dossier
+    # updates, structural lane with no series_prior data) emit a
+    # LANE_SKIPPED event instead of computing equal-weight defaults.
+    # Default False — opt-in until operator validates no behavior change
+    # on real BDs.
+    enable_lane_skip_when_no_data: bool = field(
+        default_factory=lambda: _parse_bool_env("ENABLE_LANE_SKIP_WHEN_NO_DATA", "false")
+    )
+
+    # PROFIT-ALIGN-009 (derived series priors): opt-in flag for
+    # auto-deriving a regime weight prior from market metadata (close_time
+    # window + ticker-prefix heuristics) when no explicit _SERIES_PRIORS
+    # entry exists. Default False — falls back to _time_prior as today.
+    enable_derived_series_priors: bool = field(
+        default_factory=lambda: _parse_bool_env("ENABLE_DERIVED_SERIES_PRIORS", "false")
+    )
+
     # Time discount parameters -- passed through to kelly_bet() to penalise bets
     # that lock up capital for months. Exponential decay with a configurable floor.
     time_discount_half_life: float = field(

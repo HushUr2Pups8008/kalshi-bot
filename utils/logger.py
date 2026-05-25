@@ -1225,6 +1225,51 @@ class TradeLogger:
             "ts_resolved": ts_resolved,
         })
 
+    def log_gate_summary(
+        self,
+        *,
+        ticker: str,
+        market_prefix: str,
+        binding_constraint: str,
+        scaled_confidence: float,
+        regime_confidence: float,
+        blended_confidence: float,
+        g1_threshold: float,
+        g4_threshold: float,
+        gate_chain: list[str],
+    ) -> None:
+        """PROFIT-ALIGN-008 (2026-05-25): consolidated gate-decision diagnostic.
+
+        Per CLAUDE.md gotcha: G1 reads `scaled_confidence = blended * regime`,
+        but the binding constraint when fail-safe mode fires is G4
+        (`regime_confidence < 0.20`). Operators reading SKIPPED logs see
+        G1 first and miss that G4 is the upstream cause.
+
+        This event makes the actual binding constraint explicit:
+
+          binding_constraint ∈ {
+            "G4_regime_low",       # rc < 0.20 → fail-safe G1=0.10
+            "G1_blended_confidence",  # rc ≥ 0.20 but sc < 0.05
+            "G1_fail_safe",        # in fail-safe mode AND sc < 0.10
+            "passed",              # both G1 and G4 OK
+          }
+
+        gate_chain enumerates which gates were checked + passed/failed in
+        order. Surfaces in daily_review.
+        """
+        self._write({
+            "type": "GATE_SUMMARY",
+            "ticker": ticker,
+            "market_prefix": market_prefix,
+            "binding_constraint": binding_constraint,
+            "scaled_confidence": round(float(scaled_confidence), 4),
+            "regime_confidence": round(float(regime_confidence), 4),
+            "blended_confidence": round(float(blended_confidence), 4),
+            "g1_threshold": round(float(g1_threshold), 4),
+            "g4_threshold": round(float(g4_threshold), 4),
+            "gate_chain": gate_chain,
+        })
+
     def log_match_llm_review(
         self,
         *,
