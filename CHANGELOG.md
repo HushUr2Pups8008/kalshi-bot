@@ -19,6 +19,113 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.32.0] - 2026-05-24
+
+### Added
+
+- **PROFIT-MATCH-DYNAMIC — durable + dynamic matcher feedback loop.**
+  Shipped as 5 logical commits on `fix/matcher-dynamic-feedback-loop`:
+
+  1. **Stopword fix.** `any / anyone / anything` added to
+     `_STOP_WORDS`. Closes the KXCABLEAVE false-match bridge where
+     market title "Will ANY member of Trump's Cabinet leave" was
+     tokenizing "any" as content, then matching every Trump-mentioning
+     headline via `[any, trump]` overlap.
+
+  2. **MATCH_LLM_REVIEW event.** Signal-analyzer now emits a per-LLM-
+     call feedback record classified as `true_positive` /
+     `false_positive_neutral` / undetermined per the inline verdict
+     rules:
+       - `direction in {yes, no}` → true_positive
+       - `dir=neutral + mag=none + conf >= 0.7` → false_positive_neutral
+       - low-confidence neutral → undetermined (skip)
+     Fields: ticker, market_title, market_prefix, headline, source,
+     matched_tokens (re-tokenized at the emit site so it matches what
+     the matcher actually sees), llm_relevant, llm_direction,
+     llm_magnitude, llm_confidence, verdict. Pure observability — no
+     behavior change in this commit.
+
+  3. **FP-counter aggregator + weight store.** New module
+     `analysis/match_feedback.py` + CLI runner
+     `scripts/match_feedback_aggregator.py`. Aggregator scans
+     trade-log live + archive for `MATCH_LLM_REVIEW` events, rolls
+     them into a per-(token × market_prefix × day_utc) SQLite counter
+     table at `data/match_token_fp_counters.db` (gitignored), then
+     writes the runtime weights map at
+     `data/matcher_token_weights.json` (committed).
+     Update rule:
+     ```
+     if total < MIN_TOTAL (10):                keep weight at 1.0
+     elif fp_rate >= ACTIVATE (0.40):          weight = max(0.10, 1 - fp_rate)
+     elif fp_rate < RECOVERY (0.25):           weight = 1.0
+     else (hysteresis band 0.25-0.40):          keep existing weight
+     ```
+     Operator-pinned entries (`pinned: true`) are NEVER overwritten;
+     bookkeeping fields refresh so the operator sees current FP rate
+     without losing the pin.
+
+  4. **Matcher applies downweights.** `find_candidates` loads the
+     weights file on every call (microsecond JSON parse) and
+     multiplies the per-market score by `min(weight)` across overlap
+     tokens. MIN dominates so a single known-bad bridge token
+     suppresses the match without us having to downweight every
+     supporting token individually. Per-prefix targeting:
+     `trump` downweighted for KXCABLEAVE has zero effect on
+     KXTRUMPIRAN matches (different ticker_prefix key). Floor 0.10
+     preserves residual signal for legitimate edges; recovery is
+     possible.
+
+  5. **Seed weights + launchd cron.** `data/matcher_token_weights.json`
+     ships with operator-pinned entries from the 2026-05-24
+     per-LLM-call audit:
+       - `KXCABLEAVE:trump → 0.10` (ubiquitous-entity bridge)
+       - `KXCABLEAVE:any → 0.10` (belt-and-suspenders for the
+         tokenizer fix in commit 1)
+       - `KXNEWDEAL:deal → 0.25` (polysemy: trade-deal vs Iran-deal)
+       - `KXNEWDEAL:trump → 0.40` (composes with `deal` downweight)
+     Daily aggregator cron: new
+     `ops/launchd/com.jake.kalshi-match-feedback-aggregator.plist.template`
+     fires at 08:55 America/Denver (5 min before daily_review at
+     09:00) so the operator's morning surface includes fresh
+     weights. Not auto-installed — operator runs `launchctl bootstrap`
+     to enable.
+
+  **Cold-start design.** Per operator directive "we're not waiting
+  14d for this": MIN_TOTAL is 10 (not 50), seed weights are pinned
+  from today's audit, and the matcher applies them immediately on
+  first restart. Behavior change is live from minute zero, not after
+  a 2-week observation soak.
+
+### Background
+
+The 11 post-restart LLM calls on 2026-05-24 all returned
+`magnitude=none + direction=neutral`. Per-call audit found:
+
+- 4/11 legitimate matches (Trump+Iran headlines on KXTRUMPIRAN)
+- 5/11 false positives via 'deal' polysemy (Iran-peace headlines on
+  KXNEWDEAL trade-deal market)
+- 2/11 false positives via 'trump' ubiquity (Iran-deal headlines on
+  KXCABLEAVE)
+
+**LLM was correctly returning neutral on bad matches.** The 91%
+`magnitude=none` rate is largely the LLM rejecting matcher false
+positives, not the LLM being over-conservative. Root cause was
+matcher; PROFIT-LLM-002's magnitude bump (v0.31.3) catches the
+remaining inconsistent-LLM cases.
+
+### Notes
+
+- T2 scope per IC §16.7 (changes matcher behavior). Replay-CI gate
+  passes via PROFIT-PHASE3-002 bootstrap pass-through. Operator gate
+  is substantive review.
+- No env mutation. No threshold-override-map changes. No G1-G6
+  threshold changes. No execution-path changes.
+- Full suite: **2340 passed** / 4 skipped / 71 xfailed (+38 from
+  baseline 2302; includes 21 match_feedback tests, 6 matcher
+  downweight tests, 7 verdict/logger tests, 3 seed-file tests, 1
+  tokenizer "any" test).
+- Ruff: clean.
+
 ## [0.31.3] - 2026-05-24
 
 ### Fixed

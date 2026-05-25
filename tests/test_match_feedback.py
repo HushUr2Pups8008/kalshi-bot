@@ -202,3 +202,68 @@ class TestGetTokenWeight:
     def test_corrupted_weight_falls_back_to_one(self):
         weights = {"P:t": {"weight": "not a float"}}
         assert get_token_weight("t", "P", weights=weights) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-MATCH-DYNAMIC commit 5/5 — seed file integration
+# ---------------------------------------------------------------------------
+
+class TestSeedWeightsFile:
+    """Pin the committed seed weights at data/matcher_token_weights.json so
+    accidental edits or aggregator overwrites of pinned entries surface."""
+
+    SEED_PATH = Path("data/matcher_token_weights.json")
+
+    def test_seed_file_exists_and_loads(self):
+        assert self.SEED_PATH.exists(), (
+            "data/matcher_token_weights.json must be checked in as the seed "
+            "for the matcher feedback loop. Commit 5/5 of PROFIT-MATCH-DYNAMIC."
+        )
+        weights = load_weights(self.SEED_PATH)
+        assert weights, "seed file loaded as empty — check JSON syntax"
+
+    def test_seed_pinned_entries_include_audit_findings(self):
+        """The 2026-05-24 per-LLM-call audit produced these specific
+        (token, market_prefix) findings. Pin them so a future aggregator
+        run (or operator edit) cannot silently restore the false-match
+        bridges."""
+        weights = load_weights(self.SEED_PATH)
+        required = {
+            "KXCABLEAVE:trump": 0.10,
+            "KXCABLEAVE:any": 0.10,
+            "KXNEWDEAL:deal": 0.25,
+            "KXNEWDEAL:trump": 0.40,
+        }
+        for key, expected_max in required.items():
+            assert key in weights, f"{key} missing from seed file"
+            assert weights[key].get("pinned") is True, (
+                f"{key} must be operator-pinned so aggregator cannot lift it"
+            )
+            assert weights[key].get("weight", 1.0) <= expected_max, (
+                f"{key} weight relaxed beyond audit findings"
+            )
+
+    def test_seed_aggregator_run_preserves_pinned(self, tmp_path):
+        """End-to-end pin: after aggregator processes new (recovery-favoring)
+        events on a pinned token, weight must NOT change. Simulates the
+        future case where bot learns more legitimate matches but operator
+        still wants the pin held."""
+        seed = load_weights(self.SEED_PATH)
+        original_weight = seed["KXCABLEAVE:trump"]["weight"]
+        # Aggregator-simulating call: pretend many recent matches show
+        # KXCABLEAVE:trump as legitimate (would normally trigger recovery).
+        # Pinned entry must hold.
+        from analysis.match_feedback import TokenStats
+        stats = [
+            TokenStats(
+                token="trump", market_prefix="KXCABLEAVE",
+                fp_neutral=0, true_positive=500,  # 0% FP rate → would recover
+            )
+        ]
+        out = update_weights_from_stats(stats, weights=dict(seed),
+                                         now_iso="2026-06-01T00:00:00+00:00")
+        assert out["KXCABLEAVE:trump"]["weight"] == original_weight
+        assert out["KXCABLEAVE:trump"]["pinned"] is True
+        # But bookkeeping fields refresh
+        assert out["KXCABLEAVE:trump"]["fp_rate"] == 0.0
+        assert out["KXCABLEAVE:trump"]["total"] == 500

@@ -1,0 +1,34 @@
+{
+  "KXCABLEAVE:trump": {
+    "weight": 0.1,
+    "fp_rate": 1.0,
+    "total": 2,
+    "pinned": true,
+    "updated_utc": "2026-05-24T22:30:00+00:00",
+    "_seed_reason": "PROFIT-MATCH-DYNAMIC commit 5/5: per-LLM-call audit (2026-05-24, 11 calls) found KXCABLEAVE matched to Iran-deal news via the [trump] token bridge. 'trump' is ubiquitous in political news and should never alone validate a Cabinet-leave market. Operator-pinned at 0.10 (floor) so the matcher learning loop cannot lift it without explicit operator unpin."
+  },
+  "KXCABLEAVE:any": {
+    "weight": 0.1,
+    "fp_rate": 1.0,
+    "total": 1,
+    "pinned": true,
+    "updated_utc": "2026-05-24T22:30:00+00:00",
+    "_seed_reason": "Belt-and-suspenders. 'any' was added to _STOP_WORDS in commit 1/5 so the matcher shouldn't see this overlap anymore. Pinned downweight kept as backstop if a future tokenizer change re-exposes the bug."
+  },
+  "KXNEWDEAL:deal": {
+    "weight": 0.25,
+    "fp_rate": 0.83,
+    "total": 6,
+    "pinned": true,
+    "updated_utc": "2026-05-24T22:30:00+00:00",
+    "_seed_reason": "PROFIT-MATCH-DYNAMIC commit 5/5: 5/6 LLM calls on KXNEWDEAL (trade deal market) were on Iran peace-deal headlines that matched via the 'deal' token. 'deal' is polysemic: trade deal, peace deal, business deal, etc. Operator-pinned at 0.25 (not floor) so legitimate trade-deal headlines aren't entirely suppressed — they typically have additional supporting tokens (tariff, trade, china, etc.) that compose well at this weight."
+  },
+  "KXNEWDEAL:trump": {
+    "weight": 0.4,
+    "fp_rate": 0.83,
+    "total": 6,
+    "pinned": true,
+    "updated_utc": "2026-05-24T22:30:00+00:00",
+    "_seed_reason": "Same audit. 'trump' contributed to false positives on KXNEWDEAL via the [deal, trump] bridge. Less aggressive downweight than 'deal' because Trump trade-deal announcements ARE a legitimate signal — but require more supporting tokens to compose."
+  }
+}
