@@ -1074,6 +1074,20 @@ class TradeLogger:
         }
         self._write(record)
 
+    def log_lane_skipped(
+        self,
+        *,
+        market_ticker: str,
+        lane_id: str,
+        reason: str,
+    ) -> None:
+        self._write({
+            "type": "LANE_SKIPPED",
+            "market_ticker": market_ticker,
+            "lane_id": lane_id,
+            "reason": reason,
+        })
+
     def log_structural_prior_recompute(
         self,
         *,

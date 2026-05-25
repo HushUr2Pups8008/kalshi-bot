@@ -153,50 +153,37 @@ class TestDerivedSeriesPrior:
 # ---------------------------------------------------------------------------
 
 class TestLlmDedupCache:
-    @pytest.fixture(autouse=True)
-    def _isolate_cache(self):
-        """Clear both before AND after each test — the cache is a module-level
-        OrderedDict, so without teardown the entries leak into other test
-        files that exercise signal_analyzer end-to-end (test_main_startup
-        observability probes specifically)."""
-        from analysis.llm_dedup_cache import clear
-        clear()
-        yield
-        clear()
-
     def test_store_then_lookup_returns_cached(self):
         from analysis.llm_dedup_cache import store, lookup
-        result = (0.42, 0.85, "reasoning", "no", "small")
-        store("Trump signs deal", "Will Trump sign?", 0.30, result, ttl_seconds=600)
-        got = lookup("Trump signs deal", "Will Trump sign?", 0.30, ttl_seconds=600)
+        result = (0.85, "reasoning", "no", "small")
+        store("SYSTEM:\n...\nUSER:\nTrump signs deal", result, ttl_seconds=600)
+        got = lookup("SYSTEM:\n...\nUSER:\nTrump signs deal", ttl_seconds=600)
         assert got == result
 
     def test_disabled_when_ttl_zero(self):
         from analysis.llm_dedup_cache import store, lookup
-        result = (0.5, 0.5, "x", "yes", "small")
-        store("h", "m", 0.5, result, ttl_seconds=0)
-        assert lookup("h", "m", 0.5, ttl_seconds=0) is None
+        result = (0.5, "x", "yes", "small")
+        store("prompt", result, ttl_seconds=0)
+        assert lookup("prompt", ttl_seconds=0) is None
 
     def test_expired_entries_evicted(self):
         from analysis.llm_dedup_cache import store, lookup
-        result = (0.5, 0.5, "x", "yes", "small")
-        store("h", "m", 0.5, result, ttl_seconds=10, now_monotonic=100.0)
+        result = (0.5, "x", "yes", "small")
+        store("prompt", result, ttl_seconds=10, now_monotonic=100.0)
         # 11s later — expired
-        assert lookup("h", "m", 0.5, ttl_seconds=10, now_monotonic=111.0) is None
+        assert lookup("prompt", ttl_seconds=10, now_monotonic=111.0) is None
 
-    def test_price_bucketing_5pp(self):
+    def test_prompt_text_is_cache_identity(self):
         from analysis.llm_dedup_cache import store, lookup
-        result = (0.5, 0.5, "x", "yes", "small")
-        store("h", "m", 0.30, result, ttl_seconds=600)
-        # 0.31 (1pp move) hits same 5pp bucket → cache hit
-        assert lookup("h", "m", 0.31, ttl_seconds=600) == result
-        # 0.40 (10pp move) different bucket → miss
-        assert lookup("h", "m", 0.40, ttl_seconds=600) is None
+        result = (0.5, "x", "yes", "small")
+        store("SOURCE: Reuters\nSUMMARY: one", result, ttl_seconds=600)
+        assert lookup("SOURCE: Reuters\nSUMMARY: one", ttl_seconds=600) == result
+        assert lookup("SOURCE: AP\nSUMMARY: two", ttl_seconds=600) is None
 
-    def test_different_headline_misses(self):
+    def test_different_prompt_misses(self):
         from analysis.llm_dedup_cache import store, lookup
-        store("A", "m", 0.5, ("r",), ttl_seconds=600)
-        assert lookup("B", "m", 0.5, ttl_seconds=600) is None
+        store("A", ("r",), ttl_seconds=600)
+        assert lookup("B", ttl_seconds=600) is None
 
 
 # ---------------------------------------------------------------------------

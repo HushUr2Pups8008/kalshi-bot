@@ -183,6 +183,29 @@ def _weak_match_penalty_multiplier(flags: set[str]) -> float:
     return 1.0
 
 
+def _combined_token_downweight(
+    overlap: set[str],
+    ticker_prefix: str,
+    weights: dict[str, dict[str, Any]],
+) -> float:
+    """Return composition-aware matcher-feedback multiplier.
+
+    One generic downweighted bridge token should not dominate a larger overlap
+    that also contains full-weight supporting tokens. Missing or malformed
+    entries count as 1.0.
+    """
+    if not overlap or not weights:
+        return 1.0
+    values: list[float] = []
+    for token in overlap:
+        raw = weights.get(f"{ticker_prefix}:{token}", {}).get("weight", 1.0)
+        try:
+            values.append(float(raw))
+        except (TypeError, ValueError):
+            values.append(1.0)
+    return sum(values) / len(values) if values else 1.0
+
+
 def _match_quality_flags(
     *,
     overlap: set[str],
@@ -955,27 +978,17 @@ class MarketMatcher:
             )
             score *= _weak_match_penalty_multiplier(set(structure_flags))
 
-            # PROFIT-MATCH-DYNAMIC commit 4/5: apply per-(token, market_prefix)
-            # downweight from the learning loop. Use the MINIMUM weight across
-            # the overlap tokens — most-penalized token dominates so a single
-            # known-bad bridge token (e.g. 'trump' for non-KXTRUMP* markets)
-            # can suppress an otherwise-acceptable match without us having to
-            # downweight every token individually. Floor at 0.10 preserves
-            # residual signal for legitimate edge cases (see match_feedback.py
-            # for the floor rationale).
+            # PROFIT-MATCH-DYNAMIC: apply per-(token, market_prefix)
+            # downweight from the learning loop. Combine all overlap-token
+            # weights so one generic bridge token does not dominate a stronger
+            # multi-token match that also contains full-weight support.
             if overlap and _token_weights:
                 ticker_prefix = (market.ticker or "").split("-", 1)[0]
-                min_w = min(
-                    (
-                        _token_weights.get(f"{ticker_prefix}:{t}", {}).get("weight", 1.0)
-                        for t in overlap
-                    ),
-                    default=1.0,
+                score *= _combined_token_downweight(
+                    overlap,
+                    ticker_prefix,
+                    _token_weights,
                 )
-                try:
-                    score *= float(min_w)
-                except (TypeError, ValueError):
-                    pass  # corrupted weight value — treat as 1.0, leave score alone
 
             if score < min_score:
                 continue

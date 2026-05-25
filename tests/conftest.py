@@ -199,3 +199,27 @@ def _reset_governance_global_reader():
     original = ro._global_reader
     yield
     ro._global_reader = original
+
+
+@pytest.fixture(autouse=True)
+def _reset_llm_dedup_cache():
+    """Keep the runtime LLM dedup cache from leaking across tests."""
+    from analysis import llm_dedup_cache
+    llm_dedup_cache.clear()
+    yield
+    llm_dedup_cache.clear()
+
+
+@pytest.fixture
+def isolated_match_feedback_weights(monkeypatch):
+    """Neutralize runtime matcher weights for tests that assert base matching.
+
+    Tests that exercise analysis.match_feedback itself should call load_weights
+    directly and must not use this fixture. Matcher and simulation regression
+    tests opt in at module/function scope so aggregator-mutated local state does
+    not change their expected baseline behavior.
+    """
+    monkeypatch.setattr(
+        "analysis.match_feedback.load_weights",
+        lambda *args, **kwargs: {},
+    )

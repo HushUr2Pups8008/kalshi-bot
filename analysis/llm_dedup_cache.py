@@ -6,10 +6,10 @@ market) candidate triggers a full LLM analysis call. With local Ollama qwen3,
 the cost is wallclock latency (~5-30s per call), not money — but the
 duplication saturates the LLM stage and crowds out NEW candidates.
 
-This module provides a tiny in-process cache keyed by
-``hash(headline_text, market_title, market_yes_price_bucket)`` with a
-TTL window. Cache hits return the previously-computed
-``(prob, confidence, reasoning, direction, magnitude)`` tuple.
+This module provides a tiny in-process cache keyed by the exact prompt text
+sent to the LLM. Cache hits return the previously-computed LLM verdict fields
+``(confidence, reasoning, direction, magnitude)``; callers recompute final
+probability against the current market price.
 
 Distinct from the replay-CI cache at ``scripts/edge_replay/llm_cache.py``
 (that one's purpose is deterministic replay; this one is wallclock
@@ -17,9 +17,12 @@ deduplication at the runtime path).
 
 Scope guardrails:
 
-  - Bucket ``market_yes_price`` into 5pp buckets to keep the cache useful
-    when the market price drifts a cent or two between near-duplicate
-    headlines. A 5pp move is a material market shift; cache miss is correct.
+  - Key from the full prompt, not only headline/title. Source, body summary,
+    market resolution, and close time are prompt inputs and must affect cache
+    identity.
+  - Do not key on market price. The runtime prompt intentionally excludes
+    current price; callers cache verdict fields and recompute final probability
+    against the current market quote.
   - TTL governed by ``cfg.llm_dedup_cache_ttl_seconds`` (default 900s = 15
     min). Set to 0 to disable the cache entirely.
   - In-process dict; not persisted across restarts. New cache on each boot.
@@ -41,29 +44,16 @@ _cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
 
 
 def _content_hash(
-    headline: str | None,
-    market_title: str | None,
-    market_yes_price: float | None,
+    prompt_text: str | None,
 ) -> str:
-    """Stable cache key from the inputs that determine the LLM verdict.
-
-    Bucket ``market_yes_price`` to 5pp so near-duplicate price quotes
-    (e.g. 8¢ vs 9¢) hit the same cache entry. >5pp move = cache miss.
-    """
+    """Stable cache key from the exact LLM prompt text."""
     h = hashlib.sha256()
-    h.update((headline or "").strip().lower().encode("utf-8", errors="ignore"))
-    h.update(b"\x00")
-    h.update((market_title or "").strip().lower().encode("utf-8", errors="ignore"))
-    h.update(b"\x00")
-    bucket = round(float(market_yes_price or 0.0) * 20) / 20  # 5pp bucketing
-    h.update(f"{bucket:.2f}".encode("ascii"))
+    h.update((prompt_text or "").strip().encode("utf-8", errors="ignore"))
     return h.hexdigest()
 
 
 def lookup(
-    headline: str | None,
-    market_title: str | None,
-    market_yes_price: float | None,
+    prompt_text: str | None,
     *,
     ttl_seconds: int,
     now_monotonic: Optional[float] = None,
@@ -76,7 +66,7 @@ def lookup(
         return None
     if now_monotonic is None:
         now_monotonic = time.monotonic()
-    key = _content_hash(headline, market_title, market_yes_price)
+    key = _content_hash(prompt_text)
     entry = _cache.get(key)
     if entry is None:
         return None
@@ -91,9 +81,7 @@ def lookup(
 
 
 def store(
-    headline: str | None,
-    market_title: str | None,
-    market_yes_price: float | None,
+    prompt_text: str | None,
     result: Any,
     *,
     ttl_seconds: int,
@@ -104,7 +92,7 @@ def store(
         return
     if now_monotonic is None:
         now_monotonic = time.monotonic()
-    key = _content_hash(headline, market_title, market_yes_price)
+    key = _content_hash(prompt_text)
     _cache[key] = (result, now_monotonic)
     _cache.move_to_end(key)
     # Bounded eviction

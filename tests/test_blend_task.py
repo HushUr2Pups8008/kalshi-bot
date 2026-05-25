@@ -56,6 +56,8 @@ class SpyLogger:
     def __init__(self) -> None:
         self.records: list[dict] = []
         self.skipped_records: list[dict] = []
+        self.gate_summary_records: list[dict] = []
+        self.lane_skipped_records: list[dict] = []
 
     def log_blend_decision(self, **kwargs) -> None:
         self.records.append(kwargs)
@@ -63,6 +65,12 @@ class SpyLogger:
     def log_skipped(self, **kwargs) -> None:
         # Captures BlendTask-emitted SKIPPED records per PROFIT-OBS-003 (post-soak).
         self.skipped_records.append(kwargs)
+
+    def log_gate_summary(self, **kwargs) -> None:
+        self.gate_summary_records.append(kwargs)
+
+    def log_lane_skipped(self, **kwargs) -> None:
+        self.lane_skipped_records.append(kwargs)
 
 
 class FailingQueue(asyncio.Queue):
@@ -255,6 +263,62 @@ async def test_missing_slow_lane_context_uses_fast_lane_exemptions():
     assert logger.records[0]["accumulation_p"] is None
     assert logger.records[0]["structural_p"] is None
     assert logger.records[0]["evidence_ids_contributing"] == []
+
+
+@pytest.mark.asyncio
+async def test_lane_skip_flag_emits_no_data_lane_events(monkeypatch):
+    monkeypatch.setattr(cfg, "enable_lane_skip_when_no_data", True)
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(_analysis())
+
+    assert result.ready is True
+    assert logger.lane_skipped_records == [
+        {
+            "market_ticker": "KXBLEND-1",
+            "lane_id": "accumulation",
+            "reason": "no_dossier_estimate",
+        },
+        {
+            "market_ticker": "KXBLEND-1",
+            "lane_id": "structural",
+            "reason": "no_structural_prior",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_readiness_gate_summary_logs_g4_as_binding_constraint():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    market = _market(regime_weights={
+        "fast": 1 / 3,
+        "interpretation": 1 / 3,
+        "structural": 1 / 3,
+    })
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(_analysis(market=market))
+
+    assert result.ready is False
+    assert logger.gate_summary_records
+    summary = logger.gate_summary_records[0]
+    assert summary["market_prefix"] == "KXBLEND"
+    assert summary["binding_constraint"] == "G4_regime_low"
+    assert summary["g4_threshold"] == pytest.approx(0.20)
+    assert any("G4" in item for item in summary["gate_chain"])
 
 
 @pytest.mark.asyncio

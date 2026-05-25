@@ -21,6 +21,32 @@ request-vs-response status contract that the P-7 author misread.
 
 ## [0.32.2] - 2026-05-25
 
+### Changed — Codex independent-review corrections
+
+- **PROFIT-ALIGN-003 — Floor-clamp sizing detector now proves raw
+  boundary crossing.** `_is_floor_clamp_suspected` reconstructs the
+  pre-clamp probability from market price, LLM direction, magnitude, and
+  confidence before applying the Kelly multiplier. Exact final
+  `0.05` / `0.95` alone no longer triggers halving.
+- **PROFIT-ALIGN-010 — LLM dedup cache now keys on full prompt and
+  caches verdict fields only.** Source, body summary, market resolution,
+  and close time affect cache identity. Cache hits recompute final
+  probability against the current market price instead of replaying an
+  old final probability.
+- **PROFIT-MATCH-DYNAMIC — audit seeds downgraded from pinned to
+  provisional and matcher downweights now compose across overlap
+  tokens.** The 11-call audit remains a cold-start hint, not a permanent
+  operator override. One generic bridge token no longer min-dominates a
+  stronger multi-token match.
+- **PROFIT-ALIGN scaffold cleanup.** Position-drift logging now reads
+  `cfg.position_drift_alert_threshold`; BlendTask emits `LANE_SKIPPED`
+  when opt-in no-data lane skipping is enabled; readiness evaluation now
+  emits `GATE_SUMMARY` with explicit G4/G1 binding context.
+- **Test isolation cleanup.** Runtime LLM dedup cache reset moved to
+  `tests/conftest.py`; matcher/simulation tests opt into a shared
+  `isolated_match_feedback_weights` fixture instead of ad-hoc
+  monkeypatches.
+
 ### Added — PROFIT-ALIGN deferred-items minimum-viable surfaces
 
 Per stop-hook directive to satisfy "comprehensive fixes for each
@@ -43,8 +69,9 @@ calibration is intentionally deferred to a future PR.
 - **PROFIT-ALIGN-007 (item 5) — Position-drift observability surface.**
   New `cfg.position_drift_alert_threshold` (default 0.15; env
   override `POSITION_DRIFT_ALERT_THRESHOLD`) defines when the
-  already-shipped `log_position_drift` event fires. Pure
-  observability; real auto-exit logic deferred until
+  already-shipped `log_position_drift` event fires. Wired into the
+  open-position price-update loop. Pure observability; real auto-exit
+  logic deferred until
   CALIBRATION_OBSERVATION evidence informs the drift-vs-resolution
   trade-off.
 
@@ -54,7 +81,7 @@ calibration is intentionally deferred to a future PR.
   / G1_fail_safe / passed) rather than the misleading "G1 first"
   reporting documented in CLAUDE.md. Operators reading SKIPPED logs
   no longer have to mentally translate G1-displayed-but-G4-caused
-  fail-safe states.
+  fail-safe states. Wired from BlendTask readiness evaluation.
 
 - **PROFIT-ALIGN-009 (item 9) — Derived series-prior helper (opt-in).**
   New `analysis.regime_classifier._derive_series_prior_from_metadata`:
@@ -67,12 +94,13 @@ calibration is intentionally deferred to a future PR.
 
 - **PROFIT-ALIGN-010 (item 10) — LLM content-hash dedup cache.**
   New `analysis/llm_dedup_cache.py`: in-process OrderedDict keyed by
-  `sha256(headline, market_title, market_yes_price_bucket_5pp)`,
+  `sha256(full_prompt_text)`,
   TTL-governed by `cfg.llm_dedup_cache_ttl_seconds` (default 900s =
   15 min; set to 0 to disable). Hooked into
   `analysis/signal_analyzer.estimate_probability` to skip the LLM
-  call on cache-hits and emit `status="llm_dedup_cache_hit"` meta
-  for observability. Distinct from the replay-CI cache at
+  call on cache-hits, recompute final probability from cached verdict
+  fields, and emit `status="llm_dedup_cache_hit"` meta for
+  observability. Distinct from the replay-CI cache at
   `scripts/edge_replay/llm_cache.py` (deterministic-replay only).
 
 - **PROFIT-ALIGN-011 (item 11) — Magnitude shift constants → cfg.**
