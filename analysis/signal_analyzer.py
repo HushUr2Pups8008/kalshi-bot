@@ -1394,6 +1394,50 @@ async def estimate_probability(
             **pre_llm_fields,
         )
         await write_trade_log_async(trade_log.log_signal_analysis_detail, detail)
+
+        # PROFIT-MATCH-DYNAMIC (commit 2/5): emit per-call feedback signal
+        # for the matcher learning loop. Inference rules:
+        #   - direction in {yes, no}                      → true_positive
+        #   - dir=neutral + mag=none + confidence >= 0.7  → false_positive_neutral
+        #   - otherwise (low-confidence neutral)          → undetermined, skip
+        # Aggregator (see scripts/match_feedback_aggregator.py) rolls these
+        # into per-(token × market_prefix) FP counters that feed the runtime
+        # downweight list at data/matcher_token_weights.json.
+        verdict = None
+        if llm_direction in ("yes", "no"):
+            verdict = "true_positive"
+        elif (
+            llm_direction == "neutral"
+            and llm_magnitude == "none"
+            and llm_confidence is not None
+            and float(llm_confidence) >= 0.7
+        ):
+            verdict = "false_positive_neutral"
+        if verdict:
+            try:
+                from analysis.market_matcher import _tokenize as _matcher_tokenize
+                overlap_tokens = sorted(
+                    _matcher_tokenize(market.title or "")
+                    & _matcher_tokenize(news.headline or "")
+                )
+            except Exception:
+                overlap_tokens = []
+            ticker_prefix = (market.ticker or "").split("-", 1)[0]
+            await write_trade_log_async(
+                trade_log.log_match_llm_review,
+                ticker=market.ticker,
+                market_title=market.title or "",
+                market_prefix=ticker_prefix,
+                headline=news.headline or "",
+                source=news.source or "",
+                matched_tokens=overlap_tokens,
+                llm_relevant=(verdict != "false_positive_neutral"),
+                llm_direction=llm_direction,
+                llm_magnitude=llm_magnitude,
+                llm_confidence=float(llm_confidence) if llm_confidence is not None else 0.0,
+                verdict=verdict,
+            )
+
         return llm_prob, llm_confidence, keywords, reasoning, llm_direction, llm_magnitude, llm_confidence
 
     if not keywords:

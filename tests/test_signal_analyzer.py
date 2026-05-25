@@ -1802,3 +1802,95 @@ class TestOllamaPost:
         text, early_meta, _rt, _status = await _ollama_post({}, "PROMPT", time.monotonic())
         assert text is None
         assert early_meta["status"] == "ollama_malformed_response"
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-MATCH-DYNAMIC (commit 2/5) — MATCH_LLM_REVIEW emission verdict logic
+# ---------------------------------------------------------------------------
+
+class TestMatchLlmReviewVerdict:
+    """Pins the verdict-inference rules used by signal_analyzer to classify
+    each LLM result as true_positive / false_positive_neutral / undetermined.
+    Encoded inline at signal_analyzer.py (call site of log_match_llm_review).
+    Mirrored here as a pure function so the boundary is testable.
+    """
+
+    @staticmethod
+    def _classify(direction: str, magnitude: str, confidence: float | None) -> str | None:
+        if direction in ("yes", "no"):
+            return "true_positive"
+        if (direction == "neutral"
+                and magnitude == "none"
+                and confidence is not None
+                and float(confidence) >= 0.7):
+            return "false_positive_neutral"
+        return None
+
+    def test_directional_yes_is_true_positive(self):
+        assert self._classify("yes", "small", 0.85) == "true_positive"
+
+    def test_directional_no_is_true_positive(self):
+        assert self._classify("no", "moderate", 0.95) == "true_positive"
+
+    def test_directional_low_confidence_still_true_positive(self):
+        # If LLM commits to a side at all, matcher gets a "match was useful"
+        # signal even at low confidence. Don't punish the matcher for LLM
+        # uncertainty when the match itself was topic-correct.
+        assert self._classify("yes", "small", 0.3) == "true_positive"
+
+    def test_confident_neutral_none_is_false_positive(self):
+        """Per PROFIT-MATCH-DYNAMIC commit 2/5: confident neutral + none is
+        the LLM saying 'this match was topic-wrong'. Penalize the matcher."""
+        assert self._classify("neutral", "none", 0.85) == "false_positive_neutral"
+        assert self._classify("neutral", "none", 0.7) == "false_positive_neutral"
+        assert self._classify("neutral", "none", 0.95) == "false_positive_neutral"
+
+    def test_low_confidence_neutral_is_undetermined(self):
+        """Below 0.7 confidence on neutral, we don't know if the match was
+        bad or if the LLM was uncertain. Skip the feedback signal — don't
+        punish the matcher for LLM low confidence."""
+        assert self._classify("neutral", "none", 0.55) is None
+        assert self._classify("neutral", "none", 0.3) is None
+
+    def test_neutral_with_magnitude_is_undetermined(self):
+        """Neutral direction but non-none magnitude is an LLM inconsistency
+        (caught separately by Phase B PROFIT-LLM-002 bump). Don't feed the
+        matcher loop here — different signal."""
+        assert self._classify("neutral", "small", 0.95) is None
+
+
+class TestLogMatchLlmReview:
+    """Schema pin for the trade_log.log_match_llm_review writer."""
+
+    def test_log_match_llm_review_writes_expected_keys(self, tmp_path, monkeypatch):
+        # Redirect log root so we don't pollute prod logs
+        monkeypatch.setenv("KALSHI_LOG_ROOT", str(tmp_path))
+        # Force fresh logger import bound to the new root
+        import importlib, utils.logger as logger_mod
+        importlib.reload(logger_mod)
+        tl = logger_mod.TradeLogger(tmp_path / "trades.jsonl")
+        tl.log_match_llm_review(
+            ticker="KXCABLEAVE-26MAY22-26JUN",
+            market_title="Will any member of Trump's Cabinet leave before Jun 2026?",
+            market_prefix="KXCABLEAVE",
+            headline="LIVE: Trump says Iran deal not 'fully negotiated yet'",
+            source="Some Outlet",
+            matched_tokens=["trump"],
+            llm_relevant=False,
+            llm_direction="neutral",
+            llm_magnitude="none",
+            llm_confidence=0.85,
+            verdict="false_positive_neutral",
+        )
+        # Read back
+        import json
+        path = tmp_path / "trades.jsonl"
+        line = path.read_text(encoding="utf-8").strip().splitlines()[-1]
+        rec = json.loads(line)
+        assert rec["type"] == "MATCH_LLM_REVIEW"
+        assert rec["ticker"] == "KXCABLEAVE-26MAY22-26JUN"
+        assert rec["market_prefix"] == "KXCABLEAVE"
+        assert rec["matched_tokens"] == ["trump"]
+        assert rec["verdict"] == "false_positive_neutral"
+        assert rec["llm_confidence"] == 0.85
+        assert rec["llm_relevant"] is False
