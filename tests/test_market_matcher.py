@@ -49,6 +49,22 @@ class TestTokenize:
     def test_returns_set(self):
         assert isinstance(_tokenize("foo bar baz"), set)
 
+    def test_any_filtered_per_profit_match_dynamic(self):
+        """PROFIT-MATCH-DYNAMIC (2026-05-24): 'any' was bridging KXCABLEAVE
+        (market title "Will ANY member of Trump's Cabinet leave...") to every
+        Trump-mentioning headline via [any, trump] overlap. Pin both the
+        bare form and its variants."""
+        for s in ("any", "anyone", "anything"):
+            assert s not in _tokenize(f"Will {s} of them leave")
+        # Sanity: KXCABLEAVE-style market title no longer carries 'any'
+        title_tokens = _tokenize("Will any member of Trump's Cabinet leave before Jun 2026")
+        assert "any" not in title_tokens, (
+            "'any' must be filtered from market-title tokenization. "
+            "Regression re-enables the KXCABLEAVE false-match bridge."
+        )
+        assert "trump" in title_tokens  # legit named entity stays
+        assert "cabinet" in title_tokens  # topic token stays
+
 
 # ---------------------------------------------------------------------------
 # _similarity (Jaccard)

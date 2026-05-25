@@ -44,6 +44,12 @@ _STOP_WORDS = {
     "at", "by", "for", "with", "from", "and", "or", "but", "not", "no",
     "this", "that", "it", "its", "their", "there", "if", "as", "about",
     "after", "before", "than", "when", "who", "which", "what", "how",
+    # PROFIT-MATCH-DYNAMIC (2026-05-24): universal quantifier escaped previous
+    # filtering. Market titles like "Will ANY member of Trump's Cabinet leave"
+    # tokenized "any" as content, then matched the headline's "any" — bridging
+    # KXCABLEAVE to any Trump-mentioning headline via [any, trump]. Filter
+    # both forms.
+    "any", "anyone", "anything",
     # Sports betting noise words — prevent "Over 224.5" matching "war is over"
     "over", "under", "yes", "no", "scored", "points", "goals", "rebounds",
     "assists", "win", "wins", "loss", "losses", "vs", "per", "total",
