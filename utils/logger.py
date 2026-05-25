@@ -1170,6 +1170,49 @@ class TradeLogger:
             record["matched_tokens"] = matched_tokens
         self._write(record)
 
+    def log_match_llm_review(
+        self,
+        *,
+        ticker: str,
+        market_title: str,
+        market_prefix: str,
+        headline: str,
+        source: str,
+        matched_tokens: list[str],
+        llm_relevant: bool,
+        llm_direction: str,
+        llm_magnitude: str,
+        llm_confidence: float,
+        verdict: str,
+    ) -> None:
+        """PROFIT-MATCH-DYNAMIC (2026-05-24): per-LLM-call feedback signal.
+
+        Emitted ONCE per signal-analyzer LLM call after parse, regardless of
+        verdict. Downstream aggregator (`scripts/match_feedback_aggregator.py`)
+        rolls these into per-(token × market_prefix) FP-rate counters that
+        feed the runtime downweight list at `data/matcher_token_weights.json`.
+
+        `verdict` is one of:
+          - "false_positive_relevance"  — LLM said relevant=False
+          - "false_positive_neutral"    — relevant=True but dir=neutral + mag=none
+                                          + conf>=0.7 (LLM judged not actionable)
+          - "true_positive"             — relevant=True with directional signal
+        """
+        self._write({
+            "type": "MATCH_LLM_REVIEW",
+            "ticker": ticker,
+            "market_title": market_title[:200],
+            "market_prefix": market_prefix,
+            "headline": headline[:200],
+            "source": source,
+            "matched_tokens": matched_tokens,
+            "llm_relevant": llm_relevant,
+            "llm_direction": llm_direction,
+            "llm_magnitude": llm_magnitude,
+            "llm_confidence": round(float(llm_confidence), 4),
+            "verdict": verdict,
+        })
+
     def log_position_drift(
         self,
         *,

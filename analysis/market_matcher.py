@@ -44,6 +44,12 @@ _STOP_WORDS = {
     "at", "by", "for", "with", "from", "and", "or", "but", "not", "no",
     "this", "that", "it", "its", "their", "there", "if", "as", "about",
     "after", "before", "than", "when", "who", "which", "what", "how",
+    # PROFIT-MATCH-DYNAMIC (2026-05-24): universal quantifier escaped previous
+    # filtering. Market titles like "Will ANY member of Trump's Cabinet leave"
+    # tokenized "any" as content, then matched the headline's "any" — bridging
+    # KXCABLEAVE to any Trump-mentioning headline via [any, trump]. Filter
+    # both forms.
+    "any", "anyone", "anything",
     # Sports betting noise words — prevent "Over 224.5" matching "war is over"
     "over", "under", "yes", "no", "scored", "points", "goals", "rebounds",
     "assists", "win", "wins", "loss", "losses", "vs", "per", "total",
@@ -890,6 +896,15 @@ class MarketMatcher:
         min_score    = PAPER_MIN_MATCH_SCORE if is_paper else LIVE_MIN_MATCH_SCORE
         max_results  = max_results or (PAPER_MAX_CANDIDATES if is_paper else LIVE_MAX_CANDIDATES)
 
+        # PROFIT-MATCH-DYNAMIC commit 4/5: load per-(token, market_prefix)
+        # downweights once per find_candidates call. Re-read on every call to
+        # pick up aggregator updates without a process restart. JSON parse is
+        # microsecond-scale; weights file is small (one row per token×prefix
+        # that has crossed MIN_TOTAL_FOR_DOWNWEIGHT). Returns {} if file
+        # absent (cold-start / first-time install).
+        from analysis.match_feedback import load_weights as _load_match_weights
+        _token_weights = _load_match_weights()
+
         news_tokens = _tokenize(f"{news.headline} {news.body}")
         markets     = await self._cache.get_markets()
 
@@ -939,6 +954,29 @@ class MarketMatcher:
                 market_title_meaningful=meaningful_mt,
             )
             score *= _weak_match_penalty_multiplier(set(structure_flags))
+
+            # PROFIT-MATCH-DYNAMIC commit 4/5: apply per-(token, market_prefix)
+            # downweight from the learning loop. Use the MINIMUM weight across
+            # the overlap tokens — most-penalized token dominates so a single
+            # known-bad bridge token (e.g. 'trump' for non-KXTRUMP* markets)
+            # can suppress an otherwise-acceptable match without us having to
+            # downweight every token individually. Floor at 0.10 preserves
+            # residual signal for legitimate edge cases (see match_feedback.py
+            # for the floor rationale).
+            if overlap and _token_weights:
+                ticker_prefix = (market.ticker or "").split("-", 1)[0]
+                min_w = min(
+                    (
+                        _token_weights.get(f"{ticker_prefix}:{t}", {}).get("weight", 1.0)
+                        for t in overlap
+                    ),
+                    default=1.0,
+                )
+                try:
+                    score *= float(min_w)
+                except (TypeError, ValueError):
+                    pass  # corrupted weight value — treat as 1.0, leave score alone
+
             if score < min_score:
                 continue
 

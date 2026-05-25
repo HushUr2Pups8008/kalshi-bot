@@ -49,6 +49,22 @@ class TestTokenize:
     def test_returns_set(self):
         assert isinstance(_tokenize("foo bar baz"), set)
 
+    def test_any_filtered_per_profit_match_dynamic(self):
+        """PROFIT-MATCH-DYNAMIC (2026-05-24): 'any' was bridging KXCABLEAVE
+        (market title "Will ANY member of Trump's Cabinet leave...") to every
+        Trump-mentioning headline via [any, trump] overlap. Pin both the
+        bare form and its variants."""
+        for s in ("any", "anyone", "anything"):
+            assert s not in _tokenize(f"Will {s} of them leave")
+        # Sanity: KXCABLEAVE-style market title no longer carries 'any'
+        title_tokens = _tokenize("Will any member of Trump's Cabinet leave before Jun 2026")
+        assert "any" not in title_tokens, (
+            "'any' must be filtered from market-title tokenization. "
+            "Regression re-enables the KXCABLEAVE false-match bridge."
+        )
+        assert "trump" in title_tokens  # legit named entity stays
+        assert "cabinet" in title_tokens  # topic token stays
+
 
 # ---------------------------------------------------------------------------
 # _similarity (Jaccard)
@@ -1181,3 +1197,69 @@ class TestExpectedPolicyFamilyCoverage:
             "back-compat: without per_series_counts the helper must warn "
             "on any catalog-but-missing family (preserves PR #33 behavior)"
         )
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-MATCH-DYNAMIC (commit 4/5) — matcher applies per-token downweights
+# ---------------------------------------------------------------------------
+
+class TestMatcherDownweightApplication:
+    """Pins the downweight integration math in find_candidates.
+
+    The integration is: after _weak_match_penalty_multiplier, multiply the
+    score by min(weight for token in overlap) where weights come from
+    analysis.match_feedback.load_weights().
+
+    Full find_candidates integration test is too heavy (KalshiRestClient +
+    MarketCache mocks). This pins the formula directly so future refactors
+    catch the regression.
+    """
+
+    @staticmethod
+    def _apply_downweight(score: float, overlap: set[str], prefix: str,
+                          weights: dict) -> float:
+        if overlap and weights:
+            min_w = min(
+                (weights.get(f"{prefix}:{t}", {}).get("weight", 1.0) for t in overlap),
+                default=1.0,
+            )
+            try:
+                score *= float(min_w)
+            except (TypeError, ValueError):
+                pass
+        return score
+
+    def test_no_weights_no_change(self):
+        s = self._apply_downweight(0.50, {"trump", "iran"}, "KXTRUMPIRAN", {})
+        assert s == 0.50
+
+    def test_single_downweighted_token_drops_score(self):
+        weights = {"KXCABLEAVE:trump": {"weight": 0.10}}
+        s = self._apply_downweight(0.50, {"trump"}, "KXCABLEAVE", weights)
+        assert s == pytest.approx(0.05)
+
+    def test_min_weight_dominates_when_multiple_tokens(self):
+        # Two tokens: one downweighted to 0.10, one full weight.
+        # min wins → 0.10 multiplier.
+        weights = {"KXNEWDEAL:deal": {"weight": 0.30}}
+        s = self._apply_downweight(0.50, {"deal", "trump"}, "KXNEWDEAL", weights)
+        assert s == pytest.approx(0.15)  # 0.50 × 0.30
+
+    def test_legitimate_market_prefix_unaffected(self):
+        """'trump' is downweighted for KXCABLEAVE but full weight for
+        KXTRUMPIRAN. Per-prefix targeting prevents the false-trade-off."""
+        weights = {"KXCABLEAVE:trump": {"weight": 0.10}}
+        s_legit = self._apply_downweight(0.50, {"trump"}, "KXTRUMPIRAN", weights)
+        s_bad = self._apply_downweight(0.50, {"trump"}, "KXCABLEAVE", weights)
+        assert s_legit == 0.50  # KXTRUMPIRAN unaffected
+        assert s_bad == pytest.approx(0.05)  # KXCABLEAVE penalized
+
+    def test_corrupted_weight_value_leaves_score_alone(self):
+        weights = {"KX:t": {"weight": "not a float"}}
+        s = self._apply_downweight(0.50, {"t"}, "KX", weights)
+        assert s == 0.50  # falls back gracefully
+
+    def test_unknown_token_default_weight_one(self):
+        weights = {"KX:other": {"weight": 0.10}}
+        s = self._apply_downweight(0.50, {"unknown"}, "KX", weights)
+        assert s == 0.50  # 'unknown' not in weights → default 1.0
