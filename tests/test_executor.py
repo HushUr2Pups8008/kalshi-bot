@@ -1190,3 +1190,80 @@ class TestCooldownSentinelOBS005:
             f"conftest.py still zeroes cooldowns ({bad}); spec §7 requires removing "
             "these stubs once the executor sentinel fix lands."
         )
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-ALIGN-004 (2026-05-25) — per-prefix open-position cap
+# ---------------------------------------------------------------------------
+
+class TestPerPrefixPositionCap:
+    """Pins the cfg.max_open_positions_per_prefix gate in _validate.
+
+    The matcher can produce multiple outcome-contract candidates in the same
+    series (e.g. KXTXRUNOFFENDORSE-DJT-BOTH / -KPAX / -JCOR). Without this
+    cap, one news event could open N concurrent bets against the same
+    underlying topic.
+    """
+
+    def _setup(self, monkeypatch, *, open_in_prefix=None, cap=2):
+        # Paper-mode executor — avoid live-only balance gates in _validate.
+        # Mirrors the pattern used by test_paper_cooldown_skips.
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "max_open_positions_per_prefix", cap)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_ticker_cooldown", 0)
+        monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
+        rest = MagicMock()
+        paper = MagicMock()
+        paper.get_notional_bankroll.return_value = 500.0
+        paper.portfolio.open_positions.return_value = []
+        paper.portfolio.is_concentration_ok.return_value = True
+        paper.portfolio.exposure.return_value = 0.0
+        paper.portfolio.open_positions_by_prefix = MagicMock(return_value=open_in_prefix or [])
+        ex = TradeExecutor(rest, paper)
+        return ex, paper
+
+    def test_below_cap_passes(self, monkeypatch):
+        ex, paper = self._setup(monkeypatch, open_in_prefix=[], cap=2)
+        a = _make_analysis(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH",
+                           side="yes", yes_price=50.0, edge=0.10)
+        reason = ex._validate(a)
+        assert reason is None or "per-prefix cap" not in (reason or ""), (
+            f"empty prefix should not trigger cap; got: {reason}"
+        )
+
+    def test_at_cap_blocks(self, monkeypatch):
+        # 2 already open in KXTXRUNOFFENDORSE prefix
+        existing = [
+            SimpleNamespace(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH"),
+            SimpleNamespace(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-KPAX"),
+        ]
+        ex, paper = self._setup(monkeypatch, open_in_prefix=existing, cap=2)
+        a = _make_analysis(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-JCOR",
+                           side="yes", yes_price=50.0, edge=0.10)
+        reason = ex._validate(a)
+        assert reason is not None
+        assert "per-prefix cap" in reason
+        assert "KXTXRUNOFFENDORSE" in reason
+
+    def test_different_prefix_unaffected(self, monkeypatch):
+        # 2 open in KXTRUMPIRAN, but trade is on KXTXRUNOFFENDORSE
+        existing = [
+            SimpleNamespace(ticker="KXTRUMPIRAN-26JUN01"),
+            SimpleNamespace(ticker="KXTRUMPIRAN-26JUL01"),
+        ]
+        ex, paper = self._setup(monkeypatch, open_in_prefix=[], cap=2)
+        # _setup wired open_positions_by_prefix to return [] regardless
+        # of args; we want to assert different-prefix lookup returns 0
+        paper.portfolio.open_positions_by_prefix = MagicMock(side_effect=lambda pfx: existing if pfx == "KXTRUMPIRAN" else [])
+        a = _make_analysis(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH",
+                           side="yes", yes_price=50.0, edge=0.10)
+        reason = ex._validate(a)
+        assert reason is None or "per-prefix cap" not in (reason or "")
+
+    def test_cap_disabled_when_zero(self, monkeypatch):
+        # cfg.max_open_positions_per_prefix = 0 → cap disabled even with N open
+        existing = [SimpleNamespace(ticker="KX-A"), SimpleNamespace(ticker="KX-B")]
+        ex, paper = self._setup(monkeypatch, open_in_prefix=existing, cap=0)
+        a = _make_analysis(ticker="KX-C", side="yes", yes_price=50.0, edge=0.10)
+        reason = ex._validate(a)
+        assert reason is None or "per-prefix cap" not in (reason or "")

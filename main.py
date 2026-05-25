@@ -140,6 +140,44 @@ def _source_priority(source: str) -> int:
     return 2
 
 
+def _is_floor_clamp_suspected(
+    llm_direction: str | None,
+    llm_magnitude: str | None,
+    estimated_probability: float,
+) -> bool:
+    """PROFIT-ALIGN-003 (2026-05-25): heuristic detector for floor-clamp.
+
+    `analysis/signal_analyzer._parse_llm_response` clamps the estimated
+    probability at 0.05 (NO-side) / 0.95 (YES-side). When that clamp fires,
+    the LLM wanted to push further but the floor caught it — meaning our
+    true certainty about the exact prob is fuzzy. The 2026-05-25 trade audit
+    (KXUSAIRANAGREEMENT-27-26JUN) found bot estimated prob=0.05 against
+    market 0.08 (3pp edge) but the underlying LLM shift was 6.8pp,
+    clamped to 3pp. The bot's edge math then anchors against the floor,
+    manufacturing edge that isn't robustly supported.
+
+    Returns True when the floor was likely hit:
+      - LLM emitted a directional read (direction in {yes, no})
+      - LLM magnitude was non-trivial (not None / "none")
+      - final estimated_probability is exactly 0.05 or 0.95 (within tolerance)
+
+    Heuristic: rare organic coincidences at exactly 0.05/0.95 will be
+    over-halved, which is acceptably conservative.
+
+    Caller (main.py SignalAnalysis builder) multiplies kelly/capped dollars
+    by cfg.floor_clamp_kelly_multiplier (default 0.5) when this is True.
+    """
+    EPS = 1e-6
+    if llm_direction not in ("yes", "no"):
+        return False
+    if llm_magnitude is None or llm_magnitude == "none":
+        return False
+    return (
+        abs(estimated_probability - 0.05) < EPS
+        or abs(estimated_probability - 0.95) < EPS
+    )
+
+
 def _early_max_news_age_seconds_for_source(source: str) -> int:
     """Return the freshness threshold (seconds) for a source.
 
@@ -990,6 +1028,25 @@ class TradingBot:
             time_discount_half_life=cfg.time_discount_half_life,
             time_discount_floor=cfg.time_discount_floor,
         )
+
+        # PROFIT-ALIGN-003 (2026-05-25): floor-clamp Kelly halving.
+        # See _is_floor_clamp_suspected() for the full rationale + audit
+        # context. Mitigation: when clamp is suspected, multiply the Kelly
+        # stake by cfg.floor_clamp_kelly_multiplier (default 0.5).
+        # Conservative; affects only clamped trades.
+        if (
+            _is_floor_clamp_suspected(llm_dir, llm_mag, estimated_prob)
+            and cfg.floor_clamp_kelly_multiplier < 1.0
+        ):
+            _pre = capped_dollars
+            kelly_dollars *= cfg.floor_clamp_kelly_multiplier
+            capped_dollars *= cfg.floor_clamp_kelly_multiplier
+            log.debug(
+                "[KELLY] floor_clamp_halved ticker=%s side=%s "
+                "est_prob=%.4f mult=%.2f capped=$%.2f→$%.2f",
+                market.ticker, side, estimated_prob,
+                cfg.floor_clamp_kelly_multiplier, _pre, capped_dollars,
+            )
 
         log.debug(
             "[ANALYSIS] decision_input ticker=%s source=%s side=%s edge=%+.4f "

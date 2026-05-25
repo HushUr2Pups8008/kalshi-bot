@@ -233,6 +233,26 @@ class TradeExecutor:
                     f"(cooldown={cfg.paper_ticker_cooldown//3600}h)"
                 )
 
+        # PROFIT-ALIGN-004 (2026-05-25): per-market-prefix open-position cap.
+        # The matcher can produce multiple outcome-contract matches in the same
+        # series (e.g. KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH / -KPAX / -JCOR all
+        # share the KXTXRUNOFFENDORSE prefix). Same-signal-guard catches the
+        # exact-ticker case but not the multi-outcome case. Without this cap,
+        # one piece of news can cause N concurrent bets against the same
+        # underlying topic; if the bot's read is wrong, losses compound.
+        # cfg.max_open_positions_per_prefix (default 2) gates the Nth open.
+        if cfg.max_open_positions_per_prefix > 0:
+            prefix = (analysis.market.ticker or "").split("-", 1)[0]
+            if prefix:
+                open_in_prefix = self._paper.portfolio.open_positions_by_prefix(prefix)
+                if len(open_in_prefix) >= cfg.max_open_positions_per_prefix:
+                    open_tickers = sorted({p.ticker for p in open_in_prefix})
+                    return (
+                        f"per-prefix cap: {len(open_in_prefix)} open in {prefix} "
+                        f"(cap={cfg.max_open_positions_per_prefix}, "
+                        f"open={open_tickers})"
+                    )
+
         # Multi-position guard: block opposing trades (no hedges) and duplicate
         # signals (same side, same probability estimate, same market price).
         # Reads from the in-memory Portfolio — no DB query at decision time.

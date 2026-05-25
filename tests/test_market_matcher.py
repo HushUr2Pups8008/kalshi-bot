@@ -801,12 +801,23 @@ class TestLowQualityMatchSuppression:
         assert suppressed_calls == [], "no MATCH_SUPPRESSED for multi-token match"
 
     @pytest.mark.asyncio
-    async def test_suppression_fires_when_only_overlap_token_is_in_ticker(self, matcher):
+    async def test_suppression_fires_when_only_overlap_token_is_in_ticker(self, matcher, monkeypatch):
         """B' suppresses when the only semantic overlap already appears in the ticker.
 
         Real-world case: off-topic 'iran' headline -> KXTRUMPIRAN-26MAY01.
         The ticker token alone is not supporting semantic evidence.
+
+        PROFIT-MATCH-DYNAMIC (2026-05-25) — isolate from the runtime matcher-
+        feedback weights file. The aggregator can auto-detect a downweight
+        on (KXTRUMPIRAN, trump|iran) from production data, which would
+        suppress this match BEFORE the suppression-flags check runs. This
+        test exercises the suppression-flags branch specifically, so the
+        weight downweight must be neutralized.
         """
+        monkeypatch.setattr(
+            "analysis.match_feedback.load_weights",
+            lambda *a, **kw: {},
+        )
         market = _make_market(
             "KXTRUMPIRAN-26MAY01",
             "Will Trump reach an Iran nuclear deal before May 1?",
