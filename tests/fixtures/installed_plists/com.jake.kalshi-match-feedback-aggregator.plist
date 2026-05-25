@@ -16,18 +16,31 @@
     <key>WorkingDirectory</key>
     <string>@REPO_ROOT@</string>
 
-    <!-- PROFIT-MATCH-DYNAMIC commit 5/5: daily aggregator runs at 08:55
-         America/Denver, 5 minutes before daily_review (09:00) so the
-         operator's morning surface includes fresh weights. Like the other
-         non-self-cleaning crons (bothealth, daily-review), this fires
-         forever until removed. -->
+    <!-- PROFIT-MATCH-DYNAMIC commit 5/5: aggregator fires 4×/day on a 6h
+         cadence anchored to 08:55 America/Denver — 5 minutes before
+         daily_review (09:00) so the operator's morning surface includes
+         fresh weights. The other 3 fires (02:55, 14:55, 20:55) capture
+         within-day news-cycle shifts. Like the other non-self-cleaning
+         crons (bothealth, daily-review), this fires forever until removed. -->
     <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>8</integer>
-        <key>Minute</key>
-        <integer>55</integer>
-    </dict>
+    <array>
+        <dict>
+            <key>Hour</key><integer>2</integer>
+            <key>Minute</key><integer>55</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>55</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>14</integer>
+            <key>Minute</key><integer>55</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>20</integer>
+            <key>Minute</key><integer>55</integer>
+        </dict>
+    </array>
 
     <key>RunAtLoad</key>
     <false/>
