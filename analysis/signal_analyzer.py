@@ -749,6 +749,30 @@ def _emit_llm_prompt_response_debug(
     )
 
 
+def _probability_from_llm_verdict(
+    *,
+    market,
+    confidence: float,
+    direction: str,
+    magnitude: str,
+    relevant: bool = True,
+    new_information: bool = True,
+) -> float:
+    """Apply the parsed LLM verdict to the current market price."""
+    if (
+        not relevant
+        or not new_information
+        or direction == "neutral"
+        or magnitude == "none"
+    ):
+        return market.yes_prob
+    base_shift = _magnitude_shift_table().get(magnitude, 0.0)
+    shift = base_shift * confidence
+    if direction == "yes":
+        return min(0.95, market.yes_prob + shift)
+    return max(0.05, market.yes_prob - shift)
+
+
 def _parse_llm_response(parsed: dict, market) -> tuple[float, float, str, str, str]:
     """
     Shared helper: extract (prob, confidence, reasoning, direction, magnitude)
@@ -792,15 +816,14 @@ def _parse_llm_response(parsed: dict, market) -> tuple[float, float, str, str, s
     ):
         magnitude = "small"
 
-    if not relevant or not new_info or direction == "neutral" or magnitude == "none":
-        prob = market.yes_prob
-    else:
-        base_shift = _magnitude_shift_table().get(magnitude, 0.0)
-        shift = base_shift * confidence
-        if direction == "yes":
-            prob = min(0.95, market.yes_prob + shift)
-        else:
-            prob = max(0.05, market.yes_prob - shift)
+    prob = _probability_from_llm_verdict(
+        market=market,
+        confidence=confidence,
+        direction=direction,
+        magnitude=magnitude,
+        relevant=relevant,
+        new_information=new_info,
+    )
 
     return prob, confidence, reasoning, direction, magnitude
 
@@ -1355,22 +1378,29 @@ async def estimate_probability(
         llm_result = None
     else:
         # PROFIT-ALIGN-010 (2026-05-25): runtime LLM dedup cache. Same
-        # headline+market+price-bucket within TTL → reuse prior result,
-        # skip the LLM call. Distinct from the replay-CI llm_cache.sqlite
+        # prompt within TTL → reuse prior LLM verdict fields, skip the LLM
+        # call, then recompute probability against the current market quote.
+        # Distinct from the replay-CI llm_cache.sqlite
         # (deterministic-replay only). See analysis/llm_dedup_cache.py.
         from analysis.llm_dedup_cache import (
             lookup as _llm_dedup_lookup,
             store as _llm_dedup_store,
         )
         _cache_ttl = int(getattr(cfg, "llm_dedup_cache_ttl_seconds", 0))
+        _prompt_text = _build_prompt_text(news, market)
         _cached = _llm_dedup_lookup(
-            headline=getattr(news, "headline", None),
-            market_title=getattr(market, "title", None),
-            market_yes_price=getattr(market, "yes_prob", None),
+            prompt_text=_prompt_text,
             ttl_seconds=_cache_ttl,
         )
         if _cached is not None:
-            llm_result = _cached
+            _confidence, _reasoning, _direction, _magnitude = _cached
+            _prob = _probability_from_llm_verdict(
+                market=market,
+                confidence=float(_confidence),
+                direction=str(_direction),
+                magnitude=str(_magnitude),
+            )
+            llm_result = (_prob, _confidence, _reasoning, _direction, _magnitude)
             llm_meta = _llm_meta(
                 attempted=False,
                 status="llm_dedup_cache_hit",
@@ -1380,11 +1410,10 @@ async def estimate_probability(
         else:
             llm_result, llm_meta = await llm_estimate_detailed(news, market)
             if llm_result is not None:
+                _, _confidence, _reasoning, _direction, _magnitude = llm_result
                 _llm_dedup_store(
-                    headline=getattr(news, "headline", None),
-                    market_title=getattr(market, "title", None),
-                    market_yes_price=getattr(market, "yes_prob", None),
-                    result=llm_result,
+                    prompt_text=_prompt_text,
+                    result=(_confidence, _reasoning, _direction, _magnitude),
                     ttl_seconds=_cache_ttl,
                 )
         _emit_llm_prompt_response_debug(

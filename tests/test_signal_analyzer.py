@@ -415,18 +415,6 @@ class TestKeywordEstimate:
 
 
 class TestEstimateProbability:
-    @pytest.fixture(autouse=True)
-    def _clear_llm_dedup_cache(self):
-        """PROFIT-ALIGN-010 (2026-05-25): the runtime LLM dedup cache is a
-        module-level OrderedDict. Between tests in this class, identical
-        (headline, market_title, market_price_bucket) inputs would otherwise
-        hit cached results from previous tests — breaking the isolation
-        contract that each test mocks its own LLM behavior."""
-        from analysis.llm_dedup_cache import clear
-        clear()
-        yield
-        clear()
-
     @pytest.mark.asyncio
     async def test_no_keyword_headline_can_use_llm_when_available(self, monkeypatch):
         news = _make_news("Quarterly corporate earnings beat expectations")
@@ -481,6 +469,61 @@ class TestEstimateProbability:
         assert detail.llm_probability_movement == pytest.approx(0.14)
         assert detail.llm_useful is True
         assert detail.pre_llm_would_block_and_useful is False
+
+    @pytest.mark.asyncio
+    async def test_llm_dedup_recomputes_probability_for_current_market_price(self, monkeypatch):
+        """Cache the LLM verdict, not the old final probability.
+
+        The prompt no longer includes current price, so a same-prompt cache hit
+        should reuse direction/magnitude/confidence but recompute probability
+        against the current market. Old behavior returned the first final prob.
+        """
+        news = _make_news("Quarterly corporate earnings beat expectations")
+        first_market = _make_full_market(yes_price=51.0)
+        second_market = _make_full_market(yes_price=52.0)
+        calls = 0
+
+        async def _fake_llm(_news, market):
+            nonlocal calls
+            calls += 1
+            return (
+                (market.yes_prob + 0.08, 1.0, "same verdict", "yes", "small"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail"):
+            first = await estimate_probability(news, first_market)
+            second = await estimate_probability(news, second_market)
+
+        assert calls == 1
+        assert first[0] == pytest.approx(0.59)
+        assert second[0] == pytest.approx(0.60)
+
+    @pytest.mark.asyncio
+    async def test_llm_dedup_key_includes_prompt_body_and_source(self, monkeypatch):
+        """Same headline/market with different source/body needs a fresh call."""
+        news_1 = _make_news("Quarterly corporate earnings beat expectations", body="Initial short bulletin")
+        news_2 = _make_news("Quarterly corporate earnings beat expectations", body="Follow-up adds material context")
+        news_2.source = "Associated Press"
+        market = _make_full_market()
+        calls = 0
+
+        async def _fake_llm(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return (
+                (0.58 + calls / 100, 0.9, f"verdict {calls}", "yes", "small"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail"):
+            first = await estimate_probability(news_1, market)
+            second = await estimate_probability(news_2, market)
+
+        assert calls == 2
+        assert first[3] != second[3]
 
     @pytest.mark.asyncio
     async def test_non_probe_llm_call_logs_prompt_and_raw_response_at_debug(self, monkeypatch, caplog):

@@ -32,6 +32,8 @@ from scripts.simulations import (
     trading_queue_handoff,
 )
 
+pytestmark = pytest.mark.usefixtures("isolated_match_feedback_weights")
+
 
 # ── _common --------------------------------------------------------------------
 
@@ -175,23 +177,15 @@ def test_executor_main_runs_clean(capsys):
 
 # ── match_score_audit ----------------------------------------------------------
 
-def test_match_audit_finds_target_ticker_for_each_event(monkeypatch):
+def test_match_audit_finds_target_ticker_for_each_event():
     """A1 acceptance pin: every canonical event surfaces its anchor ticker
     in the top-3 matches at score ≥ PAPER_MIN_MATCH_SCORE. If this fails,
     the matcher's first kill point is silently dropping a real LLM-positive
     signal — file a new debt-log item before changing thresholds.
 
-    PROFIT-MATCH-DYNAMIC (2026-05-25) — isolate from the runtime matcher-
-    feedback weights file: tests must not depend on aggregator-mutated
-    state at `data/matcher_token_weights.json`. The aggregator can
-    auto-detect (token, prefix) downweights from production data
-    (e.g. KXTRUMPIRAN:trump after enough false-positive observations),
-    which legitimately changes matcher behavior at runtime BUT must not
-    leak into this regression test."""
-    monkeypatch.setattr(
-        "analysis.match_feedback.load_weights",
-        lambda *a, **kw: {},
-    )
+    PROFIT-MATCH-DYNAMIC (2026-05-25) — module fixture isolates runtime
+    matcher-feedback weights: tests must not depend on aggregator-mutated
+    state at `data/matcher_token_weights.json`."""
     from config import PAPER_MIN_MATCH_SCORE
     reports = match_score_audit.run()
     assert len(reports) == len(_common.LLM_POSITIVE_EVENTS_2026_04_26)

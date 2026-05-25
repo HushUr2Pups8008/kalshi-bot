@@ -74,7 +74,7 @@ from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, VERSION
                     EARLY_MAX_NEWS_AGE_SECONDS, EARLY_MAX_NEWS_AGE_BY_SOURCE,
                     EARLY_DROP_IF_NO_TIMESTAMP, SOURCE_PRIORITY_TIERS,
                     FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD,
-                    DRIFT_ALERT_CENTS, DRIFT_LOG_COOLDOWN_SECS,
+                    DRIFT_LOG_COOLDOWN_SECS,
                     PRICE_MOVE_THRESHOLD_CENTS, PRICE_SEARCH_COOLDOWN_SECS,
                     PRICE_VELOCITY_WINDOW_SECS)
 from feeds import NewsItem
@@ -144,8 +144,10 @@ def _is_floor_clamp_suspected(
     llm_direction: str | None,
     llm_magnitude: str | None,
     estimated_probability: float,
+    market_probability: float,
+    llm_confidence: float | None,
 ) -> bool:
-    """PROFIT-ALIGN-003 (2026-05-25): heuristic detector for floor-clamp.
+    """PROFIT-ALIGN-003 (2026-05-25): detector for actual floor-clamps.
 
     `analysis/signal_analyzer._parse_llm_response` clamps the estimated
     probability at 0.05 (NO-side) / 0.95 (YES-side). When that clamp fires,
@@ -156,25 +158,47 @@ def _is_floor_clamp_suspected(
     clamped to 3pp. The bot's edge math then anchors against the floor,
     manufacturing edge that isn't robustly supported.
 
-    Returns True when the floor was likely hit:
+    Returns True when the floor was hit:
       - LLM emitted a directional read (direction in {yes, no})
       - LLM magnitude was non-trivial (not None / "none")
       - final estimated_probability is exactly 0.05 or 0.95 (within tolerance)
+      - reconstructed raw probability crossed beyond the clamp boundary
 
-    Heuristic: rare organic coincidences at exactly 0.05/0.95 will be
-    over-halved, which is acceptably conservative.
-
+    Exact-boundary arithmetic is not enough. Example: market 0.13 with a
+    small×1.0 NO shift lands at 0.05 without being caught by the clamp.
     Caller (main.py SignalAnalysis builder) multiplies kelly/capped dollars
     by cfg.floor_clamp_kelly_multiplier (default 0.5) when this is True.
     """
     EPS = 1e-6
     if llm_direction not in ("yes", "no"):
         return False
-    if llm_magnitude is None or llm_magnitude == "none":
+    if llm_magnitude not in ("small", "moderate", "large"):
         return False
+    if llm_confidence is None:
+        return False
+    try:
+        confidence = float(llm_confidence)
+        market_prob = float(market_probability)
+    except (TypeError, ValueError):
+        return False
+    shift_table = {
+        "small": float(getattr(cfg, "magnitude_shift_small", 0.08)),
+        "moderate": float(getattr(cfg, "magnitude_shift_moderate", 0.15)),
+        "large": float(getattr(cfg, "magnitude_shift_large", 0.25)),
+    }
+    raw_probability = (
+        market_prob + shift_table[llm_magnitude] * confidence
+        if llm_direction == "yes"
+        else market_prob - shift_table[llm_magnitude] * confidence
+    )
+    if llm_direction == "no":
+        return (
+            abs(estimated_probability - 0.05) < EPS
+            and raw_probability < (0.05 - EPS)
+        )
     return (
-        abs(estimated_probability - 0.05) < EPS
-        or abs(estimated_probability - 0.95) < EPS
+        abs(estimated_probability - 0.95) < EPS
+        and raw_probability > (0.95 + EPS)
     )
 
 
@@ -1035,7 +1059,13 @@ class TradingBot:
         # stake by cfg.floor_clamp_kelly_multiplier (default 0.5).
         # Conservative; affects only clamped trades.
         if (
-            _is_floor_clamp_suspected(llm_dir, llm_mag, estimated_prob)
+            _is_floor_clamp_suspected(
+                llm_dir,
+                llm_mag,
+                estimated_prob,
+                market.yes_prob,
+                llm_conf,
+            )
             and cfg.floor_clamp_kelly_multiplier < 1.0
         ):
             _pre = capped_dollars
@@ -1307,14 +1337,19 @@ class TradingBot:
 
         # ── Loop C: open position drift logging ───────────────────────────────
         # If we have an open paper position on this ticker and the price has
-        # drifted >= DRIFT_ALERT_CENTS from entry, log a POSITION_DRIFT event.
+        # drifted >= cfg.position_drift_alert_threshold from entry, log a
+        # POSITION_DRIFT event. A threshold >= 1.0 disables emission.
         open_positions = self.paper.portfolio.open_positions(ticker)
         if open_positions:
             last_drift = self._last_drift_logged.get(ticker, 0.0)
             if now_mono - last_drift >= DRIFT_LOG_COOLDOWN_SECS:
                 for pos in open_positions:
                     drift = now_mid - pos.entry_price_cents
-                    if abs(drift) >= DRIFT_ALERT_CENTS:
+                    threshold_fraction = float(cfg.position_drift_alert_threshold)
+                    if threshold_fraction >= 1.0:
+                        continue
+                    threshold_cents = pos.entry_price_cents * threshold_fraction
+                    if abs(drift) >= threshold_cents:
                         self._last_drift_logged[ticker] = now_mono
                         from utils.logger import trade_log as _tl
                         _tl.log_position_drift(

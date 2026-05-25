@@ -23,7 +23,13 @@ from config import PAPER_MIN_EDGE, cfg
 from kalshi import KalshiMarket
 from tasks import evidence_store
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
-from tasks.trade_readiness_gate import ReadinessDecision, evaluate_readiness
+from tasks.trade_readiness_gate import (
+    G1_CONFIDENCE_THRESHOLD,
+    G1_FAILSAFE_CONFIDENCE_THRESHOLD,
+    G4_REGIME_CONFIDENCE_THRESHOLD,
+    ReadinessDecision,
+    evaluate_readiness,
+)
 from utils.logger import get_logger, trade_log, write_trade_log_async
 
 
@@ -89,6 +95,10 @@ class BlendDecisionLogger(Protocol):
     ) -> None: ...
 
     def log_skipped(self, **kwargs: Any) -> None: ...
+
+    def log_gate_summary(self, **kwargs: Any) -> None: ...
+
+    def log_lane_skipped(self, **kwargs: Any) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -189,6 +199,11 @@ class BlendTask:
             default_min_edge=default_min_edge,
             structural_stable=await self._structural_stable(ticker),
         )
+        await self._emit_lane_skips(
+            ticker=ticker,
+            dossier=dossier,
+            structural_prior=structural_prior,
+        )
 
         readiness_input = _readiness_input(
             blend_result=blend_result,
@@ -204,6 +219,11 @@ class BlendTask:
             raise ReadinessEvaluationError(
                 f"readiness evaluation failed for {ticker}: {exc}"
             ) from exc
+        await self._emit_gate_summary(
+            ticker=ticker,
+            readiness=readiness,
+            blend_result=blend_result,
+        )
 
         trade_blocked_reason = (
             blend_result.trade_blocked_reason
@@ -446,6 +466,57 @@ class BlendTask:
             evidence_ids_contributing=evidence_ids,
         )
 
+    async def _emit_lane_skips(
+        self,
+        *,
+        ticker: str,
+        dossier: DossierState | None,
+        structural_prior: StructuralPriorRecord | None,
+    ) -> None:
+        if not cfg.enable_lane_skip_when_no_data:
+            return
+        if not hasattr(self._logger, "log_lane_skipped"):
+            return
+        skipped: list[tuple[str, str]] = []
+        if dossier is None or dossier.current_estimate is None:
+            skipped.append(("accumulation", "no_dossier_estimate"))
+        if structural_prior is None or structural_prior.prior_estimate is None:
+            skipped.append(("structural", "no_structural_prior"))
+        for lane_id, reason in skipped:
+            await write_trade_log_async(
+                self._logger.log_lane_skipped,
+                market_ticker=ticker,
+                lane_id=lane_id,
+                reason=reason,
+            )
+
+    async def _emit_gate_summary(
+        self,
+        *,
+        ticker: str,
+        readiness: ReadinessDecision,
+        blend_result: BlendResult,
+    ) -> None:
+        if not hasattr(self._logger, "log_gate_summary"):
+            return
+        g1_threshold = (
+            G1_FAILSAFE_CONFIDENCE_THRESHOLD
+            if readiness.fail_safe_active
+            else G1_CONFIDENCE_THRESHOLD
+        )
+        await write_trade_log_async(
+            self._logger.log_gate_summary,
+            ticker=ticker,
+            market_prefix=_series_prefix(ticker),
+            binding_constraint=_binding_constraint(readiness),
+            scaled_confidence=readiness.scaled_confidence,
+            regime_confidence=readiness.regime_confidence,
+            blended_confidence=blend_result.blended_confidence,
+            g1_threshold=g1_threshold,
+            g4_threshold=G4_REGIME_CONFIDENCE_THRESHOLD,
+            gate_chain=_gate_chain(readiness, g1_threshold),
+        )
+
     async def _emit_skipped(
         self,
         *,
@@ -649,6 +720,49 @@ def _series_prefix(ticker: str) -> str:
         # of masking them. (silent-failure-hunter finding 1 / EXEC-002.)
         raise ValueError(f"_series_prefix: empty or null ticker: {ticker!r}")
     return ticker.split("-", 1)[0]
+
+
+def _binding_constraint(readiness: ReadinessDecision) -> str:
+    if readiness.passed:
+        return "passed"
+    reasons = set(readiness.failure_reasons)
+    if "G4_regime_confidence" in reasons:
+        return "G4_regime_low"
+    if "G1_blended_confidence" in reasons:
+        return "G1_blended_confidence"
+    if "G3_disagreement_score" in reasons:
+        return "G3_disagreement_score"
+    return readiness.failure_reasons[0] if readiness.failure_reasons else "unknown"
+
+
+def _gate_chain(readiness: ReadinessDecision, g1_threshold: float) -> list[str]:
+    chain = [
+        (
+            f"G4: rc={readiness.regime_confidence:.4f} "
+            f"{'<' if readiness.regime_confidence < G4_REGIME_CONFIDENCE_THRESHOLD else '>='} "
+            f"{G4_REGIME_CONFIDENCE_THRESHOLD:.4f} "
+            f"{'FAIL' if 'G4_regime_confidence' in readiness.failure_reasons else 'PASS'}"
+        ),
+        (
+            f"G1: sc={readiness.scaled_confidence:.4f} "
+            f"{'<' if readiness.scaled_confidence < g1_threshold else '>='} "
+            f"{g1_threshold:.4f} "
+            f"{'FAIL' if 'G1_blended_confidence' in readiness.failure_reasons else 'PASS'}"
+        ),
+    ]
+    if "G3" in readiness.applied_conditions:
+        chain.append(
+            "G3: "
+            + (
+                "FAIL"
+                if "G3_disagreement_score" in readiness.failure_reasons
+                else "PASS"
+            )
+        )
+    for reason in readiness.failure_reasons:
+        if not reason.startswith(("G1_", "G3_", "G4_")):
+            chain.append(f"{reason}: FAIL")
+    return chain
 
 
 def _regime_weights(market: KalshiMarket) -> dict[str, float]:

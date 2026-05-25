@@ -1268,7 +1268,7 @@ async def test_on_price_update_logs_position_drift_from_entry_price_cents():
 
     with patch("main.time.monotonic", side_effect=[100.0, 101.0]), \
          patch("main.PRICE_MOVE_THRESHOLD_CENTS", 999.0), \
-         patch("main.DRIFT_ALERT_CENTS", 2.0), \
+         patch.object(_cfg_module.cfg, "position_drift_alert_threshold", 0.04), \
          patch("main.DRIFT_LOG_COOLDOWN_SECS", 0.0), \
          patch("analysis.fade_signal.detect_price_fade", return_value=None), \
          patch("utils.logger.trade_log.log_position_drift") as drift_mock:
@@ -2073,37 +2073,45 @@ class TestFloorClampSuspected:
 
     def test_no_directional_returns_false(self):
         from main import _is_floor_clamp_suspected
-        assert not _is_floor_clamp_suspected("neutral", "small", 0.05)
-        assert not _is_floor_clamp_suspected(None, "moderate", 0.05)
+        assert not _is_floor_clamp_suspected("neutral", "small", 0.95, 0.87, 1.0)
+        assert not _is_floor_clamp_suspected(None, "moderate", 0.05, 0.20, 1.0)
 
     def test_no_magnitude_returns_false(self):
         from main import _is_floor_clamp_suspected
-        assert not _is_floor_clamp_suspected("yes", "none", 0.95)
-        assert not _is_floor_clamp_suspected("no", None, 0.05)
+        assert not _is_floor_clamp_suspected("yes", "none", 0.95, 0.95, 1.0)
+        assert not _is_floor_clamp_suspected("no", None, 0.05, 0.05, 1.0)
 
     def test_floor_at_no_side(self):
         from main import _is_floor_clamp_suspected
-        assert _is_floor_clamp_suspected("no", "small", 0.05)
-        assert _is_floor_clamp_suspected("no", "moderate", 0.05)
-        assert _is_floor_clamp_suspected("no", "large", 0.05)
+        assert _is_floor_clamp_suspected("no", "small", 0.05, 0.08, 0.85)
+        assert _is_floor_clamp_suspected("no", "moderate", 0.05, 0.12, 1.0)
+        assert _is_floor_clamp_suspected("no", "large", 0.05, 0.20, 1.0)
 
     def test_floor_at_yes_side(self):
         from main import _is_floor_clamp_suspected
-        assert _is_floor_clamp_suspected("yes", "small", 0.95)
-        assert _is_floor_clamp_suspected("yes", "large", 0.95)
+        assert _is_floor_clamp_suspected("yes", "small", 0.95, 0.92, 1.0)
+        assert _is_floor_clamp_suspected("yes", "large", 0.95, 0.80, 1.0)
 
     def test_unclamped_returns_false(self):
         from main import _is_floor_clamp_suspected
         # Bot estimated 0.30 — clearly unclamped
-        assert not _is_floor_clamp_suspected("yes", "moderate", 0.30)
-        assert not _is_floor_clamp_suspected("no", "large", 0.62)
+        assert not _is_floor_clamp_suspected("yes", "moderate", 0.30, 0.15, 1.0)
+        assert not _is_floor_clamp_suspected("no", "large", 0.62, 0.87, 1.0)
 
     def test_within_tolerance(self):
         from main import _is_floor_clamp_suspected
         # Float exact-match with small tolerance (1e-6)
-        assert _is_floor_clamp_suspected("no", "small", 0.0500001)
-        assert not _is_floor_clamp_suspected("no", "small", 0.06)
-        assert not _is_floor_clamp_suspected("no", "small", 0.04)
+        assert _is_floor_clamp_suspected("no", "small", 0.0500001, 0.08, 0.85)
+        assert not _is_floor_clamp_suspected("no", "small", 0.06, 0.08, 0.85)
+        assert not _is_floor_clamp_suspected("no", "small", 0.04, 0.08, 0.85)
+
+    def test_exact_boundary_without_raw_crossing_is_not_suspected(self):
+        """A final 0.05 / 0.95 is not enough evidence by itself."""
+        from main import _is_floor_clamp_suspected
+        # market 0.13 - small×1.0 0.08 lands exactly on 0.05, not below it.
+        assert not _is_floor_clamp_suspected("no", "small", 0.05, 0.13, 1.0)
+        # market 0.87 + small×1.0 0.08 lands exactly on 0.95, not above it.
+        assert not _is_floor_clamp_suspected("yes", "small", 0.95, 0.87, 1.0)
 
 
 class TestFloorClampHalvingConfig:

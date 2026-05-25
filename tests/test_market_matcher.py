@@ -19,6 +19,8 @@ from analysis.market_matcher import (
 )
 from kalshi import KalshiMarket
 
+pytestmark = pytest.mark.usefixtures("isolated_match_feedback_weights")
+
 
 # ---------------------------------------------------------------------------
 # _tokenize
@@ -801,23 +803,16 @@ class TestLowQualityMatchSuppression:
         assert suppressed_calls == [], "no MATCH_SUPPRESSED for multi-token match"
 
     @pytest.mark.asyncio
-    async def test_suppression_fires_when_only_overlap_token_is_in_ticker(self, matcher, monkeypatch):
+    async def test_suppression_fires_when_only_overlap_token_is_in_ticker(self, matcher):
         """B' suppresses when the only semantic overlap already appears in the ticker.
 
         Real-world case: off-topic 'iran' headline -> KXTRUMPIRAN-26MAY01.
         The ticker token alone is not supporting semantic evidence.
 
-        PROFIT-MATCH-DYNAMIC (2026-05-25) — isolate from the runtime matcher-
-        feedback weights file. The aggregator can auto-detect a downweight
-        on (KXTRUMPIRAN, trump|iran) from production data, which would
-        suppress this match BEFORE the suppression-flags check runs. This
-        test exercises the suppression-flags branch specifically, so the
-        weight downweight must be neutralized.
+        PROFIT-MATCH-DYNAMIC (2026-05-25) — module fixture isolates runtime
+        matcher-feedback weights so this test exercises the suppression-flags
+        branch specifically.
         """
-        monkeypatch.setattr(
-            "analysis.match_feedback.load_weights",
-            lambda *a, **kw: {},
-        )
         market = _make_market(
             "KXTRUMPIRAN-26MAY01",
             "Will Trump reach an Iran nuclear deal before May 1?",
@@ -1218,8 +1213,8 @@ class TestMatcherDownweightApplication:
     """Pins the downweight integration math in find_candidates.
 
     The integration is: after _weak_match_penalty_multiplier, multiply the
-    score by min(weight for token in overlap) where weights come from
-    analysis.match_feedback.load_weights().
+    score by a composition-aware overlap-token multiplier where weights come
+    from analysis.match_feedback.load_weights().
 
     Full find_candidates integration test is too heavy (KalshiRestClient +
     MarketCache mocks). This pins the formula directly so future refactors
@@ -1229,16 +1224,8 @@ class TestMatcherDownweightApplication:
     @staticmethod
     def _apply_downweight(score: float, overlap: set[str], prefix: str,
                           weights: dict) -> float:
-        if overlap and weights:
-            min_w = min(
-                (weights.get(f"{prefix}:{t}", {}).get("weight", 1.0) for t in overlap),
-                default=1.0,
-            )
-            try:
-                score *= float(min_w)
-            except (TypeError, ValueError):
-                pass
-        return score
+        from analysis.market_matcher import _combined_token_downweight
+        return score * _combined_token_downweight(overlap, prefix, weights)
 
     def test_no_weights_no_change(self):
         s = self._apply_downweight(0.50, {"trump", "iran"}, "KXTRUMPIRAN", {})
@@ -1249,12 +1236,13 @@ class TestMatcherDownweightApplication:
         s = self._apply_downweight(0.50, {"trump"}, "KXCABLEAVE", weights)
         assert s == pytest.approx(0.05)
 
-    def test_min_weight_dominates_when_multiple_tokens(self):
-        # Two tokens: one downweighted to 0.10, one full weight.
-        # min wins → 0.10 multiplier.
+    def test_supporting_tokens_dilute_one_generic_downweight(self):
+        # Two tokens: one downweighted to 0.30, one full weight.
+        # Composition-aware averaging avoids letting one generic bridge token
+        # dominate a more specific legitimate overlap.
         weights = {"KXNEWDEAL:deal": {"weight": 0.30}}
         s = self._apply_downweight(0.50, {"deal", "trump"}, "KXNEWDEAL", weights)
-        assert s == pytest.approx(0.15)  # 0.50 × 0.30
+        assert s == pytest.approx(0.325)  # 0.50 × ((0.30 + 1.00) / 2)
 
     def test_legitimate_market_prefix_unaffected(self):
         """'trump' is downweighted for KXCABLEAVE but full weight for
