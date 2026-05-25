@@ -415,6 +415,18 @@ class TestKeywordEstimate:
 
 
 class TestEstimateProbability:
+    @pytest.fixture(autouse=True)
+    def _clear_llm_dedup_cache(self):
+        """PROFIT-ALIGN-010 (2026-05-25): the runtime LLM dedup cache is a
+        module-level OrderedDict. Between tests in this class, identical
+        (headline, market_title, market_price_bucket) inputs would otherwise
+        hit cached results from previous tests — breaking the isolation
+        contract that each test mocks its own LLM behavior."""
+        from analysis.llm_dedup_cache import clear
+        clear()
+        yield
+        clear()
+
     @pytest.mark.asyncio
     async def test_no_keyword_headline_can_use_llm_when_available(self, monkeypatch):
         news = _make_news("Quarterly corporate earnings beat expectations")

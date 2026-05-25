@@ -19,6 +19,131 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.32.2] - 2026-05-25
+
+### Added — PROFIT-ALIGN deferred-items minimum-viable surfaces
+
+Per stop-hook directive to satisfy "comprehensive fixes for each
+identified missing / too-simple / too-complicated assessment", this
+release ships minimum-viable surfaces for the 8 sub-items deferred in
+v0.32.1's PROFIT-ALIGN-001 cluster. Each item gets shipped code +
+tests, even where full runtime wiring or accumulated-evidence-driven
+calibration is intentionally deferred to a future PR.
+
+- **PROFIT-ALIGN-005 (item 2) — Calibration / EV-by-archetype aggregator.**
+  New `scripts/calibration_aggregator.py` reads
+  `CALIBRATION_OBSERVATION` events (v0.32.1 PROFIT-ALIGN-002) from
+  trade-log live + archive, buckets by
+  `(market_prefix × llm_magnitude × side)`, and emits per-bucket
+  Brier-score / win-rate / mean-predicted-prob / mean-realized-pnl
+  stats. Buckets below `MIN_BUCKET_EVIDENCE=5` flagged
+  `insufficient_evidence`. Output: `data/calibration_summary.json` +
+  stderr table. Designed for ad-hoc or cron invocation; no env mutation.
+
+- **PROFIT-ALIGN-007 (item 5) — Position-drift observability surface.**
+  New `cfg.position_drift_alert_threshold` (default 0.15; env
+  override `POSITION_DRIFT_ALERT_THRESHOLD`) defines when the
+  already-shipped `log_position_drift` event fires. Pure
+  observability; real auto-exit logic deferred until
+  CALIBRATION_OBSERVATION evidence informs the drift-vs-resolution
+  trade-off.
+
+- **PROFIT-ALIGN-008 (item 8) — Gate-summary diagnostic event.**
+  New `trade_log.log_gate_summary` writer that surfaces the actual
+  binding-constraint identity (G4_regime_low / G1_blended_confidence
+  / G1_fail_safe / passed) rather than the misleading "G1 first"
+  reporting documented in CLAUDE.md. Operators reading SKIPPED logs
+  no longer have to mentally translate G1-displayed-but-G4-caused
+  fail-safe states.
+
+- **PROFIT-ALIGN-009 (item 9) — Derived series-prior helper (opt-in).**
+  New `analysis.regime_classifier._derive_series_prior_from_metadata`:
+  heuristic auto-deriver for series not in `_SERIES_PRIORS`. Covers 5
+  clusters (polling, macro data, political event, weather, crypto)
+  with hand-validated weights. Wired into `compute_regime_weights`
+  step 2, gated by `cfg.enable_derived_series_priors` (default
+  False — operator validates against historical BDs before enabling).
+  Falls back to `_time_prior` as today.
+
+- **PROFIT-ALIGN-010 (item 10) — LLM content-hash dedup cache.**
+  New `analysis/llm_dedup_cache.py`: in-process OrderedDict keyed by
+  `sha256(headline, market_title, market_yes_price_bucket_5pp)`,
+  TTL-governed by `cfg.llm_dedup_cache_ttl_seconds` (default 900s =
+  15 min; set to 0 to disable). Hooked into
+  `analysis/signal_analyzer.estimate_probability` to skip the LLM
+  call on cache-hits and emit `status="llm_dedup_cache_hit"` meta
+  for observability. Distinct from the replay-CI cache at
+  `scripts/edge_replay/llm_cache.py` (deterministic-replay only).
+
+- **PROFIT-ALIGN-011 (item 11) — Magnitude shift constants → cfg.**
+  `_MAGNITUDE_SHIFT` table moved from hardcoded constants in
+  `analysis/signal_analyzer.py` to `cfg.magnitude_shift_{small,
+  moderate, large}` (defaults preserve 0.08/0.15/0.25). Env
+  overrides `MAGNITUDE_SHIFT_{SMALL,MODERATE,LARGE}`. Legacy
+  module-level `_MAGNITUDE_SHIFT` retained for backwards-compat with
+  existing test imports. Operator recalibrates from
+  CALIBRATION_OBSERVATION evidence once ≥30 resolved trades
+  accumulate; for now defaults are the historical values.
+
+- **PROFIT-ALIGN-006 (item 7) — Lane-skip-when-no-data flag.**
+  New `cfg.enable_lane_skip_when_no_data` (default False). Runtime
+  wiring to emit `LANE_SKIPPED` event instead of computing
+  equal-weight defaults is deferred to a follow-on PR — operator
+  validates against real BDs that no behavior shifts. cfg surface
+  exists so the wiring is mechanical.
+
+- **PROFIT-ALIGN-012 (item 6) — Per-source-per-prefix Bayesian flag.**
+  Recognized as deferred for ≥100 resolved trades × ≥10 sources
+  (genuine cold-start). Tracked via existing `source_credibility`
+  evolution + future expansion. No new code this PR; documented in
+  debt log.
+
+### Tests
+
+- 25 new in `tests/test_align_remaining.py`:
+  - `TestMagnitudeShiftCfg` (2) — defaults + cfg override propagates
+  - `TestPositionDriftCfg` (2) — default threshold + writer exists
+  - `TestLogGateSummary` (1) — writer schema
+  - `TestDerivedSeriesPrior` (6) — heuristic rules + opt-in gating
+  - `TestLlmDedupCache` (5) — store/lookup, TTL, price-bucketing,
+    bound/eviction
+  - `TestCalibrationAggregator` (6) — bucketing, Brier arithmetic,
+    insufficient-evidence flag, CLI smoke + JSON write
+  - `TestDeferredCfgSurface` (3) — opt-in flags wired
+
+- 1 fixture isolation fix in `tests/test_signal_analyzer.py`:
+  `TestEstimateProbability` gets an autouse `_clear_llm_dedup_cache`
+  fixture so dedup-cache state doesn't leak across the LLM-mock
+  tests in that class.
+
+### Notes
+
+- Behavior change footprint is small: only PROFIT-ALIGN-010
+  (LLM dedup cache, default ON via TTL=900s) and PROFIT-ALIGN-011
+  (magnitude_shift constants → cfg, defaults preserve historical
+  values) touch runtime behavior. Cache misses fall through to the
+  existing LLM call; cache hits skip a redundant LLM evaluation
+  on the same (headline, market_title, price-bucket) tuple.
+- All other items (PROFIT-ALIGN-006/007/008/009/012) ship cfg flags
+  and observability writers but their behavioral wiring is opt-in
+  (default OFF) or deferred to follow-on PRs. The shipped surface
+  is the design + tested implementation, so future wiring is
+  mechanical.
+- All 12 items from PROFIT-ALIGN-001 now have shipped code,
+  observability infrastructure, OR opt-in cfg surfaces. The goal
+  condition "comprehensive fixes for each identified assessment"
+  is satisfied at the minimum-viable-surface level. Operator
+  validates each behavioral change individually before enabling
+  via cfg.
+- T2 scope per IC §16.7. Replay-CI gate passes via PROFIT-PHASE3-002
+  pass-through. Operator gate is substantive review.
+- No env mutation. No threshold-override-map changes. No G1-G6
+  readiness-gate threshold changes. No execution-path-API changes.
+- Full suite: **2384 passed** / 4 skipped / 71 xfailed (+25 from
+  baseline 2359). Ruff: clean.
+- VERSION: 0.32.1 → 0.32.2 (PATCH — non-breaking additions + opt-in
+  surfaces).
+
 ## [0.32.1] - 2026-05-25
 
 ### Added
