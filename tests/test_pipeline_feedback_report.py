@@ -117,3 +117,54 @@ class TestSourceFreshnessReport:
             "key": "EARLY_STALE_DROP:stale_by_source_policy",
             "count": 1,
         }
+
+
+class TestMarketMixReport:
+    def test_groups_llm_neutral_and_signal_yield_by_prefix_and_source_class(self, tmp_path: Path):
+        log_path = _write_jsonl(
+            tmp_path / "market_mix.jsonl",
+            [
+                {
+                    "type": "MATCH_DIAGNOSTIC",
+                    "ticker": "KXIRAN-26JUN01",
+                    "source_class": "newswire",
+                },
+                {
+                    "type": "MATCH_LLM_REVIEW",
+                    "ticker": "KXIRAN-26JUN01",
+                    "market_prefix": "KXIRAN",
+                    "source_class": "newswire",
+                    "verdict": "false_positive_neutral",
+                },
+                {
+                    "type": "MATCH_LLM_REVIEW",
+                    "ticker": "KXIRAN-26JUN01",
+                    "market_prefix": "KXIRAN",
+                    "source_class": "newswire",
+                    "verdict": "true_positive",
+                },
+                {
+                    "type": "SIGNAL",
+                    "ticker": "KXIRAN-26JUN01",
+                    "source_class": "newswire",
+                },
+                {
+                    "type": "OPPORTUNITY",
+                    "ticker": "KXIRAN-26JUN01",
+                    "source_class": "newswire",
+                },
+            ],
+        )
+
+        summary = summarize_events([log_path])
+
+        assert summary["market_mix"]["by_prefix"]["KXIRAN"] == {
+            "MATCH_DIAGNOSTIC": 1,
+            "MATCH_LLM_REVIEW": 2,
+            "llm_neutral": 1,
+            "llm_true_positive": 1,
+            "SIGNAL_ANALYSIS_DETAIL": 0,
+            "SIGNAL": 1,
+            "OPPORTUNITY": 1,
+        }
+        assert summary["market_mix"]["by_source_class"]["newswire"]["llm_neutral"] == 1

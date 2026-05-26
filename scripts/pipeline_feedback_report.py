@@ -22,6 +22,15 @@ FUNNEL_STAGES: tuple[str, ...] = (
     "PAPER_TRADE",
 )
 FRESHNESS_STAGES: tuple[str, ...] = ("EARLY_FRESH_PASS", "EARLY_STALE_DROP")
+MARKET_MIX_STAGES: tuple[str, ...] = (
+    "MATCH_DIAGNOSTIC",
+    "MATCH_LLM_REVIEW",
+    "llm_neutral",
+    "llm_true_positive",
+    "SIGNAL_ANALYSIS_DETAIL",
+    "SIGNAL",
+    "OPPORTUNITY",
+)
 
 
 def _iter_events(paths: Iterable[Path]) -> Iterable[dict[str, Any]]:
@@ -48,6 +57,20 @@ def _top(counter: Counter[str], limit: int = 10) -> list[dict[str, Any]]:
     ]
 
 
+def _market_prefix(event: dict[str, Any]) -> str:
+    prefix = event.get("market_prefix")
+    if prefix:
+        return str(prefix)
+    ticker = event.get("ticker") or event.get("market_ticker") or ""
+    return str(ticker).split("-", 1)[0] if ticker else "unknown"
+
+
+def _filled_market_mix_counts(counter: Counter[str]) -> dict[str, int]:
+    base = Counter({stage: 0 for stage in MARKET_MIX_STAGES})
+    base.update(counter)
+    return dict(base)
+
+
 def summarize_events(paths: Iterable[Path], *, top_n: int = 10) -> dict[str, Any]:
     stage_counts = Counter({stage: 0 for stage in FUNNEL_STAGES})
     reasons: Counter[str] = Counter()
@@ -56,6 +79,8 @@ def summarize_events(paths: Iterable[Path], *, top_n: int = 10) -> dict[str, Any
     freshness_by_source: dict[str, Counter[str]] = defaultdict(Counter)
     freshness_by_source_class: dict[str, Counter[str]] = defaultdict(Counter)
     freshness_reasons: Counter[str] = Counter()
+    market_by_prefix: dict[str, Counter[str]] = defaultdict(Counter)
+    market_by_source_class: dict[str, Counter[str]] = defaultdict(Counter)
 
     for event in _iter_events(paths):
         event_type = event.get("type")
@@ -84,6 +109,26 @@ def summarize_events(paths: Iterable[Path], *, top_n: int = 10) -> dict[str, Any
             if reason:
                 freshness_reasons[f"{event_type}:{reason}"] += 1
 
+        if event_type in {
+            "MATCH_DIAGNOSTIC",
+            "MATCH_LLM_REVIEW",
+            "SIGNAL_ANALYSIS_DETAIL",
+            "SIGNAL",
+            "OPPORTUNITY",
+        }:
+            prefix = _market_prefix(event)
+            source_class = event.get("source_class") or event.get("source_type") or "unknown"
+            market_by_prefix[prefix][event_type] += 1
+            market_by_source_class[source_class][event_type] += 1
+            if event_type == "MATCH_LLM_REVIEW":
+                verdict = event.get("verdict")
+                if verdict == "false_positive_neutral":
+                    market_by_prefix[prefix]["llm_neutral"] += 1
+                    market_by_source_class[source_class]["llm_neutral"] += 1
+                elif verdict == "true_positive":
+                    market_by_prefix[prefix]["llm_true_positive"] += 1
+                    market_by_source_class[source_class]["llm_true_positive"] += 1
+
     return {
         "funnel": {
             "stage_counts": dict(stage_counts),
@@ -101,6 +146,16 @@ def summarize_events(paths: Iterable[Path], *, top_n: int = 10) -> dict[str, Any
                 for key, value in sorted(freshness_by_source_class.items())
             },
             "top_reasons": _top(freshness_reasons, top_n),
+        },
+        "market_mix": {
+            "by_prefix": {
+                key: _filled_market_mix_counts(value)
+                for key, value in sorted(market_by_prefix.items())
+            },
+            "by_source_class": {
+                key: _filled_market_mix_counts(value)
+                for key, value in sorted(market_by_source_class.items())
+            },
         },
     }
 
