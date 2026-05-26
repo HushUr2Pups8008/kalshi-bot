@@ -21,6 +21,7 @@ FUNNEL_STAGES: tuple[str, ...] = (
     "SKIPPED",
     "PAPER_TRADE",
 )
+FRESHNESS_STAGES: tuple[str, ...] = ("EARLY_FRESH_PASS", "EARLY_STALE_DROP")
 
 
 def _iter_events(paths: Iterable[Path]) -> Iterable[dict[str, Any]]:
@@ -51,6 +52,10 @@ def summarize_events(paths: Iterable[Path], *, top_n: int = 10) -> dict[str, Any
     stage_counts = Counter({stage: 0 for stage in FUNNEL_STAGES})
     reasons: Counter[str] = Counter()
     tickers: Counter[str] = Counter()
+    freshness_totals = Counter({stage: 0 for stage in FRESHNESS_STAGES})
+    freshness_by_source: dict[str, Counter[str]] = defaultdict(Counter)
+    freshness_by_source_class: dict[str, Counter[str]] = defaultdict(Counter)
+    freshness_reasons: Counter[str] = Counter()
 
     for event in _iter_events(paths):
         event_type = event.get("type")
@@ -70,11 +75,32 @@ def summarize_events(paths: Iterable[Path], *, top_n: int = 10) -> dict[str, Any
         if ticker and event_type in FUNNEL_STAGES:
             tickers[ticker] += 1
 
+        if event_type in freshness_totals:
+            freshness_totals[event_type] += 1
+            source = event.get("source") or "unknown"
+            source_class = event.get("source_class") or event.get("source_type") or "unknown"
+            freshness_by_source[source][event_type] += 1
+            freshness_by_source_class[source_class][event_type] += 1
+            if reason:
+                freshness_reasons[f"{event_type}:{reason}"] += 1
+
     return {
         "funnel": {
             "stage_counts": dict(stage_counts),
             "top_reasons": _top(reasons, top_n),
             "top_tickers": _top(tickers, top_n),
+        },
+        "freshness": {
+            "totals": dict(freshness_totals),
+            "by_source": {
+                key: dict(Counter({stage: 0 for stage in FRESHNESS_STAGES}) | value)
+                for key, value in sorted(freshness_by_source.items())
+            },
+            "by_source_class": {
+                key: dict(Counter({stage: 0 for stage in FRESHNESS_STAGES}) | value)
+                for key, value in sorted(freshness_by_source_class.items())
+            },
+            "top_reasons": _top(freshness_reasons, top_n),
         },
     }
 

@@ -72,3 +72,48 @@ class TestPipelineFunnelReport:
             "key": "KXIRAN-26JUN01",
             "count": 4,
         }
+
+
+class TestSourceFreshnessReport:
+    def test_groups_fresh_and_stale_intake_by_source_class_and_reason(self, tmp_path: Path):
+        log_path = _write_jsonl(
+            tmp_path / "freshness.jsonl",
+            [
+                {
+                    "type": "EARLY_FRESH_PASS",
+                    "source": "Reuters",
+                    "source_class": "newswire",
+                },
+                {
+                    "type": "EARLY_STALE_DROP",
+                    "source": "Reuters",
+                    "source_class": "newswire",
+                    "reason": "stale_by_source_policy",
+                },
+                {
+                    "type": "EARLY_STALE_DROP",
+                    "source": "Blog",
+                    "source_class": "blog",
+                    "reason": "disabled_source",
+                },
+            ],
+        )
+
+        summary = summarize_events([log_path])
+
+        assert summary["freshness"]["totals"] == {
+            "EARLY_FRESH_PASS": 1,
+            "EARLY_STALE_DROP": 2,
+        }
+        assert summary["freshness"]["by_source"]["Reuters"] == {
+            "EARLY_FRESH_PASS": 1,
+            "EARLY_STALE_DROP": 1,
+        }
+        assert summary["freshness"]["by_source_class"]["newswire"] == {
+            "EARLY_FRESH_PASS": 1,
+            "EARLY_STALE_DROP": 1,
+        }
+        assert summary["freshness"]["top_reasons"][0] == {
+            "key": "EARLY_STALE_DROP:stale_by_source_policy",
+            "count": 1,
+        }
