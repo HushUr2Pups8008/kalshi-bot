@@ -206,6 +206,44 @@ def _combined_token_downweight(
     return sum(values) / len(values) if values else 1.0
 
 
+def _token_downweight_details(
+    overlap: set[str],
+    ticker_prefix: str,
+    weights: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Return the composed downweight plus per-token audit details."""
+    token_weights: dict[str, dict[str, Any]] = {}
+    for token in sorted(overlap):
+        key = f"{ticker_prefix}:{token}"
+        entry = weights.get(key, {}) if weights else {}
+        raw = entry.get("weight", 1.0) if isinstance(entry, dict) else 1.0
+        try:
+            weight = float(raw)
+        except (TypeError, ValueError):
+            weight = 1.0
+
+        if isinstance(entry, dict) and entry.get("pinned") is True:
+            status = "pinned"
+        elif isinstance(entry, dict) and entry.get("_seed_status") == "provisional":
+            status = "provisional"
+        elif isinstance(entry, dict) and entry:
+            status = "automatic"
+        else:
+            status = "default"
+
+        token_weights[token] = {
+            "weight": weight,
+            "status": status,
+        }
+
+    return {
+        "tokens": sorted(overlap),
+        "token_weights": token_weights,
+        "composition_rule": "mean",
+        "final_multiplier": _combined_token_downweight(overlap, ticker_prefix, weights),
+    }
+
+
 def _match_quality_flags(
     *,
     overlap: set[str],
@@ -984,10 +1022,26 @@ class MarketMatcher:
             # multi-token match that also contains full-weight support.
             if overlap and _token_weights:
                 ticker_prefix = (market.ticker or "").split("-", 1)[0]
-                score *= _combined_token_downweight(
+                pre_weight_score = score
+                weight_details = _token_downweight_details(
                     overlap,
                     ticker_prefix,
                     _token_weights,
+                )
+                score *= weight_details["final_multiplier"]
+                await write_trade_log_async(
+                    trade_log.log_match_weight_applied,
+                    source=news.source,
+                    headline=news.headline,
+                    ticker=market.ticker,
+                    market_title=market.title,
+                    market_prefix=ticker_prefix,
+                    tokens=weight_details["tokens"],
+                    token_weights=weight_details["token_weights"],
+                    composition_rule=weight_details["composition_rule"],
+                    final_multiplier=weight_details["final_multiplier"],
+                    pre_weight_score=pre_weight_score,
+                    post_weight_score=score,
                 )
 
             if score < min_score:

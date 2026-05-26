@@ -266,6 +266,61 @@ def get_token_weight(
         return 1.0
 
 
+def _weight_entry_status(entry: dict[str, Any]) -> str:
+    if entry.get("pinned") is True:
+        return "pinned"
+    if entry.get("_seed_status") == "provisional":
+        return "provisional"
+    try:
+        weight = float(entry.get("weight", 1.0))
+    except (TypeError, ValueError):
+        weight = 1.0
+    try:
+        fp_rate = float(entry.get("fp_rate", 1.0))
+    except (TypeError, ValueError):
+        fp_rate = 1.0
+    try:
+        total = int(entry.get("total", 0))
+    except (TypeError, ValueError):
+        total = 0
+    if weight >= 1.0 and total >= MIN_TOTAL_FOR_DOWNWEIGHT and fp_rate < RECOVERY_THRESHOLD:
+        return "recovered"
+    return "automatic"
+
+
+def summarize_weight_status(weights: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Summarize matcher weights by operator/provisional/adaptive status."""
+    counts = {
+        "pinned": 0,
+        "provisional": 0,
+        "automatic": 0,
+        "recovered": 0,
+    }
+    entries: dict[str, dict[str, Any]] = {}
+    for key, entry in sorted(weights.items()):
+        safe_entry = entry if isinstance(entry, dict) else {}
+        status = _weight_entry_status(safe_entry)
+        counts[status] += 1
+        try:
+            weight = float(safe_entry.get("weight", 1.0))
+        except (TypeError, ValueError):
+            weight = 1.0
+        entries[key] = {
+            "status": status,
+            "weight": weight,
+        }
+        if "fp_rate" in safe_entry:
+            entries[key]["fp_rate"] = safe_entry["fp_rate"]
+        if "total" in safe_entry:
+            entries[key]["total"] = safe_entry["total"]
+
+    return {
+        "total_entries": len(entries),
+        "counts": counts,
+        "entries": entries,
+    }
+
+
 def update_weights_from_stats(
     stats: Iterable[TokenStats],
     *,

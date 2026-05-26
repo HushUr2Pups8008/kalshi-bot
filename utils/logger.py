@@ -955,6 +955,36 @@ class TradeLogger:
             record["market_specificity_score"] = round(market_specificity_score, 4)
         self._write(record)
 
+    def log_match_weight_applied(
+        self,
+        *,
+        source: str,
+        headline: str,
+        ticker: str,
+        market_title: str,
+        market_prefix: str,
+        tokens: list[str],
+        token_weights: dict[str, dict[str, Any]],
+        composition_rule: str,
+        final_multiplier: float,
+        pre_weight_score: float,
+        post_weight_score: float,
+    ) -> None:
+        self._write({
+            "type": "MATCH_WEIGHT_APPLIED",
+            "source": source,
+            "headline": headline,
+            "ticker": ticker,
+            "market_title": market_title,
+            "market_prefix": market_prefix,
+            "tokens": tokens,
+            "token_weights": token_weights,
+            "composition_rule": composition_rule,
+            "final_multiplier": round(final_multiplier, 4),
+            "pre_weight_score": round(pre_weight_score, 4),
+            "post_weight_score": round(post_weight_score, 4),
+        })
+
     def log_market_source_hint_diagnostic(
         self,
         *,

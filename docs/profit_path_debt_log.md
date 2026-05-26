@@ -23,19 +23,19 @@
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-05-25 (Codex independent-review follow-up: PROFIT-ALIGN-003 clamp detector now reconstructs raw pre-clamp probability before halving; PROFIT-ALIGN-010 cache keys on full prompt and caches verdict fields only; PROFIT-MATCH-DYNAMIC audit seeds downgraded from pinned to provisional; matcher token downweights now compose across supporting overlap tokens; PROFIT-ALIGN item 5/7/8 scaffold surfaces wired for observability. Paper-only posture preserved; no env/runtime mutation.) |
+| Last Updated | 2026-05-26 (Codex dynamic feedback loop: PROFIT-PIPELINE-001 now has matcher-weight telemetry, feedback-weight status summaries, and a repeatable pipeline feedback report covering funnel, source freshness, and market-mix / LLM-neutral yield. Current runtime/DB evidence still proves the pipeline can execute paper trades; active gap remains low-conversion attrition plus ongoing audit loop, not "executor unreachable." Paper-only posture preserved; no gate/sizing/paper-live mutation.) |
 | Previously Updated | 2026-05-24 (PROFIT-PHASE3-003 registered as DEFERRED — first OOS corpus build blocked on paper-trade volume. Operator picked path A1 over A2/A3/A4 and over option B (storage cost). Schema audit found `cohort_extension` column already present — no migration work needed. Current state: 8/30 resolved paper trades = 27% of Rule 1 floor; pipeline (`build_corpus.py` → `replay_gate.py` → `ci_entry.py` → `.github/workflows/replay-ci-gate.yml`) wired end-to-end and verified by PR #46. PROFIT-PHASE3-002 pass-through is the operational interim; every CI run auto-passes with explicit "operator gate remains authoritative" note until A1 closes. Recent unblocks (PR #41-#44) may move the resolution rate enough to clear the 30-row threshold before the IC §16.7 30-day framework-review deadline; operator decides.) |
 | Previously Updated (older) | 2026-05-23 (Wave-1 backup-branch replay shipped via v0.30.2 / PR #16 — closes the open-fix bookkeeping flagged by `8b2473e` 2026-05-10; 5 backup-branch commits + 6 reviewer-driven follow-on remediations landed on `main`; 4 post-deploy observation canaries remain xfail-strict until soak completes; backup branch retained as forensic anchor through soak. See §2.2 Wave-1 Replay Closure for full SHA map.) |
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 69 |
+| Total Items | 70 |
 | Last Updated (P0 closure) | 2026-05-12 (PROFIT-API-001 — Kalshi API Contract Stabilization P0 closure landed on `feature/kalshi-api-contract-p0`; VERSION 0.29.59 → 0.30.0; P-1 through P-10 complete; PAPER-ONLY posture preserved) |
-| Open — HIGH | 3 |
+| Open — HIGH | 4 |
 | Open — MEDIUM | 1 |
 | Open — LOW | 1 |
 | Items IN_PROGRESS | 1 (PROFIT-ALIGN-001 — architecture-review cluster; 9/12 sub-items active or opt-in-wired as of 2026-05-25 Codex follow-up, 1/12 documented-only, 1/12 cross-linked, 1/12 volume-gated for data-driven closure) |
-| Items ACTIVE | 1 (PROFIT-EDGE-012 — active tracker entry; Cycle-17D HALTED 2026-05-10 pre-experiment per operator pick β; earliest readiness re-check 2026-06-14) |
+| Items ACTIVE | 2 (PROFIT-PIPELINE-001 — active architecture-gap tracker for paper-trade conversion attrition; PROFIT-EDGE-012 — active tracker entry, Cycle-17D HALTED 2026-05-10 pre-experiment per operator pick β, earliest readiness re-check 2026-06-14) |
 | Items BLOCKED | 2 (PROFIT-EVID-001 — awaiting contract decision on non-trading evidence intake; PROFIT-PHASE3-003 — first OOS corpus build deferred / blocked on paper-trade volume crossing the ≥30 resolved Rule 1 floor) |
 | Items RESOLVED | 3 (PROFIT-SEC-001 — Kalshi signing fail-fast, Phase-2 commit `ce70924`; PROFIT-OBS-006 — subreddit selector observability, Phase-2 commit `1d0714c`; PROFIT-DOC-001 — governance LLM gotchas in CLAUDE.md, Phase-2 commit `b1e1a0c`) |
 | Items COMPLETE | 54 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-VALID-001, PROFIT-STARTUP-001, PROFIT-CFG-001, PROFIT-STRUCT-001, PROFIT-STRUCT-002, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-EDGE-005, PROFIT-EDGE-006, PROFIT-EDGE-007, PROFIT-EDGE-008, PROFIT-EDGE-009, PROFIT-EDGE-010, PROFIT-EDGE-011, PROFIT-DOSSIER-001, PROFIT-GOV-001, PROFIT-GOV-002, PROFIT-DOC-002, PROFIT-OBS-003, PROFIT-OBS-004, PROFIT-CUTOVER-001, PROFIT-PHASE2-001, PROFIT-DEBT-OQ1-SHIM, PROFIT-SOURCE-001, PROFIT-DEBT-WAVE1-DRAFTS) |
@@ -67,7 +67,7 @@
 <!-- Merged from docs/EDGE_STATUS.md on 2026-05-09 (docs/ consolidation initiative). EDGE_STATUS.md deleted post-merge. EDGE-004 closure-path TLDR v2.2 + v3 archived to docs/_archive/2026-05-09-docs-consolidation/. -->
 
 > **Operator-facing edge dashboard.** Refresh by commit. Single page; replaces 100+ doc index for "are we making money?" questions.
-> **Last refresh:** 2026-05-07 cycle-16E scorer-forensics run.
+> **Last refresh:** 2026-05-26 Codex paper-trade pipeline architecture audit.
 
 ### 2.0 v0.30.x Data/Runtime Alignment Audit (2026-05-13)
 
@@ -5474,22 +5474,148 @@ not changed by the Codex pass.
 
 ---
 
+### PROFIT-PIPELINE-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-PIPELINE-001 |
+| **Title** | Paper-trade conversion funnel architecture gap inventory |
+| **Category** | Architecture / observability / signal-quality |
+| **Severity** | HIGH (trade volume is the binding constraint for every data-driven calibration plan) |
+| **Status** | ACTIVE — feedback-loop observability shipped 2026-05-26; runtime tuning remains operator-gated |
+| **Priority** | NOW for read-only instrumentation/planning; behavior changes still require operator approval |
+| **Owner** | Operator + next implementation agent; Codex authored current gap reconciliation |
+| **Depends On** | Current paper logs, `data/paper_trades.db`, PROFIT-ALIGN-001 surfaces, PROFIT-MATCH-DYNAMIC feedback |
+| **Blocks** | Empirical closure of PROFIT-PHASE3-003, PROFIT-ALIGN data-driven tuning, and any confidence in readiness-gate changes |
+
+**Current finding**
+
+The architecture is not hard-blocked from paper trading. Current evidence shows
+the paper execution path is live:
+
+- `data/paper_trades.db`: 10 lifetime paper trades, 8 resolved, latest trade
+  `2026-05-25T18:36:44Z` on `KXUSAIRANAGREEMENT-27-26JUN`.
+- `logs/trades/archive/2026/05/2026-05-25.jsonl`: 54,236 events with
+  397 `EARLY_FRESH_PASS`, 197 `MATCH_DIAGNOSTIC`, 66
+  `SIGNAL_ANALYSIS_DETAIL`, 54 `MATCH_LLM_REVIEW`, 1 `SIGNAL`, 1
+  `OPPORTUNITY`, 1 `BLEND_DECISION`, and 1 `PAPER_TRADE`.
+- `logs/trades/live/trades.jsonl` after midnight UTC on 2026-05-26 showed
+  only intake freshness events so far (12 `EARLY_FRESH_PASS`, 486
+  `EARLY_STALE_DROP`), not a fresh execution-path failure.
+
+Therefore the current architecture gap is **conversion and auditability**, not
+"pipeline cannot reach executor." The pipeline reaches paper execution rarely;
+the binding questions are where good candidates die, whether matcher recovery is
+letting useful multi-token candidates through without silently re-admitting known
+bad bridges, and whether source/market mix produces enough non-neutral LLM
+verdicts to make calibration evidence accumulate.
+
+**Reconciliation against existing plans**
+
+- `PROFIT-EDGE-012` remains active, but its 2026-05-16 "0 post-clean-start
+  rows" readiness framing is no longer the freshest operating fact. Keep it as
+  the Cycle-17 redesign gate; do not use it as proof of an executor reachability
+  blocker.
+- `PROFIT-EDGE-004` remains historical/currently-not-blocking. Its broad
+  matcher / market-mix / source-mix diagnosis is still directionally useful,
+  but active execution belongs here plus `PROFIT-EDGE-012`.
+- `PROFIT-OBS-003` remains complete. The old 240/260 silent-exit era should not
+  be re-opened unless a fresh OPPORTUNITY-without-SKIPPED/PAPER_TRADE gap
+  recurs in current logs.
+- `PROFIT-PHASE3-003` remains blocked on corpus volume. The latest DB state
+  (8 resolved / 30 minimum) confirms this is a data-volume gate, not a missing
+  replay-framework gate.
+- `PROFIT-ALIGN-001` remains in progress for data-driven closure. The Codex
+  follow-up made floor-clamp, LLM-dedup, and scaffolded observability safer, but
+  it also created one new audit need: explicit matcher-weight breakdowns after
+  mean-composition.
+- `PROFIT-VALID-001` remains in the pre-go-live table as a reproducibility
+  harness requirement. It is not the immediate paper-trade-volume blocker.
+
+**Implemented feedback-loop surfaces, priority order**
+
+1. **PROFIT-MATCH-OBS-001 — matcher-weight breakdowns.** Shipped in
+   `78f00f6`: `MATCH_WEIGHT_APPLIED` records overlapped tokens, per-token
+   weights/status (`default` / `provisional` / `automatic` / `pinned`), mean
+   composition rule, final multiplier, and pre/post weight score. Test:
+   `tests/test_market_matcher.py::TestFindCandidates::test_match_weight_applied_logs_per_token_mean_multiplier`.
+2. **Feedback-weight status summary.** Shipped in `9f14113`:
+   `analysis.match_feedback.summarize_weight_status()` makes current weight
+   state auditable as provisional, pinned, automatic, or recovered. Test:
+   `tests/test_match_feedback.py::TestSummarizeWeightStatus`.
+3. **PROFIT-FUNNEL-001 — daily paper-trade conversion funnel.** Shipped in
+   `f9af903`: `scripts/pipeline_feedback_report.py` summarizes
+   fresh-pass -> matcher -> weight -> LLM-review -> signal -> blend -> skipped
+   -> paper-trade counts, top reasons, and top tickers. Test:
+   `tests/test_pipeline_feedback_report.py::TestPipelineFunnelReport`.
+4. **PROFIT-SOURCE-FRESH-001 — stale-source admission audit.** Shipped in
+   `806fefc`: the same report groups `EARLY_FRESH_PASS` /
+   `EARLY_STALE_DROP` by source, source class, and reason so stale churn can be
+   separated from true source starvation. Test:
+   `tests/test_pipeline_feedback_report.py::TestSourceFreshnessReport`.
+5. **PROFIT-MARKET-MIX-001 — LLM-neutral / market-universe audit.** Shipped in
+   `ab0b939`: the same report groups `MATCH_DIAGNOSTIC`,
+   `MATCH_LLM_REVIEW`, neutral/true-positive LLM verdicts, `SIGNAL`, and
+   `OPPORTUNITY` by market prefix and source class. Test:
+   `tests/test_pipeline_feedback_report.py::TestMarketMixReport`.
+
+**Explicit non-deletions / not-current blockers**
+
+Do not delete `PROFIT-EDGE-004`, the old OBS-003 silent-exit audit, or the
+Cycle-17 readiness history. They remain useful forensic context. Mark them as
+historical/currently-not-blocking for the live paper-trade question because the
+current DB/log state proves paper execution can happen.
+
+**Acceptance criteria for this entry to close**
+
+1. `PROFIT-MATCH-OBS-001` or equivalent matcher-weight observability lands —
+   done in `78f00f6`.
+2. A repeatable conversion-funnel report exists and is linked here — done in
+   `f9af903`.
+3. Freshness/source audit distinguishes harmless stale churn from true source
+   starvation — reporting surface done in `806fefc`; interpretation remains a
+   rolling operator review task.
+4. Market-mix/LLM-neutral audit identifies whether recall changes improve
+   signal yield or mainly increase neutral review volume — reporting surface
+   done in `ab0b939`; interpretation remains a rolling operator review task.
+5. Operator explicitly decides whether any resulting behavior changes are in
+   scope; this entry itself must not change gates, sizing, runtime state, or
+   paper/live mode.
+
+**Cross-references**
+
+- `logs/trades/archive/2026/05/2026-05-25.jsonl` — latest full-day conversion
+  evidence with one `PAPER_TRADE`.
+- `logs/trades/live/trades.jsonl` — current rolling log.
+- `data/paper_trades.db` — paper-trade corpus (10 total / 8 resolved as of
+  2026-05-26 audit).
+- `analysis/market_matcher.py` — matcher downweight composition.
+- `analysis/match_feedback.py` + `data/matcher_token_weights.json` — dynamic
+  feedback and provisional seed weights.
+- `scripts/pipeline_feedback_report.py` — repeatable funnel / freshness /
+  market-mix feedback report.
+- `analysis/signal_analyzer.py` + `tasks/blend_task.py` + `trading/executor.py`
+  — signal, blend/readiness, and execution funnel stages.
+
+---
+
 ## Execution Views
 
 ---
 
 ### A. Current Profit-Path Fix Queue
 
-Open or blocked items, ordered for safe sequential execution. **Updated 2026-05-16 post-Phase-2 close and POST_FIX_NEW readiness audit** to remove closed cutover/soak/OBS-003/OBS-004 items and route active edge work through `PROFIT-EDGE-012`.
+Open or blocked items, ordered for safe sequential execution. **Updated 2026-05-26 paper-trade pipeline architecture audit** to add the current conversion-funnel gap (`PROFIT-PIPELINE-001`) while retaining historical Cycle-17 / EDGE framing for governance continuity.
 
 | Order | ID | Title | Why this order |
 |-------|----|-------|---------------|
-| 1 | PROFIT-EDGE-012 | Cycle-17C/D redesign halted pending POST_FIX_NEW corpus readiness | ACTIVE edge tracker. 2026-05-16 read-only audit: `NOT_READY` (0 post-clean-start rows; strict floor 200). Next action is scheduled re-check / watcher hardening, not deploy. |
-| 2 | PROFIT-EDGE-004 | Pipeline reaches executor with `edge = 0.0`; matcher / market-mix / source-mix root cause | Historical parent/root-cause cluster. Active execution moved to `PROFIT-EDGE-012` after IC §16 replayed-EV gate and Cycle-17D halt. |
-| 3 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible; needed before P4-GATE. |
-| 4 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Blocked on contract decision for rejected-evidence intake semantics. |
-| 5 | PROFIT-STRUCT-002 | Verify EDGE-002 sub-fix #4 runtime cause-emission format | Verification-only; small observability gap; can run in parallel with higher-priority read-only audits. |
-| 6 | PROFIT-CAL-001 follow-up sample | Calibration outcome feedback | Core item complete; next footnote milestone is ≥10-resolution sample with ≥2 distinct lanes populated, which depends on EDGE-012 / EDGE-004 progress. |
+| 1 | PROFIT-PIPELINE-001 | Paper-trade conversion funnel architecture gap inventory | ACTIVE current blocker framing. Pipeline can execute paper trades; the next safe work is read-only conversion/observability, especially matcher-weight breakdowns and daily funnel reporting. |
+| 2 | PROFIT-EDGE-012 | Cycle-17C/D redesign halted pending POST_FIX_NEW corpus readiness | ACTIVE governance/experiment tracker. 2026-05-16 read-only audit remains historical gate evidence, but current paper DB/log evidence supersedes the "0 post-clean-start rows" fact for executor reachability. |
+| 3 | PROFIT-EDGE-004 | Pipeline reaches executor with `edge = 0.0`; matcher / market-mix / source-mix root cause | Historical/currently-not-blocking parent cluster. Keep as forensic context; active execution moved to `PROFIT-PIPELINE-001` + `PROFIT-EDGE-012`. |
+| 4 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible; needed before P4-GATE, not the immediate paper-trade-volume blocker. |
+| 5 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Blocked on contract decision for rejected-evidence intake semantics. |
+| 6 | PROFIT-STRUCT-002 | Verify EDGE-002 sub-fix #4 runtime cause-emission format | Verification-only; small observability gap; can run in parallel with higher-priority read-only audits. |
+| 7 | PROFIT-CAL-001 follow-up sample | Calibration outcome feedback | Core item complete; next footnote milestone is ≥10-resolution sample with ≥2 distinct lanes populated, which depends on paper-trade volume improving. |
 
 **Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence. **Cutover-specific note (2026-05-01):** items 3–10 are all Mac Studio work — do not re-run any of them on the MacBook. The MacBook is read-only archive after 2026-05-01T13:05:54Z.
 
