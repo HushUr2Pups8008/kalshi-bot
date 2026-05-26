@@ -13,6 +13,7 @@ import pytest
 import config as _cfg_module
 from analysis.market_matcher import (
     MarketMatcher,
+    _combined_token_downweight,
     _compute_pre_llm_match_meta,
     _tokenize,
     _similarity,
@@ -339,6 +340,50 @@ class TestFindCandidates:
         score = payload["market_specificity_score"]
         assert isinstance(score, float)
         assert 0.0 <= score <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_match_weight_applied_logs_per_token_mean_multiplier(self, matcher, monkeypatch):
+        market = _make_market(
+            "KXNEWDEAL-JUN01",
+            "Will Trump sign an Iran nuclear deal in June?",
+        )
+        matcher._cache.get_markets = AsyncMock(return_value=[market])
+        news = _make_news("Trump announces Iran nuclear deal breakthrough")
+
+        weights = {
+            "KXNEWDEAL:deal": {
+                "weight": 0.25,
+                "pinned": False,
+                "_seed_status": "provisional",
+            },
+        }
+        monkeypatch.setattr("analysis.match_feedback.load_weights", lambda: weights)
+
+        from analysis import market_matcher as mm
+
+        calls = []
+        monkeypatch.setattr(mm.trade_log, "log_match_diagnostic", lambda **kwargs: None)
+        monkeypatch.setattr(
+            mm.trade_log,
+            "log_match_weight_applied",
+            lambda **kwargs: calls.append(kwargs),
+            raising=False,
+        )
+
+        results = await matcher.find_candidates(news)
+
+        assert results
+        assert len(calls) == 1
+        payload = calls[0]
+        assert payload["ticker"] == "KXNEWDEAL-JUN01"
+        assert payload["market_prefix"] == "KXNEWDEAL"
+        assert payload["composition_rule"] == "mean"
+        assert payload["token_weights"]["deal"]["weight"] == pytest.approx(0.25)
+        assert payload["token_weights"]["deal"]["status"] == "provisional"
+        assert payload["final_multiplier"] == pytest.approx(
+            _combined_token_downweight(set(payload["tokens"]), "KXNEWDEAL", weights)
+        )
+        assert payload["final_multiplier"] > 0.25
 
     def test_compute_pre_llm_match_meta_filters_feature_stopwords(self):
         meta = _compute_pre_llm_match_meta(
