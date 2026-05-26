@@ -13,6 +13,7 @@ from analysis.match_feedback import (
     get_token_weight,
     ingest_review_events,
     load_weights,
+    summarize_weight_status,
     update_weights_from_stats,
     write_weights,
 )
@@ -202,6 +203,32 @@ class TestGetTokenWeight:
     def test_corrupted_weight_falls_back_to_one(self):
         weights = {"P:t": {"weight": "not a float"}}
         assert get_token_weight("t", "P", weights=weights) == 1.0
+
+
+class TestSummarizeWeightStatus:
+    def test_counts_pinned_provisional_automatic_and_recovered(self):
+        weights = {
+            "P:pinned": {"weight": 0.2, "pinned": True},
+            "P:provisional": {"weight": 0.4, "pinned": False, "_seed_status": "provisional"},
+            "P:auto": {"weight": 0.3, "pinned": False, "fp_rate": 0.7, "total": 12},
+            "P:recovered": {"weight": 1.0, "pinned": False, "fp_rate": 0.0, "total": 20},
+        }
+
+        summary = summarize_weight_status(weights)
+
+        assert summary["total_entries"] == 4
+        assert summary["counts"] == {
+            "pinned": 1,
+            "provisional": 1,
+            "automatic": 1,
+            "recovered": 1,
+        }
+
+    def test_missing_metadata_counts_as_automatic(self):
+        summary = summarize_weight_status({"P:legacy": {"weight": 0.5}})
+
+        assert summary["counts"]["automatic"] == 1
+        assert summary["entries"]["P:legacy"]["status"] == "automatic"
 
 
 # ---------------------------------------------------------------------------
