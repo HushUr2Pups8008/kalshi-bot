@@ -312,6 +312,12 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
     evidence = bot._evidence_queue.get_nowait()
     assert analysis.signal_meta["trigger_evidence_id"] == evidence.evidence_id
+    assert analysis.signal_meta["trigger_evidence_source"] == evidence.source
+    assert analysis.signal_meta["trigger_evidence_source_class"] == evidence.source_class
+    assert analysis.signal_meta["trigger_evidence_headline"] == evidence.headline
+    assert analysis.signal_meta["trigger_evidence_ingested_ts"] == evidence.ingested_ts
+    assert analysis.signal_meta["trigger_evidence_content_hash"] == evidence.content_hash
+    assert analysis.signal_meta["trigger_evidence_original_weight"] > 0.0
     assert analysis.news_item is news
     assert analysis.market.ticker == "KXTEST-25DEC31"
     assert analysis.estimated_probability == pytest.approx(0.65)

@@ -369,6 +369,112 @@ async def test_trigger_evidence_id_is_deduplicated_with_recent_evidence():
 
 
 @pytest.mark.asyncio
+async def test_trigger_evidence_counts_for_g6_before_dossier_catches_up():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    now = datetime(2026, 4, 20, 12, tzinfo=UTC)
+    stale_ts = datetime(2026, 4, 18, 12, tzinfo=UTC).isoformat()
+    store = FakeStore(
+        dossier=_dossier(),
+        structural_prior=_structural_prior(),
+        evidence=[
+            _evidence("ev-old-news", source_class="news", ingested_ts=stale_ts),
+            _evidence("ev-old-official", source_class="official", ingested_ts=stale_ts),
+        ],
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=store,
+        logger=logger,
+        is_paper_mode=True,
+        now=lambda: now,
+    )
+    analysis = _analysis()
+    analysis.signal_meta = {
+        "trigger_evidence_id": "ev-trigger",
+        "trigger_evidence_source": "Reuters",
+        "trigger_evidence_source_class": "news",
+        "trigger_evidence_headline": "Fresh trigger",
+        "trigger_evidence_ingested_ts": now.isoformat(),
+        "trigger_evidence_content_hash": "hash-ev-trigger",
+        "trigger_evidence_original_weight": 0.8,
+    }
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.ready is True
+    assert result.trade_blocked_reason is None
+    assert "G6_recency_score" not in result.readiness_decision.failure_reasons
+
+
+@pytest.mark.asyncio
+async def test_stale_accumulation_without_trigger_still_fails_g6():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    now = datetime(2026, 4, 20, 12, tzinfo=UTC)
+    stale_ts = datetime(2026, 4, 18, 12, tzinfo=UTC).isoformat()
+    store = FakeStore(
+        dossier=_dossier(),
+        structural_prior=_structural_prior(),
+        evidence=[
+            _evidence("ev-old-news", source_class="news", ingested_ts=stale_ts),
+            _evidence("ev-old-official", source_class="official", ingested_ts=stale_ts),
+        ],
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=store,
+        logger=logger,
+        is_paper_mode=True,
+        now=lambda: now,
+    )
+
+    result = await task.process_fast_lane_result(_analysis())
+
+    assert result.ready is False
+    assert result.trade_blocked_reason == "G6_recency_score"
+    assert "G6_recency_score" in result.readiness_decision.failure_reasons
+
+
+@pytest.mark.asyncio
+async def test_trigger_evidence_source_class_counts_for_g2():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    now = datetime(2026, 4, 18, 12, tzinfo=UTC)
+    store = FakeStore(
+        dossier=_dossier(),
+        structural_prior=_structural_prior(),
+        evidence=[_evidence("ev-news", source_class="news", ingested_ts=now.isoformat())],
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=store,
+        logger=logger,
+        is_paper_mode=True,
+        now=lambda: now,
+    )
+    analysis = _analysis()
+    analysis.signal_meta = {
+        "trigger_evidence_id": "ev-trigger",
+        "trigger_evidence_source": "White House",
+        "trigger_evidence_source_class": "official",
+        "trigger_evidence_headline": "Fresh official trigger",
+        "trigger_evidence_ingested_ts": now.isoformat(),
+        "trigger_evidence_content_hash": "hash-ev-trigger",
+        "trigger_evidence_original_weight": 0.8,
+    }
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.ready is True
+    assert result.trade_blocked_reason is None
+    assert (
+        "G2_evidence_source_class_diversity"
+        not in result.readiness_decision.failure_reasons
+    )
+
+
+@pytest.mark.asyncio
 async def test_blocked_candidate_logs_reason_and_does_not_enqueue():
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     logger = SpyLogger()

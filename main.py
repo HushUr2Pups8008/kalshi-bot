@@ -63,6 +63,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Awaitable, Callable  # noqa: F401 — referenced in string annotations
 
 from analysis import SignalAnalysis
+from analysis.evidence_scorer import source_quality
 from analysis.kelly import kelly_bet
 from tasks.stats.keyword_stats import KeywordStats
 from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
@@ -1197,6 +1198,12 @@ class TradingBot:
             analysis.signal_meta = {
                 **(analysis.signal_meta or {}),
                 "trigger_evidence_id": evidence.evidence_id,
+                "trigger_evidence_source": evidence.source,
+                "trigger_evidence_source_class": evidence.source_class,
+                "trigger_evidence_headline": evidence.headline,
+                "trigger_evidence_ingested_ts": evidence.ingested_ts,
+                "trigger_evidence_content_hash": evidence.content_hash,
+                "trigger_evidence_original_weight": source_quality(evidence.source_class),
             }
             try:
                 self._evidence_queue.put_nowait(evidence)
