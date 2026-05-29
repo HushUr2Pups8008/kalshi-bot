@@ -19,6 +19,7 @@ from analysis import SignalAnalysis
 from analysis import decision_blender
 from analysis.decision_blender import BlendResult, LaneInput
 from analysis.dossier_builder import half_life_for_regime, recency_score
+from analysis.evidence_scorer import source_quality
 from config import PAPER_MIN_EDGE, cfg
 from kalshi import KalshiMarket
 from tasks import evidence_store
@@ -209,6 +210,7 @@ class BlendTask:
             blend_result=blend_result,
             dossier=dossier,
             recent_records=recent_records,
+            trigger_record=_trigger_evidence_record(fast_lane_result),
             market=market,
             default_min_edge=default_min_edge,
             now=self._now(),
@@ -602,23 +604,71 @@ def _readiness_input(
     blend_result: BlendResult,
     dossier: DossierState | None,
     recent_records: list[EvidenceRecord],
+    trigger_record: EvidenceRecord | None = None,
     market: KalshiMarket,
     default_min_edge: float,
     now: datetime,
 ) -> dict[str, Any]:
     source_lane = "accumulation" if (dossier is not None and dossier.current_estimate is not None) else "fast"
+    readiness_records = _readiness_records(recent_records, trigger_record)
     return {
         "source_lane": source_lane,
         "blended_confidence": blend_result.blended_confidence,
         "disagreement_score": blend_result.disagreement_score,
         "default_min_edge": default_min_edge,
         "evidence_source_classes": [
-            record.source_class for record in recent_records
+            record.source_class for record in readiness_records
         ],
         "drift_suspect": dossier.drift_suspect if dossier is not None else False,
         "in_recovery": dossier.in_recovery if dossier is not None else False,
-        "recency_score": _recency_score(market, recent_records, now),
+        "recency_score": _recency_score(market, readiness_records, now),
     }
+
+
+def _trigger_evidence_record(analysis: SignalAnalysis) -> EvidenceRecord | None:
+    meta = analysis.signal_meta or {}
+    evidence_id = meta.get("trigger_evidence_id")
+    source_class = meta.get("trigger_evidence_source_class")
+    ingested_ts = meta.get("trigger_evidence_ingested_ts")
+    if not (
+        isinstance(evidence_id, str)
+        and evidence_id
+        and isinstance(source_class, str)
+        and source_class
+        and isinstance(ingested_ts, str)
+        and ingested_ts
+    ):
+        return None
+    original_weight = meta.get("trigger_evidence_original_weight")
+    if not isinstance(original_weight, int | float):
+        original_weight = source_quality(source_class)
+    return EvidenceRecord(
+        evidence_id=evidence_id,
+        market_ticker=analysis.market.ticker,
+        source=str(meta.get("trigger_evidence_source") or "unknown"),
+        source_class=source_class,
+        headline=str(meta.get("trigger_evidence_headline") or ""),
+        ingested_ts=ingested_ts,
+        content_hash=str(meta.get("trigger_evidence_content_hash") or evidence_id),
+        update_type="state",
+        dossier_version_before=0,
+        dossier_version_after=0,
+        original_weight=float(original_weight),
+    )
+
+
+def _readiness_records(
+    recent_records: list[EvidenceRecord],
+    trigger_record: EvidenceRecord | None,
+) -> list[EvidenceRecord]:
+    records: list[EvidenceRecord] = []
+    seen: set[str] = set()
+    for record in [trigger_record, *recent_records]:
+        if record is None or record.evidence_id in seen:
+            continue
+        records.append(record)
+        seen.add(record.evidence_id)
+    return records
 
 
 def _evidence_ids_for_blend(
