@@ -496,7 +496,16 @@ def build_daily_review(
         )
     with stage_timer("source scorecard", enabled=show_profile):
         scorecard_stats = source_scorecard.summarize(
-            trades_path, paper_db_path, since, until, exclude_test=exclude_test,
+            trades_path,
+            paper_db_path,
+            since,
+            until,
+            exclude_test=exclude_test,
+            # A(ii): judge tier recommendations over a wide horizon, not the 24h
+            # display window -- "zero signals" is only meaningful over ~45d given
+            # the bot emits ~1 SIGNAL/day across all sources. Lifetime-yield veto
+            # (A(i)) is always on inside summarize.
+            recommendation_window_days=source_scorecard.DEFAULT_RECOMMENDATION_WINDOW_DAYS,
         )
 
     if show_profile:
@@ -984,7 +993,14 @@ def build_daily_review(
                     f"paper={row.get('paper_trades', 0)} "
                     f"resolved={resolved} "
                     f"win_rate={paper_performance_drilldown.fmt_pct(row.get('win_rate'))} "
-                    f"pnl={pnl_display}"
+                    f"pnl={pnl_display} "
+                    # B: lifetime funnel beside each tier verdict, so a "remove
+                    # immediately" recommendation is always shown with the source's
+                    # real all-time yield (posts -> signals -> opportunities -> trades).
+                    f"| life: posts={row.get('lifetime_posts', 0)} "
+                    f"sig={row.get('lifetime_signals', 0)} "
+                    f"opp={row.get('lifetime_opportunities', 0)} "
+                    f"trade={row.get('lifetime_trades', 0)}"
                 )
     disabled_source = grouped.get("disabled by source", []) or []
     disabled_family = grouped.get("disabled by family", []) or []

@@ -5659,6 +5659,69 @@ ones (edge set, geo dedup) preserve behavior and still need operator deploy):**
   default already covers unlisted sources.
 - **#13 source-credibility params** — instrument-only; current values reasonable.
 - **#14 `matcher_token_weights.json`** — has the loop; add scheduled recompute + orphan-prune.
+
+### PROFIT-ROT-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-ROT-002 |
+| **Title** | Source-scorecard tier recommendation was staleness-only over a 24h window |
+| **Category** | Observability honesty / operator-facing recommendation quality |
+| **Severity** | MEDIUM (advisory output only — "remove immediately" is a printed recommendation, NOT an auto-disable; the real disable lists are `config.DISABLED_NEWS_SOURCES`. No trade-path / sizing / signing / persisted-state risk. The harm is an operator trusting the recommendation and manually deleting top producers.) |
+| **Status** | FIXED in working tree v0.32.6 (operator-deploy pending). Four LOW followups deferred below. |
+| **Owner** | Operator + implementation agent (Claude implemented + an independent 4-lens adversarial review reconciled; reporting-only so no replay-EV gate, but operator approves the deploy). |
+| **Depends On** | `tasks/stats/source_stats.py` (`source_stats` table + `last_signal`), `scripts/source_scorecard.py`, `scripts/daily_review.py`. |
+| **Blocks** | Nothing hard; restores trust in the `daily` source-tier recommendations. |
+
+**Context.** The `daily` report recommended **"remove immediately"** for the bot's two
+largest lifetime opportunity producers — "Middle East and north Africa | The Guardian"
+(140 lifetime signals / 123 opportunities) and "NYT > World News" (62 / 54). Root cause:
+`source_scorecard.auto_disable_candidate` judged `stale_drop_ratio ≥ 0.80 + signals == 0`
+over the report's **24h display window** (`DEFAULT_CURRENT_STATE_WINDOW_HOURS = 24`). The
+bot emits **~1 SIGNAL/day across all sources combined** (~158 lifetime), so any single
+source shows `signals == 0` in almost any 24h window — the judging window was ~100× shorter
+than the per-source signal inter-arrival time. The recommendation was structurally broken
+for a selective, low-signal-rate bot. The yield data to fix it already existed (`source_stats`
+lifetime funnel) but the recommendation never consulted it and the report never showed it.
+
+**Fixed (working tree, v0.32.6).**
+
+- **A(i) lifetime-yield veto** (`has_lifetime_yield` + `read_lifetime_totals`): a source that
+  has produced a signal/opportunity/trade is never auto-flagged "remove immediately" /
+  "likely prune"; it falls through to `watch / investigate`.
+- **Recency bound** (`_lifetime_yield_recent`): the veto requires `last_signal` within the
+  recommendation window, tied to the same 45d horizon as A(ii) so the two cannot diverge. A
+  source proven once and signal-dead past the window loses immunity and is flagged again —
+  closes the inverse-dishonesty risk an unbounded veto would create (a single ancient signal =
+  permanent immunity). Surfaced by the adversarial review against live data (14 sources were
+  signal-dead >30d with lifetime yield).
+- **A(ii) wide window** (`collect_log_metrics_windowed`, `DEFAULT_RECOMMENDATION_WINDOW_DAYS = 45`):
+  zero-signal/staleness judged over 45d in a single bucketed log pass (no redundant second scan).
+- **B funnel render**: `daily` Section 8 + scorecard group rows print
+  `life: posts/sig/opp/trade` beside every verdict.
+- Verified on live data: MENA Guardian / NYT World / Politics / Defense News / Ukraine|Guardian
+  moved `remove immediately → watch / investigate`; genuinely-zero-yield "World | Deutsche Welle"
+  correctly stays `prune`; the `remove immediately` bucket now holds only zero-lifetime sources.
+- Tests: `tests/test_source_scorecard.py` (+11 incl. veto, recency-expiry, rec-window-boundary,
+  NULL coercion), `tests/test_daily_review.py` (kwarg + Section 8 funnel regression guard).
+  Full suite 2474 passed (1 pre-existing unrelated `matcher_token_weights.json` failure).
+
+**Deferred followups (LOW — from the adversarial review).**
+
+- **Daily-report cost:** the 45d recommendation scan adds ~3s to every `daily` run (the
+  inherent cost of a 45d log judgment; the bucketed pass already removed the redundant 24h
+  re-read). Optional cheaper path: derive signal-recency from `source_stats` (free DB read)
+  and keep staleness on the display window, avoiding the 45d log scan entirely. Tunable:
+  `DEFAULT_RECOMMENDATION_WINDOW_DAYS`.
+- **Recency horizon tuning:** the veto recency bound = 45d (tied to the rec window). 30d would
+  flag borderline cases sooner (e.g. Defense News, last signal ~30d ago). Operator preference.
+- **Test isolation hygiene:** several pre-existing shared-memory tests in
+  `tests/test_source_scorecard.py` close their SQLite connection inside `try` rather than
+  `finally`, leaking a `cache=shared` in-memory DB on assertion failure. Deterministically
+  green here (0/25 runs; `pytest-randomly` not installed), but move `conn.close()` into `finally`.
+- **Window-scoped sources:** a source present only in `source_stats` (proven, but zero records in
+  the display/rec window) is not scored/rendered — matches the report's explicit window-scoping,
+  noted so a future reader does not treat the omission as a bug.
 - **`_SERIES_PRIORS` Phase 1b/2/3** — per-decision shape-mismatch telemetry, then replay-EV-gated
   auto-derivation (extend `_derive_series_prior_from_metadata`), then prune the 8 orphans.
 
