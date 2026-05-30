@@ -5872,6 +5872,73 @@ governance, referencing the Cycle-17D charter that set 200.
   highest risk). All HIGH blast radius (trade-decision inputs) → high-assurance + replay-EV + operator
   deploy; levers target lane DATA, never gate thresholds. Upside: directional only (~8 resolved), "a
   handful/day", MUST replay-EV the sign. Source: workflow `wspcz01dz`.
+- 2026-05-30 — **L-dossier Tier-A SIZING (read-only) → VERDICT GO-WITH-CAVEATS, Half A only.** Source:
+  workflow `wni1c3mvr`. DB (`evidence_store.db`): 58 dossiers, 39 inert (p≈0.5), **32 inert-but-"real"**
+  (conf≥0.20 → dilute; conf median 0.29, max 0.76); 35/58 G2-monoculture; **all 58 structural priors
+  <0.70** (llm_called=False, can never fail-safe). Counterfactual recovery (158 BLEND_DECISIONs, blend
+  math reproduced 158/158): 43 diluted, 17 gross G1-clears on inert-lane-drop **but 13 have blended_p=0.5
+  (zero edge → never trade)** → real prize **~4 full-corpus / ~1 post-fix; edge-recoverable = 0**.
+  Existence-proof, single-digit n — NOT a rate. The dominant post-fix blocker is G2/G6 + opportunity
+  throughput (5 of 8 post-fix blocks are G2/G6), which Tier A does NOT touch. **CONFIRMED BUG (the 158/158
+  reproduction proves it):** the regime-weight KEY MISMATCH — `regime_weights.get("accumulation",0.0)=0.0`
+  because `compute_regime_weights` emits `{fast,interpretation,structural}` but the lane is `lane_id=
+  "accumulation"` (`decision_blender.py:169` vs `blend_task.py:411` vs `regime_classifier.py:359`); the
+  accumulation lane is silently zeroed for every dossier-backed blend (worse as rc rises). **Recommendation:**
+  fix the key-mismatch (Half A) on **CORRECTNESS** grounds (not the tiny recovery), gated TDD + adversarial
+  review + `replay-gate-analyze` + operator deploy; **DEFER** Half B (fallback-filter widening — un-sizeable,
+  false-negative risk, two-edged). Two confirmed blender defects worth filing (key-mismatch; structural
+  `llm_called=False`). **Meta-pattern: every technical lever (gate, match, dossier Tier-A) sizes to
+  tiny/un-sizeable on single-digit data — the strongest evidence-forced argument yet for C3.**
+- 2026-05-30 — **OPERATOR DECISIONS.** (1) **C3 ADOPTED** — live-readiness re-anchored to the IC §16.7
+  EV-quality criterion (`docs/governance/2026-05-30-readiness-bar-ev-quality-proposal.md`, Status ADOPTED).
+  Governance decision made; code implementation (§7) is gated + corpus-coupled, lands with
+  PROFIT-PHASE3-003 (no live-flip effect until ≥30 resolved exists + passes the replay-gate T3 EV test;
+  PAPER-ONLY holds). (2) **Key-mismatch fix authorized** (Tier-A Half A) — fix the regime-weight key
+  mismatch on correctness grounds, under high-assurance (TDD + adversarial review + replay-gate-analyze +
+  operator deploy). Half B (fallback-filter widening) DEFERRED. Filing as PROFIT-BLENDER-002.
+
+---
+
+### PROFIT-BLENDER-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-BLENDER-002 |
+| **Title** | Blend regime-weight key mismatch silently zeroed the accumulation lane |
+| **Category** | Trade-decision correctness (blend math / G1 input) |
+| **Severity** | MEDIUM (correctness defect on a trade-decision input; paper-mode; EV-safe per counterfactual — corrective not degrading) |
+| **Status** | FIX IMPLEMENTED + adversarially reviewed (PR #63, branch `fix/blender-regime-weight-key-mismatch`); **operator merge gate pending**. |
+| **Owner** | Implementation agent (TDD + fix) + independent adversarial review; operator approves merge (blend-math/G1-input change). |
+| **Cross-links** | PROFIT-THRUPUT-001 (L-dossier Tier-A Half A); PROFIT-BLENDER-001 (fallback classifier — Half B's surface); PROFIT-PRIORS-002 (regime weights). |
+
+**Bug.** The middle blend lane is `accumulation` in lane space (`LaneInput.lane_id`,
+calibration, telemetry, `source_lane`) but `interpretation` in regime-weight space
+(`analysis/regime_classifier.compute_regime_weights` emits `{fast, interpretation, structural}`).
+`analysis/decision_blender._effective_confidences` did `regime_weights.get(lane.lane_id, 0.0)` →
+`get("accumulation", 0.0)` = **0.0**, silently zeroing the accumulation lane's regime weight for
+every dossier-backed blend (production never emits an `accumulation` key). Proven by a simulator
+reproducing all 158 recorded blends 158/158 only under the buggy key.
+
+**Fix.** Single-point alias `_LANE_TO_REGIME_KEY = {"accumulation": "interpretation"}` resolved at
+the one lookup where the conventions interface; `lane_id` not renamed (entrenched + load-bearing).
+Fictional `"accumulation"`-keyed test fixtures corrected to the production `"interpretation"` key
+(now guard the behavior) + `TestRegimeWeightKeyMapping` (bug-sensitive routing + emitter↔alias
+contract test). `python -B` full suite 2477 passed (1 pre-existing unrelated failure).
+
+**EV-safety (adversarial counterfactual, 158 recorded BLEND_DECISIONs).** 80 change; **0 edge-sign
+flips, 0 spurious DER-2 dominance**; all 16 mode flips are `dominant_lane→weighted_blend` (removes
+bug-manufactured fast dominance); 4 binding-G1 losses, all over-confident marginals haircut by a
+corroborating dossier (same side of 0.5). Corrective, not degrading. **Lens-1 reviewer BLOCK
+("fix not applied") REFUTED** — stale-bytecode artifact in the reviewer's environment; live tree
+verified by Read + git diff + runtime `[0.25,0.25]` + `-B` pytest.
+
+**Fast-follows (tracked, non-blocking).**
+- **Half B** (exclude inert-0.5 dossiers from the blend — the PROFIT-BLENDER-001 fallback classifier
+  cohort with conf≥0.20, 32/58 live dossiers): re-run this exact counterfactual once ≥20 post-fix
+  BLEND_DECISIONs accumulate (post-fix regime currently ~8, bootstrap-blocked). Kept SEPARATE from
+  the Half-A correctness fix (single-variable discipline).
+- **Structural lane `llm_called=False`** (`tasks/structural_task.py`): all 58 structural priors
+  capped <0.70, never reach the fail-safe — separate defect, separate fix.
 
 ---
 
