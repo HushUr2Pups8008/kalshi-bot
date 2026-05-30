@@ -19,6 +19,24 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.32.5] - 2026-05-30
+
+### Added
+
+- **Shared observability checkpoint for the operator reports** (`tasks/stats/observability_checkpoint.py`).
+  `daily_review.py` and `pipeline_impact_audit.py` predated the readiness gate, the edge-prioritization
+  experiment, and the rot-audit layer, so neither surfaced them. Both reports now lead with a
+  **GATES & EXPERIMENTS** section sourced from one collector: POST_FIX_NEW live-readiness verdict +
+  corpus completion (the gate to live), the `ENABLE_NEWS_EDGE_PRIORITIZATION` A/B verdict
+  (opp-rate + edge-cluster EV before/after), feed health, regime-prior orphans, market-horizon drift,
+  active edge-series, and matcher-weight depth. Readiness + A/B computed fresh; the rest read from the
+  daily aggregator's artifacts. Robust to missing inputs (degrades to `n/a`, never crashes a report).
+
+### Removed
+
+- Dead `daily_review.py` ingestion placeholders ("Dropped disabled sources / deduped: not directly
+  observable") that had no data source since 2026-05-12.
+
 ## [0.32.4] - 2026-05-30
 
 ### Added
