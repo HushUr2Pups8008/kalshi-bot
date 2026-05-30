@@ -42,16 +42,20 @@ from pathlib import Path
 
 from tabulate import tabulate
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
+from utils.output_paths import (
+    PAPER_TRADES_DB,
+    PERFORMANCE_REPORTS_DIR,
+    RAW_TRADES_DIR,
+)
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).parent.parent
-JSONL_PATH = REPO_ROOT / "logs" / "trades"
-DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
+JSONL_PATH = RAW_TRADES_DIR
+DB_PATH = PAPER_TRADES_DB
 CACHE_PATH = REPO_ROOT / "logs" / "market_resolution_cache.json"
-LOGS_DIR = REPO_ROOT / "logs"
-REPORTS_DIR = LOGS_DIR / "reports"
+REPORTS_DIR = PERFORMANCE_REPORTS_DIR
 
 PAPER_MIN_EDGE = 0.02
 PAPER_FLAT_CONTRACTS = 5

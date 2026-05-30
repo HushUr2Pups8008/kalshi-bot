@@ -35,6 +35,7 @@ from tasks.stats.edge_series import refresh as refresh_edge_series
 from tasks.stats.feed_health import audit_feeds
 from tasks.stats.market_horizon_audit import audit as audit_market_horizon
 from tasks.stats.regime_prior_audit import audit as audit_regime_priors
+from utils.output_paths import RAW_TRADES_DIR
 
 
 def _iter_review_events(trade_log_root: Path):
@@ -67,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description="Aggregate MATCH_LLM_REVIEW events into per-token FP counters + downweights",
     )
-    p.add_argument("--trade-log-root", type=Path, default=Path("logs/trades"))
+    p.add_argument("--trade-log-root", type=Path, default=RAW_TRADES_DIR)
     p.add_argument("--window-days", type=int, default=14)
     p.add_argument(
         "--dry-run", action="store_true",

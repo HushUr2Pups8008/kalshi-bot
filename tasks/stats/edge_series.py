@@ -41,10 +41,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from utils.output_paths import DERIVED_STATE_DIR, RAW_TRADES_DIR
+
 DEFAULT_WINDOW_DAYS = 45
 DEFAULT_MIN_OPPS = 3
-_PATH_DEFAULT = Path("data/news_edge_series.json")
-_LOGS_DIR_DEFAULT = Path("logs/trades")
+_PATH_DEFAULT = DERIVED_STATE_DIR / "news_edge_series.json"
+_LOGS_DIR_DEFAULT = RAW_TRADES_DIR
 
 
 def _parse_iso(ts: Any) -> datetime | None:

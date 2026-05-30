@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Online-safe daily snapshot of bot DBs to mac_archive/db_snapshots/.
+# Online-safe daily snapshot of bot DBs to the output-root backup directory.
 #
 # Uses `sqlite3 .backup` which is safe against concurrent writes on the
 # running bot — no torn reads, no need to stop the bot. Each run creates
@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
 usage: bash scripts/db_snapshot_backup.sh [--retention-days N] [--dry-run]
 
 Snapshots data/paper_trades.db and data/evidence_store.db to
-mac_archive/db_snapshots/YYYY-MM-DDThhmmZ/ via sqlite3 .backup.
+logs/backups/db_snapshots/YYYY-MM-DDThhmmZ/ via sqlite3 .backup by default.
 
 Options:
   --retention-days N   prune snapshots older than N days (default 7)
@@ -52,7 +52,8 @@ fi
 
 PAPER_DB="$REPO_ROOT/data/paper_trades.db"
 EVIDENCE_DB="$REPO_ROOT/data/evidence_store.db"
-ARCHIVE_ROOT="$REPO_ROOT/mac_archive/db_snapshots"
+OUTPUT_ROOT="${KALSHI_OUTPUT_ROOT:-${KALSHI_LOG_ROOT:-$REPO_ROOT/logs}}"
+ARCHIVE_ROOT="$OUTPUT_ROOT/backups/db_snapshots"
 
 if [[ ! -f "$PAPER_DB" ]]; then
   echo "ERROR: $PAPER_DB not found" >&2

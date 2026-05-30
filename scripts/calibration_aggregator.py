@@ -41,7 +41,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-_DEFAULT_OUTPUT = Path("data/calibration_summary.json")
+from utils.output_paths import DERIVED_STATE_DIR, RAW_TRADES_DIR
+
+_DEFAULT_OUTPUT = DERIVED_STATE_DIR / "calibration_summary.json"
 _MIN_BUCKET_EVIDENCE = 5
 """Below this count, mark bucket as `insufficient_evidence`. Operator
 should not act on Brier-score from buckets below this floor — too noisy."""
@@ -150,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description="Aggregate CALIBRATION_OBSERVATION events into per-archetype Brier-score buckets",
     )
-    p.add_argument("--trade-log-root", type=Path, default=Path("logs/trades"))
+    p.add_argument("--trade-log-root", type=Path, default=RAW_TRADES_DIR)
     p.add_argument("--output", type=Path, default=_DEFAULT_OUTPUT)
     p.add_argument(
         "--dry-run", action="store_true",

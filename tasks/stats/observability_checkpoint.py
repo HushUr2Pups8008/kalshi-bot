@@ -23,9 +23,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-_DATA_DEFAULT = Path("data")
-_DB_DEFAULT = Path("data/paper_trades.db")
-_LOGS_DEFAULT = Path("logs/trades")
+from utils.output_paths import DB_STATE_DIR, DERIVED_STATE_DIR, PAPER_TRADES_DB, RAW_TRADES_DIR
+
+_DATA_DEFAULT = DERIVED_STATE_DIR
+_DB_DEFAULT = PAPER_TRADES_DB
+_LOGS_DEFAULT = RAW_TRADES_DIR
+_RUNTIME_DATA_DEFAULT = DB_STATE_DIR
 
 
 def _d(x: Any) -> dict:
@@ -113,9 +116,11 @@ def collect(
         ("regime_priors", "regime_prior_audit.json"),
         ("market_horizon", "market_horizon_audit.json"),
         ("edge_series", "news_edge_series.json"),
-        ("matcher_weights", "matcher_token_weights.json"),
     ):
         cp[key] = _load_json(data_dir / fname)
+    cp["matcher_weights"] = _load_json(
+        _RUNTIME_DATA_DEFAULT / "matcher_token_weights.json"
+    )
     return cp
 
 

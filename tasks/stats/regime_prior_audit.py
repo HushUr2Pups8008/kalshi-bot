@@ -30,9 +30,10 @@ from tasks.stats.edge_series import (
     _series_of,
     read_opportunity_events,
 )
+from utils.output_paths import DERIVED_STATE_DIR
 
 DEFAULT_MIN_OPPS = 3
-_PATH_DEFAULT = Path("data/regime_prior_audit.json")
+_PATH_DEFAULT = DERIVED_STATE_DIR / "regime_prior_audit.json"
 
 
 def find_orphaned_priors(

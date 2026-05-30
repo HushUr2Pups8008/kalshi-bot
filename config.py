@@ -12,16 +12,16 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+from utils.output_paths import DB_STATE_DIR, OUTPUT_ROOT
+
 load_dotenv(Path(__file__).parent / ".env")
 
 # ── Directories ───────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
-# KALSHI_LOG_ROOT lets tests redirect all log output to a temp directory without
-# touching the runtime default.  Set this env var BEFORE config is imported.
-# At runtime (no override) this resolves to BASE_DIR / "logs" as before.
-_log_root_env = os.environ.get("KALSHI_LOG_ROOT", "")
-LOGS_DIR = Path(_log_root_env) if _log_root_env else BASE_DIR / "logs"
-DATA_DIR = BASE_DIR / "data"
+# KALSHI_OUTPUT_ROOT is the canonical output root. KALSHI_LOG_ROOT remains a
+# compatibility alias handled in utils.output_paths.
+LOGS_DIR = OUTPUT_ROOT
+DATA_DIR = DB_STATE_DIR
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
