@@ -23,7 +23,7 @@
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-05-26 (Codex dynamic feedback loop: PROFIT-PIPELINE-001 now has matcher-weight telemetry, feedback-weight status summaries, and a repeatable pipeline feedback report covering funnel, source freshness, and market-mix / LLM-neutral yield. Current runtime/DB evidence still proves the pipeline can execute paper trades; active gap remains low-conversion attrition plus ongoing audit loop, not "executor unreachable." Paper-only posture preserved; no gate/sizing/paper-live mutation.) |
+| Last Updated | 2026-05-30 (**PROFIT-THRUPUT-001 opened** — opportunity-throughput reframe + "C" execution plan: the funnel works as designed, the binding constraint is a structurally small news-edge surface, and the path to GREEN is edge-quality not volume; most throughput levers manufacture negative-EV volume (forbidden). C1 read-only diagnostics IN PROGRESS (no new trades required). **PROFIT-ROT-002 shipped v0.32.6** — source-scorecard tier recommendations now value-aware (advisory output only). Prior 2026-05-26: Codex dynamic feedback loop added PROFIT-PIPELINE-001 matcher-weight telemetry + repeatable pipeline feedback report; pipeline can execute paper trades, active gap is low-conversion attrition. Paper-only posture preserved.) |
 | Previously Updated | 2026-05-24 (PROFIT-PHASE3-003 registered as DEFERRED — first OOS corpus build blocked on paper-trade volume. Operator picked path A1 over A2/A3/A4 and over option B (storage cost). Schema audit found `cohort_extension` column already present — no migration work needed. Current state: 8/30 resolved paper trades = 27% of Rule 1 floor; pipeline (`build_corpus.py` → `replay_gate.py` → `ci_entry.py` → `.github/workflows/replay-ci-gate.yml`) wired end-to-end and verified by PR #46. PROFIT-PHASE3-002 pass-through is the operational interim; every CI run auto-passes with explicit "operator gate remains authoritative" note until A1 closes. Recent unblocks (PR #41-#44) may move the resolution rate enough to clear the 30-row threshold before the IC §16.7 30-day framework-review deadline; operator decides.) |
 | Previously Updated (older) | 2026-05-23 (Wave-1 backup-branch replay shipped via v0.30.2 / PR #16 — closes the open-fix bookkeeping flagged by `8b2473e` 2026-05-10; 5 backup-branch commits + 6 reviewer-driven follow-on remediations landed on `main`; 4 post-deploy observation canaries remain xfail-strict until soak completes; backup branch retained as forensic anchor through soak. See §2.2 Wave-1 Replay Closure for full SHA map.) |
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
@@ -31,7 +31,7 @@
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
 | Total Items | 70 |
 | Last Updated (P0 closure) | 2026-05-12 (PROFIT-API-001 — Kalshi API Contract Stabilization P0 closure landed on `feature/kalshi-api-contract-p0`; VERSION 0.29.59 → 0.30.0; P-1 through P-10 complete; PAPER-ONLY posture preserved) |
-| Open — HIGH | 4 |
+| Open — HIGH | 5 (incl. PROFIT-THRUPUT-001 — opportunity-throughput reframe / readiness strategy) |
 | Open — MEDIUM | 1 |
 | Open — LOW | 1 |
 | Items IN_PROGRESS | 1 (PROFIT-ALIGN-001 — architecture-review cluster; 9/12 sub-items active or opt-in-wired as of 2026-05-25 Codex follow-up, 1/12 documented-only, 1/12 cross-linked, 1/12 volume-gated for data-driven closure) |
@@ -5732,6 +5732,149 @@ news-ingestion-implementation,series-priors-durability-scope}.md`).
 
 ---
 
+### PROFIT-THRUPUT-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-THRUPUT-001 |
+| **Title** | Opportunity-throughput reframe + "C" execution plan (the path to GREEN is edge-quality, not volume) |
+| **Category** | Profit-path / readiness strategy / structural ceiling |
+| **Severity** | HIGH (this is the binding constraint on reaching live readiness; misframing it wastes cycles building negative-EV volume) |
+| **Status** | OPEN — document of record opened 2026-05-30; C1 read-only diagnostics IN PROGRESS. Updated as evidence lands (see Evidence Log). |
+| **Owner** | Operator (governance fork C3) + implementation agent (C1 read-only now; C2 levers replay-EV-gated + operator deploy). |
+| **Depends On** | Nothing for C1 (read-only). C2 levers depend on C1 findings + replay-EV harness. C3 depends on operator/governance decision. |
+| **Blocks** | Live-readiness (PROFIT-EDGE-012 / POST_FIX_NEW 200-bar), the OOS corpus (PROFIT-PHASE3-003), and ultimately paper→live cutover. |
+| **Cross-links** | Consolidates the throughput framing of `PROFIT-PIPELINE-001` (conversion attrition), `PROFIT-EDGE-004` (market-scope ceiling), `PROFIT-MATCH-001` (match quality), `PROFIT-EDGE-012` (readiness gate), `PROFIT-PHASE3-003` (OOS corpus). Supersedes the throughput sections of `~/.claude/plans/{news-ingestion-implementation,track-b-opportunity-throughput}.md` (both self-superseded in-doc). |
+
+**The reframe (evidence-backed 2026-05-30; falsifies the "pump the dry funnel" premise).**
+Reaching live readiness is NOT a news-volume problem. The funnel works as designed; the
+binding constraint is a **structurally small news-edge surface**, and most "throughput" levers
+manufacture negative-EV volume on markets the bot has no edge on (INV-6/7 violation). Measured
+over 15 day-partitions (2026-05-16 .. 2026-05-30):
+
+- **99.19% stale-drop is correct, not a bottleneck.** 775,667 stale / 781,994 observed; **80.1%
+  of drops are genuinely >7d old** (bad-timestamp backfill), only ~0.5% (~270/day) are <1h late.
+  All 158 historical opportunities had news age **<30min** (median 2m). Loosening freshness admits
+  junk. The 1,800s early gate + 300s consumer gate stay.
+- **Matching/analysis are not killing real opportunity.** All 3,557 `MATCH_SUPPRESSED` carry
+  `single_named_entity + minimal_overlap` (spurious); `ANALYSIS_REJECTED` (stale_news 735,
+  no_keywords 529) is relevance filtering. Both remove junk, not signal.
+- **Market-driven retrieval already exists + is dominant** (`feeds/search_news_monitor`, ~40 of 63
+  opps). Reddit is **permanently dead** (app-creation denied; 262 circuit-open warnings on the last
+  day) — absorb the loss, do not chase it.
+- **71% of the Kalshi universe** (37% macro + 34% "mention" + sports) is un-tradeable by news
+  interpretation. The edge surface is intrinsically ~13 event-driven series.
+- **Net throughput:** ~2.73 OPPORTUNITY/day; **39/41 carry positive edge** yet **33/41 die at the
+  readiness gate** (G1 the largest blocker) → ~0.07 realized paper-trades/day (1 in 15 days; 10
+  all-time). At this rate **200 resolved trades = years.**
+
+**The trap the operator named (2026-05-30): the EV-validation framework needs trades that won't come.**
+Every COUNT-based gate is structurally unreachable at 0.07 trades/day: POST_FIX_NEW (200 resolved),
+the OOS corpus (≥30 resolved). The structural answer is twofold: (1) raise the realized trade RATE
+from *existing* opportunity flow by recovering gate-blocked positive-edge opportunities (C1a — needs
+no new trades); (2) where validation is still required, prefer the **replay-EV harness** (replays
+decisions over RECORDED data — no new live trades) and, ultimately, **change the bar itself** (C3) so
+"ready" means demonstrated edge, not an unreachable count.
+
+**Forbidden zone (manufactures negative-EV volume / softens selectivity — NOT C work).**
+Loosen freshness, relax `ENABLE_LOW_QUALITY_MATCH_SUPPRESSION`, lower `*_MIN_MATCH_SCORE` (0.06),
+generic RSS breadth, official macro feeds (L1), broaden `SEARCH_MAX_QUERIES` to high-OI no-edge
+markets, or touch G1/G4 thresholds. All add volume on no-edge markets or soften the safety gate.
+
+**C1 — read-only diagnostics (zero trade-path risk; no new trades required; DO FIRST).**
+- **C1a — Resolve the gate question (highest value).** 39/41 positive-edge opportunities die at the
+  gate. Read the actual `GATE_SUMMARY` / `SKIPPED` records: is the gate *correctly* rejecting
+  genuinely-low-confidence signals, or *over-blocking* real positive-EV ones? ⚠️ CLAUDE.md flags this
+  as the classic misread — G1 compares `scaled = blended_confidence × regime_confidence` (regime
+  pinned ~0.2201 here, fast-lane-only), NOT blended alone. **Do not touch G1** until this proves a
+  real, fixable over-block. If it is over-blocking, this raises the trade rate from CURRENT flow —
+  the direct answer to the "200 trades = years" trap.
+- **C1b — False-negative match audit.** Of 3,557 suppressed, quantify any legitimate matches lost to
+  the entity-prefix free-pass (`_token_not_in_ticker`). Anchor: `scripts/simulations/match_score_audit.py`;
+  must preserve canonical EDGE-001 anchors (KXTRUMPIRAN events 3+5).
+- **C1c — Edge-prioritization A/B readout (passive-monitor only).** AFTER cohort 0/10 resolved →
+  years away → DEMOTED to passive monitor (`data/edge_activation_compare.json`), not an active gate.
+
+**C2 — small EV-positive levers (each replay-EV-gated, one at a time, operator deploy).**
+- **C2a — `PAPER_MAX_CANDIDATES` 3→5** (config.py:760; config comment endorses 8–10 on faster HW).
+  LLM sees past top-3 Jaccard matches. Pure throughput, no gate softening. Low risk.
+- **C2b — Match B' guard refinement** *iff* C1b finds recoverable false-negatives. Recovers real
+  matches; does NOT loosen precision. Replay-EV + soak gated.
+- **C2c — 2–3 targeted RSS feeds** on under-served PROVEN edge series (Iran/China/tariff). Ingestion-only.
+- **C2d — Disable dead Reddit** (`main.py` reddit monitor + subreddit_discovery). Stops circuit-spam +
+  wasted cycles. 0 yield, low risk.
+
+**C3 — the governance fork (the real unlock; operator/governance authority).**
+At a structurally-small edge surface, raw 200-count is the wrong bar — unreachable without softening
+selectivity (forbidden). Redefine "ready" as **demonstrated edge**: positive replayed EV (95% CI) on
+≥30 resolved across ≥2 families (the IC §16.7 OOS standard the codebase already has), unifying the
+readiness gate with the OOS-corpus gate. Redefines the live-flip criterion → route through operator +
+governance, referencing the Cycle-17D charter that set 200.
+
+**Evidence Log (append-only; updated as C1/C2 produce findings).**
+- 2026-05-30 — Document opened. Funnel measured (15 partitions): 99.19% stale (80% >7d), 2.73 opp/day,
+  39/41 positive-edge, 33/41 gate-blocked, 0.07 trades/day. Reddit dead. Sources: workflow `wi8nwqd04`.
+- 2026-05-30 — **C1a gate diagnostic → VERDICT `gate_correct_reject` (the gate is NOT over-blocking).**
+  All 33 G1-blocks are dated 2026-05-18..24 (PRE-PROFIT-PRIORS-002): a strong fast-lane LLM signal
+  (conf 0.75–0.90) was DILUTED by the old interpretation/structural-dominant `_time_prior` against
+  empty dossier/structural lanes → blended collapsed to 0.12–0.29, regime_conf to 0.063–0.23, scaled
+  (=blended×regime) to 0.008–0.035 — far under even the normal 0.05 floor. Gate code confirmed
+  (`tasks/trade_readiness_gate.py:159/171/175`; the `G1_blended_confidence` string is misleadingly
+  named — it compares *scaled*). **Already remediated:** PROFIT-PRIORS-002 (2026-05-24) reshaped
+  uninstrumented-series priors fast-dominant (0.65/0.25/0.10); post-fix (05-25..28) G1 blocks = 0,
+  same news now blends ~0.34 and PASSES. ZERO recoverable by gate tuning (forbidden + don't pass 0.05).
+  Post-fix residual blocks are G2 (source diversity) + G6 (recency) — recoverable ONLY by POPULATING
+  the interpretation/dossier lane (real multi-source evidence + fresh recency), never by weakening a
+  gate. Source: workflow `wdo7j1nnv`.
+- 2026-05-30 — **C1b false-negative match audit → VERDICT `not_worth_it`.** The B' guard is ALREADY
+  SHIPPED (commit b50d6d3, 2026-05-23, substring form). Current-regime suppressed (n=451 of the 3,557,
+  post-fix) = **100% correctly junk** (single entity already in the ticker prefix, zero supporting
+  token, e.g. "Pilgrims flock to hajj in Mecca"→"Will Trump visit Iran"); ~0% legitimate false-negatives.
+  The proposed refinement is a no-op under substring semantics or actively harmful under tokenized
+  semantics (re-floods 451 junk matches, cuts retained OPPORTUNITY 260→87 per debt-log:3560-3566 — the
+  guard is load-bearing for noise suppression). The canonical EDGE-001 anchors (KXTRUMPIRAN events 3+5)
+  DO currently fail, but from matcher SCORING (entity buried in ticker prefix; the deferred
+  PROFIT-MATCH-002 "Option C": peel the entity out, require non-entity overlap), NOT from suppression.
+  Source: workflow `wdo7j1nnv`.
+- 2026-05-30 — **C1 synthesis: both easy doors are closed, honestly.** No gate over-block, no match
+  false-negatives — the historical failure modes were already root-caused and fixed (PROFIT-PRIORS-002;
+  b50d6d3). This *confirms* the structural ceiling rather than finding a free lever. Two genuine
+  technical levers remain, both DEEP not broad (improve the edge, don't pump volume): **(L-dossier)**
+  populate the interpretation/dossier lane so fast-lane-only event series clear G2/G6 and blend more
+  robustly — raises CONVERSION of existing opportunities; **(L-matcher / PROFIT-MATCH-002)** fix matcher
+  scoring to recover the canonical anchors the bot is currently blind to on its core edge series
+  (KXTRUMPIRAN). Both high-blast-radius (anchor-harness + archive-replay gated). **Crucially, both are
+  un-sizeable from current data** (post-fix sample is ~7 graded decisions) — which is itself the
+  argument for C3: we cannot reach OR even measure against a count-based bar at this volume. C3
+  (reframe "ready" to demonstrated EV-quality, ≥30 resolved + positive replayed EV vs the unreachable
+  200) is the evidence-forced path; L-dossier raises conversion to reach even that smaller bar faster.
+- 2026-05-30 — **C3 governance proposal DRAFTED** (operator decision pending):
+  `docs/governance/2026-05-30-readiness-bar-ev-quality-proposal.md`. Re-anchors live-readiness from the
+  raw 200-resolved POST_FIX_NEW count to the IC §16.7 EV-quality criterion (positive replayed EV,
+  `ev_ci_95_lo > 0` strict, on ≥30 resolved across ≥2 families under a registered regime), collapsing two
+  redundant count-gates into one. Grounded: 200 was a structural-sufficiency proxy (cohort size vs the
+  ~237-272 frozen corpora that failed), NOT a statistical floor (debt-log:2333); the EV-CI form is
+  stricter and measures the end goal directly. Invariants preserved verbatim (INV-6/7, n≥30 CLT floor,
+  strict CI>0, ≥2-family OOS, actual-settlement pnl, cohort discipline, operator-gated cutover, R-5).
+  HONEST: necessary-not-sufficient — even 30 is far at 0.07 trades/day (8/30 now); pairs with L-dossier.
+  Source: workflow `wspcz01dz`.
+- 2026-05-30 — **L-dossier SCOPED** (read-only): `~/.claude/plans/l-dossier-lane-population-scope.md`.
+  Key reframe from the live `evidence_store.db` (58 dossiers / 406 evidence): the interpretation/dossier
+  lane is **populated-but-inert and ACTIVELY DILUTING**, not empty. 37/58 dossiers pinned at p=0.5;
+  323/406 updates are confidence-only (estimate frozen at the 0.5 seed by monoculture evidence:
+  news=296/other=108 → same-class → never a "state" update). A 0.5 dossier at confidence 0.747
+  (KXTRUMPIRAN) is classified "real" → drags blended_p toward 0.5 → pushes strong fast signals below G1.
+  Plus TWO latent bugs: (i) regime-weight KEY MISMATCH (`interpretation` weights vs `accumulation`
+  lane_id → `get(lane_id,0.0)` zeros the lane); (ii) structural `_build_context` hardcodes
+  `llm_called=False` → confidence ceiling 0.50 < 0.70 fail-safe → structural lane never triggers. Levers
+  tiered: Tier A (fix key-mismatch + fallback-filter inert-0.5 = stop dilution, lower-risk, do first),
+  Tier B (make estimates move / source diversity / structural LLM, HIGH risk), Tier C (async sync,
+  highest risk). All HIGH blast radius (trade-decision inputs) → high-assurance + replay-EV + operator
+  deploy; levers target lane DATA, never gate thresholds. Upside: directional only (~8 resolved), "a
+  handful/day", MUST replay-EV the sign. Source: workflow `wspcz01dz`.
+
+---
+
 ## Execution Views
 
 ---
@@ -5742,6 +5885,7 @@ Open or blocked items, ordered for safe sequential execution. **Updated 2026-05-
 
 | Order | ID | Title | Why this order |
 |-------|----|-------|---------------|
+| 1★ | PROFIT-THRUPUT-001 | Opportunity-throughput reframe + "C" execution plan | **Lead framing 2026-05-30.** Consolidates the throughput story of items 1–3 below. Path to GREEN = edge-quality (C3 governance fork), not volume; most throughput levers are forbidden (negative-EV). Start C1 read-only diagnostics (no new trades needed); C1a resolves whether the gate over-blocks the 39/41 positive-edge opportunities already flowing. |
 | 1 | PROFIT-PIPELINE-001 | Paper-trade conversion funnel architecture gap inventory | ACTIVE current blocker framing. Pipeline can execute paper trades; the next safe work is read-only conversion/observability, especially matcher-weight breakdowns and daily funnel reporting. |
 | 2 | PROFIT-EDGE-012 | Cycle-17C/D redesign halted pending POST_FIX_NEW corpus readiness | ACTIVE governance/experiment tracker. 2026-05-16 read-only audit remains historical gate evidence, but current paper DB/log evidence supersedes the "0 post-clean-start rows" fact for executor reachability. |
 | 3 | PROFIT-EDGE-004 | Pipeline reaches executor with `edge = 0.0`; matcher / market-mix / source-mix root cause | Historical/currently-not-blocking parent cluster. Keep as forensic context; active execution moved to `PROFIT-PIPELINE-001` + `PROFIT-EDGE-012`. |
