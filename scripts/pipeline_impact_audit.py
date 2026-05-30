@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 from scripts import decision_funnel_summary
 from scripts import match_quality_diagnostics
 from scripts import signal_edge_diagnostics
+from tasks.stats import observability_checkpoint
 from utils.diagnostics_script_helpers import parse_date_end, parse_date_start
 from utils.reporting_helpers import ProgressTracker, stage_timer, _eprint
 
@@ -402,6 +403,17 @@ def render_report(current_stats: dict[str, Any], previous_stats: dict[str, Any])
     lines.append("PIPELINE IMPACT AUDIT")
     lines.append(f"Current window : {fmt_ts(current_since)} -> {fmt_ts(current_until)}")
     lines.append(f"Previous window: {fmt_ts(previous_since)} -> {fmt_ts(previous_until)}")
+    lines.append("")
+
+    # Gates & experiments at audit time: live-readiness, the edge-prioritization
+    # A/B verdict (carries its own before/after), and the feed/regime/market-horizon
+    # rot-audit layer. Point-in-time context shared with daily_review via
+    # tasks/stats/observability_checkpoint — so a PR review sees whether it moved
+    # the readiness gate or the experiment, not just the funnel.
+    try:
+        lines.extend(observability_checkpoint.summary_lines())
+    except Exception as exc:  # observability must never break the audit
+        lines.append(f"GATES & EXPERIMENTS              : unavailable ({type(exc).__name__})")
     lines.append("")
 
     lines.append("1. Matching Quality")

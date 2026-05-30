@@ -28,6 +28,7 @@ from scripts import match_suppression_audit
 from scripts import paper_performance_drilldown
 from scripts import signal_edge_diagnostics
 from scripts import source_scorecard
+from tasks.stats import observability_checkpoint
 from utils.reporting_helpers import (
     DEFAULT_CURRENT_STATE_WINDOW_HOURS,
     ProgressTracker,
@@ -545,6 +546,16 @@ def build_daily_review(
     halt_state, cohort_ts = _collect_kalshi_drift_state()
     lines.extend(_format_kalshi_drift_lines(halt_state, cohort_ts))
 
+    # Gates & experiments: live-readiness (POST_FIX_NEW), the edge-prioritization
+    # A/B verdict, and the rot-audit layer — the decision-relevant state added
+    # since 2026-05 that the funnel sections below do not cover. Sourced from the
+    # shared tasks/stats/observability_checkpoint (also used by pipeline_impact_audit).
+    try:
+        lines.extend(observability_checkpoint.summary_lines())
+    except Exception as exc:  # observability must never break the daily report
+        lines.append(f"GATES & EXPERIMENTS              : unavailable ({type(exc).__name__})")
+    lines.append("")
+
     lines.append("1. INGESTION  [source: scripts/freshness_diagnostics.py + scripts/decision_funnel_summary.py]")
     observed_records = sum(
         row.get("observed_records", 0)
@@ -561,8 +572,6 @@ def build_daily_review(
     lines.append(f"  Source-attributed items observed : {observed_records}")
     lines.append(f"  Fresh passes                     : {fresh_passes}")
     lines.append(f"  Dropped early stale              : {early_stale}")
-    lines.append("  Dropped disabled sources         : not directly observable in current logs")
-    lines.append("  Dropped deduped                  : not directly observable in current logs")
     lines.append(f"  Rejected stale at analysis       : {analysis_rejections.get('stale_news', 0)}")
     top_stale_sources = _top_source_rows(freshness_stats, limit=top)
     if top_stale_sources:
