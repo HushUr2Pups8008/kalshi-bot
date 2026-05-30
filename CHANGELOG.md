@@ -19,6 +19,34 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.32.3] - 2026-05-30
+
+### Added — rot-durability observability (PROFIT-ROT-001)
+
+- **Self-maintaining news-edge series set.** `tasks/stats/edge_series.py` derives
+  the active edge series from a rolling 45-day OPPORTUNITY window
+  (`data/news_edge_series.json`, auto-promote ≥3 opps / auto-age-out), replacing
+  reliance on a frozen list. `config.NEWS_EDGE_SERIES` is now a cold-start seed only.
+- **Read-only rot audits** wired into the daily match-feedback aggregator
+  (exception-isolated; network ones skippable via `--skip-network-audits`):
+  `regime_prior_audit` (orphaned `_SERIES_PRIORS` + missing-prior candidates — 8
+  stale priors found), `feed_health` (RSS liveness — 21/21 live),
+  `market_horizon_audit` (close-time distribution vs expiry/proximity caps — 0% drift).
+- **Dossier review-deadline tripwire** (`tests/test_dossier_review_deadline.py`)
+  replaces a silently-rotting `2026-06-08` comment with an enforced check.
+
+### Changed
+
+- **Geo named-entity roster single-sourced** in `analysis/geo_entities.py`;
+  `market_matcher` and `market_specificity` import it. Behavior-preserving
+  (set-identical) — closes a two-copies-can-drift rot surface.
+- **News-edge retrieval prioritization** (`feeds/search_news_monitor.py`) ranks
+  proven news-edge series first within the unchanged `SEARCH_MAX_QUERIES` budget.
+  **Ships INERT** behind `ENABLE_NEWS_EDGE_PRIORITIZATION` (default OFF == prior
+  open-interest sort); decision-affecting, so activation is replay-EV gated per IC §16.
+- Corrected a stale readiness-gate gotcha in `CLAUDE.md` (post-PROFIT-PRIORS-002
+  `_time_prior` is fast-dominant → G4 is no longer the usual binding constraint).
+
 ## [0.32.2] - 2026-05-25
 
 ### Changed — Codex independent-review corrections
