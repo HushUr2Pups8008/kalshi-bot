@@ -21,6 +21,7 @@ from typing import Any, Optional
 from config import cfg, MARKET_CACHE_TTL_SECONDS, MAX_MARKET_DAYS_TO_EXPIRY
 from config import PAPER_MIN_MATCH_SCORE, PAPER_MAX_CANDIDATES, MARKET_SERIES_BLOCKLIST_PREFIXES
 from config import ENABLE_LOW_QUALITY_MATCH_SUPPRESSION, ENABLE_MATCH_SUPPRESSION_DEBUG
+from analysis.geo_entities import GEO_NAMED_ENTITIES
 from analysis.market_specificity import compute_specificity_score
 from analysis.regime_classifier import compute_regime_weights
 from feeds import NewsItem
@@ -80,26 +81,9 @@ _GEOPOLITICAL_BOOST = {
 # Used in the tiered headline gate and geo-coherence edge checks.
 # Generic conflict words (war, attack, bank, people) are NOT included here --
 # those require 2+ overlaps to pass the gate.
-_GEO_NAMED_ENTITIES = frozenset({
-    # Country names
-    "ukraine", "russia", "china", "taiwan", "iran", "israel", "gaza",
-    "korea", "pakistan", "india", "japan", "turkey", "saudi", "syria",
-    "iraq", "afghanistan", "venezuela", "cuba", "mexico", "canada",
-    "france", "germany", "britain", "lebanon", "hamas", "hezbollah",
-    "brazil", "colombia", "philippines", "vietnam", "thailand",
-    "egypt", "libya", "yemen", "somalia", "sudan", "ethiopia",
-    # Adjective / demonym forms
-    "russian", "chinese", "iranian", "ukrainian", "korean", "israeli",
-    "european", "american", "british", "french", "german", "turkish",
-    "japanese", "lebanese", "iraqi", "syrian", "saudi", "canadian",
-    "mexican", "brazilian", "colombian", "egyptian",
-    # Key individuals
-    "zelensky", "zelenskyy", "putin", "trump", "biden", "netanyahu",
-    "khamenei", "hegseth", "modi", "macron", "scholz", "starmer",
-    "vance", "rubio", "waltz",
-    # Institutions / orgs (distinctive enough for single-token match)
-    "nato", "pentagon", "kremlin", "congress", "senate",
-})
+# Single source of truth — analysis/geo_entities. Kept as an alias so the
+# figure roster cannot drift against market_specificity's copy (rot-surface fix).
+_GEO_NAMED_ENTITIES = GEO_NAMED_ENTITIES
 
 _PRE_LLM_GATE_STOPWORDS = frozenset(
     {
