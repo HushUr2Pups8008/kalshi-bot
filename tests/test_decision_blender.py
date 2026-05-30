@@ -25,8 +25,8 @@ from analysis.decision_blender import (
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-_EQUAL_REGIME = {"fast": 1.0 / 3, "accumulation": 1.0 / 3, "structural": 1.0 / 3}
-_FAST_REGIME = {"fast": 1.0, "accumulation": 0.0, "structural": 0.0}
+_EQUAL_REGIME = {"fast": 1.0 / 3, "interpretation": 1.0 / 3, "structural": 1.0 / 3}
+_FAST_REGIME = {"fast": 1.0, "interpretation": 0.0, "structural": 0.0}
 _UNIT_REGIME_CONF = 1.0   # full regime confidence → pure regime weights
 _ZERO_REGIME_CONF = 0.0   # no regime confidence → uniform 1/3
 
@@ -68,6 +68,73 @@ def _blend_all(
         structural_stable=structural_stable,
         default_min_edge=default_min_edge,
     )
+
+
+# ── Regime-weight key mapping (PROFIT-BLENDER-002) ────────────────────────────
+
+class TestRegimeWeightKeyMapping:
+    """The middle lane is "accumulation" in lane space but "interpretation" in
+    regime-weight space (analysis/regime_classifier.compute_regime_weights emits
+    {fast, interpretation, structural}). The blender must reconcile them: an
+    accumulation lane must be weighted by the "interpretation" regime weight.
+
+    Before the fix, `regime_weights.get("accumulation", 0.0)` returned 0.0 and
+    silently zeroed the accumulation lane for every production blend (production
+    never emits an "accumulation" key) -- diluting or dropping the dossier lane.
+    The two behavioral tests feed the PRODUCTION key shape and fail on the unfixed
+    lookup; the contract test guards against a future emitter-key rename silently
+    re-introducing the bug.
+    """
+
+    def test_accumulation_lane_uses_interpretation_regime_weight(self):
+        # rc=1.0 -> pure regime weights. interpretation weight 0.5 must reach the
+        # accumulation lane so both lanes carry equal effective confidence and
+        # blended_p is the mean of the lane p's.
+        r = blend(
+            fast=LaneInput(p=0.80, confidence=0.50, lane_id="fast"),
+            accumulation=LaneInput(p=0.20, confidence=0.50, lane_id="accumulation"),
+            structural=None,
+            regime_weights={"fast": 0.5, "interpretation": 0.5, "structural": 0.0},
+            regime_confidence=1.0,
+        )
+        # Fixed: eff_fast = eff_accum = 0.25 -> weighted_blend -> mean(0.80,0.20)=0.50.
+        # Bug: accum weight 0.0 -> eff_accum 0.0 -> fast dominates -> blended_p 0.80.
+        assert r.blend_mode == "weighted_blend"
+        assert r.blended_p == pytest.approx(0.50)
+
+    def test_accumulation_lane_steers_blend_via_interpretation_weight(self):
+        # Bug-sensitive (two-lane): a high interpretation weight must let the
+        # accumulation lane steer the blend. fast(p=0.5,conf=0.3) vs
+        # accumulation(p=0.2,conf=0.6) at interpretation weight 0.9, rc=1.0:
+        #   fixed: eff_fast=0.03, eff_accum=0.54 -> accumulation dominates -> p=0.20.
+        #   bug:   eff_accum=0.0 -> fast dominates -> p=0.50 (assertion fails -> guards).
+        r = blend(
+            fast=LaneInput(p=0.50, confidence=0.30, lane_id="fast"),
+            accumulation=LaneInput(p=0.20, confidence=0.60, lane_id="accumulation"),
+            structural=None,
+            regime_weights={"fast": 0.1, "interpretation": 0.9, "structural": 0.0},
+            regime_confidence=1.0,
+        )
+        assert r.blend_mode == "dominant_lane"
+        assert r.blended_p == pytest.approx(0.20)
+
+    def test_alias_targets_are_keys_the_emitter_produces(self):
+        # PROFIT-BLENDER-002 hardening: every _LANE_TO_REGIME_KEY alias TARGET must
+        # be a key compute_regime_weights actually emits. If the emitter's middle
+        # key were renamed (e.g. "interpretation" -> "interp"), the alias would
+        # silently miss and re-zero the accumulation lane -- the exact bug. This
+        # contract makes that rename fail loudly instead of regressing silently.
+        from analysis.decision_blender import _LANE_TO_REGIME_KEY
+        from analysis.regime_classifier import compute_regime_weights
+
+        from tests.test_regime_classifier import _market
+
+        emitted = set(compute_regime_weights(_market()).keys())
+        assert set(_LANE_TO_REGIME_KEY.values()) <= emitted, (
+            f"alias targets {set(_LANE_TO_REGIME_KEY.values())} are not all emitted "
+            f"by compute_regime_weights ({emitted}) -- a regime-key rename would "
+            "silently re-zero the accumulation lane (PROFIT-BLENDER-002)"
+        )
 
 
 # ── BlendResult type ──────────────────────────────────────────────────────────
@@ -114,7 +181,7 @@ class TestDER1WeightedBlend:
             fast=LaneInput(p=0.60, confidence=0.50, lane_id="fast"),
             accumulation=LaneInput(p=0.40, confidence=0.50, lane_id="accumulation"),
             structural=None,
-            regime_weights={"fast": 0.5, "accumulation": 0.5},
+            regime_weights={"fast": 0.5, "interpretation": 0.5},
             regime_confidence=_UNIT_REGIME_CONF,
         )
         assert r.blended_p == pytest.approx(0.50)
@@ -126,7 +193,7 @@ class TestDER1WeightedBlend:
             fast=LaneInput(p=0.80, confidence=0.65, lane_id="fast"),
             accumulation=LaneInput(p=0.20, confidence=0.35, lane_id="accumulation"),
             structural=None,
-            regime_weights={"fast": 0.5, "accumulation": 0.5},
+            regime_weights={"fast": 0.5, "interpretation": 0.5},
             regime_confidence=_UNIT_REGIME_CONF,
         )
         # fast weight = 0.65*0.5 = 0.325; accum weight = 0.35*0.5 = 0.175; total = 0.50
@@ -151,7 +218,7 @@ class TestDER1WeightedBlend:
             accumulation=LaneInput(p=0.10, confidence=0.50, lane_id="accumulation"),
             structural=None,
             # Even with fast=1.0 regime weight, uniform 1/3 applies at conf=0
-            regime_weights={"fast": 1.0, "accumulation": 0.0},
+            regime_weights={"fast": 1.0, "interpretation": 0.0},
             regime_confidence=_ZERO_REGIME_CONF,
         )
         # Both get eff_conf = 0.50 * 1/3 = 0.1667 → equal → mean = 0.50
@@ -174,7 +241,7 @@ class TestDER1WeightedBlend:
             fast=LaneInput(p=fast_p, confidence=fast_conf, lane_id="fast"),
             accumulation=LaneInput(p=accum_p, confidence=accum_conf, lane_id="accumulation"),
             structural=None,
-            regime_weights={"fast": fast_rw, "accumulation": accum_rw},
+            regime_weights={"fast": fast_rw, "interpretation": accum_rw},
             regime_confidence=rc,
         )
         assert r.blend_mode == "weighted_blend"
@@ -186,7 +253,7 @@ class TestDER1WeightedBlend:
             fast=LaneInput(p=0.60, confidence=0.0, lane_id="fast"),
             accumulation=LaneInput(p=0.40, confidence=0.0, lane_id="accumulation"),
             structural=None,
-            regime_weights={"fast": 0.5, "accumulation": 0.5},
+            regime_weights={"fast": 0.5, "interpretation": 0.5},
             regime_confidence=_UNIT_REGIME_CONF,
         )
         assert r.blended_p == pytest.approx(0.50)
@@ -213,7 +280,7 @@ class TestDER2DominanceRule:
             fast=LaneInput(p=fast_p, confidence=0.90, lane_id="fast"),
             accumulation=LaneInput(p=0.20, confidence=0.10, lane_id="accumulation"),
             structural=None,
-            regime_weights={"fast": 0.5, "accumulation": 0.5},
+            regime_weights={"fast": 0.5, "interpretation": 0.5},
             regime_confidence=_UNIT_REGIME_CONF,
         )
         assert r.blended_p == pytest.approx(fast_p)
@@ -225,7 +292,7 @@ class TestDER2DominanceRule:
             fast=LaneInput(p=0.70, confidence=0.50, lane_id="fast"),
             accumulation=LaneInput(p=0.30, confidence=0.40, lane_id="accumulation"),
             structural=None,
-            regime_weights={"fast": 0.5, "accumulation": 0.5},
+            regime_weights={"fast": 0.5, "interpretation": 0.5},
             regime_confidence=_UNIT_REGIME_CONF,
         )
         assert r.blend_mode == "weighted_blend"
@@ -237,7 +304,7 @@ class TestDER2DominanceRule:
             fast=LaneInput(p=0.70, confidence=0.60, lane_id="fast"),
             accumulation=LaneInput(p=0.30, confidence=0.30, lane_id="accumulation"),
             structural=None,
-            regime_weights={"fast": 1.0, "accumulation": 1.0},
+            regime_weights={"fast": 1.0, "interpretation": 1.0},
             regime_confidence=_UNIT_REGIME_CONF,
         )
         assert r.blend_mode == "weighted_blend"
@@ -249,7 +316,7 @@ class TestDER2DominanceRule:
             accumulation=LaneInput(p=0.40, confidence=0.50, lane_id="accumulation"),
             structural=None,
             # fast has zero regime weight → effective confidence = 0
-            regime_weights={"fast": 0.0, "accumulation": 1.0},
+            regime_weights={"fast": 0.0, "interpretation": 1.0},
             regime_confidence=_UNIT_REGIME_CONF,
         )
         # fast eff_conf = 0, accumulation eff_conf = 0.50 → accumulation dominates
@@ -264,7 +331,7 @@ class TestDER3StructuralTier1:
     # ensuring blend stays near fast/accum lanes while structural.p=0.20 diverges
     # by >0.30. Fast and accum share equal weight → no dominance fires.
     # structural.confidence=0.75 >= 0.70 satisfies the threshold.
-    _RW = {"fast": 0.5, "accumulation": 0.5, "structural": 0.01}
+    _RW = {"fast": 0.5, "interpretation": 0.5, "structural": 0.01}
 
     def _failsafe_blend(self, *, fast_signal_active: bool, structural_stable: bool = False) -> BlendResult:
         return blend(
@@ -332,7 +399,7 @@ class TestDER4StructuralTier2:
     # Same three-lane setup as DER-3 tests: fast+accum share equal weight,
     # structural has tiny weight (0.01) so blend stays near 0.65 and
     # structural.p=0.20 diverges by >0.30.
-    _RW = {"fast": 0.5, "accumulation": 0.5, "structural": 0.01}
+    _RW = {"fast": 0.5, "interpretation": 0.5, "structural": 0.01}
 
     def _failsafe_blend(self, *, fast_signal_active: bool, structural_stable: bool) -> BlendResult:
         return blend(
@@ -370,7 +437,7 @@ class TestDER4StructuralTier2:
             fast=_fast(),
             accumulation=_accum(),
             structural=None,
-            regime_weights={"fast": 0.5, "accumulation": 0.5},
+            regime_weights={"fast": 0.5, "interpretation": 0.5},
             regime_confidence=_UNIT_REGIME_CONF,
             fast_signal_active=False,
             structural_stable=True,
@@ -386,7 +453,7 @@ class TestDisagreementScore:
             fast=LaneInput(p=0.60, confidence=0.50, lane_id="fast"),
             accumulation=LaneInput(p=0.60, confidence=0.50, lane_id="accumulation"),
             structural=None,
-            regime_weights={"fast": 0.5, "accumulation": 0.5},
+            regime_weights={"fast": 0.5, "interpretation": 0.5},
             regime_confidence=_UNIT_REGIME_CONF,
         )
         assert r.disagreement_score == pytest.approx(0.0)
@@ -407,7 +474,7 @@ class TestDisagreementScore:
             fast=LaneInput(p=0.0, confidence=0.50, lane_id="fast"),
             accumulation=LaneInput(p=1.0, confidence=0.50, lane_id="accumulation"),
             structural=None,
-            regime_weights={"fast": 0.5, "accumulation": 0.5},
+            regime_weights={"fast": 0.5, "interpretation": 0.5},
             regime_confidence=_UNIT_REGIME_CONF,
         )
         assert r.disagreement_score == pytest.approx(0.5)
@@ -420,14 +487,14 @@ class TestDisagreementScore:
             fast=LaneInput(p=0.80, confidence=0.90, lane_id="fast"),
             accumulation=LaneInput(p=0.20, confidence=0.10, lane_id="accumulation"),
             structural=None,
-            regime_weights={"fast": 0.5, "accumulation": 0.5},
+            regime_weights={"fast": 0.5, "interpretation": 0.5},
             regime_confidence=_UNIT_REGIME_CONF,
         )
         r_equal_conf = blend(
             fast=LaneInput(p=0.80, confidence=0.50, lane_id="fast"),
             accumulation=LaneInput(p=0.20, confidence=0.50, lane_id="accumulation"),
             structural=None,
-            regime_weights={"fast": 0.5, "accumulation": 0.5},
+            regime_weights={"fast": 0.5, "interpretation": 0.5},
             regime_confidence=_UNIT_REGIME_CONF,
         )
         # Equal confidence = perfect 50/50 split → max std dev for [0.2, 0.8]
@@ -439,10 +506,12 @@ class TestDisagreementScore:
         """Cross-check CL-9 formula manually for two lanes."""
         fast_p, accum_p = 0.70, 0.50
         fast_conf, accum_conf = 0.60, 0.40
-        rw = {"fast": 0.5, "accumulation": 0.5}
+        rw = {"fast": 0.5, "interpretation": 0.5}
         rc = 1.0
         eff_f = fast_conf * rw["fast"]
-        eff_a = accum_conf * rw["accumulation"]
+        # The accumulation lane is weighted by the "interpretation" regime weight
+        # (PROFIT-BLENDER-002 lane<->regime key reconciliation).
+        eff_a = accum_conf * rw["interpretation"]
         total = eff_f + eff_a
         w_f, w_a = eff_f / total, eff_a / total
         mean = w_f * fast_p + w_a * accum_p

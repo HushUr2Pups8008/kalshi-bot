@@ -38,6 +38,16 @@ _STRUCTURAL_FAILSAFE_DIVERGENCE_THRESHOLD = 0.30
 _DOMINANCE_RATIO = 2.0
 _EQUAL_WEIGHT = 1.0 / 3.0  # RHR-3: uniform weight when regime_confidence == 0
 
+# PROFIT-BLENDER-002: the middle lane is "accumulation" in lane space (LaneInput
+# lane_id, calibration, telemetry, source_lane) but "interpretation" in
+# regime-weight space (analysis/regime_classifier.compute_regime_weights emits
+# {fast, interpretation, structural}). The two conventions meet only at the
+# regime-weight lookup below; this map reconciles them there so the accumulation
+# lane receives its real regime weight instead of a silent 0.0. Do not rename the
+# lane_id (it is entrenched + internally consistent on the lane side); resolve the
+# alias here, at the one point the conventions interface.
+_LANE_TO_REGIME_KEY = {"accumulation": "interpretation"}
+
 BlendMode = Literal[
     "weighted_blend",
     "dominant_lane",
@@ -166,7 +176,8 @@ def _effective_confidences(
     """RHR-3: interpolate between uniform weight and regime weight based on confidence."""
     result: list[float] = []
     for lane in active:
-        rw = float(regime_weights.get(lane.lane_id, 0.0))
+        regime_key = _LANE_TO_REGIME_KEY.get(lane.lane_id, lane.lane_id)
+        rw = float(regime_weights.get(regime_key, 0.0))
         interp_regime = (1.0 - regime_confidence) * _EQUAL_WEIGHT + regime_confidence * rw
         result.append(lane.confidence * interp_regime)
     return result
