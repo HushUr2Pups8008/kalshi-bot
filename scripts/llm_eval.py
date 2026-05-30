@@ -18,7 +18,7 @@ Skeleton scope (this commit):
 * A template file for an additional ~25 production-derived cases that
   the operator hand-labels post-soak.
 * CLI: ``--model qwen3:14b``, ``--cases <fixture-path>``, ``--json``.
-* Output: ``logs/eval/llm_eval_<model>_<ts>.md`` plus a one-line verdict
+* Output: ``logs/reports/evaluations/llm_eval_<model>_<ts>.md`` plus a one-line verdict
   (precision / recall / Brier vs. the canonical anchors).
 
 What this harness does NOT do (intentional):
