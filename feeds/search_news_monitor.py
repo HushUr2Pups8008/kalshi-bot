@@ -23,16 +23,23 @@ import urllib.parse
 from collections import OrderedDict
 from typing import Callable, Awaitable, Sequence
 
-from config import DISABLED_SOURCE_FAMILIES, MARKET_SERIES_BLOCKLIST_PREFIXES
+from config import (
+    DISABLED_SOURCE_FAMILIES,
+    ENABLE_NEWS_EDGE_PRIORITIZATION,
+    MARKET_SERIES_BLOCKLIST_PREFIXES,
+    NEWS_EDGE_SERIES,
+)
 from feeds import NewsItem
 from feeds.rss_monitor import poll_feed
 from kalshi import KalshiMarket
+from tasks.stats.edge_series import active_edge_series
 from utils.logger import get_logger
 
 log = get_logger("search_monitor")
 
 SEARCH_POLL_INTERVAL = 300   # seconds between full fetch cycles
-SEARCH_MAX_QUERIES   = 25    # max distinct queries per cycle (prioritized by open_interest)
+SEARCH_MAX_QUERIES   = 25    # max distinct queries per cycle (ranked by open_interest×uncertainty;
+                            # news-edge series first when ENABLE_NEWS_EDGE_PRIORITIZATION)
 SEARCH_MAX_SEEN      = 2000  # dedup cache entry limit
 
 # Hard bounds for the AIMD articles-per-query controller
@@ -149,21 +156,52 @@ def _tokenize(text: str) -> list[str]:
     ]
 
 
-def _markets_to_queries(markets: Sequence[KalshiMarket]) -> list[str]:
+def _markets_to_queries(
+    markets: Sequence[KalshiMarket],
+    edge_series: "frozenset[str] | set[str] | None" = None,
+) -> list[str]:
     """
     Convert active market titles to deduplicated search queries.
 
-    Markets are ranked by open_interest * (1 - |price - 50| / 50), which
-    prioritizes contested markets (price near 50c) with meaningful volume over
-    already-decided or illiquid ones. Fresh news moves contested markets most.
-    Each market contributes up to 4 key tokens. Markets with identical token
-    sets are skipped (deduped). Capped at SEARCH_MAX_QUERIES.
+    Markets on the active news-edge set (series with demonstrated news-edge) are
+    ranked first so they always receive targeted retrieval within the
+    SEARCH_MAX_QUERIES budget — otherwise high-open-interest macro / "mention"
+    markets the bot has no news-edge on crowd them out (option A, 2026-05-30).
+    The edge set is **self-maintaining** (option A-2): ``active_edge_series``
+    derives it from a rolling window of OPPORTUNITY history (auto-promote /
+    auto-age-out), with the static ``config.NEWS_EDGE_SERIES`` used only as a
+    cold-start seed. Callers may inject ``edge_series`` directly (tests).
+    Within each tier markets are ranked by open_interest * (1 - |price - 50|/50),
+    which prioritizes contested markets (price near 50c) with meaningful volume
+    over already-decided or illiquid ones. Fresh news moves contested markets
+    most. Each market contributes up to 4 key tokens. Markets with identical
+    token sets are skipped (deduped). Capped at SEARCH_MAX_QUERIES.
     """
+    if edge_series is None:
+        # DECISION-AFFECTING + IC §16-gated: default OFF -> empty set -> pure
+        # open_interest×uncertainty ranking (prior production behavior). Only an
+        # operator who has flipped ENABLE_NEWS_EDGE_PRIORITIZATION (with replay-EV
+        # evidence / override) gets edge-first prioritization.
+        edge_series = (
+            active_edge_series(seed=NEWS_EDGE_SERIES)
+            if ENABLE_NEWS_EDGE_PRIORITIZATION
+            else frozenset()
+        )
+
+    def _is_edge_series(m: KalshiMarket) -> int:
+        series = (
+            (getattr(m, "series_ticker", None) or getattr(m, "ticker", "") or "")
+            .split("-")[0]
+            .upper()
+        )
+        return 1 if series in edge_series else 0
+
     sorted_markets = sorted(
         markets,
         key=lambda m: (
+            _is_edge_series(m),
             getattr(m, "open_interest", 0)
-            * (1.0 - abs(getattr(m, "yes_price", 50) - 50) / 50.0)
+            * (1.0 - abs(getattr(m, "yes_price", 50) - 50) / 50.0),
         ),
         reverse=True,
     )

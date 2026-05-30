@@ -5599,6 +5599,76 @@ current DB/log state proves paper execution can happen.
 
 ---
 
+### PROFIT-ROT-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-ROT-001 |
+| **Title** | Hardcoded / time-bound "rot surface" durability inventory |
+| **Category** | Durability / observability / maintainability |
+| **Severity** | MEDIUM (silent throughput / signal-quality decay over time; no immediate trade-safety risk — these surfaces affect retrieval priority and scoring inputs, not the trade gate) |
+| **Status** | PARTIAL — 6 high-value surfaces fixed 2026-05-30 (working tree, operator-deploy pending); 6 lower-value surfaces filed below |
+| **Priority** | Done items shipped; remainder batched / low-priority |
+| **Owner** | Operator + implementation agent (Claude authored the audit + fixes; decision-affecting ones need replay-EV + operator deploy) |
+| **Depends On** | `tasks/stats/` audit pattern, `scripts/match_feedback_aggregator.py`, `feeds/subreddit_discovery.py` + `analysis/match_feedback.py` (durable patterns mirrored) |
+| **Blocks** | Nothing hard; prevents silent decay of news-retrieval quality + regime calibration |
+
+**Context.** An end-to-end audit (2026-05-30) found ~14 hand-curated / hardcoded
+surfaces that go silently wrong over time with no feedback/aging loop — same
+failure mode as the obsolete `KALSHI_GEOPOLITICAL_SERIES` allowlist. Durability
+principle adopted: *every hardcoded list/threshold needs a feedback or aging loop,
+or it rots.* The bot already had the patterns to fix them (`subreddit_discovery`
+candidate + `ZERO_SIGNAL_POSTS` suppression; `match_feedback` recomputed artifact;
+`source_stats`); the fixes reuse them.
+
+**Fixed (working tree, 2026-05-30 — observability-only items are safe; behavior-affecting
+ones (edge set, geo dedup) preserve behavior and still need operator deploy):**
+
+- **NEWS_EDGE_SERIES → self-maintaining** (`tasks/stats/edge_series.py`): rolling
+  45-day OPPORTUNITY window auto-promotes/ages series; `config.NEWS_EDGE_SERIES` is now a
+  cold-start seed; refreshed by the match-feedback aggregator. Consumed by `search_news_monitor`.
+- **Geo named-entity single-source dedup** (`analysis/geo_entities.py`): roster shared by
+  `market_matcher` + `market_specificity`, can no longer drift. Behavior-preserving.
+- **Dossier review-deadline tripwire** (`tests/test_dossier_review_deadline.py`): the
+  `2026-06-08` comment-date is now an enforced test (fails when it passes).
+- **`_SERIES_PRIORS` Phase 1a observability** (`tasks/stats/regime_prior_audit.py`): surfaces
+  orphaned priors + missing-prior candidates; first run flagged **8 stale priors**
+  (KXVANCEPAKISTAN, KXVISITVENEZUELA, KXTRUMPCRYPTOCONF, KXEFFTARIFF, KXSBUDGETRES,
+  KXELECTIONEMERGENCY, KXLTGOVGANOMR, KXCPIEU). Read-only.
+- **RSS feed health** (`tasks/stats/feed_health.py`): probes `RSS_FEEDS` for live/stale/empty/
+  unreachable; first run 21/21 live.
+- **Market-horizon observability** (`tasks/stats/market_horizon_audit.py`): live close-time
+  distribution vs `MAX_MARKET_DAYS_TO_EXPIRY`/`_DAYS_TO_CLOSE_CAP`; first run 16k markets,
+  p90=14.9d, 0% drift — assumptions currently well-calibrated, now monitored.
+
+  *Scheduling:* both network-probing audits are wired into the daily
+  `scripts/match_feedback_aggregator.py` (launchd job), run LAST and
+  exception-isolated so a slow/failed fetch cannot affect the matcher-weight job;
+  skip with `--skip-network-audits` for offline/creds-less runs. The log-derived
+  edge-series refresh + regime-prior audit run there too. (A latent missing-import
+  in that wiring — `refresh_edge_series` — was caught and fixed during this work.)
+
+**Filed for batched future work (low marginal value / existing mitigation):**
+
+- **#7 DISABLED_NEWS_SOURCES reactivation** — largely moot: 26 of 30 disabled are dead-Reddit
+  subs; only 3 non-Reddit (Foreign Policy, Defense One, NPR World) — a manual check.
+- **#8 MARKET_SERIES_BLOCKLIST_PREFIXES drift** — already mitigated by the `_SPORTS_TOKENS`
+  secondary gate in `search_news_monitor` + matcher.
+- **#9 `_GEO_SERIES_KEYWORDS`** — partial discovery loop already exists (`subreddit_discovery`).
+- **#10 EARLY_MAX_NEWS_AGE_BY_SOURCE source-string fragility** — low value; the 1800s global
+  default already covers unlisted sources.
+- **#13 source-credibility params** — instrument-only; current values reasonable.
+- **#14 `matcher_token_weights.json`** — has the loop; add scheduled recompute + orphan-prune.
+- **`_SERIES_PRIORS` Phase 1b/2/3** — per-decision shape-mismatch telemetry, then replay-EV-gated
+  auto-derivation (extend `_derive_series_prior_from_metadata`), then prune the 8 orphans.
+
+**References.** New modules: `tasks/stats/{edge_series,regime_prior_audit,feed_health,market_horizon_audit}.py`,
+`analysis/geo_entities.py`. New artifacts: `data/{news_edge_series,regime_prior_audit,feed_health,market_horizon_audit}.json`.
+Detailed scope/inventory in the operator's session plans (`~/.claude/plans/{rot-surface-inventory,
+news-ingestion-implementation,series-priors-durability-scope}.md`).
+
+---
+
 ## Execution Views
 
 ---

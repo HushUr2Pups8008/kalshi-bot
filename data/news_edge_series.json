@@ -1,0 +1,42 @@
+{
+  "KXCHINAANNOUNCE": {
+    "last_seen_utc": "2026-05-15T21:49:01.506171+00:00",
+    "opportunities": 8
+  },
+  "KXMOCTRUMP25": {
+    "last_seen_utc": "2026-05-12T00:08:49.771106+00:00",
+    "opportunities": 11
+  },
+  "KXNEWDEAL": {
+    "last_seen_utc": "2026-05-23T20:54:51.321944+00:00",
+    "opportunities": 7
+  },
+  "KXTRUMPCHINA": {
+    "last_seen_utc": "2026-05-13T08:08:07.806852+00:00",
+    "opportunities": 31
+  },
+  "KXTRUMPENDORSE": {
+    "last_seen_utc": "2026-05-12T18:14:29.109813+00:00",
+    "opportunities": 3
+  },
+  "KXTRUMPIRAN": {
+    "last_seen_utc": "2026-05-19T15:14:31.361652+00:00",
+    "opportunities": 34
+  },
+  "KXTRUMPMENTION": {
+    "last_seen_utc": "2026-05-27T13:41:53.691769+00:00",
+    "opportunities": 17
+  },
+  "KXTRUMPMENTIONB": {
+    "last_seen_utc": "2026-05-11T18:15:01.403138+00:00",
+    "opportunities": 7
+  },
+  "KXTXRUNOFFENDORSE": {
+    "last_seen_utc": "2026-05-26T10:35:34.847839+00:00",
+    "opportunities": 28
+  },
+  "KXUSAIRANAGREEMENT": {
+    "last_seen_utc": "2026-05-28T17:51:33.841048+00:00",
+    "opportunities": 9
+  }
+}

@@ -61,34 +61,20 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from analysis.geo_entities import GEO_NAMED_ENTITIES
+
 # Self-contained: market_matcher imports compute_specificity_score, so this
 # module must not import from market_matcher (would create a cycle at import
-# time). The two small helpers below are duplicated from market_matcher
-# deliberately -- they are simple and they encode a local concern specific
-# to specificity scoring. Keep them in sync if the matcher's definitions
-# evolve.
+# time). The shared named-entity roster now lives in analysis/geo_entities (a
+# leaf module both consumers import — no cycle), replacing the old hand-copied
+# "snapshot" that could silently drift from the matcher's set. The
+# _days_to_close helper below remains a deliberate local copy.
 
-# Snapshot of analysis/market_matcher._GEO_NAMED_ENTITIES at 2026-04-24.
-# Used for the "named-entity density" sub-score.
-_GEO_NAMED_ENTITIES = frozenset({
-    "ukraine", "russia", "china", "taiwan", "iran", "israel", "gaza",
-    "korea", "pakistan", "india", "japan", "turkey", "saudi", "syria",
-    "iraq", "afghanistan", "venezuela", "cuba", "mexico", "canada",
-    "france", "germany", "britain", "lebanon", "hamas", "hezbollah",
-    "brazil", "colombia", "philippines", "vietnam", "thailand",
-    "egypt", "libya", "yemen", "somalia", "sudan", "ethiopia",
-    "russian", "chinese", "iranian", "ukrainian", "korean", "israeli",
-    "european", "american", "british", "french", "german", "turkish",
-    "japanese", "lebanese", "iraqi", "syrian", "saudi", "canadian",
-    "mexican", "brazilian", "colombian", "egyptian",
-    "zelensky", "zelenskyy", "putin", "trump", "biden", "netanyahu",
-    "khamenei", "hegseth", "modi", "macron", "scholz", "starmer",
-    "vance", "rubio", "waltz",
-    "nato", "pentagon", "kremlin", "congress", "senate",
-    # Specificity-only additions -- institutional names whose mention
-    # narrows a resolution criterion. Kept local to this module because
-    # matcher's set is tuned for news-to-market matching and adding
-    # these there could affect gate behavior.
+# Canonical geo named-entity roster + specificity-only institutional tokens.
+# The extras (iaea, un, scotus, ...) are kept OUT of the shared set because
+# adding them to the matcher's gate set could change gate behavior; here they
+# only narrow the named-entity-density sub-score.
+_GEO_NAMED_ENTITIES = GEO_NAMED_ENTITIES | frozenset({
     "iaea", "un", "scotus", "fbi", "cia", "opec", "who",
 })
 

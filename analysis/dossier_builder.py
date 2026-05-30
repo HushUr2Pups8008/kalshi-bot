@@ -272,7 +272,9 @@ def recency_score(
 
 
 # UNUSED: test-only callers. Built ahead of integration. Review by 2026-06-08;
-# delete with matching tests if still untouched.
+# delete with matching tests if still untouched. Deadline is ENFORCED by
+# tests/test_dossier_review_deadline.py (fails once the date passes) so it
+# cannot rot silently — keep that test as the single source for the date.
 def identify_superseded(evidence_list: list[Evidence]) -> frozenset[str]:
     """Return evidence_ids superseded by a newer same-class item with high n-gram overlap.
 
@@ -295,7 +297,9 @@ def identify_superseded(evidence_list: list[Evidence]) -> frozenset[str]:
 
 
 # UNUSED: test-only callers. Built ahead of integration. Review by 2026-06-08;
-# delete with matching tests if still untouched.
+# delete with matching tests if still untouched. Deadline is ENFORCED by
+# tests/test_dossier_review_deadline.py (fails once the date passes) so it
+# cannot rot silently — keep that test as the single source for the date.
 def clear_on_resolution(dossier: Dossier, cleared_ts: str) -> Dossier:
     """Reset belief state after market resolution.
 
