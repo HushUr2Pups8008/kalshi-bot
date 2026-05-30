@@ -30,6 +30,7 @@ from analysis.match_feedback import (
     update_weights_from_stats,
     write_weights,
 )
+from tasks.stats.edge_activation_compare import compare as compare_edge_activation
 from tasks.stats.edge_series import refresh as refresh_edge_series
 from tasks.stats.feed_health import audit_feeds
 from tasks.stats.market_horizon_audit import audit as audit_market_horizon
@@ -138,6 +139,17 @@ def main(argv: list[str] | None = None) -> int:
         )
     except Exception as exc:
         print(f"Regime-prior audit skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
+
+    # Edge-prioritization before/after EV monitor (read-only). Updates the
+    # ENABLE_NEWS_EDGE_PRIORITIZATION experiment verdict from paper_trades + logs.
+    try:
+        cmp = compare_edge_activation()
+        if "error" not in cmp:
+            print(f"Edge-prioritization A/B: {cmp['resolved_ev']['verdict']} "
+                  f"(opps/day {cmp['opportunity_rate']['before_per_day']}→"
+                  f"{cmp['opportunity_rate']['after_per_day']})", file=sys.stderr)
+    except Exception as exc:
+        print(f"Edge-activation compare skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
 
     # Network-probing rot audits (feed liveness + market-horizon drift). Run LAST
     # and EXCEPTION-ISOLATED so a slow/failed network call can never affect the
