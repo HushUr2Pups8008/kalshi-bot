@@ -1,0 +1,48 @@
+{
+  "activation_utc": "2026-05-30T03:15:35+00:00",
+  "edge_series": [
+    "KXCHINAANNOUNCE",
+    "KXMOCTRUMP25",
+    "KXNEWDEAL",
+    "KXTRUMPCHINA",
+    "KXTRUMPENDORSE",
+    "KXTRUMPIRAN",
+    "KXTRUMPMENTION",
+    "KXTRUMPMENTIONB",
+    "KXTXRUNOFFENDORSE",
+    "KXUSAIRANAGREEMENT"
+  ],
+  "generated_utc": "2026-05-30T03:20:13.552678+00:00",
+  "opportunity_rate": {
+    "after_count": 0,
+    "after_per_day": 0.0,
+    "before_count": 155,
+    "before_per_day": 5.597
+  },
+  "resolved_ev": {
+    "after": {
+      "ev_ci95": null,
+      "mean_edge": null,
+      "mean_pnl_ev": null,
+      "n": 0,
+      "resolved": 0,
+      "total_pnl": 0.0,
+      "win_rate": null,
+      "wins": 0
+    },
+    "before": {
+      "ev_ci95": [
+        -2.9005,
+        1.9005
+      ],
+      "mean_edge": 0.1093,
+      "mean_pnl_ev": -0.5,
+      "n": 6,
+      "resolved": 5,
+      "total_pnl": -2.5,
+      "win_rate": 0.4,
+      "wins": 2
+    },
+    "verdict": "insufficient AFTER data (0/10 resolved) \u2014 keep accumulating"
+  }
+}

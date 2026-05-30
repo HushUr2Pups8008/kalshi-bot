@@ -19,6 +19,19 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.32.4] - 2026-05-30
+
+### Added
+
+- **Edge-prioritization before/after EV monitor** (`tasks/stats/edge_activation_compare.py`).
+  `ENABLE_NEWS_EDGE_PRIORITIZATION` was activated 2026-05-30 as a paper-mode monitored
+  experiment (operator override of the replay-EV gate). This read-only tool splits edge-cluster
+  paper trades + opportunities at the activation timestamp (`data/edge_prioritization_activation.json`)
+  and reports opportunity rate (leading) + realized per-trade EV / win rate with 95% CI (lagging),
+  with a built-in keep/`DEGRADED — rollback` verdict. Wired into the daily match-feedback
+  aggregator (exception-isolated). Baseline at activation: edge cluster −$0.50 mean EV, 40% win
+  (n=5), 5.6 opps/day — the bar the experiment must beat.
+
 ## [0.32.3] - 2026-05-30
 
 ### Added — rot-durability observability (PROFIT-ROT-001)

@@ -1,0 +1,7 @@
+{
+  "flag": "ENABLE_NEWS_EDGE_PRIORITIZATION",
+  "activated_utc": "2026-05-30T03:15:35+00:00",
+  "mode": "paper",
+  "override": "operator override of replay-EV gate (PROFIT-PHASE3-003 volume blocker)",
+  "note": "Cohort split anchor. Records/trades with ts >= activated_utc are the AFTER (flag-active) cohort; earlier ones are the BEFORE baseline. Edit if the flag is toggled again."
+}
