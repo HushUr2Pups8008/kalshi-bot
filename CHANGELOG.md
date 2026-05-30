@@ -19,6 +19,32 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.32.6] - 2026-05-30
+
+### Fixed
+
+- **Source-scorecard tier recommendations are now value-aware, not staleness-only**
+  (`scripts/source_scorecard.py`, `tasks/stats/source_stats.py`, `scripts/daily_review.py`).
+  The `daily` report was recommending **"remove immediately"** for the bot's best news
+  sources — "Middle East and north Africa | The Guardian" (140 lifetime signals / 123
+  opportunities) and "NYT > World News" (62 / 54) — because it judged sources over a 24h
+  window where they happened to emit zero SIGNAL events. The bot emits ~1 SIGNAL/day across
+  *all* sources combined, so 24h zero-signal is meaningless. "remove immediately" is advisory
+  only (the real disable lists are `config.DISABLED_NEWS_SOURCES`), but an operator who trusted
+  it would have deleted the top opportunity producers. Three-part fix (`PROFIT-ROT-002`):
+  - **A(i) lifetime-yield veto:** the scorecard now reads the `source_stats` lifetime funnel
+    (posts→signals→opportunities→trades) via new read-only `read_lifetime_totals()`. A source
+    that has *recently* produced a signal/opportunity/trade is never auto-flagged "remove
+    immediately" / "likely prune"; it falls through to `watch / investigate`.
+  - **Recency bound:** the veto is gated on `last_signal` within the recommendation window, so a
+    source that fired once and went signal-dead past the horizon loses immunity and is flagged
+    again (prevents permanent immunity from a single ancient signal).
+  - **A(ii) wide recommendation window:** zero-signal/staleness is judged over
+    `DEFAULT_RECOMMENDATION_WINDOW_DAYS = 45` (one bucketed log pass), not the 24h display window.
+  - **B funnel render:** `daily` Section 8 and the scorecard group rows now print the lifetime
+    funnel (`life: posts/sig/opp/trade`) beside every tier verdict, so "remove immediately" can
+    never appear without the source's real all-time yield.
+
 ## [0.32.5] - 2026-05-30
 
 ### Added

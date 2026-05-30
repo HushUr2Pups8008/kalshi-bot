@@ -521,20 +521,32 @@ def test_build_daily_review_filters_waterfall_by_tier_and_appends_summary(monkey
             "unique_candidate_phrases": 0, "grouped_phrases": {},
         },
     )
-    monkeypatch.setattr(
-        "scripts.daily_review.source_scorecard.summarize",
-        lambda *args, **kwargs: {
+    captured_scorecard_kwargs = {}
+
+    def _capture_scorecard(*args, **kwargs):
+        captured_scorecard_kwargs.update(kwargs)
+        return {
             "rows": [], "log_meta": {"records_kept": 0}, "db_exists": False,
             "grouped": {
                 "top performers": [],
                 "keep": [{"source": "Reuters"}],
                 "watch / investigate": [],
                 "prune": [{"source": "NoiseFeed"}],
-                "remove immediately": [{"source": "DeadFeed"}],
+                # DeadFeed carries a lifetime funnel so Section 8 must render it
+                # beside the "remove immediately" verdict (B). An operator who
+                # sees a bare verdict without the funnel could delete a producer.
+                "remove immediately": [{
+                    "source": "DeadFeed",
+                    "lifetime_posts": 300, "lifetime_signals": 5,
+                    "lifetime_opportunities": 2, "lifetime_trades": 1,
+                }],
                 "disabled by source": [],
                 "disabled by family": [],
             },
-        },
+        }
+
+    monkeypatch.setattr(
+        "scripts.daily_review.source_scorecard.summarize", _capture_scorecard
     )
 
     state_path = tmp_path / "tier_state.json"
@@ -545,6 +557,22 @@ def test_build_daily_review_filters_waterfall_by_tier_and_appends_summary(monkey
         tier_state_path=state_path,
     )
     rendered = "\n".join(lines)
+
+    # Regression guard (PROFIT-ROT-002): build_daily_review MUST pass the wide
+    # recommendation window into the scorecard. If a refactor drops this kwarg the
+    # operator report silently reverts to the broken 24h judgment that flagged the
+    # bot's top producers for deletion -- and nothing else in the suite catches it.
+    from scripts import source_scorecard
+
+    assert (
+        captured_scorecard_kwargs.get("recommendation_window_days")
+        == source_scorecard.DEFAULT_RECOMMENDATION_WINDOW_DAYS
+    )
+    # Section 8 renders the lifetime funnel beside every tier verdict, so
+    # "remove immediately" can never print without the source's real yield.
+    section8 = rendered.split("8. SOURCE SCORECARD")[1]
+    assert "DeadFeed" in section8
+    assert "| life: posts=300 sig=5 opp=2 trade=1" in section8
 
     assert "operationally-relevant tiers only" in rendered
     # Reuters (keep) is shown.
