@@ -20,6 +20,10 @@ from datetime import datetime, time as dt_time, timezone
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from scripts import decision_funnel_summary
 from scripts import freshness_diagnostics
 from scripts import keyword_feedback
@@ -36,19 +40,24 @@ from utils.reporting_helpers import (
     stage_timer,
     _eprint,
 )
+from utils.output_paths import (
+    DAILY_REPORTS_DIR,
+    DERIVED_STATE_DIR,
+    PAPER_TRADES_DB,
+    RAW_TRADES_LIVE_DIR,
+)
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-REPORTS_DIR = REPO_ROOT / "logs" / "reports"
+REPORTS_DIR = DAILY_REPORTS_DIR
 DEFAULT_REPORT_PATH = REPORTS_DIR / f"daily_review_{datetime.now().strftime('%Y%m%d')}.txt"
 # Persisted day-over-day tier baseline used by section 1 status-change diff.
 # Two-deep history (current + previous) so same-day reruns don't blow away
 # yesterday's reference.
-SOURCE_TIER_STATE_PATH = REPORTS_DIR / "source_tier_state.json"
+SOURCE_TIER_STATE_PATH = DERIVED_STATE_DIR / "source_tier_state.json"
 # Default to the active live file -- daily review is a current-state report.
 # Pass --path logs/trades to include archive data for historical analysis.
-DEFAULT_TRADES_LOG_PATH = REPO_ROOT / "logs" / "trades" / "live" / "trades.jsonl"
-DEFAULT_PAPER_DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
+DEFAULT_TRADES_LOG_PATH = RAW_TRADES_LIVE_DIR / "trades.jsonl"
+DEFAULT_PAPER_DB_PATH = PAPER_TRADES_DB
 RECENT_MATCH_EXAMPLES = 5
 RECENT_EDGE_AUDIT = 5
 

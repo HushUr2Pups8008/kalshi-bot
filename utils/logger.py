@@ -42,7 +42,14 @@ from typing import Any, Callable, Optional, TypeVar
 
 import colorlog
 
-from config import LOGS_DIR
+from utils.output_paths import (
+    HEALTH_REPORTS_DIR,
+    PERFORMANCE_REPORTS_DIR,
+    RAW_APP_DIR,
+    RAW_TRADES_ARCHIVE_DIR,
+    RAW_TRADES_DIR,
+    RAW_TRADES_LIVE_DIR,
+)
 from utils.log_records import SignalAnalysisDetail
 
 
@@ -108,13 +115,21 @@ CALIBRATION_CHECK_REQUIRED_FIELDS: tuple[str, ...] = (
 )
 
 # ── Subdirectory layout ───────────────────────────────────────────────────────
-_LOG_APP_DIR     = LOGS_DIR / "app"
-_LOG_TRADES_DIR  = LOGS_DIR / "trades"
-_LOG_TRADES_LIVE_DIR = _LOG_TRADES_DIR / "live"
-_LOG_REPORTS_DIR = LOGS_DIR / "reports"
-_LOG_ARCHIVE_DIR = LOGS_DIR / "trades" / "archive"
+_LOG_APP_DIR = RAW_APP_DIR
+_LOG_TRADES_DIR = RAW_TRADES_DIR
+_LOG_TRADES_LIVE_DIR = RAW_TRADES_LIVE_DIR
+_LOG_REPORTS_DIR = PERFORMANCE_REPORTS_DIR
+_LOG_HEALTH_REPORTS_DIR = HEALTH_REPORTS_DIR
+_LOG_ARCHIVE_DIR = RAW_TRADES_ARCHIVE_DIR
 
-for _d in (_LOG_APP_DIR, _LOG_TRADES_DIR, _LOG_TRADES_LIVE_DIR, _LOG_REPORTS_DIR, _LOG_ARCHIVE_DIR):
+for _d in (
+    _LOG_APP_DIR,
+    _LOG_TRADES_DIR,
+    _LOG_TRADES_LIVE_DIR,
+    _LOG_REPORTS_DIR,
+    _LOG_HEALTH_REPORTS_DIR,
+    _LOG_ARCHIVE_DIR,
+):
     _d.mkdir(parents=True, exist_ok=True)
 
 # ── Log file paths ────────────────────────────────────────────────────────────

@@ -129,10 +129,10 @@ cat > "$PLIST_PATH" <<PLIST
     </dict>
 
     <key>StandardOutPath</key>
-    <string>${REPO_ROOT}/logs/launchd_daily_review.log</string>
+    <string>${REPO_ROOT}/logs/app/daily_review_launchd.stdout.log</string>
 
     <key>StandardErrorPath</key>
-    <string>${REPO_ROOT}/logs/launchd_daily_review_err.log</string>
+    <string>${REPO_ROOT}/logs/app/daily_review_launchd.stderr.log</string>
 
     <key>RunAtLoad</key>
     <false/>

@@ -45,8 +45,10 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="${BOTHEALTH_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
 VENV_PYTHON="$REPO_ROOT/.venv/bin/python"
-LOG_DIR="$REPO_ROOT/logs/app"
-TRADES_LOG="$REPO_ROOT/logs/trades/live/trades.jsonl"
+OUTPUT_ROOT="${KALSHI_OUTPUT_ROOT:-${KALSHI_LOG_ROOT:-$REPO_ROOT/logs}}"
+LOG_DIR="$OUTPUT_ROOT/app"
+HEALTH_REPORT_DIR="$OUTPUT_ROOT/reports/health"
+TRADES_LOG="$OUTPUT_ROOT/trades/live/trades.jsonl"
 ERRORS_LOG="$LOG_DIR/errors.log"
 BOT_LOG="$LOG_DIR/bot.log"
 PAPER_DB="$REPO_ROOT/data/paper_trades.db"
@@ -55,15 +57,15 @@ RUNTIME_DIR="$REPO_ROOT/data/runtime"
 DRIFT_HALT_SENTINEL="$RUNTIME_DIR/kalshi_drift_halt.json"
 BOT_RUNTIME_LOCK="$REPO_ROOT/data/bot_runtime.lock"
 READINESS_SCRIPT="$REPO_ROOT/scripts/edge_replay/post_fix_new_readiness_status.py"
-GOV_LOG_DIR="$REPO_ROOT/logs/governance"
+GOV_LOG_DIR="$OUTPUT_ROOT/governance"
 DEBT_LOG="$REPO_ROOT/docs/profit_path_debt_log.md"
 LAUNCHD_LABEL="com.jake.kalshi-bot"
 
 DATE_ONLY="$(date -u +%Y-%m-%d)"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
-REPORT="$LOG_DIR/bothealth_${DATE_ONLY}.md"
+REPORT="$HEALTH_REPORT_DIR/bothealth_${DATE_ONLY}.md"
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$HEALTH_REPORT_DIR"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 section()  { printf '\n## %s\n\n' "$1" >>"$REPORT"; }
@@ -412,7 +414,7 @@ if [[ -n "$WATCHER_PY" ]]; then
             "$WATCHER_SCRIPT" \
             --db "$PAPER_DB" \
             --trade-log-live "$TRADES_LOG" \
-            --trade-log-archive-dir "$REPO_ROOT/logs/trades/archive" \
+            --trade-log-archive-dir "$OUTPUT_ROOT/trades/archive" \
             --json 2>&1)"
         WATCHER_EXIT=$?
         printf '%s\n' "$WATCHER_OUT" >>"$REPORT"

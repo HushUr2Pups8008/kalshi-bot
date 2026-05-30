@@ -27,10 +27,11 @@ from typing import Any
 
 from config import RSS_FEEDS
 from tasks.stats.edge_series import _parse_iso
+from utils.output_paths import DERIVED_STATE_DIR
 
 _STALE_AFTER_DEFAULT = 7 * 86400  # a feed silent for a week is likely broken
 _AGENT = "kalshi-bot-feed-health/1.0 (feed liveness monitor)"
-_PATH_DEFAULT = Path("data/feed_health.json")
+_PATH_DEFAULT = DERIVED_STATE_DIR / "feed_health.json"
 
 
 def classify_feed_health(

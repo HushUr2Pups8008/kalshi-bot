@@ -19,6 +19,24 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.32.7] - 2026-05-30
+
+### Fixed
+
+- **Blend regime-weight key mismatch silently zeroed the accumulation lane** (`PROFIT-BLENDER-002`,
+  `analysis/decision_blender.py`). The middle blend lane is `accumulation` in lane space but
+  `interpretation` in regime-weight space (`compute_regime_weights` emits `{fast, interpretation,
+  structural}`). `_effective_confidences` did `regime_weights.get(lane.lane_id, 0.0)` →
+  `get("accumulation", 0.0)` = 0.0, zeroing the accumulation lane's regime weight for every
+  dossier-backed blend (production never emits an `accumulation` key). Fix: a single-point alias
+  `_LANE_TO_REGIME_KEY = {"accumulation": "interpretation"}` resolved at the lookup; `lane_id` not
+  renamed. fast/structural weighting unchanged. Adversarial counterfactual over 158 recorded blends:
+  0 edge-sign flips, 0 spurious dominance — corrective (removes bug-manufactured fast dominance), not
+  degrading. Test fixtures used a fictional `accumulation` regime key (encoding the bug); corrected to
+  the production `interpretation` key + added bug-sensitive routing tests and an emitter↔alias contract
+  test. Paper-only. Half B (exclude inert-0.5 dossiers) and the structural `llm_called=False` defect
+  tracked as separate fast-follows.
+
 ## [0.32.6] - 2026-05-30
 
 ### Fixed

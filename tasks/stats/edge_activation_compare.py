@@ -29,10 +29,11 @@ from tasks.stats.edge_series import (
     active_edge_series,
     read_opportunity_events,
 )
+from utils.output_paths import DERIVED_STATE_DIR, PAPER_TRADES_DB
 
-_DB_DEFAULT = Path("data/paper_trades.db")
+_DB_DEFAULT = PAPER_TRADES_DB
 _MARKER_DEFAULT = Path("data/edge_prioritization_activation.json")
-_PATH_DEFAULT = Path("data/edge_activation_compare.json")
+_PATH_DEFAULT = DERIVED_STATE_DIR / "edge_activation_compare.json"
 _MIN_AFTER_N = 10
 
 

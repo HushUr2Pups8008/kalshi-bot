@@ -23,16 +23,16 @@
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-05-30 (**PROFIT-THRUPUT-001 opened** — opportunity-throughput reframe + "C" execution plan: the funnel works as designed, the binding constraint is a structurally small news-edge surface, and the path to GREEN is edge-quality not volume; most throughput levers manufacture negative-EV volume (forbidden). C1 read-only diagnostics IN PROGRESS (no new trades required). **PROFIT-ROT-002 shipped v0.32.6** — source-scorecard tier recommendations now value-aware (advisory output only). Prior 2026-05-26: Codex dynamic feedback loop added PROFIT-PIPELINE-001 matcher-weight telemetry + repeatable pipeline feedback report; pipeline can execute paper trades, active gap is low-conversion attrition. Paper-only posture preserved.) |
+| Last Updated | 2026-05-30 (**PROFIT-REPORT-001 implemented** — output-path contract landed; daily/health/performance/evaluation reports now route under `logs/reports/*`, derived report state under `logs/state/derived`, DB backups under `logs/backups/db_snapshots`, raw telemetry remains canonical under existing raw roots, and migration manifest recorded. No launchd bootstrap/restart performed.) **PROFIT-THRUPUT-001 opened** — opportunity-throughput reframe + "C" execution plan: the funnel works as designed, the binding constraint is a structurally small news-edge surface, and the path to GREEN is edge-quality not volume; most throughput levers manufacture negative-EV volume (forbidden). C1 read-only diagnostics IN PROGRESS (no new trades required). **PROFIT-ROT-002 shipped v0.32.6** — source-scorecard tier recommendations now value-aware (advisory output only). Prior 2026-05-26: Codex dynamic feedback loop added PROFIT-PIPELINE-001 matcher-weight telemetry + repeatable pipeline feedback report; pipeline can execute paper trades, active gap is low-conversion attrition. Paper-only posture preserved.) |
 | Previously Updated | 2026-05-24 (PROFIT-PHASE3-003 registered as DEFERRED — first OOS corpus build blocked on paper-trade volume. Operator picked path A1 over A2/A3/A4 and over option B (storage cost). Schema audit found `cohort_extension` column already present — no migration work needed. Current state: 8/30 resolved paper trades = 27% of Rule 1 floor; pipeline (`build_corpus.py` → `replay_gate.py` → `ci_entry.py` → `.github/workflows/replay-ci-gate.yml`) wired end-to-end and verified by PR #46. PROFIT-PHASE3-002 pass-through is the operational interim; every CI run auto-passes with explicit "operator gate remains authoritative" note until A1 closes. Recent unblocks (PR #41-#44) may move the resolution rate enough to clear the 30-row threshold before the IC §16.7 30-day framework-review deadline; operator decides.) |
 | Previously Updated (older) | 2026-05-23 (Wave-1 backup-branch replay shipped via v0.30.2 / PR #16 — closes the open-fix bookkeeping flagged by `8b2473e` 2026-05-10; 5 backup-branch commits + 6 reviewer-driven follow-on remediations landed on `main`; 4 post-deploy observation canaries remain xfail-strict until soak completes; backup branch retained as forensic anchor through soak. See §2.2 Wave-1 Replay Closure for full SHA map.) |
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 70 |
+| Total Items | 71 |
 | Last Updated (P0 closure) | 2026-05-12 (PROFIT-API-001 — Kalshi API Contract Stabilization P0 closure landed on `feature/kalshi-api-contract-p0`; VERSION 0.29.59 → 0.30.0; P-1 through P-10 complete; PAPER-ONLY posture preserved) |
 | Open — HIGH | 5 (incl. PROFIT-THRUPUT-001 — opportunity-throughput reframe / readiness strategy) |
-| Open — MEDIUM | 1 |
+| Open — MEDIUM | 2 |
 | Open — LOW | 1 |
 | Items IN_PROGRESS | 1 (PROFIT-ALIGN-001 — architecture-review cluster; 9/12 sub-items active or opt-in-wired as of 2026-05-25 Codex follow-up, 1/12 documented-only, 1/12 cross-linked, 1/12 volume-gated for data-driven closure) |
 | Items ACTIVE | 2 (PROFIT-PIPELINE-001 — active architecture-gap tracker for paper-trade conversion attrition; PROFIT-EDGE-012 — active tracker entry, Cycle-17D HALTED 2026-05-10 pre-experiment per operator pick β, earliest readiness re-check 2026-06-14) |
@@ -5939,6 +5939,253 @@ verified by Read + git diff + runtime `[0.25,0.25]` + `-B` pytest.
   the Half-A correctness fix (single-variable discipline).
 - **Structural lane `llm_called=False`** (`tasks/structural_task.py`): all 58 structural priors
   capped <0.70, never reach the fail-safe — separate defect, separate fix.
+
+---
+
+### PROFIT-REPORT-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-REPORT-001 |
+| **Title** | Consolidated analysis and reporting output contract |
+| **Category** | Observability / reporting / launchd hygiene |
+| **Severity** | MEDIUM |
+| **Status** | IMPLEMENTED 2026-05-30 — repo contract, writer migration, artifact migration, guardrails, and verification complete. Installed launchd services were audited but not restarted. |
+| **Owner** | Codex implemented repo/migration; operator owns any future launchd bootstrap/restart. |
+| **Depends On** | None. |
+| **Blocks** | Operator reporting reliability; repeatable daily/pipeline reports; launchd output hygiene. |
+
+**Problem.** Analysis and reporting outputs do not have one clear contract. Runtime facts,
+operator-facing reports, launchd stdout/stderr, replay artifacts, governance events, and
+derived caches are all stored under repo-local `logs/*` and `data/*` with mixed semantics.
+Current visible spread:
+
+- `logs/app/` contains operational logs, launchd stdout/stderr, and human Markdown reports
+  (`bot.log`, `errors.log`, `launchd.*`, `bothealth_YYYY-MM-DD.md`, daily-review launcher logs,
+  db-backup launcher logs, match-feedback launcher logs).
+- `logs/reports/` contains human reports plus state (`report_YYYYMMDD.txt`,
+  `daily_review_YYYYMMDD.txt`, `source_tier_state.json`).
+- `logs/trades/` is the canonical event stream root (`live/trades.jsonl` plus archived daily
+  partitions).
+- `logs/governance/` is the governance decision stream and governance launchd stdout/stderr.
+- `logs/edge_replay/` stores replay corpora, CI run artifacts, LLM capture/cache output, and
+  replay diagnostics.
+- `data/` stores canonical mutable state (`paper_trades.db`, `evidence_store.db`) and derived
+  machine artifacts (`news_edge_series.json`, `calibration_summary.json`,
+  `matcher_token_weights.json`, `feed_health.json`, audit JSON files).
+- Launchd jobs currently point stdout/stderr at `logs/app/*` or `logs/governance/*`:
+  `com.jake.kalshi-bot`, `com.jake.kalshi-bothealth`, `com.jake.kalshi-daily-review`,
+  `com.jake.kalshi-match-feedback-aggregator`, `com.jake.kalshi-soak-check`,
+  `com.kalshi.db-backup`, `com.kalshi.governance.fast`, and `com.kalshi.governance.deep`.
+
+**Target architecture.** Keep one canonical reporting root while preserving the distinction
+between raw source facts and generated summaries. Raw facts remain the only durable source of
+truth; reports are reproducible views over those facts and must not duplicate raw records.
+
+```text
+runtime_outputs/
+  raw/
+    app/                 # bot.log, errors.log, launchd stdout/stderr
+    trades/              # canonical event stream: live + archive
+    governance/          # canonical governance event stream + governance process logs
+    edge_replay/         # replay corpora, run manifests, LLM replay artifacts
+  state/
+    db/                  # paper_trades.db, evidence_store.db, runtime lock/sentinels
+    derived/             # recomputable machine artifacts, one owner each
+  reports/
+    daily/               # daily_review_YYYYMMDD.txt
+    health/              # bothealth_YYYY-MM-DD.md
+    performance/         # report_YYYYMMDD.txt / performance_analysis output
+    evaluations/         # llm_eval and similar explicit eval artifacts
+  backups/
+    db_snapshots/        # online-safe DB backups
+```
+
+This root may initially map to `logs/` for compatibility, but the code should use named
+helpers/env vars rather than hard-coded `logs/app`, `logs/reports`, and `data` paths. The durable
+rule is contract-first: every writer declares whether it emits raw telemetry, mutable state,
+derived state, report artifact, process log, or backup.
+
+**What we should be doing.**
+
+- Use `logs/trades/live/trades.jsonl` and its archive only as raw event telemetry, not as a
+  report destination.
+- Treat `data/paper_trades.db` and `data/evidence_store.db` as canonical mutable state until a
+  deliberate `state/db` migration is approved.
+- Treat `bothealth`, `daily_review`, `performance_analysis`, and eval outputs as generated report
+  artifacts under one report namespace.
+- Treat launchd stdout/stderr as process logs, not report artifacts.
+- Keep derived JSON artifacts single-owner and recomputable. If a JSON artifact is stateful and
+  operationally consumed (`matcher_token_weights.json`), classify it as derived state with owner
+  and retention, not a report.
+- Prefer links/references in reports back to raw facts over copying raw JSONL/DB extracts into new
+  files.
+- Add a manifest/inventory test so new writers cannot silently add unclassified output paths.
+
+**Discrepancies found 2026-05-30.**
+
+- `utils/logger.py` centralizes `LOGS_DIR`, `_LOG_APP_DIR`, `_LOG_TRADES_DIR`,
+  `_LOG_REPORTS_DIR`, and trade-log archive paths, but scripts still hard-code output defaults
+  (`scripts/daily_review.py`, `scripts/performance_analysis.py`, `scripts/llm_eval.py`,
+  `tasks/stats/edge_series.py`, `scripts/calibration_aggregator.py`).
+- `config.py` supports `KALSHI_LOG_ROOT`, but only for `LOGS_DIR`; `DATA_DIR` remains fixed at
+  repo `data/`, so "single root" is not fully configurable.
+- Human reports are split between `logs/app/bothealth_YYYY-MM-DD.md` and
+  `logs/reports/{daily_review_YYYYMMDD.txt,report_YYYYMMDD.txt}`.
+- `logs/reports/source_tier_state.json` is a state file colocated with human reports.
+- `scripts/setup_launchd.sh` still emits legacy daily-review launchd paths under
+  `logs/launchd_daily_review*.log`, while current launchd templates use
+  `logs/app/daily_review_launchd.*.log`.
+- Current live launchd `com.jake.kalshi-daily-review` has `last exit code = 1`; consolidation
+  should not hide this failure behind path changes.
+- Current tests intentionally encode the trade-log split (`tests/test_report_default_paths.py`),
+  but there is no equivalent test that classifies report/process/derived-state output destinations.
+- Multiple analysis scripts print report content to stdout and sometimes also write files. That is
+  acceptable for interactive use, but launchd jobs should have one durable artifact path plus
+  separate stdout/stderr process logs.
+
+**Implementation plan.**
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
+> (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use
+> checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Consolidate analysis/reporting outputs behind one explicit output contract without
+duplicating raw telemetry or breaking existing live readers.
+
+**Architecture:** Add a small path-contract module first, then migrate writers by category. Keep
+compatibility aliases/fallback reads only where needed; do not move live telemetry until launchd
+and tests prove the new contract. Raw event streams and DB state remain canonical sources; reports
+become reproducible views.
+
+**Tech Stack:** Python stdlib `pathlib`, existing shell launchd templates, existing pytest suite,
+macOS launchd.
+
+#### Task 1: Output contract module and tests
+
+**Files:** create `utils/output_paths.py`; modify `config.py`; test
+`tests/test_output_paths_contract.py`.
+
+- [x] Add `KALSHI_OUTPUT_ROOT` with default `REPO_ROOT / "logs"` for phase-1 compatibility.
+- [x] Define named paths for `raw.app`, `raw.trades`, `raw.governance`, `raw.edge_replay`,
+  `reports.daily`, `reports.health`, `reports.performance`, `reports.evaluations`,
+  `state.derived`, and `backups.db_snapshots`.
+- [x] Preserve existing `KALSHI_LOG_ROOT` behavior as an alias/deprecated compatibility input.
+- [x] Add tests proving all named paths resolve under one root and no report path points into raw
+  telemetry directories.
+
+#### Task 2: Migrate human report writers
+
+**Files:** modify `scripts/daily_review.py`, `scripts/bothealth.sh`,
+`scripts/performance_analysis.py`, `scripts/llm_eval.py`; test `tests/test_report_default_paths.py`,
+`tests/test_daily_review.py`, `tests/shell/test_bothealth_verdict.sh`,
+`tests/test_report_snapshots.py`.
+
+- [x] Move daily review default output from `logs/reports/daily_review_YYYYMMDD.txt` to the new
+  daily-report path.
+- [x] Move bothealth Markdown from `logs/app/bothealth_YYYY-MM-DD.md` to the new health-report path
+  while keeping launcher stdout/stderr in raw app logs.
+- [x] Move `performance_analysis` report output under the new performance-report path.
+- [x] Move `llm_eval` Markdown output under the new evaluations path.
+- [x] Keep stdout printing behavior for manual commands, but make durable file writes use the path
+  contract.
+
+#### Task 3: Classify derived machine artifacts
+
+**Files:** modify `scripts/daily_review.py`, `tasks/stats/edge_series.py`,
+`scripts/calibration_aggregator.py`, `scripts/match_feedback_aggregator.py`; test existing script
+tests plus new contract tests.
+
+- [x] Move `source_tier_state.json` out of reports and into derived state.
+- [x] Move or explicitly classify `news_edge_series.json`, `calibration_summary.json`, and
+  `matcher_token_weights.json`.
+- [x] Document which derived artifacts are recomputable and which are runtime-consumed.
+- [x] Avoid duplicating these artifacts in both `data/` and report directories.
+
+#### Task 4: Launchd template and installed-job migration
+
+**Files:** modify `ops/launchd/*.plist.template`, `scripts/setup_launchd.sh`,
+`tests/test_launchd_install_script.py`, `tests/fixtures/installed_plists/*.plist`.
+
+- [x] Update templates so stdout/stderr are process logs under the raw app/governance path contract.
+- [x] Remove legacy `scripts/setup_launchd.sh` paths under `logs/launchd_daily_review*.log`.
+- [x] Add a dry-run/audit command that prints installed launchd labels and expected output paths.
+- [x] Before any live bootstrap/bootout, verify the current daily-review exit-code-1 failure is
+  understood and fixed or deliberately preserved.
+
+#### Task 5: Inventory guardrail
+
+**Files:** create `scripts/output_path_inventory.py`; test `tests/test_output_path_inventory.py`.
+
+- [x] Scan repo source for output-path literals.
+- [x] Fail if a writer introduces an unclassified `logs/`, `data/`, `reports/`, or
+  `analysis_outputs/` path.
+- [x] Allow documented read-only legacy paths during migration.
+- [ ] Add the guardrail to CI only after initial migration lands and false positives are triaged.
+
+#### Task 6: Migration and retention
+
+**Files:** create `scripts/migrate_runtime_outputs.py`; update this tracker item.
+
+- [x] Dry-run current filesystem moves and print source/destination pairs.
+- [x] Move only generated reports and process logs first; leave `logs/trades`, `logs/governance`,
+  and DB files in place until live readers are verified.
+- [x] Do not copy raw JSONL/DB data into report directories.
+- [x] Keep a timestamped migration manifest with checksums/counts.
+- [x] Run post-migration verification: report generation, bothealth, daily review, launchd plist
+  lint, and current-state readers.
+
+**Execution note 2026-05-30.**
+
+- Contract module: `utils/output_paths.py`.
+- Report artifacts now route to `logs/reports/{daily,health,performance,evaluations}/`.
+- Recomputable derived report state now routes to `logs/state/derived/`
+  (`source_tier_state.json`, `news_edge_series.json`, `calibration_summary.json`,
+  `feed_health.json`, `regime_prior_audit.json`, `market_horizon_audit.json`,
+  `edge_activation_compare.json`).
+- Runtime-consumed matcher weights remain at `data/matcher_token_weights.json` by design.
+- DB state remains in `data/` by design.
+- DB snapshots now route to `logs/backups/db_snapshots/`.
+- Applied migration manifest:
+  `logs/state/derived/runtime_output_migration_20260530T173900Z.json`; 71 generated
+  report/derived/backup artifacts moved, 0 raw JSONL/DB records copied into report directories.
+- `scripts/launchd_output_path_audit.py` reported all 8 installed launchd output paths matching
+  rendered templates; no `launchctl bootout`, `bootstrap`, `kickstart`, or service restart was run.
+- Daily-review launchd exit-code-1 cause was direct-script import bootstrap; fixed in
+  `scripts/daily_review.py` and pinned by `tests/test_launchd_install_script.py`.
+- CI integration for `scripts/output_path_inventory.py` remains a follow-up after the operator
+  decides whether this guardrail should run on every push or stay manual during the first soak.
+
+**Verification 2026-05-30.**
+
+- `.venv/bin/ruff check ...` on touched Python files: pass.
+- `bash -n scripts/bothealth.sh scripts/db_snapshot_backup.sh scripts/setup_launchd.sh`: pass.
+- Focused output/launchd/daily-review/report tests:
+  `68 passed` after the direct-entrypoint regression test.
+- `bash tests/shell/test_bothealth_verdict.sh`: pass.
+- `tests/test_report_snapshots.py tests/test_pipeline_feedback_report.py`: `7 passed`.
+- `scripts/output_path_inventory.py`: pass, no unclassified output writers.
+- `scripts/migrate_runtime_outputs.py`: dry-run move count `0` after applied migration.
+- `scripts/launchd_output_path_audit.py`: pass, 8/8 installed output paths matched templates.
+- `scripts/daily_review.py --top 1 --exclude-test`: generated
+  `logs/reports/daily/daily_review_20260530.txt`.
+- Broader stats/reporting reader suite: 50 passed, 1 pre-existing failure in
+  `tests/test_match_feedback.py::TestSeedWeightsFile::test_seed_provisional_entries_include_audit_findings`
+  due to runtime-modified `data/matcher_token_weights.json` missing `_seed_status` for
+  `KXCABLEAVE:trump`; left untouched because the file was already dirty and runtime-owned.
+
+**Acceptance criteria.**
+
+- One documented root owns all analysis/reporting outputs.
+- Every writer is classified as raw telemetry, mutable state, derived state, report artifact,
+  process log, or backup.
+- No report artifact duplicates raw JSONL/DB contents.
+- `bothealth`, `daily_review`, `performance_analysis`, and launchd stdout/stderr write to contract
+  paths.
+- `tests/test_report_default_paths.py` and new output-contract tests pass.
+- Live launchd templates and installed plists agree before any service restart.
+- Operator can generate a daily/pipeline report without knowing whether inputs came from
+  `logs/app`, `logs/reports`, `logs/trades`, `logs/governance`, or `data`.
 
 ---
 

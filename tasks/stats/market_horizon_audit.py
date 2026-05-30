@@ -29,8 +29,9 @@ from typing import Any
 from analysis.market_specificity import _DAYS_TO_CLOSE_CAP
 from config import MARKET_CACHE_TTL_SECONDS, MAX_MARKET_DAYS_TO_EXPIRY
 from tasks.stats.edge_series import _parse_iso
+from utils.output_paths import DERIVED_STATE_DIR
 
-_PATH_DEFAULT = Path("data/market_horizon_audit.json")
+_PATH_DEFAULT = DERIVED_STATE_DIR / "market_horizon_audit.json"
 
 
 def summarize_market_horizon(

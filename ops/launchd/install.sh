@@ -36,6 +36,7 @@ TEMPLATES=(
     "com.jake.kalshi-bot"
     "com.jake.kalshi-bothealth"
     "com.jake.kalshi-daily-review"
+    "com.jake.kalshi-match-feedback-aggregator"
     "com.jake.kalshi-soak-check"
     "com.kalshi.db-backup"
     "com.kalshi.governance.fast"

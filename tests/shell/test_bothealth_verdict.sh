@@ -63,6 +63,7 @@ run_bothealth() {
     local root="$1"
     local capture="$root/osascript.args"
     BOTHEALTH_REPO_ROOT="$root" \
+    KALSHI_OUTPUT_ROOT="$root/logs" \
     BOTHEALTH_OSASCRIPT_CAPTURE="$capture" \
     PATH="$root/bin:$PATH" \
     bash "$BOTHEALTH"
