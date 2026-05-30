@@ -5,7 +5,7 @@
 | **Date** | 2026-05-30 |
 | **Author** | Claude (implementation agent) |
 | **Authority** | PROFIT-THRUPUT-001 (§C3) |
-| **Status** | **DRAFT — PENDING OPERATOR DECISION.** No code changed. This is a decision artifact for operator + governance review. |
+| **Status** | **ADOPTED 2026-05-30** (operator decision, recorded by agent on operator instruction). The *governance decision* is made: live-readiness is re-anchored to the IC §16.7 EV-quality criterion. The *code implementation* (§7) is **corpus-coupled** — it wires the readiness verdict to the replay-gate T3 OOS result and has **no live-flip effect until the OOS corpus exists** (≥30 resolved; currently 8/30, PROFIT-PHASE3-003). PAPER-ONLY posture holds. |
 | **Type** | Pre-Go-Live Gate redefinition (R-5 contract/risk-review-level change) |
 | **Reviewers** | Operator (decision authority) + a second agent (adversarial review) before any implementation |
 | **Supersedes if adopted** | The `DEFAULT_MIN_TRADES = 200` POST_FIX_NEW resume bar as the *live-flip* criterion |
@@ -93,7 +93,13 @@ C3 is the **strategic re-anchoring** that stops chasing an unreachable, mis-axis
 - **DEFER** — keep the 200-count bar; revisit after L-dossier raises throughput.
 - **REJECT** — retain 200 as-is.
 
-**Operator sign-off:** _______________  Date: __________  Decision: __________
+**Operator decision: ADOPT** (2026-05-30, recorded by agent on operator instruction; HushUr2Pups8008).
+The IC §16.7 EV-quality criterion supersedes the raw 200-count as the live-flip readiness standard, with
+all §4 invariants preserved verbatim. Implementation per §7 is gated and corpus-coupled (lands with
+PROFIT-PHASE3-003); no live-flip behavior changes until a genuine OOS corpus (≥30 resolved, ≥2 families,
+registered regime) exists and passes the replay-gate T3 EV test. PAPER-ONLY posture holds throughout.
+
+**Operator sign-off (physical):** _______________  Date: __________
 
 ---
 
