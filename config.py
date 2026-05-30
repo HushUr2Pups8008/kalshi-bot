@@ -580,6 +580,60 @@ REDDIT_TOPIC_KEYWORDS: dict[str, frozenset] = {
 # Max subreddits per poll cycle (core always included; topic subs fill remaining slots)
 REDDIT_MAX_SUBREDDITS: int = 20
 
+# ── News-edge series (option A, 2026-05-30) ──────────────────────────────────
+# Series with demonstrated news-edge: all 158 of the bot's lifetime trading
+# opportunities clustered on these event-driven political/geopolitical series
+# (and every one already carries a categorical prior in
+# analysis/regime_classifier._SERIES_PRIORS). feeds/search_news_monitor
+# prioritizes active markets on these series for targeted news retrieval so they
+# are never crowded out of the SEARCH_MAX_QUERIES budget by high-open-interest
+# macro / "mention" markets the bot has no news-edge on (CPI/GDP/yield threshold
+# markets resolve on a number, not news). Membership is by series-ticker prefix.
+#
+# ⚠️ COLD-START SEED ONLY — this list rots (it is tied to the current political
+# moment: KXTRUMP*, KXMOCTRUMP25, etc.). It is NOT the source of truth. The
+# source of truth is the self-maintaining set in tasks/stats/edge_series.py
+# (option A-2): `active_edge_series()` derives the live edge set from a rolling
+# 45-day window of OPPORTUNITY history (`data/news_edge_series.json`, refreshed
+# by scripts/match_feedback_aggregator.py), auto-promoting producing series and
+# auto-aging-out dead ones — mirroring feeds/subreddit_discovery's
+# candidate + ZERO_SIGNAL_POSTS suppression. This static set is used ONLY when
+# no artifact exists yet (a fresh DB); once the aggregator has run, dead series
+# here are never resurrected. So when the administration changes or Kalshi
+# retires a series, the live set self-corrects — unlike the obsolete
+# KALSHI_GEOPOLITICAL_SERIES allowlist (see CLAUDE.md) which had no such loop.
+# Blast radius is low: this only affects retrieval *priority*, not the trade
+# gate, so even a wrong entry degrades throughput silently rather than causing
+# bad trades. Operator-`pinned` entries in the artifact override aging.
+NEWS_EDGE_SERIES: frozenset = frozenset({
+    "KXTRUMPIRAN",          # Iran diplomacy / kinetic events (34 opps)
+    "KXTRUMPCHINA",         # China-related Trump decisions (31 opps; 5 resolved)
+    "KXTXRUNOFFENDORSE",    # Texas Senate runoff endorsements (28 opps)
+    "KXTRUMPMENTION",       # Trump mention markets (17 opps)
+    "KXMOCTRUMP25",         # Trump month-of-action calendar (11 opps)
+    "KXUSAIRANAGREEMENT",   # US-Iran nuclear deal (9 opps; 1 resolved)
+    "KXCHINAANNOUNCE",      # China-side announcements (8 opps)
+    "KXNEWDEAL",            # Trump trade-deal announcement (7 opps)
+    "KXTRUMPMENTIONB",      # Trump mention markets, B variant (7 opps)
+    "KXTRUMPENDORSE",       # Trump endorsement events (3 opps)
+    "KXFISAEXTEND",         # FISA extension legislation (3 resolved trades)
+    "KXLUTNICKOUT",         # Lutnick LNG / policy (2 opps; 1 resolved)
+    "KXNEWTARIFFS",         # New-tariffs-this-month (1 opp)
+})
+
+# Gate for the news-edge retrieval prioritization (option A). DEFAULT OFF.
+# When False, feeds/search_news_monitor ranks markets purely by
+# open_interest×uncertainty (the prior production behavior). When True, markets
+# on the active news-edge set (tasks/stats/edge_series) are ranked first within
+# the unchanged SEARCH_MAX_QUERIES budget. This is a DECISION-AFFECTING change
+# (it alters which markets get targeted news → which paper trades arise), so per
+# IC §16 it ships INERT and may only be turned on with replayed-EV evidence (or
+# an explicit operator REPLAY_GATE_OVERRIDE memo). Flip via .env + restart.
+ENABLE_NEWS_EDGE_PRIORITIZATION: bool = (
+    os.getenv("ENABLE_NEWS_EDGE_PRIORITIZATION", "false").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+
 # ── Kalshi market filters ─────────────────────────────────────────────────────
 # Series ticker PREFIXES to reject — used as a second filter after keyword
 # discovery to drop sports leagues from geo-relevant countries (e.g. Saudi Pro
