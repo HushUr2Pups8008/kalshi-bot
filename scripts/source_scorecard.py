@@ -58,6 +58,7 @@ DEFAULT_DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
 # lifetime-yield veto (``has_lifetime_yield``), which never auto-removes a source
 # that has ever produced a signal/opportunity/trade. See PROFIT-ROT-002.
 DEFAULT_RECOMMENDATION_WINDOW_DAYS = 45
+DEFAULT_INCUBATION_MIN_LIFETIME_POSTS = 30
 
 KNOWN_PUBLISHER_MARKERS = (
     "Reuters",
@@ -459,6 +460,8 @@ def rank_tuple(row: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def auto_disable_candidate(row: dict[str, Any]) -> bool:
+    if is_incubating_source(row):
+        return False
     # A(i): never auto-remove a source with a proven lifetime track record.
     if has_lifetime_yield(row):
         return False
@@ -473,6 +476,8 @@ def auto_disable_candidate(row: dict[str, Any]) -> bool:
 
 
 def watchlist_candidate(row: dict[str, Any]) -> bool:
+    if is_incubating_source(row):
+        return False
     if auto_disable_candidate(row):
         return False
     if _rec_observed(row) < 10:
@@ -485,8 +490,25 @@ def watchlist_candidate(row: dict[str, Any]) -> bool:
     return burden >= 0.60 and _rec_signals(row) <= 1
 
 
+def is_incubating_source(row: dict[str, Any]) -> bool:
+    """True while a newly tracked source lacks enough lifetime sample to prune.
+
+    Freshly added RSS desks can generate large stale-drop counts from old feed
+    backfill before source_stats has observed enough fresh posts to judge the
+    feed. Only rows with an explicit source_stats record are eligible for this
+    state; old untracked/noisy sources retain the existing prune behavior.
+    """
+    if not row.get("has_lifetime_stats"):
+        return False
+    if has_lifetime_yield(row):
+        return False
+    return row.get("lifetime_posts", 0) < DEFAULT_INCUBATION_MIN_LIFETIME_POSTS
+
+
 def recommendation_tier(row: dict[str, Any]) -> str:
     classification = row["classification"]
+    if is_incubating_source(row):
+        return "incubating"
     if auto_disable_candidate(row):
         return "remove immediately"
     if classification == "likely prune":
@@ -566,6 +588,7 @@ def summarize(
         row["stale_drop_ratio"] = (stale_total / row["observed_records"]) if row["observed_records"] > 0 else None
 
         lifetime = lifetime_totals.get(source, {})
+        row["has_lifetime_stats"] = source in lifetime_totals
         row["lifetime_posts"] = lifetime.get("posts_seen", 0)
         row["lifetime_signals"] = lifetime.get("signals", 0)
         row["lifetime_opportunities"] = lifetime.get("opportunities", 0)
@@ -593,6 +616,7 @@ def summarize(
         "remove immediately": [],
         "prune": [],
         "watch / investigate": [],
+        "incubating": [],
         "keep": [],
         "top performers": [],
         "disabled by source": [],
@@ -700,6 +724,7 @@ def print_summary(stats: dict[str, Any], top: int, hide_disabled: bool = False) 
         "top performers",
         "keep",
         "watch / investigate",
+        "incubating",
         "prune",
         "remove immediately",
     ):
@@ -711,6 +736,8 @@ def print_summary(stats: dict[str, Any], top: int, hide_disabled: bool = False) 
             print("  Sources producing acceptable signals with no major issues")
         elif title == "watch / investigate":
             print("  Mixed performance; needs more data or review")
+        elif title == "incubating":
+            print("  Newly tracked sources below minimum lifetime sample; do not prune yet")
         elif title == "prune":
             print("  Low value; consider removal soon")
         elif title == "remove immediately":

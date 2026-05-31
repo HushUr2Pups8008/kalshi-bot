@@ -64,7 +64,7 @@ RECENT_EDGE_AUDIT = 5
 # Source-scorecard tiers we keep visible in section 1's per-source waterfall.
 # Sources in any other tier (prune / remove immediately / disabled) are folded
 # into a one-line summary referencing section 8.
-_VISIBLE_TIERS: tuple[str, ...] = ("top performers", "keep", "watch / investigate")
+_VISIBLE_TIERS: tuple[str, ...] = ("top performers", "keep", "watch / investigate", "incubating")
 _HIDDEN_TIERS: tuple[str, ...] = (
     "prune",
     "remove immediately",
@@ -76,6 +76,7 @@ _TIER_ORDER: dict[str, int] = {
     "top performers": 0,
     "keep": 1,
     "watch / investigate": 2,
+    "incubating": 2,
     "prune": 3,
     "remove immediately": 4,
     "disabled by source": 5,
@@ -166,6 +167,36 @@ def fmt_counter_line(counter: Counter[str], keys: list[tuple[str, str]]) -> str:
     if not counter:
         return "n/a"
     return ", ".join(f"{label}={counter.get(key, 0)}" for key, label in keys)
+
+
+def _format_fresh_pass_conversion_lines(
+    *,
+    fresh_passes: int,
+    detail_rows: int,
+    llm_attempted: int,
+    opportunities: int,
+    paper_trades: int,
+) -> list[str]:
+    signal_label = "signal row" if detail_rows == 1 else "signal rows"
+    lines = [
+        "  Fresh-pass conversion            : "
+        f"{fresh_passes} fresh -> {detail_rows} {signal_label} -> "
+        f"{llm_attempted} LLM attempts -> {opportunities} opportunities -> "
+        f"{paper_trades} paper trades"
+    ]
+    deltas = [
+        ("fresh_to_signal", fresh_passes - detail_rows, "fresh passes did not become signal-analysis rows"),
+        ("signal_to_llm", detail_rows - llm_attempted, "signal rows did not attempt LLM"),
+        ("llm_to_opportunity", llm_attempted - opportunities, "LLM attempts did not create opportunities"),
+        ("opportunity_to_trade", opportunities - paper_trades, "opportunities did not become paper trades"),
+    ]
+    positive = [(label, delta, desc) for label, delta, desc in deltas if delta > 0]
+    if positive:
+        label, delta, desc = max(positive, key=lambda item: item[1])
+        lines.append(f"    pinch                          : {label} ({delta} {desc})")
+    else:
+        lines.append("    pinch                          : none detected in this window")
+    return lines
 
 
 def _collect_kalshi_drift_state() -> tuple[dict[str, Any], str | None]:
@@ -538,8 +569,11 @@ def build_daily_review(
     )
     suppressed = event_counts.get("MATCH_SUPPRESSED", 0)
     suppression_candidates = event_counts.get("MATCH_SUPPRESSION_CANDIDATE", 0)
+    detail_rows = edge_stats.get("counts", {}).get("SIGNAL_ANALYSIS_DETAIL", 0)
+    llm_attempted = edge_stats.get("llm_observability", {}).get("attempted", 0)
     opportunities = edge_stats.get("counts", {}).get("OPPORTUNITY", 0)
     executed = edge_stats.get("counts", {}).get("EXECUTED", 0)
+    paper_trades = event_counts.get("PAPER_TRADE", 0)
     below_threshold = skip_breakdown.get("below_threshold", 0)
     zero_edge = skip_breakdown.get("zero_edge", 0)
     duplicate = skip_breakdown.get("duplicate", 0)
@@ -591,6 +625,15 @@ def build_daily_review(
     lines.append(f"  Fresh passes                     : {fresh_passes}")
     lines.append(f"  Dropped early stale              : {early_stale}")
     lines.append(f"  Rejected stale at analysis       : {analysis_rejections.get('stale_news', 0)}")
+    lines.extend(
+        _format_fresh_pass_conversion_lines(
+            fresh_passes=fresh_passes,
+            detail_rows=detail_rows,
+            llm_attempted=llm_attempted,
+            opportunities=opportunities,
+            paper_trades=paper_trades,
+        )
+    )
     top_stale_sources = _top_source_rows(freshness_stats, limit=top)
     if top_stale_sources:
         lines.append("  Drilldown: top stale sources")
@@ -719,7 +762,6 @@ def build_daily_review(
     lines.append("")
 
     lines.append("3. ANALYSIS  [source: scripts/decision_funnel_summary.py + scripts/signal_edge_diagnostics.py + scripts/keyword_feedback.py]")
-    detail_rows = edge_stats.get("counts", {}).get("SIGNAL_ANALYSIS_DETAIL", 0)
     total_rejections = sum(analysis_rejections.values())
     lines.append(f"  Signal analysis detail rows      : {detail_rows}")
     lines.append(f"  Passed keyword gate              : {detail_rows - keyword_gate_rows}")
@@ -806,7 +848,6 @@ def build_daily_review(
     lines.append("")
 
     lines.append("5. EXECUTION  [source: scripts/decision_funnel_summary.py + scripts/paper_performance_drilldown.py]")
-    paper_trades = event_counts.get("PAPER_TRADE", 0)
     live_orders = event_counts.get("LIVE_ORDER", 0)
     lines.append(f"  Paper trades                     : {paper_trades}")
     lines.append(f"  Live orders                      : {live_orders}")
@@ -986,6 +1027,7 @@ def build_daily_review(
         ("Top performers", "top performers"),
         ("Keep", "keep"),
         ("Watch / investigate", "watch / investigate"),
+        ("Incubating", "incubating"),
         ("Prune", "prune"),
         ("Remove immediately", "remove immediately"),
     ):

@@ -5745,7 +5745,7 @@ news-ingestion-implementation,series-priors-durability-scope}.md`).
 | **Title** | Opportunity-throughput reframe + "C" execution plan (the path to GREEN is edge-quality, not volume) |
 | **Category** | Profit-path / readiness strategy / structural ceiling |
 | **Severity** | HIGH (this is the binding constraint on reaching live readiness; misframing it wastes cycles building negative-EV volume) |
-| **Status** | OPEN — PR #56-#65 review complete; easy "pipeline broken" doors closed. Current state: bot can paper-trade, but readiness remains RED from structural edge scarcity (`0/200` POST_FIX_NEW; C3 EV-quality bar adopted but corpus-coupled). Next active lane: Track B source replacement/edge-surface throughput, starting with a read-only evidence refresh plus the Reddit clean-disable plan. |
+| **Status** | OPEN — PR #56-#65 review complete; easy "pipeline broken" doors closed. Current state: bot can paper-trade, but readiness remains RED from structural edge scarcity (`0/200` POST_FIX_NEW; C3 EV-quality bar adopted but corpus-coupled). v0.33.0 Track B/B3.1 is live and still in soak; do not judge the new desks from tiny lifetime samples. Next active throughput lever remains B2 market-driven retrieval, replay-EV-gated. |
 | **Owner** | Operator (governance fork C3) + implementation agent (C1 read-only now; C2 levers replay-EV-gated + operator deploy). |
 | **Depends On** | Nothing for C1 (read-only). C2 levers depend on C1 findings + replay-EV harness. C3 depends on operator/governance decision. |
 | **Blocks** | Live-readiness (PROFIT-EDGE-012 / POST_FIX_NEW 200-bar), the OOS corpus (PROFIT-PHASE3-003), and ultimately paper→live cutover. |
@@ -5973,6 +5973,18 @@ governance, referencing the Cycle-17D charter that set 200.
   **Deferred follow-ups:** WaPo direct (needs a per-feed source-name override); B2 market-driven retrieval
   (the deep lever — replay-EV gated); Bluesky (`PROFIT-SOURCE-002`); NPR/Axios (format/freshness validation).
   Source: workflow `wypdcusfl`.
+- 2026-05-31 — **Daily/health report review after v0.33.0 restart: keep B3.1 in soak; expose the real pinch.**
+  Reports reviewed: `logs/reports/daily/daily_review_20260531.txt` and
+  `logs/reports/health/bothealth_2026-05-31.md`. Evidence: readiness remains RED (`0/200`
+  POST_FIX_NEW); last-24h trades = 0; feeds healthy (`26 live, 0 unhealthy`); ingestion observed
+  `186` fresh passes but only `1` `SIGNAL_ANALYSIS_DETAIL`, `0` LLM attempts, `0` opportunities,
+  `0` paper trades. B3.1 desks showed only tiny lifetime fresh samples (2-9 posts) while stale
+  backfill inflated observed/drop counts, so the prior scorecard `prune` label was premature. Reporting
+  follow-up: add an explicit `incubating` source-scorecard tier for sources with source_stats coverage
+  but `<30` lifetime fresh posts and no lifetime yield, and add a daily "fresh-pass conversion" line to
+  surface `fresh -> signal rows -> LLM attempts -> opportunities -> paper trades` plus the largest pinch.
+  Decision unchanged: let B3.1 soak longer before judging; B2 market-driven retrieval remains the next
+  real throughput lever, gated by replay-EV rather than volume pumping or gate relaxation.
 
 ---
 
