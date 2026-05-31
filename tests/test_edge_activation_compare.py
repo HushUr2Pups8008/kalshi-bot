@@ -13,9 +13,61 @@ from tasks.stats.edge_activation_compare import (
     split_by_activation,
     compare_verdict,
     opportunities_per_day,
+    stratify_by_edge_series,
 )
 
 ACT = "2026-05-30T03:15:35+00:00"
+EDGE = frozenset({"KXTRUMPCHINA", "KXFISAEXTEND"})
+
+
+# ── cross-sectional (replay-based) edge-prioritization eval ───────────────────
+# The temporal A/B needs live AFTER-cohort resolved trades it cannot get at the
+# throughput ceiling. This stratifies ALL recorded resolved trades into edge vs
+# non-edge and compares realized EV over the recorded corpus instead -- and it
+# auto-flips from "un-evaluable" to a real comparison once a non-edge trade exists.
+
+
+def test_stratify_un_evaluable_when_no_non_edge_resolved():
+    # Live state: every resolved trade is edge-series -> no comparison group. This is
+    # the structural-ceiling finding (bot's resolved surface is 100% edge-series), not
+    # a small-n issue.
+    trades = [
+        {"ticker": "KXTRUMPCHINA-26MAY15", "resolved": 1, "pnl_dollars": -1.0, "edge": 0.05, "ts": "x"},
+        {"ticker": "KXFISAEXTEND-26JUN01", "resolved": 1, "pnl_dollars": -1.5, "edge": 0.04, "ts": "x"},
+    ]
+    s = stratify_by_edge_series(trades, EDGE)
+    assert s["edge"]["resolved"] == 2
+    assert s["non_edge"]["resolved"] == 0
+    assert "un-evaluable" in s["verdict"].lower()
+    assert "no contrast group" in s["verdict"].lower()
+    # F3: series composition is reported so single-series strata aren't over-read.
+    assert s["edge_series_present"] == ["KXFISAEXTEND", "KXTRUMPCHINA"]
+    assert s["non_edge_series_present"] == []
+
+
+def test_stratify_compares_ev_when_a_non_edge_trade_appears():
+    # The moment a non-edge resolved trade exists, the verdict flips to a real EV
+    # comparison -- proving the evaluator is not a constant "un-evaluable" pin.
+    trades = [
+        {"ticker": "KXTRUMPCHINA-26MAY15", "resolved": 1, "pnl_dollars": 2.0, "edge": 0.05, "ts": "x"},
+        {"ticker": "KXTRUMPCHINA-26MAY16", "resolved": 1, "pnl_dollars": 1.0, "edge": 0.05, "ts": "x"},
+        {"ticker": "KXRANDOMMACRO-26JUN", "resolved": 1, "pnl_dollars": -1.0, "edge": 0.03, "ts": "x"},
+    ]
+    s = stratify_by_edge_series(trades, EDGE)
+    assert s["edge"]["resolved"] == 2 and s["non_edge"]["resolved"] == 1
+    assert s["edge"]["mean_pnl_ev"] == 1.5 and s["non_edge"]["mean_pnl_ev"] == -1.0
+    v = s["verdict"].lower()
+    # F2: descriptive, not causal; "higher" is a stratum fact, not flag-steering evidence.
+    assert "descriptive" in v and "not causal" in v and "higher" in v  # 1.5 > -1.0
+    assert s["edge_series_present"] == ["KXTRUMPCHINA"]
+    assert s["non_edge_series_present"] == ["KXRANDOMMACRO"]
+
+
+def test_stratify_un_evaluable_with_no_resolved_trades():
+    s = stratify_by_edge_series(
+        [{"ticker": "KXTRUMPCHINA-26MAY15", "resolved": 0, "pnl_dollars": None, "ts": "x"}], EDGE
+    )
+    assert "un-evaluable" in s["verdict"].lower()
 
 
 def test_cohort_stats_basic():

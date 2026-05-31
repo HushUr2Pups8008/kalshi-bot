@@ -5896,6 +5896,23 @@ governance, referencing the Cycle-17D charter that set 200.
   PAPER-ONLY holds). (2) **Key-mismatch fix authorized** (Tier-A Half A) — fix the regime-weight key
   mismatch on correctness grounds, under high-assurance (TDD + adversarial review + replay-gate-analyze +
   operator deploy). Half B (fallback-filter widening) DEFERRED. Filing as PROFIT-BLENDER-002.
+- 2026-05-30 — **Edge-prioritization "option 2" wired: replay-based (cross-sectional) EV eval.**
+  The temporal A/B (`edge_activation_compare.compare_verdict`) can't read out — `0/10 resolved
+  AFTER` at the throughput ceiling. Added `stratify_by_edge_series` (pure, tested) +
+  `compare().stratification` + an observability line: it stratifies ALL recorded resolved trades
+  by whether their series is in the CURRENT active edge set (`active_edge_series`, applied
+  RETROACTIVELY at report time — a trade moves strata as the set ages), reporting series + n.
+  **CORRECTION to a same-day hand check** that used the wrong membership set (seed∪active union →
+  "0 non-edge, un-evaluable"): under the actual criterion the split IS populated — **currently-active-edge
+  n=5 EV −$0.50 / 40% win [single series: KXTRUMPCHINA] vs currently-aged-out n=3 EV −$2.50 [single
+  series: KXFISAEXTEND]**. This is **DESCRIPTIVE, not causal** (per Codex review): a stratification of
+  historical outcomes by *current* edge-set membership — NOT evidence the flag steered toward better
+  markets at trade time (single-series strata; n=5 vs 3 → no statistical power). This is the recorded-corpus
+  alternative to waiting for live AFTER trades; it does NOT need the bootstrap corpus. Files:
+  `tasks/stats/edge_activation_compare.py`, `tasks/stats/observability_checkpoint.py` (+tests).
+  Note: a literal `replay_gate` run can't evaluate edge-prioritization (it's input-selection, not
+  decision-logic; the un-fetched counterfactual news isn't recorded) — stratification is the
+  coherent replay-based proxy.
 
 ---
 
