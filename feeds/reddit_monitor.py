@@ -314,6 +314,18 @@ async def run_reddit_monitor(
       - list[str]         -> use that static list every cycle
       - async callable    -> call each cycle to get the current list (adaptive mode)
     """
+    # Master switch (default off). Reddit denied the bot's OAuth app (2026-05-29),
+    # so anonymous polling is IP-blocked and yields 0 signal lifetime. Return before
+    # any network/session work so the scheduled task completes cleanly instead of
+    # looping on 403s. Re-enable with REDDIT_ENABLED=true if an app is ever approved.
+    if not cfg.reddit_enabled:
+        log.info(
+            "Reddit ingestion disabled (REDDIT_ENABLED not set) -- skipping. "
+            "Reddit denied the bot's OAuth app (2026-05-29); anonymous polling is "
+            "IP-blocked and yields 0 signal. Set REDDIT_ENABLED=true to re-enable."
+        )
+        return
+
     # Normalize subreddits to a uniform async callable
     if subreddits is None:
         _static = REDDIT_SUBREDDITS

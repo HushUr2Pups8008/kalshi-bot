@@ -1907,6 +1907,12 @@ class TradingBot:
         Waits 5 minutes on startup so the market cache is warm before the first pass.
         """
         from feeds.subreddit_discovery import run_discovery_pass
+        if not cfg.reddit_enabled:
+            log.info(
+                "[DISCOVERY] Reddit disabled (REDDIT_ENABLED not set) -- subreddit "
+                "discovery task exiting cleanly; no Reddit search to perform."
+            )
+            return
         await asyncio.sleep(300)  # Let market cache warm up
         while True:
             try:
