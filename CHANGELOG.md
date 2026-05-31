@@ -19,6 +19,27 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.32.8] - 2026-05-30
+
+### Added
+
+- **Edge-prioritization "option 2": replay-based (cross-sectional) EV evaluation** (`PROFIT-THRUPUT-001`,
+  `tasks/stats/edge_activation_compare.stratify_by_edge_series`). The temporal A/B can't read out (`0/10
+  resolved AFTER` at the throughput ceiling), so this stratifies ALL recorded resolved trades by whether
+  their series is in the *current* active edge set and compares realized EV over the recorded corpus —
+  no live AFTER cohort needed. **DESCRIPTIVE, not causal** (membership applied retroactively; reports
+  series + n so single-series strata aren't over-read). Surfaced in `compare().stratification` and the
+  daily/pipeline GATES section. Per Codex adversarial review: framing tightened to "current-active vs
+  currently-aged-out," composition exposed.
+
+### Fixed
+
+- **Stale `test_db_snapshot_backup.py` after the output-path migration** — the script writes/prunes under
+  `logs/backups/db_snapshots` (honoring `KALSHI_OUTPUT_ROOT` > `KALSHI_LOG_ROOT` > `REPO_ROOT/logs`), but
+  the Darwin-only tests still seeded/asserted `mac_archive/db_snapshots` and inherited the conftest's
+  shared `KALSHI_LOG_ROOT` temp. Updated the path + pinned `KALSHI_OUTPUT_ROOT` per-test for isolation.
+  Test-only; the live db-backup job was pruning correctly.
+
 ## [0.32.7] - 2026-05-30
 
 ### Fixed

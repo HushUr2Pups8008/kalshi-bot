@@ -74,6 +74,61 @@ def cohort_stats(trades: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _stratify_verdict(edge: dict[str, Any], non_edge: dict[str, Any]) -> str:
+    ee, ne = edge.get("resolved", 0), non_edge.get("resolved", 0)
+    if ee == 0 and ne == 0:
+        return "un-evaluable: 0 resolved trades in either stratum — no EV signal yet"
+    if ne == 0:
+        return (
+            f"un-evaluable: {ee} resolved trades, all on currently-active edge series; 0 on "
+            "currently-non-edge series — no contrast group (PROFIT-THRUPUT-001 structural ceiling)."
+        )
+    if ee == 0:
+        return f"un-evaluable: 0 current-active-edge resolved vs {ne} currently-non-edge"
+    ev_e, ev_n = edge.get("mean_pnl_ev"), non_edge.get("mean_pnl_ev")
+    if ev_e is None or ev_n is None:
+        return "insufficient resolved data in one stratum"
+    rel = "higher" if ev_e > ev_n else ("lower" if ev_e < ev_n else "equal to")
+    return (
+        f"DESCRIPTIVE (not causal): current-active-edge per-trade EV ${ev_e} {rel} than "
+        f"currently-non-edge ${ev_n} (n={ee} vs {ne}; current membership applied retroactively) "
+        "-- directional only, no power at this n"
+    )
+
+
+def stratify_by_edge_series(
+    trades: list[dict[str, Any]], edge_series: "frozenset[str] | set[str]"
+) -> dict[str, Any]:
+    """Cross-sectional descriptive EV split of recorded trades by CURRENT edge-set membership.
+
+    Splits ALL recorded resolved trades by whether their series is in the *current* active
+    edge set (``edge_series``). IMPORTANT: membership is applied RETROACTIVELY at report time
+    -- a historical trade moves strata as the active set ages -- so this is a DESCRIPTIVE
+    comparison (currently-active series vs currently-aged-out/inactive series), NOT causal
+    evidence the flag steered toward better markets at trade time. It is the recorded-corpus
+    companion to the temporal A/B (``compare_verdict``), which is the before/after but needs
+    live AFTER-cohort trades. Reports series composition + n so single-series strata are not
+    over-read. Pure.
+    """
+    edge_t: list[dict[str, Any]] = []
+    non_edge_t: list[dict[str, Any]] = []
+    for t in trades:
+        target = edge_t if _covered(_series_of(t.get("ticker") or ""), edge_series) else non_edge_t
+        target.append(t)
+    edge_stats, non_edge_stats = cohort_stats(edge_t), cohort_stats(non_edge_t)
+
+    def _series_present(rows: list[dict[str, Any]]) -> list[str]:
+        return sorted({_series_of(t.get("ticker") or "") for t in rows if _is_resolved(t)})
+
+    return {
+        "edge": edge_stats,
+        "non_edge": non_edge_stats,
+        "edge_series_present": _series_present(edge_t),
+        "non_edge_series_present": _series_present(non_edge_t),
+        "verdict": _stratify_verdict(edge_stats, non_edge_stats),
+    }
+
+
 def split_by_activation(
     rows: list[dict[str, Any]],
     activation_ts: str,
@@ -188,7 +243,8 @@ def compare(
         edge_series = active_edge_series(seed=NEWS_EDGE_SERIES) or frozenset(NEWS_EDGE_SERIES)
 
     # Resolved-EV cohorts (edge cluster only — the flag only steers edge-series retrieval).
-    edge_trades = [t for t in read_trades(db_path) if _covered(_series_of(t["ticker"]), edge_series)]
+    all_trades = read_trades(db_path)
+    edge_trades = [t for t in all_trades if _covered(_series_of(t["ticker"]), edge_series)]
     tb, ta = split_by_activation(edge_trades, activation_ts)
 
     # Opportunity rate cohorts (leading indicator) over full history.
@@ -213,6 +269,10 @@ def compare(
         "opportunity_rate": opportunities_per_day(
             ob, oa, before_days=before_days, after_days=after_days
         ),
+        # Cross-sectional (replay-based) EV eval: edge-series vs non-edge over the full
+        # recorded corpus -- the alternative to the temporal A/B, which cannot read out
+        # without live AFTER-cohort trades.
+        "stratification": stratify_by_edge_series(all_trades, edge_series),
     }
     if write:
         path.parent.mkdir(parents=True, exist_ok=True)

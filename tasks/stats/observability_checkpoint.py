@@ -45,6 +45,7 @@ def summarize(checkpoint: dict[str, Any]) -> dict[str, Any]:
     fh, rp, mh = _d(cp.get("feed_health")), _d(cp.get("regime_priors")), _d(cp.get("market_horizon"))
     es, mw = cp.get("edge_series"), cp.get("matcher_weights")
     ev, op = _d(ab.get("resolved_ev")), _d(ab.get("opportunity_rate"))
+    strat = _d(ab.get("stratification"))
     flag = cp.get("flag_enabled")
     return {
         "readiness_verdict": rd.get("readiness", "n/a"),
@@ -57,6 +58,13 @@ def summarize(checkpoint: dict[str, Any]) -> dict[str, Any]:
         "ab_opps_after": op.get("after_per_day"),
         "ab_ev_before": _d(ev.get("before")).get("mean_pnl_ev"),
         "ab_ev_after": _d(ev.get("after")).get("mean_pnl_ev"),
+        "ab_strat_verdict": strat.get("verdict", "n/a"),
+        "ab_strat_edge_ev": _d(strat.get("edge")).get("mean_pnl_ev"),
+        "ab_strat_nonedge_ev": _d(strat.get("non_edge")).get("mean_pnl_ev"),
+        "ab_strat_edge_n": _d(strat.get("edge")).get("resolved"),
+        "ab_strat_nonedge_n": _d(strat.get("non_edge")).get("resolved"),
+        "ab_strat_edge_series": strat.get("edge_series_present") or [],
+        "ab_strat_nonedge_series": strat.get("non_edge_series_present") or [],
         "feed_live": _d(fh.get("by_health")).get("live"),
         "feed_unhealthy": len(fh.get("unhealthy", []) or []),
         "regime_orphans": len(rp.get("orphaned_priors", []) or []),
@@ -139,9 +147,13 @@ def summary_lines(checkpoint: "dict[str, Any] | None" = None) -> list[str]:
         lines.append(f"    reason                         : {s['readiness_reason']}")
     lines += [
         f"  Edge-prioritization flag         : {s['edge_flag']}",
-        f"    A/B verdict                    : {s['ab_verdict']}",
+        f"    A/B verdict (temporal)         : {s['ab_verdict']}",
         f"    opp rate before->after (/day)  : {s['ab_opps_before']} -> {s['ab_opps_after']}",
         f"    edge-cluster EV before->after  : ${s['ab_ev_before']} -> ${s['ab_ev_after']}",
+        f"    edge-set EV split (descriptive): active ${s['ab_strat_edge_ev']} "
+        f"(n={s['ab_strat_edge_n']}, {s['ab_strat_edge_series']}) vs aged-out "
+        f"${s['ab_strat_nonedge_ev']} (n={s['ab_strat_nonedge_n']}, {s['ab_strat_nonedge_series']})",
+        f"    split verdict                  : {s['ab_strat_verdict']}",
         f"  Feeds                            : {s['feed_live']} live, {s['feed_unhealthy']} unhealthy",
         f"  Regime priors                    : {s['regime_orphans']} orphaned, "
         f"{s['regime_candidates']} missing-prior candidate(s)",
