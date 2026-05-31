@@ -67,12 +67,16 @@ def test_db_snapshot_backup_seeds_online_safe_sqlite_copies(tmp_path: Path):
     result = subprocess.run(
         ["bash", "scripts/db_snapshot_backup.sh", "--retention-days", "7"],
         cwd=repo,
+        # The script's output root honors KALSHI_OUTPUT_ROOT > KALSHI_LOG_ROOT >
+        # REPO_ROOT/logs. conftest sets KALSHI_LOG_ROOT to a shared temp; pin
+        # KALSHI_OUTPUT_ROOT to this test's repo/logs so output stays isolated here.
+        env={**os.environ, "KALSHI_OUTPUT_ROOT": str(repo / "logs")},
         check=True,
         capture_output=True,
         text=True,
     )
 
-    snapshots = sorted((repo / "mac_archive/db_snapshots").glob("????-??-??T????Z"))
+    snapshots = sorted((repo / "logs/backups/db_snapshots").glob("????-??-??T????Z"))
     assert len(snapshots) == 1
     assert (snapshots[0] / "paper_trades.db").is_file()
     assert (snapshots[0] / "evidence_store.db").is_file()
@@ -84,7 +88,7 @@ def test_db_snapshot_backup_seeds_online_safe_sqlite_copies(tmp_path: Path):
 @_DARWIN_ONLY
 def test_db_snapshot_backup_prunes_expired_snapshot_directories(tmp_path: Path):
     repo = _seed_repo(tmp_path)
-    old_snapshot = repo / "mac_archive/db_snapshots/2000-01-01T0000Z"
+    old_snapshot = repo / "logs/backups/db_snapshots/2000-01-01T0000Z"
     old_snapshot.mkdir(parents=True)
     (old_snapshot / "paper_trades.db").write_text("stale", encoding="utf-8")
     old_time = time.time() - 3 * 24 * 60 * 60
@@ -93,11 +97,12 @@ def test_db_snapshot_backup_prunes_expired_snapshot_directories(tmp_path: Path):
     subprocess.run(
         ["bash", "scripts/db_snapshot_backup.sh", "--retention-days", "1"],
         cwd=repo,
+        env={**os.environ, "KALSHI_OUTPUT_ROOT": str(repo / "logs")},
         check=True,
         capture_output=True,
         text=True,
     )
 
     assert not old_snapshot.exists()
-    snapshots = sorted((repo / "mac_archive/db_snapshots").glob("????-??-??T????Z"))
+    snapshots = sorted((repo / "logs/backups/db_snapshots").glob("????-??-??T????Z"))
     assert len(snapshots) == 1
