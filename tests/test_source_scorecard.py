@@ -10,6 +10,7 @@ from scripts.source_scorecard import (
     disabled_status,
     format_group_rows,
     has_lifetime_yield,
+    is_incubating_source,
     is_disabled_source,
     parse_date_end,
     parse_date_start,
@@ -346,7 +347,7 @@ def test_summarize_separates_disabled_sources_from_active_groups():
         disabled_sources = {row["source"] for row in stats["grouped"]["disabled by source"]}
         active_sources = {
             row["source"]
-            for bucket in ("remove immediately", "prune", "watch / investigate", "keep", "top performers")
+            for bucket in ("remove immediately", "prune", "watch / investigate", "keep", "top performers", "incubating")
             for row in stats["grouped"][bucket]
         }
 
@@ -376,7 +377,7 @@ def test_summarize_separates_family_disabled_sources_from_active_groups():
         disabled_rows = {row["source"]: row for row in stats["grouped"]["disabled by family"]}
         active_sources = {
             row["source"]
-            for bucket in ("remove immediately", "prune", "watch / investigate", "keep", "top performers")
+            for bucket in ("remove immediately", "prune", "watch / investigate", "keep", "top performers", "incubating")
             for row in stats["grouped"][bucket]
         }
 
@@ -464,7 +465,7 @@ def test_summarize_assigns_each_active_source_to_one_recommendation_tier():
         assert rows["Active Keep"]["source_family"] == "other"
         assert rows["Active Top"]["source_family"] == "other"
         memberships = {}
-        for bucket in ("remove immediately", "prune", "watch / investigate", "keep", "top performers"):
+        for bucket in ("remove immediately", "prune", "watch / investigate", "keep", "top performers", "incubating"):
             for row in stats["grouped"][bucket]:
                 memberships.setdefault(row["source"], []).append(bucket)
 
@@ -473,6 +474,44 @@ def test_summarize_assigns_each_active_source_to_one_recommendation_tier():
         assert memberships["Active Keep"] == ["keep"]
         assert memberships["Active Top"] == ["top performers"]
         conn.close()
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_new_feed_incubates_before_prune_even_with_stale_log_volume():
+    tmp = make_tmp_dir("source_scorecard")
+    try:
+        logs_root = tmp / "trades"
+        write_jsonl(
+            logs_root / "live" / "trades.jsonl",
+            [
+                {
+                    "type": "EARLY_STALE_DROP",
+                    "reason": "stale_by_source_policy",
+                    "source": "NYT > U.S. > Politics",
+                    "ticker": "KX1",
+                    "ts": f"2026-05-29T00:{i:02d}:00+00:00",
+                }
+                for i in range(20)
+            ],
+        )
+        stats_db = tmp / "paper_trades.db"
+        _write_source_stats(stats_db, [("NYT > U.S. > Politics", 2, 0, 0, 0)])
+
+        stats = summarize(
+            logs_root,
+            tmp / "missing_paper_trades.db",
+            since=parse_date_start("2026-05-29"),
+            until=parse_date_end("2026-05-30"),
+            exclude_test=False,
+            recommendation_window_days=45,
+            source_stats_db_path=stats_db,
+        )
+        row = next(r for r in stats["rows"] if r["source"] == "NYT > U.S. > Politics")
+
+        assert is_incubating_source(row) is True
+        assert _tier_of(stats, "NYT > U.S. > Politics") == "incubating"
+        assert _tier_of(stats, "NYT > U.S. > Politics") != "prune"
     finally:
         cleanup_tmp_dir(tmp)
 
@@ -537,6 +576,7 @@ def test_print_summary_shows_disabled_section_by_default(capsys):
             "remove immediately": [],
             "prune": [],
             "watch / investigate": [],
+            "incubating": [],
             "keep": [],
             "top performers": [],
             "disabled by source": [
@@ -586,6 +626,7 @@ def test_print_summary_hides_disabled_section_when_requested(capsys):
             "remove immediately": [],
             "prune": [],
             "watch / investigate": [],
+            "incubating": [],
             "keep": [],
             "top performers": [],
             "disabled by source": [
@@ -648,6 +689,7 @@ def test_print_summary_includes_tiered_recommendation_sections(capsys):
             ],
             "prune": [],
             "watch / investigate": [],
+            "incubating": [],
             "keep": [],
             "top performers": [],
             "disabled by source": [],
@@ -681,6 +723,7 @@ def test_print_summary_shows_family_disabled_reason(capsys):
             "remove immediately": [],
             "prune": [],
             "watch / investigate": [],
+            "incubating": [],
             "keep": [],
             "top performers": [],
             "disabled by source": [],

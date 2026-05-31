@@ -5,11 +5,27 @@ from pathlib import Path
 
 from scripts.daily_review import (
     _build_tier_by_source,
+    _format_fresh_pass_conversion_lines,
     _format_tier_change_lines,
     _load_previous_tier_state,
     _save_current_tier_state,
     build_daily_review,
 )
+
+
+def test_format_fresh_pass_conversion_lines_surfaces_funnel_pinch():
+    lines = _format_fresh_pass_conversion_lines(
+        fresh_passes=186,
+        detail_rows=1,
+        llm_attempted=0,
+        opportunities=0,
+        paper_trades=0,
+    )
+
+    assert lines == [
+        "  Fresh-pass conversion            : 186 fresh -> 1 signal row -> 0 LLM attempts -> 0 opportunities -> 0 paper trades",
+        "    pinch                          : fresh_to_signal (185 fresh passes did not become signal-analysis rows)",
+    ]
 
 
 def test_build_daily_review_formats_pipeline_stages(monkeypatch):
@@ -224,6 +240,8 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Drilldown: pre-LLM would-block by source (top)" in rendered
     assert "Drilldown: pre-LLM would-block by market (top)" in rendered
     assert "Drilldown: per-source freshness waterfall" in rendered
+    assert "Fresh-pass conversion" in rendered
+    assert "9 fresh -> 6 signal rows -> 1 LLM attempts -> 3 opportunities -> 2 paper trades" in rendered
     assert "LLM rows                         : 1" in rendered
     assert "LLM attempted (post-filter)       : 1" in rendered
     assert "LLM skipped (routing)             : 2" in rendered
@@ -248,6 +266,7 @@ def test_build_tier_by_source_flattens_grouped_dict():
             "top performers": [{"source": "Reuters"}],
             "keep": [{"source": "AP"}, {"source": "BBC"}],
             "watch / investigate": [],
+            "incubating": [{"source": "NewDesk"}],
             "prune": [{"source": "NoiseFeed"}],
             "remove immediately": [{"source": "DeadFeed"}],
             "disabled by source": [{"source": "BlockedFeed"}],
@@ -259,6 +278,7 @@ def test_build_tier_by_source_flattens_grouped_dict():
         "Reuters": "top performers",
         "AP": "keep",
         "BBC": "keep",
+        "NewDesk": "incubating",
         "NoiseFeed": "prune",
         "DeadFeed": "remove immediately",
         "BlockedFeed": "disabled by source",
@@ -531,6 +551,7 @@ def test_build_daily_review_filters_waterfall_by_tier_and_appends_summary(monkey
                 "top performers": [],
                 "keep": [{"source": "Reuters"}],
                 "watch / investigate": [],
+                "incubating": [],
                 "prune": [{"source": "NoiseFeed"}],
                 # DeadFeed carries a lifetime funnel so Section 8 must render it
                 # beside the "remove immediately" verdict (B). An operator who
@@ -671,7 +692,8 @@ def test_build_daily_review_uses_persisted_state_for_change_diff(monkeypatch, tm
             "rows": [], "log_meta": {"records_kept": 0}, "db_exists": False,
             "grouped": {
                 "top performers": [], "keep": [{"source": "Reuters"}],
-                "watch / investigate": [], "prune": [], "remove immediately": [],
+                "watch / investigate": [], "incubating": [],
+                "prune": [], "remove immediately": [],
                 "disabled by source": [], "disabled by family": [],
             },
         }),
