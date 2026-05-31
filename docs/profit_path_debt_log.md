@@ -23,7 +23,7 @@
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-05-31 (**v0.32.8 PR-arc review recorded under PROFIT-THRUPUT-001** — PRs #56-#65 confirm the paper-trade path works, but the binding blocker is still a structurally tiny edge surface plus current-source starvation; no restart needed for read-only reporting changes; immediate recommended next action is Track B3 Reddit restore preflight/diagnosis while the bot soaks on v0.32.8.) Prior 2026-05-30: PROFIT-REPORT-001 implemented; PROFIT-THRUPUT-001 opened; PROFIT-ROT-002 shipped v0.32.6; output artifacts consolidated under the new `logs/reports`, `logs/state/derived`, and `logs/backups` contract. Paper-only posture preserved. |
+| Last Updated | 2026-05-31 (**v0.32.8 PR-arc review recorded under PROFIT-THRUPUT-001; Reddit restore path corrected under PROFIT-SOURCE-001** — PRs #56-#65 confirm the paper-trade path works, but the binding blocker is still a structurally tiny edge surface plus current-source starvation; no restart needed for read-only reporting changes; immediate recommended next action is Track B replacement-feed evidence refresh plus a clean Reddit-disable plan while the bot soaks on v0.32.8.) Prior 2026-05-30: PROFIT-REPORT-001 implemented; PROFIT-THRUPUT-001 opened; PROFIT-ROT-002 shipped v0.32.6; output artifacts consolidated under the new `logs/reports`, `logs/state/derived`, and `logs/backups` contract. Paper-only posture preserved. |
 | Previously Updated | 2026-05-24 (PROFIT-PHASE3-003 registered as DEFERRED — first OOS corpus build blocked on paper-trade volume. Operator picked path A1 over A2/A3/A4 and over option B (storage cost). Schema audit found `cohort_extension` column already present — no migration work needed. Current state: 8/30 resolved paper trades = 27% of Rule 1 floor; pipeline (`build_corpus.py` → `replay_gate.py` → `ci_entry.py` → `.github/workflows/replay-ci-gate.yml`) wired end-to-end and verified by PR #46. PROFIT-PHASE3-002 pass-through is the operational interim; every CI run auto-passes with explicit "operator gate remains authoritative" note until A1 closes. Recent unblocks (PR #41-#44) may move the resolution rate enough to clear the 30-row threshold before the IC §16.7 30-day framework-review deadline; operator decides.) |
 | Previously Updated (older) | 2026-05-23 (Wave-1 backup-branch replay shipped via v0.30.2 / PR #16 — closes the open-fix bookkeeping flagged by `8b2473e` 2026-05-10; 5 backup-branch commits + 6 reviewer-driven follow-on remediations landed on `main`; 4 post-deploy observation canaries remain xfail-strict until soak completes; backup branch retained as forensic anchor through soak. See §2.2 Wave-1 Replay Closure for full SHA map.) |
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
@@ -1090,17 +1090,17 @@ Deferred until the Stage 5 Phase 2 (P2.2) 72-hour paper-mode observation window 
 | Field | Value |
 |-------|-------|
 | **ID** | PROFIT-SOURCE-001 |
-| **Title** | Reddit intake is degraded-permanent; Reddit OAuth is externally blocked |
+| **Title** | Reddit intake is permanently unavailable; disable and replace it |
 | **Category** | Intake / Source Availability |
 | **Severity** | MEDIUM |
-| **Status** | COMPLETE |
+| **Status** | OPEN — operator confirmed Reddit approval denied; runtime disable/replacement-feed plan pending |
 | **Priority** | NOW (mitigation is cheap; unblock is externally gated) |
 | **Owner** | Shared |
-| **Depends On** | Reddit Responsible Builder Policy review (externally blocked; app submitted, no response) |
-| **Blocks** | — (Reddit-unique signal assessed as thin per `docs/_archive/studies/news_sources_evaluation.md` §7) |
+| **Depends On** | Operator finding complete: Reddit app approval denied; no OAuth path exists |
+| **Blocks** | Track B source replacement / opportunity-throughput recovery |
 
 **Description**  
-Reddit intake runs in public-JSON mode because OAuth credentials are not available — the operator submitted an application per Reddit's Responsible Builder Policy and has received no response. Public-JSON polling is rate-limited per-IP and triggers structural 403 storms; on 2026-04-22 the 403 storm tripped `reddit_monitor.py`'s global circuit breaker within ~11 seconds of startup ("100% of subreddits failed (1/1), suspending all Reddit polling for 30m"). The circuit-breaker behavior is the *intended* response to 403 storms, not a bug — but it means Reddit contributes effectively zero signal whenever the circuit is open, which is most of the time during cold polling cycles.
+Reddit intake runs in public-JSON mode because OAuth credentials are not available. The operator submitted a Reddit app approval request per Reddit's current approval flow, and the request was denied because the app did not show community benefit. That removes the practical OAuth path. Public-JSON polling is rate-limited per-IP and triggers structural 403 storms; on 2026-04-22 the 403 storm tripped `reddit_monitor.py`'s global circuit breaker within ~11 seconds of startup ("100% of subreddits failed (1/1), suspending all Reddit polling for 30m"). The circuit-breaker behavior is the *intended* response to 403 storms, not a bug — but it means Reddit contributes effectively zero signal whenever the circuit is open, which is most of the time during cold polling cycles. Treat Reddit as dead for planning purposes.
 
 **Why it matters to profitability / safety / reliability**  
 Reddit contributes a small but non-zero share of the signal mix when it works. Losing it permanently is a coverage reduction, not a correctness or safety issue. The full evaluation in `docs/_archive/studies/news_sources_evaluation.md` §7 concludes Reddit-unique content is thin (most is wire-service repost; analytical content is slower than ISW/CSIS RSS; firsthand-witness content is replaceable by Bluesky/Mastodon/Telegram when those integrations are authorized). The residual risk is that downstream diagnostics (`source_scorecard`, feedback loops that attribute signal to Reddit posts) silently report a distorted source mix if Reddit is treated as "active" while it's actually degraded.
@@ -1108,29 +1108,32 @@ Reddit contributes a small but non-zero share of the signal mix when it works. L
 **Evidence / Source**  
 - `logs/app/bot.log` 2026-04-22T11:16:43 UTC — "Reddit access denied for r/ArmedConflicts (403) -- backing off 120s", followed by 30+ similar lines across all 20 polled subreddits within 10 seconds, followed by "Reddit global circuit open -- suspending all Reddit polling for 30m".
 - `feeds/reddit_monitor.py:19` starts with the log message "Reddit monitor started (public JSON -- degraded, expect rate limits). Set REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET in .env for OAuth2" — the module itself acknowledges the degraded state at every startup.
-- Operator confirmation (2026-04-23): Reddit app submitted via Responsible Builder Policy intake; no response. Treat as permanently blocked for planning purposes.
+- Operator confirmation (2026-04-23): Reddit app submitted via Responsible Builder Policy intake; no response at that time. Treat as externally blocked for planning purposes.
+- Operator confirmation (2026-05-29): Reddit app creation now requires Reddit approval, approval was denied, and no OAuth path exists. Treat Reddit as permanently unavailable.
 
 **Proposed Fix**  
-Two-track strategy per `docs/_archive/studies/news_sources_evaluation.md` §7.2:
+Two-track strategy per `docs/_archive/studies/news_sources_evaluation.md` §7.2, updated for the 2026-05-29 operator denial:
 
-*Track A — mitigation (cheap, post-S4.5c close):*
-1. Trim `REDDIT_SUBREDDITS` polling pool from 20 to a curated 2-3 (candidates: `r/ArmedConflicts`, `r/CredibleDefense`, plus 1-2 region-specific rotated in by `subreddit_selector.py`) to reduce the 403-storm attack surface.
-2. Downgrade Reddit-related log lines at startup from INFO to DEBUG where they're not actionable, to stop polluting the `bot.log` signal.
-3. Ensure `SOURCE_HEALTH` telemetry (planned in the same evaluation) distinguishes "Reddit circuit open (expected)" from "Reddit circuit open (unexpected)" — only the latter should alert.
+*Track A — clean disable (cheap, current path):*
+1. Disable `run_reddit_monitor` cleanly behind an explicit config/launch-time switch so the bot does not spend cycles on a known-dead source or emit expected 403 noise as operational signal.
+2. Preserve source-health reporting, but classify Reddit as "disabled/permanently unavailable" rather than "active but circuit open."
+3. Keep historical Reddit attribution in reports, but exclude Reddit from current-source availability and opportunity-throughput expectations.
 
-*Track B — unblock (gated externally):*
-1. Do not spend further engineering effort on Reddit OAuth until Reddit responds to the pending app.
-2. If Reddit approves the app, migrate `reddit_monitor.py` to OAuth2 — that's a config-credential change plus a small code change to the auth flow, not a re-architecture.
-3. If Reddit denies or stays silent past a configurable patience window (suggest 90 days post-submission), formally deprecate Reddit intake and repurpose the polling loop for a replacement (Bluesky journalist timeline is the leading candidate per Appendix A Tier 2).
+*Track B — replace (binding throughput path):*
+1. Do not spend further engineering effort on Reddit OAuth unless the operator supplies a new Reddit approval path.
+2. Use the Track B evidence refresh to quantify per-source opportunity yield and identify replacement-feed to series mappings.
+3. Repurpose the polling capacity toward authorized replacement sources. Leading candidates remain Bluesky journalist timelines, Mastodon/Telegram where authorized, and higher-yield RSS/API sources already mapped to active Kalshi series.
 
 **Acceptance Criteria**  
-- Track A mitigations deployed post-S4.5c close and observed in `bot.log` (circuit-open events drop significantly in volume; no unexpected-outage false positives in `SOURCE_HEALTH` emissions).
-- This debt-log entry transitions to COMPLETE under either (a) Track B succeeds and OAuth is active, OR (b) Reddit formally deprecated and replacement source integrated.
-- **(c) Operator-override (added 2026-05-10):** Reddit may be declared `PERMANENTLY_DEGRADED` and this entry CLOSED without replacement integration when the operator decides intake-mix simplification outweighs replacement-source velocity. Replacement-source work transfers to a successor entry (`PROFIT-SOURCE-002`).
-- `docs/_archive/studies/news_sources_evaluation.md` §7.2 steps 1-5 are executed or consciously re-deferred.
+- `run_reddit_monitor` is not started by default in the production launch path unless an explicit operator override enables it.
+- Source-health/reporting classifies Reddit as disabled/permanently unavailable, not as an active degraded source that keeps generating 403/circuit-open noise.
+- Current-source availability and opportunity-throughput reports exclude Reddit from expected live coverage while preserving historical attribution.
+- Replacement-source work is either integrated here or transferred to a successor Track B / `PROFIT-SOURCE-002` entry with per-source opportunity-yield evidence.
 
 **Notes**  
 Do not treat this as a go-live blocker. Per `docs/_archive/studies/news_sources_evaluation.md` §6, the operator-confirmed priority is correctness over velocity, and the Reddit-unique signal is thin enough that going live without Reddit is acceptable provided the source mix is honestly reported. The go-live blocker is `PROFIT-CAL-001`, not this item.
+
+**REOPENED 2026-05-31:** Prior closure declared the planning posture (`PERMANENTLY_DEGRADED`) but did not remove the live runtime behavior. Current evidence still shows Reddit monitor 403/circuit-open noise and source starvation, so the remaining work is runtime hygiene plus replacement-feed evidence, not OAuth restoration.
 
 **CLOSED 2026-05-10 (Operator override):** Reddit declared `PERMANENTLY_DEGRADED`. Reasoning: (i) `feeds/reddit_monitor.py` global circuit breaker fires on every cold-start 403 storm — Reddit contributes effectively zero signal in steady state; (ii) Reddit Responsible Builder Policy app submitted 2026-04-23, no response; 90-day patience window not yet expired (2026-07-22) but operator electing immediate deprecation under acceptance criterion (c). (iii) Track A mitigations (subreddit pool trim, log downgrade, SOURCE_HEALTH semantics) NOT executed — superseded by deprecation. Replacement-source integration deferred to `PROFIT-SOURCE-002`. No code changes in this closure.
 
@@ -5740,7 +5743,7 @@ news-ingestion-implementation,series-priors-durability-scope}.md`).
 | **Title** | Opportunity-throughput reframe + "C" execution plan (the path to GREEN is edge-quality, not volume) |
 | **Category** | Profit-path / readiness strategy / structural ceiling |
 | **Severity** | HIGH (this is the binding constraint on reaching live readiness; misframing it wastes cycles building negative-EV volume) |
-| **Status** | OPEN — PR #56-#65 review complete; easy "pipeline broken" doors closed. Current state: bot can paper-trade, but readiness remains RED from structural edge scarcity (`0/200` POST_FIX_NEW; C3 EV-quality bar adopted but corpus-coupled). Next active lane: Track B source restoration/edge-surface throughput, starting with Reddit B3 preflight if operator approves. |
+| **Status** | OPEN — PR #56-#65 review complete; easy "pipeline broken" doors closed. Current state: bot can paper-trade, but readiness remains RED from structural edge scarcity (`0/200` POST_FIX_NEW; C3 EV-quality bar adopted but corpus-coupled). Next active lane: Track B source replacement/edge-surface throughput, starting with a read-only evidence refresh plus the Reddit clean-disable plan. |
 | **Owner** | Operator (governance fork C3) + implementation agent (C1 read-only now; C2 levers replay-EV-gated + operator deploy). |
 | **Depends On** | Nothing for C1 (read-only). C2 levers depend on C1 findings + replay-EV harness. C3 depends on operator/governance decision. |
 | **Blocks** | Live-readiness (PROFIT-EDGE-012 / POST_FIX_NEW 200-bar), the OOS corpus (PROFIT-PHASE3-003), and ultimately paper→live cutover. |
@@ -5930,12 +5933,15 @@ governance, referencing the Cycle-17D charter that set 200.
   replay of unrecorded edge-prioritization counterfactual fetches. Still-open technical lanes:
   structural `llm_called=False`; Half B inert-0.5 dossier exclusion after ≥20 post-fix blends;
   post-blender-fix G1/readiness audit; production-faithful LLM eval transport; matcher-weight
-  runtime/seed hygiene. **What can/should be done right now:** no bot restart and no trade-path
-  mutation. Let v0.32.8 soak with the blender fix live. The cheapest active move toward GREEN is
-  **Track B3 Reddit restore preflight/diagnosis**: verify no other instance shares the external IP,
-  confirm auth/app status and rate-limit/circuit-breaker behavior, and only then decide whether a
-  credentials/app fix is available. If Reddit remains blocked, continue the edge-prioritization soak
-  and pursue structural-lane / Half-B work only when their documented volume gates are met.
+  runtime/seed hygiene. **2026-05-31 correction:** do not pursue Reddit restore as the immediate
+  path. `PROFIT-SOURCE-001` now records the operator finding that Reddit app approval was denied and
+  no OAuth path exists. **What can/should be done right now:** no bot restart and no trade-path
+  mutation. Let v0.32.8 soak with the blender fix live. The cheapest active move toward GREEN is a
+  **Track B replacement-feed evidence refresh** plus a clean plan to disable `run_reddit_monitor`:
+  quantify current source attrition/yield, map authorized replacement feeds to active Kalshi series,
+  classify Reddit as permanently unavailable in source health, and only then implement the runtime
+  disable/replacement wiring. Continue structural-lane / Half-B work only when their documented
+  volume gates are met.
 
 ---
 
