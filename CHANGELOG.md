@@ -19,6 +19,33 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.0] - 2026-05-30
+
+### Added
+
+- **Track B B3.1 — high-yield publisher-desk RSS feeds** (`PROFIT-THRUPUT-001` / `PROFIT-EDGE-004`).
+  All 13 OPPORTUNITY-generating series are US-political/geopolitical, but the top opportunity publishers
+  were configured World-desk-only and The Hill was absent. Added the missing US-politics desks of
+  already-proven sources — NYT Politics, NYT U.S., The Hill (News + Senate), Guardian US — to
+  `config.RSS_FEEDS`, each live-probed (HTTP 200, fresh) with a matching `1800s`
+  `EARLY_MAX_NEWS_AGE_BY_SOURCE` override (publisher RSS lags past the 300s default, else
+  dead-on-arrival). Pure additive ingestion breadth — the matcher/LLM/blend/gate pipeline is unchanged
+  (input-breadth only, not a decision-logic change; INV-6/7 preserved). WaPo deferred (its generic
+  "Politics" feed title would collide with Politico's source label); gov/macro feeds dropped
+  (probe-dead or zero current demand).
+
+### Changed
+
+- **Reddit ingestion disabled by default** (`PROFIT-SOURCE-001`). Reddit denied the bot's OAuth app
+  (2026-05-29) and anonymous polling is IP-blocked, yielding 0 signals / 0 opportunities / 0 trades
+  lifetime across 47 subreddits. New `cfg.reddit_enabled` master switch (default off; `REDDIT_ENABLED=true`
+  re-enables) gates `run_reddit_monitor`, `run_discovery_pass`, and `_subreddit_discovery_task` — each
+  early-exits cleanly before any network work, ending the perpetual 403/circuit-open log storm and the
+  wasted poll cycles. G2-safe: both dossier evidence stores hold 0 `social`-class records, so the removal
+  cannot change any evidence-source-diversity gate outcome. Paper-only posture unchanged.
+
+---
+
 ## [0.32.8] - 2026-05-30
 
 ### Added

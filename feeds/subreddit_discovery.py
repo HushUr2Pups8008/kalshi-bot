@@ -20,6 +20,7 @@ from typing import Sequence
 import aiohttp
 
 from config import (
+    cfg,
     MARKET_SERIES_BLOCKLIST_PREFIXES,
     REDDIT_CORE_SUBREDDITS,
     REDDIT_SUBREDDIT_TOPIC_MAP,
@@ -144,6 +145,12 @@ async def run_discovery_pass(
     Insert new candidates into subreddit_candidates table.
     Returns count of new candidates found.
     """
+    # Reddit master switch (default off) -- discovery hits Reddit's (also IP-blocked)
+    # public search API, so skip it entirely when Reddit ingestion is disabled.
+    if not cfg.reddit_enabled:
+        log.debug("[DISCOVERY] Reddit disabled -- skipping subreddit discovery pass")
+        return 0
+
     queries = _markets_to_queries(list(markets))
     if not queries:
         log.debug("[DISCOVERY] No market queries available, skipping pass")

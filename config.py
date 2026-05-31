@@ -152,6 +152,21 @@ RSS_FEEDS = [
     # Still disabled via DISABLED_NEWS_SOURCES (NPR, Foreign Policy, Defense One).
     # BBC / France 24 / Deutsche Welle were re-enabled in B3 (2026-04-23) after
     # URL probe confirmed fresh content.
+    #
+    # ─── B3.1 high-yield publisher-desk additions (2026-05-30, URLs live-probed) ───
+    # Track B / PROFIT-EDGE-004: all 13 OPPORTUNITY-generating series are US-political/
+    # geopolitical, but NYT and the Guardian were configured World-desk-only and The
+    # Hill (the canonical Congress / endorsement / cabinet beat) was absent. These add
+    # the missing US-politics desks of the top opportunity publishers (NYT is the #1
+    # OPPORTUNITY source; Guardian desks are the largest single source). Each also gets
+    # a 1800s EARLY_MAX_NEWS_AGE_BY_SOURCE override below (publisher RSS lags past the
+    # 300s default). WaPo deferred: its generic "Politics"/"National" feed titles would
+    # collide with the Politico source label -- needs a per-feed source-name override.
+    "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml",  # feed.title = "NYT > U.S. > Politics"
+    "https://rss.nytimes.com/services/xml/rss/nyt/US.xml",        # feed.title = "NYT > U.S. News"
+    "https://thehill.com/news/feed/",                             # feed.title = "Just In News" (The Hill)
+    "https://thehill.com/homenews/senate/feed/",                  # feed.title = "Senate News" (The Hill)
+    "https://www.theguardian.com/us-news/rss",                    # feed.title = "US news | The Guardian"
 ]
 RSS_POLL_INTERVAL_SECONDS = 60
 
@@ -211,6 +226,12 @@ EARLY_MAX_NEWS_AGE_BY_SOURCE: dict[str, int] = {
     "BBC News": 1800,
     "France 24 - International breaking news, top stories and headlines": 1800,
     "World | Deutsche Welle": 1800,
+    # ─── B3.1 high-yield publisher desks (2026-05-30; titles live-probed) ───
+    "NYT > U.S. > Politics": 1800,
+    "NYT > U.S. News": 1800,
+    "Just In News": 1800,        # The Hill -- "Just In" news desk
+    "Senate News": 1800,         # The Hill -- Senate desk
+    "US news | The Guardian": 1800,
 }
 
 # Per-source queue priority overrides. Lower number = processed first.
@@ -1283,6 +1304,17 @@ class BotConfig:
     )
     reddit_user_agent: Optional[str] = field(
         default_factory=lambda: os.getenv("REDDIT_USER_AGENT")
+    )
+
+    # Reddit ingestion master switch. Default OFF: Reddit denied the bot's OAuth
+    # app (2026-05-29, "no community benefit"), so anonymous .json polling is
+    # IP-blocked (~2,600 HTTP-403/wk; circuit permanently open) and Reddit yields
+    # 0 signals / 0 opportunities / 0 trades lifetime (Track B B0 evidence,
+    # PROFIT-EDGE-004). Leaving it scheduled just burns poll cycles and floods the
+    # log with 403 warnings. Set REDDIT_ENABLED=true to re-enable cleanly if an
+    # approved app ever exists.
+    reddit_enabled: bool = field(
+        default_factory=lambda: _parse_bool_env("REDDIT_ENABLED", "false")
     )
 
     @property

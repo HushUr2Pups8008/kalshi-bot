@@ -1093,7 +1093,7 @@ Deferred until the Stage 5 Phase 2 (P2.2) 72-hour paper-mode observation window 
 | **Title** | Reddit intake is permanently unavailable; disable and replace it |
 | **Category** | Intake / Source Availability |
 | **Severity** | MEDIUM |
-| **Status** | OPEN — operator confirmed Reddit approval denied; runtime disable/replacement-feed plan pending |
+| **Status** | RUNTIME DISABLE IMPLEMENTED 2026-05-31 (v0.33.0, `cfg.reddit_enabled` default-off; PR open, operator merge + restart gate pending) — AC#1 met. Source-health reclassification (AC#2/3) + replacement feeds tracked under PROFIT-THRUPUT-001 (B3.1). |
 | **Priority** | NOW (mitigation is cheap; unblock is externally gated) |
 | **Owner** | Shared |
 | **Depends On** | Operator finding complete: Reddit app approval denied; no OAuth path exists |
@@ -1134,6 +1134,8 @@ Two-track strategy per `docs/_archive/studies/news_sources_evaluation.md` §7.2,
 Do not treat this as a go-live blocker. Per `docs/_archive/studies/news_sources_evaluation.md` §6, the operator-confirmed priority is correctness over velocity, and the Reddit-unique signal is thin enough that going live without Reddit is acceptable provided the source mix is honestly reported. The go-live blocker is `PROFIT-CAL-001`, not this item.
 
 **REOPENED 2026-05-31:** Prior closure declared the planning posture (`PERMANENTLY_DEGRADED`) but did not remove the live runtime behavior. Current evidence still shows Reddit monitor 403/circuit-open noise and source starvation, so the remaining work is runtime hygiene plus replacement-feed evidence, not OAuth restoration.
+
+**RUNTIME DISABLE SHIPPED 2026-05-31 (v0.33.0; branch `track-b/reddit-disable-b31-feeds`; pending operator merge + restart):** `cfg.reddit_enabled` master switch (default off; `REDDIT_ENABLED=true` re-enables) early-exits `run_reddit_monitor`, `run_discovery_pass`, and `_subreddit_discovery_task` before any network work (TDD, 5 tests) — satisfies Acceptance Criterion #1 (not started by default absent an explicit operator override). Evidence (workflow `wypdcusfl`) reconfirms 0 signals / 0 opportunities / 0 trades lifetime across 47 subs; G2-safe (0 `social`-class evidence in either dossier store). Replacement-feed work (B3.1 publisher-desk RSS — NYT Politics/US, The Hill, Guardian US) shipped in the same v0.33.0 batch, tracked under `PROFIT-THRUPUT-001`. **Still open (AC#2/3):** the runtime no longer polls Reddit, but `source_scorecard` / source-health reporting still needs the explicit "disabled / permanently unavailable" classification (vs "active degraded") — reporting-layer change, separate from this ingestion disable.
 
 **CLOSED 2026-05-10 (Operator override):** Reddit declared `PERMANENTLY_DEGRADED`. Reasoning: (i) `feeds/reddit_monitor.py` global circuit breaker fires on every cold-start 403 storm — Reddit contributes effectively zero signal in steady state; (ii) Reddit Responsible Builder Policy app submitted 2026-04-23, no response; 90-day patience window not yet expired (2026-07-22) but operator electing immediate deprecation under acceptance criterion (c). (iii) Track A mitigations (subreddit pool trim, log downgrade, SOURCE_HEALTH semantics) NOT executed — superseded by deprecation. Replacement-source integration deferred to `PROFIT-SOURCE-002`. No code changes in this closure.
 
@@ -5942,6 +5944,35 @@ governance, referencing the Cycle-17D charter that set 200.
   classify Reddit as permanently unavailable in source health, and only then implement the runtime
   disable/replacement wiring. Continue structural-lane / Half-B work only when their documented
   volume gates are met.
+- 2026-05-31 — **Track B EXECUTED: Reddit runtime-disabled + B3.1 replacement feeds (first batch) shipped**
+  (v0.33.0, branch `track-b/reddit-disable-b31-feeds`; PR open, operator merge + restart gate pending).
+  Executes the plan prescribed in the entry above (evidence refresh → classify Reddit unavailable →
+  implement runtime disable + replacement wiring).
+  **Evidence refresh** (workflow `wypdcusfl`, read-only): Reddit confirmed **0 signals / 0 opportunities
+  / 0 trades lifetime** (47 r/ subs, 61 posts, off-topic sports/entertainment) → marginal yield ≈ 0;
+  throughput **collapsing** 5.36 → 1.43 → 0 opp/day (full / last-7d / last-24h; 55h zero-opp gap).
+  Per-source yield (`source_stats`): demand is 100% US-political/geopolitical RSS (Guardian-MENA 123 opps,
+  NYT World 54, Guardian World 51, Al Jazeera 32).
+  **Reddit disable** (satisfies `PROFIT-SOURCE-001` AC#1): `cfg.reddit_enabled` default-off + early-exit
+  gates in `run_reddit_monitor`, `run_discovery_pass`, `_subreddit_discovery_task` (TDD, 5 tests). G2-safe —
+  0 `social`-class evidence in `evidence_store.db` / `dossier_updates_post_fix.db`, so removal cannot change
+  a diversity-gate outcome.
+  **B3.1 first batch**: 5 publisher desks (NYT Politics/US, The Hill News/Senate, Guardian US) appended to
+  `config.RSS_FEEDS`, all live-probed (HTTP 200, fresh), each with a 1800s freshness override (TDD, 3 tests).
+  **Honest divergences from the evidence pack (validation caught all four):** (i) the pack's "30-min default
+  covers them" was WRONG — the default cutoff is 300s → publisher RSS is dead-on-arrival without the 1800s
+  override; (ii) WaPo **deferred** — its generic "Politics"/"National" feed titles collide with Politico's
+  source label (attribution corruption); (iii) gov feeds **non-viable** (USTR 404; State press/Iran return
+  non-RSS); (iv) macro feeds (BLS/BEA/FRED) **refuted** — 0 macro-series opportunities ever; would inject
+  noise the `_ECONOMIC_TOKENS` gate filters.
+  **Adversarial review (2 independent lenses) reconciled:** input-breadth-only — **NOT** a §16 decision-logic
+  change (matcher/blend/gate math untouched; every item still clears the same unchanged selectivity);
+  INV-6/7 preserved; no cohort reset warranted (0/200, nothing lost); layer-isolated (`/feeds` + config only);
+  deploy gate = OPERATOR restart. Findings fixed: discovery-task clean early-exit + log; strengthened
+  source-label collision test; date/comment hygiene.
+  **Deferred follow-ups:** WaPo direct (needs a per-feed source-name override); B2 market-driven retrieval
+  (the deep lever — replay-EV gated); Bluesky (`PROFIT-SOURCE-002`); NPR/Axios (format/freshness validation).
+  Source: workflow `wypdcusfl`.
 
 ---
 
