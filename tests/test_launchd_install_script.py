@@ -20,7 +20,6 @@ INSTALL_SH = REPO_ROOT / "ops" / "launchd" / "install.sh"
 TEMPLATES = (
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-bot.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-bothealth.plist.template",
-    REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-daily-review.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-match-feedback-aggregator.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-soak-check.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.kalshi.db-backup.plist.template",
@@ -125,6 +124,8 @@ def test_print_emits_both_plists():
     out = _run_print()
     assert "<string>com.kalshi.governance.fast</string>" in out
     assert "<string>com.kalshi.governance.deep</string>" in out
+    assert "<string>com.jake.kalshi-daily-review</string>" not in out
+    assert "<string>--daily-review</string>" in out
     assert out.count("<string>--run-source</string>") >= 2
     assert out.count("<string>launchd</string>") >= 2
 

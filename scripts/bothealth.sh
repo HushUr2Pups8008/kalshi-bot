@@ -13,9 +13,11 @@
 #
 # Designed to fire daily ~08:00 MDT via
 # ~/Library/LaunchAgents/com.jake.kalshi-bothealth.plist (RunAtLoad=false,
-# StartInterval=86400). Unlike the soak-check / midsoak scripts this one
-# does NOT self-clean the trigger plist — it is meant to keep firing
-# forever until the operator removes it.
+# StartCalendarInterval). The launchd template passes --daily-review so the
+# morning health report and full pipeline daily review share one scheduled
+# trigger. Unlike the soak-check / midsoak scripts this one does NOT self-clean
+# the trigger plist — it is meant to keep firing forever until the operator
+# removes it.
 #
 # Read-only. No DB writes. No trade-log writes. No process control.
 # Safe to run at any time.
@@ -23,6 +25,7 @@
 set -uo pipefail
 
 POST_DEPLOY=0
+RUN_DAILY_REVIEW=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -30,8 +33,12 @@ while [[ $# -gt 0 ]]; do
             POST_DEPLOY=1
             shift
             ;;
+        --daily-review)
+            RUN_DAILY_REVIEW=1
+            shift
+            ;;
         -h|--help)
-            echo "usage: bash scripts/bothealth.sh [--post-deploy]"
+            echo "usage: bash scripts/bothealth.sh [--post-deploy] [--daily-review]"
             exit 0
             ;;
         *)
@@ -48,6 +55,8 @@ VENV_PYTHON="$REPO_ROOT/.venv/bin/python"
 OUTPUT_ROOT="${KALSHI_OUTPUT_ROOT:-${KALSHI_LOG_ROOT:-$REPO_ROOT/logs}}"
 LOG_DIR="$OUTPUT_ROOT/app"
 HEALTH_REPORT_DIR="$OUTPUT_ROOT/reports/health"
+DAILY_REVIEW_SCRIPT="$REPO_ROOT/scripts/daily_review.py"
+DAILY_REVIEW_DIR="$OUTPUT_ROOT/reports/daily"
 TRADES_LOG="$OUTPUT_ROOT/trades/live/trades.jsonl"
 ERRORS_LOG="$LOG_DIR/errors.log"
 BOT_LOG="$LOG_DIR/bot.log"
@@ -65,7 +74,7 @@ DATE_ONLY="$(date -u +%Y-%m-%d)"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 REPORT="$HEALTH_REPORT_DIR/bothealth_${DATE_ONLY}.md"
 
-mkdir -p "$LOG_DIR" "$HEALTH_REPORT_DIR"
+mkdir -p "$LOG_DIR" "$HEALTH_REPORT_DIR" "$DAILY_REVIEW_DIR"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 section()  { printf '\n## %s\n\n' "$1" >>"$REPORT"; }
@@ -440,7 +449,35 @@ fi
 printf '\ndrift_verdict=%s\n' "$DRIFT_VERDICT" >>"$REPORT"
 codeblock_end
 
-# ── 10. Verdict line ──────────────────────────────────────────────────────────
+# ── 10. Daily review report ───────────────────────────────────────────────────
+DAILY_REVIEW_STATUS="not_requested"
+DAILY_REVIEW_REPORT=""
+if [[ "$RUN_DAILY_REVIEW" == "1" ]]; then
+    section "10. Daily review report"
+    codeblock_start
+    DAILY_REVIEW_PY="$(python_bin)" || true
+    if [[ -z "$DAILY_REVIEW_PY" ]]; then
+        printf 'python not available; skipping daily review\n' >>"$REPORT"
+        DAILY_REVIEW_STATUS="python_unavailable"
+    elif [[ ! -f "$DAILY_REVIEW_SCRIPT" ]]; then
+        printf 'daily_review.py missing at %s\n' "$DAILY_REVIEW_SCRIPT" >>"$REPORT"
+        DAILY_REVIEW_STATUS="script_missing"
+    else
+        DAILY_REVIEW_REPORT="$DAILY_REVIEW_DIR/daily_review_$(date +%Y%m%d).txt"
+        KALSHI_OUTPUT_ROOT="$OUTPUT_ROOT" "$DAILY_REVIEW_PY" "$DAILY_REVIEW_SCRIPT" >>"$REPORT" 2>&1
+        DAILY_REVIEW_EXIT=$?
+        printf '\ndaily_review exit_status=%s\n' "$DAILY_REVIEW_EXIT" >>"$REPORT"
+        printf 'daily_review report=%s\n' "$DAILY_REVIEW_REPORT" >>"$REPORT"
+        if (( DAILY_REVIEW_EXIT == 0 )); then
+            DAILY_REVIEW_STATUS="ok"
+        else
+            DAILY_REVIEW_STATUS="failed"
+        fi
+    fi
+    codeblock_end
+fi
+
+# ── 11. Verdict line ──────────────────────────────────────────────────────────
 section "Verdict"
 {
     if [[ "$KALSHI_DRIFT_STATUS" == kalshi_drift=HALT* ]]; then
@@ -457,6 +494,8 @@ section "Verdict"
         VERDICT="**YELLOW** — POST_FIX_NEW readiness unavailable; review P0 section"
     elif [[ "${P0_POST_SENTINEL_ROWS:-}" == "0" && "${P0_RUNTIME_HOURS:-0}" =~ ^[0-9]+$ && "$P0_RUNTIME_HOURS" -ge 6 ]]; then
         VERDICT="**YELLOW** — No new paper_trades since clean-start (${P0_RUNTIME_HOURS}h elapsed)"
+    elif [[ "$DAILY_REVIEW_STATUS" == "failed" || "$DAILY_REVIEW_STATUS" == "script_missing" || "$DAILY_REVIEW_STATUS" == "python_unavailable" ]]; then
+        VERDICT="**YELLOW** — daily review ${DAILY_REVIEW_STATUS}; review section 10"
     elif (( EXC_COUNT > 5 )); then
         VERDICT="**YELLOW** — $EXC_COUNT distinct exception classes; review section 6"
     else
@@ -466,7 +505,7 @@ section "Verdict"
 } >>"$REPORT"
 
 # Notify operator (best-effort, won't fail the script if osascript missing)
-NOTIFY_BODY="bothealth: ${VERDICT//\*/}; ${KALSHI_DRIFT_STATUS}; ${P0_COHORT_STATUS}; ${POST_FIX_NEW_STATUS}"
+NOTIFY_BODY="bothealth: ${VERDICT//\*/}; ${KALSHI_DRIFT_STATUS}; ${P0_COHORT_STATUS}; ${POST_FIX_NEW_STATUS}; daily_review=${DAILY_REVIEW_STATUS}"
 NOTIFY_BODY_ESCAPED="$(osascript_escape "$NOTIFY_BODY")"
 osascript -e "display notification \"$NOTIFY_BODY_ESCAPED\" with title \"kalshi-bot\"" 2>/dev/null || true
 

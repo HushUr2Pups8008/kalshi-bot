@@ -10,14 +10,17 @@
     <array>
         <string>/bin/bash</string>
         <string>@REPO_ROOT@/scripts/bothealth.sh</string>
+        <string>--daily-review</string>
     </array>
 
     <key>WorkingDirectory</key>
     <string>@REPO_ROOT@</string>
 
-    <!-- Daily 08:00 America/Denver. Unlike soak-check / midsoak this plist
-         does NOT self-clean — it is meant to keep firing forever until the
-         operator removes it. -->
+    <!-- Daily 08:00 America/Denver. Runs bothealth plus the full daily review
+         from one launchd trigger so the operator has one morning reporting
+         surface and no duplicate daily-review job. Unlike soak-check / midsoak
+         this plist does NOT self-clean — it is meant to keep firing forever
+         until the operator removes it. -->
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>

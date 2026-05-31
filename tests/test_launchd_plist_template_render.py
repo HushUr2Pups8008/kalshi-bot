@@ -12,7 +12,6 @@ INSTALL_SH = REPO_ROOT / "ops/launchd/install.sh"
 EXPECTED_LABELS = {
     "com.jake.kalshi-bot",
     "com.jake.kalshi-bothealth",
-    "com.jake.kalshi-daily-review",
     "com.jake.kalshi-match-feedback-aggregator",
     "com.jake.kalshi-soak-check",
     "com.kalshi.db-backup",
@@ -41,6 +40,8 @@ def test_all_launchd_templates_render_valid_plists():
     rendered = _rendered_plists()
 
     assert set(rendered) == EXPECTED_LABELS
+    assert "--daily-review" in rendered["com.jake.kalshi-bothealth"]["ProgramArguments"]
+    assert "com.jake.kalshi-daily-review" not in rendered
     for label, plist in rendered.items():
         assert plist["WorkingDirectory"] == str(REPO_ROOT), label
         assert "@REPO_ROOT@" not in str(plist), label

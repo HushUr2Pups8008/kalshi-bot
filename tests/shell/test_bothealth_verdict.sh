@@ -61,12 +61,13 @@ EOF
 
 run_bothealth() {
     local root="$1"
+    shift || true
     local capture="$root/osascript.args"
     BOTHEALTH_REPO_ROOT="$root" \
     KALSHI_OUTPUT_ROOT="$root/logs" \
     BOTHEALTH_OSASCRIPT_CAPTURE="$capture" \
     PATH="$root/bin:$PATH" \
-    bash "$BOTHEALTH"
+    bash "$BOTHEALTH" "$@"
 }
 
 fixture="$TMP_ROOT/green"
@@ -77,6 +78,24 @@ assert_contains "$out" "Verdict: **GREEN**"
 toast="$(cat "$fixture/osascript.args")"
 assert_contains "$toast" "kalshi_drift=ok"
 assert_contains "$toast" "p0_cohort=2026-05-12T23:50:04+00:00 rows_since=1"
+
+fixture="$TMP_ROOT/daily-review"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+cat >"$fixture/scripts/daily_review.py" <<'EOF'
+#!/usr/bin/env python3
+import os
+from pathlib import Path
+root = Path(os.environ["KALSHI_OUTPUT_ROOT"])
+(root / "reports" / "daily").mkdir(parents=True, exist_ok=True)
+(root / "reports" / "daily" / "daily_review_marker.txt").write_text("ok\n")
+print("daily review ok")
+EOF
+out="$(run_bothealth "$fixture" --daily-review)"
+assert_contains "$out" "Verdict: **GREEN**"
+report="$(find "$fixture/logs/reports/health" -name 'bothealth_*.md' -print -quit)"
+assert_contains "$(cat "$report")" "daily_review exit_status=0"
+[[ -f "$fixture/logs/reports/daily/daily_review_marker.txt" ]] || fail "daily review marker not written"
 
 fixture="$TMP_ROOT/missing-sentinel"
 make_fixture "$fixture"
