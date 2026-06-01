@@ -16,7 +16,7 @@
     <key>WorkingDirectory</key>
     <string>@REPO_ROOT@</string>
 
-    <!-- Daily 08:00 America/Denver. Runs bothealth plus the full daily review
+    <!-- Daily 05:00 America/Denver. Runs bothealth plus the full daily review
          from one launchd trigger so the operator has one morning reporting
          surface and no duplicate daily-review job. Unlike soak-check / midsoak
          this plist does NOT self-clean — it is meant to keep firing forever
@@ -24,7 +24,7 @@
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
-        <integer>8</integer>
+        <integer>5</integer>
         <key>Minute</key>
         <integer>0</integer>
     </dict>

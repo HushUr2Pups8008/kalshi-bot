@@ -1558,61 +1558,8 @@ class TestMainAsyncBlocking:
         bot.paper.get_notional_bankroll.return_value = 490.0
         return bot
 
-    @pytest.mark.asyncio
-    async def test_daily_summary_called_off_event_loop_thread(self):
-        import threading
-        bot = self._make_bot()
-
-        event_loop_thread = threading.current_thread().name
-        call_threads: list[str] = []
-
-        original = bot.paper.daily_summary.side_effect
-
-        def tracking_daily_summary():
-            call_threads.append(threading.current_thread().name)
-
-        bot.paper.daily_summary.side_effect = tracking_daily_summary
-
-        report_path = MagicMock()
-        with patch("main.asyncio.sleep", new=AsyncMock(side_effect=Exception("stop"))), \
-             patch("utils.logger.LOG_REPORTS_DIR", MagicMock()):
-            try:
-                await bot._daily_report_task()
-            except Exception:
-                pass
-
-        if call_threads:
-            assert all(t != event_loop_thread for t in call_threads), (
-                f"daily_summary called on event loop thread ({event_loop_thread!r}). "
-                "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
-            )
-
-    @pytest.mark.asyncio
-    async def test_generate_report_called_off_event_loop_thread(self):
-        import threading
-        bot = self._make_bot()
-
-        event_loop_thread = threading.current_thread().name
-        call_threads: list[str] = []
-
-        def tracking_generate_report():
-            call_threads.append(threading.current_thread().name)
-            return "report text"
-
-        bot.paper.generate_report.side_effect = tracking_generate_report
-
-        with patch("main.asyncio.sleep", new=AsyncMock(side_effect=Exception("stop"))), \
-             patch("utils.logger.LOG_REPORTS_DIR", MagicMock()):
-            try:
-                await bot._daily_report_task()
-            except Exception:
-                pass
-
-        if call_threads:
-            assert all(t != event_loop_thread for t in call_threads), (
-                f"generate_report called on event loop thread ({event_loop_thread!r}). "
-                "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
-            )
+    def test_operator_reports_are_not_generated_from_bot_runtime_loop(self):
+        assert not hasattr(TradingBot, "_daily_report_task")
 
     @pytest.mark.asyncio
     async def test_resolve_market_called_off_event_loop_thread(self):

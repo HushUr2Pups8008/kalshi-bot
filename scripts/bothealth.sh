@@ -11,13 +11,13 @@
 #   - logs/app/bot.log + errors  (exception class scan)
 #   - docs/profit_path_debt_log.md (recent debt-entry deltas)
 #
-# Designed to fire daily ~08:00 MDT via
+# Designed to fire daily ~05:00 MDT via
 # ~/Library/LaunchAgents/com.jake.kalshi-bothealth.plist (RunAtLoad=false,
 # StartCalendarInterval). The launchd template passes --daily-review so the
-# morning health report and full pipeline daily review share one scheduled
-# trigger. Unlike the soak-check / midsoak scripts this one does NOT self-clean
-# the trigger plist — it is meant to keep firing forever until the operator
-# removes it.
+# morning health, pipeline daily review, and performance analysis share one
+# scheduled trigger. Unlike the soak-check / midsoak scripts this one does NOT
+# self-clean the trigger plist — it is meant to keep firing forever until the
+# operator removes it.
 #
 # Read-only. No DB writes. No trade-log writes. No process control.
 # Safe to run at any time.
@@ -57,6 +57,8 @@ LOG_DIR="$OUTPUT_ROOT/app"
 HEALTH_REPORT_DIR="$OUTPUT_ROOT/reports/health"
 DAILY_REVIEW_SCRIPT="$REPO_ROOT/scripts/daily_review.py"
 DAILY_REVIEW_DIR="$OUTPUT_ROOT/reports/daily"
+PERFORMANCE_SCRIPT="$REPO_ROOT/scripts/performance_analysis.py"
+PERFORMANCE_REPORT_DIR="$OUTPUT_ROOT/reports/performance"
 TRADES_LOG="$OUTPUT_ROOT/trades/live/trades.jsonl"
 ERRORS_LOG="$LOG_DIR/errors.log"
 BOT_LOG="$LOG_DIR/bot.log"
@@ -74,7 +76,7 @@ DATE_ONLY="$(date -u +%Y-%m-%d)"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 REPORT="$HEALTH_REPORT_DIR/bothealth_${DATE_ONLY}.md"
 
-mkdir -p "$LOG_DIR" "$HEALTH_REPORT_DIR" "$DAILY_REVIEW_DIR"
+mkdir -p "$LOG_DIR" "$HEALTH_REPORT_DIR" "$DAILY_REVIEW_DIR" "$PERFORMANCE_REPORT_DIR"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 section()  { printf '\n## %s\n\n' "$1" >>"$REPORT"; }
@@ -464,20 +466,72 @@ if [[ "$RUN_DAILY_REVIEW" == "1" ]]; then
         DAILY_REVIEW_STATUS="script_missing"
     else
         DAILY_REVIEW_REPORT="$DAILY_REVIEW_DIR/daily_review_$(date +%Y%m%d).txt"
-        KALSHI_OUTPUT_ROOT="$OUTPUT_ROOT" "$DAILY_REVIEW_PY" "$DAILY_REVIEW_SCRIPT" >>"$REPORT" 2>&1
+        DAILY_REVIEW_STDOUT="$(mktemp)"
+        KALSHI_OUTPUT_ROOT="$OUTPUT_ROOT" "$DAILY_REVIEW_PY" "$DAILY_REVIEW_SCRIPT" >"$DAILY_REVIEW_STDOUT" 2>&1
         DAILY_REVIEW_EXIT=$?
-        printf '\ndaily_review exit_status=%s\n' "$DAILY_REVIEW_EXIT" >>"$REPORT"
+        printf 'daily_review exit_status=%s\n' "$DAILY_REVIEW_EXIT" >>"$REPORT"
         printf 'daily_review report=%s\n' "$DAILY_REVIEW_REPORT" >>"$REPORT"
         if (( DAILY_REVIEW_EXIT == 0 )); then
             DAILY_REVIEW_STATUS="ok"
+            if [[ -f "$DAILY_REVIEW_REPORT" ]]; then
+                printf 'daily_review lines=%s bytes=%s\n' \
+                    "$(wc -l <"$DAILY_REVIEW_REPORT" | tr -d ' ')" \
+                    "$(wc -c <"$DAILY_REVIEW_REPORT" | tr -d ' ')" >>"$REPORT"
+            fi
+            printf 'daily_review body=standalone artifact only; not embedded in bothealth\n' >>"$REPORT"
         else
             DAILY_REVIEW_STATUS="failed"
+            printf 'daily_review tail:\n' >>"$REPORT"
+            tail -20 "$DAILY_REVIEW_STDOUT" >>"$REPORT"
         fi
+        rm -f "$DAILY_REVIEW_STDOUT"
     fi
     codeblock_end
 fi
 
-# ── 11. Verdict line ──────────────────────────────────────────────────────────
+# ── 11. Performance analysis report ───────────────────────────────────────────
+PERFORMANCE_STATUS="not_requested"
+PERFORMANCE_REPORT=""
+if [[ "$RUN_DAILY_REVIEW" == "1" ]]; then
+    section "11. Performance analysis report"
+    codeblock_start
+    PERFORMANCE_PY="$(python_bin)" || true
+    if [[ -z "$PERFORMANCE_PY" ]]; then
+        printf 'python not available; skipping performance analysis\n' >>"$REPORT"
+        PERFORMANCE_STATUS="python_unavailable"
+    elif [[ ! -f "$PERFORMANCE_SCRIPT" ]]; then
+        printf 'performance_analysis.py missing at %s\n' "$PERFORMANCE_SCRIPT" >>"$REPORT"
+        PERFORMANCE_STATUS="script_missing"
+    else
+        PERFORMANCE_STDOUT="$(mktemp)"
+        KALSHI_OUTPUT_ROOT="$OUTPUT_ROOT" "$PERFORMANCE_PY" "$PERFORMANCE_SCRIPT" >"$PERFORMANCE_STDOUT" 2>&1
+        PERFORMANCE_EXIT=$?
+        PERFORMANCE_REPORT="$(awk -F'Report saved to: ' '/Report saved to:/ {print $2}' "$PERFORMANCE_STDOUT" | tail -1)"
+        printf 'performance_analysis exit_status=%s\n' "$PERFORMANCE_EXIT" >>"$REPORT"
+        if [[ -n "$PERFORMANCE_REPORT" ]]; then
+            printf 'performance_analysis report=%s\n' "$PERFORMANCE_REPORT" >>"$REPORT"
+        else
+            printf 'performance_analysis report=(not reported)\n' >>"$REPORT"
+        fi
+        if (( PERFORMANCE_EXIT == 0 )); then
+            PERFORMANCE_STATUS="ok"
+            if [[ -n "$PERFORMANCE_REPORT" && -f "$PERFORMANCE_REPORT" ]]; then
+                printf 'performance_analysis lines=%s bytes=%s\n' \
+                    "$(wc -l <"$PERFORMANCE_REPORT" | tr -d ' ')" \
+                    "$(wc -c <"$PERFORMANCE_REPORT" | tr -d ' ')" >>"$REPORT"
+            fi
+            printf 'performance_analysis body=standalone artifact only; not embedded in bothealth\n' >>"$REPORT"
+        else
+            PERFORMANCE_STATUS="failed"
+            printf 'performance_analysis tail:\n' >>"$REPORT"
+            tail -20 "$PERFORMANCE_STDOUT" >>"$REPORT"
+        fi
+        rm -f "$PERFORMANCE_STDOUT"
+    fi
+    codeblock_end
+fi
+
+# ── 12. Verdict line ──────────────────────────────────────────────────────────
 section "Verdict"
 {
     if [[ "$KALSHI_DRIFT_STATUS" == kalshi_drift=HALT* ]]; then

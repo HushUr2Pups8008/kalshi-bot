@@ -1528,16 +1528,6 @@ class TradingBot:
 
     # ── Scheduled tasks ───────────────────────────────────────────────────────
 
-    async def _daily_report_task(self) -> None:
-        from utils.logger import LOG_REPORTS_DIR
-        while True:
-            await asyncio.sleep(86_400)
-            await asyncio.to_thread(self.paper.daily_summary)
-            report      = await asyncio.to_thread(self.paper.generate_report)
-            report_path = LOG_REPORTS_DIR / f"report_{datetime.now(timezone.utc).strftime('%Y%m%d')}.txt"
-            await asyncio.to_thread(report_path.write_text, report, encoding="utf-8")
-            log.info("Daily report written to %s", report_path)
-
     async def _warm_ws_subscriptions(self) -> None:
         """
         Background task: wait for the initial market cache warmup to finish,
@@ -2219,7 +2209,6 @@ class TradingBot:
             asyncio.create_task(self._news_consumer_task(),             name="news_consumer"),
             asyncio.create_task(self.ws.run(),                          name="websocket"),
             asyncio.create_task(self._warm_ws_subscriptions(),          name="ws_warm"),
-            asyncio.create_task(self._daily_report_task(),              name="daily_report"),
             asyncio.create_task(self._market_refresh_task(),            name="market_refresh"),
             asyncio.create_task(self._auto_resolve_task(),              name="auto_resolve"),
             asyncio.create_task(self._subreddit_discovery_task(),       name="sub_discovery"),
