@@ -504,7 +504,10 @@ if [[ "$RUN_DAILY_REVIEW" == "1" ]]; then
         PERFORMANCE_STATUS="script_missing"
     else
         PERFORMANCE_STDOUT="$(mktemp)"
-        KALSHI_OUTPUT_ROOT="$OUTPUT_ROOT" "$PERFORMANCE_PY" "$PERFORMANCE_SCRIPT" >"$PERFORMANCE_STDOUT" 2>&1
+        (
+            cd "$REPO_ROOT" || exit 1
+            KALSHI_OUTPUT_ROOT="$OUTPUT_ROOT" "$PERFORMANCE_PY" -m scripts.performance_analysis
+        ) >"$PERFORMANCE_STDOUT" 2>&1
         PERFORMANCE_EXIT=$?
         PERFORMANCE_REPORT="$(awk -F'Report saved to: ' '/Report saved to:/ {print $2}' "$PERFORMANCE_STDOUT" | tail -1)"
         printf 'performance_analysis exit_status=%s\n' "$PERFORMANCE_EXIT" >>"$REPORT"
