@@ -40,7 +40,9 @@ def test_all_launchd_templates_render_valid_plists():
     rendered = _rendered_plists()
 
     assert set(rendered) == EXPECTED_LABELS
-    assert "--daily-review" in rendered["com.jake.kalshi-bothealth"]["ProgramArguments"]
+    bothealth = rendered["com.jake.kalshi-bothealth"]
+    assert "--daily-review" in bothealth["ProgramArguments"]
+    assert bothealth["StartCalendarInterval"] == {"Hour": 5, "Minute": 0}
     assert "com.jake.kalshi-daily-review" not in rendered
     for label, plist in rendered.items():
         assert plist["WorkingDirectory"] == str(REPO_ROOT), label

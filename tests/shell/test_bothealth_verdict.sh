@@ -21,6 +21,12 @@ assert_contains() {
     [[ "$haystack" == *"$needle"* ]] || fail "expected [$needle] in: $haystack"
 }
 
+assert_not_contains() {
+    local haystack="$1"
+    local needle="$2"
+    [[ "$haystack" != *"$needle"* ]] || fail "did not expect [$needle] in: $haystack"
+}
+
 make_fixture() {
     local root="$1"
     mkdir -p "$root/bin" "$root/data/runtime" "$root/logs/app" "$root/logs/governance" "$root/scripts/edge_replay"
@@ -89,13 +95,30 @@ from pathlib import Path
 root = Path(os.environ["KALSHI_OUTPUT_ROOT"])
 (root / "reports" / "daily").mkdir(parents=True, exist_ok=True)
 (root / "reports" / "daily" / "daily_review_marker.txt").write_text("ok\n")
-print("daily review ok")
+print("daily review body should stay out of bothealth")
+EOF
+cat >"$fixture/scripts/performance_analysis.py" <<'EOF'
+#!/usr/bin/env python3
+import os
+from pathlib import Path
+root = Path(os.environ["KALSHI_OUTPUT_ROOT"])
+target = root / "reports" / "performance" / "analysis_marker.txt"
+target.parent.mkdir(parents=True, exist_ok=True)
+target.write_text("ok\n")
+print("performance body should stay out of bothealth")
+print(f"Report saved to: {target}")
 EOF
 out="$(run_bothealth "$fixture" --daily-review)"
 assert_contains "$out" "Verdict: **GREEN**"
 report="$(find "$fixture/logs/reports/health" -name 'bothealth_*.md' -print -quit)"
-assert_contains "$(cat "$report")" "daily_review exit_status=0"
+report_body="$(cat "$report")"
+assert_contains "$report_body" "daily_review exit_status=0"
+assert_contains "$report_body" "performance_analysis exit_status=0"
+assert_contains "$report_body" "performance_analysis report=$fixture/logs/reports/performance/analysis_marker.txt"
+assert_not_contains "$report_body" "daily review body should stay out of bothealth"
+assert_not_contains "$report_body" "performance body should stay out of bothealth"
 [[ -f "$fixture/logs/reports/daily/daily_review_marker.txt" ]] || fail "daily review marker not written"
+[[ -f "$fixture/logs/reports/performance/analysis_marker.txt" ]] || fail "performance report marker not written"
 
 fixture="$TMP_ROOT/missing-sentinel"
 make_fixture "$fixture"
