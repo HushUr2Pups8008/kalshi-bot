@@ -5985,6 +5985,20 @@ governance, referencing the Cycle-17D charter that set 200.
   surface `fresh -> signal rows -> LLM attempts -> opportunities -> paper trades` plus the largest pinch.
   Decision unchanged: let B3.1 soak longer before judging; B2 market-driven retrieval remains the next
   real throughput lever, gated by replay-EV rather than volume pumping or gate relaxation.
+- 2026-06-01 — **Fresh-pass → signal-analysis bypass impact check (read-only): simple gate bypass is not
+  the missing lever.** On the 2026-06-01 UTC window, the live log had `309` `EARLY_FRESH_PASS` events,
+  `36` `SIGNAL_ANALYSIS_DETAIL` rows, and `21` `ANALYSIS_REJECTED(no_keywords)` rows. The `no_keywords`
+  check in `main.py` runs **after** `analysis/signal_analyzer.py` has already emitted
+  `SIGNAL_ANALYSIS_DETAIL`, so bypassing it would add **0** signal-analysis rows; it would only allow up
+  to `21` additional downstream `SIGNAL` attempts, many already LLM-neutral/no-keyword. The actual
+  fresh→signal gap is upstream: `178/302` unique fresh items were fresh-only with no ticker candidate in
+  the trade log, `92` had match-weight evidence but no analysis row, and only `4` unique fresh items were
+  suppressed by match-quality. Post-clean-start totals show the same shape: `8,658` fresh-pass events,
+  `1,111` signal-analysis rows, `879` no-keyword rejections, and `4,470/8,360` unique fresh items with no
+  downstream candidate at all. Therefore "allow all fresh passes to flow into signal rows" is not a
+  one-line keyword-gate bypass; it requires changing market-candidate assignment/matching semantics so
+  every fresh item is attached to a ticker, which is signal-generating and must be replay-EV / precision
+  audited before implementation. B2 market-driven retrieval remains the cleaner throughput lever.
 
 ---
 
