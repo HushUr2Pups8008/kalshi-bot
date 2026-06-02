@@ -27,6 +27,7 @@ from analysis.regime_classifier import compute_regime_weights
 from feeds import NewsItem
 from kalshi import KalshiMarket
 from kalshi.rest_client import KalshiRestClient
+from kalshi.series_metadata import KalshiSeriesMetadata, normalize_series_list
 from utils.logger import get_logger, trade_log, write_trade_log_async
 
 log = get_logger("market_matcher")
@@ -709,6 +710,7 @@ class MarketCache:
         self._last_fetch:     float = 0.0
         self._all_markets:    list[KalshiMarket] = []
         self._all_last_fetch: float = 0.0
+        self._series_metadata_by_ticker: dict[str, KalshiSeriesMetadata] = {}
         self._lock            = asyncio.Lock()
         self._all_lock        = asyncio.Lock()
 
@@ -750,6 +752,7 @@ class MarketCache:
         Runs in a thread pool executor so it doesn't block the event loop.
         """
         all_series = self._client.get_all_series()
+        series_metadata_by_ticker = normalize_series_list(all_series)
 
         # Pass 1: keyword-match series titles to find geo/political candidates
         keyword_matched = [s for s in all_series if _is_geo_series(s)]
@@ -813,7 +816,15 @@ class MarketCache:
             geo_tickers_set=geo_tickers_set,
         )
 
+        self._series_metadata_by_ticker = {
+            ticker: series_metadata_by_ticker[ticker]
+            for ticker in geo_tickers
+            if ticker in series_metadata_by_ticker
+        }
         return filtered, len(geo_tickers)
+
+    def get_series_metadata_snapshot(self) -> dict[str, KalshiSeriesMetadata]:
+        return dict(self._series_metadata_by_ticker)
 
     async def get_all_markets(self) -> list[KalshiMarket]:
         """

@@ -20,6 +20,12 @@ class KalshiMarket:
     result:           str = ""
     regime_weights:   dict[str, float] = field(default_factory=dict)
     market_metadata:  dict[str, str] = field(default_factory=dict)
+    rules_primary:    str = ""
+    rules_secondary:  str = ""
+    settlement_timer_seconds: Optional[int] = None
+    early_close_condition: str = ""
+    expected_expiration_time: str = ""
+    expiration_time:  str = ""
 
     # ------------------------------------------------------------------
     # Post-P0 pricing surface (LD-2). All Optional with defaults so legacy

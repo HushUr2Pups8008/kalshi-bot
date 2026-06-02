@@ -141,6 +141,16 @@ def _optional_datetime(payload: dict, key: str) -> Optional[datetime]:
         return None
 
 
+def _optional_int(payload: dict, key: str) -> Optional[int]:
+    raw = payload.get(key)
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _has_unrecognized_price_drift(payload: dict) -> bool:
     """Return True if the payload carries keys that LOOK like price
     contracts (contain side+price tokens) but none of the recognized
@@ -343,6 +353,12 @@ def _build_market(
         subtitle=str(payload.get("subtitle", "")),
         result=str(payload.get("result", "")),
         market_metadata=_extract_market_metadata(payload),
+        rules_primary=str(payload.get("rules_primary") or ""),
+        rules_secondary=str(payload.get("rules_secondary") or ""),
+        settlement_timer_seconds=_optional_int(payload, "settlement_timer_seconds"),
+        early_close_condition=str(payload.get("early_close_condition") or ""),
+        expected_expiration_time=str(payload.get("expected_expiration_time") or ""),
+        expiration_time=str(payload.get("expiration_time") or ""),
         yes_bid_cents=yes_bid_cents,
         yes_ask_cents=yes_ask_cents,
         no_bid_cents=no_bid_cents,

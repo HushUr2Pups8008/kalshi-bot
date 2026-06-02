@@ -51,7 +51,7 @@ Official Kalshi API facts used for this plan:
 
 ## Implementation Steps
 
-- [ ] **Step 1: Add typed series metadata**
+- [x] **Step 1: Add typed series metadata**
 
   Create `kalshi/series_metadata.py`:
 
@@ -111,7 +111,7 @@ Official Kalshi API facts used for this plan:
       )
   ```
 
-- [ ] **Step 2: Test series metadata against real-field shape**
+- [x] **Step 2: Test series metadata against real-field shape**
 
   Add `tests/test_series_metadata.py`:
 
@@ -145,7 +145,7 @@ Official Kalshi API facts used for this plan:
       assert series.can_close_early is True
   ```
 
-- [ ] **Step 3: Add `KalshiRestClient.get_series()` and cache cadence**
+- [x] **Step 3: Add `KalshiRestClient.get_series()` and cache cadence**
 
   Modify `kalshi/rest_client.py`:
 
@@ -167,7 +167,7 @@ Official Kalshi API facts used for this plan:
 
   Do not call this once per fresh item. Fetch at most once per series per market-cache refresh. Before adding detail fetches, inspect whether `get_all_series()` list payloads already carry `settlement_sources`; if they do, hydrate from the list response and avoid detail calls.
 
-- [ ] **Step 4: Preserve explicit market rules without duplicating text**
+- [x] **Step 4: Preserve explicit market rules without duplicating text**
 
   Update `KalshiMarket` in `kalshi/__init__.py`:
 
@@ -182,7 +182,7 @@ Official Kalshi API facts used for this plan:
 
   Update `_build_market()` in `kalshi/normalizer.py` to populate these fields. When later building hint text, do not join `rules_*` twice from both typed fields and `market_metadata`.
 
-- [ ] **Step 5: Extend `kalshi/source_hints.py` instead of creating parallel planner modules**
+- [x] **Step 5: Extend `kalshi/source_hints.py` instead of creating parallel planner modules**
 
   Add a `MarketContractContext` dataclass to `kalshi/source_hints.py`:
 
@@ -239,7 +239,7 @@ Official Kalshi API facts used for this plan:
       )
   ```
 
-- [ ] **Step 6: Redesign market-first queries around entity/topic terms and existing budgets**
+- [x] **Step 6: Redesign market-first queries around entity/topic terms and existing budgets**
 
   Keep query construction in `kalshi/source_hints.py`. Do not emit `site:{domain} "{full market question}"` as the primary query. It is too exact for real generic-publisher settlement sources.
 
@@ -276,7 +276,7 @@ Official Kalshi API facts used for this plan:
 
   `_tokenize_query_terms` should reuse the same stop-word/off-topic style already used by `feeds/search_news_monitor.py`, or import a shared helper after extracting it. The test fixture should use a real generic-publisher shape such as tags `("Iran", "Trump")` and `The Associated Press`, not a fabricated government-clerk source.
 
-- [ ] **Step 7: Wire market-first query planning only as default-off shadow input**
+- [x] **Step 7: Wire market-first query planning only as default-off shadow input**
 
   Modify `feeds/search_news_monitor.py` or its caller so market-first query candidates can be included only when `ENABLE_MARKET_FIRST_QUERY_SHADOW=true`.
 
@@ -287,7 +287,7 @@ Official Kalshi API facts used for this plan:
   - Log query basis separately from current title-derived queries.
   - Never route these results directly to executable signal rows.
 
-- [ ] **Step 8: Add shadow assignment records with explicit tuple unpacking**
+- [x] **Step 8: Add shadow assignment records with explicit tuple unpacking**
 
   Create `analysis/candidate_assignment_shadow.py`:
 
@@ -366,7 +366,7 @@ Official Kalshi API facts used for this plan:
   No `getattr(..., default)` masking on tuple/object shape. Shape errors must fail tests and surface in logs.
   Gate this path separately from query-shadow mode: add `ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW=false` as the default, and do not run `assign_fresh_item_shadow()` unless the operator explicitly enables it.
 
-- [ ] **Step 9: Emit shadow rows to a partitioned shadow log**
+- [x] **Step 9: Emit shadow rows to a partitioned shadow log**
 
   Do not dilute `logs/trades/live/trades.jsonl`. Add a dedicated writer for `logs/trades/shadow/fresh_pass_assignment_shadow.jsonl` or equivalent partition under the output-path contract.
 
@@ -384,7 +384,7 @@ Official Kalshi API facts used for this plan:
 
   Consumer-loop handling: exceptions from `matcher.find_candidates()` itself should be logged and skipped so the ingest loop stays alive. Candidate-shape errors after a candidates list is returned should emit `malformed=true` rows as shown above, so the audit can count them instead of silently losing the defect.
 
-- [ ] **Step 10: Add assignment audit with false-clean guards**
+- [x] **Step 10: Add assignment audit with false-clean guards**
 
   Create `scripts/market_first_assignment_audit.py` that reads only `logs/trades/shadow/` by default and reports:
 
@@ -406,7 +406,7 @@ Official Kalshi API facts used for this plan:
 
   Add a known-match test where a fresh item matches a market and the audit proves `top_ticker` is non-empty.
 
-- [ ] **Step 11: Capture suppressed candidates or narrow the gate language**
+- [x] **Step 11: Capture suppressed candidates or narrow the gate language**
 
   `find_candidates()` returns post-suppression survivors. If the plan needs to measure suppression false positives, add a parallel diagnostic path that records suppressed candidates, or read existing `MATCH_SUPPRESSED` rows into the audit.
 
@@ -416,7 +416,7 @@ Official Kalshi API facts used for this plan:
 
   Do not claim the shadow assignment corpus measures suppression false-positive rate unless suppressed candidates are included.
 
-- [ ] **Step 12: Put durable metadata snapshots in `tasks/`**
+- [x] **Step 12: Put durable metadata snapshots in `tasks/`**
 
   Create `tasks/market_metadata_snapshot.py`, not a writer in `analysis/`.
 
@@ -426,7 +426,7 @@ Official Kalshi API facts used for this plan:
   - Include payload hash and `last_updated_ts` for drift detection.
   - Keep `analysis/` functions pure.
 
-- [ ] **Step 13: Use realistic acceptance gates**
+- [x] **Step 13: Use realistic acceptance gates**
 
   Before behavior change:
 

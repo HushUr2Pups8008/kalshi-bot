@@ -655,6 +655,18 @@ ENABLE_NEWS_EDGE_PRIORITIZATION: bool = (
     in {"1", "true", "yes", "on"}
 )
 
+# Shadow-only market-first retrieval diagnostics. DEFAULT OFF.
+ENABLE_MARKET_FIRST_QUERY_SHADOW: bool = _parse_bool_env(
+    "ENABLE_MARKET_FIRST_QUERY_SHADOW",
+    default="false",
+)
+
+# Shadow-only per-fresh-item assignment diagnostics. DEFAULT OFF.
+ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW: bool = _parse_bool_env(
+    "ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW",
+    default="false",
+)
+
 # ── Kalshi market filters ─────────────────────────────────────────────────────
 # Series ticker PREFIXES to reject — used as a second filter after keyword
 # discovery to drop sports leagues from geo-relevant countries (e.g. Saudi Pro
