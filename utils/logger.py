@@ -49,6 +49,7 @@ from utils.output_paths import (
     RAW_TRADES_ARCHIVE_DIR,
     RAW_TRADES_DIR,
     RAW_TRADES_LIVE_DIR,
+    RAW_TRADES_SHADOW_DIR,
 )
 from utils.log_records import SignalAnalysisDetail
 
@@ -118,6 +119,7 @@ CALIBRATION_CHECK_REQUIRED_FIELDS: tuple[str, ...] = (
 _LOG_APP_DIR = RAW_APP_DIR
 _LOG_TRADES_DIR = RAW_TRADES_DIR
 _LOG_TRADES_LIVE_DIR = RAW_TRADES_LIVE_DIR
+_LOG_TRADES_SHADOW_DIR = RAW_TRADES_SHADOW_DIR
 _LOG_REPORTS_DIR = PERFORMANCE_REPORTS_DIR
 _LOG_HEALTH_REPORTS_DIR = HEALTH_REPORTS_DIR
 _LOG_ARCHIVE_DIR = RAW_TRADES_ARCHIVE_DIR
@@ -126,6 +128,7 @@ for _d in (
     _LOG_APP_DIR,
     _LOG_TRADES_DIR,
     _LOG_TRADES_LIVE_DIR,
+    _LOG_TRADES_SHADOW_DIR,
     _LOG_REPORTS_DIR,
     _LOG_HEALTH_REPORTS_DIR,
     _LOG_ARCHIVE_DIR,
@@ -137,6 +140,7 @@ APP_LOG_FILE   = _LOG_APP_DIR    / "bot.log"
 ERROR_LOG_FILE = _LOG_APP_DIR    / "errors.log"   # WARNING+ only -- quick triage
 LEGACY_TRADE_LOG_FILE = _LOG_TRADES_DIR / "trades.jsonl"  # temporary legacy read path during cutover validation
 TRADE_LOG_FILE = _LOG_TRADES_LIVE_DIR / "trades.jsonl"    # preferred active newline-delimited JSON target
+SHADOW_ASSIGNMENT_LOG_FILE = _LOG_TRADES_SHADOW_DIR / "fresh_pass_assignment_shadow.jsonl"
 LOG_REPORTS_DIR = _LOG_REPORTS_DIR                # for paper_trader report output
 
 # ── Formatters ────────────────────────────────────────────────────────────────
@@ -1427,8 +1431,31 @@ class TradeLogger:
         })
 
 
+class ShadowTradeLogger:
+    """Partitioned writer for diagnostic-only shadow rows."""
+
+    def __init__(self, path: Path = SHADOW_ASSIGNMENT_LOG_FILE) -> None:
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _write(self, record: dict[str, Any]) -> None:
+        record = dict(record)
+        record.setdefault("ts", datetime.now(timezone.utc).isoformat())
+        record.setdefault("shadow_only", True)
+        with self.path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, sort_keys=True) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+
+    def log_fresh_pass_assignment_shadow(self, record: dict[str, Any]) -> None:
+        if record.get("type") != "FRESH_PASS_ASSIGNMENT_SHADOW":
+            raise ValueError("unexpected shadow record type")
+        self._write(record)
+
+
 # Module-level singletons
 trade_log = TradeLogger()
+shadow_trade_log = ShadowTradeLogger()
 
 
 def emit_opportunity(

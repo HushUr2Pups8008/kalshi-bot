@@ -26,6 +26,7 @@ from kalshi.normalizer import (
     normalize_market_list_entry,
     normalize_market_detail,
 )
+from kalshi.series_metadata import KalshiSeriesMetadata, normalize_series_payload
 from utils.logger import get_logger
 
 log = get_logger("kalshi_rest")
@@ -244,6 +245,15 @@ class KalshiRestClient:
             return None
         except Exception as exc:
             log.warning("get_market(%s) failed: %s", ticker, exc)
+            return None
+
+    def get_series(self, series_ticker: str) -> KalshiSeriesMetadata | None:
+        """Fetch and normalize one series detail payload for shadow metadata."""
+        try:
+            data = self._request("GET", f"/series/{series_ticker}")
+            return normalize_series_payload(data)
+        except Exception as exc:
+            log.warning("get_series(%s) failed: %s", series_ticker, exc)
             return None
 
     def get_exchange_status(self) -> Optional[ExchangeState]:

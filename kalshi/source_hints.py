@@ -9,7 +9,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Mapping
+from typing import Callable, Iterable, Mapping
+
+from kalshi.series_metadata import KalshiSeriesMetadata, SettlementSource
 
 
 class SourceClass(str, Enum):
@@ -70,6 +72,16 @@ class MarketSourceHintDiagnostics:
     plan: MarketSourceTargetPlan
     counters: dict[str, dict[str, int | None]]
     log_records: list[dict[str, object]]
+
+
+@dataclass(frozen=True)
+class MarketContractContext:
+    ticker: str
+    title: str
+    rules_text: str
+    settlement_text: str
+    topic_terms: tuple[str, ...]
+    settlement_sources: tuple[SettlementSource, ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -186,6 +198,8 @@ _REGISTRY: tuple[_RegistryEntry, ...] = (
     ),
 )
 
+DEFAULT_SOURCE_REGISTRY = SourceRegistry(_REGISTRY)
+
 _GENERIC_LABELS: Mapping[str, str] = {
     "news outlets": "generic_or_unverifiable_label",
     "social media": "generic_or_unverifiable_label",
@@ -288,6 +302,116 @@ def _extract_rejections(text: str) -> dict[str, str]:
 def _query_for(domain: str, title: str) -> list[str]:
     safe_title = title.replace('"', "'")
     return [f'site:{domain} "{safe_title}"']
+
+
+def _market_topic_terms(title: str, series_metadata: KalshiSeriesMetadata | None) -> tuple[str, ...]:
+    if series_metadata is not None:
+        tag_terms = _clean_topic_terms(series_metadata.tags)
+        if len(tag_terms) >= 2:
+            return tag_terms[:4]
+        raw_terms: list[str] = [*series_metadata.tags, *series_metadata.title.split()]
+    else:
+        raw_terms = []
+    raw_terms.extend(title.split())
+    return _clean_topic_terms(raw_terms)[:4]
+
+
+def _clean_topic_terms(raw_terms: Iterable[str]) -> tuple[str, ...]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_terms:
+        term = re.sub(r"[^A-Za-z0-9]", "", raw).lower()
+        if len(term) < 3 or term in {"will", "shall", "would", "could"} or term in seen:
+            continue
+        terms.append(term)
+        seen.add(term)
+    return tuple(terms)
+
+
+def _is_placeholder_source(source: SettlementSource) -> bool:
+    label = source.label.strip().lower()
+    domain = source.domain.strip().lower().removeprefix("www.")
+    if domain.endswith("kalshi.com"):
+        return True
+    return label in {"kalshi", "kalshi.com"}
+
+
+def _hint_for_settlement_source(
+    source: SettlementSource,
+    registry: SourceRegistry,
+) -> SourceHint | None:
+    if _is_placeholder_source(source):
+        return None
+    if hint := registry.lookup(source.label):
+        return hint
+    if source.domain:
+        return SourceHint(
+            canonical_name=source.label or source.domain,
+            domain=source.domain,
+            source_class=SourceClass.NATIONAL_PUBLISHER,
+            aliases=(source.label,) if source.label else (),
+        )
+    return None
+
+
+def build_market_contract_context(
+    market: object,
+    series_metadata: KalshiSeriesMetadata | None,
+) -> MarketContractContext:
+    """Build a shadow-only contract context without duplicating typed rule fields."""
+
+    explicit_rules = [
+        getattr(market, "rules_primary", "") or "",
+        getattr(market, "rules_secondary", "") or "",
+    ]
+    metadata = getattr(market, "market_metadata", {}) or {}
+    metadata_rules: list[str] = []
+    metadata_settlement: list[str] = []
+    for key, value in metadata.items():
+        if not value:
+            continue
+        key_lower = str(key).lower()
+        if key_lower.startswith("rules_") or key_lower.startswith("settlement_"):
+            continue
+        if "settlement" in key_lower:
+            metadata_settlement.append(str(value))
+        else:
+            metadata_rules.append(str(value))
+    return MarketContractContext(
+        ticker=str(getattr(market, "ticker", "")),
+        title=str(getattr(market, "title", "")),
+        rules_text="\n".join(part for part in (*explicit_rules, *metadata_rules) if part),
+        settlement_text="\n".join(metadata_settlement),
+        topic_terms=_market_topic_terms(str(getattr(market, "title", "")), series_metadata),
+        settlement_sources=series_metadata.settlement_sources if series_metadata else (),
+    )
+
+
+def build_market_first_queries(
+    context: MarketContractContext,
+    *,
+    max_queries: int,
+    registry: SourceRegistry = DEFAULT_SOURCE_REGISTRY,
+) -> tuple[str, ...]:
+    """Build source-scoped topic queries for default-off shadow retrieval."""
+
+    if max_queries <= 0 or len(context.topic_terms) < 2:
+        return ()
+    topic = " ".join(context.topic_terms[:4])
+    queries: list[str] = []
+    seen: set[str] = set()
+    for source in context.settlement_sources:
+        hint = _hint_for_settlement_source(source, registry)
+        if hint is None:
+            continue
+        query = f"site:{hint.domain} {topic}"
+        if query in seen:
+            continue
+        queries.append(query)
+        seen.add(query)
+        if len(queries) >= max_queries:
+            break
+    return tuple(queries)
 
 
 def build_market_source_hints(

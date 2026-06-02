@@ -780,6 +780,19 @@ class TradingBot:
                 headline=headline,
                 age_seconds=age_secs,
             )
+            from config import ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW
+            if ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW:
+                try:
+                    from analysis.candidate_assignment_shadow import build_shadow_assignment
+                    from utils.logger import shadow_trade_log
+
+                    shadow_row = await build_shadow_assignment(self.matcher, news)
+                    await write_trade_log_async(
+                        shadow_trade_log.log_fresh_pass_assignment_shadow,
+                        shadow_row.to_record(),
+                    )
+                except Exception as exc:
+                    log.warning("[SHADOW_ASSIGNMENT] failed: %s", exc)
         priority = _source_priority(source)
         if priority == 1:
             log.debug("[FAST_LANE] tier-1 source priority=%d source=[%s]: %s",
@@ -2199,6 +2212,7 @@ class TradingBot:
                     queue_depth_fn=lambda: (
                         self._news_queue.qsize() / self._news_queue.maxsize
                     ),
+                    get_series_metadata=self.matcher._cache.get_series_metadata_snapshot,
                 ),
                 name="search",
             ),

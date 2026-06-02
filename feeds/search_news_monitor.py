@@ -25,6 +25,7 @@ from typing import Callable, Awaitable, Sequence
 
 from config import (
     DISABLED_SOURCE_FAMILIES,
+    ENABLE_MARKET_FIRST_QUERY_SHADOW,
     ENABLE_NEWS_EDGE_PRIORITIZATION,
     MARKET_SERIES_BLOCKLIST_PREFIXES,
     NEWS_EDGE_SERIES,
@@ -32,6 +33,8 @@ from config import (
 from feeds import NewsItem
 from feeds.rss_monitor import poll_feed
 from kalshi import KalshiMarket
+from kalshi.series_metadata import KalshiSeriesMetadata
+from kalshi.source_hints import build_market_contract_context, build_market_first_queries
 from tasks.stats.edge_series import active_edge_series
 from utils.logger import get_logger
 
@@ -159,6 +162,9 @@ def _tokenize(text: str) -> list[str]:
 def _markets_to_queries(
     markets: Sequence[KalshiMarket],
     edge_series: "frozenset[str] | set[str] | None" = None,
+    *,
+    series_metadata_by_ticker: "dict[str, KalshiSeriesMetadata] | None" = None,
+    market_first_query_shadow: bool = False,
 ) -> list[str]:
     """
     Convert active market titles to deduplicated search queries.
@@ -231,6 +237,23 @@ def _markets_to_queries(
             continue
         seen_sets.add(token_set)
         queries.append(" ".join(tokens))
+        if market_first_query_shadow and len(queries) < SEARCH_MAX_QUERIES:
+            series_key = (
+                (getattr(market, "series_ticker", None) or getattr(market, "ticker", "") or "")
+                .split("-")[0]
+                .upper()
+            )
+            series_metadata = (series_metadata_by_ticker or {}).get(series_key)
+            context = build_market_contract_context(market, series_metadata)
+            for shadow_query in build_market_first_queries(
+                context,
+                max_queries=SEARCH_MAX_QUERIES - len(queries),
+            ):
+                if shadow_query in queries:
+                    continue
+                queries.append(shadow_query)
+                if len(queries) >= SEARCH_MAX_QUERIES:
+                    break
 
     return queries
 
@@ -240,6 +263,7 @@ async def run_search_news_monitor(
     get_markets: Callable[[], Sequence[KalshiMarket]],
     poll_interval: int = SEARCH_POLL_INTERVAL,
     queue_depth_fn: "Callable[[], float] | None" = None,
+    get_series_metadata: "Callable[[], dict[str, KalshiSeriesMetadata]] | None" = None,
 ) -> None:
     """
     Poll Google News RSS and Bing News RSS for queries derived from active
@@ -276,7 +300,16 @@ async def run_search_news_monitor(
     while True:
         try:
             markets = get_markets()
-            queries = _markets_to_queries(markets)
+            series_metadata = (
+                get_series_metadata()
+                if ENABLE_MARKET_FIRST_QUERY_SHADOW and get_series_metadata is not None
+                else None
+            )
+            queries = _markets_to_queries(
+                markets,
+                series_metadata_by_ticker=series_metadata,
+                market_first_query_shadow=ENABLE_MARKET_FIRST_QUERY_SHADOW,
+            )
 
             if not queries:
                 log.debug("Search news: no active markets, skipping cycle")
