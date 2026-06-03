@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 from feeds import NewsItem
 from feeds.search_news_monitor import SEARCH_MAX_QUERIES, _markets_to_queries
@@ -13,6 +14,9 @@ from kalshi.source_hints import (
 )
 from analysis.candidate_assignment_shadow import build_shadow_assignment
 from scripts.market_first_assignment_audit import summarize, validate
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _market() -> KalshiMarket:
@@ -143,3 +147,14 @@ def test_assignment_audit_flags_false_clean_rows(tmp_path):
         "assigned rows without top_ticker",
         "assigned rows without top_score",
     ]
+
+
+def test_fresh_pass_assignment_shadow_is_scheduled_out_of_band():
+    source = (REPO_ROOT / "main.py").read_text(encoding="utf-8")
+    enqueue_body = source.split("async def _enqueue_news", 1)[1].split(
+        "def _schedule_fresh_pass_assignment_shadow", 1
+    )[0]
+
+    assert "self._schedule_fresh_pass_assignment_shadow(news)" in enqueue_body
+    assert "await build_shadow_assignment" not in enqueue_body
+    assert "asyncio.wait_for(" in source
