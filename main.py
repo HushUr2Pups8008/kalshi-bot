@@ -811,6 +811,9 @@ class TradingBot:
             from analysis.candidate_assignment_shadow import build_shadow_assignment
             from utils.logger import shadow_trade_log
 
+            if not self.matcher._cache.has_market_snapshot():
+                log.debug("[SHADOW_ASSIGNMENT] market cache cold; skipping diagnostic row")
+                return
             async with self._shadow_assignment_semaphore:
                 shadow_row = await asyncio.wait_for(
                     build_shadow_assignment(self.matcher, news),

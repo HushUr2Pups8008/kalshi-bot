@@ -157,4 +157,5 @@ def test_fresh_pass_assignment_shadow_is_scheduled_out_of_band():
 
     assert "self._schedule_fresh_pass_assignment_shadow(news)" in enqueue_body
     assert "await build_shadow_assignment" not in enqueue_body
+    assert "has_market_snapshot()" in source
     assert "asyncio.wait_for(" in source
