@@ -826,6 +826,9 @@ class MarketCache:
     def get_series_metadata_snapshot(self) -> dict[str, KalshiSeriesMetadata]:
         return dict(self._series_metadata_by_ticker)
 
+    def has_market_snapshot(self) -> bool:
+        return bool(self._markets)
+
     async def get_all_markets(self) -> list[KalshiMarket]:
         """
         Return all active Kalshi markets (up to 2000), regardless of category.
