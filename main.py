@@ -638,6 +638,8 @@ class TradingBot:
         # Cross-source dedup: Reuters/AP/BBC often publish the same story within
         # minutes. Skip near-identical headlines seen in the last 15 minutes.
         self._dedup = HeadlineDedup()
+        self._shadow_assignment_tasks: set[asyncio.Task[None]] = set()
+        self._shadow_assignment_semaphore = asyncio.Semaphore(2)
         # Previous WS mid-price per ticker -- used to detect threshold crossings
         # for the price-based fade signal.
         self._ws_prev_prices: dict[str, float] = {}
@@ -782,17 +784,7 @@ class TradingBot:
             )
             from config import ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW
             if ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW:
-                try:
-                    from analysis.candidate_assignment_shadow import build_shadow_assignment
-                    from utils.logger import shadow_trade_log
-
-                    shadow_row = await build_shadow_assignment(self.matcher, news)
-                    await write_trade_log_async(
-                        shadow_trade_log.log_fresh_pass_assignment_shadow,
-                        shadow_row.to_record(),
-                    )
-                except Exception as exc:
-                    log.warning("[SHADOW_ASSIGNMENT] failed: %s", exc)
+                self._schedule_fresh_pass_assignment_shadow(news)
         priority = _source_priority(source)
         if priority == 1:
             log.debug("[FAST_LANE] tier-1 source priority=%d source=[%s]: %s",
@@ -802,6 +794,36 @@ class TradingBot:
         except asyncio.QueueFull:
             log.warning("News queue full (%d items) -- dropping: %s",
                         self._news_queue.maxsize, headline[:60])
+
+    def _schedule_fresh_pass_assignment_shadow(self, news: NewsItem) -> None:
+        if len(self._shadow_assignment_tasks) >= 25:
+            log.debug("[SHADOW_ASSIGNMENT] backlog full; dropping diagnostic row")
+            return
+        task = asyncio.create_task(
+            self._emit_fresh_pass_assignment_shadow(news),
+            name="fresh-pass-assignment-shadow",
+        )
+        self._shadow_assignment_tasks.add(task)
+        task.add_done_callback(self._shadow_assignment_tasks.discard)
+
+    async def _emit_fresh_pass_assignment_shadow(self, news: NewsItem) -> None:
+        try:
+            from analysis.candidate_assignment_shadow import build_shadow_assignment
+            from utils.logger import shadow_trade_log
+
+            async with self._shadow_assignment_semaphore:
+                shadow_row = await asyncio.wait_for(
+                    build_shadow_assignment(self.matcher, news),
+                    timeout=30.0,
+                )
+            await write_trade_log_async(
+                shadow_trade_log.log_fresh_pass_assignment_shadow,
+                shadow_row.to_record(),
+            )
+        except asyncio.TimeoutError:
+            log.warning("[SHADOW_ASSIGNMENT] timed out")
+        except Exception as exc:
+            log.warning("[SHADOW_ASSIGNMENT] failed: %s", exc)
 
     async def _news_consumer_task(self) -> None:
         """Drain the priority news queue, processing one item at a time."""
