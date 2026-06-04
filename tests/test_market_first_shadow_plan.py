@@ -98,8 +98,17 @@ class _Matcher:
     def __init__(self, candidates):
         self._candidates = candidates
 
-    async def find_candidates(self, news):
+    async def find_candidates(self, news, **_kwargs):
         return self._candidates
+
+
+class _RefreshAwareMatcher:
+    def __init__(self):
+        self.refresh_cache = None
+
+    async def find_candidates(self, news, *, refresh_cache=True):
+        self.refresh_cache = refresh_cache
+        return []
 
 
 def test_shadow_assignment_unpacks_candidate_tuple_without_getattr_defaults():
@@ -112,6 +121,18 @@ def test_shadow_assignment_unpacks_candidate_tuple_without_getattr_defaults():
     assert row.top_ticker == "KXTRUMPIRAN-26"
     assert row.top_score == 0.42
     assert row.malformed is False
+
+
+def test_shadow_assignment_uses_snapshot_only_matching():
+    matcher = _RefreshAwareMatcher()
+
+    row = asyncio.run(build_shadow_assignment(
+        matcher,
+        NewsItem(headline="Trump Iran update", url="https://example.com", source="test"),
+    ))
+
+    assert matcher.refresh_cache is False
+    assert row.assigned is False
 
 
 def test_shadow_assignment_emits_malformed_row_instead_of_raising():
