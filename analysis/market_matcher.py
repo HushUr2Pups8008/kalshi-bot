@@ -721,6 +721,14 @@ class MarketCache:
                 await self._refresh()
         return list(self._markets)
 
+    def get_markets_snapshot(self) -> list[KalshiMarket]:
+        """Return the current cached markets without refreshing.
+
+        Shadow-only diagnostics use this so observability cannot trigger REST
+        refreshes or contend with the live matcher path.
+        """
+        return list(self._markets)
+
     async def _refresh(self) -> None:
         if time.monotonic() - self._last_fetch < _REFRESH_DEBOUNCE_SECONDS:
             log.debug("Market cache refresh debounced (last refresh %.0fs ago)", time.monotonic() - self._last_fetch)
@@ -943,7 +951,11 @@ class MarketMatcher:
         self._cache = MarketCache(rest_client)
 
     async def find_candidates(
-        self, news: NewsItem, max_results: int | None = None
+        self,
+        news: NewsItem,
+        max_results: int | None = None,
+        *,
+        refresh_cache: bool = True,
     ) -> list[tuple[KalshiMarket, float, dict[str, Any]]]:
         """
         Return (market, score, match_meta) triples sorted by score descending.
@@ -965,7 +977,11 @@ class MarketMatcher:
         _token_weights = _load_match_weights()
 
         news_tokens = _tokenize(f"{news.headline} {news.body}")
-        markets     = await self._cache.get_markets()
+        markets = (
+            await self._cache.get_markets()
+            if refresh_cache
+            else self._cache.get_markets_snapshot()
+        )
 
         headline_tokens = _tokenize(news.headline)
         match_time = datetime.now(timezone.utc)
