@@ -36,9 +36,13 @@ import json
 import os
 import sqlite3
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from tabulate import tabulate
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
@@ -51,7 +55,6 @@ from utils.output_paths import (
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(__file__).parent.parent
 JSONL_PATH = RAW_TRADES_DIR
 DB_PATH = PAPER_TRADES_DB
 CACHE_PATH = REPO_ROOT / "logs" / "market_resolution_cache.json"
@@ -103,6 +106,16 @@ def _skip_category(reason):
     if not reason:
         return "unknown"
     r = reason.lower()
+    if "g1_blended_confidence" in r:
+        return "confidence gate"
+    if "g2_evidence_source_class_diversity" in r:
+        return "source diversity gate"
+    if "g3_disagreement_score" in r:
+        return "disagreement gate"
+    if "g6_recency_score" in r:
+        return "recency gate"
+    if "series_correlation" in r:
+        return "series correlation gate"
     if "status=active" in r:
         return "bug: market status=active (pre-v0.2.0)"
     if "cooldown" in r:
@@ -129,6 +142,11 @@ def _is_controllable(reason):
         "price illiquid",
         "insufficient balance",
         "unknown",
+        "confidence gate",
+        "source diversity gate",
+        "disagreement gate",
+        "recency gate",
+        "series correlation gate",
     )
 
 
@@ -243,15 +261,34 @@ def load_jsonl(since_dt, until_dt):
     return entries
 
 
-def load_db_trades():
-    """Load all trades from paper_trades.db. Returns list of dicts."""
+def load_db_trades(since_dt=None, until_dt=None):
+    """Load trades from paper_trades.db. Returns list of dicts.
+
+    When a window is supplied, keep DB-derived report sections aligned with
+    the JSONL window instead of mixing windowed funnel counts with lifetime DB
+    performance.
+    """
     if not DB_PATH.exists():
         return []
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     rows = conn.execute("SELECT * FROM paper_trades ORDER BY ts").fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    trades = [dict(r) for r in rows]
+    if since_dt is None and until_dt is None:
+        return trades
+
+    filtered = []
+    for trade in trades:
+        dt = _parse_ts(trade.get("ts"))
+        if dt is None:
+            continue
+        if since_dt is not None and dt < since_dt:
+            continue
+        if until_dt is not None and dt > until_dt:
+            continue
+        filtered.append(trade)
+    return filtered
 
 
 def load_db_state():
@@ -574,6 +611,18 @@ def section_skip_breakdown(entries):
     top = sorted(ticker_counts.items(), key=lambda x: -x[1])[:10]
     for ticker, count in top:
         lines.append("  %3d  %s" % (count, ticker))
+
+    if by_cat.get("other"):
+        raw_counts = Counter(
+            (s.get("reason") or "unknown").strip() or "unknown"
+            for s in by_cat["other"]
+        )
+        lines.append("")
+        lines.append("Unclassified raw skip reasons:")
+        raw_rows = [[count, reason[:120]] for reason, count in raw_counts.most_common(10)]
+        lines.append(
+            tabulate(raw_rows, headers=["Count", "Raw Reason"], tablefmt="simple")
+        )
 
     return "\n".join(lines)
 
@@ -900,7 +949,7 @@ def section_source_quality():
     return "\n".join(lines)
 
 
-def section_candidate_subreddits():
+def section_candidate_subreddits(max_rows=None):
     """
     Show subreddits discovered via Reddit post search (v0.21.0 discovery loop).
     Displays discovered_ts, query that found it, probe_count, last_probed, status.
@@ -918,6 +967,41 @@ def section_candidate_subreddits():
             ORDER BY status ASC, probe_count DESC, discovered_ts DESC
             """
         ).fetchall()
+        max_probes = int(os.getenv("SUBREDDIT_CANDIDATE_MAX_PROBES", "3"))
+        has_source_stats = (
+            conn.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'source_stats'
+                """
+            ).fetchone()
+            is not None
+        )
+        if has_source_stats:
+            eligible_row = conn.execute(
+                """
+                SELECT count(*)
+                FROM subreddit_candidates c
+                LEFT JOIN source_stats s ON s.source = 'r/' || c.sub
+                WHERE c.status = 'candidate'
+                  AND c.probe_count >= ?
+                  AND COALESCE(s.signals, 0) = 0
+                  AND COALESCE(s.opportunities, 0) = 0
+                  AND COALESCE(s.trades, 0) = 0
+                """,
+                (max_probes,),
+            ).fetchone()
+        else:
+            eligible_row = conn.execute(
+                """
+                SELECT count(*)
+                FROM subreddit_candidates
+                WHERE status = 'candidate'
+                  AND probe_count >= ?
+                """,
+                (max_probes,),
+            ).fetchone()
+        max_probe_no_signal = int(eligible_row[0] if eligible_row else 0)
     except sqlite3.OperationalError:
         return (
             "subreddit_candidates table not found -- bot has not run with v0.21.0+ yet."
@@ -928,8 +1012,15 @@ def section_candidate_subreddits():
     if not rows:
         return "No candidate subreddits discovered yet."
 
+    if max_rows is None:
+        max_rows = int(os.getenv("PERFORMANCE_REPORT_MAX_SUBREDDIT_ROWS", "100"))
+    max_rows = max(1, max_rows)
+
+    status_counts = Counter(r["status"] for r in rows)
+    visible_rows = rows[:max_rows]
+
     table_rows = []
-    for r in rows:
+    for r in visible_rows:
         discovered = (r["discovered_ts"] or "")[:10]
         via = (r["discovered_via"] or "")[:25]
         last = (r["last_probed"] or "never")[:16]
@@ -945,6 +1036,22 @@ def section_candidate_subreddits():
         )
 
     lines = ["Candidate subreddits (discovered via Reddit post search):", ""]
+    summary = ", ".join(
+        "%s: %d" % (status, count)
+        for status, count in sorted(status_counts.items())
+    )
+    lines.append("  Status summary: %s" % summary)
+    if max_probe_no_signal:
+        lines.append(
+            "  Max-probe no-signal eligible: %d (SUBREDDIT_CANDIDATE_MAX_PROBES=%d)"
+            % (max_probe_no_signal, max_probes)
+        )
+    if len(rows) > len(visible_rows):
+        lines.append(
+            "  Showing %d of %d rows (set PERFORMANCE_REPORT_MAX_SUBREDDIT_ROWS to adjust)"
+            % (len(visible_rows), len(rows))
+        )
+    lines.append("")
     lines.append(
         tabulate(
             table_rows,
@@ -969,6 +1076,54 @@ def section_candidate_subreddits():
     )
 
     return "\n".join(lines)
+
+
+def _state_float(state, key):
+    try:
+        value = state.get(key)
+    except AttributeError:
+        return None
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _starting_bankroll(db_trades, state):
+    for key in ("paper_starting_bankroll", "starting_bankroll", "initial_bankroll"):
+        value = _state_float(state, key)
+        if value is not None and value > 0:
+            return value
+
+    first_trade = None
+    for trade in db_trades:
+        before = trade.get("notional_bankroll_before")
+        if before is None:
+            continue
+        try:
+            before_value = float(before)
+        except (TypeError, ValueError):
+            continue
+        if before_value <= 0:
+            continue
+        dt = _parse_ts(trade.get("ts"))
+        sort_key = dt or datetime.max.replace(tzinfo=timezone.utc)
+        if first_trade is None or sort_key < first_trade[0]:
+            first_trade = (sort_key, before_value)
+    if first_trade is not None:
+        return first_trade[1]
+
+    env_value = os.getenv("BANKROLL")
+    if env_value:
+        try:
+            parsed = float(env_value)
+            if parsed > 0:
+                return parsed
+        except ValueError:
+            pass
+    return 500.0
 
 
 def section_per_series_win_rate():
@@ -1452,7 +1607,7 @@ def section_golive_readiness(db_trades, state):
     min_win_rate = float(os.getenv("GO_LIVE_MIN_WIN_RATE", "0.52"))
     max_drawdown = float(os.getenv("GO_LIVE_MAX_DRAWDOWN_PCT", "0.20"))
 
-    bankroll_start = 500.0  # can't easily read from .env here; use known default
+    bankroll_start = _starting_bankroll(db_trades, state)
     drawdown = (
         (bankroll_start - bankroll_now) / bankroll_start if bankroll_start > 0 else 0.0
     )
@@ -1548,9 +1703,10 @@ def main():
 
     # Load data
     entries = load_jsonl(since_dt, until_dt)
-    db_trades = load_db_trades()
+    db_trades_all = load_db_trades()
+    db_trades = load_db_trades(since_dt, until_dt)
     state = load_db_state()
-    resolution_map = build_resolution_map(db_trades, entries, args.enrich)
+    resolution_map = build_resolution_map(db_trades_all, entries, args.enrich)
 
     # Build report
     report_lines = []
@@ -1564,7 +1720,13 @@ def main():
         % (since_dt.strftime("%Y-%m-%d"), until_dt.strftime("%Y-%m-%d"))
     )
     report_lines.append("  JSONL     : %d entries in window" % len(entries))
-    report_lines.append("  DB trades : %d total" % len(db_trades))
+    if len(db_trades_all) == len(db_trades):
+        report_lines.append("  DB trades : %d in window" % len(db_trades))
+    else:
+        report_lines.append(
+            "  DB trades : %d in window (%d lifetime)"
+            % (len(db_trades), len(db_trades_all))
+        )
     report_lines.append("=" * 70)
 
     # Caveats
@@ -1616,7 +1778,7 @@ def main():
     report_lines.append(section_kelly_shadow())
 
     report_lines.append(section_header("8. GO-LIVE READINESS"))
-    report_lines.append(section_golive_readiness(db_trades, state))
+    report_lines.append(section_golive_readiness(db_trades_all, state))
 
     report_lines.append("")
     report_lines.append("=" * 70)
