@@ -11,7 +11,11 @@ from unittest.mock import patch
 
 import pytest
 
-from feeds.subreddit_selector import _update_probe_ts, _mark_candidate_suppressed
+from feeds.subreddit_selector import (
+    _mark_candidate_suppressed,
+    _sync_suppressed_candidates,
+    _update_probe_ts,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +78,78 @@ def test_mark_candidate_suppressed_sets_status(tmp_path):
     ).fetchone()
     conn.close()
     assert row[0] == "suppressed"
+
+
+def test_sync_suppressed_candidates_updates_backlog_status(tmp_path):
+    db = tmp_path / "paper_trades.db"
+    conn = sqlite3.connect(db)
+    conn.execute(_CREATE_TABLE)
+    conn.executemany(
+        "INSERT INTO subreddit_candidates (sub, status, probe_count) VALUES (?, 'candidate', ?)",
+        [("dead_sub", 3), ("live_sub", 1)],
+    )
+    conn.commit()
+    conn.close()
+
+    class FakeSourceStats:
+        def is_suppressed(self, source: str) -> bool:
+            return source == "r/dead_sub"
+
+    updated = _sync_suppressed_candidates(db, FakeSourceStats())
+
+    conn = sqlite3.connect(db)
+    rows = dict(conn.execute("SELECT sub, status FROM subreddit_candidates").fetchall())
+    conn.close()
+    assert updated == 1
+    assert rows == {"dead_sub": "suppressed", "live_sub": "candidate"}
+
+
+def test_sync_suppressed_candidates_suppresses_max_probe_no_signal(tmp_path, monkeypatch):
+    db = tmp_path / "paper_trades.db"
+    conn = sqlite3.connect(db)
+    conn.execute(_CREATE_TABLE)
+    conn.execute(
+        """
+        CREATE TABLE source_stats (
+            source TEXT PRIMARY KEY,
+            posts_seen INTEGER DEFAULT 0,
+            signals INTEGER DEFAULT 0,
+            opportunities INTEGER DEFAULT 0,
+            trades INTEGER DEFAULT 0
+        )
+        """
+    )
+    conn.executemany(
+        "INSERT INTO subreddit_candidates (sub, status, probe_count) VALUES (?, 'candidate', ?)",
+        [("stale_sub", 3), ("signal_sub", 3), ("fresh_sub", 2)],
+    )
+    conn.execute(
+        """
+        INSERT INTO source_stats
+            (source, posts_seen, signals, opportunities, trades)
+        VALUES ('r/signal_sub', 10, 1, 0, 0)
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    class FakeSourceStats:
+        def is_suppressed(self, source: str) -> bool:
+            return False
+
+    monkeypatch.setenv("SUBREDDIT_CANDIDATE_MAX_PROBES", "3")
+
+    updated = _sync_suppressed_candidates(db, FakeSourceStats())
+
+    conn = sqlite3.connect(db)
+    rows = dict(conn.execute("SELECT sub, status FROM subreddit_candidates").fetchall())
+    conn.close()
+    assert updated == 1
+    assert rows == {
+        "stale_sub": "suppressed",
+        "signal_sub": "candidate",
+        "fresh_sub": "candidate",
+    }
 
 
 # ---------------------------------------------------------------------------

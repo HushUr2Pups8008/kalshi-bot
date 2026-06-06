@@ -11,6 +11,7 @@ _mark_candidate_suppressed which do lightweight SQLite reads/writes.
 """
 
 import logging
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -165,6 +166,75 @@ def _mark_candidate_suppressed(db_path: Path, sub: str) -> None:
         raise
 
 
+def _sync_suppressed_candidates(db_path: Path, source_stats) -> int:
+    """Sync SourceStats zero-signal suppression into subreddit_candidates."""
+    if source_stats is None:
+        return 0
+    max_probes = int(os.getenv("SUBREDDIT_CANDIDATE_MAX_PROBES", "3"))
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            has_source_stats = (
+                conn.execute(
+                    """
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table' AND name = 'source_stats'
+                    """
+                ).fetchone()
+                is not None
+            )
+            if has_source_stats:
+                rows = conn.execute(
+                    """
+                    SELECT
+                        c.sub,
+                        c.probe_count,
+                        COALESCE(s.signals, 0) AS signals,
+                        COALESCE(s.opportunities, 0) AS opportunities,
+                        COALESCE(s.trades, 0) AS trades
+                    FROM subreddit_candidates c
+                    LEFT JOIN source_stats s ON s.source = 'r/' || c.sub
+                    WHERE c.status = 'candidate'
+                    """
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT sub, probe_count, 0 AS signals, 0 AS opportunities, 0 AS trades
+                    FROM subreddit_candidates
+                    WHERE status = 'candidate'
+                    """
+                ).fetchall()
+
+            suppressed = []
+            for sub, probe_count, signals, opportunities, trades in rows:
+                if source_stats.is_suppressed("r/" + sub):
+                    suppressed.append(sub)
+                    continue
+                has_signal_evidence = any(
+                    (value or 0) > 0 for value in (signals, opportunities, trades)
+                )
+                if max_probes > 0 and probe_count >= max_probes and not has_signal_evidence:
+                    suppressed.append(sub)
+
+            if not suppressed:
+                return 0
+            conn.executemany(
+                "UPDATE subreddit_candidates SET status = 'suppressed' WHERE sub = ?",
+                [(sub,) for sub in suppressed],
+            )
+            conn.commit()
+            return len(suppressed)
+        finally:
+            conn.close()
+    except Exception as exc:
+        logging.getLogger("subreddit_selector").error(
+            "[SUBREDDIT] DB write failed (table=subreddit_candidates, sync=suppressed): %s",
+            exc,
+        )
+        raise
+
+
 def select_subreddits(
     markets: Sequence[KalshiMarket],
     source_stats=None,   # SourceStats instance or None
@@ -233,6 +303,12 @@ def select_subreddits(
 
     # Tier 3: candidate probes fill remaining capacity
     if db_path is not None and len(selected) < REDDIT_MAX_SUBREDDITS:
+        if source_stats is not None:
+            synced = _sync_suppressed_candidates(db_path, source_stats)
+            if synced:
+                logging.getLogger("subreddit_selector").debug(
+                    "[SUBREDDIT] Synced %d suppressed candidate rows", synced
+                )
         probes = _load_probe_candidates(
             db_path,
             limit=SUBREDDIT_PROBE_SLOTS,
