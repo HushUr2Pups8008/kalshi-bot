@@ -21,7 +21,7 @@ Not prepared for broad runtime integration yet.
 | --- | --- | --- |
 | Bothealth RED / `POST_FIX_NEW` NOT_READY | Captured as a non-Polymarket runtime stop condition. Polymarket work remains disabled-by-default and paper-only. | Do not use Polymarket integration to justify live readiness. High-risk runtime work still needs operator approval and separate review. |
 | Since-restart bottleneck is fresh-pass to signal/edge conversion | Kept out of Polymarket scope. Contract capture does not alter matcher, LLM, executor, or runtime gates. | Continue treating Kalshi edge scarcity as separate pipeline work. |
-| Mixed worktree with runtime artifacts | Added ignore coverage for `logs/backups/` and `logs/state/`. Runtime `data/matcher_token_weights.json` remains intentionally unstaged. | Before any PR, stage only plan/contract/test docs and confirm no runtime JSON/log artifacts are included. |
+| Mixed worktree with runtime artifacts | Left generated `logs/backups/`, `logs/state/`, and runtime `data/matcher_token_weights.json` out of the docs/test prep PR. | Before any PR, stage only plan/contract/test docs and confirm no runtime JSON/log artifacts are included. |
 | High-risk surfaces: DB, executor, paper trader, credentials, observer | Executed only Task 0 artifacts. No `trading/`, DB schema, executor, credential, observer, launchd, or live-order code changed. | Tasks 3-13 require explicit operator approval, focused PRs, and review checkpoints. |
 | External docs support Task 0 | Captured official Polymarket US API assumptions in markdown and JSON fixture with a focused test. | Re-check docs on the day any API-path/auth/order behavior changes. |
 
@@ -36,7 +36,6 @@ Open a docs/test-only PR containing:
 - `docs/api_contracts/polymarket_us_retail_contract.md`
 - `tests/fixtures/polymarket_us/contract_snapshot.json`
 - `tests/test_polymarket_contract_snapshot.py`
-- `.gitignore`
 
 Do not include:
 
