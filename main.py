@@ -796,6 +796,11 @@ class TradingBot:
                         self._news_queue.maxsize, headline[:60])
 
     def _schedule_fresh_pass_assignment_shadow(self, news: NewsItem) -> None:
+        if not hasattr(self, "_shadow_assignment_tasks"):
+            self._shadow_assignment_tasks = set()
+        if not hasattr(self, "_shadow_assignment_semaphore"):
+            self._shadow_assignment_semaphore = asyncio.Semaphore(2)
+
         if len(self._shadow_assignment_tasks) >= 25:
             log.debug("[SHADOW_ASSIGNMENT] backlog full; dropping diagnostic row")
             return

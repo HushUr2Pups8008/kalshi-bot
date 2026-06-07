@@ -328,27 +328,23 @@ class TestKellyShadow:
         assert row["edge"] == pytest.approx(0.20)
 
     def test_record_trade_persists_executed_side_edge_no(self, trader):
-        """PROFIT-OBS-004 (closed 2026-05-02): no-side trades persist
-        -analysis.edge so the recorded value reflects the executed side.
-
-        Without this fix, every NO-side trade would persist a misleadingly
-        negative edge — exactly the symptom that surfaced on the 3
-        KXFISAEXTEND-26APR-MAY0{1,2,3} historical rows."""
-        # YES-side edge of -0.068 (estimated_prob 0.432, market_yes 50c).
-        # Executed-side edge for NO is +0.068.
+        """NO-side trades persist the chosen-side executable edge."""
+        # Production analysis.edge is already chosen-side after select_side().
+        # The recorder must not negate it back to the YES-side perspective.
         analysis = _make_mock_analysis(
-            side="no", yes_price=50.0, estimated_prob=0.432, edge=-0.068,
+            side="no", yes_price=70.0, estimated_prob=0.656, edge=0.044,
             ticker="KXOBS004-NO",
         )
-        with patch("dataclasses.asdict", return_value={"series_ticker": "KXOBS004"}):
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXOBS004"}), \
+             patch("trading.paper_trader.trade_log") as trade_log_mock:
             trader.record_trade(analysis)
         row = trader._conn.execute(
             "SELECT side, edge FROM paper_trades WHERE ticker='KXOBS004-NO'"
         ).fetchone()
         assert row["side"] == "no"
-        assert row["edge"] == pytest.approx(0.068), (
-            "PROFIT-OBS-004: NO-side trade must persist executed-side edge "
-            "(positive), not the YES-side perspective (negative)."
+        assert row["edge"] == pytest.approx(0.044)
+        assert trade_log_mock.log_paper_trade.call_args.kwargs["edge"] == pytest.approx(
+            0.044
         )
 
 
@@ -831,6 +827,16 @@ class TestMigrations:
                 "5, 50, 2.5, 0.6, 50.0, 0.1, 2.5, 2.5, 'h', 's', '[]', 'r', "
                 "'{\"series_ticker\": \"KXLEG\"}')"
             )
+            legacy_conn.execute(
+                "INSERT INTO paper_trades (trade_id, ts, ticker, market_title, side, "
+                "contracts, price_cents, cost_dollars, estimated_prob, market_yes_price, "
+                "edge, kelly_dollars, capped_dollars, signal_headline, signal_source, "
+                "keywords_matched, reasoning, market_snapshot) VALUES "
+                "('legacy-no-bad-edge', '2026-06-05T13:09:56+00:00', "
+                "'KXFISAEXTEND-26MAY-JUN15', 't', 'no', "
+                "5, 30, 1.5, 0.656, 70.0, -0.044, 1.5, 1.5, 'h', 's', '[]', 'r', "
+                "'{\"series_ticker\": \"KXFISAEXTEND\"}')"
+            )
             legacy_conn.commit()
 
             from trading.paper_trader import PaperTrader
@@ -854,6 +860,10 @@ class TestMigrations:
             ).fetchone()
             assert row["series_ticker"] == "KXLEG"
             assert row["entry_price_cents"] == 50.0
+            repaired = pt._conn.execute(
+                "SELECT edge FROM paper_trades WHERE trade_id='legacy-no-bad-edge'"
+            ).fetchone()
+            assert repaired["edge"] == pytest.approx(0.044)
         finally:
             keeper.close()
 
