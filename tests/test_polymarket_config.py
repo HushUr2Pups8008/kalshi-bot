@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 
 import config as config_module
@@ -20,6 +22,7 @@ def _clear_polymarket_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "POLYMARKET_US_ENABLED",
         "POLYMARKET_US_KEY_ID",
         "POLYMARKET_US_SECRET",
+        "POLYMARKET_US_ELIGIBILITY_ACK_DATE",
         "POLYMARKET_US_PUBLIC_BASE_URL",
         "POLYMARKET_US_API_BASE_URL",
         "POLYMARKET_US_LIVE_TRADING_ENABLED",
@@ -47,6 +50,7 @@ def test_polymarket_config_defaults_disabled(monkeypatch):
     assert cfg.polymarket_us_live_trading_enabled is False
     assert cfg.polymarket_us_key_id == ""
     assert cfg.polymarket_us_secret == ""
+    assert cfg.polymarket_us_eligibility_ack_date == ""
     assert cfg.polymarket_us_public_base_url == "https://gateway.polymarket.us"
     assert cfg.polymarket_us_api_base_url == "https://api.polymarket.us"
     assert cfg.polymarket_us_public_requests_per_second == 20
@@ -70,6 +74,7 @@ def test_polymarket_enabled_accepts_credentials_but_live_trading_stays_separate(
     monkeypatch.setenv("POLYMARKET_US_ENABLED", "true")
     monkeypatch.setenv("POLYMARKET_US_KEY_ID", "pm-key-id")
     monkeypatch.setenv("POLYMARKET_US_SECRET", "pm-secret")
+    monkeypatch.setenv("POLYMARKET_US_ELIGIBILITY_ACK_DATE", date.today().isoformat())
 
     cfg = _bot_config()
 
