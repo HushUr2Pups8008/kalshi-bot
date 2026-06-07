@@ -1,0 +1,57 @@
+{
+  "reviewed_utc": "2026-06-07T00:00:00Z",
+  "docs": {
+    "introduction": "https://docs.polymarket.us/api-reference/introduction",
+    "authentication": "https://docs.polymarket.us/api-reference/authentication",
+    "markets_get_markets": "https://docs.polymarket.us/api-reference/markets/get-markets",
+    "account_get_account_balances": "https://docs.polymarket.us/api-reference/account/get-account-balances",
+    "orders_overview": "https://docs.polymarket.us/api-reference/orders/overview",
+    "rate_limits": "https://docs.polymarket.us/trader-guide/rate-limits"
+  },
+  "public_market_data": {
+    "base_url": "https://gateway.polymarket.us",
+    "get_markets_path": "/v1/markets",
+    "auth_required": false
+  },
+  "authenticated": {
+    "base_url": "https://api.polymarket.us",
+    "portfolio_positions_path": "/v1/portfolio/positions",
+    "account_balances_path": "/v1/account/balances",
+    "orders_path": "/v1/orders",
+    "auth_required": true
+  },
+  "auth": {
+    "headers": [
+      "X-PM-Access-Key",
+      "X-PM-Timestamp",
+      "X-PM-Signature"
+    ],
+    "signature_message": "timestamp + method + path",
+    "timestamp_unit": "milliseconds",
+    "timestamp_skew_seconds": 30,
+    "secret_decode": "base64 decode secret, use first 32 bytes as Ed25519 private key bytes"
+  },
+  "rate_limits": {
+    "public_unauthenticated": "20 req/sec per IP",
+    "trading_rest": "100 req/sec per firm averaged over 1 minute",
+    "query_report_endpoints": {
+      "GetTradeStats": "60 req/min",
+      "ListInstruments": "6 req/min",
+      "ListSymbols": "6 req/min",
+      "GetOrderBook": "12 req/min",
+      "GetBBO": "12 req/min",
+      "SearchOrders": "12 req/min",
+      "SearchExecutions": "12 req/min",
+      "SearchTrades": "12 req/min",
+      "ListPositionValuations": "~0.5 req/min"
+    },
+    "grpc_streaming": "100 ingress msg/sec per firm averaged over 1 minute",
+    "fix": "150 ingress msg/sec per session"
+  },
+  "implementation_rules": [
+    "Use public gateway for market/event data without credentials.",
+    "Use authenticated API only for portfolio/account/order endpoints.",
+    "Never place live Polymarket orders in this plan.",
+    "Re-check docs and account eligibility on the day any enablement flag changes."
+  ]
+}
