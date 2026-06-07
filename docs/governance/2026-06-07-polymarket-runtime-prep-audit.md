@@ -2,14 +2,14 @@
 
 Audited: 2026-06-07
 
-Commit: `6ee6fa5 Prepare polymarket contract integration`
+Merged PR: `#84` at `0e2cf7e`
 
 ## Cleared For Prep
 
 - Task 0 contract snapshot exists as markdown and JSON fixture.
 - Contract snapshot test exists and passes.
-- Runtime log trees `logs/backups/` and `logs/state/` are ignored so future broad `git add` commands do not pull them into code PRs.
-- Plan, prior readiness review, timing assessment, runtime prep status, contract doc, fixture, and test are in one scoped local commit.
+- Runtime log trees `logs/backups/` and `logs/state/` were identified as generated state and left out of the docs/test prep PR.
+- Plan, prior readiness review, timing assessment, runtime prep status, contract doc, fixture, and test are merged in PR #84.
 - No runtime/service code was changed.
 - No `trading/`, DB schema, executor, credential, launchd, observer, or live-order path was changed.
 
@@ -35,9 +35,10 @@ Observed:
 
 - `tests/test_polymarket_contract_snapshot.py`: 2 passed.
 - Ruff: all checks passed.
-- Git: local `main` is ahead of `origin/main` by 1 commit.
-- Remaining unstaged file: `data/matcher_token_weights.json`.
-- Latest commit: `6ee6fa5 Prepare polymarket contract integration`.
+- PR #84 final diff is limited to `docs/**` and `tests/**`.
+- Required checks passed: `lint`, `tests`, `p0-gate`, `sims-smoke`, and `replay-ci-gate`.
+- Local `main` is synced to `origin/main` at merge commit `0e2cf7e`.
+- Remaining unstaged/generated state: `data/matcher_token_weights.json`, `logs/backups/`, and `logs/state/`.
 
 ## Next Gate
 
