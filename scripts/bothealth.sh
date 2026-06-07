@@ -262,21 +262,72 @@ if [[ -d "$GOV_LOG_DIR" ]]; then
         KS=$(printf '%s\n' "$ALL_RECS" | grep -c '"KILL_SWITCH"' || true)
         VE=$(printf '%s\n' "$ALL_RECS" | grep -c '"VALIDATION_ERROR"' || true)
         BATCH_ABORTED=$(printf '%s\n' "$ALL_RECS" | awk '/"GOVERNANCE_CYCLE_END"/ && /"batch_aborted": true/' | wc -l | awk '{print $1}')
-        PARSE_ERR=$(printf '%s\n' "$ALL_RECS" | grep -c '"GOVERNANCE_DECISION_PARSE_ERROR"' || true)
+        GOV_PY="$(python_bin)"
+        if [[ -n "$GOV_PY" ]]; then
+            PARSE_COUNTS="$(printf '%s\n' "$ALL_RECS" | "$GOV_PY" -c '
+import json
+import re
+import sys
+from datetime import datetime, timedelta, timezone
+
+cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+lifetime = 0
+recent = 0
+
+def parsed_ts(row):
+    raw = row.get("ts") or row.get("timestamp")
+    if isinstance(raw, str) and raw:
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    cycle_id = row.get("cycle_id")
+    if isinstance(cycle_id, str):
+        match = re.search(r"gc_(\d{4}-\d{2}-\d{2})_(\d{6})", cycle_id)
+        if match:
+            try:
+                return datetime.strptime(
+                    "".join(match.groups()), "%Y-%m-%d%H%M%S"
+                ).replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+    return None
+
+for line in sys.stdin:
+    try:
+        row = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if row.get("type") != "GOVERNANCE_DECISION_PARSE_ERROR":
+        continue
+    lifetime += 1
+    ts = parsed_ts(row)
+    if ts is None or ts >= cutoff:
+        recent += 1
+
+print(f"{recent} {lifetime}")
+')"
+            PARSE_ERR_24H="${PARSE_COUNTS%% *}"
+            PARSE_ERR="${PARSE_COUNTS##* }"
+        else
+            PARSE_ERR=$(printf '%s\n' "$ALL_RECS" | grep -c '"GOVERNANCE_DECISION_PARSE_ERROR"' || true)
+            PARSE_ERR_24H="$PARSE_ERR"
+        fi
         printf 'cycles_completed     : %s\n' "$CYCLE_END_TOTAL" >>"$REPORT"
         printf 'decisions            : %s\n' "$DEC_TOTAL" >>"$REPORT"
         printf 'applied=true (must=0): %s\n' "$APPLIED" >>"$REPORT"
         printf 'KILL_SWITCH (must=0) : %s\n' "$KS" >>"$REPORT"
         printf 'VALIDATION_ERROR (must=0): %s\n' "$VE" >>"$REPORT"
         printf 'batch_aborted (must=0): %s\n' "$BATCH_ABORTED" >>"$REPORT"
-        printf 'PARSE_ERROR          : %s\n' "$PARSE_ERR" >>"$REPORT"
+        printf 'PARSE_ERROR_24H (must=0): %s\n' "$PARSE_ERR_24H" >>"$REPORT"
+        printf 'PARSE_ERROR_lifetime : %s\n' "$PARSE_ERR" >>"$REPORT"
     else
         printf '(no governance audit files yet)\n' >>"$REPORT"
-        APPLIED=0; KS=0; VE=0; BATCH_ABORTED=0
+        APPLIED=0; KS=0; VE=0; BATCH_ABORTED=0; PARSE_ERR=0; PARSE_ERR_24H=0
     fi
 else
     printf '(governance log dir does not exist)\n' >>"$REPORT"
-    APPLIED=0; KS=0; VE=0; BATCH_ABORTED=0
+    APPLIED=0; KS=0; VE=0; BATCH_ABORTED=0; PARSE_ERR=0; PARSE_ERR_24H=0
 fi
 codeblock_end
 

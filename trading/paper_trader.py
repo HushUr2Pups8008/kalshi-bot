@@ -514,11 +514,40 @@ class PaperTrader:
             except Exception as exc:
                 log.warning("DB backfill of series_ticker failed: %s", exc)
 
+        self._repair_executed_side_edges()
+
         if added_cols:
             log.info("DB migration complete (added: %s)", ", ".join(added_cols))
 
     def _paper_trades_columns(self) -> set[str]:
         return {row[1] for row in self._conn.execute("PRAGMA table_info(paper_trades)")}
+
+    def _repair_executed_side_edges(self) -> None:
+        """Canonicalize stored trade edge to the executed side."""
+        try:
+            cur = self._conn.execute(
+                """UPDATE paper_trades
+                   SET edge = CASE lower(side)
+                       WHEN 'yes' THEN estimated_prob - (price_cents / 100.0)
+                       WHEN 'no' THEN (1.0 - estimated_prob) - (price_cents / 100.0)
+                       ELSE edge
+                   END
+                   WHERE side IS NOT NULL
+                     AND edge IS NOT NULL
+                     AND estimated_prob IS NOT NULL
+                     AND price_cents IS NOT NULL
+                     AND lower(side) IN ('yes', 'no')
+                     AND abs(edge - CASE lower(side)
+                       WHEN 'yes' THEN estimated_prob - (price_cents / 100.0)
+                       WHEN 'no' THEN (1.0 - estimated_prob) - (price_cents / 100.0)
+                       ELSE edge
+                     END) > 0.0000001"""
+            )
+            self._conn.commit()
+            if cur.rowcount:
+                log.info("DB repaired executed-side edge for %d paper trades", cur.rowcount)
+        except Exception as exc:
+            log.warning("DB executed-side edge repair failed: %s", exc)
 
     @staticmethod
     def _resolve_cohort_extension() -> str | None:
@@ -803,18 +832,16 @@ class PaperTrader:
             provenance_retrieved_str = None
         provenance_hash = getattr(_market, "raw_payload_hash", None)
 
-        # PROFIT-OBS-004 (closed 2026-05-02): persist the EXECUTED-side edge,
-        # not the YES-side edge. analysis.edge is set upstream as
-        # (estimated_probability - market.yes_prob), which is the YES-side
-        # perspective regardless of which side the executor traded. For
-        # NO-side trades the executed-side edge is the negation. The 3
-        # historical KXFISAEXTEND-26APR-MAY0{1,2,3} rows persisted under the
-        # old YES-side convention are backfilled in the same commit; from
-        # this point forward every paper_trades.edge value is the side the
-        # executor actually traded.
-        executed_edge = (
-            analysis.edge if analysis.side == "yes" else -analysis.edge
+        side = str(analysis.side).lower()
+        # Persist the executable edge for the side actually traded. Production
+        # analysis.edge is already chosen-side, while older replay/test paths may
+        # still carry YES-side edge, so derive from probability + entry price.
+        entry_prob = (
+            analysis.estimated_probability
+            if side == "yes"
+            else 1.0 - analysis.estimated_probability
         )
+        executed_edge = entry_prob - (price_cents / 100.0)
 
         # PROFIT-CAL-001: per-lane estimates arrive via signal_meta, populated by
         # BlendTask when the candidate is built. Fast-lane-only paths leave these
@@ -862,7 +889,7 @@ class PaperTrader:
                 datetime.now(timezone.utc).isoformat(),
                 analysis.market.ticker,
                 analysis.market.title,
-                analysis.side,
+                side,
                 contracts,
                 price_cents,
                 cost_dollars,
@@ -906,7 +933,7 @@ class PaperTrader:
         self.portfolio.add(Position(
             trade_id=trade_id,
             ticker=analysis.market.ticker,
-            side=analysis.side,
+            side=side,
             contracts=contracts,
             cost_dollars=cost_dollars,
             price_cents=price_cents,
@@ -921,13 +948,13 @@ class PaperTrader:
             "trade_id": trade_id,
             "ticker": analysis.market.ticker,
             "market_title": analysis.market.title,
-            "side": analysis.side,
+            "side": side,
             "contracts": contracts,
             "price_cents": price_cents,
             "cost_dollars": cost_dollars,
             "estimated_probability": analysis.estimated_probability,
             "entry_price_cents": float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0,
-            "edge": analysis.edge,
+            "edge": executed_edge,
             "kelly_dollars": analysis.kelly_dollars,
             "reasoning": analysis.reasoning,
             "signal_headline": analysis.news_item.headline,
@@ -943,8 +970,8 @@ class PaperTrader:
         log.info(
             "[PAPER] %s: BUY %d%s %s @ %dc | cost=$%.2f | edge=%+.3f | "
             "bankroll=$%.2f->$%.2f | src_mult=%.2fx | %s",
-            trade_id, contracts, kelly_note, analysis.side.upper(), price_cents,
-            cost_dollars, analysis.edge,
+            trade_id, contracts, kelly_note, side.upper(), price_cents,
+            cost_dollars, executed_edge,
             bankroll_before, bankroll_after,
             source_mult, analysis.market.ticker,
         )
