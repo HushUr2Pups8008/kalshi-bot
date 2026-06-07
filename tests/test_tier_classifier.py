@@ -48,6 +48,19 @@ def test_single_t0_path_returns_t0(tmp_path, monkeypatch):
     assert classify_tier([Path("docs/foo.md")]) == "T0"
 
 
+def test_project_metadata_paths_return_t0(tmp_path, monkeypatch):
+    """Project metadata and operator review artifacts do not alter runtime
+    trading behavior. They must remain T0 unless bundled with higher-tier
+    code paths, otherwise docs/test PRs can fail replay-CI for lack of corpus.
+    """
+    monkeypatch.chdir(tmp_path)
+    paths = [
+        Path(".hermes/reviews/2026-06-07-polymarket-runtime-prep-audit.md"),
+        Path(".gitignore"),
+    ]
+    assert classify_tier(paths) == "T0"
+
+
 def test_single_t1_path_returns_t1(tmp_path, monkeypatch):
     """analysis/market_matcher.py is the canonical T1 path (paper-mode
     behavioral, replay-decidable per §2). Misclassifying this as T0 would
@@ -78,7 +91,12 @@ def test_max_wins_t0_plus_t1_returns_t1(tmp_path, monkeypatch):
     gate — otherwise an attacker / careless contributor could bury a T1
     behavioral change inside a docs commit."""
     monkeypatch.chdir(tmp_path)
-    paths = [Path("docs/notes.md"), Path("analysis/market_matcher.py")]
+    paths = [
+        Path("docs/notes.md"),
+        Path(".hermes/reviews/runtime-audit.md"),
+        Path(".gitignore"),
+        Path("analysis/market_matcher.py"),
+    ]
     assert classify_tier(paths) == "T1"
 
 
@@ -355,6 +373,8 @@ def test_default_log_path_uses_repo_relative_logs_dir(tmp_path, monkeypatch):
         ([Path("scripts/install.sh")], "T0"),
         ([Path("scripts/governance_monitor.py")], "T0"),
         ([Path(".github/workflows/ci.yml")], "T0"),
+        ([Path(".hermes/plans/polymarket.md")], "T0"),
+        ([Path(".gitignore")], "T0"),
         ([Path("feeds/something_new.py")], "T1"),
         ([Path("tasks/blend_task.py")], "T1"),
         ([Path("trading/paper_trader.py")], "T3"),
