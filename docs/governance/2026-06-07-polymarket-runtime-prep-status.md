@@ -4,9 +4,9 @@ Prepared: 2026-06-07
 
 Inputs:
 
-- `.hermes/plans/2026-06-06_111138-polymarket-trading-integration.md`
-- `.hermes/reviews/2026-06-07-polymarket-integration-timing-assessment.md`
-- `.hermes/api_contracts/polymarket_us_retail_contract.md`
+- `docs/governance/2026-06-06_111138-polymarket-trading-integration.md`
+- `docs/governance/2026-06-07-polymarket-integration-timing-assessment.md`
+- `docs/api_contracts/polymarket_us_retail_contract.md`
 - `tests/fixtures/polymarket_us/contract_snapshot.json`
 
 ## Status
@@ -29,11 +29,11 @@ Not prepared for broad runtime integration yet.
 
 Open a docs/test-only PR containing:
 
-- `.hermes/plans/2026-06-06_111138-polymarket-trading-integration.md`
-- `.hermes/reviews/2026-06-07-polymarket-plan-readiness-review.md`
-- `.hermes/reviews/2026-06-07-polymarket-integration-timing-assessment.md`
-- `.hermes/reviews/2026-06-07-polymarket-runtime-prep-status.md`
-- `.hermes/api_contracts/polymarket_us_retail_contract.md`
+- `docs/governance/2026-06-06_111138-polymarket-trading-integration.md`
+- `docs/governance/2026-06-07-polymarket-plan-readiness-review.md`
+- `docs/governance/2026-06-07-polymarket-integration-timing-assessment.md`
+- `docs/governance/2026-06-07-polymarket-runtime-prep-status.md`
+- `docs/api_contracts/polymarket_us_retail_contract.md`
 - `tests/fixtures/polymarket_us/contract_snapshot.json`
 - `tests/test_polymarket_contract_snapshot.py`
 - `.gitignore`

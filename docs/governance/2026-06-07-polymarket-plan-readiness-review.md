@@ -2,7 +2,7 @@
 
 Reviewed: 2026-06-07
 
-Plan: `/Users/jacobparenti/vscode/kalshi-bot/.hermes/plans/2026-06-06_111138-polymarket-trading-integration.md`
+Plan: `/Users/jacobparenti/vscode/kalshi-bot/docs/governance/2026-06-06_111138-polymarket-trading-integration.md`
 
 ## Verdict
 

@@ -2,9 +2,9 @@
 
 Reviewed: 2026-06-07
 
-Plan: `.hermes/plans/2026-06-06_111138-polymarket-trading-integration.md`
+Plan: `docs/governance/2026-06-06_111138-polymarket-trading-integration.md`
 
-Prior review: `.hermes/reviews/2026-06-07-polymarket-plan-readiness-review.md`
+Prior review: `docs/governance/2026-06-07-polymarket-plan-readiness-review.md`
 
 ## Verdict
 

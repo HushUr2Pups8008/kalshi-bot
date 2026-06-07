@@ -55,7 +55,7 @@
 
 ### Create
 
-- `.hermes/api_contracts/polymarket_us_retail_contract.md` — hand-captured official endpoint/auth/rate-limit contract.
+- `docs/api_contracts/polymarket_us_retail_contract.md` — hand-captured official endpoint/auth/rate-limit contract.
 - `tests/fixtures/polymarket_us/contract_snapshot.json` — machine-readable fixture generated from official docs and developer portal/account checks.
 - `trading/venue.py` — venue constants/types and helpers.
 - `trading/venue_client.py` — protocol for venue market data / orders / balance.
@@ -101,7 +101,7 @@
 **Objective:** Freeze the current official Polymarket US Retail API contract before implementing client code, so tests fail when archived assumptions drift from the live docs.
 
 **Files:**
-- Create: `.hermes/api_contracts/polymarket_us_retail_contract.md`
+- Create: `docs/api_contracts/polymarket_us_retail_contract.md`
 - Create: `tests/fixtures/polymarket_us/contract_snapshot.json`
 - Test: `tests/test_polymarket_contract_snapshot.py`
 
@@ -116,7 +116,7 @@ from pathlib import Path
 
 
 SNAPSHOT = Path("tests/fixtures/polymarket_us/contract_snapshot.json")
-DOC = Path(".hermes/api_contracts/polymarket_us_retail_contract.md")
+DOC = Path("docs/api_contracts/polymarket_us_retail_contract.md")
 
 
 def test_polymarket_us_contract_snapshot_is_present_and_currently_reviewed():
@@ -240,7 +240,7 @@ Implementation rules:
 - Every implementation PR that changes Polymarket API paths, auth, rate limits, or order behavior must update this file and `tests/fixtures/polymarket_us/contract_snapshot.json` in the same commit.
 ```
 
-Save as `.hermes/api_contracts/polymarket_us_retail_contract.md`.
+Save as `docs/api_contracts/polymarket_us_retail_contract.md`.
 
 - [ ] **Step 5: Run tests**
 
@@ -251,7 +251,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add .hermes/api_contracts/polymarket_us_retail_contract.md tests/fixtures/polymarket_us/contract_snapshot.json tests/test_polymarket_contract_snapshot.py
+git add docs/api_contracts/polymarket_us_retail_contract.md tests/fixtures/polymarket_us/contract_snapshot.json tests/test_polymarket_contract_snapshot.py
 git commit -m "docs: capture polymarket us api contract"
 ```
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 SNAPSHOT = Path("tests/fixtures/polymarket_us/contract_snapshot.json")
-DOC = Path(".hermes/api_contracts/polymarket_us_retail_contract.md")
+DOC = Path("docs/api_contracts/polymarket_us_retail_contract.md")
 
 
 def test_polymarket_us_contract_snapshot_is_present_and_currently_reviewed() -> None:
