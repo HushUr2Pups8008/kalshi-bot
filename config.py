@@ -1139,6 +1139,52 @@ class BotConfig:
     )
     kalshi_env: str = field(default_factory=lambda: os.getenv("KALSHI_ENV", "demo"))
 
+    # Polymarket US credentials and endpoints. Disabled until explicitly enabled.
+    polymarket_us_enabled: bool = field(
+        default_factory=lambda: _parse_bool_env("POLYMARKET_US_ENABLED", "false")
+    )
+    polymarket_us_key_id: str = field(
+        default_factory=lambda: os.getenv("POLYMARKET_US_KEY_ID", "").strip()
+    )
+    polymarket_us_secret: str = field(
+        default_factory=lambda: os.getenv("POLYMARKET_US_SECRET", "").strip()
+    )
+    polymarket_us_public_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "POLYMARKET_US_PUBLIC_BASE_URL", "https://gateway.polymarket.us"
+        ).rstrip("/")
+    )
+    polymarket_us_api_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "POLYMARKET_US_API_BASE_URL", "https://api.polymarket.us"
+        ).rstrip("/")
+    )
+    polymarket_us_live_trading_enabled: bool = field(
+        default_factory=lambda: _parse_bool_env(
+            "POLYMARKET_US_LIVE_TRADING_ENABLED", "false"
+        )
+    )
+    polymarket_us_public_requests_per_second: int = field(
+        default_factory=lambda: int(
+            os.getenv("POLYMARKET_US_PUBLIC_REQUESTS_PER_SECOND", "20")
+        )
+    )
+    polymarket_us_order_requests_per_second: int = field(
+        default_factory=lambda: int(
+            os.getenv("POLYMARKET_US_ORDER_REQUESTS_PER_SECOND", "100")
+        )
+    )
+    polymarket_us_bbo_requests_per_minute: int = field(
+        default_factory=lambda: int(
+            os.getenv("POLYMARKET_US_BBO_REQUESTS_PER_MINUTE", "12")
+        )
+    )
+    polymarket_us_position_valuation_requests_per_minute: float = field(
+        default_factory=lambda: float(
+            os.getenv("POLYMARKET_US_POSITION_VALUATION_REQUESTS_PER_MINUTE", "0.5")
+        )
+    )
+
     # Live trading params
     bankroll: float = field(default_factory=lambda: float(os.getenv("BANKROLL", "500")))
     kelly_fraction: float = field(
@@ -1450,6 +1496,25 @@ class BotConfig:
             errors.append(
                 "KALSHI_ENV must be 'demo' or 'prod', got '%s'" % self.kalshi_env
             )
+        if self.polymarket_us_public_requests_per_second <= 0:
+            errors.append("POLYMARKET_US_PUBLIC_REQUESTS_PER_SECOND must be positive")
+        if self.polymarket_us_order_requests_per_second <= 0:
+            errors.append("POLYMARKET_US_ORDER_REQUESTS_PER_SECOND must be positive")
+        if self.polymarket_us_bbo_requests_per_minute <= 0:
+            errors.append("POLYMARKET_US_BBO_REQUESTS_PER_MINUTE must be positive")
+        if self.polymarket_us_position_valuation_requests_per_minute <= 0:
+            errors.append(
+                "POLYMARKET_US_POSITION_VALUATION_REQUESTS_PER_MINUTE must be positive"
+            )
+        if self.polymarket_us_enabled:
+            if not self.polymarket_us_key_id:
+                errors.append(
+                    "POLYMARKET_US_KEY_ID is required when POLYMARKET_US_ENABLED=true"
+                )
+            if not self.polymarket_us_secret:
+                errors.append(
+                    "POLYMARKET_US_SECRET is required when POLYMARKET_US_ENABLED=true"
+                )
         if self.bankroll <= 0:
             errors.append("BANKROLL must be positive, got %.2f" % self.bankroll)
         if not (0 < self.kelly_fraction <= 1.0):
