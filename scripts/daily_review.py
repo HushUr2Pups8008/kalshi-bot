@@ -46,6 +46,9 @@ from utils.output_paths import (
     PAPER_TRADES_DB,
     RAW_TRADES_LIVE_DIR,
 )
+from utils.diagnostic_reporting_helpers import format_counter
+from utils.diagnostics_script_helpers import is_test_record_source_only
+from utils.trade_log_reader import iter_trade_records
 
 
 REPORTS_DIR = DAILY_REPORTS_DIR
@@ -167,6 +170,57 @@ def fmt_counter_line(counter: Counter[str], keys: list[tuple[str, str]]) -> str:
     if not counter:
         return "n/a"
     return ", ".join(f"{label}={counter.get(key, 0)}" for key, label in keys)
+
+
+def _fresh_pass_assignment_shadow_path(trades_path: Path) -> Path:
+    if trades_path.is_dir():
+        trades_root = trades_path
+    elif trades_path.name == "trades.jsonl" and trades_path.parent.name == "live":
+        trades_root = trades_path.parent.parent
+    else:
+        trades_root = trades_path.parent
+    return trades_root / "shadow" / "fresh_pass_assignment_shadow.jsonl"
+
+
+def _summarize_fresh_pass_assignment_shadow(
+    trades_path: Path,
+    *,
+    since: datetime | None,
+    until: datetime | None,
+    exclude_test: bool = False,
+) -> dict[str, Any]:
+    shadow_path = _fresh_pass_assignment_shadow_path(trades_path)
+    stats: dict[str, Any] = {
+        "path": shadow_path,
+        "rows": 0,
+        "assigned": 0,
+        "unassigned": 0,
+        "malformed": 0,
+        "top_unassigned_sources": Counter(),
+    }
+    if not shadow_path.exists():
+        return stats
+
+    for record in iter_trade_records(
+        shadow_path,
+        since=since,
+        until=until,
+        event_types={"FRESH_PASS_ASSIGNMENT_SHADOW"},
+    ):
+        if exclude_test and is_test_record_source_only(record):
+            continue
+        stats["rows"] += 1
+        if bool(record.get("malformed")):
+            stats["malformed"] += 1
+            continue
+        if bool(record.get("assigned")):
+            stats["assigned"] += 1
+        else:
+            stats["unassigned"] += 1
+            source = str(record.get("source") or "").strip()
+            if source:
+                stats["top_unassigned_sources"][source] += 1
+    return stats
 
 
 def _format_fresh_pass_conversion_lines(
@@ -553,6 +607,12 @@ def build_daily_review(
 
     event_counts = funnel_stats.get("event_counts", {})
     analysis_rejections = Counter(funnel_stats.get("analysis_rejected_reasons", {}))
+    assignment_shadow_stats = _summarize_fresh_pass_assignment_shadow(
+        trades_path,
+        since=since,
+        until=until,
+        exclude_test=exclude_test,
+    )
     skip_breakdown = edge_stats.get("skip_breakdown", {})
     match_flags = Counter(match_stats.get("heuristic_flags", {}))
     llm_rows = sum(
@@ -634,6 +694,18 @@ def build_daily_review(
             paper_trades=paper_trades,
         )
     )
+    if assignment_shadow_stats.get("rows", 0) > 0:
+        lines.append(
+            "  Fresh assignment shadow         : "
+            f"{assignment_shadow_stats.get('assigned', 0)} assigned, "
+            f"{assignment_shadow_stats.get('unassigned', 0)} unassigned, "
+            f"{assignment_shadow_stats.get('malformed', 0)} malformed"
+        )
+        top_unassigned = assignment_shadow_stats.get("top_unassigned_sources", Counter())
+        if top_unassigned:
+            lines.append("  Drilldown: unassigned fresh-pass sources")
+            for line in format_counter(top_unassigned, top=top):
+                lines.append(line)
     top_stale_sources = _top_source_rows(freshness_stats, limit=top)
     if top_stale_sources:
         lines.append("  Drilldown: top stale sources")
