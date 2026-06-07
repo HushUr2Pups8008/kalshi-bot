@@ -6,6 +6,7 @@ from pathlib import Path
 from scripts.daily_review import (
     _build_tier_by_source,
     _format_fresh_pass_conversion_lines,
+    _summarize_fresh_pass_assignment_shadow,
     _format_tier_change_lines,
     _load_previous_tier_state,
     _save_current_tier_state,
@@ -26,6 +27,55 @@ def test_format_fresh_pass_conversion_lines_surfaces_funnel_pinch():
         "  Fresh-pass conversion            : 186 fresh -> 1 signal row -> 0 LLM attempts -> 0 opportunities -> 0 paper trades",
         "    pinch                          : fresh_to_signal (185 fresh passes did not become signal-analysis rows)",
     ]
+
+
+def test_summarize_fresh_pass_assignment_shadow_counts_assignment_outcomes(tmp_path):
+    trades_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    shadow_path = tmp_path / "logs" / "trades" / "shadow" / "fresh_pass_assignment_shadow.jsonl"
+    shadow_path.parent.mkdir(parents=True)
+    trades_path.parent.mkdir(parents=True)
+    trades_path.write_text("", encoding="utf-8")
+    shadow_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "FRESH_PASS_ASSIGNMENT_SHADOW",
+                        "ts": "2026-04-11T12:00:00+00:00",
+                        "source": "Reuters",
+                        "headline": "Assigned",
+                        "assigned": True,
+                        "candidate_count": 2,
+                        "top_ticker": "KXASSIGNED",
+                        "top_score": 0.12,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "FRESH_PASS_ASSIGNMENT_SHADOW",
+                        "ts": "2026-04-11T13:00:00+00:00",
+                        "source": "AP",
+                        "headline": "Unassigned",
+                        "assigned": False,
+                        "candidate_count": 0,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    stats = _summarize_fresh_pass_assignment_shadow(
+        trades_path,
+        since=datetime(2026, 4, 11, tzinfo=timezone.utc),
+        until=datetime(2026, 4, 11, 23, 59, tzinfo=timezone.utc),
+    )
+
+    assert stats["rows"] == 2
+    assert stats["assigned"] == 1
+    assert stats["unassigned"] == 1
+    assert stats["top_unassigned_sources"] == Counter({"AP": 1})
 
 
 def test_build_daily_review_formats_pipeline_stages(monkeypatch):
@@ -83,6 +133,16 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                 "LIVE_ORDER": 0,
             },
             "analysis_rejected_reasons": {"stale_news": 2, "no_keywords": 1},
+        },
+    )
+    monkeypatch.setattr(
+        "scripts.daily_review._summarize_fresh_pass_assignment_shadow",
+        lambda *args, **kwargs: {
+            "rows": 9,
+            "assigned": 4,
+            "unassigned": 5,
+            "malformed": 0,
+            "top_unassigned_sources": Counter({"Reuters": 3, "AP": 2}),
         },
     )
     monkeypatch.setattr(
@@ -242,6 +302,8 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Drilldown: per-source freshness waterfall" in rendered
     assert "Fresh-pass conversion" in rendered
     assert "9 fresh -> 6 signal rows -> 1 LLM attempts -> 3 opportunities -> 2 paper trades" in rendered
+    assert "Fresh assignment shadow         : 4 assigned, 5 unassigned, 0 malformed" in rendered
+    assert "Drilldown: unassigned fresh-pass sources" in rendered
     assert "LLM rows                         : 1" in rendered
     assert "LLM attempted (post-filter)       : 1" in rendered
     assert "LLM skipped (routing)             : 2" in rendered
