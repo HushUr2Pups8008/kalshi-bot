@@ -39,6 +39,47 @@ def test_normalizes_binary_market_payload():
     assert market.price_available is True
 
 
+def test_normalizes_public_gateway_string_encoded_outcomes():
+    payload = {
+        "id": "123",
+        "slug": "will-example-happen-2026",
+        "question": "Will example happen in 2026?",
+        "active": True,
+        "closed": False,
+        "outcomes": '["No","Yes"]',
+        "outcomePrices": '["0.58","0.43"]',
+        "volume": "1200.50",
+        "openInterest": "34.25",
+        "endDate": "2026-12-31T23:59:59Z",
+    }
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.status == "open"
+    assert market.yes_ask_cents == 43
+    assert market.no_ask_cents == 58
+    assert market.volume_dollars == 1200.50
+    assert market.open_interest_dollars == 34.25
+    assert market.close_time == "2026-12-31T23:59:59Z"
+    assert market.is_tradeable()
+
+
+def test_closed_public_gateway_market_is_not_tradeable():
+    payload = {
+        "id": "123",
+        "question": "Closed?",
+        "active": True,
+        "closed": True,
+        "outcomes": '["No","Yes"]',
+        "outcomePrices": '["0.01","1"]',
+    }
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.status == "closed"
+    assert not market.is_tradeable()
+
+
 def test_normalizes_id_and_question_fallbacks():
     payload = {
         "id": "market-123",

@@ -35,7 +35,7 @@ def test_get_markets_uses_public_gateway_and_normalizes():
         "https://gateway.polymarket.us/v1/markets",
     )
     kwargs = client._session.request.call_args.kwargs
-    assert kwargs["params"] == {"limit": 1}
+    assert kwargs["params"] == {"limit": 1, "closed": "false"}
     headers = kwargs["headers"]
     assert headers["Accept"] == "application/json"
     assert "X-PM-Access-Key" not in headers
@@ -57,6 +57,7 @@ def test_get_markets_passes_cursor_and_returns_cursor():
     assert client._session.request.call_args.kwargs["params"] == {
         "limit": 25,
         "cursor": "abc",
+        "closed": "false",
     }
 
 

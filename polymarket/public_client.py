@@ -49,7 +49,7 @@ class PolymarketPublicClient:
         return response.json() if response.text else {}
 
     def get_markets(self, **kwargs: Any) -> tuple[list[PolymarketMarket], str | None]:
-        params = {"limit": kwargs.get("limit", 100)}
+        params = {"limit": kwargs.get("limit", 100), "closed": "false"}
         cursor = kwargs.get("cursor")
         if cursor:
             params["cursor"] = cursor
