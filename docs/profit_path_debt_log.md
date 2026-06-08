@@ -133,7 +133,19 @@ Per R-9 single-tracker rule: this table is the work-state record for the 10-PR r
 
 | ID | Status | Owner | Branch | MR | Second-agent review | Operator gate | Restart req. | Depends on | Spec |
 |---|---|---|---|---|---|---|---|---|---|
-| PR-1 — scaffolding (signed-HTTP client skeleton) | **OPEN** | Either (bias Claude Code) | `feat/polymarket-pr1-signed-http-skeleton` (not yet created) | — | yes (signing/credentials surface per agent_collaboration.md) | merge only | no | — | design § 3 + § 9 PR-1 row |
+| Task 0 — contract prep / staged rollout record | **COMPLETE** (`0e2cf7e`; corrected by `98ce51d`) | Codex | `codex/polymarket-contract-prep` | #84, #85 | no | no | no | — | prep audit + tracker correction |
+| Stage 1 — venue namespace helpers | **COMPLETE** (`1e15247`) | Codex | `codex/venue-namespace` | #86 | no | no | no | Task 0 | actual implementation uses `venue` / `polymarket_us` terminology |
+| Stage 2 — venue client protocol | **COMPLETE** (`6a71d73`) | Codex | `codex/venue-client-protocol` | #87 | no | no | no | Stage 1 | protocol surface for multi-venue clients |
+| Stage 3 — disabled Polymarket config | **COMPLETE** (`4825aa1`) | Codex | `codex/polymarket-disabled-config` | #88 | no | no | no | Stage 2 | config remains disabled by default |
+| Stage 4 — Ed25519 auth helper | **COMPLETE** (`d74b306`) | Codex | `codex/polymarket-auth-helper` | #89 | no | no | no | Stage 3 | signing helper only; no live POST |
+| Stage 4B — secret hygiene + preflight | **COMPLETE** (`6a9158f`) | Codex | `codex/polymarket-secret-hygiene` | #90 | no | no | no | Stage 4 | no secret logging; same-day enablement preflight |
+| Stage 5 — binary market model / normalizer | **COMPLETE** (`77863e0`) | Codex | `codex/polymarket-normalizer` | #91 | no | no | no | Stage 4B | fail-closed binary market parsing |
+| Stage 6 — read-only public market client | **COMPLETE** (`2686c06`) | Codex | `codex/polymarket-public-client` | #92 | no | no | no | Stage 5 | GET-only public client |
+| Stage 6B — authenticated account probe client | **COMPLETE** (`8225139`) | Codex | `codex/polymarket-account-probe` | #93 | no | no | no | Stage 6 | account/balance probes; order placement hard-gated |
+| Stage 7 / design PR-4 — paper-trade venue persistence | **COMPLETE** (`934e1d7`) | Codex | `codex-paper-trade-venue` | #94 | no | replay override only | no runtime restart performed | Stage 6B | `paper_trades.venue TEXT NOT NULL DEFAULT 'kalshi'`; legacy fallback |
+| Design PR-8 — settlement reconciler | **COMPLETE** (`6cff081`) | Codex | `codex-polymarket-settlement-reconciler` | #95 | no | replay override only | no | Stage 7 | additive `SettlementReconciler`; reuses `_resolve_market_sync` by protocol |
+| Design PR-9 — venue-split observability | **COMPLETE** (`0c9c977`) | Codex | `codex-polymarket-observability-split` | #96 | no | replay override only | no | PR-8 | daily review / readiness split by `venue` |
+| Design PR-10 — paper-mode soak window | **OPEN / OPERATOR-ONLY** | Operator | — | — | no | yes | operator decides | PR-9 | N-day paper soak; no code files touched |
 
 Rules specific to this queue:
 
@@ -141,6 +153,7 @@ Rules specific to this queue:
 - A row may not transition to `COMPLETE` until the matching design § 9 acceptance criteria are satisfied AND a second-agent adversarial review has approved the diff.
 - The Day-1 invariants in design § 8 must be enforceable before PR-1 merges (in particular: `PolymarketSignedHttpClient.post(...)` raises `NotImplementedError`; `_allow_post: bool = False` constructor kwarg with no caller setting True; sign-failure raises rather than returning partial headers; ASCII-only runtime strings; no credential reads from `.env`; no new env vars; no Kalshi-side refactor).
 - Live-capable transitions (lifting the `NotImplementedError` raise; introducing `POLYMARKET_LIVE_TRADING_ENABLED`; first POST against the Polymarket REST API) are operator-gated per design § 11 and require dual-agent adversarial review per CLAUDE.md agent-collaboration policy.
+- Implementation note 2026-06-08: the landed rollout uses `venue='polymarket_us'` rather than the original design's `exchange='polymarket'` spelling. The replay-CI failure class on #94-#96 was the approved staged-integration override class: `tier=T3` / `InsufficientCorpusError: 0 usable corpora`; normal CI checks passed before each merge.
 
 ### 2.1 Edge Verdict
 
