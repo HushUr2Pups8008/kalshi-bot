@@ -15,6 +15,7 @@ from main import (
     _ensure_supported_python,
     _is_cli_only_command,
     _log_bankroll_summary,
+    _log_polymarket_account_summary,
     _startup_probe_matched_tokens,
     _validate_startup_observability_probe_record,
     async_main,
@@ -165,6 +166,82 @@ def test_log_bankroll_summary_warns_when_persisted_paper_state_differs(monkeypat
     assert "Notional bankroll: $500.00" in caplog.text
     assert "Configured starting bankroll (.env BANKROLL): $50.00" in caplog.text
     assert "Persisted paper bankroll ($500.00) differs from .env BANKROLL ($50.00)" in caplog.text
+
+
+def test_log_polymarket_account_summary_logs_balance_and_status(monkeypatch, caplog):
+    import config as _cfg_module
+
+    monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", True)
+    monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_live_trading_enabled", False)
+
+    class FakePolymarketAccountClient:
+        def get_balance(self):
+            return 850.0
+
+        def get_positions(self, *, limit=100):
+            return {"positions": [{"market": "m1"}, {"market": "m2"}]}
+
+    with caplog.at_level("INFO", logger="main"):
+        status = _log_polymarket_account_summary(
+            client_factory=FakePolymarketAccountClient,
+        )
+
+    assert status.account_balance == 850.0
+    assert status.positions_count == 2
+    assert "Polymarket account balance: $850.00" in caplog.text
+    assert (
+        "Polymarket status: enabled=true live_trading=false "
+        "paper_execution=blend account_balance=$850.00 positions=2"
+    ) in caplog.text
+
+
+def test_log_polymarket_account_summary_warns_when_auth_unavailable(monkeypatch, caplog):
+    import config as _cfg_module
+
+    monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", True)
+    monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_live_trading_enabled", False)
+
+    class FailingPolymarketAccountClient:
+        def __init__(self):
+            raise ValueError("invalid Polymarket US Ed25519 secret")
+
+    with caplog.at_level("INFO", logger="main"):
+        status = _log_polymarket_account_summary(
+            client_factory=FailingPolymarketAccountClient,
+        )
+
+    assert status.account_balance is None
+    assert status.account_error
+    assert "Could not fetch Polymarket account summary" in caplog.text
+    assert "Polymarket status: enabled=true live_trading=false" in caplog.text
+    assert "account_balance=unavailable" in caplog.text
+
+
+def test_log_polymarket_account_summary_keeps_balance_when_positions_fail(monkeypatch, caplog):
+    import config as _cfg_module
+
+    monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", True)
+    monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_live_trading_enabled", False)
+
+    class PartiallyFailingPolymarketAccountClient:
+        def get_balance(self):
+            return 850.0
+
+        def get_positions(self, *, limit=100):
+            raise RuntimeError("positions unavailable")
+
+    with caplog.at_level("INFO", logger="main"):
+        status = _log_polymarket_account_summary(
+            client_factory=PartiallyFailingPolymarketAccountClient,
+        )
+
+    assert status.account_balance == 850.0
+    assert status.positions_count is None
+    assert status.account_error == "positions unavailable"
+    assert "Polymarket account balance: $850.00" in caplog.text
+    assert "Could not fetch Polymarket positions" in caplog.text
+    assert "account_balance=$850.00" in caplog.text
+    assert "account_error=true" in caplog.text
 
 
 def test_validate_startup_observability_probe_record_reports_missing_fields():
