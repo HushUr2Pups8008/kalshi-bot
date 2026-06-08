@@ -31,6 +31,12 @@ def test_normalizes_binary_market_payload():
     assert market.close_time == "2026-12-31T23:59:59Z"
     assert market.is_binary is True
     assert market.is_tradeable()
+    assert market.tradeable_id == "will-example-happen-2026"
+    assert market.ticker == "will-example-happen-2026"
+    assert market.series_ticker == "polymarket_us"
+    assert market.yes_price == 42
+    assert market.no_price == 59
+    assert market.price_available is True
 
 
 def test_normalizes_id_and_question_fallbacks():
