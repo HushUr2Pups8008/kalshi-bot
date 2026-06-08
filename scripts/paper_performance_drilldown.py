@@ -200,6 +200,7 @@ def summarize(path: Path, exclude_test: bool = False) -> dict[str, Any]:
         "avg_loss": None,
         "sources": [],
         "signal_types": [],
+        "venues": [],
         "tickers": [],
         "series": [],
         "holding_period_count": 0,
@@ -233,6 +234,7 @@ def summarize(path: Path, exclude_test: bool = False) -> dict[str, Any]:
         stats["avg_loss"] = sum(loss_values) / len(loss_values) if loss_values else None
 
     stats["sources"] = group_trade_rows(trades, "signal_source", "(unknown)")
+    stats["venues"] = group_trade_rows(trades, "venue", "kalshi")
 
     signal_type_key = "signal_type" if "signal_type" in columns else ""
     if signal_type_key:

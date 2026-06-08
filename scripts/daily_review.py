@@ -933,6 +933,21 @@ def build_daily_review(
         lines.append(f"    Open: {paper_stats['open_trades']}")
         lines.append(f"    Win rate: {paper_performance_drilldown.fmt_pct(paper_stats.get('win_rate'))}")
         lines.append(f"    Total P&L: {fmt_money(paper_stats.get('total_pnl'))}")
+        venue_rows = paper_stats.get("venues") or []
+        if len(venue_rows) > 1 or any(
+            str(row.get("name") or "") != "kalshi" for row in venue_rows
+        ):
+            lines.append("  Drilldown: paper performance by venue")
+            for row in venue_rows:
+                resolved = row.get("resolved") or 0
+                pnl_display = fmt_money(row.get("pnl")) if resolved else "n/a"
+                lines.append(
+                    f"    {row.get('name') or 'kalshi'}: "
+                    f"trades={row.get('trades', 0)} "
+                    f"resolved={resolved} "
+                    f"win_rate={paper_performance_drilldown.fmt_pct(row.get('win_rate'))} "
+                    f"pnl={pnl_display}"
+                )
     lines.append("")
 
     llm_value = edge_stats.get("llm_value_add", {})
