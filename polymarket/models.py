@@ -18,6 +18,30 @@ class PolymarketMarket:
     close_time: str
     is_binary: bool = True
 
+    @property
+    def tradeable_id(self) -> str:
+        return self.market_id
+
+    @property
+    def ticker(self) -> str:
+        return self.market_id
+
+    @property
+    def series_ticker(self) -> str:
+        return self.venue.value
+
+    @property
+    def yes_price(self) -> int | None:
+        return self.yes_ask_cents
+
+    @property
+    def no_price(self) -> int | None:
+        return self.no_ask_cents
+
+    @property
+    def price_available(self) -> bool:
+        return self.yes_ask_cents is not None and self.no_ask_cents is not None
+
     def is_tradeable(self) -> bool:
         return (
             self.status in {"open", "active"}
