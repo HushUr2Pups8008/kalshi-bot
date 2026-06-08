@@ -21,7 +21,7 @@ from utils.logger import get_logger
 
 log = get_logger("polymarket.paper_runtime")
 
-_DEFAULT_MARKET_LIMIT = 100
+_DEFAULT_MARKET_LIMIT = 500
 _DEFAULT_MARKET_CACHE_TTL_SECONDS = 300.0
 _DEFAULT_MAX_CANDIDATES = 1
 _DEFAULT_MIN_MATCH_SCORE = 0.08
@@ -50,6 +50,7 @@ _STOPWORDS = frozenset(
         "with",
     }
 )
+_SUPPRESSED_CATEGORIES = frozenset({"sports"})
 
 
 class _PublicMarketClient(Protocol):
@@ -350,9 +351,13 @@ def match_polymarket_markets(
 
     scored: list[tuple[PolymarketMarket, float, dict[str, Any]]] = []
     for market in markets:
-        if market.venue != Venue.POLYMARKET_US or not market.is_tradeable():
+        if (
+            market.venue != Venue.POLYMARKET_US
+            or not market.is_tradeable()
+            or _is_suppressed_market(market)
+        ):
             continue
-        market_tokens = _meaningful_tokens(f"{market.title} {market.subtitle}")
+        market_tokens = _meaningful_tokens(_market_match_text(market))
         if not market_tokens:
             continue
         overlap = news_tokens & market_tokens
@@ -371,6 +376,18 @@ def match_polymarket_markets(
 
     scored.sort(key=lambda item: item[1], reverse=True)
     return scored[:max_results]
+
+
+def _is_suppressed_market(market: PolymarketMarket) -> bool:
+    return market.category.strip().lower() in _SUPPRESSED_CATEGORIES
+
+
+def _market_match_text(market: PolymarketMarket) -> str:
+    return " ".join(
+        part
+        for part in (market.title, market.question, market.subtitle)
+        if part
+    )
 
 
 def polymarket_paper_runtime_disabled_reason(config: Any = cfg) -> str | None:

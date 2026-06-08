@@ -30,6 +30,9 @@ def _market(**overrides) -> PolymarketMarket:
         "venue": Venue.POLYMARKET_US,
         "market_id": "will-example-event-happen-2026",
         "title": "Will example event happen in 2026?",
+        "question": "Will example event happen in 2026?",
+        "subtitle": "",
+        "category": "politics",
         "status": "open",
         "yes_ask_cents": 42,
         "no_ask_cents": 59,
@@ -112,7 +115,14 @@ async def test_process_news_skips_when_no_polymarket_market_matches(caplog):
         raise AssertionError("estimator should not run without a market match")
 
     runtime = PolymarketPaperRuntime(
-        client=_FakeClient([_market(title="Will unrelated bill pass?")]),
+        client=_FakeClient(
+            [
+                _market(
+                    title="Will unrelated bill pass?",
+                    question="Will unrelated bill pass?",
+                )
+            ]
+        ),
         route_analysis=route_analysis,
         keyword_stats=None,
         estimate_probability_fn=estimate_probability,
@@ -177,6 +187,69 @@ def test_match_polymarket_markets_filters_non_tradeable_markets():
     assert [market.market_id for market, _score, _meta in matches] == [
         "will-example-event-happen-alt"
     ]
+
+
+def test_match_polymarket_markets_uses_question_and_subtitle_text():
+    matches = match_polymarket_markets(
+        _news("Kansas governor election tightens after new polling"),
+        [
+            _market(
+                market_id="ewc-usgub-ks-2026-11-03-dem",
+                title="Democratic Party",
+                question="Kansas Governor Election Winner",
+                subtitle="2026 race",
+                category="politics",
+            ),
+        ],
+        max_results=5,
+        min_score=0.01,
+    )
+
+    assert [market.market_id for market, _score, _meta in matches] == [
+        "ewc-usgub-ks-2026-11-03-dem"
+    ]
+    assert matches[0][2]["polymarket_matched_tokens"] == [
+        "election",
+        "governor",
+        "kansas",
+    ]
+
+
+def test_match_polymarket_markets_suppresses_sports_false_positives():
+    matches = match_polymarket_markets(
+        _news(
+            "The Memo: Spencer Pratt comes up short in Los Angeles, drawing "
+            "hollow claims of voter fraud"
+        ),
+        [
+            _market(
+                market_id="tec-mlb-champ-2026-09-27-lad",
+                title="Los Angeles Dodgers",
+                question="World Series Champion",
+                category="sports",
+            ),
+            _market(
+                market_id="ewc-usse-ca-2026-11-03-dem",
+                title="Democratic Party",
+                question="California Senate Election Winner",
+                category="politics",
+            ),
+        ],
+        max_results=5,
+        min_score=0.01,
+    )
+
+    assert [market.market_id for market, _score, _meta in matches] == []
+
+
+def test_polymarket_paper_runtime_default_market_limit_covers_broader_universe():
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([]),
+        route_analysis=lambda analysis, **kwargs: None,
+        keyword_stats=None,
+    )
+
+    assert runtime._market_limit >= 500
 
 
 def test_polymarket_paper_runtime_disabled_reason():

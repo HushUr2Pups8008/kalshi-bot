@@ -97,4 +97,7 @@ def normalize_polymarket_market(payload: dict[str, Any]) -> PolymarketMarket:
             or ""
         ),
         is_binary=True,
+        question=str(payload.get("question") or "").strip(),
+        subtitle=str(payload.get("subtitle") or "").strip(),
+        category=str(payload.get("category") or "").strip().lower(),
     )

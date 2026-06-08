@@ -17,6 +17,9 @@ class PolymarketMarket:
     open_interest_dollars: float
     close_time: str
     is_binary: bool = True
+    question: str = ""
+    subtitle: str = ""
+    category: str = ""
 
     @property
     def tradeable_id(self) -> str:
@@ -29,10 +32,6 @@ class PolymarketMarket:
     @property
     def series_ticker(self) -> str:
         return self.venue.value
-
-    @property
-    def subtitle(self) -> str:
-        return ""
 
     @property
     def yes_price(self) -> int | None:

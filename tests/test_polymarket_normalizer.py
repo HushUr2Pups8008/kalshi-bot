@@ -8,6 +8,9 @@ def test_normalizes_binary_market_payload():
     payload = {
         "slug": "will-example-happen-2026",
         "title": "Will example happen in 2026?",
+        "question": "Example resolution question?",
+        "subtitle": "Example subtitle",
+        "category": "politics",
         "status": "open",
         "outcomes": [
             {"name": "Yes", "bestAsk": {"value": "0.42", "currency": "USD"}},
@@ -23,6 +26,9 @@ def test_normalizes_binary_market_payload():
     assert market.venue == Venue.POLYMARKET_US
     assert market.market_id == "will-example-happen-2026"
     assert market.title == "Will example happen in 2026?"
+    assert market.question == "Example resolution question?"
+    assert market.subtitle == "Example subtitle"
+    assert market.category == "politics"
     assert market.status == "open"
     assert market.yes_ask_cents == 42
     assert market.no_ask_cents == 59
