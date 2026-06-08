@@ -2206,6 +2206,7 @@ class TradingBot:
         log.info("=" * 60)
         log.info("Kalshi Trading Bot v%s starting", VERSION)
         log.info("Mode:             %s", "PAPER TRADING" if cfg.is_paper_trading else "LIVE TRADING")
+        log.info(cfg.polymarket_us_startup_status())
         _log_bankroll_summary(notional)
         log.info("Max bet (dynamic): $%.2f  (%.0f%% of bankroll, hard cap $%.2f)",
                  max_bet, cfg.max_bet_pct_bankroll * 100, cfg.max_bet_hard_cap)
