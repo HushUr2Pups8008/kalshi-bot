@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import config as _cfg_module
 from trading.executor import TradeExecutor
+from trading.venue import Venue
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +482,42 @@ class TestValidateSkipReasons:
 
 
 class TestBlendedCandidateCompatibility:
+    @pytest.mark.asyncio
+    async def test_non_kalshi_blended_candidate_skips_kalshi_refetch(self, monkeypatch):
+        ex, rest, _ = _make_paper_executor(monkeypatch)
+        ex._execute_paper = AsyncMock(return_value="paper-trade-id")
+        base = _make_analysis(
+            ticker="will-example-event-happen-2026",
+            edge=0.23,
+            estimated_prob=0.65,
+            yes_price=42.0,
+        )
+        base.market.venue = Venue.POLYMARKET_US
+        base.market.series_ticker = Venue.POLYMARKET_US.value
+        base.market.status = "open"
+        base.market.yes_ask_cents = 42
+        base.market.no_ask_cents = 59
+        candidate = _make_blended_candidate(
+            base_analysis=base,
+            blended_probability=0.65,
+            signal_meta={
+                "source_lane": "blend",
+                "venue": "polymarket_us",
+                "readiness_gate_min_edge_override": 0.01,
+            },
+        )
+
+        with patch("trading.executor.trade_log"):
+            trade_id = await ex.execute(candidate)
+
+        assert trade_id == "paper-trade-id"
+        rest.get_market.assert_not_called()
+        routed_analysis = ex._execute_paper.await_args.args[0]
+        assert routed_analysis.market.venue == Venue.POLYMARKET_US
+        assert routed_analysis.market.ticker == "will-example-event-happen-2026"
+        assert routed_analysis.executed_price_cents == 42
+        assert routed_analysis.edge == pytest.approx(0.23)
+
     @pytest.mark.asyncio
     async def test_execute_accepts_blended_candidate_and_uses_override_only_for_edge_gate(
         self,

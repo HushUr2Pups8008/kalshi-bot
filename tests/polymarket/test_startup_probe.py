@@ -59,7 +59,7 @@ def test_startup_probe_logs_sample_market_when_enabled(monkeypatch, caplog):
     assert client.calls == [{"limit": 1}]
     assert "startup_probe=ok" in caplog.text
     assert "sample_market=will-example-happen-2026" in caplog.text
-    assert "paper_execution=not_wired" in caplog.text
+    assert "paper_execution=blend" in caplog.text
     assert "live_trading=false" in caplog.text
 
 

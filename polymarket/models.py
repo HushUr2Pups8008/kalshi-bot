@@ -31,12 +31,22 @@ class PolymarketMarket:
         return self.venue.value
 
     @property
+    def subtitle(self) -> str:
+        return ""
+
+    @property
     def yes_price(self) -> int | None:
         return self.yes_ask_cents
 
     @property
     def no_price(self) -> int | None:
         return self.no_ask_cents
+
+    @property
+    def yes_prob(self) -> float:
+        if self.yes_ask_cents is None:
+            return 0.5
+        return self.yes_ask_cents / 100.0
 
     @property
     def price_available(self) -> bool:

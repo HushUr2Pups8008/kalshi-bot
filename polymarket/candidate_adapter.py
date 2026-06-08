@@ -15,6 +15,7 @@ class PolymarketExecutionMarket:
     ticker: str
     series_ticker: str
     title: str
+    subtitle: str
     status: str
     yes_price: int
     no_price: int
@@ -27,6 +28,10 @@ class PolymarketExecutionMarket:
     price_method: str = "binary_ask"
     price_retrieved_at: str | None = None
     raw_payload_hash: str | None = None
+
+    @property
+    def yes_prob(self) -> float:
+        return self.yes_price / 100.0
 
     @property
     def price_available(self) -> bool:
@@ -60,6 +65,7 @@ def adapt_polymarket_analysis(
         ticker=market.market_id,
         series_ticker=Venue.POLYMARKET_US.value,
         title=market.title,
+        subtitle=market.subtitle,
         status=market.status,
         yes_price=market.yes_ask_cents,
         no_price=market.no_ask_cents,

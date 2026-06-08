@@ -380,12 +380,21 @@ class TradeExecutor:
 
         ticker = candidate.market.ticker
         fresh_market = None
-        try:
-            fresh_market = await asyncio.to_thread(self._rest.get_market, ticker)
-        except Exception as exc:
-            log.warning(
-                "[BLEND_REFETCH] %s fetch failed: %s -- falling back to candidate snapshot",
-                ticker, exc,
+        candidate_venue = self._venue_value(candidate.market)
+        if candidate_venue == "kalshi":
+            try:
+                fresh_market = await asyncio.to_thread(self._rest.get_market, ticker)
+            except Exception as exc:
+                log.warning(
+                    "[BLEND_REFETCH] %s fetch failed: %s -- falling back to candidate snapshot",
+                    ticker, exc,
+                )
+        else:
+            fresh_market = candidate.market
+            log.debug(
+                "[BLEND_REFETCH] %s venue=%s using venue snapshot (no Kalshi refetch)",
+                ticker,
+                candidate_venue,
             )
 
         if fresh_market is None:
@@ -436,6 +445,18 @@ class TradeExecutor:
         analysis.signal_type = "blend"
         analysis.signal_meta = signal_meta
         return analysis
+
+    @staticmethod
+    def _venue_value(market: Any) -> str:
+        raw = getattr(market, "venue", None)
+        if raw is None:
+            return "kalshi"
+        if isinstance(raw, str):
+            return raw.strip().lower() or "kalshi"
+        value = getattr(raw, "value", None)
+        if isinstance(value, str):
+            return value.strip().lower() or "kalshi"
+        return "kalshi"
 
     @staticmethod
     def _candidate_signal_meta(candidate: Any) -> dict[str, Any]:

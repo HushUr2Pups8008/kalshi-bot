@@ -620,6 +620,27 @@ class TradingBot:
         )
         self.source_stats  = SourceStats(db_path=DATA_DIR / "paper_trades.db")
         self.keyword_stats = KeywordStats(DATA_DIR / "paper_trades.db")
+        self.polymarket_paper_runtime = None
+        try:
+            from polymarket.paper_runtime import (
+                PolymarketPaperRuntime,
+                polymarket_paper_runtime_disabled_reason,
+            )
+
+            disabled_reason = polymarket_paper_runtime_disabled_reason(cfg)
+            if disabled_reason is None:
+                self.polymarket_paper_runtime = PolymarketPaperRuntime(
+                    route_analysis=self._route_analysis_through_blend,
+                    keyword_stats=self.keyword_stats,
+                )
+                log.info("[POLYMARKET_PAPER] active paper_execution=blend")
+            else:
+                log.info(
+                    "[POLYMARKET_PAPER] inactive reason=%s",
+                    disabled_reason,
+                )
+        except Exception as exc:
+            log.warning("[POLYMARKET_PAPER] initialization_failed error=%s", exc)
         self.ws.on_price_update(self._on_price_update)
         # Multi-lane queues and tasks.  BlendTask owns the trading queue; the
         # evidence queue feeds AccumulationTask independently of the fast lane.
@@ -854,6 +875,12 @@ class TradingBot:
     async def on_news_item(self, news: NewsItem) -> None:
         log.info("[NEWS] [%s] %s", news.source, news.headline[:100])
         self.source_stats.increment_posts(news.source)
+
+        if self.polymarket_paper_runtime is not None:
+            try:
+                await self.polymarket_paper_runtime.process_news(news)
+            except Exception:
+                log.exception("[POLYMARKET_PAPER] consumer_error")
 
         # P-7: one-fetch-per-cycle exchange-status fail-closed gate.
         if not self._exchange_open_or_skip("news"):
@@ -2167,7 +2194,8 @@ class TradingBot:
                     self.source_stats.increment_trades(
                         candidate.fast_lane_analysis.news_item.source
                     )
-                self.ws.watch([candidate.market.ticker])
+                if self.executor._venue_value(candidate.market) == "kalshi":
+                    self.ws.watch([candidate.market.ticker])
             except Exception:
                 log.exception(
                     "[BLEND] consumer_error ticker=%s", candidate.market.ticker

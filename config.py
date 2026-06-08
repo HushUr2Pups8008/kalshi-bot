@@ -1481,7 +1481,7 @@ class BotConfig:
         return (
             "Polymarket US: "
             f"enabled={enabled} "
-            "paper_execution=not_wired "
+            "paper_execution=blend "
             f"live_trading={live_trading}"
         )
 
