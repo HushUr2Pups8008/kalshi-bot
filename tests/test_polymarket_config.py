@@ -84,6 +84,26 @@ def test_polymarket_enabled_accepts_credentials_but_live_trading_stays_separate(
     assert cfg.polymarket_us_secret == "pm-secret"
 
 
+def test_polymarket_startup_status_is_visible_but_does_not_claim_paper_execution(
+    monkeypatch,
+):
+    _clear_polymarket_env(monkeypatch)
+    monkeypatch.setenv("POLYMARKET_US_ENABLED", "true")
+    monkeypatch.setenv("POLYMARKET_US_KEY_ID", "pm-key-id")
+    monkeypatch.setenv("POLYMARKET_US_SECRET", "pm-secret")
+    monkeypatch.setenv("POLYMARKET_US_ELIGIBILITY_ACK_DATE", date.today().isoformat())
+
+    cfg = _bot_config()
+
+    status = cfg.polymarket_us_startup_status()
+
+    assert "enabled=true" in status
+    assert "paper_execution=not_wired" in status
+    assert "live_trading=false" in status
+    assert "pm-key-id" not in status
+    assert "pm-secret" not in status
+
+
 @pytest.mark.parametrize(
     ("env_name", "env_value"),
     [

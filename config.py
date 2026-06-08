@@ -1472,6 +1472,19 @@ class BotConfig:
     # Set at runtime via set_paper_mode() — do not mutate directly.
     is_paper_trading: bool = True
 
+    def polymarket_us_startup_status(self) -> str:
+        """Operator-facing Polymarket status without credential material."""
+        enabled = str(self.polymarket_us_enabled).lower()
+        live_trading = str(self.polymarket_us_live_trading_enabled).lower()
+        if not self.polymarket_us_enabled:
+            return "Polymarket US: enabled=false"
+        return (
+            "Polymarket US: "
+            f"enabled={enabled} "
+            "paper_execution=not_wired "
+            f"live_trading={live_trading}"
+        )
+
     def __post_init__(self) -> None:
         """Validate critical config at startup -- fail fast, not hours later."""
         errors: list[str] = []
