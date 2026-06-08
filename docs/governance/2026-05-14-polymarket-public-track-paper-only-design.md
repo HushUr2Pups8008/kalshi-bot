@@ -365,6 +365,8 @@ Dual-agent pre-touch review is required per `~/.claude/rules/agent_collaboration
 
 Each PR has a single sentence of scope, an explicit "files NOT touched" list, tests required, operator gate (Y/N), depends-on (Y/N), recommended primary agent, second-agent review required (Y/N), and recommended execution mode. The (a)/(b)/(c)/(d) classifications attached to each PR trace back to § 2 and ultimately to investigation § 4.
 
+Implementation status note (2026-06-08): the landed Codex rollout split this original 10-PR plan into smaller reviewable PRs #84-#96 and uses the existing repository term `venue` with value `polymarket_us` instead of this draft's older `exchange='polymarket'` wording. The current work-state record is `docs/profit_path_debt_log.md` § 2.0a.1. This design remains the safety reference for operator gates: PR-10 is still operator-only paper soak, and live-capable POST remains deferred until after soak acceptance.
+
 ### PR-1 — Scaffolding Only
 
 - **Scope:** Add config keys (`POLYMARKET_API_KEY_ID`, `POLYMARKET_API_KEY_SECRET`) and env-var documentation; create `exchange/base.py` with `SignedHttpClient` / `SignedWebSocketClient` ABCs; create `polymarket/rest_client.py` skeleton with `_sign()` implementation and `post()` raising `NotImplementedError`. No callers anywhere wire it up. Plant `bot_state.polymarket_clean_start_ts` sentinel migration.
