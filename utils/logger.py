@@ -629,11 +629,13 @@ class TradeLogger:
         signal_source: str,
         signal_meta: dict[str, Any] | None = None,
         bankroll_delta_dollars: float | None = None,
+        venue: str = "kalshi",
     ) -> None:
         record = {
             "type": "PAPER_TRADE",
             "trade_id": trade_id,
             "ticker": ticker,
+            "venue": venue,
             "market_title": market_title,
             "side": side,
             "contracts": contracts,

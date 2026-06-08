@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     trade_id                TEXT PRIMARY KEY,
     ts                      TEXT NOT NULL,
     ticker                  TEXT NOT NULL,
+    venue                   TEXT NOT NULL DEFAULT 'kalshi',
     market_title            TEXT NOT NULL,
     side                    TEXT NOT NULL,
     contracts               INTEGER NOT NULL,
@@ -137,6 +138,10 @@ _P0_PROVENANCE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("price_retrieved_at", "TEXT"),
     ("raw_payload_hash", "TEXT"),
     ("p0_contract_version", "INTEGER DEFAULT 1"),
+)
+
+_VENUE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("venue", "TEXT NOT NULL DEFAULT 'kalshi'"),
 )
 
 
@@ -453,6 +458,10 @@ class PaperTrader:
 
         if "market_snapshot" not in cols and self._ensure_paper_trades_column("market_snapshot", "TEXT", cols):
             added_cols.append("market_snapshot")
+
+        for name, ddl in _VENUE_COLUMNS:
+            if name not in cols and self._ensure_paper_trades_column(name, ddl, cols):
+                added_cols.append(name)
 
         # v0.22.0: feedback-loop columns
         new_cols = [
@@ -832,6 +841,19 @@ class PaperTrader:
             provenance_retrieved_str = None
         provenance_hash = getattr(_market, "raw_payload_hash", None)
 
+        def _venue_string(value: Any) -> str | None:
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped:
+                    return stripped
+            return None
+
+        venue = (
+            _venue_string(getattr(analysis, "venue", None))
+            or _venue_string(getattr(analysis.market, "venue", None))
+            or "kalshi"
+        )
+
         side = str(analysis.side).lower()
         # Persist the executable edge for the side actually traded. Production
         # analysis.edge is already chosen-side, while older replay/test paths may
@@ -873,21 +895,22 @@ class PaperTrader:
 
         self._conn.execute(
             """INSERT INTO paper_trades
-               (trade_id, ts, ticker, market_title, side, contracts, price_cents,
-                cost_dollars, estimated_prob, entry_price_cents, edge, kelly_dollars,
-                capped_dollars, signal_headline, signal_source, keywords_matched,
-                reasoning, source_multiplier, notional_bankroll_before, notional_bankroll_after,
+               (trade_id, ts, ticker, venue, market_title, side, contracts, price_cents,
+                 cost_dollars, estimated_prob, entry_price_cents, edge, kelly_dollars,
+                 capped_dollars, signal_headline, signal_source, keywords_matched,
+                 reasoning, source_multiplier, notional_bankroll_before, notional_bankroll_after,
                 market_snapshot, series_ticker, signal_type, match_score,
                 llm_direction, llm_magnitude, llm_confidence, kelly_contracts,
-                fast_lane_p, fast_lane_confidence, accumulation_p, accumulation_confidence,
-                structural_p, structural_confidence,
-                price_source, price_method, price_retrieved_at, raw_payload_hash,
-                p0_contract_version, cohort_extension)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 fast_lane_p, fast_lane_confidence, accumulation_p, accumulation_confidence,
+                 structural_p, structural_confidence,
+                 price_source, price_method, price_retrieved_at, raw_payload_hash,
+                 p0_contract_version, cohort_extension)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 trade_id,
                 datetime.now(timezone.utc).isoformat(),
                 analysis.market.ticker,
+                venue,
                 analysis.market.title,
                 side,
                 contracts,
@@ -933,6 +956,7 @@ class PaperTrader:
         self.portfolio.add(Position(
             trade_id=trade_id,
             ticker=analysis.market.ticker,
+            venue=venue,
             side=side,
             contracts=contracts,
             cost_dollars=cost_dollars,
@@ -947,6 +971,7 @@ class PaperTrader:
         paper_trade_kwargs = {
             "trade_id": trade_id,
             "ticker": analysis.market.ticker,
+            "venue": venue,
             "market_title": analysis.market.title,
             "side": side,
             "contracts": contracts,

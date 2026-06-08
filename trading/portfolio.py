@@ -21,9 +21,10 @@ class Position:
     """A single open paper or live trade.
 
     ``entry_price_cents`` is the EXECUTED ENTRY price in cents for the
-    chosen side (NOT the legacy YES midpoint). The ``price_source`` and
-    ``price_method`` fields carry provenance so callers can distinguish
-    executed-side semantics from legacy rows. Defaulted to
+    chosen side (NOT the legacy YES midpoint). ``venue`` defaults to
+    ``"kalshi"`` for historical rows that predate venue namespacing. The
+    ``price_source`` and ``price_method`` fields carry provenance so callers
+    can distinguish executed-side semantics from legacy rows. Defaulted to
     ``"unavailable"`` / ``"none"`` for hydration of pre-P0 DB rows that
     lack the columns.
 
@@ -41,6 +42,7 @@ class Position:
     estimated_prob:    float
     entry_price_cents: float
     ts:                str    # ISO8601 UTC — used for cooldown seeding on restart
+    venue:            str = "kalshi"
     price_source:     str = "unavailable"
     price_method:     str = "none"
 
@@ -73,18 +75,20 @@ class Portfolio:
         # schemas continue to load.
         cols = {r[1] for r in conn.execute("PRAGMA table_info(paper_trades)").fetchall()}
         has_provenance = "price_source" in cols and "price_method" in cols
+        venue_expr = "venue" if "venue" in cols else "'kalshi' AS venue"
         entry_price_col = "entry_price_cents" if "entry_price_cents" in cols else "market_yes_price"
         if has_provenance:
             select_sql = (
                 "SELECT trade_id, ticker, side, contracts, cost_dollars, price_cents, "
                 f"       estimated_prob, {entry_price_col} AS entry_price_cents, ts, "
-                "       price_source, price_method "
+                f"       {venue_expr}, price_source, price_method "
                 "FROM paper_trades WHERE resolved = 0 ORDER BY ts ASC"
             )
         else:
             select_sql = (
                 "SELECT trade_id, ticker, side, contracts, cost_dollars, price_cents, "
-                f"       estimated_prob, {entry_price_col} AS entry_price_cents, ts "
+                f"       estimated_prob, {entry_price_col} AS entry_price_cents, ts, "
+                f"       {venue_expr} "
                 "FROM paper_trades WHERE resolved = 0 ORDER BY ts ASC"
             )
         rows = conn.execute(select_sql).fetchall()
@@ -108,6 +112,7 @@ class Portfolio:
                 estimated_prob=row["estimated_prob"],
                 entry_price_cents=row["entry_price_cents"],
                 ts=row["ts"],
+                venue=_get("venue", "kalshi"),
                 price_source=_get("price_source", "unavailable"),
                 price_method=_get("price_method", "none"),
             )
