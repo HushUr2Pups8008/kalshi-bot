@@ -44,7 +44,7 @@ def log_polymarket_startup_probe(
     sample_market = markets[0].market_id if markets else None
     log.info(
         "[POLYMARKET] startup_probe=ok enabled=true public_markets_sampled=%d "
-        "sample_market=%s paper_execution=not_wired live_trading=%s",
+        "sample_market=%s paper_execution=blend live_trading=%s",
         len(markets),
         sample_market or "none",
         str(cfg.polymarket_us_live_trading_enabled).lower(),
