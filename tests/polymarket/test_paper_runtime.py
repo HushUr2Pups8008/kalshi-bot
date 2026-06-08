@@ -53,7 +53,7 @@ class _FakeClient:
 
 
 @pytest.mark.asyncio
-async def test_process_news_routes_matched_polymarket_analysis_through_blend():
+async def test_process_news_routes_matched_polymarket_analysis_through_blend(caplog):
     routed = []
 
     async def route_analysis(analysis, **kwargs):
@@ -76,7 +76,8 @@ async def test_process_news_routes_matched_polymarket_analysis_through_blend():
         market_cache_ttl_seconds=300,
     )
 
-    routed_count = await runtime.process_news(_news())
+    with caplog.at_level("INFO", logger="polymarket.paper_runtime"):
+        routed_count = await runtime.process_news(_news())
 
     assert routed_count == 1
     assert len(routed) == 1
@@ -89,10 +90,19 @@ async def test_process_news_routes_matched_polymarket_analysis_through_blend():
     assert analysis.edge == pytest.approx(0.23)
     assert analysis.signal_meta["venue"] == "polymarket_us"
     assert analysis.signal_meta["polymarket_match_score"] > 0
+    stats = runtime.stats()
+    assert stats.market_count == 1
+    assert stats.news_processed == 1
+    assert stats.routed_count == 1
+    assert stats.no_match_count == 0
+    assert stats.last_match_count == 1
+    assert "[POLYMARKET_MATCH] candidate ticker=will-example-event-happen-2026" in caplog.text
+    assert "[POLYMARKET_ANALYSIS] candidate ticker=will-example-event-happen-2026" in caplog.text
+    assert "[POLYMARKET_PAPER] heartbeat markets=1" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_process_news_skips_when_no_polymarket_market_matches():
+async def test_process_news_skips_when_no_polymarket_market_matches(caplog):
     routed = []
 
     async def route_analysis(analysis, **kwargs):
@@ -108,10 +118,19 @@ async def test_process_news_skips_when_no_polymarket_market_matches():
         estimate_probability_fn=estimate_probability,
     )
 
-    routed_count = await runtime.process_news(_news("Example event gets more likely"))
+    with caplog.at_level("INFO", logger="polymarket.paper_runtime"):
+        routed_count = await runtime.process_news(_news("Example event gets more likely"))
 
     assert routed_count == 0
     assert routed == []
+    stats = runtime.stats()
+    assert stats.market_count == 1
+    assert stats.news_processed == 1
+    assert stats.routed_count == 0
+    assert stats.no_match_count == 1
+    assert stats.last_match_count == 0
+    assert "[POLYMARKET_MATCH] no_match markets=1" in caplog.text
+    assert "[POLYMARKET_PAPER] heartbeat markets=1" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -138,6 +157,10 @@ async def test_process_news_fail_closed_when_public_market_fetch_fails(caplog):
 
     assert routed_count == 0
     assert "public_market_fetch_failed" in caplog.text
+    stats = runtime.stats()
+    assert stats.market_count == 0
+    assert stats.news_processed == 1
+    assert stats.last_error == "public_market_fetch_failed"
 
 
 def test_match_polymarket_markets_filters_non_tradeable_markets():

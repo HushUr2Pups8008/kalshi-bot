@@ -285,6 +285,61 @@ def _log_bankroll_summary(notional_bankroll: float) -> None:
             )
 
 
+def _log_polymarket_account_summary(*, client_factory=None):
+    from polymarket.account_client import PolymarketAccountClient
+    from polymarket.status import PolymarketAccountStatus, count_positions
+
+    if client_factory is None:
+        client_factory = PolymarketAccountClient
+
+    status = PolymarketAccountStatus(
+        enabled=bool(cfg.polymarket_us_enabled),
+        live_trading=bool(cfg.polymarket_us_live_trading_enabled),
+        paper_execution="blend",
+    )
+    if not cfg.polymarket_us_enabled:
+        log.info(status.log_line())
+        return status
+
+    try:
+        client = client_factory()
+    except Exception as exc:
+        log.warning("Could not fetch Polymarket account summary: %s", exc)
+        status = PolymarketAccountStatus(
+            enabled=True,
+            live_trading=bool(cfg.polymarket_us_live_trading_enabled),
+            paper_execution="blend",
+            account_error=str(exc),
+        )
+        log.info(status.log_line())
+        return status
+
+    account_error = None
+    balance = None
+    positions_count = None
+    try:
+        balance = client.get_balance()
+        log.info("Polymarket account balance: $%.2f", balance)
+    except Exception as exc:
+        account_error = str(exc)
+        log.warning("Could not fetch Polymarket account balance: %s", exc)
+    try:
+        positions_count = count_positions(client.get_positions(limit=100))
+    except Exception as exc:
+        account_error = account_error or str(exc)
+        log.warning("Could not fetch Polymarket positions: %s", exc)
+    status = PolymarketAccountStatus(
+        enabled=True,
+        live_trading=bool(cfg.polymarket_us_live_trading_enabled),
+        paper_execution="blend",
+        account_balance=balance,
+        positions_count=positions_count,
+        account_error=account_error,
+    )
+    log.info(status.log_line())
+    return status
+
+
 class _RuntimeInstanceGuard:
     """Best-effort singleton guard for the long-running bot runtime.
 
@@ -2258,6 +2313,8 @@ class TradingBot:
             log.info("Kalshi account balance: $%.2f", balance)
         except Exception as exc:
             log.warning("Could not fetch Kalshi balance: %s", exc)
+        if cfg.polymarket_us_enabled:
+            await asyncio.to_thread(_log_polymarket_account_summary)
 
         await self._check_llm_health()
         await self._run_startup_observability_probe()

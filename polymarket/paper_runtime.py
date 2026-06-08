@@ -80,6 +80,17 @@ class PolymarketMatchMeta:
         }
 
 
+@dataclass(frozen=True)
+class PolymarketPaperRuntimeStats:
+    market_count: int
+    last_refresh_age_seconds: float | None
+    news_processed: int
+    routed_count: int
+    no_match_count: int
+    last_match_count: int
+    last_error: str | None
+
+
 class PolymarketPaperRuntime:
     """Paper-only Polymarket analysis router backed by public market data."""
 
@@ -106,10 +117,18 @@ class PolymarketPaperRuntime:
         self._markets: list[PolymarketMarket] = []
         self._last_fetch = 0.0
         self._fetch_lock = asyncio.Lock()
+        self._news_processed = 0
+        self._routed_count = 0
+        self._no_match_count = 0
+        self._last_match_count = 0
+        self._last_error: str | None = None
 
     async def process_news(self, news: NewsItem) -> int:
+        self._news_processed += 1
         markets = await self._get_markets()
         if not markets:
+            self._last_match_count = 0
+            self._log_heartbeat()
             return 0
 
         matches = match_polymarket_markets(
@@ -118,17 +137,31 @@ class PolymarketPaperRuntime:
             max_results=self._max_candidates,
             min_score=self._min_match_score,
         )
+        self._last_match_count = len(matches)
         if not matches:
-            log.debug("[POLYMARKET_PAPER] no_match headline=%s", news.headline[:80])
+            self._no_match_count += 1
+            log.info(
+                "[POLYMARKET_MATCH] no_match markets=%d headline=%s",
+                len(markets),
+                news.headline[:80],
+            )
+            self._log_heartbeat()
             return 0
 
         routed = 0
         for market, match_score, match_meta in matches:
+            log.info(
+                "[POLYMARKET_MATCH] candidate ticker=%s score=%.3f matched_tokens=%s",
+                market.market_id,
+                match_score,
+                ",".join(match_meta.get("polymarket_matched_tokens", [])[:8]),
+            )
             analysis = await self._build_analysis(news, market, match_score, match_meta)
             if analysis is None:
                 continue
             result = await self._route_analysis(analysis, accumulate=True, watch=False)
             routed += 1
+            self._routed_count += 1
             log.info(
                 "[POLYMARKET_PAPER] routed ticker=%s enqueued=%s match_score=%.3f "
                 "paper_execution=blend",
@@ -136,7 +169,41 @@ class PolymarketPaperRuntime:
                 getattr(result, "enqueued", None),
                 match_score,
             )
+        self._log_heartbeat()
         return routed
+
+    def stats(self) -> PolymarketPaperRuntimeStats:
+        age = None
+        if self._last_fetch:
+            age = max(0.0, time.monotonic() - self._last_fetch)
+        return PolymarketPaperRuntimeStats(
+            market_count=len(self._markets),
+            last_refresh_age_seconds=age,
+            news_processed=self._news_processed,
+            routed_count=self._routed_count,
+            no_match_count=self._no_match_count,
+            last_match_count=self._last_match_count,
+            last_error=self._last_error,
+        )
+
+    def _log_heartbeat(self) -> None:
+        stats = self.stats()
+        age = (
+            "unknown"
+            if stats.last_refresh_age_seconds is None
+            else f"{stats.last_refresh_age_seconds:.1f}s"
+        )
+        log.info(
+            "[POLYMARKET_PAPER] heartbeat markets=%d cache_age=%s "
+            "news_processed=%d routed=%d no_match=%d last_match=%d last_error=%s",
+            stats.market_count,
+            age,
+            stats.news_processed,
+            stats.routed_count,
+            stats.no_match_count,
+            stats.last_match_count,
+            stats.last_error or "none",
+        )
 
     async def _get_markets(self) -> list[PolymarketMarket]:
         async with self._fetch_lock:
@@ -149,6 +216,7 @@ class PolymarketPaperRuntime:
                     limit=self._market_limit,
                 )
             except Exception as exc:
+                self._last_error = "public_market_fetch_failed"
                 log.warning(
                     "[POLYMARKET_PAPER] public_market_fetch_failed error=%s",
                     exc,
@@ -156,6 +224,7 @@ class PolymarketPaperRuntime:
                 return []
             self._markets = list(markets)
             self._last_fetch = time.monotonic()
+            self._last_error = None
             log.info(
                 "[POLYMARKET_PAPER] market_cache_refreshed markets=%d limit=%d",
                 len(self._markets),
@@ -255,6 +324,16 @@ class PolymarketPaperRuntime:
             **(adapted.signal_meta or {}),
             **match_meta,
         }
+        log.info(
+            "[POLYMARKET_ANALYSIS] candidate ticker=%s side=%s price_cents=%d "
+            "edge=%.4f est_prob=%.4f confidence=%.3f",
+            market.market_id,
+            adapted.side,
+            adapted.executed_price_cents,
+            adapted.edge,
+            adapted.estimated_probability,
+            adapted.confidence,
+        )
         return adapted
 
 
