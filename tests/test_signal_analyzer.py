@@ -778,6 +778,42 @@ class TestEstimateProbability:
         assert "llm_routing_reason" not in kwargs
 
     @pytest.mark.asyncio
+    async def test_match_llm_review_uses_explicit_match_meta_for_non_kalshi_venues(self, monkeypatch):
+        news = _make_news("Kansas governor election tightens after new polling")
+        market = _make_full_market(
+            title="Democratic Party",
+            subtitle="Kansas Governor Election Winner",
+            series_ticker="polymarket_us",
+        )
+        market.ticker = "ewc-usgub-ks-2026-11-03-dem"
+        match_meta = {
+            "venue": "polymarket_us",
+            "matched_tokens": ["election", "governor", "kansas"],
+            "pre_llm_quality_pass": True,
+            "pre_llm_semantic_overlap_count": 3,
+            "pre_llm_semantic_overlap_ratio": 0.75,
+            "pre_llm_gate_reason": None,
+        }
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "LLM found relevant directional information", "yes", "moderate"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_match_llm_review") as review_mock:
+            await estimate_probability(news, market, match_meta=match_meta)
+
+        review_mock.assert_called_once()
+        assert review_mock.call_args.kwargs["market_prefix"] == "polymarket_us"
+        assert review_mock.call_args.kwargs["matched_tokens"] == [
+            "election",
+            "governor",
+            "kansas",
+        ]
+
+    @pytest.mark.asyncio
     async def test_match_meta_logs_would_block_without_keywords(self, monkeypatch):
         news = _make_news("Quarterly corporate earnings beat expectations")
         market = _make_full_market()

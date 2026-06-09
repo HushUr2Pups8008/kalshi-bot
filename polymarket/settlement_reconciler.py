@@ -32,11 +32,27 @@ class SettlementResolver(Protocol):
         """Resolve open paper trades using PaperTrader atomicity semantics."""
 
 
+class PolymarketPublicSettlementSource:
+    def __init__(self, client: Any | None = None):
+        if client is None:
+            from polymarket.public_client import PolymarketPublicClient
+
+            client = PolymarketPublicClient()
+        self._client = client
+
+    def get_settlement(self, market_id: str) -> Mapping[str, Any] | None:
+        payload = self._client.get_market_payload(market_id)
+        if not _payload_is_settled(payload):
+            raise SettlementNotFound(f"Polymarket market {market_id} is not settled")
+        return payload
+
+
 @dataclass(frozen=True)
 class SettlementReconcileResult:
     checked: int = 0
     resolved: int = 0
     not_found: int = 0
+    lane_events: tuple[tuple[str, bool, str, str, float], ...] = ()
 
 
 class SettlementReconciler:
@@ -49,6 +65,7 @@ class SettlementReconciler:
         checked = 0
         resolved = 0
         not_found = 0
+        lane_events: list[tuple[str, bool, str, str, float]] = []
 
         for ticker in tickers:
             checked += 1
@@ -59,13 +76,20 @@ class SettlementReconciler:
                 continue
 
             resolved_yes = _resolved_yes_from_payload(ticker, payload)
-            self._resolver._resolve_market_sync(ticker, resolved_yes)
+            resolved_lane_events = self._resolver._resolve_market_sync(
+                ticker, resolved_yes
+            )
+            for trade_id, lane_name, lane_estimate in resolved_lane_events:
+                lane_events.append(
+                    (ticker, resolved_yes, trade_id, lane_name, lane_estimate)
+                )
             resolved += 1
 
         return SettlementReconcileResult(
             checked=checked,
             resolved=resolved,
             not_found=not_found,
+            lane_events=tuple(lane_events),
         )
 
     def _open_polymarket_tickers(self, *, limit: int | None) -> list[str]:
@@ -80,6 +104,15 @@ class SettlementReconciler:
             params.append(limit)
         rows = self._resolver._conn.execute(sql, params).fetchall()
         return [str(row["ticker"]) for row in rows]
+
+
+def _payload_is_settled(payload: Mapping[str, Any]) -> bool:
+    status = str(payload.get("status") or "").strip().lower()
+    return (
+        payload.get("settled") is True
+        or payload.get("closed") is True
+        or status in {"closed", "finalized", "resolved", "settled"}
+    )
 
 
 def _resolved_yes_from_payload(

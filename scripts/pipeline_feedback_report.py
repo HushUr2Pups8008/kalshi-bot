@@ -58,9 +58,10 @@ def _top(counter: Counter[str], limit: int = 10) -> list[dict[str, Any]]:
 
 
 def _market_prefix(event: dict[str, Any]) -> str:
-    prefix = event.get("market_prefix")
-    if prefix:
-        return str(prefix)
+    for key in ("market_prefix", "series_ticker", "venue"):
+        prefix = event.get(key)
+        if prefix:
+            return str(prefix)
     ticker = event.get("ticker") or event.get("market_ticker") or ""
     return str(ticker).split("-", 1)[0] if ticker else "unknown"
 

@@ -3,6 +3,7 @@
 from polymarket.settlement_reconciler import (
     SettlementDriftError,
     SettlementNotFound,
+    PolymarketPublicSettlementSource,
     SettlementReconcileResult,
     SettlementReconciler,
     SettlementResolver,
@@ -12,6 +13,7 @@ from polymarket.settlement_reconciler import (
 __all__ = [
     "SettlementDriftError",
     "SettlementNotFound",
+    "PolymarketPublicSettlementSource",
     "SettlementReconcileResult",
     "SettlementReconciler",
     "SettlementResolver",

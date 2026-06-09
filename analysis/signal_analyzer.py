@@ -1496,13 +1496,28 @@ async def estimate_probability(
         if verdict:
             try:
                 from analysis.market_matcher import _tokenize as _matcher_tokenize
-                overlap_tokens = sorted(
-                    _matcher_tokenize(market.title or "")
-                    & _matcher_tokenize(news.headline or "")
+                meta_tokens = []
+                if isinstance(match_meta, dict):
+                    raw_tokens = (
+                        match_meta.get("matched_tokens")
+                        or match_meta.get("polymarket_matched_tokens")
+                        or match_meta.get("pre_llm_semantic_overlap_tokens")
+                    )
+                    if isinstance(raw_tokens, list):
+                        meta_tokens = [str(token) for token in raw_tokens]
+                overlap_tokens = (
+                    sorted(meta_tokens)
+                    if meta_tokens
+                    else sorted(
+                        _matcher_tokenize(market.title or "")
+                        & _matcher_tokenize(news.headline or "")
+                    )
                 )
             except Exception:
                 overlap_tokens = []
-            ticker_prefix = (market.ticker or "").split("-", 1)[0]
+            ticker_prefix = str(getattr(market, "series_ticker", "") or "").strip()
+            if not ticker_prefix:
+                ticker_prefix = (market.ticker or "").split("-", 1)[0]
             await write_trade_log_async(
                 trade_log.log_match_llm_review,
                 ticker=market.ticker,

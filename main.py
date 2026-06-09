@@ -68,6 +68,10 @@ from analysis.kelly import kelly_bet
 from tasks.stats.keyword_stats import KeywordStats
 from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
+from polymarket.settlement_reconciler import (
+    PolymarketPublicSettlementSource,
+    SettlementReconciler,
+)
 from tasks.stats.source_stats import SourceStats
 from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, VERSION,
                     FADE_TWEET_FEED_URLS,
@@ -687,6 +691,7 @@ class TradingBot:
                 self.polymarket_paper_runtime = PolymarketPaperRuntime(
                     route_analysis=self._route_analysis_through_blend,
                     keyword_stats=self.keyword_stats,
+                    source_stats=self.source_stats,
                 )
                 log.info("[POLYMARKET_PAPER] active paper_execution=blend")
             else:
@@ -1699,18 +1704,32 @@ class TradingBot:
         self.source_stats.flush()
         open_trades = await asyncio.to_thread(
             lambda: self.paper._conn.execute(
-                "SELECT DISTINCT ticker FROM paper_trades WHERE resolved = 0"
+                "SELECT DISTINCT ticker, COALESCE(venue, 'kalshi') AS venue "
+                "FROM paper_trades WHERE resolved = 0"
             ).fetchall()
         )
         if not open_trades:
             return
 
-        tickers = [row[0] for row in open_trades]
-        log.debug("Auto-resolve: checking %d open tickers", len(tickers))
+        rows = []
+        for row in open_trades:
+            if hasattr(row, "keys"):
+                ticker = row["ticker"]
+                venue = row["venue"] if "venue" in row.keys() else "kalshi"
+            else:
+                ticker = row[0]
+                venue = row[1] if len(row) > 1 else "kalshi"
+            rows.append((str(ticker), str(venue or "kalshi")))
+        kalshi_tickers = [
+            ticker for ticker, venue in rows
+            if venue in ("", "kalshi")
+        ]
+        has_polymarket = any(venue == "polymarket_us" for _ticker, venue in rows)
+        log.debug("Auto-resolve: checking %d open tickers", len(rows))
 
         loop = asyncio.get_running_loop()
         resolved_count = 0
-        for ticker in tickers:
+        for ticker in kalshi_tickers:
             try:
                 market = await loop.run_in_executor(
                     None, self.rest.get_market, ticker
@@ -1736,11 +1755,34 @@ class TradingBot:
             except Exception as exc:
                 log.warning("Auto-resolve: failed to check %s: %s", ticker, exc)
 
+        if has_polymarket and cfg.polymarket_us_enabled:
+            try:
+                result = await asyncio.to_thread(
+                    lambda: SettlementReconciler(
+                        source=PolymarketPublicSettlementSource(),
+                        resolver=self.paper,
+                    ).reconcile()
+                )
+                resolved_count += result.resolved
+                if result.checked:
+                    log.info(
+                        "Auto-resolve: Polymarket checked=%d resolved=%d not_found=%d",
+                        result.checked,
+                        result.resolved,
+                        result.not_found,
+                    )
+                if result.lane_events:
+                    await self.paper.record_resolution_calibration_events(
+                        result.lane_events
+                    )
+            except Exception as exc:
+                log.warning("Auto-resolve: Polymarket settlement failed: %s", exc)
+
         if resolved_count:
             bankroll = await asyncio.to_thread(self.paper.get_notional_bankroll)
             log.info(
                 "Auto-resolve: resolved %d/%d tickers | bankroll=$%.2f",
-                resolved_count, len(tickers),
+                resolved_count, len(rows),
                 bankroll,
             )
 

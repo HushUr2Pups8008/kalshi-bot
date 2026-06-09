@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import config as _cfg_module
+import main as main_module
 from analysis import SignalAnalysis
 from feeds.subreddit_selector import filter_disabled_subreddits, select_subreddits
 from feeds.search_news_monitor import run_search_news_monitor
@@ -21,6 +22,7 @@ from feeds import NewsItem
 from kalshi import KalshiMarket
 from kalshi.source_hints import MarketSourceHintDiagnostics, MarketSourceTargetPlan
 from main import TradingBot, _signal_to_evidence, _source_class_for_evidence
+from polymarket.settlement_reconciler import SettlementReconcileResult
 from trading.portfolio import Position
 
 
@@ -1604,6 +1606,54 @@ class TestMainAsyncBlocking:
             f"resolve_market sync body called on event loop thread ({event_loop_thread!r}). "
             "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
         )
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_routes_polymarket_rows_to_settlement_reconciler(self, monkeypatch):
+        bot = self._make_bot()
+
+        finalized_market = MagicMock()
+        finalized_market.status = "finalized"
+        finalized_market.result = "yes"
+        bot.rest = MagicMock()
+        bot.rest.get_market = MagicMock(return_value=finalized_market)
+
+        cursor_mock = MagicMock()
+        cursor_mock.fetchall.return_value = [
+            ("KXTEST-25DEC31", "kalshi"),
+            ("ewc-usgub-ks-2026-11-03-dem", "polymarket_us"),
+        ]
+        bot.paper._conn.execute.return_value = cursor_mock
+        bot.paper.resolve_market = AsyncMock(return_value=None)
+
+        calls = []
+
+        class FakeReconciler:
+            def __init__(self, *, source, resolver):
+                calls.append(("init", source, resolver))
+
+            def reconcile(self, *, limit=None):
+                calls.append(("reconcile", limit))
+                return SettlementReconcileResult(
+                    checked=1,
+                    resolved=1,
+                    not_found=0,
+                )
+
+        monkeypatch.setattr(main_module, "SettlementReconciler", FakeReconciler, raising=False)
+        monkeypatch.setattr(
+            main_module,
+            "PolymarketPublicSettlementSource",
+            lambda: object(),
+            raising=False,
+        )
+        monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", True)
+        monkeypatch.setattr(main_module.cfg, "polymarket_us_enabled", True)
+
+        await bot._check_and_resolve()
+
+        bot.rest.get_market.assert_called_once_with("KXTEST-25DEC31")
+        bot.paper.resolve_market.assert_awaited_once_with("KXTEST-25DEC31", True)
+        assert calls[-1] == ("reconcile", None)
 
     @pytest.mark.asyncio
     async def test_open_trades_query_called_off_event_loop_thread(self):

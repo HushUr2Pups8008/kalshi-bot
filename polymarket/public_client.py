@@ -69,3 +69,12 @@ class PolymarketPublicClient:
         if not isinstance(data, dict):
             raise ValueError("Polymarket market response must be an object")
         return normalize_polymarket_market(data.get("market", data))
+
+    def get_market_payload(self, market_id: str) -> dict[str, Any]:
+        data = self._request("GET", f"/v1/markets/{market_id}")
+        if not isinstance(data, dict):
+            raise ValueError("Polymarket market response must be an object")
+        payload = data.get("market", data)
+        if not isinstance(payload, dict):
+            raise ValueError("Polymarket market payload must be an object")
+        return payload

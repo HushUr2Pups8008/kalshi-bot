@@ -99,6 +99,26 @@ def test_reconciler_resolves_polymarket_yes_settlement(conn):
     assert row["resolved_yes"] == 1
 
 
+def test_reconciler_returns_lane_events_for_calibration_emission(conn):
+    class LaneResolver(FakeResolver):
+        def _resolve_market_sync(self, ticker: str, resolved_yes: bool):
+            super()._resolve_market_sync(ticker, resolved_yes)
+            return [("trade-1", "fast", 0.62)]
+
+    _insert_trade(conn, "pm-yes", "will-example-happen-2026")
+    source = FakeSettlementSource(
+        {"will-example-happen-2026": {"settled": True, "resolvedOutcome": "YES"}}
+    )
+    resolver = LaneResolver(conn)
+
+    result = SettlementReconciler(source=source, resolver=resolver).reconcile()
+
+    assert result.resolved == 1
+    assert result.lane_events == (
+        ("will-example-happen-2026", True, "trade-1", "fast", 0.62),
+    )
+
+
 def test_reconciler_resolves_polymarket_no_settlement(conn):
     _insert_trade(conn, "pm-no", "will-example-fail-2026")
     source = FakeSettlementSource(
