@@ -48,6 +48,10 @@ class PolymarketMarket:
         return self.yes_ask_cents / 100.0
 
     @property
+    def open_interest(self) -> float:
+        return self.open_interest_dollars
+
+    @property
     def price_available(self) -> bool:
         return self.yes_ask_cents is not None and self.no_ask_cents is not None
 

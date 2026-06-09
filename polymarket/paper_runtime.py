@@ -192,6 +192,24 @@ class PolymarketPaperRuntime:
             last_error=self._last_error,
         )
 
+    def cached_markets(self) -> list[PolymarketMarket]:
+        return list(self._markets)
+
+    def cached_candidate_markets(self) -> list[PolymarketMarket]:
+        return [
+            market
+            for market in self._markets
+            if (
+                market.venue == Venue.POLYMARKET_US
+                and market.is_tradeable()
+                and not _is_suppressed_market(market)
+            )
+        ]
+
+    async def warm_cache(self) -> int:
+        markets = await self._get_markets()
+        return len(markets)
+
     def _log_heartbeat(self) -> None:
         stats = self.stats()
         age = (

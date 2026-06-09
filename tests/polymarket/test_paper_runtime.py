@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -61,6 +62,42 @@ class _FakeSourceStats:
 
     def increment_signals(self, source: str) -> None:
         self.signals.append(source)
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_populates_cached_markets_for_shared_getters():
+    market = _market()
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([market]),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+
+    assert runtime.cached_markets() == []
+
+    warmed = await runtime.warm_cache()
+
+    assert warmed == 1
+    assert runtime.cached_markets() == [market]
+
+
+@pytest.mark.asyncio
+async def test_cached_candidate_markets_excludes_suppressed_polymarket_categories():
+    politics = _market(market_id="will-us-iran-deal-happen", category="politics")
+    sports = _market(market_id="will-nba-finals-game-seven-happen", category="sports")
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([sports, politics]),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+
+    await runtime.warm_cache()
+
+    assert runtime.cached_candidate_markets() == [politics]
 
 
 @pytest.mark.asyncio

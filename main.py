@@ -2138,8 +2138,20 @@ class TradingBot:
     def _make_market_getter(self) -> "Callable[[], list]":
         """Sync callable returning the live market cache for search/GDELT query generation."""
         def _get() -> list:
-            return self.matcher._cache._markets
+            markets = list(self.matcher._cache._markets)
+            polymarket_runtime = getattr(self, "polymarket_paper_runtime", None)
+            if polymarket_runtime is not None:
+                markets.extend(polymarket_runtime.cached_candidate_markets())
+            return markets
         return _get
+
+    async def _warm_polymarket_paper_runtime_cache(self) -> int:
+        polymarket_runtime = getattr(self, "polymarket_paper_runtime", None)
+        if polymarket_runtime is None:
+            return 0
+        warmed = await polymarket_runtime.warm_cache()
+        log.info("[POLYMARKET_PAPER] warm_cache_ready markets=%d", warmed)
+        return warmed
 
     async def _check_llm_health(self) -> None:
         """Log LLM availability at startup so the operator knows what's active."""
@@ -2360,6 +2372,7 @@ class TradingBot:
 
         await self._check_llm_health()
         await self._run_startup_observability_probe()
+        await self._warm_polymarket_paper_runtime_cache()
 
         tasks = [
             asyncio.create_task(run_rss_monitor(self._enqueue_news),    name="rss"),
