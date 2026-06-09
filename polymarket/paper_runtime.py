@@ -369,7 +369,8 @@ def match_polymarket_markets(
     min_score: float = _DEFAULT_MIN_MATCH_SCORE,
 ) -> list[tuple[PolymarketMarket, float, dict[str, Any]]]:
     news_tokens = _meaningful_tokens(f"{news.headline} {news.body}")
-    if not news_tokens:
+    headline_tokens = _meaningful_tokens(news.headline)
+    if not news_tokens and not headline_tokens:
         return []
 
     scored: list[tuple[PolymarketMarket, float, dict[str, Any]]] = []
@@ -384,9 +385,12 @@ def match_polymarket_markets(
         if not market_tokens:
             continue
         overlap = news_tokens & market_tokens
+        headline_overlap = headline_tokens & market_tokens
         if not overlap:
             continue
-        score = len(overlap) / max(1, len(news_tokens | market_tokens))
+        full_score = len(overlap) / max(1, len(news_tokens | market_tokens))
+        headline_score = len(headline_overlap) / max(1, len(headline_tokens | market_tokens))
+        score = max(full_score, headline_score)
         if score < min_score:
             continue
         rounded_score = round(score, 4)
