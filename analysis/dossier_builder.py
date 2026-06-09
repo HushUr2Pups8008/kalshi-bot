@@ -18,8 +18,7 @@ import math
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
-from analysis.evidence_scorer import NGRAM_OVERLAP_THRESHOLD, ngram_overlap
-from analysis.evidence_types import Dossier, Evidence, EvidenceScore
+from analysis.evidence_types import Dossier, EvidenceScore
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -269,53 +268,3 @@ def recency_score(
         for w, ts in items
     )
     return total_effective / total_original
-
-
-# UNUSED: test-only callers. Built ahead of integration. Review by 2026-06-08;
-# delete with matching tests if still untouched. Deadline is ENFORCED by
-# tests/test_dossier_review_deadline.py (fails once the date passes) so it
-# cannot rot silently — keep that test as the single source for the date.
-def identify_superseded(evidence_list: list[Evidence]) -> frozenset[str]:
-    """Return evidence_ids superseded by a newer same-class item with high n-gram overlap.
-
-    Item A is superseded if a newer item B exists with the same source_class
-    and ngram_overlap(A.headline, B.headline) >= NGRAM_OVERLAP_THRESHOLD.
-    """
-    if len(evidence_list) < 2:
-        return frozenset()
-    sorted_ev = sorted(evidence_list, key=lambda e: _parse_ts(e.ingested_ts))
-    superseded: set[str] = set()
-    for i, older in enumerate(sorted_ev):
-        for newer in sorted_ev[i + 1:]:
-            if (
-                newer.source_class == older.source_class
-                and ngram_overlap(older.headline, newer.headline) >= NGRAM_OVERLAP_THRESHOLD
-            ):
-                superseded.add(older.evidence_id)
-                break
-    return frozenset(superseded)
-
-
-# UNUSED: test-only callers. Built ahead of integration. Review by 2026-06-08;
-# delete with matching tests if still untouched. Deadline is ENFORCED by
-# tests/test_dossier_review_deadline.py (fails once the date passes) so it
-# cannot rot silently — keep that test as the single source for the date.
-def clear_on_resolution(dossier: Dossier, cleared_ts: str) -> Dossier:
-    """Reset belief state after market resolution.
-
-    Preserves market_ticker and created_ts; increments dossier_version.
-    """
-    return replace(
-        dossier,
-        dossier_version=dossier.dossier_version + 1,
-        current_estimate=None,
-        prior_estimate=None,
-        confidence=0.0,
-        drift_suspect=False,
-        in_recovery=False,
-        freeze_started_ts=None,
-        recovery_started_ts=None,
-        recovery_until_ts=None,
-        last_cross_class_state_update_ts=None,
-        updated_ts=cleared_ts,
-    )
