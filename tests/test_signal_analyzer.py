@@ -814,6 +814,38 @@ class TestEstimateProbability:
         ]
 
     @pytest.mark.asyncio
+    async def test_signal_analysis_detail_uses_explicit_match_meta_venue(self, monkeypatch):
+        news = _make_news("Kansas governor election tightens after new polling")
+        market = _make_full_market(
+            title="Democratic Party",
+            subtitle="Kansas Governor Election Winner",
+            series_ticker="polymarket_us",
+        )
+        market.ticker = "ewc-usgub-ks-2026-11-03-dem"
+        match_meta = {
+            "venue": "polymarket_us",
+            "matched_tokens": ["election", "governor", "kansas"],
+            "pre_llm_quality_pass": True,
+            "pre_llm_semantic_overlap_count": 3,
+            "pre_llm_semantic_overlap_ratio": 0.75,
+            "pre_llm_gate_reason": None,
+        }
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "LLM found relevant directional information", "yes", "moderate"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
+            await estimate_probability(news, market, match_meta=match_meta)
+
+        kwargs = _detail_to_kwargs(detail_mock)
+        assert kwargs["ticker"] == "ewc-usgub-ks-2026-11-03-dem"
+        assert kwargs["venue"] == "polymarket_us"
+
+    @pytest.mark.asyncio
     async def test_match_meta_logs_would_block_without_keywords(self, monkeypatch):
         news = _make_news("Quarterly corporate earnings beat expectations")
         market = _make_full_market()

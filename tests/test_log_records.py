@@ -29,7 +29,7 @@ from utils.logger import TradeLogger
 # (governance audit, edge replay, dashboards) see the change.
 _FULL_SNAPSHOT_KEYS = frozenset({
     "type", "ts",
-    "ticker", "source", "headline", "method", "keywords",
+    "ticker", "source", "headline", "method", "keywords", "venue",
     "base_probability", "final_probability", "market_price",
     "keyword_contributions",
     "llm_direction", "llm_magnitude", "llm_confidence",
@@ -80,6 +80,7 @@ def _full_payload_detail() -> SignalAnalysisDetail:
         base_probability=0.5,
         final_probability=0.65,
         market_price=0.5,
+        venue="kalshi",
         llm_direction="yes",
         llm_magnitude="moderate",
         llm_confidence=0.85,

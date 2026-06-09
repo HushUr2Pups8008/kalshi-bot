@@ -154,6 +154,22 @@ def _build_llm_meta_kwargs(llm_meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _signal_detail_venue(
+    market: KalshiMarket, match_meta: dict[str, Any] | None
+) -> str:
+    raw = None
+    if isinstance(match_meta, dict):
+        raw = match_meta.get("venue")
+    if raw is None:
+        raw = getattr(market, "venue", None)
+    if raw is None:
+        return "kalshi"
+    if hasattr(raw, "value"):
+        raw = raw.value
+    text = str(raw).strip().lower()
+    return text or "kalshi"
+
+
 async def _ollama_check_circuit() -> tuple[bool, dict[str, Any] | None]:
     """Circuit-breaker gate before Ollama HTTP commit.
 
@@ -1315,6 +1331,7 @@ async def estimate_probability(
         keyword_override_mode=keyword_override_mode,
         keyword_signal_strength=keyword_signal_strength,
     )
+    signal_detail_venue = _signal_detail_venue(market, match_meta)
     probe_fields = (
         {"is_startup_probe": True, "is_synthetic_probe": True}
         if is_startup_probe
@@ -1461,6 +1478,7 @@ async def estimate_probability(
             base_probability=base_probability,
             final_probability=llm_prob,
             market_price=market.yes_prob,
+            venue=signal_detail_venue,
             llm_direction=llm_direction,
             llm_magnitude=llm_magnitude,
             llm_confidence=llm_confidence,
@@ -1558,6 +1576,7 @@ async def estimate_probability(
             base_probability=base_probability,
             final_probability=market.yes_prob,
             market_price=market.yes_prob,
+            venue=signal_detail_venue,
             llm_result_used=False,
             llm_routing_passed=(routing_reason is None),
             llm_routing_reason=routing_reason,
@@ -1591,6 +1610,7 @@ async def estimate_probability(
         base_probability=base_probability,
         final_probability=kw_prob,
         market_price=market.yes_prob,
+        venue=signal_detail_venue,
         llm_result_used=False,
         llm_routing_passed=(routing_reason is None),
         llm_routing_reason=routing_reason,
