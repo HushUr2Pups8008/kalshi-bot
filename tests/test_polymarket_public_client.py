@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock
 
+import requests
+
 from polymarket.public_client import PolymarketPublicClient
 from trading.venue import Venue
 
@@ -76,6 +78,64 @@ def test_get_market_normalizes_single_market_payload():
         "GET",
         "https://gateway.polymarket.us/v1/markets/m2",
     )
+
+
+def test_get_market_payload_falls_back_to_open_market_slug_lookup_on_404():
+    client = PolymarketPublicClient(base_url="https://gateway.polymarket.us")
+    not_found = MagicMock()
+    not_found.text = "{}"
+    not_found.status_code = 404
+    not_found.raise_for_status.side_effect = requests.HTTPError(
+        response=not_found
+    )
+    listed = MagicMock()
+    listed.text = '{"markets":[]}'
+    listed.json.return_value = {"markets": [_market_payload("m2")], "cursor": None}
+    listed.raise_for_status.return_value = None
+    client._session.request = MagicMock(side_effect=[not_found, listed])
+
+    payload = client.get_market_payload("m2")
+
+    assert payload["slug"] == "m2"
+    assert client._session.request.call_args_list[1].kwargs["params"] == {
+        "limit": 500,
+        "closed": "false",
+    }
+
+
+def test_get_market_payload_falls_back_to_closed_market_slug_lookup_for_settlement():
+    client = PolymarketPublicClient(base_url="https://gateway.polymarket.us")
+    not_found = MagicMock()
+    not_found.text = "{}"
+    not_found.status_code = 404
+    not_found.raise_for_status.side_effect = requests.HTTPError(
+        response=not_found
+    )
+    open_page = MagicMock()
+    open_page.text = '{"markets":[]}'
+    open_page.json.return_value = {"markets": [], "cursor": None}
+    open_page.raise_for_status.return_value = None
+    closed_page = MagicMock()
+    closed_page.text = '{"markets":[]}'
+    closed_payload = {
+        **_market_payload("m2"),
+        "closed": True,
+        "resolvedOutcome": "YES",
+    }
+    closed_page.json.return_value = {"markets": [closed_payload], "cursor": None}
+    closed_page.raise_for_status.return_value = None
+    client._session.request = MagicMock(
+        side_effect=[not_found, open_page, closed_page]
+    )
+
+    payload = client.get_market_payload("m2")
+
+    assert payload["slug"] == "m2"
+    assert payload["resolvedOutcome"] == "YES"
+    assert client._session.request.call_args_list[2].kwargs["params"] == {
+        "limit": 500,
+        "closed": "true",
+    }
 
 
 def test_get_markets_skips_unsupported_payloads():

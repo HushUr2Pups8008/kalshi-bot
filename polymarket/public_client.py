@@ -4,6 +4,7 @@ import time
 from typing import Any
 
 import requests
+from requests import HTTPError
 
 from config import cfg
 from polymarket.models import PolymarketMarket
@@ -71,10 +72,40 @@ class PolymarketPublicClient:
         return normalize_polymarket_market(data.get("market", data))
 
     def get_market_payload(self, market_id: str) -> dict[str, Any]:
-        data = self._request("GET", f"/v1/markets/{market_id}")
+        try:
+            data = self._request("GET", f"/v1/markets/{market_id}")
+        except HTTPError as exc:
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            if status_code != 404:
+                raise
+            return self._find_market_payload_by_slug_or_id(market_id)
         if not isinstance(data, dict):
             raise ValueError("Polymarket market response must be an object")
         payload = data.get("market", data)
         if not isinstance(payload, dict):
             raise ValueError("Polymarket market payload must be an object")
         return payload
+
+    def _find_market_payload_by_slug_or_id(self, market_id: str) -> dict[str, Any]:
+        wanted = str(market_id).strip()
+        for closed in ("false", "true"):
+            cursor = None
+            while True:
+                params: dict[str, Any] = {"limit": 500, "closed": closed}
+                if cursor:
+                    params["cursor"] = cursor
+                data = self._request("GET", "/v1/markets", params=params)
+                raw_markets = data.get("markets", []) if isinstance(data, dict) else data
+                for payload in raw_markets:
+                    if not isinstance(payload, dict):
+                        continue
+                    identifiers = {
+                        str(payload.get("slug") or "").strip(),
+                        str(payload.get("id") or "").strip(),
+                    }
+                    if wanted in identifiers:
+                        return payload
+                cursor = data.get("cursor") if isinstance(data, dict) else None
+                if not cursor:
+                    break
+        raise ValueError(f"Polymarket market {market_id!r} not found")
