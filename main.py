@@ -953,7 +953,7 @@ class TradingBot:
 
         try:
             candidates = await asyncio.wait_for(
-                self.matcher.find_candidates(news),
+                self.matcher.find_candidates(news, refresh_cache=False),
                 timeout=NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
