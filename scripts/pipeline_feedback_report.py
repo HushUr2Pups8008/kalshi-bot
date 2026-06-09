@@ -20,6 +20,8 @@ FUNNEL_STAGES: tuple[str, ...] = (
     "BLEND_DECISION",
     "SKIPPED",
     "PAPER_TRADE",
+    "PAPER_RESOLUTION",
+    "CALIBRATION_CHECK",
 )
 FRESHNESS_STAGES: tuple[str, ...] = ("EARLY_FRESH_PASS", "EARLY_STALE_DROP")
 MARKET_MIX_STAGES: tuple[str, ...] = (
@@ -30,6 +32,11 @@ MARKET_MIX_STAGES: tuple[str, ...] = (
     "SIGNAL_ANALYSIS_DETAIL",
     "SIGNAL",
     "OPPORTUNITY",
+    "BLEND_DECISION",
+    "SKIPPED",
+    "PAPER_TRADE",
+    "PAPER_RESOLUTION",
+    "CALIBRATION_CHECK",
 )
 
 
@@ -110,13 +117,7 @@ def summarize_events(paths: Iterable[Path], *, top_n: int = 10) -> dict[str, Any
             if reason:
                 freshness_reasons[f"{event_type}:{reason}"] += 1
 
-        if event_type in {
-            "MATCH_DIAGNOSTIC",
-            "MATCH_LLM_REVIEW",
-            "SIGNAL_ANALYSIS_DETAIL",
-            "SIGNAL",
-            "OPPORTUNITY",
-        }:
+        if event_type in MARKET_MIX_STAGES:
             prefix = _market_prefix(event)
             source_class = event.get("source_class") or event.get("source_type") or "unknown"
             market_by_prefix[prefix][event_type] += 1

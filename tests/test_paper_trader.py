@@ -1023,6 +1023,23 @@ class TestCalibrationEmission:
                 abs(c.kwargs["lane_estimate"] - 1.0)
             )
 
+    def test_resolve_market_emits_polymarket_venue_on_resolution_feedback(self, trader):
+        analysis = self._analysis_with_lanes(
+            ticker="ewc-usgub-ks-2026-11-03-dem",
+        )
+        analysis.venue = "polymarket_us"
+        analysis.market.venue = "polymarket_us"
+        analysis.market.series_ticker = "polymarket_us"
+        with patch("dataclasses.asdict", return_value={"series_ticker": "polymarket_us"}):
+            trader.record_trade(analysis)
+
+        with patch("trading.paper_trader.trade_log") as mock_log:
+            _run_resolve(trader, analysis.market.ticker, True)
+
+        assert mock_log.log_paper_resolution.call_args.kwargs["venue"] == "polymarket_us"
+        for call in mock_log.log_calibration_check.call_args_list:
+            assert call.kwargs["venue"] == "polymarket_us"
+
     def test_resolve_market_emits_zero_when_lane_columns_null(self, trader):
         """Historical rows (pre-v0.29.47, no lane data) must emit zero events."""
         analysis = _make_mock_analysis(yes_price=40.0, side="yes")

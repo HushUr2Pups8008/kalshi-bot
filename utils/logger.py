@@ -663,6 +663,7 @@ class TradeLogger:
         resolved_yes: bool,
         pnl_dollars: float,
         bankroll_delta_dollars: float | None = None,
+        venue: str | None = None,
     ) -> None:
         record = {
             "type": "PAPER_RESOLUTION",
@@ -671,6 +672,8 @@ class TradeLogger:
             "resolved_yes": resolved_yes,
             "pnl_dollars": round(pnl_dollars, 2),
         }
+        if venue:
+            record["venue"] = venue
         if bankroll_delta_dollars is not None:
             record["bankroll_delta_dollars"] = round(bankroll_delta_dollars, 2)
         self._write(record)
@@ -1047,6 +1050,7 @@ class TradeLogger:
         trade_considered: bool,
         trade_blocked_reason: str | None,
         evidence_ids_contributing: list[str],
+        venue: str | None = None,
     ) -> None:
         record = {
             "type": "BLEND_DECISION",
@@ -1067,6 +1071,8 @@ class TradeLogger:
             "trade_blocked_reason": trade_blocked_reason,
             "evidence_ids_contributing": evidence_ids_contributing,
         }
+        if venue:
+            record["venue"] = venue
         self._write(record)
 
     def log_evidence_ingestion(
@@ -1422,15 +1428,19 @@ class TradeLogger:
         lane_estimate: float,
         final_resolution: float,
         error: float,
+        venue: str | None = None,
     ) -> None:
-        self._write({
+        record = {
             "type": "CALIBRATION_CHECK",
             "market_ticker": market_ticker,
             "lane": lane,
             "lane_estimate": round(lane_estimate, 4),
             "final_resolution": round(final_resolution, 4),
             "error": round(error, 4),
-        })
+        }
+        if venue:
+            record["venue"] = venue
+        self._write(record)
 
 
 class ShadowTradeLogger:

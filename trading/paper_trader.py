@@ -1033,6 +1033,17 @@ class PaperTrader:
     ) -> None:
         """Emit calibration feedback for already-committed resolved trades."""
         for ticker, resolved_yes, trade_id, lane_name, lane_estimate in lane_events:
+            venue_row = self._conn.execute(
+                "SELECT venue FROM paper_trades WHERE trade_id = ?",
+                (trade_id,),
+            ).fetchone()
+            venue = (
+                str(venue_row["venue"]).strip()
+                if venue_row is not None
+                and "venue" in venue_row.keys()
+                and str(venue_row["venue"] or "").strip()
+                else None
+            )
             final_resolution = 1.0 if resolved_yes else 0.0
             error = abs(lane_estimate - final_resolution)
             trade_log.log_calibration_check(
@@ -1041,6 +1052,7 @@ class PaperTrader:
                 lane_estimate=lane_estimate,
                 final_resolution=final_resolution,
                 error=error,
+                venue=venue,
             )
             if self._calibration_task is not None:
                 try:
@@ -1135,6 +1147,7 @@ class PaperTrader:
                 resolved_yes=resolved_yes,
                 pnl_dollars=pnl,
                 bankroll_delta_dollars=payout,
+                venue=t["venue"] if "venue" in t.keys() else None,
             )
             # PROFIT-ALIGN-002 (2026-05-25): per-resolved-trade calibration
             # observation. The biggest missing-piece flagged in the

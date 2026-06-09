@@ -63,6 +63,8 @@ class TestPipelineFunnelReport:
             "BLEND_DECISION": 0,
             "SKIPPED": 1,
             "PAPER_TRADE": 1,
+            "PAPER_RESOLUTION": 0,
+            "CALIBRATION_CHECK": 0,
         }
         assert {
             "key": "SKIPPED:G1_blended_confidence",
@@ -166,6 +168,11 @@ class TestMarketMixReport:
             "SIGNAL_ANALYSIS_DETAIL": 0,
             "SIGNAL": 1,
             "OPPORTUNITY": 1,
+            "BLEND_DECISION": 0,
+            "SKIPPED": 0,
+            "PAPER_TRADE": 0,
+            "PAPER_RESOLUTION": 0,
+            "CALIBRATION_CHECK": 0,
         }
         assert summary["market_mix"]["by_source_class"]["newswire"]["llm_neutral"] == 1
 
@@ -192,3 +199,64 @@ class TestMarketMixReport:
 
         assert summary["market_mix"]["by_prefix"]["polymarket_us"]["SIGNAL_ANALYSIS_DETAIL"] == 1
         assert summary["market_mix"]["by_prefix"]["polymarket_us"]["SIGNAL"] == 1
+
+    def test_groups_full_polymarket_path_by_venue(self, tmp_path: Path):
+        log_path = _write_jsonl(
+            tmp_path / "polymarket_full_path.jsonl",
+            [
+                {
+                    "type": "SIGNAL_ANALYSIS_DETAIL",
+                    "ticker": "ewc-usgub-ks-2026-11-03-dem",
+                    "venue": "polymarket_us",
+                    "source_class": "newswire",
+                },
+                {
+                    "type": "OPPORTUNITY",
+                    "ticker": "ewc-usgub-ks-2026-11-03-dem",
+                    "venue": "polymarket_us",
+                    "source_class": "newswire",
+                },
+                {
+                    "type": "BLEND_DECISION",
+                    "market_ticker": "ewc-usgub-ks-2026-11-03-dem",
+                    "venue": "polymarket_us",
+                    "source_class": "newswire",
+                },
+                {
+                    "type": "SKIPPED",
+                    "ticker": "ewc-usgub-ks-2026-11-03-dem",
+                    "venue": "polymarket_us",
+                    "source_class": "newswire",
+                    "reason": "G1_blended_confidence",
+                },
+                {
+                    "type": "PAPER_TRADE",
+                    "ticker": "ewc-usgub-ks-2026-11-03-dem",
+                    "venue": "polymarket_us",
+                    "source_class": "newswire",
+                },
+                {
+                    "type": "PAPER_RESOLUTION",
+                    "ticker": "ewc-usgub-ks-2026-11-03-dem",
+                    "venue": "polymarket_us",
+                    "source_class": "newswire",
+                },
+                {
+                    "type": "CALIBRATION_CHECK",
+                    "market_ticker": "ewc-usgub-ks-2026-11-03-dem",
+                    "venue": "polymarket_us",
+                    "source_class": "newswire",
+                },
+            ],
+        )
+
+        summary = summarize_events([log_path])
+
+        polymarket_mix = summary["market_mix"]["by_prefix"]["polymarket_us"]
+        assert polymarket_mix["SIGNAL_ANALYSIS_DETAIL"] == 1
+        assert polymarket_mix["OPPORTUNITY"] == 1
+        assert polymarket_mix["BLEND_DECISION"] == 1
+        assert polymarket_mix["SKIPPED"] == 1
+        assert polymarket_mix["PAPER_TRADE"] == 1
+        assert polymarket_mix["PAPER_RESOLUTION"] == 1
+        assert polymarket_mix["CALIBRATION_CHECK"] == 1
