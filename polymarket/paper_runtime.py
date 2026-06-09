@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from analysis import SignalAnalysis
 from analysis.kelly import kelly_bet
+from analysis.market_matcher import _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
 from analysis.side_selection import compute_edge, select_side
 from config import PAPER_FLAT_CONTRACTS, cfg
@@ -100,6 +101,7 @@ class PolymarketPaperRuntime:
         *,
         route_analysis: _RouteAnalysis,
         keyword_stats: Any,
+        source_stats: Any | None = None,
         client: _PublicMarketClient | None = None,
         estimate_probability_fn: _EstimateProbability = estimate_probability,
         market_limit: int = _DEFAULT_MARKET_LIMIT,
@@ -110,6 +112,7 @@ class PolymarketPaperRuntime:
         self._client = client or PolymarketPublicClient()
         self._route_analysis = route_analysis
         self._keyword_stats = keyword_stats
+        self._source_stats = source_stats
         self._estimate_probability = estimate_probability_fn
         self._market_limit = market_limit
         self._market_cache_ttl_seconds = market_cache_ttl_seconds
@@ -160,6 +163,8 @@ class PolymarketPaperRuntime:
             analysis = await self._build_analysis(news, market, match_score, match_meta)
             if analysis is None:
                 continue
+            if self._source_stats is not None:
+                self._source_stats.increment_signals(news.source)
             result = await self._route_analysis(analysis, accumulate=True, watch=False)
             routed += 1
             self._routed_count += 1
@@ -367,11 +372,19 @@ def match_polymarket_markets(
         if score < min_score:
             continue
         rounded_score = round(score, 4)
+        matched_tokens = sorted(overlap)
+        pre_llm_meta = _compute_pre_llm_match_meta(
+            news.headline,
+            _market_match_text(market),
+            matched_tokens,
+        )
         meta = PolymarketMatchMeta(
             venue=Venue.POLYMARKET_US.value,
             match_score=rounded_score,
-            matched_tokens=sorted(overlap),
+            matched_tokens=matched_tokens,
         ).as_dict()
+        meta.update(pre_llm_meta)
+        meta["matched_tokens"] = matched_tokens
         scored.append((market, rounded_score, meta))
 
     scored.sort(key=lambda item: item[1], reverse=True)

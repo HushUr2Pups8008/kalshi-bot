@@ -55,6 +55,14 @@ class _FakeClient:
         return self.markets[:limit], None
 
 
+class _FakeSourceStats:
+    def __init__(self):
+        self.signals = []
+
+    def increment_signals(self, source: str) -> None:
+        self.signals.append(source)
+
+
 @pytest.mark.asyncio
 async def test_process_news_routes_matched_polymarket_analysis_through_blend(caplog):
     routed = []
@@ -102,6 +110,52 @@ async def test_process_news_routes_matched_polymarket_analysis_through_blend(cap
     assert "[POLYMARKET_MATCH] candidate ticker=will-example-event-happen-2026" in caplog.text
     assert "[POLYMARKET_ANALYSIS] candidate ticker=will-example-event-happen-2026" in caplog.text
     assert "[POLYMARKET_PAPER] heartbeat markets=1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_process_news_supplies_shared_match_meta_and_signal_stats():
+    routed = []
+    source_stats = _FakeSourceStats()
+
+    async def route_analysis(analysis, **kwargs):
+        routed.append((analysis, kwargs))
+        return SimpleNamespace(enqueued=True)
+
+    async def estimate_probability(news, market, *, keyword_stats=None, match_meta=None):
+        assert match_meta["venue"] == "polymarket_us"
+        assert match_meta["matched_tokens"] == ["election", "governor", "kansas"]
+        assert match_meta["pre_llm_quality_pass"] is True
+        assert match_meta["pre_llm_semantic_overlap_count"] == 3
+        assert match_meta["pre_llm_semantic_overlap_ratio"] > 0.25
+        assert match_meta["pre_llm_gate_reason"] is None
+        return 0.65, 0.8, ["election"], "reason", "yes", "moderate", 0.8
+
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient(
+            [
+                _market(
+                    market_id="ewc-usgub-ks-2026-11-03-dem",
+                    title="Democratic Party",
+                    question="Kansas Governor Election Winner",
+                    subtitle="2026 race",
+                )
+            ]
+        ),
+        route_analysis=route_analysis,
+        keyword_stats=None,
+        source_stats=source_stats,
+        estimate_probability_fn=estimate_probability,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+
+    routed_count = await runtime.process_news(
+        _news("Kansas governor election tightens after new polling")
+    )
+
+    assert routed_count == 1
+    assert source_stats.signals == ["Example Wire"]
+    assert routed[0][0].signal_meta["pre_llm_quality_pass"] is True
 
 
 @pytest.mark.asyncio

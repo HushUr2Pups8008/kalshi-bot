@@ -168,3 +168,27 @@ class TestMarketMixReport:
             "OPPORTUNITY": 1,
         }
         assert summary["market_mix"]["by_source_class"]["newswire"]["llm_neutral"] == 1
+
+    def test_groups_non_kalshi_market_mix_by_explicit_series_or_venue(self, tmp_path: Path):
+        log_path = _write_jsonl(
+            tmp_path / "polymarket_mix.jsonl",
+            [
+                {
+                    "type": "SIGNAL_ANALYSIS_DETAIL",
+                    "ticker": "ewc-usgub-ks-2026-11-03-dem",
+                    "series_ticker": "polymarket_us",
+                    "source_class": "newswire",
+                },
+                {
+                    "type": "SIGNAL",
+                    "ticker": "some-polymarket-slug",
+                    "venue": "polymarket_us",
+                    "source_class": "newswire",
+                },
+            ],
+        )
+
+        summary = summarize_events([log_path])
+
+        assert summary["market_mix"]["by_prefix"]["polymarket_us"]["SIGNAL_ANALYSIS_DETAIL"] == 1
+        assert summary["market_mix"]["by_prefix"]["polymarket_us"]["SIGNAL"] == 1

@@ -260,6 +260,26 @@ class TestKeywordOutcomes:
         assert row is not None
         assert row["correct"] in (0, 1)
 
+    def test_keyword_outcomes_use_stored_series_for_polymarket_resolution(self, trader):
+        analysis = _make_mock_analysis(
+            ticker="ewc-usgub-ks-2026-11-03-dem",
+            series_ticker="polymarket_us",
+            keywords=["election"],
+            signal_type="polymarket_news",
+        )
+        analysis.venue = "polymarket_us"
+        analysis.market.venue = "polymarket_us"
+        with patch("dataclasses.asdict", return_value={"series_ticker": "polymarket_us"}):
+            trader.record_trade(analysis)
+
+        _run_resolve(trader, analysis.market.ticker, True)
+
+        row = trader._conn.execute(
+            "SELECT series_ticker FROM keyword_outcomes WHERE keyword='election'"
+        ).fetchone()
+        assert row is not None
+        assert row["series_ticker"] == "polymarket_us"
+
 
 class TestKellyShadow:
     def test_kelly_contracts_column_populated(self, trader):
@@ -1032,6 +1052,31 @@ class TestCalibrationEmission:
         }
         for lane in ("fast", "accumulation", "structural"):
             assert calibration_task._state.lanes[lane].sample_count == 1
+
+    def test_reconciled_settlement_lane_events_update_calibration_task(self, trader, monkeypatch):
+        from tasks.calibration_task import CalibrationTask
+
+        calibration_task = CalibrationTask()
+        monkeypatch.setattr(trader, "_calibration_task", calibration_task)
+
+        asyncio.run(
+            trader.record_resolution_calibration_events(
+                [
+                    ("ewc-usgub-ks-2026-11-03-dem", True, "trade-1", "fast", 0.62),
+                    (
+                        "ewc-usgub-ks-2026-11-03-dem",
+                        True,
+                        "trade-1",
+                        "accumulation",
+                        0.58,
+                    ),
+                ]
+            )
+        )
+
+        assert set(calibration_task._state.lanes.keys()) == {"fast", "accumulation"}
+        assert calibration_task._state.lanes["fast"].sample_count == 1
+        assert calibration_task._state.lanes["accumulation"].sample_count == 1
 
     def test_resolve_market_survives_calibration_task_error(
         self, trader, monkeypatch, caplog

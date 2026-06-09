@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterable
 
 if TYPE_CHECKING:
     from tasks.calibration_task import CalibrationTask
@@ -1020,8 +1020,20 @@ class PaperTrader:
         )
         if not lane_events:
             return
-        final_resolution = 1.0 if resolved_yes else 0.0
-        for trade_id, lane_name, lane_estimate in lane_events:
+        await self.record_resolution_calibration_events(
+            (
+                (ticker, resolved_yes, trade_id, lane_name, lane_estimate)
+                for trade_id, lane_name, lane_estimate in lane_events
+            )
+        )
+
+    async def record_resolution_calibration_events(
+        self,
+        lane_events: Iterable[tuple[str, bool, str, str, float]],
+    ) -> None:
+        """Emit calibration feedback for already-committed resolved trades."""
+        for ticker, resolved_yes, trade_id, lane_name, lane_estimate in lane_events:
+            final_resolution = 1.0 if resolved_yes else 0.0
             error = abs(lane_estimate - final_resolution)
             trade_log.log_calibration_check(
                 market_ticker=ticker,
@@ -1081,7 +1093,15 @@ class PaperTrader:
             total_payout += payout
 
         now_ts = datetime.now(timezone.utc).isoformat()
-        series_ticker = ticker.split("-")[0]  # e.g. "KXTRUMPIRAN-26APR01" -> "KXTRUMPIRAN"
+        series_ticker = next(
+            (
+                str(t["series_ticker"]).strip()
+                for t, _won, _payout, _pnl in outcomes
+                if "series_ticker" in t.keys()
+                and str(t["series_ticker"] or "").strip()
+            ),
+            ticker.split("-")[0],
+        )
 
         # Atomically mark all trades resolved and credit bankroll in one transaction.
         # _credit_bankroll calls _set_state which commits -- both the UPDATE rows and
