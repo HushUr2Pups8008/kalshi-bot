@@ -104,7 +104,7 @@ _SPORTS_TOKENS = frozenset({
 _ECONOMIC_TOKENS = frozenset({
     # Interest rates / bonds
     "treasury", "yield", "yields", "note", "notes", "bond", "bonds",
-    "coupon", "maturity", "spread", "basis",
+    "coupon", "maturity", "spread", "basis", "fed", "rate", "rates",
     # Inflation / macro indicators
     "cpi", "pce", "inflation", "deflation", "gdp", "deficit", "debt",
     "yoy", "qoq", "mom",          # year-over-year / quarter-over-quarter / month-over-month
@@ -157,6 +157,22 @@ def _tokenize(text: str) -> list[str]:
         and t not in _NOISE_TOKENS
         and len(t) >= 3
     ]
+
+
+def _market_query_text(market: KalshiMarket) -> str:
+    return " ".join(
+        part
+        for part in (
+            getattr(market, "title", ""),
+            getattr(market, "question", ""),
+            getattr(market, "subtitle", ""),
+        )
+        if part
+    )
+
+
+def _dedupe_preserving_order(tokens: list[str]) -> list[str]:
+    return list(dict.fromkeys(tokens))
 
 
 def _markets_to_queries(
@@ -223,7 +239,7 @@ def _markets_to_queries(
         _ticker = (getattr(market, "series_ticker", None) or market.ticker).upper()
         if any(_ticker.startswith(p) for p in MARKET_SERIES_BLOCKLIST_PREFIXES):
             continue
-        tokens = _tokenize(market.title)[:4]
+        tokens = _dedupe_preserving_order(_tokenize(_market_query_text(market)))[:4]
         if len(tokens) < 2:
             continue
         # Secondary gate: content-based off-topic token filter.

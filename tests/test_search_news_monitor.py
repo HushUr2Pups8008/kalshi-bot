@@ -84,3 +84,32 @@ def test_non_edge_low_oi_market_still_crowded_out():
 
     assert "obscure ordinance hearing notice" not in queries
     assert len(queries) <= SEARCH_MAX_QUERIES
+
+
+def test_query_builder_uses_market_question_when_title_is_generic():
+    market = SimpleNamespace(
+        title="Democratic Party",
+        question="U.S House Midterm Winner",
+        subtitle="2026 election",
+        open_interest=1000,
+        yes_price=50,
+        series_ticker="polymarket_us",
+        ticker="paccc-usho-midterms-2026-11-03-dem",
+    )
+
+    queries = _markets_to_queries([market])
+
+    assert queries == ["democratic party house midterm"]
+
+
+def test_query_builder_skips_fed_rate_markets_as_economic_noise():
+    market = SimpleNamespace(
+        title="Maintains rate",
+        question="Fed Decision in June",
+        open_interest=1000,
+        yes_price=50,
+        series_ticker="polymarket_us",
+        ticker="rdc-usfed-fomc-2026-06-17-maintains",
+    )
+
+    assert _markets_to_queries([market]) == []
