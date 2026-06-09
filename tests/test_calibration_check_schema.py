@@ -69,6 +69,16 @@ def test_payload_exact_fields(tmp_path):
     assert set(record.keys()) == expected_keys
 
 
+def test_payload_includes_optional_venue_when_present(tmp_path):
+    import json
+    logger = _make_logger(tmp_path)
+    kwargs = _valid_kwargs()
+    kwargs["venue"] = "polymarket_us"
+    logger.log_calibration_check(**kwargs)
+    record = json.loads((tmp_path / "trades.jsonl").read_text().strip())
+    assert record["venue"] == "polymarket_us"
+
+
 # ── Numeric rounding ──────────────────────────────────────────────────────────
 
 def test_numeric_fields_rounded_to_4dp(tmp_path):

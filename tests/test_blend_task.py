@@ -236,6 +236,7 @@ async def test_ready_candidate_reads_lanes_logs_and_enqueues():
             "trade_considered": True,
             "trade_blocked_reason": None,
             "evidence_ids_contributing": ["ev-1", "ev-2"],
+            "venue": "kalshi",
         }
     ]
     assert {call[0] for call in store.calls} == {

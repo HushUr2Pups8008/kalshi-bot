@@ -93,6 +93,7 @@ class BlendDecisionLogger(Protocol):
         trade_considered: bool,
         trade_blocked_reason: str | None,
         evidence_ids_contributing: list[str],
+        venue: str | None = None,
     ) -> None: ...
 
     def log_skipped(self, **kwargs: Any) -> None: ...
@@ -254,6 +255,11 @@ class BlendTask:
         )
         await self._emit_blend_decision(
             ticker=ticker,
+            venue=_venue_string(
+                getattr(fast_lane_result, "venue", None)
+                or getattr(fast_lane_result.market, "venue", None)
+            )
+            or "kalshi",
             blend_result=blend_result,
             regime_weights=regime_weights,
             regime_confidence=regime_confidence,
@@ -442,6 +448,7 @@ class BlendTask:
         self,
         *,
         ticker: str,
+        venue: str | None,
         blend_result: BlendResult,
         regime_weights: dict[str, float],
         regime_confidence: float,
@@ -466,6 +473,7 @@ class BlendTask:
             trade_considered=True,
             trade_blocked_reason=trade_blocked_reason,
             evidence_ids_contributing=evidence_ids,
+            venue=venue,
         )
 
     async def _emit_lane_skips(
@@ -770,6 +778,15 @@ def _series_prefix(ticker: str) -> str:
         # of masking them. (silent-failure-hunter finding 1 / EXEC-002.)
         raise ValueError(f"_series_prefix: empty or null ticker: {ticker!r}")
     return ticker.split("-", 1)[0]
+
+
+def _venue_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "value"):
+        value = value.value
+    text = str(value).strip().lower()
+    return text or None
 
 
 def _binding_constraint(readiness: ReadinessDecision) -> str:
