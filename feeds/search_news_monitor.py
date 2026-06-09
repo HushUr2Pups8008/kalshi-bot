@@ -218,11 +218,19 @@ def _markets_to_queries(
         )
         return 1 if series in edge_series else 0
 
+    def _interest_weight(m: KalshiMarket) -> float:
+        return float(
+            getattr(m, "open_interest", 0)
+            or getattr(m, "open_interest_dollars", 0)
+            or getattr(m, "volume_dollars", 0)
+            or 1.0
+        )
+
     sorted_markets = sorted(
         markets,
         key=lambda m: (
             _is_edge_series(m),
-            getattr(m, "open_interest", 0)
+            _interest_weight(m)
             * (1.0 - abs(getattr(m, "yes_price", 50) - 50) / 50.0),
         ),
         reverse=True,
