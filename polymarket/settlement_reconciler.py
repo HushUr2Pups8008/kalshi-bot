@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
@@ -115,6 +116,57 @@ def _payload_is_settled(payload: Mapping[str, Any]) -> bool:
     )
 
 
+def _payload_list_field(payload: Mapping[str, Any], key: str) -> list[Any]:
+    value = payload.get(key)
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise SettlementDriftError(
+                f"settlement payload has malformed {key}"
+            ) from exc
+        if isinstance(parsed, list):
+            return parsed
+    raise SettlementDriftError(f"settlement payload missing list field {key}")
+
+
+def _resolved_yes_from_yes_no_prices(
+    market_id: str, payload: Mapping[str, Any]
+) -> bool:
+    outcomes = [str(value).strip().lower() for value in _payload_list_field(payload, "outcomes")]
+    prices = _payload_list_field(payload, "outcomePrices")
+    if len(outcomes) != 2 or len(prices) != 2 or set(outcomes) != {"yes", "no"}:
+        raise SettlementDriftError(
+            f"settlement payload for {market_id} missing resolvedOutcome"
+        )
+
+    try:
+        numeric_prices = [float(value) for value in prices]
+    except (TypeError, ValueError) as exc:
+        raise SettlementDriftError(
+            f"settlement payload for {market_id} has nonnumeric outcomePrices"
+        ) from exc
+
+    winning_indexes = [
+        index
+        for index, price in enumerate(numeric_prices)
+        if price >= 0.999
+    ]
+    losing_indexes = [
+        index
+        for index, price in enumerate(numeric_prices)
+        if price <= 0.001
+    ]
+    if len(winning_indexes) != 1 or len(losing_indexes) != 1:
+        raise SettlementDriftError(
+            f"settlement payload for {market_id} has ambiguous outcomePrices"
+        )
+
+    return outcomes[winning_indexes[0]] == "yes"
+
+
 def _resolved_yes_from_payload(
     market_id: str, payload: Mapping[str, Any] | None
 ) -> bool:
@@ -136,9 +188,7 @@ def _resolved_yes_from_payload(
         or payload.get("result")
     )
     if not isinstance(raw_outcome, str):
-        raise SettlementDriftError(
-            f"settlement payload for {market_id} missing resolvedOutcome"
-        )
+        return _resolved_yes_from_yes_no_prices(market_id, payload)
 
     outcome = raw_outcome.strip().lower()
     if outcome == "yes":

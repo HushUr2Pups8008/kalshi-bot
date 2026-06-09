@@ -6,6 +6,7 @@ from polymarket.settlement_reconciler import (
     SettlementDriftError,
     SettlementNotFound,
     SettlementReconciler,
+    _resolved_yes_from_payload,
 )
 
 
@@ -131,6 +132,26 @@ def test_reconciler_resolves_polymarket_no_settlement(conn):
     assert result.checked == 1
     assert result.resolved == 1
     assert resolver.resolved == [("will-example-fail-2026", False)]
+
+
+def test_resolved_yes_from_closed_yes_no_outcome_prices():
+    payload = {
+        "closed": True,
+        "outcomes": '["No","Yes"]',
+        "outcomePrices": '["0","1"]',
+    }
+
+    assert _resolved_yes_from_payload("will-example-happen", payload) is True
+
+
+def test_resolved_no_from_closed_yes_no_outcome_prices():
+    payload = {
+        "closed": True,
+        "outcomes": ["Yes", "No"],
+        "outcomePrices": ["0", "1"],
+    }
+
+    assert _resolved_yes_from_payload("will-example-happen", payload) is False
 
 
 def test_reconciler_noops_when_settlement_not_found(conn):
