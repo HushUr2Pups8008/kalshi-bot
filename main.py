@@ -737,6 +737,7 @@ class TradingBot:
         self._last_drift_logged: dict[str, float] = {}
         # Loop D: previous market ticker set for new-market detection
         self._known_market_tickers: set[str] = set()
+        self._known_polymarket_market_tickers: set[str] = set()
         self._market_refresh_lock = asyncio.Lock()
         self._startup_started_monotonic = time.monotonic()
         self._startup_started_at = datetime.now(timezone.utc)
@@ -1543,8 +1544,22 @@ class TradingBot:
             markets = await self.matcher._cache.get_markets()
             market  = next((m for m in markets if m.ticker == ticker), None)
             if market is None:
-                log.debug("[PRICE_MOVE] %s not in geo cache, skipping targeted search", ticker)
-                return
+                polymarket_runtime = getattr(self, "polymarket_paper_runtime", None)
+                polymarket_markets = (
+                    polymarket_runtime.cached_candidate_markets()
+                    if polymarket_runtime is not None
+                    else []
+                )
+                market = next(
+                    (m for m in polymarket_markets if m.ticker == ticker),
+                    None,
+                )
+                if market is None:
+                    log.debug(
+                        "[PRICE_MOVE] %s not in market caches, skipping targeted search",
+                        ticker,
+                    )
+                    return
 
             from feeds.search_news_monitor import _markets_to_queries, _gnews_url, _bing_url
             from feeds.rss_monitor import poll_feed
@@ -2164,12 +2179,68 @@ class TradingBot:
         return _get
 
     async def _warm_polymarket_paper_runtime_cache(self) -> int:
+        warmed = await TradingBot._refresh_polymarket_paper_runtime_cache(
+            self,
+            initial=True,
+        )
+        log.info("[POLYMARKET_PAPER] warm_cache_ready markets=%d", warmed)
+        return warmed
+
+    async def _refresh_polymarket_paper_runtime_cache(
+        self,
+        *,
+        initial: bool = False,
+    ) -> int:
         polymarket_runtime = getattr(self, "polymarket_paper_runtime", None)
         if polymarket_runtime is None:
             return 0
         warmed = await polymarket_runtime.warm_cache()
-        log.info("[POLYMARKET_PAPER] warm_cache_ready markets=%d", warmed)
+        candidate_markets = list(polymarket_runtime.cached_candidate_markets())
+        current_tickers = {market.ticker for market in candidate_markets}
+        known_tickers = getattr(self, "_known_polymarket_market_tickers", set())
+
+        if known_tickers and not initial:
+            added = current_tickers - known_tickers
+            for market in candidate_markets:
+                if market.ticker not in added:
+                    continue
+                from utils.logger import trade_log as _tl
+
+                await write_trade_log_async(
+                    _tl.log_new_market,
+                    ticker=market.ticker,
+                    title=market.title,
+                    series_ticker=market.series_ticker,
+                )
+                log.info(
+                    "[POLYMARKET_NEW_MARKET] %s listed: '%s' -- triggering targeted search",
+                    market.ticker,
+                    market.title[:60],
+                )
+                asyncio.create_task(self._trigger_targeted_search(market.ticker))
+
+        self._known_polymarket_market_tickers = current_tickers
+        stats = polymarket_runtime.stats()
+        log.info(
+            "[POLYMARKET_PAPER] candidate_cache_ready markets=%d "
+            "candidate_markets=%d initial=%s",
+            stats.market_count,
+            len(candidate_markets),
+            initial,
+        )
         return warmed
+
+    async def _polymarket_market_refresh_task(self) -> None:
+        from polymarket.paper_runtime import _DEFAULT_MARKET_CACHE_TTL_SECONDS
+
+        if getattr(self, "polymarket_paper_runtime", None) is None:
+            return
+        while True:
+            await asyncio.sleep(_DEFAULT_MARKET_CACHE_TTL_SECONDS)
+            try:
+                await self._refresh_polymarket_paper_runtime_cache()
+            except Exception as exc:
+                log.warning("[POLYMARKET_PAPER] market_refresh_task_error error=%s", exc)
 
     async def _check_llm_health(self) -> None:
         """Log LLM availability at startup so the operator knows what's active."""
@@ -2417,6 +2488,10 @@ class TradingBot:
             asyncio.create_task(self.ws.run(),                          name="websocket"),
             asyncio.create_task(self._warm_ws_subscriptions(),          name="ws_warm"),
             asyncio.create_task(self._market_refresh_task(),            name="market_refresh"),
+            asyncio.create_task(
+                self._polymarket_market_refresh_task(),
+                name="polymarket_market_refresh",
+            ),
             asyncio.create_task(self._auto_resolve_task(),              name="auto_resolve"),
             asyncio.create_task(self._subreddit_discovery_task(),       name="sub_discovery"),
             asyncio.create_task(self._log_rotation_task(),              name="log_rotation"),
