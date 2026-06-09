@@ -954,7 +954,7 @@ async def test_on_news_item_times_out_kalshi_matching_without_starving_polymarke
     bot.polymarket_paper_runtime = MagicMock()
     bot.polymarket_paper_runtime.process_news = AsyncMock(return_value=0)
 
-    async def _never_returns(_news):
+    async def _never_returns(_news, **_kwargs):
         await asyncio.Event().wait()
 
     bot.matcher.find_candidates = AsyncMock(side_effect=_never_returns)
@@ -968,6 +968,8 @@ async def test_on_news_item_times_out_kalshi_matching_without_starving_polymarke
 
     assert bot.polymarket_paper_runtime.process_news.await_count == 2
     assert bot.matcher.find_candidates.await_count == 2
+    for call in bot.matcher.find_candidates.await_args_list:
+        assert call.kwargs["refresh_cache"] is False
 
 
 @pytest.mark.asyncio
