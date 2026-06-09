@@ -113,3 +113,26 @@ def test_query_builder_skips_fed_rate_markets_as_economic_noise():
     )
 
     assert _markets_to_queries([market]) == []
+
+
+def test_zero_liquidity_markets_still_rank_by_uncertainty():
+    decided = SimpleNamespace(
+        title="Candidate Decided",
+        question="Remote House Primary Winner",
+        open_interest=0,
+        yes_price=95,
+        series_ticker="polymarket_us",
+        ticker="remote-primary-decided",
+    )
+    contested = SimpleNamespace(
+        title="Candidate Tossup",
+        question="Competitive House Primary Winner",
+        open_interest=0,
+        yes_price=51,
+        series_ticker="polymarket_us",
+        ticker="competitive-primary-tossup",
+    )
+
+    queries = _markets_to_queries([decided, contested])
+
+    assert queries[0] == "candidate tossup competitive house"
