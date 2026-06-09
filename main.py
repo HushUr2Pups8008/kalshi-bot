@@ -738,6 +738,7 @@ class TradingBot:
         # Loop D: previous market ticker set for new-market detection
         self._known_market_tickers: set[str] = set()
         self._known_polymarket_market_tickers: set[str] = set()
+        self._last_polymarket_yes_ask_cents: dict[str, int] = {}
         self._market_refresh_lock = asyncio.Lock()
         self._startup_started_monotonic = time.monotonic()
         self._startup_started_at = datetime.now(timezone.utc)
@@ -2198,6 +2199,7 @@ class TradingBot:
         candidate_markets = list(polymarket_runtime.cached_candidate_markets())
         current_tickers = {market.ticker for market in candidate_markets}
         known_tickers = getattr(self, "_known_polymarket_market_tickers", set())
+        added: set[str] = set()
 
         if known_tickers and not initial:
             added = current_tickers - known_tickers
@@ -2219,6 +2221,38 @@ class TradingBot:
                 )
                 asyncio.create_task(self._trigger_targeted_search(market.ticker))
 
+        last_prices = getattr(self, "_last_polymarket_yes_ask_cents", {})
+        if not initial and last_prices:
+            now = time.monotonic()
+            last_search = getattr(self, "_last_search_triggered", {})
+            for market in candidate_markets:
+                if market.ticker in added or market.yes_ask_cents is None:
+                    continue
+                previous_price = last_prices.get(market.ticker)
+                if previous_price is None:
+                    continue
+                move = abs(market.yes_ask_cents - previous_price)
+                if move < PRICE_MOVE_THRESHOLD_CENTS:
+                    continue
+                last_trigger = last_search.get(market.ticker, 0.0)
+                if now - last_trigger < PRICE_SEARCH_COOLDOWN_SECS:
+                    continue
+                last_search[market.ticker] = now
+                log.info(
+                    "[POLYMARKET_PRICE_MOVE] %s yes_ask %dc -> %dc "
+                    "(move=%dc) -- triggering targeted search",
+                    market.ticker,
+                    previous_price,
+                    market.yes_ask_cents,
+                    move,
+                )
+                asyncio.create_task(self._trigger_targeted_search(market.ticker))
+
+        self._last_polymarket_yes_ask_cents = {
+            market.ticker: market.yes_ask_cents
+            for market in candidate_markets
+            if market.yes_ask_cents is not None
+        }
         self._known_polymarket_market_tickers = current_tickers
         stats = polymarket_runtime.stats()
         log.info(

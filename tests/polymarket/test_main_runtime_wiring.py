@@ -178,6 +178,72 @@ async def test_polymarket_refresh_detects_new_candidate_market_and_triggers_sear
 
 
 @pytest.mark.asyncio
+async def test_polymarket_refresh_triggers_targeted_search_on_price_move(monkeypatch):
+    old_market = PolymarketMarket(
+        venue=Venue.POLYMARKET_US,
+        market_id="moving-senate-market",
+        title="Moving Senate market",
+        status="open",
+        yes_ask_cents=60,
+        no_ask_cents=41,
+        volume_dollars=1_000.0,
+        open_interest_dollars=500.0,
+        close_time="2026-12-31T23:59:59Z",
+        category="politics",
+    )
+    moved_market = PolymarketMarket(
+        venue=Venue.POLYMARKET_US,
+        market_id="moving-senate-market",
+        title="Moving Senate market",
+        status="open",
+        yes_ask_cents=45,
+        no_ask_cents=56,
+        volume_dollars=1_000.0,
+        open_interest_dollars=500.0,
+        close_time="2026-12-31T23:59:59Z",
+        category="politics",
+    )
+    triggered = []
+
+    class Runtime:
+        async def warm_cache(self):
+            return 1
+
+        def cached_candidate_markets(self):
+            return [moved_market]
+
+        def stats(self):
+            return SimpleNamespace(market_count=1)
+
+    async def trigger(ticker):
+        triggered.append(ticker)
+
+    real_create_task = __import__("asyncio").create_task
+
+    def capture_task(coro):
+        task = real_create_task(coro)
+        triggered.append(task)
+        return task
+
+    bot = SimpleNamespace(
+        polymarket_paper_runtime=Runtime(),
+        _known_polymarket_market_tickers={old_market.ticker},
+        _last_polymarket_yes_ask_cents={old_market.ticker: old_market.yes_ask_cents},
+        _last_search_triggered={},
+        _trigger_targeted_search=trigger,
+    )
+    monkeypatch.setattr("main.asyncio.create_task", capture_task)
+    monkeypatch.setattr("main.PRICE_MOVE_THRESHOLD_CENTS", 10)
+    monkeypatch.setattr("main.PRICE_SEARCH_COOLDOWN_SECS", 0)
+
+    await TradingBot._refresh_polymarket_paper_runtime_cache(bot)
+    await triggered[-1]
+
+    assert moved_market.ticker in triggered
+    assert bot._last_polymarket_yes_ask_cents[moved_market.ticker] == 45
+
+
+@pytest.mark.asyncio
 async def test_targeted_search_resolves_polymarket_candidate_market(monkeypatch):
     market = PolymarketMarket(
         venue=Venue.POLYMARKET_US,
