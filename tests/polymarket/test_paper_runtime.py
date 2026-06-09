@@ -347,6 +347,36 @@ def test_match_polymarket_markets_filters_non_politics_categories():
     ]
 
 
+def test_match_polymarket_markets_uses_headline_score_when_body_dilutes_match():
+    news = _news("Alaska Senate candidate under investigation over alleged voter confusion scheme")
+    news.body = " ".join(f"irrelevanttoken{idx}" for idx in range(80))
+
+    matches = match_polymarket_markets(
+        news,
+        [
+            _market(
+                market_id="ewc-usse-ak-2026-11-03-rep",
+                title="Republican Party",
+                question="Alaska Senate Election Winner",
+                category="politics",
+            ),
+            _market(
+                market_id="ewc-usse-ak-2026-11-03-dem",
+                title="Democratic Party",
+                question="Alaska Senate Election Winner",
+                category="politics",
+            ),
+        ],
+        max_results=5,
+        min_score=0.08,
+    )
+
+    assert [market.market_id for market, _score, _meta in matches] == [
+        "ewc-usse-ak-2026-11-03-rep",
+        "ewc-usse-ak-2026-11-03-dem",
+    ]
+
+
 def test_match_polymarket_markets_uses_question_and_subtitle_text():
     matches = match_polymarket_markets(
         _news("Kansas governor election tightens after new polling"),
