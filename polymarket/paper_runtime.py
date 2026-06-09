@@ -12,7 +12,7 @@ from analysis.kelly import kelly_bet
 from analysis.market_matcher import _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
 from analysis.side_selection import compute_edge, select_side
-from config import PAPER_FLAT_CONTRACTS, cfg
+from config import PAPER_FLAT_CONTRACTS, PAPER_MAX_CANDIDATES, cfg
 from feeds import NewsItem
 from polymarket.candidate_adapter import adapt_polymarket_analysis
 from polymarket.models import PolymarketMarket
@@ -24,7 +24,7 @@ log = get_logger("polymarket.paper_runtime")
 
 _DEFAULT_MARKET_LIMIT = 500
 _DEFAULT_MARKET_CACHE_TTL_SECONDS = 300.0
-_DEFAULT_MAX_CANDIDATES = 1
+_DEFAULT_MAX_CANDIDATES = PAPER_MAX_CANDIDATES
 _DEFAULT_MIN_MATCH_SCORE = 0.08
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _STOPWORDS = frozenset(

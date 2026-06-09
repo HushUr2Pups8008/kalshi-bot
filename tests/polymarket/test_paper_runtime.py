@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from config import PAPER_MAX_CANDIDATES
 from feeds import NewsItem
 from polymarket.models import PolymarketMarket
 from polymarket.paper_runtime import (
@@ -147,6 +148,38 @@ async def test_process_news_routes_matched_polymarket_analysis_through_blend(cap
     assert "[POLYMARKET_MATCH] candidate ticker=will-example-event-happen-2026" in caplog.text
     assert "[POLYMARKET_ANALYSIS] candidate ticker=will-example-event-happen-2026" in caplog.text
     assert "[POLYMARKET_PAPER] heartbeat markets=1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_process_news_defaults_to_shared_paper_candidate_count():
+    routed = []
+    markets = [
+        _market(market_id=f"will-example-event-happen-{idx}")
+        for idx in range(PAPER_MAX_CANDIDATES)
+    ]
+
+    async def route_analysis(analysis, **kwargs):
+        routed.append((analysis, kwargs))
+        return SimpleNamespace(enqueued=True)
+
+    async def estimate_probability(news, market, *, keyword_stats=None, match_meta=None):
+        return 0.65, 0.8, ["example"], "reason", "yes", "moderate", 0.8
+
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient(markets),
+        route_analysis=route_analysis,
+        keyword_stats=None,
+        estimate_probability_fn=estimate_probability,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+
+    routed_count = await runtime.process_news(_news())
+
+    assert routed_count == PAPER_MAX_CANDIDATES
+    assert [analysis.market.ticker for analysis, _kwargs in routed] == [
+        market.market_id for market in markets
+    ]
 
 
 @pytest.mark.asyncio
