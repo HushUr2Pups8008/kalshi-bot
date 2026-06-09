@@ -51,7 +51,7 @@ _STOPWORDS = frozenset(
         "with",
     }
 )
-_SUPPRESSED_CATEGORIES = frozenset({"sports"})
+_ALLOWED_CATEGORIES = frozenset({"politics"})
 
 
 class _PublicMarketClient(Protocol):
@@ -410,7 +410,7 @@ def match_polymarket_markets(
 
 
 def _is_suppressed_market(market: PolymarketMarket) -> bool:
-    return market.category.strip().lower() in _SUPPRESSED_CATEGORIES
+    return market.category.strip().lower() not in _ALLOWED_CATEGORIES
 
 
 def _market_match_text(market: PolymarketMarket) -> str:

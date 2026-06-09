@@ -88,8 +88,10 @@ async def test_warm_cache_populates_cached_markets_for_shared_getters():
 async def test_cached_candidate_markets_excludes_suppressed_polymarket_categories():
     politics = _market(market_id="will-us-iran-deal-happen", category="politics")
     sports = _market(market_id="will-nba-finals-game-seven-happen", category="sports")
+    culture = _market(market_id="will-tommy-lee-jones-attend", category="culture")
+    macro = _market(market_id="will-fed-cut-rates", category="macro")
     runtime = PolymarketPaperRuntime(
-        client=_FakeClient([sports, politics]),
+        client=_FakeClient([sports, culture, macro, politics]),
         route_analysis=AsyncMock(),
         keyword_stats=None,
         market_limit=10,
@@ -310,6 +312,38 @@ def test_match_polymarket_markets_filters_non_tradeable_markets():
 
     assert [market.market_id for market, _score, _meta in matches] == [
         "will-example-event-happen-alt"
+    ]
+
+
+def test_match_polymarket_markets_filters_non_politics_categories():
+    matches = match_polymarket_markets(
+        _news("Georgia governor election polling tightens"),
+        [
+            _market(
+                market_id="will-georgia-governor-election-happen",
+                title="Georgia Governor Election Winner",
+                question="Georgia Governor Election Winner",
+                category="politics",
+            ),
+            _market(
+                market_id="will-georgia-reality-show-winner-happen",
+                title="Georgia reality show winner",
+                question="Georgia reality show winner",
+                category="culture",
+            ),
+            _market(
+                market_id="will-georgia-game-total-happen",
+                title="Georgia game total",
+                question="Georgia game total",
+                category="sports",
+            ),
+        ],
+        max_results=5,
+        min_score=0.01,
+    )
+
+    assert [market.market_id for market, _score, _meta in matches] == [
+        "will-georgia-governor-election-happen"
     ]
 
 
