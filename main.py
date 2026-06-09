@@ -115,6 +115,11 @@ _BOT_RUNTIME_LOCK = DATA_DIR / "bot_runtime.lock"
 # are never compared against each other (dataclasses without __lt__ would raise).
 _news_counter = itertools.count()
 
+NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS = max(
+    1.0,
+    float(os.getenv("NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS", "20")),
+)
+
 
 def _validate_startup_observability_probe_record(record: dict, required_fields: tuple[str, ...]) -> list[str]:
     missing = [field for field in required_fields if field not in record]
@@ -946,7 +951,20 @@ class TradingBot:
         if not self._exchange_open_or_skip("news"):
             return
 
-        candidates = await self.matcher.find_candidates(news)
+        try:
+            candidates = await asyncio.wait_for(
+                self.matcher.find_candidates(news),
+                timeout=NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            log.warning(
+                "News candidate discovery timed out after %.1fs; skipping Kalshi "
+                "candidate path for source=%s headline=%s",
+                NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS,
+                news.source,
+                news.headline[:80],
+            )
+            return
         if not candidates:
             log.debug("No matching markets for: %s", news.headline[:60])
             return

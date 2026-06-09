@@ -948,6 +948,29 @@ async def test_news_consumer_task_continues_after_handler_exception():
 
 
 @pytest.mark.asyncio
+async def test_on_news_item_times_out_kalshi_matching_without_starving_polymarket(monkeypatch):
+    monkeypatch.setattr(main_module, "NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS", 0.01)
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = MagicMock()
+    bot.polymarket_paper_runtime.process_news = AsyncMock(return_value=0)
+
+    async def _never_returns(_news):
+        await asyncio.Event().wait()
+
+    bot.matcher.find_candidates = AsyncMock(side_effect=_never_returns)
+    first = _make_news()
+    second = _make_news()
+    second.headline = "Second fresh headline"
+    second.item_id = "id-2"
+
+    await bot.on_news_item(first)
+    await bot.on_news_item(second)
+
+    assert bot.polymarket_paper_runtime.process_news.await_count == 2
+    assert bot.matcher.find_candidates.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_process_fade_tweet_returns_early_without_pattern():
     bot = _make_bot_stub()
     tweet = _make_news()
