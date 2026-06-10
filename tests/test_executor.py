@@ -668,6 +668,7 @@ class TestStructuredBoundaryLogging:
                 market_price=0.50001,
                 edge=0.01233,
                 min_edge_threshold=0.04,
+                venue="polymarket_us",
             )
 
         record = write_mock.call_args.args[0]
@@ -677,6 +678,7 @@ class TestStructuredBoundaryLogging:
         assert record["absolute_diff"] == pytest.approx(0.0123)
         assert record["source"] == "Reuters"
         assert record["method"] == "keyword"
+        assert record["venue"] == "polymarket_us"
 
     @pytest.mark.asyncio
     async def test_execute_live_logs_edge_context_on_success(self, monkeypatch):
