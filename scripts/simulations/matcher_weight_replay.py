@@ -17,6 +17,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from analysis.match_feedback import is_market_defining_token
+
 try:
     from config import PAPER_MIN_MATCH_SCORE
 except Exception:  # pragma: no cover - CLI fallback for isolated use
@@ -52,9 +54,17 @@ def _coerce_weight(raw: Any) -> float:
 
 
 def score_multiplier(tokens: list[str], prefix: str, weights: dict[str, Any]) -> float:
-    """Mirror production mean composition for overlap-token downweights."""
+    """Mirror production mean composition for overlap-token downweights.
+
+    Keeps parity with analysis.market_matcher._combined_token_downweight,
+    including the defining-token guard: a market's own ticker-defining token is
+    never downweighted (kept at 1.0) regardless of the stored weight.
+    """
     values: list[float] = []
     for token in tokens:
+        if is_market_defining_token(token, prefix):
+            values.append(1.0)
+            continue
         entry = weights.get(f"{prefix}:{token}", {})
         values.append(_coerce_weight(entry.get("weight", 1.0)))
     return sum(values) / len(values) if values else 1.0

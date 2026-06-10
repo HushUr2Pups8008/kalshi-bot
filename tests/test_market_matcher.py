@@ -350,8 +350,13 @@ class TestFindCandidates:
         matcher._cache.get_markets = AsyncMock(return_value=[market])
         news = _make_news("Trump announces Iran nuclear deal breakthrough")
 
+        # Downweight a genuine BRIDGE token ('nuclear'), not the market's own
+        # defining token. 'deal' is a substring of KXNEWDEAL, so it is treated
+        # as the market's defining token and never downweighted (kept at 1.0,
+        # see TestDefiningTokenGuard); 'nuclear' is not, so its learned weight
+        # applies and is what this logging test asserts on.
         weights = {
-            "KXNEWDEAL:deal": {
+            "KXNEWDEAL:nuclear": {
                 "weight": 0.25,
                 "pinned": False,
                 "_seed_status": "provisional",
@@ -378,8 +383,8 @@ class TestFindCandidates:
         assert payload["ticker"] == "KXNEWDEAL-JUN01"
         assert payload["market_prefix"] == "KXNEWDEAL"
         assert payload["composition_rule"] == "mean"
-        assert payload["token_weights"]["deal"]["weight"] == pytest.approx(0.25)
-        assert payload["token_weights"]["deal"]["status"] == "provisional"
+        assert payload["token_weights"]["nuclear"]["weight"] == pytest.approx(0.25)
+        assert payload["token_weights"]["nuclear"]["status"] == "provisional"
         assert payload["final_multiplier"] == pytest.approx(
             _combined_token_downweight(set(payload["tokens"]), "KXNEWDEAL", weights)
         )
@@ -1282,11 +1287,14 @@ class TestMatcherDownweightApplication:
         assert s == pytest.approx(0.05)
 
     def test_supporting_tokens_dilute_one_generic_downweight(self):
-        # Two tokens: one downweighted to 0.30, one full weight.
+        # Two tokens: one downweighted bridge token (0.30), one full weight.
         # Composition-aware averaging avoids letting one generic bridge token
-        # dominate a more specific legitimate overlap.
-        weights = {"KXNEWDEAL:deal": {"weight": 0.30}}
-        s = self._apply_downweight(0.50, {"deal", "trump"}, "KXNEWDEAL", weights)
+        # dominate a more specific legitimate overlap. Both tokens are chosen so
+        # that NEITHER is the market's own ticker-defining token (which is never
+        # downweighted, see TestDefiningTokenGuard) — 'trump' and 'cabinet' are
+        # not substrings of 'KXCABLEAVE', so the learned 0.30 weight applies.
+        weights = {"KXCABLEAVE:trump": {"weight": 0.30}}
+        s = self._apply_downweight(0.50, {"trump", "cabinet"}, "KXCABLEAVE", weights)
         assert s == pytest.approx(0.325)  # 0.50 × ((0.30 + 1.00) / 2)
 
     def test_legitimate_market_prefix_unaffected(self):
@@ -1307,3 +1315,67 @@ class TestMatcherDownweightApplication:
         weights = {"KX:other": {"weight": 0.10}}
         s = self._apply_downweight(0.50, {"unknown"}, "KX", weights)
         assert s == 0.50  # 'unknown' not in weights → default 1.0
+
+
+# ---------------------------------------------------------------------------
+# Matcher-feedback self-poisoning guard — a market's own ticker-defining token
+# must never be floored out of the candidate funnel.
+# ---------------------------------------------------------------------------
+
+class TestDefiningTokenGuard:
+    """The feedback loop's only negative signal (``false_positive_neutral``)
+    fires when the LLM saw the *right* market but the headline carried no
+    directional edge. A correctly-matched high-traffic market therefore drives
+    its own defining token's fp_rate -> 1.0 and the loop floors that token to
+    0.10. A single-overlap match on a 0.10 token scores below the 0.06
+    threshold, so the correct market silently disappears from the opportunity
+    funnel — and a 14-day rolling window makes it oscillate rather than recover.
+    These tests pin that a market's ticker-defining token keeps full weight
+    regardless of the learned (poisoned) value. WHY: opportunity throughput is
+    the binding constraint on trade volume; flooring a defining token throttles
+    it without improving precision (the match was never wrong).
+    """
+
+    @staticmethod
+    def _apply_downweight(score, overlap, prefix, weights):
+        from analysis.market_matcher import _combined_token_downweight
+        return score * _combined_token_downweight(overlap, prefix, weights)
+
+    def test_floored_defining_token_kept_at_full_weight(self):
+        # KXVISITIRAN:iran floored to 0.10 by the loop (fp_rate≈0.97 from many
+        # no-signal Iran headlines). Guard restores it: score unchanged.
+        weights = {"KXVISITIRAN:iran": {"weight": 0.10}}
+        s = self._apply_downweight(0.12, {"iran"}, "KXVISITIRAN", weights)
+        assert s == pytest.approx(0.12)  # NOT 0.012 — match survives 0.06 gate
+
+    def test_floored_topic_defining_token_kept_at_full_weight(self):
+        # Topic word encoded in the ticker (tariffs in KXNEWTARIFFS), not a
+        # named entity — still defining, still protected.
+        weights = {"KXNEWTARIFFS:tariffs": {"weight": 0.10}}
+        s = self._apply_downweight(0.10, {"tariffs"}, "KXNEWTARIFFS", weights)
+        assert s == pytest.approx(0.10)
+
+    def test_defining_token_mixed_with_real_bridge_token(self):
+        # 'iran' is defining (kept 1.0); 'sanctions' is a genuine bridge token
+        # downweighted to 0.20. Only the bridge token is penalized.
+        weights = {
+            "KXVISITIRAN:iran": {"weight": 0.10},
+            "KXVISITIRAN:sanctions": {"weight": 0.20},
+        }
+        s = self._apply_downweight(0.50, {"iran", "sanctions"}, "KXVISITIRAN", weights)
+        assert s == pytest.approx(0.30)  # 0.50 × ((1.00 + 0.20) / 2)
+
+    def test_short_substring_token_is_not_treated_as_defining(self):
+        # 'out' (len 3) is a substring of KXSCHUMEROUT but is an incidental
+        # fragment, not the subject word — the guard's length floor (4) excludes
+        # it, so a learned downweight on it still applies.
+        weights = {"KXSCHUMEROUT:out": {"weight": 0.10}}
+        s = self._apply_downweight(0.50, {"out"}, "KXSCHUMEROUT", weights)
+        assert s == pytest.approx(0.05)  # downweight applies (not defining)
+
+    def test_non_substring_token_still_downweighted(self):
+        # 'trump' is NOT in KXCABLEAVE's ticker → a legitimate bridge token that
+        # the loop may downweight. Guard must not protect it.
+        weights = {"KXCABLEAVE:trump": {"weight": 0.10}}
+        s = self._apply_downweight(0.50, {"trump"}, "KXCABLEAVE", weights)
+        assert s == pytest.approx(0.05)

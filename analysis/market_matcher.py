@@ -23,6 +23,7 @@ from config import PAPER_MIN_MATCH_SCORE, PAPER_MAX_CANDIDATES, MARKET_SERIES_BL
 from config import ENABLE_LOW_QUALITY_MATCH_SUPPRESSION, ENABLE_MATCH_SUPPRESSION_DEBUG
 from analysis.geo_entities import GEO_NAMED_ENTITIES
 from analysis.market_specificity import compute_specificity_score
+from analysis.match_feedback import is_market_defining_token
 from analysis.regime_classifier import compute_regime_weights
 from feeds import NewsItem
 from kalshi import KalshiMarket
@@ -183,6 +184,12 @@ def _combined_token_downweight(
         return 1.0
     values: list[float] = []
     for token in overlap:
+        # A market's own ticker-defining token is never a noise bridge; keep it
+        # at full weight so the self-poisoning feedback loop cannot floor the
+        # correct market out of the candidate funnel.
+        if is_market_defining_token(token, ticker_prefix):
+            values.append(1.0)
+            continue
         raw = weights.get(f"{ticker_prefix}:{token}", {}).get("weight", 1.0)
         try:
             values.append(float(raw))
@@ -199,6 +206,11 @@ def _token_downweight_details(
     """Return the composed downweight plus per-token audit details."""
     token_weights: dict[str, dict[str, Any]] = {}
     for token in sorted(overlap):
+        # Mirror the guard in _combined_token_downweight: a market's own
+        # ticker-defining token is reported at full weight, never downweighted.
+        if is_market_defining_token(token, ticker_prefix):
+            token_weights[token] = {"weight": 1.0, "status": "defining"}
+            continue
         key = f"{ticker_prefix}:{token}"
         entry = weights.get(key, {}) if weights else {}
         raw = entry.get("weight", 1.0) if isinstance(entry, dict) else 1.0

@@ -19,6 +19,28 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.1] - 2026-06-10
+
+### Fixed
+
+- **Kalshi matcher defining-token guard wired into the scoring path**
+  (`PROFIT-MATCH-DYNAMIC` self-poisoning; completes PR #130). PR #130 added
+  `is_market_defining_token` and guarded `match_feedback.get_token_weight`
+  plus the Polymarket runtime, but the Kalshi matcher
+  (`analysis/market_matcher.py`) inlines the per-token weight lookup in
+  `_combined_token_downweight` / `_token_downweight_details` and never calls
+  `get_token_weight`, so it remained unguarded. A correctly-matched
+  high-traffic market accumulated `false_positive_neutral` reviews (right
+  market, no directional edge), driving its own ticker-defining token's
+  fp_rate→~1.0 until the loop floored it to 0.10; a single-overlap match on
+  that token then scored below the 0.06 threshold and the correct market
+  silently left the candidate funnel — throttling opportunity throughput, the
+  binding constraint on trade volume. The guard now keeps a market's own
+  ticker-defining token at full weight. It only ever *raises* a weight to 1.0,
+  never bypasses the structural precision gate or the score threshold, and is
+  mirrored in `scripts/simulations/matcher_weight_replay.py` for replay-CI
+  fidelity. Diagnosed from `logs/reports/performance/analysis_20260610_1100.txt`.
+
 ## [0.33.0] - 2026-05-30
 
 ### Added
