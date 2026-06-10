@@ -12,6 +12,7 @@ from analysis.match_feedback import (
     aggregate_window,
     get_token_weight,
     ingest_review_events,
+    is_market_defining_token,
     load_weights,
     market_prefix_for,
     summarize_weight_status,
@@ -218,6 +219,46 @@ class TestGetTokenWeight:
     def test_corrupted_weight_falls_back_to_one(self):
         weights = {"P:t": {"weight": "not a float"}}
         assert get_token_weight("t", "P", weights=weights) == 1.0
+
+    def test_defining_token_bypasses_floored_weight(self):
+        # The loop floored KXVISITIRAN:iran to 0.10, but 'iran' is the market's
+        # own ticker-defining token — get_token_weight must ignore the learned
+        # weight and return 1.0 so the correct market stays matchable.
+        weights = {"KXVISITIRAN:iran": {"weight": 0.10, "fp_rate": 0.97, "total": 1058}}
+        assert get_token_weight("iran", "KXVISITIRAN", weights=weights) == 1.0
+
+
+class TestIsMarketDefiningToken:
+    """A token encoded into the series ticker is the market's subject word and
+    must never be downweighted as a noise bridge. See is_market_defining_token.
+    """
+
+    @pytest.mark.parametrize(
+        "token,prefix",
+        [
+            ("iran", "KXVISITIRAN"),
+            ("tariffs", "KXNEWTARIFFS"),
+            ("zelenskyy", "KXZELENSKYYOUT"),
+            ("netanyahu", "KXNETANYAHUOUT"),
+            ("india", "KXTARIFFRATEINDIA"),
+            ("IRAN", "kxvisitiran"),  # case-insensitive
+        ],
+    )
+    def test_defining_tokens_detected(self, token, prefix):
+        assert is_market_defining_token(token, prefix) is True
+
+    @pytest.mark.parametrize(
+        "token,prefix",
+        [
+            ("trump", "KXCABLEAVE"),   # bridge token, not in ticker
+            ("sanctions", "KXVISITIRAN"),
+            ("out", "KXSCHUMEROUT"),   # len < 4: incidental fragment
+            ("", "KXVISITIRAN"),       # empty token
+            ("iran", ""),              # empty prefix
+        ],
+    )
+    def test_non_defining_tokens_rejected(self, token, prefix):
+        assert is_market_defining_token(token, prefix) is False
 
 
 class TestSummarizeWeightStatus:
