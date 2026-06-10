@@ -348,6 +348,50 @@ These items were added during the 2026-04-20 expanded audit. They do not replace
 
 ---
 
+### PROFIT-MATCH-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-MATCH-002 |
+| **Title** | Kalshi matcher did not apply the defining-token guard (PR #130 gap) |
+| **Category** | Opportunity Throughput / Matcher Feedback |
+| **Severity** | HIGH (throughput; binding constraint on trade volume) |
+| **Status** | IMPLEMENTED on branch `fix/kalshi-matcher-defining-token-guard` (`12df3a0`, v0.33.1) — PENDING operator merge gate |
+| **Priority** | NOW |
+| **primary_agent** | Claude Code (implement) |
+| **second_agent_review_required** | YES — done: `kalshi-safety-reviewer` (APPROVE-WITH-NITS on code) |
+| **operator_gate_required** | YES — touches signal-generating ingestion that drives trade decisions; operator approves merge/push |
+| **recommended_workflow** | high-assurance (implement → independent adversarial review → operator gate) |
+| **safe_while_bot_running** | YES to merge code (read-time guard, only raises weights to 1.0); does NOT mutate live state |
+| **recommended_execution_mode** | paper (no live-mode change) |
+
+**Description**
+The matcher-feedback loop's only negative signal is verdict `false_positive_neutral` (the LLM saw the *right* market but the headline gave no directional edge). A correctly-matched high-traffic market (e.g. KXVISITIRAN, total≈1058) drives its own ticker-defining token (`iran`) to fp_rate≈0.97, and the loop floors that token to `DOWNWEIGHT_FLOOR=0.10`. The Kalshi matcher applies `score *= mean(per-token weights)` then drops candidates `< 0.06`, so a single-overlap match on a floored defining token scores ≈0.012 and the correct market silently leaves the candidate funnel (a 14-day-window oscillation, not permanent). PR #130 added `is_market_defining_token` + guarded `match_feedback.get_token_weight` and the Polymarket runtime, but the **Kalshi** `analysis/market_matcher.py` inlines the weight lookup in `_combined_token_downweight` / `_token_downweight_details` and never calls `get_token_weight`, so it stayed unguarded.
+
+**Why it matters to profitability / safety / reliability**
+CLAUDE.md identifies opportunity throughput (news→tradeable-market match) as the current binding constraint on trade volume; go-live readiness has been stuck at 14/20 resolved trades for 5 straight daily reports. Self-poisoning the matcher against correctly-matched markets directly suppresses the trade volume needed to clear the readiness bar — without improving precision (the match was never wrong).
+
+**Evidence / Source**
+- Diagnosed from `logs/reports/performance/analysis_20260610_1100.txt` (workflow `wmb18mrf8`).
+- `analysis/market_matcher.py` `_combined_token_downweight` (:184) / `_token_downweight_details` (:206) inline `weights.get(...)`; no `get_token_weight` call (confirmed `count=0` in HEAD).
+- PR #130 (`0af4cef`) touched match_feedback/signal_analyzer/polymarket only — not market_matcher.
+
+**Fix (implemented)**
+Apply the already-merged `is_market_defining_token` predicate in the Kalshi matcher scoring path (force weight 1.0, skip downweight) and mirror it in `scripts/simulations/matcher_weight_replay.py::score_multiplier` for replay-CI fidelity. The guard only ever raises a weight to 1.0 — it never bypasses the structural precision gate (geo-entity / 2+ generic) or the `< 0.06` score threshold, so it cannot admit a structurally-invalid match. Tests: `tests/test_market_matcher.py::TestDefiningTokenGuard`, `tests/test_match_feedback.py::TestIsMarketDefiningToken` + `test_defining_token_bypasses_floored_weight`, `tests/test_matcher_weight_replay.py` parity test.
+
+**Open follow-up — PROFIT-MATCH-002a (precision trade-off, operator decision)**
+The shared predicate `is_market_defining_token` = `len(token) >= 4 and token.lower() in market_prefix.lower()` is blunt: it also protects generic words that are merely substrings of compound tickers — e.g. `KXTRUMPTOPIC:trump`, `KXLEAVECONGRESS:congress`, `KXSENATEREC:senate`, `KXVOTESAVEAMERICA:vote`, `KXTRUMPSUPREMELEADER:leader` (≈37 currently-downweighted entries forced to 1.0). The `KX…TRUMP…:trump` cases are exactly the entity-prefix bridges PROFIT-MATCH-001 (B') chose NOT to auto-preserve. Single-entity matches are still backstopped by the `_pure_single_entity` suppression path, so the residual risk is multi-generic-token matches losing a legitimate bridge-token downweight. This trade-off was accepted by PR #130 for `get_token_weight`/Polymarket; this item extends it to Kalshi consistently. If precision degrades, refine the predicate (e.g. distinguish subject words from generic substrings, or exclude a small denylist of ubiquitous bridge tokens) as a separate operator-gated change touching all venues.
+
+**Acceptance Criteria**
+- Kalshi matcher keeps a market's own ticker-defining token at full weight (regression test pins `0.12` survives the 0.06 gate, NOT `0.012`).
+- No EV/confidence/score-threshold/Kelly/sizing/readiness gate behavior changed.
+- Replay sim stays in parity with production scoring.
+- Operator approves merge; precision trade-off (002a) explicitly accepted or refinement scheduled.
+
+> **Note (separate, pre-existing):** `data/matcher_token_weights.json` is dirty in the working tree (runtime aggregator overwrote the committed cold-start seed: `KXCABLEAVE:trump` `_seed_status`/`_seed_reason` dropped, total 2→982). This breaks `tests/test_match_feedback.py::TestSeedWeightsFile::test_seed_provisional_entries_include_audit_findings` independent of the code change. It is the documented `data/*.json live-churn` condition and is **not** part of `12df3a0`. Operator decides whether to restore the seed (`git checkout HEAD -- data/matcher_token_weights.json`) or promote the runtime snapshot via a separate review.
+
+---
+
 ### PROFIT-RUNTIME-001
 
 | Field | Value |
