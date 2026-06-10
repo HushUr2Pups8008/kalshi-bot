@@ -26,6 +26,7 @@ from scripts.simulations import (
     governance_fast_cycle,
     match_score_audit,
     paper_trade_roundtrip,
+    polymarket_feedback_roundtrip,
     readiness_gate_events,
     resolution_calibration,
     threshold_calibration,
@@ -342,6 +343,43 @@ def test_roundtrip_source_multiplier_persists_to_row(tmp_path):
         )
         # Fresh DB → no prior credibility → neutral 1.0 multiplier.
         assert r.source_multiplier_persisted == pytest.approx(1.0)
+
+
+# ── polymarket_feedback_roundtrip ---------------------------------------------
+
+def test_polymarket_feedback_roundtrip_closes_shared_loop(tmp_path):
+    report = polymarket_feedback_roundtrip.run(db_root=tmp_path)
+    assert report.routed_count == 1
+    assert report.blend_enqueued is True
+    assert report.trade_id
+    assert report.paper_row["venue"] == "polymarket_us"
+    assert report.paper_row["series_ticker"] == "polymarket_us"
+    assert json.loads(report.paper_row["keywords_matched"]) == [
+        "election",
+        "governor",
+        "kansas",
+        "race",
+    ]
+    assert report.settlement_checked == 1
+    assert report.settlement_resolved == 1
+    assert report.resolved_row["resolved"] == 1
+    assert report.keyword_outcomes["election"]["series_ticker"] == "polymarket_us"
+    assert report.source_stats == {"posts_seen": 1, "signals": 1}
+    assert report.source_credibility["total"] == 1
+    assert report.calibration_samples["fast"] == 1
+    assert report.feedback_report["market_mix"]["by_prefix"]["polymarket_us"][
+        "PAPER_TRADE"
+    ] == 1
+
+
+def test_polymarket_feedback_roundtrip_main_runs_clean(capsys, tmp_path):
+    assert polymarket_feedback_roundtrip.main(["--db-root", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "Polymarket feedback round-trip" in out
+    assert "settlement" in out
+    assert polymarket_feedback_roundtrip.main(["--db-root", str(tmp_path), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["paper_row"]["venue"] == "polymarket_us"
 
 
 # ── trading_queue_handoff ------------------------------------------------------
