@@ -519,6 +519,43 @@ class TestBlendedCandidateCompatibility:
         assert routed_analysis.edge == pytest.approx(0.23)
 
     @pytest.mark.asyncio
+    async def test_non_kalshi_blended_executor_skip_logs_venue(self, monkeypatch):
+        ex, rest, _ = _make_paper_executor(monkeypatch)
+        ex._execute_paper = AsyncMock(return_value="paper-trade-id")
+        base = _make_analysis(
+            ticker="will-example-event-happen-2026",
+            edge=0.01,
+            estimated_prob=0.43,
+            yes_price=42.0,
+        )
+        base.market.venue = Venue.POLYMARKET_US
+        base.market.series_ticker = Venue.POLYMARKET_US.value
+        base.market.status = "open"
+        base.market.yes_ask_cents = 42
+        base.market.no_ask_cents = 59
+        candidate = _make_blended_candidate(
+            base_analysis=base,
+            blended_probability=0.43,
+            signal_meta={
+                "source_lane": "blend",
+                "venue": "polymarket_us",
+                "readiness_gate_min_edge_override": None,
+            },
+        )
+
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            trade_id = await ex.execute(candidate)
+
+        assert trade_id is None
+        rest.get_market.assert_not_called()
+        ex._execute_paper.assert_not_called()
+        trade_log_mock.log_skipped.assert_called_once()
+        kwargs = trade_log_mock.log_skipped.call_args.kwargs
+        assert kwargs["reason"] == "edge +0.0100 below min_edge 0.02"
+        assert kwargs["venue"] == "polymarket_us"
+        assert kwargs["signal_meta"] == candidate.signal_meta
+
+    @pytest.mark.asyncio
     async def test_execute_accepts_blended_candidate_and_uses_override_only_for_edge_gate(
         self,
         monkeypatch,
@@ -573,6 +610,7 @@ class TestBlendedCandidateCompatibility:
         assert kwargs["reason"] == "edge +0.0050 below min_edge 0.02"
         assert kwargs["min_edge_threshold"] == pytest.approx(0.02)
         assert kwargs["signal_meta"] == candidate.signal_meta
+        assert kwargs["venue"] == "kalshi"
 
     def test_override_validation_fails_closed_for_malformed_metadata(self, monkeypatch):
         ex, _, _ = _make_paper_executor(monkeypatch)
@@ -651,6 +689,7 @@ class TestStructuredBoundaryLogging:
             market_price=float(analysis.executed_price_cents),
             edge=analysis.edge,
             min_edge_threshold=0.04,
+            venue="kalshi",
         )
 
     def test_log_skipped_computes_probability_price_diffs_with_precision(self):

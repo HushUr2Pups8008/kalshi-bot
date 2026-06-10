@@ -153,6 +153,7 @@ class TradeExecutor:
                 "market_price": float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0,
                 "edge": analysis.edge,
                 "min_edge_threshold": effective_min_edge,
+                "venue": self._venue_value(analysis.market),
             }
             if signal_meta:
                 skipped_kwargs["signal_meta"] = signal_meta
