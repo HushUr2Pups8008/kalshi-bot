@@ -82,6 +82,48 @@ class PolymarketMatchMeta:
         }
 
 
+def _analysis_keywords(
+    keywords: Sequence[str] | None,
+    match_meta: dict[str, Any],
+) -> list[str]:
+    for raw_keywords in (
+        keywords,
+        match_meta.get("matched_tokens"),
+        match_meta.get("polymarket_matched_tokens"),
+        match_meta.get("pre_llm_semantic_overlap_tokens"),
+    ):
+        normalized = _dedupe_keyword_values(raw_keywords)
+        if normalized:
+            return normalized
+    return []
+
+
+def _dedupe_keyword_values(raw_keywords: Any) -> list[str]:
+    if raw_keywords is None:
+        return []
+    if isinstance(raw_keywords, str):
+        values: Sequence[Any] = [raw_keywords]
+    elif isinstance(raw_keywords, Sequence):
+        values = raw_keywords
+    else:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_keyword in values:
+        if not isinstance(raw_keyword, str):
+            continue
+        keyword = raw_keyword.strip()
+        if not keyword:
+            continue
+        dedupe_key = keyword.lower()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized.append(keyword)
+    return normalized
+
+
 @dataclass(frozen=True)
 class PolymarketPaperRuntimeStats:
     market_count: int
@@ -323,6 +365,7 @@ class PolymarketPaperRuntime:
             )
 
         side_edge = edges.yes_edge if side == "yes" else edges.no_edge
+        analysis_keywords = _analysis_keywords(keywords, match_meta)
         base_analysis = SignalAnalysis(
             news_item=news,
             market=market,
@@ -333,7 +376,7 @@ class PolymarketPaperRuntime:
             kelly_fraction=kelly_fraction,
             kelly_dollars=kelly_dollars,
             capped_dollars=capped_dollars,
-            keywords_matched=keywords,
+            keywords_matched=analysis_keywords,
             reasoning=reasoning,
             confidence=confidence,
             match_score=match_score,
