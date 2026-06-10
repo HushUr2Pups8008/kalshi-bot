@@ -1533,9 +1533,8 @@ async def estimate_probability(
                 )
             except Exception:
                 overlap_tokens = []
-            ticker_prefix = str(getattr(market, "series_ticker", "") or "").strip()
-            if not ticker_prefix:
-                ticker_prefix = (market.ticker or "").split("-", 1)[0]
+            from analysis.match_feedback import market_prefix_for as _market_prefix_for
+            ticker_prefix = _market_prefix_for(market)
             review_venue = None
             if isinstance(match_meta, dict):
                 raw_venue = match_meta.get("venue")

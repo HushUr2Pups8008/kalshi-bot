@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -63,6 +63,11 @@ class _FakeSourceStats:
 
     def increment_signals(self, source: str) -> None:
         self.signals.append(source)
+
+
+@pytest.fixture(autouse=True)
+def _empty_runtime_match_weights(monkeypatch):
+    monkeypatch.setattr("polymarket.paper_runtime._load_match_weights", lambda: {})
 
 
 @pytest.mark.asyncio
@@ -402,6 +407,40 @@ def test_match_polymarket_markets_uses_question_and_subtitle_text():
         "governor",
         "kansas",
     ]
+
+
+def test_match_polymarket_markets_applies_shared_token_weights():
+    news = _news("Kansas governor election tightens after new polling")
+    market = _market(
+        market_id="ewc-usgub-ks-2026-11-03-dem",
+        title="Democratic Party",
+        question="Kansas Governor Election Winner",
+        subtitle="2026 race",
+        category="politics",
+    )
+    token_weights = {
+        "polymarket_us:election": {"weight": 0.1},
+        "polymarket_us:governor": {"weight": 0.1},
+        "polymarket_us:kansas": {"weight": 0.1},
+        "ewc:election": {"weight": 1.0},
+        "ewc:governor": {"weight": 1.0},
+        "ewc:kansas": {"weight": 1.0},
+    }
+
+    with patch("polymarket.paper_runtime.trade_log.log_match_weight_applied") as log_mock:
+        matches = match_polymarket_markets(
+            news,
+            [market],
+            max_results=5,
+            min_score=0.08,
+            token_weights=token_weights,
+        )
+
+    assert matches == []
+    log_mock.assert_called_once()
+    assert log_mock.call_args.kwargs["market_prefix"] == "polymarket_us"
+    assert log_mock.call_args.kwargs["final_multiplier"] == pytest.approx(0.1)
+    assert log_mock.call_args.kwargs["post_weight_score"] < 0.08
 
 
 def test_match_polymarket_markets_suppresses_sports_false_positives():

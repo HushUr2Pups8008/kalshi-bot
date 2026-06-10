@@ -13,6 +13,7 @@ from analysis.match_feedback import (
     get_token_weight,
     ingest_review_events,
     load_weights,
+    market_prefix_for,
     summarize_weight_status,
     update_weights_from_stats,
     write_weights,
@@ -35,6 +36,20 @@ def _ev(token_list, prefix, verdict, day):
         "llm_confidence": 0.85,
         "verdict": verdict,
     }
+
+
+def test_market_prefix_for_prefers_series_ticker_then_ticker_prefix():
+    class Market:
+        series_ticker = "polymarket_us"
+        ticker = "ewc-usgub-ks-2026-11-03-dem"
+
+    assert market_prefix_for(Market()) == "polymarket_us"
+
+    class LegacyMarket:
+        series_ticker = ""
+        ticker = "KXNEWDEAL-JUN01"
+
+    assert market_prefix_for(LegacyMarket()) == "KXNEWDEAL"
 
 
 class TestIngestReviewEvents:
