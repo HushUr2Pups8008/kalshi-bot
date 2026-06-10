@@ -392,6 +392,43 @@ The shared predicate `is_market_defining_token` = `len(token) >= 4 and token.low
 
 ---
 
+### PROFIT-REPORT-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-REPORT-001 |
+| **Title** | Go-live readiness (report §8) measured on lifetime/frozen-polluted cohort; two-cohort win-rate ambiguity |
+| **Category** | Reporting / Readiness-Gate Transparency |
+| **Severity** | MEDIUM (operator-decision quality; not a trading-path defect) |
+| **Status** | IMPLEMENTED on branch `fix/golive-readiness-cohort-transparency` (v0.33.2) — PENDING operator merge gate |
+| **Priority** | NOW |
+| **primary_agent** | Claude Code (implement) |
+| **second_agent_review_required** | YES — done: `kalshi-safety-reviewer` (APPROVE-WITH-NITS; gate-unchanged claim could not be refuted) |
+| **operator_gate_required** | YES — readiness-gate display surface; operator approves merge. Switching the gate to post-P0 is a SEPARATE operator-only decision (loosens the gate). |
+| **recommended_workflow** | high-assurance (implement → independent review → operator gate) |
+| **safe_while_bot_running** | YES — reporting-only (`scripts/`); no execution/sizing/gate-computation change |
+| **recommended_execution_mode** | paper (no live-mode change) |
+
+**Description**
+Section 8 (`section_golive_readiness`) computes win-rate and start-vs-now drawdown over the LIFETIME un-cohorted DB cohort, which includes the frozen pre-P0 trades that sections 7b/7d/7e exclude as non-representative. The 2026-06-10 review showed this reads as 43% win / 38.2% drawdown (lifetime) vs 60% / smaller (post-P0). Section 2 (placed trades, in-window) reports 60% while §8 reports 43%, both previously bare-labeled "Win rate" — high operator-misread risk. The drawdown metric is also start-vs-now, not peak-to-trough.
+
+**Why it matters**
+The go-live gate is the highest-consequence report section; unlabeled lifetime/frozen-polluted numbers can mislead the paper→live decision. (Note: post-P0 has only 5 resolved trades, so the `min_resolved=20` criterion fails under either cohort — the binding constraint is trade VOLUME, surfaced by PROFIT-MATCH-002, not win-rate/drawdown.)
+
+**Fix (implemented — transparency, not gate-loosening)**
+(1) §8 labels its cohort basis LIFETIME (includes frozen pre-P0); (2) drawdown labeled "decline from starting bankroll, not peak-to-trough" + informational true peak-to-trough added; (3) INFORMATIONAL post-P0 view added (resolved/win-rate/peak-to-trough, marked "NOT the gating basis"); (4) P0-boundary-missing guard mirrors 7b/7d/7e; (5) §2 labeled IN-WINDOW with cross-reference. The authoritative PASS/FAIL is byte-for-byte unchanged (lifetime cohort, same `GO_LIVE_*` thresholds) — verified by `test_golive_post_p0_view_is_informational_not_gating`.
+
+**Open follow-up — PROFIT-REPORT-001a (operator decision)**
+Should the go-live gate judge on the post-P0 (current-regime) cohort instead of lifetime? That would loosen the gate (excludes frozen losses) and is an explicit operator/safety decision — NOT applied here. Note it would not currently make the bot READY anyway (post-P0 resolved 5/20 and drawdown both still fail).
+
+**Acceptance Criteria**
+- §8 cohort basis is labeled; post-P0 view present and marked informational.
+- Authoritative gate verdict unchanged (regression test enforces post-P0 cannot flip a lifetime FAIL to READY).
+- Peak-to-trough reported distinct from start-vs-now; §2 labeled in-window.
+- Operator approves merge; the post-P0-gating question (001a) explicitly decided.
+
+---
+
 ### PROFIT-RUNTIME-001
 
 | Field | Value |

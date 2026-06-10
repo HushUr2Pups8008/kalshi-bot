@@ -246,6 +246,100 @@ def test_golive_readiness_uses_persisted_trade_start_bankroll():
     assert "drawdown" not in output.split("OVERALL:", 1)[1]
 
 
+def test_golive_post_p0_view_is_informational_not_gating():
+    """The post-P0 informational view must NOT alter the authoritative go-live
+    verdict. The gate stays on the LIFETIME cohort; a perfect post-P0 record
+    cannot flip a lifetime FAIL to READY. WHY: section 8 is a safety gate;
+    surfacing the current-regime cohort for operator visibility must never
+    silently loosen the gate (which is an operator-only decision)."""
+    boundary = "2026-05-12T23:50:04+00:00"
+    db_trades = []
+    # Pre-P0: 15 resolved, 4 wins (drags lifetime win rate down).
+    for i in range(15):
+        db_trades.append(
+            {
+                "trade_id": f"pre-{i}",
+                "ts": "2026-05-10T12:00:00+00:00",
+                "resolved": 1,
+                "pnl_dollars": 1.0 if i < 4 else -1.0,
+                "notional_bankroll_before": 50.0 if i == 0 else None,
+            }
+        )
+    # Post-P0: 5 resolved, ALL wins (100%) — current regime looks great.
+    for i in range(5):
+        db_trades.append(
+            {
+                "trade_id": f"post-{i}",
+                "ts": "2026-05-20T12:00:00+00:00",
+                "resolved": 1,
+                "pnl_dollars": 2.0,
+                "notional_bankroll_before": None,
+            }
+        )
+    # Lifetime: 20 resolved, 9 wins = 45% < 52% -> FAIL; drawdown 10% PASS;
+    # resolved 20 PASS. So the gate must FAIL on win rate.
+    state = {
+        "notional_bankroll": "45.00",
+        pa.P0_PRICE_FIX_SENTINEL_KEY: boundary,
+    }
+    output = pa.section_golive_readiness(db_trades, state)
+
+    # Gate verdict uses the lifetime cohort (45%), NOT post-P0's 100%.
+    assert "OVERALL: NOT READY" in output
+    assert "READY FOR LIVE TRADING" not in output
+    assert "Win rate        : 45% / 52% required  [FAIL]" in output
+    assert "win rate needs 52% (currently 45%, lifetime)" in output
+    # Post-P0 reality is surfaced as informational only.
+    assert "Post-P0 view    : INFORMATIONAL" in output
+    assert "Win rate      : 100% / 52% target" in output
+    assert "an operator decision, not applied here" in output
+
+
+def test_golive_reports_peak_to_trough_and_cohort_label():
+    """F1/F3: section 8 labels its cohort basis (lifetime, includes frozen
+    pre-P0) and reports a peak-to-trough drawdown distinct from the start-vs-now
+    gate metric. Here the bankroll dips to 30 then recovers to 45: start-vs-now
+    drawdown is 10% but the true peak-to-trough is 40%."""
+    db_trades = [
+        {
+            "trade_id": "a",
+            "ts": "2026-05-20T12:00:00+00:00",
+            "resolved": 1,
+            "pnl_dollars": -1.0,
+            "notional_bankroll_before": 50.0,
+        },
+        {
+            "trade_id": "b",
+            "ts": "2026-05-21T12:00:00+00:00",
+            "resolved": 1,
+            "pnl_dollars": -1.0,
+            "notional_bankroll_before": 30.0,  # trough
+        },
+    ]
+    state = {
+        "notional_bankroll": "45.00",  # recovered
+        pa.P0_PRICE_FIX_SENTINEL_KEY: "2026-05-12T23:50:04+00:00",
+    }
+    output = pa.section_golive_readiness(db_trades, state)
+    assert "Cohort basis    : LIFETIME" in output
+    assert "(decline from starting bankroll, not peak-to-trough)" in output
+    # peak 50 -> trough 30 = 40% peak-to-trough, vs 10% start-vs-now.
+    assert "Peak-to-trough  : 40.0%" in output
+    assert "Drawdown        : 10.0% / 20% max" in output
+
+
+def test_placed_performance_labels_in_window_cohort():
+    """F2: Section 2 (placed trades) labels its cohort as IN-WINDOW and
+    cross-references that go-live readiness (section 8) uses the LIFETIME
+    cohort, so the in-window win rate is not misread as the gate's basis."""
+    db_trades = [
+        {"trade_id": "x", "resolved": 0, "cost_dollars": 1.0, "edge": 0.05}
+    ]
+    output = pa.section_placed_performance([], db_trades, {})
+    assert "Cohort: IN-WINDOW" in output
+    assert "LIFETIME cohort" in output
+
+
 def test_skip_breakdown_surfaces_raw_unclassified_reasons():
     entries = [
         {"type": "SKIPPED", "ticker": "KX1", "reason": "market closed: close_time_elapsed"},

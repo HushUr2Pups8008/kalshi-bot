@@ -19,6 +19,30 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.2] - 2026-06-10
+
+### Changed
+
+- **Go-live readiness (report section 8) cohort transparency** (addresses the
+  readiness-reporting findings from the 2026-06-10 performance review;
+  `PROFIT-REPORT-001`). Section 8 computes win-rate and drawdown over the
+  LIFETIME cohort, which includes the frozen pre-P0 trades that sections
+  7b/7d/7e exclude as non-representative — producing readiness numbers that read
+  as worse than the current regime. The section now:
+  (1) labels its cohort basis explicitly as LIFETIME (includes frozen pre-P0);
+  (2) labels the drawdown as "decline from starting bankroll, not peak-to-trough"
+  and adds an informational true peak-to-trough metric;
+  (3) adds an INFORMATIONAL post-P0 (current-regime) view — resolved count, win
+  rate, peak-to-trough — explicitly marked "NOT the gating basis";
+  (4) applies the P0-boundary-missing guard that 7b/7d/7e already use.
+  Section 2 (placed trades) now labels its cohort IN-WINDOW and cross-references
+  the lifetime cohort, resolving the two-cohort win-rate ambiguity.
+  **The authoritative PASS/FAIL verdict is unchanged** — it still gates on the
+  lifetime cohort against the same `GO_LIVE_*` thresholds. Switching the gate to
+  the post-P0 cohort would loosen a safety gate and is left as an operator
+  decision. Reporting-only (`scripts/`); no execution, sizing, or gate-computation
+  change. Independently reviewed by kalshi-safety-reviewer (APPROVE-WITH-NITS).
+
 ## [0.33.1] - 2026-06-10
 
 ### Fixed
