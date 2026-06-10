@@ -253,13 +253,13 @@ class BlendTask:
             trigger_evidence_id=(fast_lane_result.signal_meta or {}).get("trigger_evidence_id"),
             include_recent=dossier is not None,
         )
+        venue = _venue_string(
+            getattr(fast_lane_result, "venue", None)
+            or getattr(fast_lane_result.market, "venue", None)
+        ) or "kalshi"
         await self._emit_blend_decision(
             ticker=ticker,
-            venue=_venue_string(
-                getattr(fast_lane_result, "venue", None)
-                or getattr(fast_lane_result.market, "venue", None)
-            )
-            or "kalshi",
+            venue=venue,
             blend_result=blend_result,
             regime_weights=regime_weights,
             regime_confidence=regime_confidence,
@@ -274,6 +274,7 @@ class BlendTask:
                 readiness=readiness,
                 trade_blocked_reason=trade_blocked_reason,
                 fast_lane_result=fast_lane_result,
+                venue=venue,
             )
             return BlendTaskResult(
                 market_ticker=ticker,
@@ -535,6 +536,7 @@ class BlendTask:
         readiness: ReadinessDecision,
         trade_blocked_reason: str,
         fast_lane_result: SignalAnalysis,
+        venue: str,
     ) -> None:
         """Emit a SKIPPED record for the blocked-reason early-return path.
 
@@ -585,6 +587,7 @@ class BlendTask:
             "market_price": market_price,
             "edge": edge,
             "min_edge_threshold": min_edge_threshold,
+            "venue": venue,
         }
         signal_meta = fast_lane_result.signal_meta
         if signal_meta:
