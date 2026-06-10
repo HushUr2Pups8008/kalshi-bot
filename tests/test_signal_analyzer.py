@@ -807,6 +807,7 @@ class TestEstimateProbability:
 
         review_mock.assert_called_once()
         assert review_mock.call_args.kwargs["market_prefix"] == "polymarket_us"
+        assert review_mock.call_args.kwargs["venue"] == "polymarket_us"
         assert review_mock.call_args.kwargs["matched_tokens"] == [
             "election",
             "governor",
@@ -1996,6 +1997,7 @@ class TestLogMatchLlmReview:
             ticker="KXCABLEAVE-26MAY22-26JUN",
             market_title="Will any member of Trump's Cabinet leave before Jun 2026?",
             market_prefix="KXCABLEAVE",
+            venue="kalshi",
             headline="LIVE: Trump says Iran deal not 'fully negotiated yet'",
             source="Some Outlet",
             matched_tokens=["trump"],
@@ -2013,6 +2015,7 @@ class TestLogMatchLlmReview:
         assert rec["type"] == "MATCH_LLM_REVIEW"
         assert rec["ticker"] == "KXCABLEAVE-26MAY22-26JUN"
         assert rec["market_prefix"] == "KXCABLEAVE"
+        assert rec["venue"] == "kalshi"
         assert rec["matched_tokens"] == ["trump"]
         assert rec["verdict"] == "false_positive_neutral"
         assert rec["llm_confidence"] == 0.85

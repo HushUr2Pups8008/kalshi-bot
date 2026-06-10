@@ -1358,6 +1358,7 @@ class TradeLogger:
         llm_magnitude: str,
         llm_confidence: float,
         verdict: str,
+        venue: str | None = None,
     ) -> None:
         """PROFIT-MATCH-DYNAMIC (2026-05-24): per-LLM-call feedback signal.
 
@@ -1372,7 +1373,7 @@ class TradeLogger:
                                           + conf>=0.7 (LLM judged not actionable)
           - "true_positive"             — relevant=True with directional signal
         """
-        self._write({
+        record = {
             "type": "MATCH_LLM_REVIEW",
             "ticker": ticker,
             "market_title": market_title[:200],
@@ -1385,7 +1386,10 @@ class TradeLogger:
             "llm_magnitude": llm_magnitude,
             "llm_confidence": round(float(llm_confidence), 4),
             "verdict": verdict,
-        })
+        }
+        if venue:
+            record["venue"] = venue
+        self._write(record)
 
     def log_position_drift(
         self,
