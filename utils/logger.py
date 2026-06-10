@@ -627,6 +627,7 @@ class TradeLogger:
         reasoning: str,
         signal_headline: str,
         signal_source: str,
+        keywords_matched: list[str] | None = None,
         signal_meta: dict[str, Any] | None = None,
         bankroll_delta_dollars: float | None = None,
         venue: str = "kalshi",
@@ -649,6 +650,8 @@ class TradeLogger:
             "signal_headline": signal_headline,
             "signal_source": signal_source,
         }
+        if keywords_matched is not None:
+            record["keywords_matched"] = keywords_matched
         if signal_meta:
             record["signal_meta"] = signal_meta
         if bankroll_delta_dollars is not None:

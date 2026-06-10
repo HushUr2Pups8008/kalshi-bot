@@ -984,6 +984,7 @@ class PaperTrader:
             "reasoning": analysis.reasoning,
             "signal_headline": analysis.news_item.headline,
             "signal_source": analysis.news_item.source,
+            "keywords_matched": analysis.keywords_matched,
             "bankroll_delta_dollars": bankroll_after - bankroll_before,
         }
         signal_meta = vars(analysis).get("signal_meta")

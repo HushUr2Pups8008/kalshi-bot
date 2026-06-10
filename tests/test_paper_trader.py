@@ -313,6 +313,9 @@ class TestKellyShadow:
             trade_log_mock.log_paper_trade.call_args.kwargs["signal_meta"]
             == analysis.signal_meta
         )
+        assert trade_log_mock.log_paper_trade.call_args.kwargs[
+            "keywords_matched"
+        ] == analysis.keywords_matched
 
     def test_kelly_contracts_independent_of_flat(self, trader):
         """kelly_contracts reflects capped_dollars sizing, not PAPER_FLAT_CONTRACTS."""
