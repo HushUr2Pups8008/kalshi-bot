@@ -9,7 +9,9 @@ from typing import Any, Protocol
 
 from analysis import SignalAnalysis
 from analysis.kelly import kelly_bet
-from analysis.market_matcher import _compute_pre_llm_match_meta
+from analysis.market_matcher import _compute_pre_llm_match_meta, _token_downweight_details
+from analysis.match_feedback import load_weights as _load_match_weights
+from analysis.match_feedback import market_prefix_for
 from analysis.signal_analyzer import estimate_probability
 from analysis.side_selection import compute_edge, select_side
 from config import PAPER_FLAT_CONTRACTS, PAPER_MAX_CANDIDATES, cfg
@@ -18,7 +20,7 @@ from polymarket.candidate_adapter import adapt_polymarket_analysis
 from polymarket.models import PolymarketMarket
 from polymarket.public_client import PolymarketPublicClient
 from trading.venue import Venue
-from utils.logger import get_logger
+from utils.logger import get_logger, trade_log
 
 log = get_logger("polymarket.paper_runtime")
 
@@ -410,11 +412,14 @@ def match_polymarket_markets(
     *,
     max_results: int = _DEFAULT_MAX_CANDIDATES,
     min_score: float = _DEFAULT_MIN_MATCH_SCORE,
+    token_weights: dict[str, dict[str, Any]] | None = None,
 ) -> list[tuple[PolymarketMarket, float, dict[str, Any]]]:
     news_tokens = _meaningful_tokens(f"{news.headline} {news.body}")
     headline_tokens = _meaningful_tokens(news.headline)
     if not news_tokens and not headline_tokens:
         return []
+    if token_weights is None:
+        token_weights = _load_match_weights()
 
     scored: list[tuple[PolymarketMarket, float, dict[str, Any]]] = []
     for market in markets:
@@ -434,6 +439,28 @@ def match_polymarket_markets(
         full_score = len(overlap) / max(1, len(news_tokens | market_tokens))
         headline_score = len(headline_overlap) / max(1, len(headline_tokens | market_tokens))
         score = max(full_score, headline_score)
+        market_prefix = market_prefix_for(market)
+        if overlap and token_weights:
+            pre_weight_score = score
+            weight_details = _token_downweight_details(
+                overlap,
+                market_prefix,
+                token_weights,
+            )
+            score *= weight_details["final_multiplier"]
+            trade_log.log_match_weight_applied(
+                source=news.source,
+                headline=news.headline,
+                ticker=market.ticker,
+                market_title=_market_match_text(market),
+                market_prefix=market_prefix,
+                tokens=weight_details["tokens"],
+                token_weights=weight_details["token_weights"],
+                composition_rule=weight_details["composition_rule"],
+                final_multiplier=weight_details["final_multiplier"],
+                pre_weight_score=pre_weight_score,
+                post_weight_score=score,
+            )
         if score < min_score:
             continue
         rounded_score = round(score, 4)
@@ -449,6 +476,7 @@ def match_polymarket_markets(
             matched_tokens=matched_tokens,
         ).as_dict()
         meta.update(pre_llm_meta)
+        meta["market_prefix"] = market_prefix
         meta["matched_tokens"] = matched_tokens
         scored.append((market, rounded_score, meta))
 

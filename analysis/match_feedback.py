@@ -82,6 +82,51 @@ CREATE INDEX IF NOT EXISTS idx_match_token_fp_window
 """
 
 
+def market_prefix_for(market: Any) -> str:
+    """Return the matcher-feedback prefix used by review and weight events."""
+    series_ticker = str(getattr(market, "series_ticker", "") or "").strip()
+    if series_ticker:
+        return series_ticker
+    ticker = str(getattr(market, "ticker", "") or getattr(market, "market_id", "") or "")
+    return ticker.split("-", 1)[0]
+
+
+_DEFINING_TOKEN_MIN_LEN: int = 4
+"""Minimum token length for the defining-token guard. Below this, a substring
+match against the series ticker is too likely to be an incidental fragment
+('out' in KXSCHUMEROUT, 'cab'/'ave' in KXCABLEAVE) rather than the market's
+subject word, so we do not treat it as defining."""
+
+
+def is_market_defining_token(token: str, market_prefix: str) -> bool:
+    """True when ``token`` is the market's own subject word, encoded into its
+    series ticker (e.g. ``iran`` in ``KXVISITIRAN``, ``tariffs`` in
+    ``KXNEWTARIFFS``, ``zelenskyy`` in ``KXZELENSKYYOUT``).
+
+    The matcher-feedback loop exists to downweight tokens that *bridge* a
+    headline to a market where the token does not belong. A market's own
+    ticker-encoded token is never such a bridge — it is the single most
+    reliable signal that the *correct* market was found. But the loop's only
+    negative signal is ``false_positive_neutral`` (the LLM saw the right
+    market, yet this particular headline carried no directional edge), so a
+    correctly-matched, high-traffic market accumulates fp_rate -> 1.0 and its
+    defining token gets floored to ``DOWNWEIGHT_FLOOR`` (0.10). Once floored, a
+    single-overlap match on that token scores below the matcher threshold and
+    the correct market can no longer surface as a tradeable opportunity — a
+    self-poisoning loop that throttles opportunity throughput (the binding
+    constraint on trade volume per CLAUDE.md). Callers use this predicate to
+    keep a market's own subject token at full weight regardless of the learned
+    downweight. The guard only ever *raises* a weight back to 1.0; it never
+    bypasses the matcher's structural precision gate or score threshold.
+    See docs/profit_path_debt_log.md (PROFIT-MATCH-DYNAMIC self-poisoning).
+    """
+    if not token or not market_prefix:
+        return False
+    if len(token) < _DEFINING_TOKEN_MIN_LEN:
+        return False
+    return token.lower() in market_prefix.lower()
+
+
 @dataclass(frozen=True)
 class TokenStats:
     token: str
@@ -252,7 +297,12 @@ def get_token_weight(
 
     Returns 1.0 if no entry exists (no penalty). Hot-path callable — accepts
     a pre-loaded weights dict to avoid re-reading the file every match cycle.
+
+    A market's own ticker-defining token is never downweighted (see
+    ``is_market_defining_token``) — the learned weight is bypassed entirely.
     """
+    if is_market_defining_token(token, market_prefix):
+        return 1.0
     if weights is None:
         weights = load_weights(weights_path)
     key = f"{market_prefix}:{token}"
