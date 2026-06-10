@@ -200,7 +200,7 @@ async def test_process_news_supplies_shared_match_meta_and_signal_stats():
         assert match_meta["pre_llm_semantic_overlap_count"] == 3
         assert match_meta["pre_llm_semantic_overlap_ratio"] > 0.25
         assert match_meta["pre_llm_gate_reason"] is None
-        return 0.65, 0.8, ["election"], "reason", "yes", "moderate", 0.8
+        return 0.65, 0.8, [], "reason", "yes", "moderate", 0.8
 
     runtime = PolymarketPaperRuntime(
         client=_FakeClient(
@@ -227,6 +227,7 @@ async def test_process_news_supplies_shared_match_meta_and_signal_stats():
 
     assert routed_count == 1
     assert source_stats.signals == ["Example Wire"]
+    assert routed[0][0].keywords_matched == ["election", "governor", "kansas"]
     assert routed[0][0].signal_meta["pre_llm_quality_pass"] is True
 
 

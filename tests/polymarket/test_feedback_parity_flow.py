@@ -81,7 +81,8 @@ async def test_polymarket_candidate_closes_shared_feedback_loop(tmp_path, monkey
 
     async def estimate_probability(news, market, *, keyword_stats=None, match_meta=None):
         assert match_meta["pre_llm_quality_pass"] is True
-        return 0.65, 0.8, ["election"], "reason", "yes", "moderate", 0.8
+        assert match_meta["matched_tokens"] == ["election", "governor", "kansas", "race"]
+        return 0.65, 0.8, [], "reason", "yes", "moderate", 0.8
 
     async def route_analysis(analysis, **kwargs):
         assert kwargs == {"accumulate": True, "watch": False}
