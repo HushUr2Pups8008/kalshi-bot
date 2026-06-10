@@ -7,6 +7,7 @@ import pytest
 
 import config as config_module
 from analysis import SignalAnalysis
+from analysis.decision_blender import BlendResult
 from feeds import NewsItem
 from polymarket.candidate_adapter import adapt_polymarket_analysis
 from polymarket.models import PolymarketMarket
@@ -142,11 +143,28 @@ def test_rejects_non_tradeable_polymarket_market():
 
 @pytest.mark.asyncio
 async def test_adapted_polymarket_analysis_routes_through_shared_blend_contract():
+    def blocked_blender(fast, accumulation, structural, **kwargs):
+        return BlendResult(
+            blended_p=0.30,
+            blended_confidence=0.01,
+            disagreement_score=0.0,
+            blend_mode="blocked_for_venue_regression",
+            readiness_gate_min_edge_override=None,
+            trade_blocked_reason="G1_blended_confidence",
+            fast_lane_p=fast.p,
+            fast_lane_confidence=fast.confidence,
+            accumulation_p=None,
+            accumulation_confidence=None,
+            structural_p=None,
+            structural_confidence=None,
+        )
+
     logger = _BlendLogger()
     task = BlendTask(
         trading_queue=asyncio.Queue(),
         store=_BlendStore(),
         logger=logger,
+        blender=blocked_blender,
         is_paper_mode=True,
         now=lambda: datetime(2026, 6, 9, tzinfo=timezone.utc),
     )
@@ -164,6 +182,7 @@ async def test_adapted_polymarket_analysis_routes_through_shared_blend_contract(
         "interpretation": 0.0,
         "structural": 0.0,
     }
+    assert logger.skips[0]["venue"] == "polymarket_us"
 
 
 def test_adapted_analysis_records_polymarket_paper_row(paper_trader):

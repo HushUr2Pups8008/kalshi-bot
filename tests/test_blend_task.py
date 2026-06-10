@@ -760,6 +760,7 @@ async def test_blocked_blend_emits_skipped_record(trade_blocked_reason: str) -> 
     )
     assert logger.skipped_records[0]["reason"] == trade_blocked_reason
     assert logger.skipped_records[0]["ticker"] == "KXBLEND-1"
+    assert logger.skipped_records[0]["venue"] == "kalshi"
 
 
 @pytest.mark.asyncio
