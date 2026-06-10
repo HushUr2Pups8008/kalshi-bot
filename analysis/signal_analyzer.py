@@ -1536,11 +1536,25 @@ async def estimate_probability(
             ticker_prefix = str(getattr(market, "series_ticker", "") or "").strip()
             if not ticker_prefix:
                 ticker_prefix = (market.ticker or "").split("-", 1)[0]
+            review_venue = None
+            if isinstance(match_meta, dict):
+                raw_venue = match_meta.get("venue")
+                if raw_venue is not None:
+                    review_venue = str(raw_venue).strip().lower() or None
+            if review_venue is None:
+                raw_venue = getattr(market, "venue", None)
+                if hasattr(raw_venue, "value"):
+                    raw_venue = raw_venue.value
+                if raw_venue is not None:
+                    review_venue = str(raw_venue).strip().lower() or None
+            if review_venue is None and ticker_prefix == "polymarket_us":
+                review_venue = ticker_prefix
             await write_trade_log_async(
                 trade_log.log_match_llm_review,
                 ticker=market.ticker,
                 market_title=market.title or "",
                 market_prefix=ticker_prefix,
+                venue=review_venue,
                 headline=news.headline or "",
                 source=news.source or "",
                 matched_tokens=overlap_tokens,
