@@ -730,6 +730,7 @@ class TradeLogger:
         market_price: float | None = None,
         edge: float | None = None,
         min_edge_threshold: float | None = None,
+        venue: str | None = None,
         signal_meta: dict[str, Any] | None = None,
     ) -> None:
         """Emit a SKIPPED trade-log record.
@@ -786,6 +787,8 @@ class TradeLogger:
             record["edge"] = round(edge, 4)
         if min_edge_threshold is not None:
             record["min_edge_threshold"] = round(min_edge_threshold, 4)
+        if venue:
+            record["venue"] = venue
         if signal_meta:
             record["signal_meta"] = signal_meta
         self._write(record)
