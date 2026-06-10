@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from analysis import SignalAnalysis
@@ -28,6 +28,13 @@ class PolymarketExecutionMarket:
     price_method: str = "binary_ask"
     price_retrieved_at: str | None = None
     raw_payload_hash: str | None = None
+    regime_weights: dict[str, float] = field(
+        default_factory=lambda: {
+            "fast": 1.0,
+            "interpretation": 0.0,
+            "structural": 0.0,
+        }
+    )
 
     @property
     def yes_prob(self) -> float:

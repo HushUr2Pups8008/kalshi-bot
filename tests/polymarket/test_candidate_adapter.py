@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -10,6 +11,7 @@ from feeds import NewsItem
 from polymarket.candidate_adapter import adapt_polymarket_analysis
 from polymarket.models import PolymarketMarket
 from polymarket.paper_trader import PolymarketPaperTrader
+from tasks.blend_task import BlendTask
 from trading.paper_trader import PaperTrader
 from trading.venue import Venue
 
@@ -69,6 +71,37 @@ def _polymarket_market(**overrides) -> PolymarketMarket:
     return PolymarketMarket(**values)
 
 
+class _BlendStore:
+    async def get_dossier(self, market_ticker: str):
+        return None
+
+    async def get_structural_prior(self, market_ticker: str):
+        return None
+
+    async def get_recent_evidence(self, market_ticker: str, *, limit: int = 100):
+        return []
+
+
+class _BlendLogger:
+    def __init__(self) -> None:
+        self.blend_decisions: list[dict] = []
+        self.skips: list[dict] = []
+        self.gate_summaries: list[dict] = []
+        self.lane_skips: list[dict] = []
+
+    def log_blend_decision(self, **kwargs) -> None:
+        self.blend_decisions.append(kwargs)
+
+    def log_skipped(self, **kwargs) -> None:
+        self.skips.append(kwargs)
+
+    def log_gate_summary(self, **kwargs) -> None:
+        self.gate_summaries.append(kwargs)
+
+    def log_lane_skipped(self, **kwargs) -> None:
+        self.lane_skips.append(kwargs)
+
+
 def test_adapts_yes_side_analysis_to_polymarket_execution_contract():
     adapted = adapt_polymarket_analysis(_base_analysis(side="yes"), _polymarket_market())
 
@@ -78,6 +111,11 @@ def test_adapts_yes_side_analysis_to_polymarket_execution_contract():
     assert adapted.market.title == "Will example happen in 2026?"
     assert adapted.market.price_source == "polymarket_us_rest"
     assert adapted.market.price_method == "binary_ask"
+    assert adapted.market.regime_weights == {
+        "fast": 1.0,
+        "interpretation": 0.0,
+        "structural": 0.0,
+    }
     assert adapted.venue == "polymarket_us"
     assert adapted.side == "yes"
     assert adapted.executed_price_cents == 42
@@ -100,6 +138,32 @@ def test_rejects_non_tradeable_polymarket_market():
             _base_analysis(side="yes"),
             _polymarket_market(yes_ask_cents=None),
         )
+
+
+@pytest.mark.asyncio
+async def test_adapted_polymarket_analysis_routes_through_shared_blend_contract():
+    logger = _BlendLogger()
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=_BlendStore(),
+        logger=logger,
+        is_paper_mode=True,
+        now=lambda: datetime(2026, 6, 9, tzinfo=timezone.utc),
+    )
+    adapted = adapt_polymarket_analysis(
+        _base_analysis(side="yes"),
+        _polymarket_market(),
+    )
+
+    result = await task.process_fast_lane_result(adapted)
+
+    assert result.market_ticker == "will-example-happen-2026"
+    assert logger.blend_decisions[0]["venue"] == "polymarket_us"
+    assert logger.blend_decisions[0]["regime_weights"] == {
+        "fast": 1.0,
+        "interpretation": 0.0,
+        "structural": 0.0,
+    }
 
 
 def test_adapted_analysis_records_polymarket_paper_row(paper_trader):
