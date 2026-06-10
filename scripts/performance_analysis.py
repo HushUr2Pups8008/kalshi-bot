@@ -184,6 +184,41 @@ def _fmt_pnl(v):
     return "%s$%.2f" % (sign, v)
 
 
+def _venue_name(trade):
+    venue = str(trade.get("venue") or "").strip()
+    return venue or "unknown"
+
+
+def _venue_performance_rows(db_trades):
+    rows = []
+    for venue in sorted({_venue_name(t) for t in db_trades}):
+        venue_trades = [t for t in db_trades if _venue_name(t) == venue]
+        resolved = [t for t in venue_trades if t.get("resolved")]
+        wins = [t for t in resolved if (t.get("pnl_dollars") or 0) > 0]
+        losses = [t for t in resolved if (t.get("pnl_dollars") or 0) <= 0]
+        net_pnl = sum(t.get("pnl_dollars") or 0 for t in resolved)
+        total_cost = sum(t.get("cost_dollars") or 0 for t in venue_trades)
+        avg_edge = (
+            sum(t.get("edge") or 0 for t in venue_trades) / len(venue_trades)
+            if venue_trades
+            else 0.0
+        )
+        rows.append(
+            [
+                venue,
+                len(venue_trades),
+                len(resolved),
+                len(venue_trades) - len(resolved),
+                _pct(len(wins), len(resolved)),
+                "%d W / %d L" % (len(wins), len(losses)),
+                _fmt_pnl(net_pnl),
+                "$%.2f" % total_cost,
+                "%+.4f" % avg_edge,
+            ]
+        )
+    return rows
+
+
 def _p0_cohort_boundary(conn):
     try:
         row = conn.execute(
@@ -497,6 +532,28 @@ def section_placed_performance(entries, db_trades, resolution_map):
     lines.append("  Total cost    : $%.2f" % total_cost)
     lines.append("  ROI on cost   : %.1f%%" % roi)
     lines.append("  Avg edge      : %+.4f" % avg_edge)
+
+    venue_rows = _venue_performance_rows(db_trades)
+    if venue_rows:
+        lines.append("")
+        lines.append("By venue:")
+        lines.append(
+            tabulate(
+                venue_rows,
+                headers=[
+                    "Venue",
+                    "Trades",
+                    "Resolved",
+                    "Open",
+                    "Win Rate",
+                    "W/L",
+                    "Net P&L",
+                    "Cost",
+                    "Avg Edge",
+                ],
+                tablefmt="simple",
+            )
+        )
 
     if resolved:
         best = max(resolved, key=lambda t: t.get("pnl_dollars") or -999)
