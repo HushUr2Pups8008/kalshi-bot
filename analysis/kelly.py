@@ -68,7 +68,7 @@ def kelly_bet(
     bankroll: float,
     kelly_fraction: float = 0.5,
     max_bet_dollars: float = 75.0,
-    min_bet_dollars: float = 2.0,
+    min_bet_dollars: float = 0.0,  # PROFIT-SIZING-001: aligned with cfg default (no floor)
     min_edge: float = 0.04,
     source_multiplier: float = 1.0,
     confidence: float = 1.0,
