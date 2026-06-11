@@ -19,6 +19,19 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.4] - 2026-06-10
+
+### Added
+
+- **`scripts/mark_open_positions.py`** — read-only mark-to-market of open paper
+  positions (`PROFIT-DRAWDOWN-001a`). Fetches current prices (Kalshi signed GET
+  + Polymarket public GET), values each held side, and reports TRUE paper equity
+  = notional_bankroll + Σ current value. First run: 8 Kalshi opens worth $5.45
+  vs $4.60 entry; true equity **$34.10–$44.10** (true drawdown ~12–32%, not the
+  reported 42.7% — the gap is capital-at-risk in unresolved positions, not loss).
+  Polymarket positions ($10 entry) currently unpriced — stored ticker ≠ public
+  market-id (`PROFIT-DRAWDOWN-001b`). Places no orders, writes nothing.
+
 ## [0.33.3] - 2026-06-10
 
 ### Fixed
