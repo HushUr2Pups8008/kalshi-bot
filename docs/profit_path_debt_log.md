@@ -446,8 +446,11 @@ Bankroll $50.00 → $28.65 (−$21.35). Decomposition: **realized P&L −$6.75**
 **Largest realized-loss cluster — KXFISAEXTEND (audit item)**
 −$7.50 across 3 NO bets placed within ~7 seconds on 2026-05-01T01:57, all from `VitalLaw.com`, all resolved YES (thesis backwards) — one correlated same-thesis cluster exceeding total net realized P&L. Pre-P0, so likely already mitigated by the series-correlation gate (`series_correlation_window_seconds=3600`) + per-prefix cap (2) added since. **Action:** confirm those guards would now suppress 3 sibling-contract same-series bets in one minute; review `VitalLaw.com` directional reliability.
 
-**Open follow-up — PROFIT-DRAWDOWN-001a (mark-to-market, operator-gated)**
-The $14.60 is entry cash, NOT a current mark. The DB stores no live price for the 12 open tickers, so true paper-equity is unknown (could be > or < $28.65). Recommend a read-only REST price fetch to mark open positions before drawing profitability/go-live conclusions. Until then, do not read 42.7% as "42.7% of capital destroyed" — it is ~13.5% realized + ~29% unresolved capital-at-risk.
+**PROFIT-DRAWDOWN-001a — mark-to-market (DONE 2026-06-10, operator-approved)**
+Ran `scripts/mark_open_positions.py` (read-only: signed Kalshi GET + Polymarket public GET). Result: the 8 **Kalshi** open positions are worth **$5.45 current vs $4.60 entry** (slightly *in the money* — e.g. KXFISAEXTEND-JUN15 NO now ~75.5c). The 4 **Polymarket** positions ($10.00 entry) could NOT be priced — `get_market(<stored ticker>)` 404s because the stored ticker is not the Polymarket public-API market-id (pricing gap, see 001b). **True paper equity = $34.10 .. $44.10** (low = Polymarket worthless; high = Polymarket at entry), i.e. **true drawdown ~12–32%, NOT the reported 42.7%.** Confirms the headline: the drawdown is dominated by capital-at-risk in unresolved (mostly-retaining-value) positions, not realized destruction.
+
+**Open follow-up — PROFIT-DRAWDOWN-001b (Polymarket MTM pricing gap)**
+`scripts/mark_open_positions.py` cannot price Polymarket positions: the `ticker` stored in `paper_trades` (e.g. `ewc-usse-me-2026-11-03-dem`) is not the id `PolymarketPublicClient.get_market` expects (404). Need the ticker→Polymarket-market-id mapping the paper runtime uses (or store the market-id at trade time). Until then the $10.00 Polymarket open cost is unpriced and the equity is a range. Low priority (4 positions, longshot-ish prices likely retaining value).
 
 ---
 
