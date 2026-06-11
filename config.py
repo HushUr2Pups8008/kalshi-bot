@@ -1208,8 +1208,17 @@ class BotConfig:
     max_bet_hard_cap: float = field(
         default_factory=lambda: float(os.getenv("MAX_BET_HARD_CAP", "200.0"))
     )
+    # PROFIT-SIZING-001 (2026-06-11): min-bet floor removed (default 0.0) per
+    # operator decision — the bot trades freely on Kelly down to the natural
+    # 1-contract floor (contracts_from_dollars). This removes the rejection in
+    # kelly_bet (kelly_dollars < min_bet -> 0) and the floor on dynamic_max_bet's
+    # cap. CAVEAT (load-bearing): fees are NOT modelled anywhere in the EV/Kelly
+    # path, so min_bet_dollars was the implicit fee-floor. With it at 0, a tiny
+    # positive-edge LIVE trade can be net-negative after Kalshi fees — positive-
+    # EV gating still holds at the edge level (min_edge), but NOT net-of-fees.
+    # Follow-up: add a fee-aware EV gate before relying on live profitability.
     min_bet_dollars: float = field(
-        default_factory=lambda: float(os.getenv("MIN_BET_DOLLARS", "2.0"))
+        default_factory=lambda: float(os.getenv("MIN_BET_DOLLARS", "0.0"))
     )
 
     # PROFIT-ALIGN-001/003 (2026-05-25): trade-audit driven safeguards.
