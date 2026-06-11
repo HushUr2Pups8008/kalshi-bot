@@ -65,7 +65,10 @@ def test_build_candidates_joins_blend_with_nearby_skipped():
     assert candidates[0]["edge"] == 0.01
 
 
-def test_trigger_evidence_can_clear_g2_source_class_diversity():
+def test_trigger_evidence_can_clear_g2_source_class_diversity(monkeypatch):
+    # PROFIT-SOURCE-001: G2 default is now 1. Pin 2 so the single-source baseline
+    # blocks and the trigger-evidence-clears-G2 mechanism is exercised.
+    monkeypatch.setattr("scripts.simulations.paper_admission_replay.G2_MIN_SOURCE_CLASSES", 2)
     candidate = build_candidates(
         [
             _blend(
@@ -214,7 +217,9 @@ def test_lower_paper_min_edge_can_clear_executor_min_edge():
     assert lowered["admitted"] is True
 
 
-def test_analyze_summarizes_scenarios_and_reason_deltas(tmp_path):
+def test_analyze_summarizes_scenarios_and_reason_deltas(tmp_path, monkeypatch):
+    # PROFIT-SOURCE-001: pin G2=2 so single-source scenarios still block here.
+    monkeypatch.setattr("scripts.simulations.paper_admission_replay.G2_MIN_SOURCE_CLASSES", 2)
     path = tmp_path / "events.jsonl"
     _write_jsonl(
         path,

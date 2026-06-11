@@ -19,6 +19,23 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.7] - 2026-06-11
+
+### Changed
+
+- **Allow single-source trades + track their performance** (`PROFIT-SOURCE-001`,
+  operator decision). The first 12h post-restart produced 2 opportunities, both
+  skipped by `G2_evidence_source_class_diversity` (single-source). To unblock
+  throughput, `G2_MIN_SOURCE_CLASSES` default lowered 2→1 (env-overridable — set
+  `G2_MIN_SOURCE_CLASSES=2` to revert). Only the diversity requirement is
+  relaxed; all other gates (G1/G3/G4/G6, edge, EV) are unchanged.
+  **Tracking:** every trade now records its distinct evidence source-class count
+  (`ReadinessDecision.source_class_count` → `signal_meta.evidence_source_class_count`,
+  logged on PAPER_TRADE events). New report §5b (`section_single_vs_multi_source`)
+  splits resolved win-rate + net P&L by single (1 source) / multi (≥2) / unknown,
+  so the relaxation can be kept or reverted on evidence. No DB migration; full
+  suite green (2642 passed).
+
 ## [0.33.6] - 2026-06-11
 
 ### Changed

@@ -574,6 +574,63 @@ def section_pipeline_funnel(entries, db_trades):
     return "\n".join(lines)
 
 
+def section_single_vs_multi_source(entries, db_trades):
+    """PROFIT-SOURCE-001: split resolved-trade performance by distinct evidence
+    source-class count (single-source vs multi-source), to evaluate whether
+    allowing single-source trades (G2 relaxed to 1) helps or hurts. The count is
+    captured per trade in the PAPER_TRADE event's signal_meta
+    (evidence_source_class_count); fast-lane trades have no count (unknown)."""
+    count_by_trade = {}
+    for e in entries:
+        if e.get("type") != "PAPER_TRADE":
+            continue
+        tid = e.get("trade_id")
+        sm = e.get("signal_meta")
+        if tid and isinstance(sm, dict):
+            c = sm.get("evidence_source_class_count")
+            if c is not None:
+                try:
+                    count_by_trade[tid] = int(c)
+                except (TypeError, ValueError):
+                    pass
+
+    buckets = {"single (1 source)": [], "multi (>=2 sources)": [], "unknown/fast-lane": []}
+    for t in db_trades:
+        if not t.get("resolved"):
+            continue
+        c = count_by_trade.get(t.get("trade_id"))
+        if c is None:
+            buckets["unknown/fast-lane"].append(t)
+        elif c <= 1:
+            buckets["single (1 source)"].append(t)
+        else:
+            buckets["multi (>=2 sources)"].append(t)
+
+    lines = [
+        "Single-source vs multi-source performance (resolved; PROFIT-SOURCE-001):",
+        "",
+        "  G2 now allows single-source (G2_MIN_SOURCE_CLASSES=1); this tracks how",
+        "  single- vs multi-source trades actually perform so the relaxation can be",
+        "  kept or reverted on evidence. Source-class count from PAPER_TRADE signal_meta.",
+        "",
+        "%-22s %9s %9s %11s" % ("Cohort", "Resolved", "Win Rate", "Net P&L"),
+        "-" * 54,
+    ]
+    any_data = False
+    for label, rows in buckets.items():
+        if not rows:
+            continue
+        any_data = True
+        wins = sum(1 for r in rows if (r.get("pnl_dollars") or 0) > 0)
+        net = sum(r.get("pnl_dollars") or 0 for r in rows)
+        wr = "%.0f%%" % (wins / len(rows) * 100)
+        lines.append("%-22s %9d %9s %+11.2f" % (label, len(rows), wr, net))
+    if not any_data:
+        lines.append("  No resolved trades with source-class tracking yet")
+        lines.append("  (single-source trades only started after the G2 relaxation).")
+    return "\n".join(lines)
+
+
 def section_placed_performance(entries, db_trades, resolution_map):
     db_by_id = {t["trade_id"]: t for t in db_trades}
 
@@ -1970,6 +2027,9 @@ def main():
 
     report_lines.append(section_header("5. PER-SOURCE PERFORMANCE"))
     report_lines.append(section_source_performance(entries, db_trades))
+
+    report_lines.append(section_header("5b. SINGLE vs MULTI-SOURCE PERFORMANCE"))
+    report_lines.append(section_single_vs_multi_source(entries, db_trades))
 
     report_lines.append(section_header("6. SOURCE QUALITY FUNNEL"))
     report_lines.append(section_source_quality())

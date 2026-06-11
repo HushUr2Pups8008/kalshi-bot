@@ -537,6 +537,29 @@ Fees are **not modelled** anywhere in the EV/Kelly path. So `min_bet_dollars` wa
 
 ---
 
+### PROFIT-SOURCE-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-SOURCE-001 |
+| **Title** | Allow single-source trades (relax G2) + track single- vs multi-source performance |
+| **Category** | Trade selectivity / Readiness gate / Tracking |
+| **Severity** | MEDIUM (throughput vs corroboration trade-off; reversible) |
+| **Status** | IMPLEMENTED 2026-06-11 (v0.33.7), this PR — operator-directed |
+| **operator_gated** | YES — relaxes a selectivity gate; operator approved. Env-revertible. |
+
+**Decision (operator, 2026-06-11):** the only 2 opportunities in the first 12h post-restart were both skipped by `G2_evidence_source_class_diversity` (single-source). To unblock throughput (the binding constraint), allow single-source trades **and** track how they perform so the relaxation can be kept or reverted on evidence.
+
+**Implemented:**
+- `tasks/trade_readiness_gate.py`: `G2_MIN_SOURCE_CLASSES` default 2→1 (env-overridable `G2_MIN_SOURCE_CLASSES` — set to 2 in `.env` to revert instantly). Single distinct source class now clears G2. Fast-lane was already G2-exempt. Other gates (G1/G3/G4/G6, edge, EV) unchanged — only the diversity requirement is relaxed.
+- **Tracking:** `ReadinessDecision.source_class_count` (gate computes `len(set(evidence_source_classes))`) → carried into `signal_meta.evidence_source_class_count` (blend_task) → logged on every PAPER_TRADE JSONL event. No DB migration.
+- **Surfacing:** report §5b `section_single_vs_multi_source` splits resolved-trade win-rate + net P&L into single (1 source) / multi (≥2) / unknown (fast-lane). Populates as single-source trades resolve.
+- Tests: `test_single_source_allowed_and_count_tracked`, `test_single_vs_multi_source_breakout`; existing G2-mechanism tests pinned to `G2_MIN=2`. Full suite green (2642 passed).
+
+**Evaluation plan:** after single-source trades accumulate + resolve, compare §5b single vs multi win-rate/P&L. If single-source materially underperforms, revert (`G2_MIN_SOURCE_CLASSES=2`). Gated on trade volume + resolution (runtime).
+
+---
+
 ### PROFIT-RUNTIME-001
 
 | Field | Value |

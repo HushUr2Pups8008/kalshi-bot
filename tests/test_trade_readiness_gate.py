@@ -59,7 +59,11 @@ def test_g1_scaled_confidence_is_enforced():
     assert decision.trade_blocked_reason == "G1_blended_confidence"
 
 
-def test_g2_source_class_diversity_is_enforced_for_dossiers():
+def test_g2_source_class_diversity_is_enforced_for_dossiers(monkeypatch):
+    # PROFIT-SOURCE-001: G2 default is now 1 (single-source allowed). Pin it to 2
+    # to test the diversity-enforcement MECHANISM. Relaxed-policy behaviour is
+    # covered by test_blend_task.py::test_single_source_allowed_and_count_tracked.
+    monkeypatch.setattr("tasks.trade_readiness_gate.G2_MIN_SOURCE_CLASSES", 2)
     decision = evaluate_readiness(
         _dossier_candidate(evidence_source_classes=["news", "news"]),
         regime_confidence=0.80,
@@ -67,6 +71,7 @@ def test_g2_source_class_diversity_is_enforced_for_dossiers():
 
     assert decision.passed is False
     assert decision.failure_reasons == ("G2_evidence_source_class_diversity",)
+    assert decision.source_class_count == 1
 
 
 def test_g3_blocks_above_disagreement_threshold():

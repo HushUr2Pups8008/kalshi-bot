@@ -746,6 +746,9 @@ def _trade_candidate(
         "regime_confidence": regime_confidence,
         "blend_mode": blend_result.blend_mode,
         "readiness_gate_min_edge_override": readiness_override,
+        # PROFIT-SOURCE-001: track distinct evidence source-class count so single-
+        # vs multi-source trade performance can be compared once G2 allows single.
+        "evidence_source_class_count": readiness.source_class_count,
     }
     # F-11 P1-A: SignalAnalysis.market_yes_price was deleted; the canonical
     # post-P0 source for the executed-side entry price is executed_price_cents.
