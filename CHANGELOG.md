@@ -19,6 +19,32 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.10] - 2026-06-11
+
+> Stacks on 0.33.8 (#139) and 0.33.9 (#140). Supersedes the no-op draft PR #137. Merge after those, or rebase VERSION/CHANGELOG.
+
+### Changed
+
+- **Matcher feedback L2-a wired end-to-end: emit `match_score`, then score-gate the
+  `false_positive_neutral` signal** (`PROFIT-MATCH-003`, operator-directed). The
+  feedback loop's only negative signal is "the LLM saw the right market but this
+  headline carried no directional edge" — which on a clearly-correct (higher-score)
+  match is NOT a wrong match, yet it was poisoning correct markets' tokens
+  (PROFIT-MATCH-002's defining-token flooring was the symptom). The consumer-side
+  gate was drafted in #137 but was a **no-op in production** because `MATCH_LLM_REVIEW`
+  events never carried a `match_score` (0/985 events). This change wires the producer:
+  `main._process_candidate` threads the matcher score onto `match_meta`,
+  `signal_analyzer` reads it at the emission site, and `utils.logger.log_match_llm_review`
+  records it (omitted when absent). With the score present, `match_feedback.ingest_review_events`
+  now only counts a neutral verdict toward downweighting when `match_score <
+  L2_NEUTRAL_FP_MARGINAL_MAX_SCORE` (0.12); a neutral on a stronger match is skipped
+  (neither fp nor tp). `true_positive` always counts; a missing `match_score` is treated
+  as marginal (conservative — preserves prior behaviour, e.g. the synthetic startup probe).
+  Extends #131's defining-token guard to non-defining correct-market tokens. Threshold
+  tunable; EV impact to be validated via the replay-corpus bootstrap. Tests:
+  `TestL2ScoreGatedFalsePositive` (consumer), `TestLogMatchLlmReview` + signal-analyzer
+  call-site + `_process_candidate` injection (producer). Full suite green (2645 passed).
+
 ## [0.33.7] - 2026-06-11
 
 ### Changed

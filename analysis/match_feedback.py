@@ -62,6 +62,20 @@ ACTIVATE_THRESHOLD: float = 0.40
 threshold avoids penalizing borderline matchers (legitimate edges
 sometimes look like false positives at low N)."""
 
+L2_NEUTRAL_FP_MARGINAL_MAX_SCORE: float = 0.12
+"""PROFIT-MATCH-003 (L2-a): a ``false_positive_neutral`` verdict only counts
+toward downweighting when the match's ``match_score`` is BELOW this band. The
+loop's only negative signal is "the LLM saw the right market but this headline
+carried no directional edge" -- which on a clearly-correct (higher-score) match
+is *not* evidence of a wrong match, so counting it poisons correct markets
+(PROFIT-MATCH-002 was the defining-token symptom; this is the root). Neutral
+verdicts on marginal (low-score, possibly wrong-market) matches still count.
+``true_positive`` always counts. Missing match_score is treated as marginal
+(conservative -- preserves prior behaviour). The producer side that emits
+``match_score`` onto MATCH_LLM_REVIEW is wired in main._process_candidate +
+analysis/signal_analyzer + utils/logger (without it this gate is a no-op).
+Tunable; validate via replay-EV (the bootstrap corpus) before tightening."""
+
 _DB_PATH_DEFAULT: Path = Path("data/match_token_fp_counters.db")
 _WEIGHTS_PATH_DEFAULT: Path = Path("data/matcher_token_weights.json")
 
@@ -179,6 +193,19 @@ def ingest_review_events(
                 verdict = ev.get("verdict")
                 if verdict not in ("true_positive", "false_positive_neutral"):
                     continue
+                # PROFIT-MATCH-003 (L2-a): score-gate the neutral signal. A
+                # neutral verdict on a clearly-correct (higher-score) match is
+                # "right market, no directional edge from this headline", NOT a
+                # wrong match -- counting it poisons correct markets. Only count
+                # neutral toward downweighting on marginal (low-score) matches.
+                # true_positive always counts.
+                if verdict == "false_positive_neutral":
+                    try:
+                        match_score = float(ev.get("match_score"))
+                    except (TypeError, ValueError):
+                        match_score = 0.0  # missing -> treat as marginal (counts)
+                    if match_score >= L2_NEUTRAL_FP_MARGINAL_MAX_SCORE:
+                        continue
                 ts = ev.get("ts") or ""
                 day_utc = ts[:10] if len(ts) >= 10 else ""
                 if not day_utc:
