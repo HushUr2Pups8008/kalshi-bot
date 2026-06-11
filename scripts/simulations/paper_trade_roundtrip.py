@@ -52,6 +52,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from analysis import SignalAnalysis  # noqa: E402
+from analysis.kelly import contracts_from_dollars  # noqa: E402,F401  (used in _expected_paper_cost)
 from config import PAPER_FLAT_CONTRACTS  # noqa: E402
 from feeds import NewsItem  # noqa: E402
 from scripts.simulations._common import (  # noqa: E402
@@ -92,8 +93,10 @@ def _signal_analysis(event: LLMPositiveEvent, headline: str) -> SignalAnalysis:
     market = synthetic_market(event)
     estimated_prob = event.fast_p
     edge = estimated_prob - market.yes_price / 100.0
-    # capped_dollars not used by paper INSERT (paper uses PAPER_FLAT_CONTRACTS)
-    # but the live path branches on it, so populate something realistic.
+    # PROFIT-SIZING-001b: capped_dollars now drives BOTH paper and live sizing
+    # (paper mirrors live via Kelly). Seed it to a realistic ~5-contract notional
+    # so the synthetic trade sizes sensibly; the recorder converts it to an
+    # integer contract count via contracts_from_dollars.
     price_cents = max(1, min(99, int(market.yes_price)))
     capped = PAPER_FLAT_CONTRACTS * price_cents / 100.0
     # P-6 / LD-10: paper recorder consumes executed_price_cents; map to the
@@ -157,21 +160,15 @@ def _read_inserted_row(db_path: Path, trade_id: str) -> Optional[dict]:
         conn.close()
 
 
-def _expected_paper_cost(market, side: str) -> float:
-    """P-6 / LD-10: paper recorder consumes ``executed_price_cents`` on the
-    chosen side, so the expected debit mirrors that executable ask rather
-    than the legacy midpoint synthesis."""
-    if side == "yes":
-        price_cents = market.yes_ask_cents
-    else:
-        price_cents = market.no_ask_cents
-    if price_cents is None:
-        # Fallback shouldn't fire under synthetic_market but keep the math
-        # defined rather than raising in a harness path.
-        yes_int = max(1, min(99, int(market.yes_price)))
-        price_cents = yes_int if side == "yes" else max(1, min(99, 100 - yes_int))
-    price_cents = max(1, min(99, int(price_cents)))
-    return PAPER_FLAT_CONTRACTS * price_cents / 100.0
+def _expected_paper_cost(analysis) -> float:
+    """PROFIT-SIZING-001b: paper now sizes by Kelly (mirrors live), so the
+    expected debit is the Kelly contract count at the executed side price --
+    matching trading.paper_trader.record_trade exactly (price_cents from
+    executed_price_cents; contracts = contracts_from_dollars(capped_dollars,
+    price); cost = contracts * price / 100)."""
+    price_cents = max(1, min(99, int(analysis.executed_price_cents)))
+    kelly_contracts = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
+    return kelly_contracts * price_cents / 100.0
 
 
 # ── Per-event simulation ──────────────────────────────────────────────────────
@@ -204,11 +201,7 @@ async def _run_event(
         else None
     )
 
-    expected_cost = (
-        _expected_paper_cost(analysis.market, analysis.side)
-        if trade_id
-        else None
-    )
+    expected_cost = _expected_paper_cost(analysis) if trade_id else None
 
     return RoundtripReport(
         event_name=event.name,

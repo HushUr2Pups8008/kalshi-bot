@@ -19,6 +19,36 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.6] - 2026-06-11
+
+### Changed
+
+- **Paper sizing now mirrors live (Kelly)** (`PROFIT-SIZING-001b`). Paper trades
+  previously recorded flat 5 contracts (`PAPER_FLAT_CONTRACTS`); they now size by
+  Kelly via `contracts_from_dollars(capped_dollars, price)` — identical to the
+  live path — so the paper cohort predicts live behaviour. `trading/paper_trader.py`
+  records `contracts = kelly_contracts`; `trading/executor.py`'s concentration
+  pre-check uses the Kelly contract cost; the sims roundtrip
+  (`scripts/simulations/paper_trade_roundtrip.py`) expected-cost mirrors the
+  Kelly math. With the min-bet floor already removed (`PROFIT-SIZING-001`),
+  trades size down to the natural 1-contract floor. **Scope:** this is the
+  *shared* paper path, so **Polymarket** paper trades switch flat-5→Kelly too
+  (via the common `PaperTrader.record_trade`), not just Kalshi. Full suite green
+  (2634 passed).
+  **`PAPER_FLAT_CONTRACTS` is NOT fully retired:** it no longer sets recorded
+  contracts directly, but it still seeds `capped_dollars` for the *no-edge
+  placeholder* path (`main.py`, `polymarket/paper_runtime.py`) when Kelly
+  returns 0, which is then re-sized by Kelly — so no-edge paper trades land at
+  ~5 contracts (4 at 13 price points, from `int()` truncation). Report P&L
+  attribution (`scripts/performance_analysis.py`) and §7e still assume flat-5
+  for paper — reporting follow-up.
+  **Operator awareness:** (1) Kelly can size a single paper trade far above the
+  old flat-5 (up to `dynamic_max_bet`), so paper notional drawdown moves faster
+  — `_debit_bankroll` does not clamp at 0. (2) The sizing regime changed: set a
+  `bot_state` marker at deploy (e.g. `sizing_regime_kelly_deployed_ts`) so
+  report cohort analysis separates flat-5-era from Kelly-era trades (analogous
+  to the P0 sentinel).
+
 ## [0.33.5] - 2026-06-11
 
 ### Changed

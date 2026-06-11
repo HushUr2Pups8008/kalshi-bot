@@ -188,7 +188,9 @@ class TestBankrollAtomicity:
 
 class TestResolveMarketAccounting:
     def test_winning_yes_trade_positive_pnl(self, trader):
-        analysis = _make_mock_analysis(yes_price=40.0, side="yes")
+        # PROFIT-SIZING-001b: paper sizes by Kelly now. capped $2.00 @ 40c =>
+        # 5 contracts, so the resolution-math expectations below are unchanged.
+        analysis = _make_mock_analysis(yes_price=40.0, side="yes", capped_dollars=2.0)
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
             trader.record_trade(analysis)
         _run_resolve(trader, analysis.market.ticker, True)
@@ -200,7 +202,7 @@ class TestResolveMarketAccounting:
         assert row["pnl_dollars"] == pytest.approx(3.00, abs=0.01)
 
     def test_losing_yes_trade_negative_pnl(self, trader):
-        analysis = _make_mock_analysis(yes_price=40.0, side="yes")
+        analysis = _make_mock_analysis(yes_price=40.0, side="yes", capped_dollars=2.0)
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
             trader.record_trade(analysis)
         _run_resolve(trader, analysis.market.ticker, False)
@@ -208,11 +210,12 @@ class TestResolveMarketAccounting:
         row = trader._conn.execute(
             "SELECT pnl_dollars FROM paper_trades WHERE resolved=1"
         ).fetchone()
-        # Lost: cost = 5 * 0.40 = $2.00; payout = 0; pnl = -$2.00
+        # 5 contracts (capped $2 @ 40c). Lost: cost = $2.00; payout = 0; pnl = -$2.00
         assert row["pnl_dollars"] == pytest.approx(-2.00, abs=0.01)
 
     def test_winning_no_trade_positive_pnl(self, trader):
-        analysis = _make_mock_analysis(yes_price=60.0, side="no")
+        # NO at yes_price=60c => executed price 40c; capped $2.00 => 5 contracts.
+        analysis = _make_mock_analysis(yes_price=60.0, side="no", capped_dollars=2.0)
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
             trader.record_trade(analysis)
         _run_resolve(trader, analysis.market.ticker, False)
@@ -220,7 +223,6 @@ class TestResolveMarketAccounting:
         row = trader._conn.execute(
             "SELECT pnl_dollars FROM paper_trades WHERE resolved=1"
         ).fetchone()
-        # NO contract at yes_price=60c => price_cents = 100-60 = 40c
         # 5 contracts * 40c = $2.00 cost; win = 5 contracts = $5; pnl = $3.00
         assert row["pnl_dollars"] == pytest.approx(3.00, abs=0.01)
 
@@ -293,8 +295,10 @@ class TestKellyShadow:
         ).fetchone()
         assert row["kelly_contracts"] is not None
         assert row["kelly_contracts"] >= 1
-        # In paper mode, flat 5 contracts are placed regardless of Kelly
-        assert row["contracts"] == 5
+        # PROFIT-SIZING-001b: paper now mirrors live -- contracts == Kelly size,
+        # not flat-5. At 50c, $10 capped => 20 contracts.
+        assert row["contracts"] == row["kelly_contracts"]
+        assert row["contracts"] == 20
 
     def test_record_trade_logs_blended_signal_meta_when_present(self, trader):
         analysis = _make_mock_analysis(yes_price=50.0, capped_dollars=10.0)
@@ -317,9 +321,10 @@ class TestKellyShadow:
             "keywords_matched"
         ] == analysis.keywords_matched
 
-    def test_kelly_contracts_independent_of_flat(self, trader):
-        """kelly_contracts reflects capped_dollars sizing, not PAPER_FLAT_CONTRACTS."""
-        # At 50c, $20 => 40 contracts; $2 => 4 contracts. Both still use flat 5 in contracts.
+    def test_paper_contracts_track_kelly_sizing(self, trader):
+        """PROFIT-SIZING-001b: paper sizes by Kelly (mirrors live), so recorded
+        contracts == kelly_contracts and scale with capped_dollars."""
+        # At 50c, $20 => 40 contracts; $2 => 4 contracts.
         analysis_big  = _make_mock_analysis(yes_price=50.0, capped_dollars=20.0)
         analysis_small = _make_mock_analysis(
             yes_price=50.0, capped_dollars=2.0, ticker="KXTEST-25DEC30"
@@ -334,9 +339,9 @@ class TestKellyShadow:
         big_kelly   = rows[0]["kelly_contracts"]
         small_kelly = rows[1]["kelly_contracts"]
         assert big_kelly > small_kelly
-        # Both use flat 5
-        assert rows[0]["contracts"] == 5
-        assert rows[1]["contracts"] == 5
+        # Paper now records the Kelly size, not flat-5.
+        assert rows[0]["contracts"] == big_kelly == 40
+        assert rows[1]["contracts"] == small_kelly == 4
 
     def test_record_trade_persists_executed_side_edge_yes(self, trader):
         """PROFIT-OBS-004 (closed 2026-05-02): yes-side trades persist

@@ -310,13 +310,13 @@ def test_roundtrip_inserts_one_row_per_accepted_event(tmp_path):
         assert r.inserted_row["ticker"] == r.ticker
 
 
-def test_roundtrip_bankroll_debit_matches_paper_flat_cost(tmp_path):
-    """A4 #2: bankroll debit equals the paper-flat cost recorded on the row.
+def test_roundtrip_bankroll_debit_matches_recorded_cost(tmp_path):
+    """A4 #2: bankroll debit equals the cost recorded on the row.
 
-    Paper mode uses ``PAPER_FLAT_CONTRACTS`` rather than ``capped_dollars``,
-    so the debit math contract is "delta == row.cost_dollars" rather than
-    "delta == capped_dollars". Pin that explicitly so a future change that
-    reroutes paper sizing to capped_dollars surfaces here."""
+    PROFIT-SIZING-001b: paper now sizes by Kelly (mirrors live) -- recorded
+    cost = kelly_contracts * executed_price. The invariant pinned here is
+    "delta == row.cost_dollars == expected (Kelly) cost"; the harness's
+    expected-cost mirror was updated in lockstep with paper_trader."""
     reports = paper_trade_roundtrip.run(db_root=tmp_path)
     for r in reports:
         if not r.accepted:
