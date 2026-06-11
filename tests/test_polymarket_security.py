@@ -1,14 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
-
-import pytest
-
 import config as config_module
-from polymarket.security import (
-    redact_polymarket_secret,
-    require_polymarket_enablement_preflight,
-)
+from polymarket.security import redact_polymarket_secret
 from tests.test_polymarket_config import _clear_polymarket_env, _valid_rsa_pem
 
 
@@ -29,57 +22,20 @@ def test_redact_polymarket_secret_noops_when_secret_missing():
     assert redact_polymarket_secret(message, "") == message
 
 
-def test_disabled_runtime_does_not_require_eligibility_ack():
-    assert (
-        require_polymarket_enablement_preflight(
-            enabled=False,
-            eligibility_ack_date="",
-            today="2026-06-07",
-        )
-        is None
-    )
-
-
-def test_enabled_runtime_requires_same_day_eligibility_ack(monkeypatch, capsys):
+def test_enabled_runtime_no_longer_requires_eligibility_ack(monkeypatch):
+    # Operator decision 2026-06-11: the daily same-day eligibility-ack gate is
+    # removed. Enabling Polymarket no longer requires
+    # POLYMARKET_US_ELIGIBILITY_ACK_DATE — config builds without it, like Kalshi.
+    # WHY this stays a test: it pins the regression so the daily-.env-edit
+    # requirement cannot silently return.
     _clear_polymarket_env(monkeypatch)
-    secret = "base64-secret-value"
     monkeypatch.setenv("POLYMARKET_US_ENABLED", "true")
     monkeypatch.setenv("POLYMARKET_US_KEY_ID", "key")
-    monkeypatch.setenv("POLYMARKET_US_SECRET", secret)
+    monkeypatch.setenv("POLYMARKET_US_SECRET", "base64-secret-value")
     monkeypatch.delenv("POLYMARKET_US_ELIGIBILITY_ACK_DATE", raising=False)
 
-    with pytest.raises(SystemExit):
-        config_module.BotConfig(
-            api_key_id="kalshi-key",
-            api_key_secret=_valid_rsa_pem(),
-        )
-
-    captured = capsys.readouterr()
-    assert secret not in captured.err
-    assert "POLYMARKET_US_ELIGIBILITY_ACK_DATE" in captured.err
-
-
-def test_stale_eligibility_ack_fails_preflight():
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
-
-    with pytest.raises(ValueError) as excinfo:
-        require_polymarket_enablement_preflight(
-            enabled=True,
-            eligibility_ack_date=yesterday,
-            today=date.today().isoformat(),
-        )
-
-    assert "POLYMARKET_US_ELIGIBILITY_ACK_DATE" in str(excinfo.value)
-
-
-def test_same_day_eligibility_ack_passes_preflight():
-    today = date.today().isoformat()
-
-    assert (
-        require_polymarket_enablement_preflight(
-            enabled=True,
-            eligibility_ack_date=today,
-            today=today,
-        )
-        is None
+    cfg = config_module.BotConfig(
+        api_key_id="kalshi-key",
+        api_key_secret=_valid_rsa_pem(),
     )
+    assert cfg.polymarket_us_enabled is True

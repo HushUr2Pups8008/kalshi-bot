@@ -656,7 +656,7 @@ def section_placed_performance(entries, db_trades, resolution_map):
         "  Cohort: IN-WINDOW (report window only). Go-live readiness (section 8)"
     )
     lines.append(
-        "  reports the LIFETIME cohort, so its win rate / drawdown differ from"
+        "  gates on the POST-P0 cohort, so its win rate / drawdown differ from"
     )
     lines.append("  the figures below.")
     lines.append("")
@@ -1800,9 +1800,7 @@ def section_edge_calibration(db_trades):
 
 
 def section_golive_readiness(db_trades, state):
-    resolved = [t for t in db_trades if t.get("resolved")]
-    wins = [t for t in resolved if (t.get("pnl_dollars") or 0) > 0]
-    win_rate = (len(wins) / len(resolved)) if resolved else 0.0
+    resolved_all = [t for t in db_trades if t.get("resolved")]
 
     try:
         bankroll_now = float(state.get("notional_bankroll", 0))
@@ -1813,125 +1811,107 @@ def section_golive_readiness(db_trades, state):
     min_resolved = int(os.getenv("GO_LIVE_MIN_RESOLVED", "20"))
     min_win_rate = float(os.getenv("GO_LIVE_MIN_WIN_RATE", "0.52"))
     max_drawdown = float(os.getenv("GO_LIVE_MAX_DRAWDOWN_PCT", "0.20"))
-
     bankroll_start = _starting_bankroll(db_trades, state)
-    drawdown = (
+
+    def _cohort_stats(rows):
+        wins = [t for t in rows if (t.get("pnl_dollars") or 0) > 0]
+        wr = (len(wins) / len(rows)) if rows else 0.0
+        pts = _bankroll_equity_points(rows, bankroll_now)
+        ptt = _equity_max_drawdown(pts)
+        # A 0% peak-to-trough from a <2-point curve is "bankroll history could
+        # not be reconstructed", NOT "no drawdown". Flag it so the gate fails
+        # closed instead of silently passing a cohort with missing equity data
+        # (false-pass on a go-live safety gate).
+        dd_measurable = len(pts) >= 2
+        return len(rows), wr, ptt, dd_measurable
+
+    # PROFIT-REPORT-001a (operator decision 2026-06-11): GATE ON POST-P0.
+    # The pre-P0 cohort ran under the pre-fix Kalshi pricing bug and is excluded
+    # everywhere else (7b/7d/7e) as non-representative — gating go-live on it was
+    # leveraging known-broken functionality. The authoritative verdict now uses
+    # the post-P0 (current-regime) cohort; lifetime is informational only. If the
+    # P0 boundary sentinel is missing we fall back to lifetime (conservative) so
+    # the gate always produces a verdict.
+    boundary = _parse_p0_boundary(state.get(P0_PRICE_FIX_SENTINEL_KEY))
+    if boundary is not None:
+        gating = [
+            t for t in resolved_all
+            if (_parse_ts(t.get("ts")) is not None and _parse_ts(t.get("ts")) >= boundary)
+        ]
+        gate_basis = "POST-P0"
+    else:
+        gating = resolved_all
+        gate_basis = "LIFETIME (post-P0 boundary missing -- fallback)"
+
+    g_n, g_wr, g_ptt, g_dd_measurable = _cohort_stats(gating)
+    life_n, life_wr, life_ptt, _ = _cohort_stats(resolved_all)
+    life_dd_startnow = (
         (bankroll_start - bankroll_now) / bankroll_start if bankroll_start > 0 else 0.0
     )
+    dd_ok = g_dd_measurable and g_ptt <= max_drawdown
 
     def gate(val, threshold, mode):
-        if mode == "min":
-            ok = val >= threshold
-        else:
-            ok = val <= threshold
+        ok = val >= threshold if mode == "min" else val <= threshold
         return "PASS" if ok else "FAIL"
 
     lines = ["Go-live readiness:", ""]
-    lines.append(
-        "  Cohort basis    : LIFETIME (all resolved trades, INCLUDING the frozen"
-    )
-    lines.append(
-        "                    pre-P0 cohort that sections 7b/7d/7e exclude as"
-    )
-    lines.append(
-        "                    non-representative). Gate kept conservative; see the"
-    )
-    lines.append("                    post-P0 view below.")
+    lines.append("  Cohort basis    : %s (pre-P0 excluded -- ran under the" % gate_basis)
+    lines.append("                    pre-fix pricing bug; matches 7b/7d/7e).")
     lines.append("")
     lines.append(
         "  Resolved trades : %d / %d required  [%s]"
-        % (len(resolved), min_resolved, gate(len(resolved), min_resolved, "min"))
+        % (g_n, min_resolved, gate(g_n, min_resolved, "min"))
     )
     lines.append(
         "  Win rate        : %.0f%% / %.0f%% required  [%s]"
-        % (win_rate * 100, min_win_rate * 100, gate(win_rate, min_win_rate, "min"))
+        % (g_wr * 100, min_win_rate * 100, gate(g_wr, min_win_rate, "min"))
     )
-    lines.append(
-        "  Drawdown        : %.1f%% / %.0f%% max  [%s]"
-        % (drawdown * 100, max_drawdown * 100, gate(drawdown, max_drawdown, "max"))
-    )
-    lines.append(
-        "                    (decline from starting bankroll, not peak-to-trough)"
-    )
+    if g_dd_measurable:
+        lines.append(
+            "  Drawdown        : %.1f%% / %.0f%% max  [%s]  (peak-to-trough)"
+            % (g_ptt * 100, max_drawdown * 100, "PASS" if dd_ok else "FAIL")
+        )
+    else:
+        lines.append(
+            "  Drawdown        : n/a / %.0f%% max  [FAIL]  (peak-to-trough -- too"
+            " few bankroll samples to measure; failing closed)"
+            % (max_drawdown * 100)
+        )
     lines.append(
         "  Notional bankroll : $%.2f (started $%.2f)" % (bankroll_now, bankroll_start)
     )
-    lifetime_ptt = _equity_max_drawdown(_bankroll_equity_points(resolved, bankroll_now))
+    lines.append("")
     lines.append(
-        "  Peak-to-trough  : %.1f%%  (informational; max entry-sampled equity"
-        " decline)" % (lifetime_ptt * 100)
+        "  Lifetime view (incl. frozen pre-P0; INFORMATIONAL, not gating):"
+    )
+    lines.append(
+        "    Resolved %d | Win rate %.0f%% | start-vs-now %.1f%% | peak-to-trough %.1f%%"
+        % (life_n, life_wr * 100, life_dd_startnow * 100, life_ptt * 100)
     )
     lines.append("")
 
-    # Post-P0 (current-regime) cohort — INFORMATIONAL only. The pre-P0 cohort is
-    # frozen as non-representative everywhere else (7b/7d/7e); surfacing the
-    # post-P0 reality lets the operator see current-regime win rate / drawdown
-    # WITHOUT the gate silently switching cohorts, which would loosen a safety
-    # gate (an operator-only decision).
-    boundary = _parse_p0_boundary(state.get(P0_PRICE_FIX_SENTINEL_KEY))
-    if boundary is None:
-        lines.append(
-            "  Post-P0 view    : unavailable (bot_state.%s missing); cohort split"
-            % P0_PRICE_FIX_SENTINEL_KEY
-        )
-        lines.append(
-            "                    not reported. Gate above is the lifetime cohort."
-        )
-    else:
-        post = []
-        for t in resolved:
-            dt = _parse_ts(t.get("ts"))
-            if dt is not None and dt >= boundary:
-                post.append(t)
-        post_wins = [t for t in post if (t.get("pnl_dollars") or 0) > 0]
-        post_wr = (len(post_wins) / len(post)) if post else 0.0
-        post_ptt = _equity_max_drawdown(_bankroll_equity_points(post, bankroll_now))
-        lines.append(
-            "  Post-P0 view    : INFORMATIONAL (current-regime cohort, ts >= %s);"
-            % boundary.date().isoformat()
-        )
-        lines.append("                    NOT the gating basis.")
-        lines.append(
-            "    Resolved      : %d  (lifetime gate still requires %d total)"
-            % (len(post), min_resolved)
-        )
-        lines.append(
-            "    Win rate      : %.0f%% / %.0f%% target"
-            % (post_wr * 100, min_win_rate * 100)
-        )
-        lines.append(
-            "    Peak-to-trough: %.1f%% / %.0f%% target"
-            % (post_ptt * 100, max_drawdown * 100)
-        )
-        lines.append(
-            "    (Gating on post-P0 instead of lifetime would loosen the gate --"
-        )
-        lines.append("    an operator decision, not applied here.)")
-    lines.append("")
-
-    all_pass = (
-        len(resolved) >= min_resolved
-        and win_rate >= min_win_rate
-        and drawdown <= max_drawdown
-    )
+    all_pass = g_n >= min_resolved and g_wr >= min_win_rate and dd_ok
     if all_pass:
-        lines.append("  OVERALL: READY FOR LIVE TRADING (lifetime cohort)")
+        lines.append("  OVERALL: READY FOR LIVE TRADING (%s cohort)" % gate_basis)
     else:
         missing = []
-        if len(resolved) < min_resolved:
+        if g_n < min_resolved:
+            missing.append("%d more resolved trades needed" % (min_resolved - g_n))
+        if g_wr < min_win_rate:
             missing.append(
-                "%d more resolved trades needed" % (min_resolved - len(resolved))
+                "win rate needs %.0f%% (currently %.0f%%)"
+                % (min_win_rate * 100, g_wr * 100)
             )
-        if win_rate < min_win_rate:
-            missing.append(
-                "win rate needs %.0f%% (currently %.0f%%, lifetime)"
-                % (min_win_rate * 100, win_rate * 100)
-            )
-        if drawdown > max_drawdown:
-            missing.append(
-                "drawdown %.1f%% exceeds %.0f%% cap (lifetime)"
-                % (drawdown * 100, max_drawdown * 100)
-            )
+        if not dd_ok:
+            if not g_dd_measurable:
+                missing.append(
+                    "drawdown not measurable (too few bankroll samples)"
+                )
+            else:
+                missing.append(
+                    "drawdown %.1f%% exceeds %.0f%% cap"
+                    % (g_ptt * 100, max_drawdown * 100)
+                )
         lines.append("  OVERALL: NOT READY -- " + "; ".join(missing))
 
     return "\n".join(lines)

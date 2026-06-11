@@ -1149,11 +1149,6 @@ class BotConfig:
     polymarket_us_secret: str = field(
         default_factory=lambda: os.getenv("POLYMARKET_US_SECRET", "").strip()
     )
-    polymarket_us_eligibility_ack_date: str = field(
-        default_factory=lambda: os.getenv(
-            "POLYMARKET_US_ELIGIBILITY_ACK_DATE", ""
-        ).strip()
-    )
     polymarket_us_public_base_url: str = field(
         default_factory=lambda: os.getenv(
             "POLYMARKET_US_PUBLIC_BASE_URL", "https://gateway.polymarket.us"
@@ -1542,15 +1537,6 @@ class BotConfig:
                 errors.append(
                     "POLYMARKET_US_SECRET is required when POLYMARKET_US_ENABLED=true"
                 )
-            try:
-                from polymarket.security import require_polymarket_enablement_preflight
-
-                require_polymarket_enablement_preflight(
-                    enabled=self.polymarket_us_enabled,
-                    eligibility_ack_date=self.polymarket_us_eligibility_ack_date,
-                )
-            except ValueError as exc:
-                errors.append(str(exc))
         if self.bankroll <= 0:
             errors.append("BANKROLL must be positive, got %.2f" % self.bankroll)
         if not (0 < self.kelly_fraction <= 1.0):
