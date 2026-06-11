@@ -19,6 +19,28 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.11] - 2026-06-11
+
+> Stacks on 0.33.8 (#139), 0.33.9 (#140), 0.33.10 (#141). Merge after them or rebase VERSION/CHANGELOG.
+
+### Fixed
+
+- **Polymarket open positions can now be marked-to-market** (`PROFIT-DRAWDOWN-001b`,
+  operator-directed). `PolymarketPublicClient.get_market` issued `GET /v1/markets/{id}`,
+  which only resolves a numeric id — but the bot persists the market **slug** as the
+  ticker (`normalize_polymarket_market` sets `market_id = slug|id`), so every stored
+  Polymarket ticker (e.g. `ewc-usse-me-2026-11-03-dem`) 404'd. `scripts/mark_open_positions.py`
+  therefore reported all open Polymarket positions as value-unknown, inflating the
+  apparent paper drawdown. Root-cause fix: `get_market` now delegates to
+  `get_market_payload`, which already had a 404→slug/id fallback (paginates the markets
+  list, matches `slug`/`id`), then normalizes — aligning it with the settlement path
+  (`settlement_reconciler` already used `get_market_payload`). The only Polymarket
+  `get_market` caller is `scripts/mark_open_positions.py` (the other `get_market` callers,
+  `performance_analysis` and `edge_replay/fetch_resolved_markets`, use the unrelated
+  `KalshiRestClient.get_market`). Strictly better on the 404 path (was: raise; now:
+  resolve when the market exists). Read-only; no execution-path change. Test:
+  `test_get_market_falls_back_to_slug_lookup_on_404`.
+
 ## [0.33.7] - 2026-06-11
 
 ### Changed
