@@ -18,7 +18,7 @@ from typing import Any, Callable, Optional
 
 from analysis import SignalAnalysis
 from analysis.kelly import contracts_from_dollars
-from config import cfg, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, PAPER_BLOCK_SAME_SIDE_DUPLICATE
+from config import cfg, PAPER_MIN_EDGE, PAPER_BLOCK_SAME_SIDE_DUPLICATE
 from kalshi import OrderResult
 from kalshi.rest_client import KalshiRestClient
 from trading.paper_trader import PaperTrader
@@ -299,11 +299,17 @@ class TradeExecutor:
             "This is a bug in _validate control flow."
         )
         paper_unit_price = max(1, min(99, int(analysis.executed_price_cents)))
-        trade_cost = (
-            PAPER_FLAT_CONTRACTS * paper_unit_price / 100.0
-            if self._is_paper
-            else analysis.capped_dollars
-        )
+        if self._is_paper:
+            # PROFIT-SIZING-001b: paper sizes by Kelly now (mirrors live, matches
+            # paper_trader). Concentration pre-check uses the actual Kelly
+            # contract cost rather than the retired flat-5 estimate.
+            trade_cost = (
+                contracts_from_dollars(analysis.capped_dollars, paper_unit_price)
+                * paper_unit_price
+                / 100.0
+            )
+        else:
+            trade_cost = analysis.capped_dollars
         if not self._paper.portfolio.is_concentration_ok(
             ticker=analysis.market.ticker,
             additional_dollars=trade_cost,

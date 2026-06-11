@@ -30,7 +30,7 @@ from tabulate import tabulate
 import config as config_module
 from analysis import SignalAnalysis
 from tasks.stats.source_credibility import SourceCredibility
-from config import cfg, DATA_DIR, PAPER_FLAT_CONTRACTS
+from config import cfg, DATA_DIR
 from trading.portfolio import Portfolio, Position
 from utils.logger import get_logger, trade_log, TRADE_LOG_FILE
 
@@ -805,15 +805,14 @@ class PaperTrader:
 
         trade_id    = str(uuid.uuid4())[:12]
         price_cents = max(1, min(99, int(analysis.executed_price_cents)))
-        # Kelly shadow: always compute what Kelly would size, even in flat paper mode.
-        # Stored as kelly_contracts for post-hoc analytics comparing flat-5 vs Kelly P&L.
+        # kelly_contracts: what Kelly sizes for this trade. Retained as a stored
+        # column for analytics (and the §7e flat-vs-Kelly history pre-cutover).
         kelly_contracts = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
-        # Paper training mode: flat contracts -- no bankroll gating so we
-        # maximise trade volume and accumulate signal-quality data.
-        if cfg.is_paper_trading:
-            contracts    = PAPER_FLAT_CONTRACTS
-        else:
-            contracts    = kelly_contracts
+        # PROFIT-SIZING-001b: paper now MIRRORS live -- size by Kelly (not flat-5)
+        # so the paper cohort predicts live behaviour. With the min-bet floor
+        # removed (PROFIT-SIZING-001) trades size down to the natural 1-contract
+        # floor in contracts_from_dollars. Both modes now use kelly_contracts.
+        contracts    = kelly_contracts
         cost_dollars = contracts * price_cents / 100.0
 
         bankroll_before = self.get_notional_bankroll()
