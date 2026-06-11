@@ -340,6 +340,52 @@ def test_placed_performance_labels_in_window_cohort():
     assert "LIFETIME cohort" in output
 
 
+def test_kelly_shadow_payout_is_side_aware_no_win():
+    """PROFIT-REPORT-002: a NO contract bought at 92c that resolves NO is a WIN
+    (payout = contracts), not a total loss. The prior renderer assumed every
+    position was YES and booked winning NO bets as losses, corrupting the Kelly
+    delta (this is what produced the bogus post-P0 Kelly -48.9%)."""
+    no_win = {
+        "kelly_contracts": 2,
+        "price_cents": 92,
+        "resolved_yes": 0,  # market resolved NO -> a NO bet WINS
+        "side": "no",
+        "pnl_dollars": 0.40,
+        "cost_dollars": 4.60,
+    }
+    out = pa._render_kelly_shadow_rows([no_win])
+    assert "+0.16" in out  # kelly cost 1.84, payout 2.0 -> +0.16 (win booked)
+    assert "-1.84" not in out  # the old YES-assumption total-loss value
+
+
+def test_kelly_shadow_no_bet_resolving_yes_is_loss():
+    """A NO contract loses when the market resolves YES: payout 0."""
+    no_loss = {
+        "kelly_contracts": 2,
+        "price_cents": 92,
+        "resolved_yes": 1,  # market resolved YES -> a NO bet LOSES
+        "side": "no",
+        "pnl_dollars": -4.60,
+        "cost_dollars": 4.60,
+    }
+    out = pa._render_kelly_shadow_rows([no_loss])
+    assert "-1.84" in out  # cost 1.84, payout 0 -> -1.84
+
+
+def test_kelly_shadow_yes_bet_unchanged():
+    """YES side keeps prior behaviour: wins when the market resolves YES."""
+    yes_win = {
+        "kelly_contracts": 2,
+        "price_cents": 50,
+        "resolved_yes": 1,
+        "side": "yes",
+        "pnl_dollars": 2.5,
+        "cost_dollars": 2.5,
+    }
+    out = pa._render_kelly_shadow_rows([yes_win])
+    assert "+1.00" in out  # cost 1.0, payout 2.0 -> +1.00
+
+
 def test_skip_breakdown_surfaces_raw_unclassified_reasons():
     entries = [
         {"type": "SKIPPED", "ticker": "KX1", "reason": "market closed: close_time_elapsed"},
