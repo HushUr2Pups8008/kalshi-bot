@@ -476,7 +476,11 @@ async def test_trigger_evidence_source_class_counts_for_g2():
 
 
 @pytest.mark.asyncio
-async def test_blocked_candidate_logs_reason_and_does_not_enqueue():
+async def test_blocked_candidate_logs_reason_and_does_not_enqueue(monkeypatch):
+    # PROFIT-SOURCE-001: G2 default is now 1 (single-source allowed). Pin it back
+    # to 2 here so a single-source candidate still BLOCKS -- this test exercises
+    # the block-logging + no-enqueue path, not the G2 policy itself.
+    monkeypatch.setattr("tasks.trade_readiness_gate.G2_MIN_SOURCE_CLASSES", 2)
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     logger = SpyLogger()
     store = FakeStore(
@@ -499,6 +503,37 @@ async def test_blocked_candidate_logs_reason_and_does_not_enqueue():
     assert queue.empty()
     assert logger.records[0]["trade_considered"] is True
     assert logger.records[0]["trade_blocked_reason"] == "G2_evidence_source_class_diversity"
+
+
+@pytest.mark.asyncio
+async def test_single_source_allowed_and_count_tracked(monkeypatch):
+    """PROFIT-SOURCE-001: with G2_MIN=1 (default), a single-source candidate is
+    NO LONGER blocked, and its source-class count (1) is recorded on the
+    readiness decision + propagated into signal_meta for performance tracking."""
+    monkeypatch.setattr("tasks.trade_readiness_gate.G2_MIN_SOURCE_CLASSES", 1)
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    store = FakeStore(
+        dossier=_dossier(),
+        structural_prior=_structural_prior(),
+        evidence=[_evidence("ev-1", source_class="news")],
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=store,
+        logger=logger,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(_analysis())
+
+    assert (
+        "G2_evidence_source_class_diversity"
+        not in result.readiness_decision.failure_reasons
+    )
+    assert result.readiness_decision.source_class_count == 1
+    if result.candidate is not None:
+        assert result.candidate.signal_meta["evidence_source_class_count"] == 1
 
 
 @pytest.mark.asyncio

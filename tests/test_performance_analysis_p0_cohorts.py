@@ -386,6 +386,33 @@ def test_kelly_shadow_yes_bet_unchanged():
     assert "+1.00" in out  # cost 1.0, payout 2.0 -> +1.00
 
 
+def test_single_vs_multi_source_breakout():
+    """PROFIT-SOURCE-001: split resolved performance by source-class count read
+    from PAPER_TRADE signal_meta. Single=1, multi>=2, missing=unknown."""
+    entries = [
+        {"type": "PAPER_TRADE", "trade_id": "s1", "signal_meta": {"evidence_source_class_count": 1}},
+        {"type": "PAPER_TRADE", "trade_id": "m1", "signal_meta": {"evidence_source_class_count": 3}},
+        {"type": "PAPER_TRADE", "trade_id": "u1", "signal_meta": {}},
+    ]
+    db_trades = [
+        {"trade_id": "s1", "resolved": 1, "pnl_dollars": 2.0},
+        {"trade_id": "m1", "resolved": 1, "pnl_dollars": -1.0},
+        {"trade_id": "u1", "resolved": 1, "pnl_dollars": 0.5},
+        {"trade_id": "open", "resolved": 0, "pnl_dollars": None},
+    ]
+    out = pa.section_single_vs_multi_source(entries, db_trades)
+    assert "single (1 source)" in out
+    assert "multi (>=2 sources)" in out
+    # single: 1 resolved, 100% win, +2.00 ; multi: 1 resolved, 0% win, -1.00
+    assert "100%" in out and "+2.00" in out
+    assert "-1.00" in out
+
+
+def test_single_vs_multi_source_no_data():
+    out = pa.section_single_vs_multi_source([], [])
+    assert "No resolved trades with source-class tracking yet" in out
+
+
 def test_skip_breakdown_surfaces_raw_unclassified_reasons():
     entries = [
         {"type": "SKIPPED", "ticker": "KX1", "reason": "market closed: close_time_elapsed"},
