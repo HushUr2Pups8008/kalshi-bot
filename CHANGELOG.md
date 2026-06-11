@@ -19,6 +19,23 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.5] - 2026-06-11
+
+### Changed
+
+- **Min-bet floor removed** (`min_bet_dollars` default 2.0 → 0.0;
+  `PROFIT-SIZING-001`, operator decision). The bot now trades freely on Kelly
+  down to the natural 1-contract floor (`contracts_from_dollars` ≥ 1), in both
+  paper and live. Removes the rejection in `kelly_bet` (`kelly_dollars <
+  min_bet → 0`) and the floor on `dynamic_max_bet`'s cap. Positive-EV gating at
+  the edge level (`min_edge`) is preserved; live still rejects `capped_dollars
+  <= 0` (zero/negative edge).
+  **CAVEAT:** fees are not modelled in the EV/Kelly path, so min-bet was the
+  implicit fee-floor — a tiny positive-edge **live** trade can now be net-
+  negative after fees. Follow-up `PROFIT-SIZING-001a` (fee-aware EV gate)
+  recommended before live cutover; bot is paper-active so no live money is at
+  risk yet. Paper→Kelly sizing (`PROFIT-SIZING-001b`) follows in a separate PR.
+
 ## [0.33.4] - 2026-06-10
 
 ### Added

@@ -508,6 +508,35 @@ The matcher-feedback loop's only negative signal is `verdict=false_positive_neut
 
 ---
 
+### PROFIT-SIZING-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-SIZING-001 |
+| **Title** | Min-bet floor removed (paper + live); paper to mirror live Kelly sizing |
+| **Category** | Bet sizing / Execution path |
+| **Severity** | HIGH (live money sizing; positive-EV gating net-of-fees) |
+| **Status** | PART 1 DONE — min-bet removed (`min_bet_dollars` default 2.0→0.0), this PR. PART 2 (paper→Kelly) + the fee-gate follow-up PENDING |
+| **primary_agent** | Claude Code (implement) |
+| **second_agent_review_required** | YES — `kalshi-safety-reviewer` (bet-sizing surface) |
+| **operator_gate_required** | YES — operator approves merge; **and** owns the paper→live MODE cutover (this change only alters sizing logic, not trading mode) |
+| **recommended_execution_mode** | paper (bot is paper-active; live behaviour is latent until the operator's mode cutover) |
+
+**Decision (operator, 2026-06-11)**
+Remove the min-bet floor from both paper and live; let the bot trade freely on Kelly down to the natural 1-contract floor (`contracts_from_dollars` returns ≥1). Rationale: paper should mirror live so the paper cohort predicts live; flat-5 was inflating paper trade count vs what live would do.
+
+**Mechanics removed (verified)**
+`min_bet_dollars` did double duty: (1) rejection in `kelly_bet` (`kelly_dollars < min_bet → return 0,0,0`), (2) floor on `dynamic_max_bet`'s cap (`max(min_bet, …)`). Default → 0.0 removes both. `contracts_from_dollars` keeps a hard floor of 1 contract, so the smallest trade is 1 contract. Live still rejects `capped_dollars<=0` (zero/negative edge), so **positive-EV gating at the edge level (`min_edge`) is preserved**.
+
+**CAVEAT — load-bearing (operator accepted)**
+Fees are **not modelled** anywhere in the EV/Kelly path. So `min_bet_dollars` was the *implicit* fee-floor: with it at 0, a tiny positive-edge **live** trade can be net-negative after Kalshi fees. Positive-EV gating no longer holds *net-of-fees*. Operator explicitly accepted this and directed removal now.
+
+**Follow-ups**
+- **PROFIT-SIZING-001a (fee-aware EV gate)** — add a Kalshi-fee model to the EV/Kelly path (or a per-trade fee-vs-edge check) so positive-EV gating holds net-of-fees before relying on live profitability. RECOMMENDED before live cutover. Bot is paper-active, so no live money is at risk yet.
+- **PROFIT-SIZING-001b (paper → Kelly)** — route paper sizing through `kelly_bet`/`contracts_from_dollars` (drop `PAPER_FLAT_CONTRACTS` at `paper_trader.py`, the executor concentration pre-check, and the sims-roundtrip expected-cost). Add a sizing-regime cohort marker so flat-5-era trades are not blended with Kelly-era; reframe report §7e (paper becomes Kelly, flat-5 becomes the shadow). Separate reviewed PR.
+
+---
+
 ### PROFIT-RUNTIME-001
 
 | Field | Value |
