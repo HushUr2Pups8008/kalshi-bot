@@ -429,6 +429,82 @@ Should the go-live gate judge on the post-P0 (current-regime) cohort instead of 
 
 ---
 
+### PROFIT-DRAWDOWN-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-DRAWDOWN-001 |
+| **Title** | "38–42% drawdown" is mostly capital-at-risk in open positions, not realized loss |
+| **Category** | Reporting interpretation / Risk |
+| **Severity** | MEDIUM (decision quality; the go-live drawdown "blocker" is largely an accounting artifact) |
+| **Status** | DIAGNOSED 2026-06-10 (workflow `wy8xsxioo`); reframe documented |
+| **operator_gated** | mark-to-market pass (001a) requires a read-only REST price fetch — operator gate |
+
+**Finding (drawdown attribution, reconciles exactly to $0.0000)**
+Bankroll $50.00 → $28.65 (−$21.35). Decomposition: **realized P&L −$6.75** (32% of the decline) + **$14.60 cash committed to 12 still-open POST-P0 positions** (68%). The paper bankroll model subtracts an open trade's full entry cost at placement, so an unresolved bet depresses the bankroll dollar-for-dollar with no loss incurred. `50.00 − 6.75 − 14.60 = 28.65`. The realized loss is small-N and **pre-P0-dominated**: pre-P0 −$7.50 (9 trades, 33%); **post-P0 is +$0.75** (5 trades, 60%). True realized peak-to-trough is only ~5.6%; the 31–42% figures are dominated by open-position entry-cost deduction.
+
+**Largest realized-loss cluster — KXFISAEXTEND (audit item)**
+−$7.50 across 3 NO bets placed within ~7 seconds on 2026-05-01T01:57, all from `VitalLaw.com`, all resolved YES (thesis backwards) — one correlated same-thesis cluster exceeding total net realized P&L. Pre-P0, so likely already mitigated by the series-correlation gate (`series_correlation_window_seconds=3600`) + per-prefix cap (2) added since. **Action:** confirm those guards would now suppress 3 sibling-contract same-series bets in one minute; review `VitalLaw.com` directional reliability.
+
+**Open follow-up — PROFIT-DRAWDOWN-001a (mark-to-market, operator-gated)**
+The $14.60 is entry cash, NOT a current mark. The DB stores no live price for the 12 open tickers, so true paper-equity is unknown (could be > or < $28.65). Recommend a read-only REST price fetch to mark open positions before drawing profitability/go-live conclusions. Until then, do not read 42.7% as "42.7% of capital destroyed" — it is ~13.5% realized + ~29% unresolved capital-at-risk.
+
+---
+
+### PROFIT-REPORT-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-REPORT-002 |
+| **Title** | Kelly-shadow renderer (report §7e) booked winning NO bets as losses (not side-aware) |
+| **Category** | Reporting correctness |
+| **Severity** | MEDIUM (corrupted the flat-5-vs-Kelly comparison that informs the sizing decision) |
+| **Status** | FIXED 2026-06-10 (this PR); `_render_kelly_shadow_rows` now side-aware |
+| **operator_gated** | NO (reporting-only); the downstream SIZING decision stays operator-gated |
+
+**Description**
+`_render_kelly_shadow_rows` computed `k_payout = contracts if resolved_yes else 0`, assuming every position was YES. A winning NO bet (e.g. NO bought at 92c that resolved NO) was booked as a total loss. This produced the bogus **post-P0 Kelly ROI −43.7% / delta −48.9%** that underpinned the "don't switch to Kelly" call. Fix: payout is now side-aware (`side=="no" → won = not resolved_yes`; YES/unknown keep prior behaviour). Tests: `test_kelly_shadow_payout_is_side_aware_no_win` + NO-loss + YES-unchanged. **Consequence:** the prior "Kelly underperforms" conclusion was computed on bad data — re-evaluate the Kelly-vs-flat-5 question once the next report regenerates §7e (still operator-gated; do not switch sizing on the corrected number without review).
+
+---
+
+### PROFIT-MATCH-003
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-MATCH-003 |
+| **Title** | L2 design — stop counting `false_positive_neutral` as a downweight signal on correct matches |
+| **Category** | Matcher feedback (root cause behind PROFIT-MATCH-002) |
+| **Severity** | MEDIUM |
+| **Status** | DESIGN ONLY (2026-06-10). Ship is operator-gated + replay-EV-blocked (corpus insufficient, T3) |
+| **operator_gated** | YES (reshapes the learning signal; needs replayed-EV per IC §16) |
+
+**Problem**
+The matcher-feedback loop's only negative signal is `verdict=false_positive_neutral` (LLM saw the *right* market, no directional edge from THIS headline). `fp_rate = fp_neutral/(fp_neutral+true_positive)`. A correctly-matched high-traffic market accrues neutral reviews and gets its tokens floored. PROFIT-MATCH-002 (#131) guards a market's *own ticker-defining* token, but **non-defining** correct-market tokens are still vulnerable. Root cause: "no edge from this headline" ≠ "wrong market", yet both feed `fp_neutral`.
+
+**Design options**
+- **L2-a (recommended) — score-gated false positive.** Only count a neutral verdict toward downweighting when the match was *structurally marginal* (low `match_score` / weak-match flags). A neutral verdict on a high-score, clearly-correct match is "no edge", not "wrong market" → no downweight. **Feasible with no prompt/schema change:** `MATCH_LLM_REVIEW` already carries `match_score` (`utils/logger.py` `log_match_llm_review`); `match_feedback.ingest_review_events` just ignores it today. Add a `match_score` threshold (e.g. count fp only when score < ~0.10–0.12 band) to the ingestion rule.
+- **L2-b — explicit LLM relevance field.** Add `market_relevance: relevant|irrelevant` to the signal LLM output; downweight only on `irrelevant`. Cleanest root fix but touches the prompt/JSON schema (qwen3 `think:False` / JSON-grammar gotchas) — higher blast.
+- **L2-c — base-rate normalization.** Most matched headlines are no-edge (high neutral rate is the BASE rate). Downweight a token only when its neutral rate is *anomalously high* vs the corpus baseline, not on absolute `fp_rate`. No new fields; changes the activation rule globally.
+
+**Recommendation:** L2-a (lowest blast, no schema change). **Prerequisite:** a usable replay corpus to validate the EV impact (currently `InsufficientCorpusError`/T3 — corpus-gated, see Decisions below). Do not ship until the post-P0 open cohort resolves and a corpus exists.
+
+---
+
+### 2026-06-10 Performance-Review — Decisions & Monitoring
+
+**Replay-CI corpus deadlock (policy).** Every scoring PR currently trips `replay-ci-gate` with `InsufficientCorpusError: 0 usable corpora` (T3) — #130/#131/#132 all merged on required checks (`lint`/`tests`/`sims-smoke`/`p0-gate`) with replay red. **Operative policy (recommended default):** treat `replay-ci-gate` as **advisory until a resolved-trade corpus exists**; merges proceed on the 4 required checks + manual review + independent adversarial review for scoring/sizing/gate changes. Do NOT bootstrap the corpus by lowering thresholds / `allow_in_period_only` (weakens the EV gate on too little data). Revisit once ≥1 diverse corpus is available (gated by resolved-trade volume — the same binding constraint as go-live).
+
+**Throughput baseline (post-#131/#132, 2026-06-10) — re-measure with `scripts/perf_throughput_diff.py`.** 7d funnel: 29 SIGNAL / 29 OPPORTUNITY / 12 PAPER_TRADE / 66 SKIPPED; 42,322 MATCH_WEIGHT_APPLIED; defining-token guard fired **152×** (all 2026-06-10; e.g. KXVISITIRAN:iran ×96), **0 rescues yet** (none of the 7 fired prefixes is in the 9-entry seed — the guard is day-0 forward insurance; of 152 fires, ~26 *would* be floored < 0.06 if their prefix accrued an fp_rate→1.0). Go-live resolved stuck at 14/20. **Monitoring trigger:** re-run `perf_throughput_diff.py` on the next daily reports over 7–14 days; the matcher fix is confirmed if OPPORTUNITY/PAPER_TRADE rise and resolved-count climbs toward 20. Hold `PAPER_MIN_MATCH_SCORE=0.06` and `DOWNWEIGHT_FLOOR=0.10` constant so deltas are attributable.
+
+**No-action decisions (recorded so they are not re-litigated):**
+- **Kelly sizing:** do not switch — but the prior −48.9% was a bugged number (PROFIT-REPORT-002); re-evaluate on the corrected §7e, still operator-gated.
+- **Match-score / edge thresholds:** no change (calibration n=5, not statistically robust).
+- **PROFIT-REPORT-001a (gate on post-P0):** leave on lifetime; wouldn't pass anyway (5/20 resolved + open-cost drawdown).
+- **PROFIT-MATCH-002a (predicate precision):** monitor match-quality logs; refine only if precision degrades.
+- **GitLab mirror:** no-sync. `gitlab/main` is 296 commits behind `origin/main` (0 ahead) — migrated GitHub-primary, mirror effectively abandoned. Force-pushing 296 commits to a stale mirror (possible CI/cost side effects) is not warranted; the recommendation was conditional ("sync if GitLab used").
+
+---
+
 ### PROFIT-RUNTIME-001
 
 | Field | Value |

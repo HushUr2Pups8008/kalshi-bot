@@ -1574,7 +1574,18 @@ def _render_kelly_shadow_rows(rows):
     for r in rows:
         k_contracts = r["kelly_contracts"] or 0
         k_cost      = k_contracts * r["price_cents"] / 100.0
-        k_payout    = float(k_contracts) if r["resolved_yes"] else 0.0
+        # Side-aware payout: a YES contract pays $1 when the market resolves
+        # YES; a NO contract pays $1 when it resolves NO. The prior code assumed
+        # every position was YES, so a winning NO bet (e.g. NO bought at 92c that
+        # resolved NO) was booked as a total loss, corrupting the Kelly delta
+        # (PROFIT-REPORT-002). For unknown/blank side we keep the YES assumption
+        # (prior behaviour) rather than guess.
+        side = str(r["side"] or "").strip().lower()
+        if side == "no":
+            won = not r["resolved_yes"]
+        else:  # "yes" or unknown -> prior behaviour
+            won = bool(r["resolved_yes"])
+        k_payout    = float(k_contracts) if won else 0.0
         k_pnl       = k_payout - k_cost
 
         flat_pnl  += r["pnl_dollars"]

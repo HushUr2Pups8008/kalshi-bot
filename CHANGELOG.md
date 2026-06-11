@@ -19,6 +19,36 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.3] - 2026-06-10
+
+### Fixed
+
+- **Kelly-shadow renderer (report §7e) is now side-aware** (`PROFIT-REPORT-002`).
+  `_render_kelly_shadow_rows` computed payout as `contracts if resolved_yes
+  else 0`, assuming every position was YES — so a winning NO bet (e.g. NO bought
+  at 92c that resolved NO) was booked as a total loss. This produced the bogus
+  post-P0 Kelly ROI −43.7% / delta −48.9% that underpinned the "don't switch to
+  Kelly" call. Payout is now side-aware (`side=="no" → won = not resolved_yes`;
+  YES/unknown keep prior behaviour). Reporting-only; the sizing decision stays
+  operator-gated, but should be re-evaluated on the corrected number.
+
+### Added
+
+- **`scripts/perf_throughput_diff.py`** — diffs two `analysis_*.txt` reports for
+  the throughput funnel + go-live readiness deltas, to verify the matcher
+  defining-token guard (`PROFIT-MATCH-002`/#131) lifts opportunity throughput
+  and to watch resolved-trade accumulation toward the go-live bar. Format-aware
+  of the v0.33.2 §8 layout (extracts the gate win-rate, not the post-P0 line).
+
+### Notes
+
+- Documented `PROFIT-DRAWDOWN-001` (the 38–42% "drawdown" is ~$6.75 realized
+  loss + ~$14.60 open-position entry-cost, not capital destroyed; KXFISAEXTEND
+  correlated-cluster audit; mark-to-market follow-up 001a), `PROFIT-MATCH-003`
+  (L2 design to stop `false_positive_neutral` poisoning correct matches), and
+  the 2026-06-10 review decisions (replay-CI corpus policy, throughput baseline,
+  no-action items) in `docs/profit_path_debt_log.md`.
+
 ## [0.33.2] - 2026-06-10
 
 ### Changed
