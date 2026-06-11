@@ -478,8 +478,10 @@ Ran `scripts/mark_open_positions.py` (read-only: signed Kalshi GET + Polymarket 
 | **Title** | L2 design — stop counting `false_positive_neutral` as a downweight signal on correct matches |
 | **Category** | Matcher feedback (root cause behind PROFIT-MATCH-002) |
 | **Severity** | MEDIUM |
-| **Status** | DESIGN ONLY (2026-06-10). Ship is operator-gated + replay-EV-blocked (corpus insufficient, T3) |
-| **operator_gated** | YES (reshapes the learning signal; needs replayed-EV per IC §16) |
+| **Status** | IMPLEMENTED (L2-a) 2026-06-11 (v0.33.7), this PR — operator-directed. EV-validation via replay still pending (corpus bootstrap PR-C) |
+| **operator_gated** | YES (reshapes the learning signal) — operator approved implementation now; validate EV via the bootstrap corpus when available |
+
+**Implemented (L2-a):** `match_feedback.ingest_review_events` now score-gates the `false_positive_neutral` signal — a neutral verdict only increments `fp_neutral` when the event's `match_score < L2_NEUTRAL_FP_MARGINAL_MAX_SCORE` (0.12). A neutral on a clearly-correct (higher-score) match is "right market, no edge from this headline" and is skipped (counts as neither fp nor tp); `true_positive` always counts; missing `match_score` is treated as marginal (conservative, preserves prior behaviour). This stops correct high-score markets from being floored — the root behind PROFIT-MATCH-002's defining-token symptom, now extended to non-defining tokens. Threshold tunable; the 0.12 band protects clearly-strong matches while still penalizing near-threshold (likely-wrong) bridges. **Caveat:** single-token correct matches scoring < 0.12 (e.g. a defining token at ~0.10) are still counted — but #131's defining-token guard already protects those; the residual is non-defining weak-score matches, genuinely ambiguous. Tests: `TestL2ScoreGatedFalsePositive`. EV impact unmeasured until a replay corpus exists (PR-C bootstrap).
 
 **Problem**
 The matcher-feedback loop's only negative signal is `verdict=false_positive_neutral` (LLM saw the *right* market, no directional edge from THIS headline). `fp_rate = fp_neutral/(fp_neutral+true_positive)`. A correctly-matched high-traffic market accrues neutral reviews and gets its tokens floored. PROFIT-MATCH-002 (#131) guards a market's *own ticker-defining* token, but **non-defining** correct-market tokens are still vulnerable. Root cause: "no edge from this headline" ≠ "wrong market", yet both feed `fp_neutral`.

@@ -19,6 +19,23 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.7] - 2026-06-11
+
+### Changed
+
+- **Matcher feedback: score-gate the `false_positive_neutral` signal** (L2-a,
+  `PROFIT-MATCH-003`). The loop's only negative signal is "LLM saw the right
+  market but this headline carried no directional edge" — which on a clearly-
+  correct (higher-score) match is NOT a wrong match, yet it was poisoning
+  correct markets' tokens (PROFIT-MATCH-002's defining-token flooring was the
+  symptom). `match_feedback.ingest_review_events` now only counts a neutral
+  verdict toward downweighting when `match_score < L2_NEUTRAL_FP_MARGINAL_MAX_SCORE`
+  (0.12); a neutral on a stronger match is skipped (neither fp nor tp).
+  `true_positive` always counts; missing `match_score` is treated as marginal
+  (conservative, preserves prior behaviour). Extends #131's defining-token guard
+  to non-defining correct-market tokens. Threshold tunable; EV impact to be
+  validated via the replay-corpus bootstrap. Tests: `TestL2ScoreGatedFalsePositive`.
+
 ## [0.33.6] - 2026-06-11
 
 ### Changed
