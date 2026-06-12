@@ -19,6 +19,25 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.13] - 2026-06-12
+
+### Changed
+
+- **Go-live readiness (report §8) drawdown now gates on mark-to-market equity**
+  (`PROFIT-DRAWDOWN-001c`, operator-directed). The notional bankroll deducts each
+  open trade's full entry cost at placement, so with many open positions §8 failed
+  its drawdown criterion on a phantom number (2026-06-12: notional said **45.7%**
+  drawdown while true MTM equity said **18.9%** — under the 20% cap). The pricing
+  core of `scripts/mark_open_positions.py` is now importable
+  (`compute_open_position_marks`) and `performance_analysis.py` calls it fail-soft:
+  §8's current equity point becomes `notional + marked value of open positions`.
+  Unpriced positions count at **$0** (fail-closed — MTM can only be more
+  pessimistic than reality); historical curve points stay notional, so past troughs
+  are never erased; on any fetch failure §8 falls back to notional **with an
+  explicit label** (notional overstates drawdown — the conservative direction).
+  MTM runs by default in the daily report (bounded: one GET per open position);
+  `--no-mtm` opts out. Tests: 3 new §8 cases + `tests/test_mark_open_positions.py`.
+
 ## [0.33.12] - 2026-06-11
 
 > Stacks on 0.33.8 (#139), 0.33.9 (#140), 0.33.10 (#141), 0.33.11 (#142). Merge after them or rebase VERSION/CHANGELOG.

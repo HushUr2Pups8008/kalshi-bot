@@ -263,6 +263,71 @@ def test_golive_readiness_fallback_uses_persisted_start_and_measurable_drawdown(
     assert "drawdown" not in output.split("OVERALL:", 1)[1]
 
 
+def _mtm_trades(n=20, start=50.0):
+    """20 resolved lifetime trades, 55% win rate, flat 50.0 equity history."""
+    return [
+        {
+            "trade_id": f"t-{i}",
+            "ts": f"2026-05-{1 + i:02d}T12:00:00+00:00",
+            "resolved": 1,
+            "pnl_dollars": 1.0 if i < 11 else -1.0,
+            "notional_bankroll_before": start,
+        }
+        for i in range(n)
+    ]
+
+
+def test_golive_drawdown_uses_mtm_equity_when_available():
+    """PROFIT-DRAWDOWN-001c: with an MTM snapshot, the gate's current equity
+    point is notional + marked open-position value. WHY: notional deducts each
+    open trade's full cost at entry, so a bot holding many open positions shows
+    a phantom drawdown (2026-06-12: notional said 45.7%, true equity said
+    18.9%) and the go-live gate fails on a number that isn't a loss."""
+    db_trades = _mtm_trades()
+    state = {"notional_bankroll": "30.00"}  # notional alone: (50-30)/50 = 40% FAIL
+
+    no_mtm = pa.section_golive_readiness(db_trades, state)
+    assert "Drawdown        : 40.0% / 20% max  [FAIL]" in no_mtm
+    assert "OVERALL: NOT READY" in no_mtm
+
+    with_mtm = pa.section_golive_readiness(
+        db_trades, state, mtm={"marked_value": 18.0, "unpriced_count": 0}
+    )
+    # Equity point = 30 + 18 = 48 -> peak-to-trough (50-48)/50 = 4% PASS.
+    assert "Drawdown        : 4.0% / 20% max  [PASS]" in with_mtm
+    assert "MTM equity        : $48.00 = notional + $18.00 open-position value" in with_mtm
+    assert "OVERALL: READY FOR LIVE TRADING" in with_mtm
+
+
+def test_golive_mtm_unavailable_labels_notional_fallback():
+    """mtm=None (offline / fetch failure) gates on notional and SAYS so —
+    silent fallback would leave the operator unable to tell a real drawdown
+    from the open-cost artifact. Notional overstates drawdown, which is the
+    conservative failure direction for a go-live gate."""
+    output = pa.section_golive_readiness(
+        _mtm_trades(), {"notional_bankroll": "30.00"}, mtm=None
+    )
+    assert "MTM equity        : unavailable" in output
+    assert "overstates drawdown" in output
+    assert "Drawdown        : 40.0% / 20% max  [FAIL]" in output
+
+
+def test_golive_mtm_unpriced_positions_count_at_zero():
+    """Unpriced positions contribute $0 to MTM equity (fail-closed): only
+    marked_value is added; unknown_cost must NOT inflate equity. A position the
+    tool could not price may genuinely be worthless."""
+    output = pa.section_golive_readiness(
+        _mtm_trades(),
+        {"notional_bankroll": "30.00"},
+        # unknown_cost present but must be ignored by the equity computation.
+        mtm={"marked_value": 5.0, "unknown_cost": 13.0, "unpriced_count": 3},
+    )
+    # Equity = 30 + 5 = 35 (NOT 48): peak-to-trough (50-35)/50 = 30% -> still FAIL.
+    assert "MTM equity        : $35.00 = notional + $5.00 open-position value" in output
+    assert "(3 unpriced positions counted at $0)" in output
+    assert "Drawdown        : 30.0% / 20% max  [FAIL]" in output
+
+
 def test_golive_gates_on_post_p0_cohort_not_lifetime():
     """Operator decision 2026-06-11: the go-live gate uses the POST-P0 cohort,
     NOT lifetime. The pre-P0 cohort ran under the pre-fix pricing bug and is
