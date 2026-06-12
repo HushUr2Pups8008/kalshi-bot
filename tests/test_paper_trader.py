@@ -490,6 +490,60 @@ class TestStartupInitialization:
         assert "[PAPER_INIT]" not in caplog.text
         keeper.close()
 
+    def test_sizing_regime_kelly_sentinel_is_stamped_on_first_startup(self, monkeypatch):
+        # PROFIT-SIZING-001b: the bot auto-stamps the flat-5 -> Kelly sizing
+        # cohort boundary at startup (no operator action, no .env var).
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+
+        from trading.paper_trader import PaperTrader
+
+        keeper, connect = _shared_memory_connect("sizing-sentinel-stamp")
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            pt = PaperTrader(db_path=":memory:", startup_context="test")
+            row = pt._conn.execute(
+                "SELECT value FROM bot_state WHERE key = ?",
+                ("sizing_regime_kelly_deployed_ts",),
+            ).fetchone()
+
+        assert row is not None
+        # Stored as a parseable UTC ISO timestamp (mirrors the P0 sentinel).
+        parsed = datetime.fromisoformat(row[0])
+        assert parsed.tzinfo is not None
+        keeper.close()
+
+    def test_sizing_regime_kelly_sentinel_is_never_overwritten(self, monkeypatch):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+
+        from trading.paper_trader import PaperTrader
+
+        original = "2026-06-01T00:00:00+00:00"
+        keeper, connect = _shared_memory_connect("sizing-sentinel-overwrite")
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            first = PaperTrader(db_path=":memory:", startup_context="test")
+            first._set_state("sizing_regime_kelly_deployed_ts", original)
+
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            second = PaperTrader(db_path=":memory:", startup_context="test")
+            row = second._conn.execute(
+                "SELECT value FROM bot_state WHERE key = ?",
+                ("sizing_regime_kelly_deployed_ts",),
+            ).fetchone()
+
+        # WHY: the cohort boundary must be permanent. A later restart must not
+        # move it, or flat-5-era vs Kelly-era resolved trades get mis-split.
+        assert row[0] == original
+        keeper.close()
+
     def test_initialize_is_idempotent_on_same_instance(self, monkeypatch, caplog):
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
         monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)

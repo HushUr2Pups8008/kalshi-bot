@@ -19,6 +19,26 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.9] - 2026-06-11
+
+> Stacks on 0.33.8 (PR #139). If merged before #139, rebase #139's VERSION/CHANGELOG forward.
+
+### Added
+
+- **Bot auto-stamps the flat-5 → Kelly sizing cohort boundary** (`PROFIT-SIZING-001c`,
+  follow-on to `PROFIT-SIZING-001b`). Paper sizing switched flat-5 → Kelly in v0.33.6;
+  resolved trades from the two regimes are not comparable, so the performance report
+  needs a timestamp boundary to split them (mirroring the P0 pricing-fix sentinel). The
+  earlier debt note recommended the **operator** set a `bot_state` marker by hand — that
+  contradicts the "no manual deploy steps" stance, and the boundary is unrecoverable if
+  not captured at deploy time. `PaperTrader._ensure_sizing_regime_kelly_sentinel()` now
+  idempotently inserts `bot_state.sizing_regime_kelly_deployed_ts` at the first startup
+  under the Kelly-sizing code — **no operator action, no `.env` variable**. Written once
+  and never overwritten (cohort boundaries are permanent). Stamped at first-startup so it
+  can trail the actual v0.33.6 deploy slightly; harmless because the Kelly-era resolved
+  cohort is empty at planting time. Two regression tests pin stamp-on-startup and
+  never-overwrite. No DB migration (reuses the existing `bot_state` KV table).
+
 ## [0.33.8] - 2026-06-11
 
 ### Removed
