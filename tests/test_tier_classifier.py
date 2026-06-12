@@ -86,7 +86,7 @@ def test_max_wins_t1_plus_t3_returns_t3(tmp_path, monkeypatch):
     """A behavioral edit bundled with a sizing-formula edit must route to T3.
     Per §2 the safety invariant is that the highest tier wins."""
     monkeypatch.chdir(tmp_path)
-    paths = [Path("analysis/blender.py"), Path("trading/executor.py")]
+    paths = [Path("analysis/decision_blender.py"), Path("trading/executor.py")]
     assert classify_tier(paths) == "T3"
 
 
@@ -286,7 +286,9 @@ def test_tier_of_path_specific_known_files(tmp_path, monkeypatch):
     assert tier_of_path("tests/test_anything.py") == "T0"
     # T1
     assert tier_of_path("analysis/signal_analyzer.py") == "T1"
-    assert tier_of_path("analysis/blender.py") == "T1"
+    # PROFIT-EDGE-014: the rule previously named analysis/blender.py, which
+    # does not exist; the real blender file is decision_blender.py.
+    assert tier_of_path("analysis/decision_blender.py") == "T1"
     assert tier_of_path("analysis/evidence_scorer.py") == "T1"
     assert tier_of_path("tasks/trade_readiness_gate.py") == "T1"
     assert tier_of_path("feeds/reddit_source.py") == "T1"
@@ -409,3 +411,12 @@ def test_classify_tier_write_ledger_false_skips_audit_log(tmp_path, monkeypatch)
     assert lines_after_false == lines_after_true, (
         "write_ledger=False must not append to the audit log"
     )
+
+
+def test_decision_blender_classifies_t1_not_unknown_t3():
+    """PROFIT-EDGE-014 review finding: the rule table named analysis/blender.py
+    (nonexistent), so the REAL blender file fell through to the unknown-path T3
+    fail-safe and blender PRs were misrouted (same class as the tasks/stats
+    false positive). The classifier docstring places the blender in T1."""
+    from pathlib import Path
+    assert tier_of_path(Path("analysis/decision_blender.py")) == "T1"

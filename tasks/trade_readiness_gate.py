@@ -25,8 +25,14 @@ from typing import Any, Mapping
 # Why 0.05: G1 = 0.35 was set on the same day as G4 = 0.40 with the same
 # unreachable assumptions. The blender's `_effective_confidences()`
 # attenuates each lane's confidence by `lane_conf × (rw_lane × rc + (1-rc)/3)`
-# and `blended_confidence` is the *mean* of those effective confidences. For
-# fast-lane-only LLM signal at conf=0.85 on the new categorical priors:
+# and `blended_confidence` was, at the time, the *mean* of those effective
+# confidences (divided by lane COUNT). PROFIT-EDGE-014 (2026-06-12, operator
+# option b) changed blended_confidence to the interp-weight-weighted MEAN of
+# lane confidences — a confident fast lane is no longer diluted by the lane
+# count when low-confidence lanes are present; expect higher
+# scaled_confidence for the same inputs than the historical examples below
+# (kept for threshold-history context). For fast-lane-only LLM signal at
+# conf=0.85 on the new categorical priors (pre-EDGE-014 math):
 #
 #   Sports prior (rc=0.528):           scaled_conf ≈ 0.27
 #   KXTRUMPIRAN prior (rc=0.27):       scaled_conf ≈ 0.10

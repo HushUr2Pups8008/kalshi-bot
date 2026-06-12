@@ -745,3 +745,111 @@ class TestProfitBlender001NegativeGates:
             f"unexpected blend_mode {r.blend_mode!r}; the fallback filter "
             "must not break structural fail-safe pathways"
         )
+
+
+# ── PROFIT-EDGE-014: confidence-weighted blended_confidence (operator option b)
+
+
+class TestConfidenceWeightedBlend:
+    """blended_confidence is the interp-weight-weighted MEAN of lane
+    confidences, not a mean of (confidence x weight) products divided by lane
+    COUNT. WHY: the count-mean diluted a 0.85-confidence fast lane to ~0.15
+    blended whenever two low-confidence lanes were present, producing the G1
+    near-miss cluster diagnosed 2026-06-12 (16/16 skips at median scaled 0.044
+    vs the 0.05 threshold). DER-1 pins only the p_blend formula; confidence
+    aggregation is implementation-defined."""
+
+    _DIAG_REGIME = {"fast": 0.65, "interpretation": 0.25, "structural": 0.10}
+
+    def test_edge014_diagnosed_near_miss_now_clears_g1(self):
+        """Production-shaped near-miss: fast 0.75 (observed 0.75-0.85), acc
+        0.43 (observed max), struct 0.18, rc=0.25 — ratios flat enough to stay
+        in weighted_blend, like the 16 diagnosed skips (their recorded
+        blended_confidence 0.10-0.20 matches the old count-mean in
+        weighted_blend mode; a dominance-shaped triple would have cleared G1
+        even under old math). Old math: blended = 0.493/3 ~0.164 -> scaled
+        ~0.041 (the diagnosed near-miss band, G1 FAIL). New math: blended
+        ~0.493 -> scaled ~0.123, clearing both G1 thresholds."""
+        from tasks.trade_readiness_gate import (
+            G1_CONFIDENCE_THRESHOLD,
+            G1_FAILSAFE_CONFIDENCE_THRESHOLD,
+        )
+        rc = 0.25
+        r = blend(
+            fast=LaneInput(p=0.60, confidence=0.75, lane_id="fast"),
+            accumulation=LaneInput(p=0.55, confidence=0.43, lane_id="accumulation"),
+            structural=LaneInput(p=0.50, confidence=0.18, lane_id="structural"),
+            regime_weights=self._DIAG_REGIME,
+            regime_confidence=rc,
+        )
+        assert r.blend_mode == "weighted_blend"
+        # interp weights: fast .4125 / acc .3125 / struct .275 (sum 1.0)
+        expected = 0.75 * 0.4125 + 0.43 * 0.3125 + 0.18 * 0.275
+        assert r.blended_confidence == pytest.approx(expected, abs=1e-6)
+        scaled = r.blended_confidence * rc
+        assert scaled >= G1_CONFIDENCE_THRESHOLD
+        assert scaled >= G1_FAILSAFE_CONFIDENCE_THRESHOLD
+
+    def test_blended_confidence_bounded_by_lane_confidences(self):
+        """A true weighted average cannot leave [min(conf), max(conf)] — the
+        property that makes the change safe against overshoot: no combination
+        of weights can manufacture confidence above the most confident lane."""
+        r = blend(
+            fast=LaneInput(p=0.60, confidence=0.85, lane_id="fast"),
+            accumulation=LaneInput(p=0.55, confidence=0.21, lane_id="accumulation"),
+            structural=LaneInput(p=0.50, confidence=0.12, lane_id="structural"),
+            regime_weights=self._DIAG_REGIME,
+            regime_confidence=0.25,
+        )
+        assert 0.12 <= r.blended_confidence <= 0.85
+
+    def test_single_lane_adopts_its_own_confidence(self):
+        """Docstring contract: 'When only one lane is present it is adopted
+        directly.' The old math scaled a lone lane's confidence by its interp
+        regime weight (0.85 -> ~0.35), contradicting that."""
+        r = blend(
+            fast=LaneInput(p=0.60, confidence=0.85, lane_id="fast"),
+            accumulation=None,
+            structural=None,
+            regime_weights=self._DIAG_REGIME,
+            regime_confidence=0.25,
+        )
+        assert r.blended_confidence == pytest.approx(0.85)
+
+    def test_equal_confidence_lanes_blend_to_that_confidence(self):
+        """Weighted-mean invariance: if every lane reports the same confidence,
+        the blend reports exactly that confidence regardless of weights."""
+        r = blend(
+            fast=LaneInput(p=0.60, confidence=0.40, lane_id="fast"),
+            accumulation=LaneInput(p=0.55, confidence=0.40, lane_id="accumulation"),
+            structural=LaneInput(p=0.50, confidence=0.40, lane_id="structural"),
+            regime_weights=self._DIAG_REGIME,
+            regime_confidence=0.7,
+        )
+        assert r.blended_confidence == pytest.approx(0.40)
+
+    def test_dominant_lane_adopts_raw_confidence(self):
+        """DER-2 full authority extends to confidence: the old eff-conf output
+        made a DOMINANT lane report LOWER confidence than a contested blend
+        (more agreement -> less confidence — inverted)."""
+        r = blend(
+            fast=LaneInput(p=0.80, confidence=0.90, lane_id="fast"),
+            accumulation=LaneInput(p=0.20, confidence=0.05, lane_id="accumulation"),
+            structural=LaneInput(p=0.30, confidence=0.05, lane_id="structural"),
+            regime_weights=self._DIAG_REGIME,
+            regime_confidence=1.0,
+        )
+        assert r.blend_mode == "dominant_lane"
+        assert r.blended_p == pytest.approx(0.80)
+        assert r.blended_confidence == pytest.approx(0.90)
+
+    def test_all_zero_confidence_still_zero(self):
+        """Degraded path unchanged: all-zero lane confidences -> blended 0.0."""
+        r = blend(
+            fast=LaneInput(p=0.60, confidence=0.0, lane_id="fast"),
+            accumulation=LaneInput(p=0.55, confidence=0.0, lane_id="accumulation"),
+            structural=None,
+            regime_weights=self._DIAG_REGIME,
+            regime_confidence=0.25,
+        )
+        assert r.blended_confidence == pytest.approx(0.0)

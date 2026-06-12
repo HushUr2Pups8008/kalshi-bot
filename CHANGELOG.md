@@ -19,6 +19,30 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.14] - 2026-06-12
+
+### Changed
+
+- **Confidence-weighted lane blending** (`PROFIT-EDGE-014` option b, operator-directed).
+  `blended_confidence` is now the interp-weight-weighted **mean of lane confidences**
+  (`Σ conf_i·w_i / Σ w_i`) instead of the mean of the products divided by lane COUNT —
+  the count-mean diluted a 0.85-confidence fast lane to ~0.15 blended whenever two
+  low-confidence lanes were present, producing the diagnosed G1 near-miss cluster
+  (16/16 skips since 2026-06-05 at median `scaled_confidence` 0.044 vs the 0.05
+  threshold; max 0.0493). Properties: a true weighted average bounded by the lanes'
+  own confidences (no overshoot possible); single-lane blends now adopt the lane's
+  own confidence (the old math scaled it by its regime weight, contradicting the
+  documented degeneration); DER-2 dominant mode adopts the dominant lane's raw
+  confidence (old output made a dominant lane report LOWER confidence than a
+  contested blend). **Unchanged:** `blended_p` (DER-1 contract formula), the DER-2
+  dominance trigger, DER-3/4 fail-safes, disagreement score, all G1–G6 thresholds.
+  DER-1 in IMPLEMENTATION_CONTRACT.md pins only the `p_blend` formula; confidence
+  aggregation is implementation-defined. Behavioral change (more candidates clear
+  G1): replay-EV validation owed when the corpus exists (PROFIT-PHASE3 bootstrap
+  state); monitored via BLEND_DECISION records + report §§5b/7b. Tests:
+  `TestConfidenceWeightedBlend` (6 cases incl. the production-shaped near-miss
+  regression). Full suite green (2664 passed).
+
 ## [0.33.13] - 2026-06-12
 
 ### Changed
