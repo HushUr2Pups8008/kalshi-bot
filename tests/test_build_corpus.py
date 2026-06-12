@@ -77,6 +77,109 @@ def _start_end() -> tuple[datetime, datetime]:
     )
 
 
+def _make_paper_trades_db_with_capture_key(path: Path) -> None:
+    """paper_trades mirror that includes the I-1 llm_capture_row_id join key."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE paper_trades (
+                trade_id     TEXT PRIMARY KEY,
+                ts           TEXT NOT NULL,
+                ticker       TEXT NOT NULL,
+                side         TEXT NOT NULL,
+                price_cents  INTEGER NOT NULL,
+                series_ticker TEXT,
+                llm_capture_row_id TEXT
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO paper_trades VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                # joined: row_id present in the capture fixture
+                ("t1", "2026-05-23T21:22:16Z", "KXTRUMPIRAN-27", "yes", 55,
+                 "KXTRUMPIRAN", "signal::KXTRUMPIRAN-27::news-abc"),
+                # not joined: key has no matching capture
+                ("t2", "2026-05-24T00:00:00Z", "KXMOCTRUMP25-2", "no", 45,
+                 "KXMOCTRUMP25", "signal::KXMOCTRUMP25-2::news-missing"),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _write_capture_fixture(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "row_id": "signal::KXTRUMPIRAN-27::news-abc",
+        "prompt_template_hash": "tpl123",
+        "prompt_filled_hash": "fill123",
+        "model_id": "qwen3:14b",
+        "model_digest": "sha256:deadbeef",
+        "ollama_version": "0.24.0",
+        "endpoint_type": "openai_compat",
+        "seed": None,
+        "temperature": 0.0,
+        "num_ctx": None,
+        "sampler_options_hash": "samp123",
+        "hardware_backend_class": "arm64-Darwin",
+        "response_hash": "resp123",
+        # bulky fields the index must DROP (must not bloat the corpus row):
+        "response": {"big": "payload"},
+        "request_payload": {"messages": ["..."]},
+        "captured_at_utc": "2026-05-23T21:22:20+00:00",
+    }
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    return path
+
+
+def test_corpus_stamps_cache_key_for_joined_trade_only(tmp_path: Path) -> None:
+    """PROFIT-PHASE3 I-1: a corpus row whose trade carries an llm_capture_row_id
+    matching a captured decision is stamped with the 13-field cache key; a row
+    whose key has no capture is left cache-uncovered. WHY: the gate's cache-
+    coverage check must see real keys for replayable rows and NOTHING for
+    un-replayable ones — a fabricated key would let an un-replayable row pass."""
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db_with_capture_key(db)
+    _write_regimes_doc(tmp_path)
+    capture = _write_capture_fixture(tmp_path / "logs" / "llm_capture.jsonl")
+
+    out = tmp_path / "out.jsonl"
+    build_corpus.build_corpus(
+        start_utc=datetime(2026, 5, 23, 21, 22, 16, tzinfo=timezone.utc),
+        end_utc=datetime(2026, 5, 26, 0, 0, 0, tzinfo=timezone.utc),
+        market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+        cohort_tag="POST_V030_2_OOS_SEED",
+        regime_label="post_v030_2_oos_seed",
+        output_path=out,
+        paper_trades_db=db,
+        regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+        llm_capture_path=capture,
+    )
+
+    rows = {}
+    for line in out.read_text().splitlines():
+        rec = json.loads(line)
+        rows[rec["trade_id"]] = rec
+
+    joined = rows["t1"]
+    unjoined = rows["t2"]
+    # Joined row carries the 13-field cache key (sample a few + the join row_id).
+    assert joined["response_hash"] == "resp123"
+    assert joined["prompt_template_hash"] == "tpl123"
+    assert joined["model_id"] == "qwen3:14b"
+    assert joined["row_id"] == "signal::KXTRUMPIRAN-27::news-abc"
+    # The bulky response / request payload are NOT carried into the corpus row.
+    assert "response" not in joined
+    assert "request_payload" not in joined
+    # Unjoined row is left honestly uncovered — no fabricated cache key.
+    assert "response_hash" not in unjoined
+    assert "prompt_template_hash" not in unjoined
+    assert "row_id" not in unjoined
+
+
 def test_unregistered_regime_raises(tmp_path: Path) -> None:
     db = tmp_path / "paper_trades.db"
     _make_paper_trades_db(db)

@@ -19,6 +19,34 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.12] - 2026-06-11
+
+> Stacks on 0.33.8 (#139), 0.33.9 (#140), 0.33.10 (#141), 0.33.11 (#142). Merge after them or rebase VERSION/CHANGELOG.
+
+### Added
+
+- **Replay corpus cache-key join (PROFIT-PHASE3 I-1 completion)** — make FUTURE
+  resolved paper trades gate-eligible (operator-directed). Investigation found
+  I-3 (LLM capture, `llm_capture.py`) and I-2 (read-path, `llm_cache.py`) were
+  already shipped and capturing in production (2453 rows); the real gap was the
+  **capture↔trade join + corpus cache-key stamping**. This change:
+  - adds a single-source-of-truth `signal_capture_row_id(ticker, news_item_id)`
+    in `llm_capture.py` and an offline `index_captures_by_row_id()` read helper;
+  - **fixes a latent capture-key defect** — the signal path built the key from
+    `news.id` (which doesn't exist on `NewsItem`; it is `item_id`), so every
+    signal on a ticker collided on one empty-news-id key. Now uses `news.item_id`;
+  - persists the join key as an additive nullable `paper_trades.llm_capture_row_id`
+    column (idempotent migration), set in `record_trade` via the same helper so
+    the keys match exactly;
+  - wires `build_corpus.py` to stamp the 13-field LLM cache key onto each corpus
+    row by joining `llm_capture_row_id` → capture index. Rows with no matching
+    capture are left cache-uncovered (never fabricated).
+  Forward-looking: only trades recorded after deploy carry the key. Does NOT add
+  any corpus to the gate's auto-discovered dir, so the PROFIT-PHASE3-002 CI
+  pass-through is unaffected. The Rule-1 ≥30-volume and OOS-regime blockers still
+  stand; this removes only the cache-coverage blocker for future corpora. Full
+  suite green (2643 passed).
+
 ## [0.33.7] - 2026-06-11
 
 ### Changed

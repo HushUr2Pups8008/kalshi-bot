@@ -2093,3 +2093,41 @@ class TestLogCalibrationObservation:
         assert rec["llm_magnitude"] is None
         assert rec["llm_confidence"] is None
         assert rec["realized_outcome"] == 0
+
+
+class TestI3CaptureJoinKey:
+    """PROFIT-PHASE3 I-1: the signal-analyzer capture must build its row_id from
+    news.item_id via the shared helper, so the key matches what record_trade
+    persists on the trade (the capture->trade join). Regression guard against
+    the prior bug that used news.id (nonexistent on NewsItem -> empty tail ->
+    every signal on a ticker collided on one key)."""
+
+    def test_i3_capture_uses_item_id_join_key(self, monkeypatch):
+        from types import SimpleNamespace
+        import analysis.signal_analyzer as sa
+
+        captured: dict = {}
+
+        def _fake_capture(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(
+            "scripts.edge_replay.llm_capture.capture_llm_response", _fake_capture
+        )
+        news = SimpleNamespace(
+            item_id="news-xyz",
+            id="SHOULD_NOT_BE_USED",
+            headline="h",
+            source="s",
+        )
+        market = SimpleNamespace(ticker="KXFOO-1")
+
+        sa._i3_capture_signal_llm_call(
+            news=news,
+            market=market,
+            prompt_text="filled prompt",
+            payload={},
+            response_text="raw response",
+        )
+
+        assert captured.get("row_id") == "signal::KXFOO-1::news-xyz"

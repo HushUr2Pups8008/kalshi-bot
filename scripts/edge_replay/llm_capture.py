@@ -57,7 +57,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Final, Literal
 
-__all__ = ["capture_llm_response"]
+__all__ = [
+    "capture_llm_response",
+    "signal_capture_row_id",
+    "index_captures_by_row_id",
+    "CAPTURE_CACHE_KEY_FIELDS",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +81,44 @@ _FIRST_CLASS_SAMPLER_KEYS: Final[frozenset[str]] = frozenset(
 # ``scripts`` directory that holds this module.
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 _DEFAULT_CAPTURE_PATH: Path = _REPO_ROOT / "logs" / "edge_replay" / "llm_capture.jsonl"
+
+# The 13-field cache-identity tuple (Codex blocker D). This is the durable
+# contract the replay gate's cache-coverage check consumes; the corpus builder
+# stamps exactly these keys onto each corpus row (PROFIT-PHASE3 I-1 completion).
+# Keep in sync with llm_cache._CACHE_KEY_COLUMNS and the record assembled in
+# capture_llm_response.
+CAPTURE_CACHE_KEY_FIELDS: Final[tuple[str, ...]] = (
+    "row_id",
+    "prompt_template_hash",
+    "prompt_filled_hash",
+    "model_id",
+    "model_digest",
+    "ollama_version",
+    "endpoint_type",
+    "seed",
+    "temperature",
+    "num_ctx",
+    "sampler_options_hash",
+    "hardware_backend_class",
+    "response_hash",
+)
+
+
+def signal_capture_row_id(ticker: str, news_item_id: str) -> str:
+    """Canonical join key for a signal-analyzer LLM capture.
+
+    SINGLE SOURCE OF TRUTH for the signal-path ``row_id`` format. The
+    signal-analyzer capture site and ``PaperTrader.record_trade`` MUST build the
+    key with this function so a resolved paper trade can be joined back to its
+    captured LLM decision (the corpus builder keys on the persisted value).
+    Drift between the two sites silently breaks the join, which is why the
+    format lives here and is imported, never re-inlined.
+
+    Format: ``signal::<ticker>::<news_item_id>``. ``news_item_id`` is the
+    ``NewsItem.item_id`` dedup hash (NOT ``news.id``, which does not exist on
+    NewsItem — the earlier bug that made every signal on a ticker collide).
+    """
+    return f"signal::{ticker}::{news_item_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -444,3 +487,44 @@ def capture_llm_response(
         except Exception:  # noqa: BLE001 — even logging must not raise
             pass
         return
+
+
+def index_captures_by_row_id(
+    path: Path | str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Build an offline ``{row_id: {13 cache-key fields}}`` index of the capture
+    log, for the corpus builder (PROFIT-PHASE3 I-1 completion).
+
+    Read-only, fail-soft helper — NOT part of the production write path. Each
+    line is parsed independently; unparseable lines are skipped (a corrupt tail
+    line must not lose the whole index). When a ``row_id`` appears more than once
+    (e.g. the same (ticker, news_item) decided in two cycles), the LAST capture
+    wins, matching the most-recent decision. Returns an empty dict if the capture
+    file does not exist (honest absence → the gate counts those rows as
+    cache-uncovered rather than silently fabricating coverage).
+
+    Only the ``CAPTURE_CACHE_KEY_FIELDS`` are retained; the raw response and
+    request payload are intentionally dropped to keep the index small.
+    """
+    target = Path(path) if path is not None else _DEFAULT_CAPTURE_PATH
+    index: dict[str, dict[str, Any]] = {}
+    if not target.exists():
+        return index
+    with target.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(record, dict):
+                continue
+            row_id = record.get("row_id")
+            if not row_id:
+                continue
+            index[str(row_id)] = {
+                field: record.get(field) for field in CAPTURE_CACHE_KEY_FIELDS
+            }
+    return index

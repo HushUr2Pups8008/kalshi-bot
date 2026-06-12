@@ -1060,9 +1060,21 @@ def _i3_capture_signal_llm_call(*, news, market, prompt_text, payload, response_
     follow-up: I-3 ships the WRITE path; I-2 wires the read+replay path).
     """
     try:
-        from scripts.edge_replay.llm_capture import capture_llm_response
+        from scripts.edge_replay.llm_capture import (
+            capture_llm_response,
+            signal_capture_row_id,
+        )
 
-        row_id = f"signal::{getattr(market, 'ticker', 'unknown')}::{getattr(news, 'id', '')}"
+        # PROFIT-PHASE3 I-1: build the join key via the shared helper so it
+        # exactly matches what PaperTrader.record_trade persists on the trade
+        # row (enabling the capture->trade join the corpus builder needs).
+        # Uses news.item_id (the dedup hash) -- NOT news.id, which does not
+        # exist on NewsItem and previously made every signal on a ticker
+        # collide on one empty-news-id key.
+        row_id = signal_capture_row_id(
+            getattr(market, "ticker", "unknown"),
+            getattr(news, "item_id", "") or "",
+        )
         capture_llm_response(
             row_id=row_id,
             prompt_template=_LLM_SYSTEM_PROMPT,
