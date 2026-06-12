@@ -1116,6 +1116,16 @@ class TradingBot:
         )
         await self._emit_market_source_hint_diagnostics(market)
 
+        # PROFIT-MATCH-003 (L2-a): thread the matcher score onto match_meta so
+        # the downstream MATCH_LLM_REVIEW emission carries it. The feedback
+        # loop's score-gate (analysis/match_feedback.py) only counts a
+        # false_positive_neutral verdict toward downweighting when the match was
+        # MARGINAL (low score) -- a neutral on a clearly-correct (high-score)
+        # match is "right market, no edge from this headline", not a wrong
+        # match. Without this the score-gate sees no score and stays a no-op.
+        if isinstance(match_meta, dict):
+            match_meta.setdefault("match_score", round(float(match_score), 4))
+
         estimated_prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
             await estimate_probability(news, market, keyword_stats=self.keyword_stats, match_meta=match_meta)
         # PROFIT-EDGE-001: reject only when neither signal source produced

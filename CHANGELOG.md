@@ -41,6 +41,82 @@ request-vs-response status contract that the P-7 author misread.
   resolve when the market exists). Read-only; no execution-path change. Test:
   `test_get_market_falls_back_to_slug_lookup_on_404`.
 
+## [0.33.10] - 2026-06-11
+
+> Stacks on 0.33.8 (#139) and 0.33.9 (#140). Supersedes the no-op draft PR #137. Merge after those, or rebase VERSION/CHANGELOG.
+
+### Changed
+
+- **Matcher feedback L2-a wired end-to-end: emit `match_score`, then score-gate the
+  `false_positive_neutral` signal** (`PROFIT-MATCH-003`, operator-directed). The
+  feedback loop's only negative signal is "the LLM saw the right market but this
+  headline carried no directional edge" — which on a clearly-correct (higher-score)
+  match is NOT a wrong match, yet it was poisoning correct markets' tokens
+  (PROFIT-MATCH-002's defining-token flooring was the symptom). The consumer-side
+  gate was drafted in #137 but was a **no-op in production** because `MATCH_LLM_REVIEW`
+  events never carried a `match_score` (0/985 events). This change wires the producer:
+  `main._process_candidate` threads the matcher score onto `match_meta`,
+  `signal_analyzer` reads it at the emission site, and `utils.logger.log_match_llm_review`
+  records it (omitted when absent). With the score present, `match_feedback.ingest_review_events`
+  now only counts a neutral verdict toward downweighting when `match_score <
+  L2_NEUTRAL_FP_MARGINAL_MAX_SCORE` (0.12); a neutral on a stronger match is skipped
+  (neither fp nor tp). `true_positive` always counts; a missing `match_score` is treated
+  as marginal (conservative — preserves prior behaviour, e.g. the synthetic startup probe).
+  Extends #131's defining-token guard to non-defining correct-market tokens. Threshold
+  tunable; EV impact to be validated via the replay-corpus bootstrap. Tests:
+  `TestL2ScoreGatedFalsePositive` (consumer), `TestLogMatchLlmReview` + signal-analyzer
+  call-site + `_process_candidate` injection (producer). Full suite green (2645 passed).
+
+## [0.33.9] - 2026-06-11
+
+> Stacks on 0.33.8 (PR #139). If merged before #139, rebase #139's VERSION/CHANGELOG forward.
+
+### Added
+
+- **Bot auto-stamps the flat-5 → Kelly sizing cohort boundary** (`PROFIT-SIZING-001c`,
+  follow-on to `PROFIT-SIZING-001b`). Paper sizing switched flat-5 → Kelly in v0.33.6;
+  resolved trades from the two regimes are not comparable, so the performance report
+  needs a timestamp boundary to split them (mirroring the P0 pricing-fix sentinel). The
+  earlier debt note recommended the **operator** set a `bot_state` marker by hand — that
+  contradicts the "no manual deploy steps" stance, and the boundary is unrecoverable if
+  not captured at deploy time. `PaperTrader._ensure_sizing_regime_kelly_sentinel()` now
+  idempotently inserts `bot_state.sizing_regime_kelly_deployed_ts` at the first startup
+  under the Kelly-sizing code — **no operator action, no `.env` variable**. Written once
+  and never overwritten (cohort boundaries are permanent). Stamped at first-startup so it
+  can trail the actual v0.33.6 deploy slightly; harmless because the Kelly-era resolved
+  cohort is empty at planting time. Two regression tests pin stamp-on-startup and
+  never-overwrite. No DB migration (reuses the existing `bot_state` KV table).
+
+## [0.33.8] - 2026-06-11
+
+### Removed
+
+- **Removed the daily Polymarket eligibility-ack gate** (operator decision). Enabling
+  Polymarket no longer requires `POLYMARKET_US_ELIGIBILITY_ACK_DATE` — config built
+  and a startup-time preflight `sys.exit(1)`-ed unless that `.env` value equalled
+  *today's* UTC date, forcing a manual daily `.env` edit just to keep Polymarket
+  trading (Kalshi has no equivalent). The env var, the `polymarket_us_eligibility_ack_date`
+  config field, the `require_polymarket_enablement_preflight()` function, and the
+  `__post_init__` call site are all removed; the var is now ignored and may be deleted
+  from `.env`/`.env.example`. Polymarket trades whenever `POLYMARKET_US_ENABLED=true`
+  (still gated separately by `POLYMARKET_US_LIVE_TRADING_ENABLED` for live orders).
+  Regression test pins that config builds without the ack var.
+
+### Changed
+
+- **Go-live readiness (report §8) now gates on the POST-P0 cohort** (`PROFIT-REPORT-001a`,
+  operator decision). The pre-P0 cohort ran under the pre-fix Kalshi pricing bug and is
+  excluded as non-representative everywhere else (report §§7b/7d/7e); gating go-live on
+  it was leveraging known-broken behavior. The authoritative READY/NOT-READY verdict
+  (resolved count, win rate, drawdown) now uses the post-P0 cohort; the lifetime view is
+  retained as INFORMATIONAL only. If the P0 boundary sentinel is missing, the gate falls
+  back to lifetime so it always produces a verdict. The drawdown criterion uses
+  peak-to-trough (consistent with how the post-P0 cohort was already measured) and
+  **fails closed** when a non-empty cohort's bankroll curve has too few samples to
+  measure — preventing a silent 0%-drawdown false-pass on a safety gate. Report-only;
+  no change to the live trade-readiness gate (`tasks/trade_readiness_gate.py`) or
+  execution path.
+
 ## [0.33.7] - 2026-06-11
 
 ### Changed

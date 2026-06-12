@@ -1362,6 +1362,7 @@ class TradeLogger:
         llm_confidence: float,
         verdict: str,
         venue: str | None = None,
+        match_score: float | None = None,
     ) -> None:
         """PROFIT-MATCH-DYNAMIC (2026-05-24): per-LLM-call feedback signal.
 
@@ -1392,6 +1393,11 @@ class TradeLogger:
         }
         if venue:
             record["venue"] = venue
+        # PROFIT-MATCH-003 (L2-a): carry the matcher score so the feedback loop
+        # can score-gate the false_positive_neutral signal. Omitted when None so
+        # the consumer treats it as marginal (prior behaviour).
+        if match_score is not None:
+            record["match_score"] = round(float(match_score), 4)
         self._write(record)
 
     def log_position_drift(

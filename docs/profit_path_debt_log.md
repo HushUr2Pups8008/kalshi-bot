@@ -480,8 +480,8 @@ Ran `scripts/mark_open_positions.py` (read-only: signed Kalshi GET + Polymarket 
 | **Title** | L2 design — stop counting `false_positive_neutral` as a downweight signal on correct matches |
 | **Category** | Matcher feedback (root cause behind PROFIT-MATCH-002) |
 | **Severity** | MEDIUM |
-| **Status** | DESIGN ONLY (2026-06-10). Ship is operator-gated + replay-EV-blocked (corpus insufficient, T3) |
-| **operator_gated** | YES (reshapes the learning signal; needs replayed-EV per IC §16) |
+| **Status** | IMPLEMENTED end-to-end (L2-a) 2026-06-11 (v0.33.10), this PR — operator-directed; supersedes no-op draft #137. EV-validation via replay still pending (corpus bootstrap). |
+| **operator_gated** | YES (reshapes the learning signal) — operator approved implementation now; validate EV via the bootstrap corpus when available |
 
 **Problem**
 The matcher-feedback loop's only negative signal is `verdict=false_positive_neutral` (LLM saw the *right* market, no directional edge from THIS headline). `fp_rate = fp_neutral/(fp_neutral+true_positive)`. A correctly-matched high-traffic market accrues neutral reviews and gets its tokens floored. PROFIT-MATCH-002 (#131) guards a market's *own ticker-defining* token, but **non-defining** correct-market tokens are still vulnerable. Root cause: "no edge from this headline" ≠ "wrong market", yet both feed `fp_neutral`.
@@ -492,6 +492,12 @@ The matcher-feedback loop's only negative signal is `verdict=false_positive_neut
 - **L2-c — base-rate normalization.** Most matched headlines are no-edge (high neutral rate is the BASE rate). Downweight a token only when its neutral rate is *anomalously high* vs the corpus baseline, not on absolute `fp_rate`. No new fields; changes the activation rule globally.
 
 **Recommendation:** L2-a (lowest blast, no schema change). **Prerequisite:** a usable replay corpus to validate the EV impact (currently `InsufficientCorpusError`/T3 — corpus-gated, see Decisions below). Do not ship until the post-P0 open cohort resolves and a corpus exists.
+
+**Implemented end-to-end (L2-a), v0.33.10 — operator-directed (supersedes #137).** The design above assumed L2-a needed "no schema change" because "`MATCH_LLM_REVIEW` already carries `match_score`." **That assumption was wrong** — the event never emitted a score (0/985 events), which is exactly why the consumer-only draft #137 was a no-op in production. This PR wires both sides:
+- **Producer:** `main._process_candidate` threads the matcher score onto `match_meta` (`match_meta.setdefault("match_score", round(score, 4))`); `analysis/signal_analyzer.py` reads it at the `MATCH_LLM_REVIEW` emission site; `utils/logger.py::log_match_llm_review` gained a `match_score` param and records it (OMITTED when `None`).
+- **Consumer:** `match_feedback.ingest_review_events` now skips a `false_positive_neutral` verdict when `match_score >= L2_NEUTRAL_FP_MARGINAL_MAX_SCORE` (0.12). `true_positive` always counts; missing `match_score` → treated as marginal (counts), preserving prior behaviour for the synthetic startup probe and any legacy events.
+
+This stops correct high-score markets from being floored — the root behind PROFIT-MATCH-002's defining-token symptom, now extended to non-defining tokens. The 0.12 band protects clearly-strong matches while still penalizing near-threshold (likely-wrong) bridges. **Caveat:** single-token correct matches scoring < 0.12 are still counted, but #131's defining-token guard already protects those; the residual is non-defining weak-score matches (genuinely ambiguous). Tests: `TestL2ScoreGatedFalsePositive` (consumer), `TestLogMatchLlmReview` + signal-analyzer call-site + `_process_candidate` injection (producer). **EV impact unmeasured until a replay corpus exists** (bootstrap, PROFIT-PHASE3); the change is behaviorally conservative (strictly removes some downweights) but should still be replay-validated before tightening the threshold.
 
 ---
 
@@ -535,7 +541,7 @@ Fees are **not modelled** anywhere in the EV/Kelly path. So `min_bet_dollars` wa
 
 **Follow-ups**
 - **PROFIT-SIZING-001a (fee-aware EV gate)** — add a Kalshi-fee model to the EV/Kelly path (or a per-trade fee-vs-edge check) so positive-EV gating holds net-of-fees before relying on live profitability. RECOMMENDED before live cutover. Bot is paper-active, so no live money is at risk yet.
-- **PROFIT-SIZING-001b (paper → Kelly) — DONE 2026-06-11 (v0.33.6).** Paper now sizes by Kelly (mirrors live): `trading/paper_trader.py` records `contracts = kelly_contracts`; `trading/executor.py` concentration pre-check uses the Kelly contract cost; `scripts/simulations/paper_trade_roundtrip.py` expected-cost mirrors the Kelly math. `PAPER_FLAT_CONTRACTS` no longer sets recorded contracts directly, but is **NOT fully retired** (PR #136 review correction): it still seeds `capped_dollars` for the **no-edge placeholder** in `main.py` and `polymarket/paper_runtime.py` (when Kelly returns 0), which Kelly then re-sizes — so no-edge paper trades land ~5 contracts (4 at 13 price points via `int()` truncation). **Scope:** the shared `PaperTrader.record_trade` means **Polymarket** paper also switched flat-5→Kelly (intended, consistent). **Blast radius:** Kelly can size a paper trade well above flat-5 (up to `dynamic_max_bet`); `_debit_bankroll` does not clamp at 0, so paper notional drawdown moves faster. Report attribution (`scripts/performance_analysis.py` hardcodes flat-5=5) and §7e still assume flat-5 → reporting follow-up. Full suite green (2634 passed). **Cohort marker (operator action):** the sizing regime changed at deploy — flat-5-era resolved trades (all current ones) should not be blended with the new Kelly-era cohort. Recommend the operator set a `bot_state` marker at deploy (mirroring the P0 sentinel), e.g. `sizing_regime_kelly_deployed_ts`, so the report can split cohorts; until then, treat all pre-deploy resolved trades as flat-5-era. **§7e reframe (follow-up):** post-cutover paper *is* Kelly, so the §7e "Flat-5 (actual) vs Kelly shadow" comparison is only meaningful for the flat-5-era rows; for Kelly-era rows the "actual" column already reflects Kelly. A clean reframe (label the era, swap the shadow) is a small reporting follow-up.
+- **PROFIT-SIZING-001b (paper → Kelly) — DONE 2026-06-11 (v0.33.6).** Paper now sizes by Kelly (mirrors live): `trading/paper_trader.py` records `contracts = kelly_contracts`; `trading/executor.py` concentration pre-check uses the Kelly contract cost; `scripts/simulations/paper_trade_roundtrip.py` expected-cost mirrors the Kelly math. `PAPER_FLAT_CONTRACTS` no longer sets recorded contracts directly, but is **NOT fully retired** (PR #136 review correction): it still seeds `capped_dollars` for the **no-edge placeholder** in `main.py` and `polymarket/paper_runtime.py` (when Kelly returns 0), which Kelly then re-sizes — so no-edge paper trades land ~5 contracts (4 at 13 price points via `int()` truncation). **Scope:** the shared `PaperTrader.record_trade` means **Polymarket** paper also switched flat-5→Kelly (intended, consistent). **Blast radius:** Kelly can size a paper trade well above flat-5 (up to `dynamic_max_bet`); `_debit_bankroll` does not clamp at 0, so paper notional drawdown moves faster. Report attribution (`scripts/performance_analysis.py` hardcodes flat-5=5) and §7e still assume flat-5 → reporting follow-up. Full suite green (2634 passed). **Cohort marker — PROFIT-SIZING-001c (bot auto-stamped, v0.33.9):** the sizing regime changed at deploy — flat-5-era resolved trades should not be blended with the new Kelly-era cohort. The original recommendation here was for the *operator* to set a `bot_state` marker by hand; that was wrong (it contradicts the no-manual-deploy-steps stance, and the boundary is unrecoverable if not captured at deploy time). Resolved by making the bot do it: `PaperTrader._ensure_sizing_regime_kelly_sentinel()` idempotently stamps `bot_state.sizing_regime_kelly_deployed_ts` at the first startup under the Kelly code (mirroring the P0 sentinel) — no operator action, no `.env` var, written once and never overwritten. Stamped at first-startup so it can trail the actual v0.33.6 deploy slightly; harmless because the Kelly-era resolved cohort is empty at planting time. The report does not yet *read* this marker; wiring `section_kelly_shadow` / §7e to split on it is the remaining reporting follow-up. **§7e reframe (follow-up):** post-cutover paper *is* Kelly, so the §7e "Flat-5 (actual) vs Kelly shadow" comparison is only meaningful for the flat-5-era rows; for Kelly-era rows the "actual" column already reflects Kelly. A clean reframe (label the era, swap the shadow) is a small reporting follow-up.
 
 ---
 
@@ -6286,6 +6292,27 @@ verified by Read + git diff + runtime `[0.25,0.25]` + `-B` pytest.
   capped <0.70, never reach the fail-safe — separate defect, separate fix.
 
 ---
+
+### PROFIT-REPORT-001a
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-REPORT-001a |
+| **Title** | Go-live readiness gates on POST-P0 cohort; Polymarket daily ack-gate removed |
+| **Category** | Reporting / go-live gate / config friction |
+| **Severity** | MEDIUM |
+| **Status** | IMPLEMENTED 2026-06-11 — VERSION 0.33.8, branch `fix/gate-corrections-polymarket-ack-and-post-p0`. Paper-only posture preserved; no live-execution path touched. |
+| **Owner** | Claude implemented; operator owns merge + (eventual) live cutover. |
+| **Depends On** | P-8 P0 cohort sentinel (`bot_state.p0_price_fix_deployed_ts`). |
+| **Blocks** | Trustworthy go-live verdict; unattended Polymarket operation. |
+
+**Two operator-decision corrections (2026-06-11), bundled (both are gate/config, neither touches the execution path):**
+
+**F — Go-live readiness (performance report §8) now gates on the POST-P0 cohort.**
+Previously §8's authoritative READY/NOT-READY verdict used the LIFETIME cohort, with post-P0 shown only as informational. The pre-P0 cohort ran under the pre-fix Kalshi pricing bug (P-1..P-10, closed 2026-05-12) and is excluded as non-representative everywhere else (report §§7b/7d/7e). Operator: *"No, post0. Pre post0 didn't work correctly, why leverage improper functionality as the gate?"* Now the verdict (resolved count, win rate, drawdown) uses post-P0; lifetime is INFORMATIONAL only; falls back to lifetime if the P0 boundary sentinel is missing so a verdict is always produced. Drawdown criterion = peak-to-trough (the metric post-P0 was already measured by, since a sub-cohort has no clean start-vs-now baseline) and **fails closed** when a non-empty cohort's bankroll curve has <2 samples — closing a silent 0%-drawdown false-pass on a safety gate. `scripts/performance_analysis.py::section_golive_readiness`; tests in `tests/test_performance_analysis_p0_cohorts.py`. Note: post-P0 currently has well under the 20-resolved floor, so §8 still reports NOT READY (operator: *"we're not ready anyways"*).
+
+**A — Removed the daily Polymarket eligibility-ack gate.**
+`config.py` built and a startup preflight `sys.exit(1)`-ed unless `POLYMARKET_US_ELIGIBILITY_ACK_DATE` equalled *today's* UTC date — forcing a manual daily `.env` edit to keep Polymarket trading (and breaking local pytest on every date rollover). Operator: *"I shouldn't have to change the .env daily… I don't have that for kalshi and everything functions properly. Fix that."* Fully removed: the env var, the `polymarket_us_eligibility_ack_date` field, `require_polymarket_enablement_preflight()`, the `__post_init__` call site, and the `.env.example` line. A regression test pins that config builds without the var. Polymarket now trades whenever `POLYMARKET_US_ENABLED=true`; live orders remain separately gated by `POLYMARKET_US_LIVE_TRADING_ENABLED`. Historical design doc `docs/governance/2026-06-06_111138-polymarket-trading-integration.md` left intact as a frozen record. Supersedes memory `feedback_polymarket_ack_date_daily_gate` (the daily-refresh burden no longer exists).
 
 ### PROFIT-REPORT-001
 
