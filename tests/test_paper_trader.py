@@ -147,6 +147,25 @@ def trader(monkeypatch):
     keeper.close()
 
 
+def test_record_trade_persists_llm_capture_join_key(trader):
+    """PROFIT-PHASE3 I-1: record_trade persists the capture join key
+    (signal::<ticker>::<news.item_id>) so the corpus builder can link the
+    resolved trade to its captured LLM decision. Also exercises the additive
+    migration end-to-end: the INSERT references llm_capture_row_id, so the
+    column must have been added at PaperTrader init."""
+    analysis = _make_mock_analysis(ticker="KXTRUMPIRAN-27", side="yes")
+    analysis.news_item.item_id = "news-xyz"
+
+    with patch("dataclasses.asdict", return_value={"series_ticker": "KXTRUMPIRAN"}):
+        trader.record_trade(analysis)
+
+    row = trader._conn.execute(
+        "SELECT llm_capture_row_id FROM paper_trades WHERE ticker = ?",
+        ("KXTRUMPIRAN-27",),
+    ).fetchone()
+    assert row["llm_capture_row_id"] == "signal::KXTRUMPIRAN-27::news-xyz"
+
+
 class TestBankrollAtomicity:
     """Regression for the bankroll desync bug fixed in v0.23.0."""
 

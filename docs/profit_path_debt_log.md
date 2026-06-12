@@ -5495,6 +5495,13 @@ evaluate real EV:
    markets, 95% CI**. We're at 27% of the floor. The pipeline is
    wired; the input data is missing.
 
+**Update 2026-06-11 (PROFIT-PHASE3 I-1 cache-key join completion, v0.33.12, operator-directed).**
+Investigating "build the corpus bootstrap" revealed the actual gap was NOT I-3 or I-2 (both already shipped and firing — `scripts/edge_replay/llm_capture.py` has captured **2453** production LLM responses into `llm_capture.jsonl`, and `scripts/edge_replay/llm_cache.py` is the SQLite read-path with `migrate_jsonl_to_sqlite` + coverage). The missing piece was the **capture↔trade join + corpus cache-key stamping**: `build_corpus.py` stamped none of the 13 cache-key fields, and nothing linked a resolved trade to its captured decision. Also found a latent defect — the signal-path capture key used `news.id` (which does not exist on `NewsItem`; it is `item_id`), so every signal on a ticker collided on one empty-news-id key. This PR:
+- Adds a single-source-of-truth join key `signal_capture_row_id(ticker, news_item_id)` in `llm_capture.py`; the signal-analyzer capture site (`_i3_capture_signal_llm_call`) now uses it with `news.item_id` (fixes the degenerate key).
+- Persists that key as an additive nullable `paper_trades.llm_capture_row_id` column (idempotent migration, mirrors `_P0_PROVENANCE_COLUMNS`) set in `record_trade` via the same helper, so the keys match exactly.
+- Adds an offline `index_captures_by_row_id()` read helper and wires `build_corpus.py` to stamp the 13 cache-key fields onto each corpus row by joining `llm_capture_row_id` → capture index. Absent captures leave the row cache-uncovered (never fabricated) — honest signal for the gate's coverage check.
+**Scope/limits:** forward-looking — only trades recorded AFTER this deploys carry the join key; the 6 existing post-P0 resolved trades remain best-effort/un-joinable. Does NOT place any corpus in the gate's auto-discovered `corpus_dir`, so the PROFIT-PHASE3-002 pass-through is unaffected (no CI-flip). The Rule-1 ≥30 volume blocker (this entry) and the OOS regime-diversity blocker (Phase 4, ~60–90d organic) still stand; this only removes the cache-coverage blocker for future gate-eligible corpora.
+
 **Why A1 (wait), not A2 / A3**
 
 Operator considered four sub-paths (2026-05-24 transcript):

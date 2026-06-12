@@ -63,6 +63,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from scripts.edge_replay.llm_capture import (
+    CAPTURE_CACHE_KEY_FIELDS,
+    index_captures_by_row_id,
+)
+
+
 CORPUS_BUILDER_VERSION = 1
 
 # I-10 (framework v3, closes Codex blocker E). Mirrors
@@ -227,6 +233,31 @@ def _stamp_row(
     return stamped
 
 
+def _apply_capture_cache_keys(
+    row: dict[str, Any],
+    capture_index: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Stamp the 13-field LLM cache key onto a corpus row by joining the trade's
+    persisted ``llm_capture_row_id`` to the capture index (PROFIT-PHASE3 I-1).
+
+    When the trade has no join key, or the key is absent from the index
+    (historical trades predating capture, non-LLM signals, or a capture-file
+    gap), the cache fields are left ABSENT -- the replay gate then counts the
+    row as cache-uncovered, which is the honest signal. NEVER fabricates a key
+    (a fabricated key would let an un-replayable row pass cache coverage).
+    """
+    join_key = row.get("llm_capture_row_id")
+    if not join_key:
+        return row
+    captured = capture_index.get(str(join_key))
+    if not captured:
+        return row
+    enriched = dict(row)
+    for field_name in CAPTURE_CACHE_KEY_FIELDS:
+        enriched[field_name] = captured.get(field_name)
+    return enriched
+
+
 def _default_output_path(
     *,
     regime_label: str,
@@ -257,6 +288,7 @@ def build_corpus(
     regimes_doc_path: Path | None = None,
     built_at_utc: str | None = None,
     include_contamination: bool = False,
+    llm_capture_path: Path | None = None,
 ) -> BuildResult:
     """Build a replay corpus from ``paper_trades.db`` for one window+regime.
 
@@ -396,6 +428,11 @@ def build_corpus(
                 "filtered (include_contamination=False default)."
             )
 
+    # PROFIT-PHASE3 I-1: build the row_id -> 13-field cache-key index once, then
+    # join each corpus row to its captured LLM decision (read-only, fail-soft;
+    # absent captures leave the cache fields off the row -> honestly uncovered).
+    capture_index = index_captures_by_row_id(llm_capture_path)
+
     # Write JSONL atomically by writing then renaming.
     tmp_path = resolved_output.with_name(resolved_output.name + ".tmp")
     with tmp_path.open("w", encoding="utf-8") as out:
@@ -409,6 +446,7 @@ def build_corpus(
                 market_families=list(market_families),
                 built_at_utc=stamp_built_at,
             )
+            stamped = _apply_capture_cache_keys(stamped, capture_index)
             out.write(json.dumps(stamped, sort_keys=True))
             out.write("\n")
     tmp_path.replace(resolved_output)

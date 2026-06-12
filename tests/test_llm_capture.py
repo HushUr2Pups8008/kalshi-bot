@@ -631,3 +631,70 @@ def test_capture_rejects_nan_in_response(monkeypatch, tmp_path):
     # The capture should have swallowed the ValueError raised by
     # allow_nan=False; no JSONL line should be written.
     assert not (tmp_path / "llm_capture.jsonl").exists()
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-PHASE3 I-1: shared join key + offline read index
+# ---------------------------------------------------------------------------
+
+
+def test_signal_capture_row_id_format():
+    """The signal join key is signal::<ticker>::<news_item_id>. This is the
+    single source of truth shared by the capture site and record_trade — its
+    format is load-bearing for the capture->trade join."""
+    from scripts.edge_replay.llm_capture import signal_capture_row_id
+
+    assert signal_capture_row_id("KXFOO-1", "news-abc") == "signal::KXFOO-1::news-abc"
+    # Empty news item id (non-news signals) still yields a stable, parseable key.
+    assert signal_capture_row_id("KXFOO-1", "") == "signal::KXFOO-1::"
+
+
+def test_index_captures_by_row_id_last_write_wins_and_drops_payload(tmp_path: Path):
+    """The offline index keeps only the 13 cache-key fields (drops the bulky
+    response/request payload), skips unparseable + id-less lines, and keeps the
+    LAST capture for a repeated row_id (the most recent decision)."""
+    from scripts.edge_replay.llm_capture import (
+        CAPTURE_CACHE_KEY_FIELDS,
+        index_captures_by_row_id,
+    )
+
+    p = tmp_path / "cap.jsonl"
+    lines = [
+        json.dumps({"row_id": "k1", "response_hash": "OLD", "model_id": "m",
+                    "response": {"x": 1}, "request_payload": {"y": 2}}),
+        "this is not json",  # unparseable -> skipped, must not lose the index
+        json.dumps({"row_id": "k1", "response_hash": "NEW", "model_id": "m"}),  # last wins
+        json.dumps({"response_hash": "noid"}),  # missing row_id -> skipped
+        json.dumps({"row_id": "k2", "prompt_template_hash": "tpl"}),
+    ]
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    idx = index_captures_by_row_id(p)
+
+    assert set(idx.keys()) == {"k1", "k2"}
+    assert idx["k1"]["response_hash"] == "NEW"  # last write wins
+    # Only the 13 cache-key fields are retained (missing ones present as None).
+    assert set(idx["k1"].keys()) == set(CAPTURE_CACHE_KEY_FIELDS)
+    assert "response" not in idx["k1"]
+    assert "request_payload" not in idx["k1"]
+
+
+def test_index_captures_by_row_id_missing_file_returns_empty(tmp_path: Path):
+    """Honest absence: no capture file -> empty index (gate counts those rows as
+    cache-uncovered rather than fabricating coverage)."""
+    from scripts.edge_replay.llm_capture import index_captures_by_row_id
+
+    assert index_captures_by_row_id(tmp_path / "does-not-exist.jsonl") == {}
+
+
+def test_capture_cache_key_fields_match_gate_cache_columns():
+    """Drift guard: the 13-field key the corpus builder stamps
+    (CAPTURE_CACHE_KEY_FIELDS) MUST equal the key the replay gate looks up
+    (llm_cache._CACHE_KEY_COLUMNS), in the same order. If they drift, the gate's
+    cache-coverage check silently misses every stamped row -> a real corpus
+    would falsely read as 0% covered. These are hand-maintained duplicates in
+    two modules; this test is the only thing pinning them together."""
+    from scripts.edge_replay.llm_capture import CAPTURE_CACHE_KEY_FIELDS
+    from scripts.edge_replay.llm_cache import _CACHE_KEY_COLUMNS
+
+    assert tuple(CAPTURE_CACHE_KEY_FIELDS) == tuple(_CACHE_KEY_COLUMNS)

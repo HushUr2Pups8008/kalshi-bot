@@ -540,6 +540,13 @@ class PaperTrader:
             # but the I-11 retrospective consumes it as the gold-standard
             # OOS measurement for the named change.
             ("cohort_extension",        "TEXT"),
+            # PROFIT-PHASE3 I-1: durable join key linking this trade to its
+            # captured LLM decision (llm_capture.jsonl row_id). Lets the corpus
+            # builder stamp the 13-field cache key onto the corpus row so the
+            # replay gate's cache-coverage check can resolve it. Nullable:
+            # historical rows (and non-LLM signals) have no captured decision
+            # and join lossily / not at all.
+            ("llm_capture_row_id",      "TEXT"),
         ]
         for col, col_type in new_cols:
             if col not in cols and self._ensure_paper_trades_column(col, col_type, cols):
@@ -936,6 +943,24 @@ class PaperTrader:
         # persistence is never blocked by sentinel-file machinery.
         cohort_extension = self._resolve_cohort_extension()
 
+        # PROFIT-PHASE3 I-1: persist the capture join key so a resolved trade can
+        # be linked to its captured LLM decision (the corpus builder keys on
+        # this). Built via the SAME shared helper the signal-analyzer capture
+        # site uses, so the keys match exactly. Lazy import + None fallback keeps
+        # trade persistence fail-soft (a missing helper loses only the corpus
+        # join for these rows, never the trade). Non-LLM signals have an empty
+        # item_id -> a degenerate key with no matching capture (joins to nothing,
+        # which is correct).
+        try:
+            from scripts.edge_replay.llm_capture import signal_capture_row_id
+
+            llm_capture_row_id = signal_capture_row_id(
+                analysis.market.ticker,
+                getattr(analysis.news_item, "item_id", "") or "",
+            )
+        except Exception:  # noqa: BLE001 — additive join key, never block a trade
+            llm_capture_row_id = None
+
         self._conn.execute(
             """INSERT INTO paper_trades
                (trade_id, ts, ticker, venue, market_title, side, contracts, price_cents,
@@ -947,8 +972,8 @@ class PaperTrader:
                  fast_lane_p, fast_lane_confidence, accumulation_p, accumulation_confidence,
                  structural_p, structural_confidence,
                  price_source, price_method, price_retrieved_at, raw_payload_hash,
-                 p0_contract_version, cohort_extension)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 p0_contract_version, cohort_extension, llm_capture_row_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 trade_id,
                 datetime.now(timezone.utc).isoformat(),
@@ -991,6 +1016,7 @@ class PaperTrader:
                 provenance_hash,
                 1,
                 cohort_extension,
+                llm_capture_row_id,
             ),
         )
         self._conn.commit()
