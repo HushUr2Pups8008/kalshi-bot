@@ -815,6 +815,74 @@ class TestEstimateProbability:
         ]
 
     @pytest.mark.asyncio
+    async def test_match_llm_review_carries_match_score_from_match_meta(self, monkeypatch):
+        # PROFIT-MATCH-003 (L2-a): the matcher score threaded onto match_meta
+        # must reach log_match_llm_review, or the feedback loop's score-gate
+        # has no score and stays a no-op.
+        news = _make_news("Kansas governor election tightens after new polling")
+        market = _make_full_market(
+            title="Democratic Party",
+            subtitle="Kansas Governor Election Winner",
+            series_ticker="polymarket_us",
+        )
+        market.ticker = "ewc-usgub-ks-2026-11-03-dem"
+        match_meta = {
+            "venue": "polymarket_us",
+            "matched_tokens": ["election", "governor", "kansas"],
+            "match_score": 0.1875,
+            "pre_llm_quality_pass": True,
+            "pre_llm_semantic_overlap_count": 3,
+            "pre_llm_semantic_overlap_ratio": 0.75,
+            "pre_llm_gate_reason": None,
+        }
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "LLM found relevant directional information", "yes", "moderate"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_match_llm_review") as review_mock:
+            await estimate_probability(news, market, match_meta=match_meta)
+
+        review_mock.assert_called_once()
+        assert review_mock.call_args.kwargs["match_score"] == pytest.approx(0.1875)
+
+    @pytest.mark.asyncio
+    async def test_match_llm_review_match_score_none_when_absent(self, monkeypatch):
+        # No match_score on match_meta -> passed as None -> record omits it ->
+        # consumer treats it as marginal (prior behaviour).
+        news = _make_news("Kansas governor election tightens after new polling")
+        market = _make_full_market(
+            title="Democratic Party",
+            subtitle="Kansas Governor Election Winner",
+            series_ticker="polymarket_us",
+        )
+        market.ticker = "ewc-usgub-ks-2026-11-03-dem"
+        match_meta = {
+            "venue": "polymarket_us",
+            "matched_tokens": ["election", "governor", "kansas"],
+            "pre_llm_quality_pass": True,
+            "pre_llm_semantic_overlap_count": 3,
+            "pre_llm_semantic_overlap_ratio": 0.75,
+            "pre_llm_gate_reason": None,
+        }
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "LLM found relevant directional information", "yes", "moderate"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_match_llm_review") as review_mock:
+            await estimate_probability(news, market, match_meta=match_meta)
+
+        review_mock.assert_called_once()
+        assert review_mock.call_args.kwargs["match_score"] is None
+
+    @pytest.mark.asyncio
     async def test_signal_analysis_detail_uses_explicit_match_meta_venue(self, monkeypatch):
         news = _make_news("Kansas governor election tightens after new polling")
         market = _make_full_market(
@@ -2006,6 +2074,7 @@ class TestLogMatchLlmReview:
             llm_magnitude="none",
             llm_confidence=0.85,
             verdict="false_positive_neutral",
+            match_score=0.1834,
         )
         # Read back
         import json
@@ -2020,6 +2089,36 @@ class TestLogMatchLlmReview:
         assert rec["verdict"] == "false_positive_neutral"
         assert rec["llm_confidence"] == 0.85
         assert rec["llm_relevant"] is False
+        # PROFIT-MATCH-003 (L2-a): match_score is carried (rounded to 4dp) so the
+        # feedback loop can score-gate the false_positive_neutral signal.
+        assert rec["match_score"] == 0.1834
+
+    def test_log_match_llm_review_omits_match_score_when_none(self, tmp_path, monkeypatch):
+        # WHY: a missing match_score must be ABSENT from the record (not 0.0) so
+        # the consumer treats it as marginal/prior-behaviour rather than as a
+        # genuine zero score.
+        monkeypatch.setenv("KALSHI_LOG_ROOT", str(tmp_path))
+        import importlib, utils.logger as logger_mod
+        importlib.reload(logger_mod)
+        tl = logger_mod.TradeLogger(tmp_path / "trades.jsonl")
+        tl.log_match_llm_review(
+            ticker="KXCABLEAVE-26MAY22-26JUN",
+            market_title="Will any member of Trump's Cabinet leave before Jun 2026?",
+            market_prefix="KXCABLEAVE",
+            headline="LIVE: synthetic probe headline",
+            source="Some Outlet",
+            matched_tokens=["trump"],
+            llm_relevant=True,
+            llm_direction="yes",
+            llm_magnitude="small",
+            llm_confidence=0.85,
+            verdict="true_positive",
+        )
+        import json
+        path = tmp_path / "trades.jsonl"
+        line = path.read_text(encoding="utf-8").strip().splitlines()[-1]
+        rec = json.loads(line)
+        assert "match_score" not in rec
 
 
 # ---------------------------------------------------------------------------

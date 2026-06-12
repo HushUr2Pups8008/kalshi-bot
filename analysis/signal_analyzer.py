@@ -1560,6 +1560,18 @@ async def estimate_probability(
                     review_venue = str(raw_venue).strip().lower() or None
             if review_venue is None and ticker_prefix == "polymarket_us":
                 review_venue = ticker_prefix
+            # PROFIT-MATCH-003 (L2-a): carry the matcher score (threaded onto
+            # match_meta by main._process_candidate) so the feedback loop can
+            # score-gate the false_positive_neutral signal. None when absent
+            # (e.g. the startup probe) -> consumer treats it as marginal.
+            review_match_score = None
+            if isinstance(match_meta, dict):
+                raw_score = match_meta.get("match_score")
+                if raw_score is not None:
+                    try:
+                        review_match_score = float(raw_score)
+                    except (TypeError, ValueError):
+                        review_match_score = None
             await write_trade_log_async(
                 trade_log.log_match_llm_review,
                 ticker=market.ticker,
@@ -1574,6 +1586,7 @@ async def estimate_probability(
                 llm_magnitude=llm_magnitude,
                 llm_confidence=float(llm_confidence) if llm_confidence is not None else 0.0,
                 verdict=verdict,
+                match_score=review_match_score,
             )
 
         return llm_prob, llm_confidence, keywords, reasoning, llm_direction, llm_magnitude, llm_confidence

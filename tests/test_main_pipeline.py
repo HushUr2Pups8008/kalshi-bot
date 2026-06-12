@@ -311,6 +311,10 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
         keyword_stats=bot.keyword_stats,
         match_meta=match_meta,
     )
+    # PROFIT-MATCH-003 (L2-a): _process_candidate threads the matcher score onto
+    # match_meta so the downstream MATCH_LLM_REVIEW emission carries it (the
+    # feedback loop's score-gate is a no-op without this).
+    assert match_meta["match_score"] == pytest.approx(0.42)
     analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
     evidence = bot._evidence_queue.get_nowait()
     assert analysis.signal_meta["trigger_evidence_id"] == evidence.evidence_id

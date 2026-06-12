@@ -364,6 +364,7 @@ class PaperTrader:
         self._log_startup_diagnostics(startup_state)
         self._log_state_initialization(startup_state)
         self._ensure_p0_cohort_sentinel()
+        self._ensure_sizing_regime_kelly_sentinel()
         if self._startup_context == "runtime":
             type(self)._runtime_owner_pid = os.getpid()
         self._initialized = True
@@ -400,6 +401,49 @@ class PaperTrader:
         if self._startup_context != "test":
             log.info(
                 "[P-9 / LD-7] Inserted bot_state.p0_price_fix_deployed_ts=%s",
+                deployed_ts,
+            )
+
+    def _ensure_sizing_regime_kelly_sentinel(self) -> None:
+        """Idempotent insert of bot_state.sizing_regime_kelly_deployed_ts.
+
+        Paper sizing switched flat-5 -> Kelly in v0.33.6 (PROFIT-SIZING-001b).
+        Resolved trades from the two sizing regimes are not comparable, so the
+        performance report needs a boundary to split the flat-5-era cohort from
+        the Kelly-era cohort (mirroring the P0 pricing-fix sentinel).
+
+        The bot stamps this automatically at the first startup that runs the
+        Kelly-sizing code -- there is NO operator action and NO .env variable
+        (an explicit decision: the operator should not have to set deploy
+        markers by hand). Like the P0 sentinel, the value is written once and
+        NEVER overwritten, so the boundary is anchored permanently. Stamping at
+        first-startup-under-this-code means the recorded instant can trail the
+        actual v0.33.6 code deploy slightly; this is harmless because the
+        Kelly-era resolved cohort is empty at planting time, so no resolved
+        trade is mis-attributed across the boundary.
+        """
+        sentinel_key = "sizing_regime_kelly_deployed_ts"
+        existing = self._conn.execute(
+            "SELECT value FROM bot_state WHERE key = ?",
+            (sentinel_key,),
+        ).fetchone()
+        if existing is not None:
+            return  # already set; never overwrite the historical boundary
+
+        deployed_ts = datetime.now(timezone.utc).isoformat()
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO bot_state(key, value) VALUES (?, ?)",
+                    (sentinel_key, deployed_ts),
+                )
+        except sqlite3.IntegrityError:
+            # Race: another PaperTrader inserted between our SELECT and INSERT.
+            # The other process won; never overwrite the boundary.
+            return
+        if self._startup_context != "test":
+            log.info(
+                "Inserted bot_state.sizing_regime_kelly_deployed_ts=%s",
                 deployed_ts,
             )
 
