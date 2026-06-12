@@ -478,8 +478,8 @@ Ran `scripts/mark_open_positions.py` (read-only: signed Kalshi GET + Polymarket 
 | **Title** | L2 design — stop counting `false_positive_neutral` as a downweight signal on correct matches |
 | **Category** | Matcher feedback (root cause behind PROFIT-MATCH-002) |
 | **Severity** | MEDIUM |
-| **Status** | DESIGN ONLY (2026-06-10). Ship is operator-gated + replay-EV-blocked (corpus insufficient, T3) |
-| **operator_gated** | YES (reshapes the learning signal; needs replayed-EV per IC §16) |
+| **Status** | IMPLEMENTED end-to-end (L2-a) 2026-06-11 (v0.33.10), this PR — operator-directed; supersedes no-op draft #137. EV-validation via replay still pending (corpus bootstrap). |
+| **operator_gated** | YES (reshapes the learning signal) — operator approved implementation now; validate EV via the bootstrap corpus when available |
 
 **Problem**
 The matcher-feedback loop's only negative signal is `verdict=false_positive_neutral` (LLM saw the *right* market, no directional edge from THIS headline). `fp_rate = fp_neutral/(fp_neutral+true_positive)`. A correctly-matched high-traffic market accrues neutral reviews and gets its tokens floored. PROFIT-MATCH-002 (#131) guards a market's *own ticker-defining* token, but **non-defining** correct-market tokens are still vulnerable. Root cause: "no edge from this headline" ≠ "wrong market", yet both feed `fp_neutral`.
@@ -490,6 +490,12 @@ The matcher-feedback loop's only negative signal is `verdict=false_positive_neut
 - **L2-c — base-rate normalization.** Most matched headlines are no-edge (high neutral rate is the BASE rate). Downweight a token only when its neutral rate is *anomalously high* vs the corpus baseline, not on absolute `fp_rate`. No new fields; changes the activation rule globally.
 
 **Recommendation:** L2-a (lowest blast, no schema change). **Prerequisite:** a usable replay corpus to validate the EV impact (currently `InsufficientCorpusError`/T3 — corpus-gated, see Decisions below). Do not ship until the post-P0 open cohort resolves and a corpus exists.
+
+**Implemented end-to-end (L2-a), v0.33.10 — operator-directed (supersedes #137).** The design above assumed L2-a needed "no schema change" because "`MATCH_LLM_REVIEW` already carries `match_score`." **That assumption was wrong** — the event never emitted a score (0/985 events), which is exactly why the consumer-only draft #137 was a no-op in production. This PR wires both sides:
+- **Producer:** `main._process_candidate` threads the matcher score onto `match_meta` (`match_meta.setdefault("match_score", round(score, 4))`); `analysis/signal_analyzer.py` reads it at the `MATCH_LLM_REVIEW` emission site; `utils/logger.py::log_match_llm_review` gained a `match_score` param and records it (OMITTED when `None`).
+- **Consumer:** `match_feedback.ingest_review_events` now skips a `false_positive_neutral` verdict when `match_score >= L2_NEUTRAL_FP_MARGINAL_MAX_SCORE` (0.12). `true_positive` always counts; missing `match_score` → treated as marginal (counts), preserving prior behaviour for the synthetic startup probe and any legacy events.
+
+This stops correct high-score markets from being floored — the root behind PROFIT-MATCH-002's defining-token symptom, now extended to non-defining tokens. The 0.12 band protects clearly-strong matches while still penalizing near-threshold (likely-wrong) bridges. **Caveat:** single-token correct matches scoring < 0.12 are still counted, but #131's defining-token guard already protects those; the residual is non-defining weak-score matches (genuinely ambiguous). Tests: `TestL2ScoreGatedFalsePositive` (consumer), `TestLogMatchLlmReview` + signal-analyzer call-site + `_process_candidate` injection (producer). **EV impact unmeasured until a replay corpus exists** (bootstrap, PROFIT-PHASE3); the change is behaviorally conservative (strictly removes some downweights) but should still be replay-validated before tightening the threshold.
 
 ---
 

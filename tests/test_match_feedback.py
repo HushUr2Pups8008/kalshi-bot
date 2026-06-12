@@ -7,6 +7,7 @@ import pytest
 
 from analysis.match_feedback import (
     DOWNWEIGHT_FLOOR,
+    L2_NEUTRAL_FP_MARGINAL_MAX_SCORE,
     MIN_TOTAL_FOR_DOWNWEIGHT,
     TokenStats,
     aggregate_window,
@@ -21,8 +22,8 @@ from analysis.match_feedback import (
 )
 
 
-def _ev(token_list, prefix, verdict, day):
-    return {
+def _ev(token_list, prefix, verdict, day, match_score=None):
+    ev = {
         "type": "MATCH_LLM_REVIEW",
         "ts": f"{day}T12:00:00+00:00",
         "ticker": f"{prefix}-26JUN01",
@@ -37,6 +38,9 @@ def _ev(token_list, prefix, verdict, day):
         "llm_confidence": 0.85,
         "verdict": verdict,
     }
+    if match_score is not None:
+        ev["match_score"] = match_score
+    return ev
 
 
 def test_market_prefix_for_prefers_series_ticker_then_ticker_prefix():
@@ -51,6 +55,53 @@ def test_market_prefix_for_prefers_series_ticker_then_ticker_prefix():
         ticker = "KXNEWDEAL-JUN01"
 
     assert market_prefix_for(LegacyMarket()) == "KXNEWDEAL"
+
+
+class TestL2ScoreGatedFalsePositive:
+    """PROFIT-MATCH-003 (L2-a): a false_positive_neutral verdict only counts
+    toward downweighting on a MARGINAL (low match_score) match. A neutral on a
+    clearly-correct (high-score) match is 'right market, no edge from this
+    headline' and must NOT poison the token's fp_rate. WHY: the loop's only
+    negative signal conflated no-edge with wrong-match, flooring correct
+    high-traffic markets (PROFIT-MATCH-002 was the defining-token symptom)."""
+
+    def _fp(self, tmp_path, match_score):
+        db = tmp_path / "fp.db"
+        ingest_review_events(
+            [_ev(["sanctions"], "KXVISITIRAN", "false_positive_neutral",
+                 "2026-05-20", match_score=match_score)],
+            db_path=db,
+        )
+        stats = aggregate_window(today_utc="2026-05-21", db_path=db)
+        s = next((x for x in stats if x.token == "sanctions"), None)
+        return s.fp_neutral if s else 0
+
+    def test_high_score_neutral_not_counted(self, tmp_path: Path):
+        # 0.20 >= 0.12 band -> clearly-correct match, no-edge -> NOT a downweight.
+        assert self._fp(tmp_path, 0.20) == 0
+
+    def test_marginal_score_neutral_counted(self, tmp_path: Path):
+        # 0.05 < 0.12 band -> marginal/possibly-wrong match -> counts as fp.
+        assert self._fp(tmp_path, 0.05) == 1
+
+    def test_missing_score_counted_conservatively(self, tmp_path: Path):
+        # No match_score on the event -> treated as marginal (prior behaviour).
+        assert self._fp(tmp_path, None) == 1
+
+    def test_boundary_score_counted(self, tmp_path: Path):
+        # Exactly at the band is NOT below it -> not counted (>= skips).
+        assert self._fp(tmp_path, L2_NEUTRAL_FP_MARGINAL_MAX_SCORE) == 0
+
+    def test_true_positive_always_counted_regardless_of_score(self, tmp_path: Path):
+        db = tmp_path / "fp.db"
+        ingest_review_events(
+            [_ev(["iran"], "KXVISITIRAN", "true_positive", "2026-05-20",
+                 match_score=0.05)],
+            db_path=db,
+        )
+        stats = aggregate_window(today_utc="2026-05-21", db_path=db)
+        s = next(x for x in stats if x.token == "iran")
+        assert s.true_positive == 1
 
 
 class TestIngestReviewEvents:
