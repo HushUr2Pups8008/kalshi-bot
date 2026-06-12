@@ -137,11 +137,12 @@ def blend(
     non_fallback = [ln for ln in raw_active if ln.signal_kind != "fallback"]
     active: list[LaneInput] = non_fallback if non_fallback else raw_active
 
-    eff_conf = _effective_confidences(active, regime_weights, regime_confidence)
+    eff_conf, interp_weights = _effective_confidences(active, regime_weights, regime_confidence)
 
     blend_mode, blended_p, blended_conf, min_edge_override, block_reason = _resolve_blend(
         active=active,
         eff_conf=eff_conf,
+        interp_weights=interp_weights,
         structural=structural,
         fast_signal_active=fast_signal_active,
         structural_stable=structural_stable,
@@ -172,21 +173,31 @@ def _effective_confidences(
     active: list[LaneInput],
     regime_weights: dict[str, float],
     regime_confidence: float,
-) -> list[float]:
-    """RHR-3: interpolate between uniform weight and regime weight based on confidence."""
-    result: list[float] = []
+) -> tuple[list[float], list[float]]:
+    """RHR-3: interpolate between uniform weight and regime weight based on confidence.
+
+    Returns ``(eff_conf, interp_weights)``: per-lane effective confidence
+    (lane confidence x interpolated regime weight) and the interpolated regime
+    weights themselves. The weights are needed separately so blended_confidence
+    can be a true weighted MEAN of lane confidences (PROFIT-EDGE-014) instead of
+    a mean of the products, which diluted a confident lane by the lane COUNT.
+    """
+    eff: list[float] = []
+    weights: list[float] = []
     for lane in active:
         regime_key = _LANE_TO_REGIME_KEY.get(lane.lane_id, lane.lane_id)
         rw = float(regime_weights.get(regime_key, 0.0))
         interp_regime = (1.0 - regime_confidence) * _EQUAL_WEIGHT + regime_confidence * rw
-        result.append(lane.confidence * interp_regime)
-    return result
+        weights.append(interp_regime)
+        eff.append(lane.confidence * interp_regime)
+    return eff, weights
 
 
 def _resolve_blend(
     *,
     active: list[LaneInput],
     eff_conf: list[float],
+    interp_weights: list[float],
     structural: LaneInput | None,
     fast_signal_active: bool,
     structural_stable: bool,
@@ -194,6 +205,7 @@ def _resolve_blend(
 ) -> tuple[BlendMode, float, float, float | None, str | None]:
     """Apply DER-1 → DER-2 → DER-3/4 in order. Return (mode, p, conf, override, block)."""
     total_eff = sum(eff_conf)
+    total_weight = sum(interp_weights)
 
     if total_eff == 0.0:
         # All effective confidences are zero — equal weight fallback.
@@ -201,13 +213,31 @@ def _resolve_blend(
         conf_blend = 0.0
     else:
         p_blend = sum(eff_conf[i] * active[i].p for i in range(len(active))) / total_eff
-        conf_blend = total_eff / len(active)  # mean effective confidence as blended confidence
+        # PROFIT-EDGE-014 (operator option b, 2026-06-12): blended_confidence is
+        # the interp-weight-weighted MEAN of lane confidences
+        # (sum(conf_i * w_i) / sum(w_i) == total_eff / total_weight). The prior
+        # formula divided by len(active) — a mean of the PRODUCTS — which
+        # diluted a 0.85-confidence fast lane to ~0.15 blended whenever two
+        # low-confidence lanes were present (16/16 diagnosed G1 skips since
+        # 2026-06-05 were near-misses at median scaled 0.044 vs the 0.05
+        # threshold). A true weighted average is bounded by the lanes' own
+        # confidences and degenerates to the lane's confidence when only one
+        # lane is present (which the prior formula contradicted: single-lane
+        # conf was scaled by its regime weight). blended_p, the DER-2 dominance
+        # trigger, and the disagreement score still use eff_conf — unchanged.
+        # DER-1 in IMPLEMENTATION_CONTRACT.md pins only the p_blend formula;
+        # the confidence aggregation is implementation-defined.
+        conf_blend = total_eff / total_weight if total_weight > 0 else 0.0
 
     # DER-2: dominance check
     dominant_idx = _dominant_lane_index(eff_conf)
     if dominant_idx is not None:
         p_blend = active[dominant_idx].p
-        conf_blend = eff_conf[dominant_idx]
+        # Full authority (DER-2) extends to confidence: the dominant lane's own
+        # confidence is adopted, mirroring the weighted-mean semantics above
+        # (previously eff_conf[i] = conf x weight, which made a DOMINANT lane
+        # report LOWER confidence than a contested blend — inverted).
+        conf_blend = active[dominant_idx].confidence
         return "dominant_lane", p_blend, conf_blend, None, None
 
     # DER-3 / DER-4: structural fail-safe

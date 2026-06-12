@@ -2230,3 +2230,30 @@ class TestI3CaptureJoinKey:
         )
 
         assert captured.get("row_id") == "signal::KXFOO-1::news-xyz"
+
+
+class TestLlmConfidenceClamp:
+    """PROFIT-EDGE-014 review finding: out-of-range LLM confidence must be
+    clamped at the producer. The confidence-weighted blend propagates a
+    single/dominant lane's RAW confidence to blended_confidence, where the
+    readiness gate's probability validation raises on >1.0 — unclamped, a
+    malformed LLM value becomes a per-candidate exception instead of a
+    bounded input."""
+
+    def test_confidence_clamped_to_unit_interval(self):
+        from types import SimpleNamespace
+        import analysis.signal_analyzer as sa
+
+        market = SimpleNamespace(yes_prob=0.50, ticker="KXCLAMP-1")
+        over = sa._parse_llm_response(
+            {"confidence": 7.0, "direction": "yes", "magnitude": "small",
+             "relevant": True, "new_information": True, "reasoning": "r"},
+            market,
+        )
+        under = sa._parse_llm_response(
+            {"confidence": -3.0, "direction": "yes", "magnitude": "small",
+             "relevant": True, "new_information": True, "reasoning": "r"},
+            market,
+        )
+        assert over[1] == 1.0
+        assert under[1] == 0.0

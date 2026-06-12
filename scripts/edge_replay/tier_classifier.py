@@ -158,9 +158,14 @@ PATH_TIER_RULES: list[dict[str, Any]] = [
         "matcher": lambda p: _eq(p, "analysis/signal_analyzer.py"),
     },
     {
+        # PROFIT-EDGE-014 review finding: this rule previously named
+        # "analysis/blender.py", which does not exist -- the real blender is
+        # analysis/decision_blender.py, so blender PRs fell through to the
+        # unknown-path T3 fail-safe (same misroute class as the tasks/stats
+        # false positive). The classifier docstring places the blender in T1.
         "tier": "T1",
-        "pattern": "analysis/blender.py",
-        "matcher": lambda p: _eq(p, "analysis/blender.py"),
+        "pattern": "analysis/decision_blender.py",
+        "matcher": lambda p: _eq(p, "analysis/decision_blender.py"),
     },
     {
         "tier": "T1",

@@ -798,7 +798,14 @@ def _parse_llm_response(parsed: dict, market) -> tuple[float, float, str, str, s
     unchanged when the model signals no new information.
     Returns raw direction and magnitude for storage in paper_trades.
     """
-    confidence = float(parsed.get("confidence", 0.5))
+    # PROFIT-EDGE-014 review finding: clamp to [0,1]. The old blend math
+    # (eff-conf mass / lane count) numerically masked an out-of-range LLM
+    # confidence; the confidence-weighted blend propagates a single/dominant
+    # lane's RAW confidence to blended_confidence, where the readiness gate's
+    # probability-field validation raises on >1.0 -- a malformed LLM value
+    # would become a per-candidate exception instead of a bad-but-bounded
+    # input. Clamp at the producer.
+    confidence = max(0.0, min(1.0, float(parsed.get("confidence", 0.5))))
     reasoning  = parsed.get("reasoning", "")
     relevant   = parsed.get("relevant", True)
     new_info   = parsed.get("new_information", True)
