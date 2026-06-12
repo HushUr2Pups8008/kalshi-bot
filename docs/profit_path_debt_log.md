@@ -454,6 +454,40 @@ Ran `scripts/mark_open_positions.py` (read-only: signed Kalshi GET + Polymarket 
 
 **Root-cause fix (not a tool patch):** `get_market` now delegates to `get_market_payload`, which already had a 404→slug/id fallback (`_find_market_payload_by_slug_or_id` paginates the markets list and matches `payload["slug"]`/`["id"]`), then normalizes the result. `normalize_polymarket_market` sets `market_id = slug|id`, so the stored ticker matches by slug. This aligns `get_market` with the settlement path (`settlement_reconciler` already used `get_market_payload`). The only Polymarket `get_market` caller is `scripts/mark_open_positions.py`; the other `get_market` callers (`scripts/performance_analysis.py`, `scripts/edge_replay/fetch_resolved_markets.py`) use the unrelated `KalshiRestClient.get_market` and are not affected. Strictly better on the 404 path (previously raised; now resolves when the market exists). No change needed to `mark_open_positions.py` itself. Test: `test_get_market_falls_back_to_slug_lookup_on_404`. The MTM tool can now price the open Polymarket positions, collapsing the equity *range* to a point estimate.
 
+**PROFIT-DRAWDOWN-001c — go-live gate drawdown now MTM-based (IMPLEMENTED 2026-06-12, v0.33.13, operator-directed)**
+First full MTM run (2026-06-12, all 13 open positions priced incl. 5 Polymarket via 001b): **true paper equity $40.53 → true drawdown 18.9%**, *under* the 20% go-live cap — while report §8 simultaneously failed its drawdown criterion at **45.7%** on the notional bankroll (which deducts each open trade's full entry cost at placement). The gate was failing on a phantom number. Fix: `scripts/mark_open_positions.py` pricing core extracted to importable `compute_open_position_marks()`; `performance_analysis.py` calls it fail-soft and §8's current equity point becomes `notional + marked open-position value`. Conservatism preserved: unpriced positions count at **$0** (fail-closed); historical curve points stay notional (past troughs never erased); fetch failure → notional fallback **with explicit label** (notional overstates drawdown — the conservative failure direction). Runs by default in the daily report (bounded by open-position count; `--no-mtm` opts out — chosen over the `--enrich` opt-in convention because the gate's correctness depends on it). Tests: 3 §8 cases + `tests/test_mark_open_positions.py`. **Adversarial review (kalshi-safety-reviewer) found and this PR remediated four issues before merge:** (1) `last=0` on an empty book valued a held NO at full contract value (false-pass direction) → `last` fallback now bounded to (0,100), else unpriced; (2) Polymarket held-side ask-marking absorbed the full spread as phantom equity → now `min(held ask, 100 − opposite ask)` bid-equivalent; (3) config's creds `sys.exit(1)` (SystemExit escapes `except Exception`) could kill the now-default-on daily report → caught explicitly, falls back to notional; (4) NaN `marked_value` would silently drop the current equity point → non-finite rejected. Residual known optimism: Kalshi mid-mark carries ≤ half-spread.
+
+---
+
+### PROFIT-EDGE-014
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EDGE-014 |
+| **Title** | G1 confidence-gate skips are NEAR-MISSES (median scaled 0.044 vs 0.05), not no-signal — lane dilution × regime ceiling |
+| **Category** | Signal quality / readiness gate calibration |
+| **Severity** | MEDIUM (largest single gate category; ~50% of gate skips in recent report windows) |
+| **Status** | DIAGNOSED 2026-06-12 — **operator decision required** before any threshold/blending change (execution-criteria change per global rules) |
+| **Owner** | Operator (decision); either agent (implementation, replay-validated) |
+
+**Diagnosis (2026-06-12, 16 G1-blocked decisions since 2026-06-05, BLEND_DECISION/SKIPPED/GATE_SUMMARY records):**
+- `blended_confidence`: min 0.105 / med 0.187 / max 0.197 — **NOT zero**. These are real signals, refuting a pure PROFIT-EDGE-004 "no-signal ceiling" framing for this cohort. `fast_lane_confidence` is **0.75–0.85** on the same decisions.
+- `regime_confidence`: 0.22–0.28 (the fast-dominant `_time_prior` regime, clears G4).
+- `scaled_confidence = bc × rc`: min 0.029 / **med 0.044 / max 0.0493** vs threshold **0.05** — agonizing near-misses; the max missed by 0.0007.
+- Counterfactuals: **16/16** would pass if either factor were 1.0 — the multiplicative structure is the mechanism: a 0.75–0.85-confident fast-lane signal is diluted by low-confidence accumulation (~0.21) / structural (~0.12) lanes into blended ~0.16–0.19 (the PROFIT-PRIORS-001 dilution gotcha), then ×~0.25 regime → just under the bar.
+- Rate correction: daily reports show ~78–81 "confidence gate" skips **per ~30-day report window** (~2.7/day), not per day as an earlier readout implied. Still the largest category (next: series-correlation ~29, source-diversity ~25/window).
+
+**Operator options (none applied; ranked by blast radius):**
+1. **G1 0.05 → 0.04** — admits the median near-miss; prior art exists (Wave-2 "Lever B" harness, `test_lever_b_g1_004_admits_candidate_between_004_and_005`). Smallest change; replay-validate when corpus volume allows, else accept as paper-mode experiment with §5b/§7b tracking.
+2. **Confidence-weighted lane blending** — stop letting a 0.12-confidence structural lane dilute a 0.85-confidence fast lane. Root-cause shaped, larger blast (touches blend math; high-assurance + replay evidence per IC §16).
+3. **No change** — conservative; accept ~2.7/day near-miss attrition while volume accumulates.
+
+**Watch items (re-check by 2026-06-14):**
+- **#143 capture-key persist UNVERIFIED**: 0 trades recorded since the 2026-06-12 10:15 UTC restart as of ~13:30Z; first post-restart trade must show `paper_trades.llm_capture_row_id = signal::<ticker>::<item_id>`.
+- **KXNEWDEAL:deal floored pre-#141**: live aggregator (08:55Z, pre-restart) drove it to weight 0.1 / fp_rate 1.0 / n=13 under OLD counting rules (every neutral counted) and dropped the `_seed_status` metadata on rewrite. Watch whether #141's score-gate eases it; the metadata drop also makes `test_seed_provisional_entries_include_audit_findings` fail against the live working tree (it reads the mutable `data/matcher_token_weights.json` — test-design flaw, CI unaffected since it checks out the committed file).
+
+**Efficacy context (2026-06-12 assessment):** post-P0 cohort 6 resolved / 50% WR / +$0.60 (≈break-even, n too small); trades placed per window 8→22 while opportunities flat (conversion up from the matcher/G2 changes); true MTM drawdown 18.9% vs notional 45.7% (001c closes that artifact). Binding constraints: resolved-trade volume (6/20) and signal confidence (this entry), not throughput plumbing.
+
 ---
 
 ### PROFIT-REPORT-002

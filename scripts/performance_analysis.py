@@ -33,6 +33,7 @@ window.
 
 import argparse
 import json
+import math
 import os
 import sqlite3
 import sys
@@ -1799,13 +1800,42 @@ def section_edge_calibration(db_trades):
     return "\n".join(lines)
 
 
-def section_golive_readiness(db_trades, state):
+def section_golive_readiness(db_trades, state, mtm=None):
     resolved_all = [t for t in db_trades if t.get("resolved")]
 
     try:
         bankroll_now = float(state.get("notional_bankroll", 0))
     except (TypeError, ValueError):
         bankroll_now = 0.0
+
+    # PROFIT-DRAWDOWN-001c: the notional bankroll deducts each open trade's
+    # FULL entry cost at placement, so with many open positions the final
+    # equity point understates true equity and the drawdown criterion fails on
+    # a phantom number (2026-06-12: notional said 45.7%, true MTM equity said
+    # 18.9%). When a mark-to-market snapshot is supplied (mtm dict from
+    # scripts.mark_open_positions.compute_open_position_marks), the CURRENT
+    # equity point becomes bankroll + marked value of open positions. Unpriced
+    # positions count at $0 (fail-closed: unpriced == worthless). Marks are
+    # conservative per venue: Kalshi held-side mid (bounded last fallback only
+    # inside (0,100)); Polymarket min(held ask, 100 - opposite ask) -- residual
+    # optimism is bounded by half the Kalshi spread. Historical
+    # curve points remain entry-sampled notional snapshots — a past trough is
+    # never erased. When mtm is None (offline / fetch failure), fall back to
+    # the notional point and say so: notional overstates drawdown, which is the
+    # conservative failure direction for a go-live gate.
+    mtm_marked = None
+    if isinstance(mtm, dict):
+        try:
+            mtm_marked = float(mtm.get("marked_value", 0) or 0)
+        except (TypeError, ValueError):
+            mtm_marked = None
+        # NaN is truthy and float()-clean but would silently drop the final
+        # equity point downstream (_bankroll_equity_points skips non-positive,
+        # and NaN comparisons are all False) — gate would then see history
+        # only. Reject non-finite values outright (review finding).
+        if mtm_marked is not None and not math.isfinite(mtm_marked):
+            mtm_marked = None
+    equity_now = bankroll_now + mtm_marked if mtm_marked is not None else bankroll_now
 
     # Read config thresholds from env / defaults
     min_resolved = int(os.getenv("GO_LIVE_MIN_RESOLVED", "20"))
@@ -1816,7 +1846,7 @@ def section_golive_readiness(db_trades, state):
     def _cohort_stats(rows):
         wins = [t for t in rows if (t.get("pnl_dollars") or 0) > 0]
         wr = (len(wins) / len(rows)) if rows else 0.0
-        pts = _bankroll_equity_points(rows, bankroll_now)
+        pts = _bankroll_equity_points(rows, equity_now)
         ptt = _equity_max_drawdown(pts)
         # A 0% peak-to-trough from a <2-point curve is "bankroll history could
         # not be reconstructed", NOT "no drawdown". Flag it so the gate fails
@@ -1880,6 +1910,23 @@ def section_golive_readiness(db_trades, state):
     lines.append(
         "  Notional bankroll : $%.2f (started $%.2f)" % (bankroll_now, bankroll_start)
     )
+    if mtm_marked is not None:
+        unpriced = 0
+        if isinstance(mtm, dict):
+            unpriced = int(mtm.get("unpriced_count") or 0)
+        suffix = (
+            "  (%d unpriced positions counted at $0)" % unpriced if unpriced else ""
+        )
+        lines.append(
+            "  MTM equity        : $%.2f = notional + $%.2f open-position value;"
+            " drawdown gates on this%s" % (equity_now, mtm_marked, suffix)
+        )
+    else:
+        lines.append(
+            "  MTM equity        : unavailable -- drawdown gates on notional,"
+            " which counts open positions as worthless (overstates drawdown;"
+            " conservative)"
+        )
     lines.append("")
     lines.append(
         "  Lifetime view (incl. frozen pre-P0; INFORMATIONAL, not gating):"
@@ -1936,6 +1983,15 @@ def main():
         "--enrich",
         action="store_true",
         help="Fetch market resolutions from Kalshi API for unresolved tickers.",
+    )
+    parser.add_argument(
+        "--no-mtm",
+        action="store_true",
+        help=(
+            "Skip the open-position mark-to-market fetch; section 8's drawdown"
+            " then gates on the notional bankroll (overstates drawdown when"
+            " open positions retain value)."
+        ),
     )
     args = parser.parse_args()
 
@@ -2032,8 +2088,34 @@ def main():
     report_lines.append(section_header("7e. KELLY SHADOW SIZING"))
     report_lines.append(section_kelly_shadow())
 
+    # PROFIT-DRAWDOWN-001c: mark open positions to market so section 8's
+    # drawdown criterion reflects true paper equity, not the notional bankroll
+    # (which counts every open position as worthless). Fail-soft: any failure
+    # (offline, API error, missing creds) falls back to the notional point,
+    # which OVERSTATES drawdown -- the conservative direction for this gate.
+    # Default ON despite the --enrich opt-in convention because the gate's
+    # correctness depends on it and the fetch is bounded by open-position
+    # count; --no-mtm opts out.
+    mtm = None
+    if not args.no_mtm:
+        try:
+            from scripts.mark_open_positions import compute_open_position_marks
+
+            mtm = compute_open_position_marks()
+        except SystemExit as exc:
+            # config.BotConfig.__post_init__ sys.exit(1)s on missing/invalid
+            # creds, and the lazy KalshiRestClient import inside the pricing
+            # loop imports config. SystemExit is BaseException -- without this
+            # clause it would escape and kill the whole daily report instead
+            # of falling back to the notional drawdown (review finding).
+            print("WARNING: open-position mark-to-market failed: SystemExit(%s)" % exc)
+            mtm = None
+        except Exception as exc:
+            print("WARNING: open-position mark-to-market failed: %s" % exc)
+            mtm = None
+
     report_lines.append(section_header("8. GO-LIVE READINESS"))
-    report_lines.append(section_golive_readiness(db_trades_all, state))
+    report_lines.append(section_golive_readiness(db_trades_all, state, mtm=mtm))
 
     report_lines.append("")
     report_lines.append("=" * 70)
