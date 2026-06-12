@@ -224,37 +224,55 @@ def test_load_db_trades_filters_to_requested_window(tmp_path, monkeypatch):
     assert len(pa.load_db_trades()) == 3
 
 
-def test_golive_readiness_uses_persisted_trade_start_bankroll():
+def test_golive_readiness_fallback_uses_persisted_start_and_measurable_drawdown():
+    """Fallback path (no P0 boundary sentinel) gates on the LIFETIME cohort, reads
+    the persisted starting bankroll for display, and computes a MEASURABLE
+    peak-to-trough drawdown from the equity curve. Bankroll peaks at 50, dips to
+    42 (16% peak-to-trough) then recovers — comfortably under the 20% cap."""
     db_trades = []
     for i in range(20):
+        if i == 0:
+            before = 50.0  # peak (also the persisted start)
+        elif i == 1:
+            before = 42.0  # trough -> 16% peak-to-trough
+        else:
+            before = 45.0
         db_trades.append(
             {
                 "trade_id": f"t-{i}",
+                "ts": f"2026-05-{1 + i:02d}T12:00:00+00:00",
                 "resolved": 1,
-                "pnl_dollars": 1.0 if i < 11 else -1.0,
-                "notional_bankroll_before": 50.0 if i == 0 else None,
+                "pnl_dollars": 1.0 if i < 11 else -1.0,  # 55% win rate
+                "notional_bankroll_before": before,
             }
         )
 
     output = pa.section_golive_readiness(
         db_trades,
-        {"notional_bankroll": "40.25"},
+        {"notional_bankroll": "45.25"},
     )
 
-    assert "Drawdown        : 19.5% / 20% max  [PASS]" in output
-    assert "Notional bankroll : $40.25 (started $50.00)" in output
+    # No P0 sentinel -> fallback to lifetime gating, labelled as such.
+    assert "Cohort basis    : LIFETIME (post-P0 boundary missing" in output
+    # Peak-to-trough is measurable (16%) and passes; start bankroll is displayed.
+    assert "Drawdown        : 16.0% / 20% max  [PASS]" in output
+    assert "(peak-to-trough)" in output
+    assert "Notional bankroll : $45.25 (started $50.00)" in output
+    # 20 resolved, 55% win, 16% drawdown -> READY; no failure reason emitted.
+    assert "OVERALL: READY FOR LIVE TRADING" in output
     assert "drawdown" not in output.split("OVERALL:", 1)[1]
 
 
-def test_golive_post_p0_view_is_informational_not_gating():
-    """The post-P0 informational view must NOT alter the authoritative go-live
-    verdict. The gate stays on the LIFETIME cohort; a perfect post-P0 record
-    cannot flip a lifetime FAIL to READY. WHY: section 8 is a safety gate;
-    surfacing the current-regime cohort for operator visibility must never
-    silently loosen the gate (which is an operator-only decision)."""
+def test_golive_gates_on_post_p0_cohort_not_lifetime():
+    """Operator decision 2026-06-11: the go-live gate uses the POST-P0 cohort,
+    NOT lifetime. The pre-P0 cohort ran under the pre-fix pricing bug and is
+    excluded as non-representative (matches 7b/7d/7e). A weak lifetime win rate
+    must not gate go-live, and conversely a thin post-P0 sample must FAIL on
+    resolved-count even when its win rate is perfect. WHY: gating on known-broken
+    pre-P0 data was leveraging improper functionality as the gate."""
     boundary = "2026-05-12T23:50:04+00:00"
     db_trades = []
-    # Pre-P0: 15 resolved, 4 wins (drags lifetime win rate down).
+    # Pre-P0: 15 resolved, 4 wins (would drag a LIFETIME gate down to 45%).
     for i in range(15):
         db_trades.append(
             {
@@ -265,7 +283,7 @@ def test_golive_post_p0_view_is_informational_not_gating():
                 "notional_bankroll_before": 50.0 if i == 0 else None,
             }
         )
-    # Post-P0: 5 resolved, ALL wins (100%) — current regime looks great.
+    # Post-P0: 5 resolved, ALL wins (100%) — the representative regime.
     for i in range(5):
         db_trades.append(
             {
@@ -276,30 +294,31 @@ def test_golive_post_p0_view_is_informational_not_gating():
                 "notional_bankroll_before": None,
             }
         )
-    # Lifetime: 20 resolved, 9 wins = 45% < 52% -> FAIL; drawdown 10% PASS;
-    # resolved 20 PASS. So the gate must FAIL on win rate.
     state = {
         "notional_bankroll": "45.00",
         pa.P0_PRICE_FIX_SENTINEL_KEY: boundary,
     }
     output = pa.section_golive_readiness(db_trades, state)
 
-    # Gate verdict uses the lifetime cohort (45%), NOT post-P0's 100%.
+    # Gate basis is POST-P0; the verdict uses post-P0 (100% win, 5 resolved),
+    # NOT lifetime's 45%.
+    assert "Cohort basis    : POST-P0" in output
+    assert "Win rate        : 100% / 52% required  [PASS]" in output
+    assert "Resolved trades : 5 / 20 required  [FAIL]" in output
+    # A thin post-P0 sample fails on resolved-count even at 100% win rate.
     assert "OVERALL: NOT READY" in output
     assert "READY FOR LIVE TRADING" not in output
-    assert "Win rate        : 45% / 52% required  [FAIL]" in output
-    assert "win rate needs 52% (currently 45%, lifetime)" in output
-    # Post-P0 reality is surfaced as informational only.
-    assert "Post-P0 view    : INFORMATIONAL" in output
-    assert "Win rate      : 100% / 52% target" in output
-    assert "an operator decision, not applied here" in output
+    assert "15 more resolved trades needed" in output
+    # Lifetime is surfaced as informational only (45% win rate, 20 resolved).
+    assert "INFORMATIONAL, not gating" in output
+    assert "Resolved 20" in output
 
 
 def test_golive_reports_peak_to_trough_and_cohort_label():
-    """F1/F3: section 8 labels its cohort basis (lifetime, includes frozen
-    pre-P0) and reports a peak-to-trough drawdown distinct from the start-vs-now
-    gate metric. Here the bankroll dips to 30 then recovers to 45: start-vs-now
-    drawdown is 10% but the true peak-to-trough is 40%."""
+    """F1/F3 (revised for post-P0 gating): section 8 labels its cohort basis as
+    POST-P0 and gates on the peak-to-trough drawdown. Here the bankroll dips to
+    30 then recovers to 45: the gate uses the 40% peak-to-trough, while the
+    lifetime informational view also reports the 10% start-vs-now figure."""
     db_trades = [
         {
             "trade_id": "a",
@@ -321,23 +340,24 @@ def test_golive_reports_peak_to_trough_and_cohort_label():
         pa.P0_PRICE_FIX_SENTINEL_KEY: "2026-05-12T23:50:04+00:00",
     }
     output = pa.section_golive_readiness(db_trades, state)
-    assert "Cohort basis    : LIFETIME" in output
-    assert "(decline from starting bankroll, not peak-to-trough)" in output
-    # peak 50 -> trough 30 = 40% peak-to-trough, vs 10% start-vs-now.
-    assert "Peak-to-trough  : 40.0%" in output
-    assert "Drawdown        : 10.0% / 20% max" in output
+    assert "Cohort basis    : POST-P0" in output
+    # Gate now uses peak-to-trough: peak 50 -> trough 30 = 40% (FAIL > 20% cap).
+    assert "Drawdown        : 40.0% / 20% max  [FAIL]" in output
+    assert "(peak-to-trough)" in output
+    # Lifetime informational view still reports the 10% start-vs-now figure.
+    assert "start-vs-now 10.0%" in output
 
 
 def test_placed_performance_labels_in_window_cohort():
     """F2: Section 2 (placed trades) labels its cohort as IN-WINDOW and
-    cross-references that go-live readiness (section 8) uses the LIFETIME
+    cross-references that go-live readiness (section 8) gates on the POST-P0
     cohort, so the in-window win rate is not misread as the gate's basis."""
     db_trades = [
         {"trade_id": "x", "resolved": 0, "cost_dollars": 1.0, "edge": 0.05}
     ]
     output = pa.section_placed_performance([], db_trades, {})
     assert "Cohort: IN-WINDOW" in output
-    assert "LIFETIME cohort" in output
+    assert "POST-P0 cohort" in output
 
 
 def test_kelly_shadow_payout_is_side_aware_no_win():
