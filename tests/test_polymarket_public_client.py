@@ -80,6 +80,40 @@ def test_get_market_normalizes_single_market_payload():
     )
 
 
+def test_get_market_falls_back_to_slug_lookup_on_404():
+    # PROFIT-DRAWDOWN-001b: a stored slug-style id (the form the bot persists)
+    # 404s on GET /v1/markets/{slug}. get_market must fall back to the markets-
+    # list slug/id lookup and normalize, so mark_open_positions can price open
+    # Polymarket positions instead of leaving them unpriced. WHY this matters:
+    # the prior get_market raised on 404, so every open Polymarket position was
+    # reported as value-unknown, inflating the apparent paper drawdown.
+    slug = "ewc-usse-me-2026-11-03-dem"
+    client = PolymarketPublicClient(base_url="https://gateway.polymarket.us")
+    not_found = MagicMock()
+    not_found.text = "{}"
+    not_found.status_code = 404
+    not_found.raise_for_status.side_effect = requests.HTTPError(response=not_found)
+    listed = MagicMock()
+    listed.text = '{"markets":[]}'
+    listed.json.return_value = {"markets": [_market_payload(slug)], "cursor": None}
+    listed.raise_for_status.return_value = None
+    client._session.request = MagicMock(side_effect=[not_found, listed])
+
+    market = client.get_market(slug)
+
+    assert market.market_id == slug
+    # First call: the direct (404'd) GET. Second: the markets-list fallback.
+    assert client._session.request.call_args_list[0].args[1].endswith(
+        f"/v1/markets/{slug}"
+    )
+    assert client._session.request.call_args_list[1].kwargs["params"] == {
+        "limit": 500,
+        "closed": "false",
+    }
+    # The held side is now priceable for mark-to-market (was unpriced before).
+    assert market.yes_ask_cents is not None and market.yes_ask_cents > 0
+
+
 def test_get_market_payload_falls_back_to_open_market_slug_lookup_on_404():
     client = PolymarketPublicClient(base_url="https://gateway.polymarket.us")
     not_found = MagicMock()

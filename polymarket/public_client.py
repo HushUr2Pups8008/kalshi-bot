@@ -66,10 +66,18 @@ class PolymarketPublicClient:
         return markets, data.get("cursor") if isinstance(data, dict) else None
 
     def get_market(self, market_id: str) -> PolymarketMarket:
-        data = self._request("GET", f"/v1/markets/{market_id}")
-        if not isinstance(data, dict):
-            raise ValueError("Polymarket market response must be an object")
-        return normalize_polymarket_market(data.get("market", data))
+        # PROFIT-DRAWDOWN-001b: delegate to get_market_payload so a slug-style
+        # identifier falls back to a slug/id lookup over the markets list on a
+        # 404 instead of raising. The bot persists market_id = slug|id
+        # (normalize_polymarket_market sets it from payload["slug"] or ["id"]),
+        # and GET /v1/markets/{id} only resolves the numeric id -- so a stored
+        # slug 404s. This 404'd every open Polymarket position in
+        # scripts/mark_open_positions.py (and any other get_market caller passing
+        # a slug). The settlement path already used get_market_payload; this
+        # aligns get_market with it. List-endpoint payloads normalize the same
+        # way (see get_markets), so the fallback result is safe to normalize.
+        payload = self.get_market_payload(market_id)
+        return normalize_polymarket_market(payload)
 
     def get_market_payload(self, market_id: str) -> dict[str, Any]:
         try:
