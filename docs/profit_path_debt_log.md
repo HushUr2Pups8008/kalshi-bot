@@ -6285,6 +6285,27 @@ verified by Read + git diff + runtime `[0.25,0.25]` + `-B` pytest.
 
 ---
 
+### PROFIT-REPORT-001a
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-REPORT-001a |
+| **Title** | Go-live readiness gates on POST-P0 cohort; Polymarket daily ack-gate removed |
+| **Category** | Reporting / go-live gate / config friction |
+| **Severity** | MEDIUM |
+| **Status** | IMPLEMENTED 2026-06-11 — VERSION 0.33.8, branch `fix/gate-corrections-polymarket-ack-and-post-p0`. Paper-only posture preserved; no live-execution path touched. |
+| **Owner** | Claude implemented; operator owns merge + (eventual) live cutover. |
+| **Depends On** | P-8 P0 cohort sentinel (`bot_state.p0_price_fix_deployed_ts`). |
+| **Blocks** | Trustworthy go-live verdict; unattended Polymarket operation. |
+
+**Two operator-decision corrections (2026-06-11), bundled (both are gate/config, neither touches the execution path):**
+
+**F — Go-live readiness (performance report §8) now gates on the POST-P0 cohort.**
+Previously §8's authoritative READY/NOT-READY verdict used the LIFETIME cohort, with post-P0 shown only as informational. The pre-P0 cohort ran under the pre-fix Kalshi pricing bug (P-1..P-10, closed 2026-05-12) and is excluded as non-representative everywhere else (report §§7b/7d/7e). Operator: *"No, post0. Pre post0 didn't work correctly, why leverage improper functionality as the gate?"* Now the verdict (resolved count, win rate, drawdown) uses post-P0; lifetime is INFORMATIONAL only; falls back to lifetime if the P0 boundary sentinel is missing so a verdict is always produced. Drawdown criterion = peak-to-trough (the metric post-P0 was already measured by, since a sub-cohort has no clean start-vs-now baseline) and **fails closed** when a non-empty cohort's bankroll curve has <2 samples — closing a silent 0%-drawdown false-pass on a safety gate. `scripts/performance_analysis.py::section_golive_readiness`; tests in `tests/test_performance_analysis_p0_cohorts.py`. Note: post-P0 currently has well under the 20-resolved floor, so §8 still reports NOT READY (operator: *"we're not ready anyways"*).
+
+**A — Removed the daily Polymarket eligibility-ack gate.**
+`config.py` built and a startup preflight `sys.exit(1)`-ed unless `POLYMARKET_US_ELIGIBILITY_ACK_DATE` equalled *today's* UTC date — forcing a manual daily `.env` edit to keep Polymarket trading (and breaking local pytest on every date rollover). Operator: *"I shouldn't have to change the .env daily… I don't have that for kalshi and everything functions properly. Fix that."* Fully removed: the env var, the `polymarket_us_eligibility_ack_date` field, `require_polymarket_enablement_preflight()`, the `__post_init__` call site, and the `.env.example` line. A regression test pins that config builds without the var. Polymarket now trades whenever `POLYMARKET_US_ENABLED=true`; live orders remain separately gated by `POLYMARKET_US_LIVE_TRADING_ENABLED`. Historical design doc `docs/governance/2026-06-06_111138-polymarket-trading-integration.md` left intact as a frozen record. Supersedes memory `feedback_polymarket_ack_date_daily_gate` (the daily-refresh burden no longer exists).
+
 ### PROFIT-REPORT-001
 
 | Field | Value |

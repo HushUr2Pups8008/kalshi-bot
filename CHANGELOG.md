@@ -19,6 +19,36 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.8] - 2026-06-11
+
+### Removed
+
+- **Removed the daily Polymarket eligibility-ack gate** (operator decision). Enabling
+  Polymarket no longer requires `POLYMARKET_US_ELIGIBILITY_ACK_DATE` — config built
+  and a startup-time preflight `sys.exit(1)`-ed unless that `.env` value equalled
+  *today's* UTC date, forcing a manual daily `.env` edit just to keep Polymarket
+  trading (Kalshi has no equivalent). The env var, the `polymarket_us_eligibility_ack_date`
+  config field, the `require_polymarket_enablement_preflight()` function, and the
+  `__post_init__` call site are all removed; the var is now ignored and may be deleted
+  from `.env`/`.env.example`. Polymarket trades whenever `POLYMARKET_US_ENABLED=true`
+  (still gated separately by `POLYMARKET_US_LIVE_TRADING_ENABLED` for live orders).
+  Regression test pins that config builds without the ack var.
+
+### Changed
+
+- **Go-live readiness (report §8) now gates on the POST-P0 cohort** (`PROFIT-REPORT-001a`,
+  operator decision). The pre-P0 cohort ran under the pre-fix Kalshi pricing bug and is
+  excluded as non-representative everywhere else (report §§7b/7d/7e); gating go-live on
+  it was leveraging known-broken behavior. The authoritative READY/NOT-READY verdict
+  (resolved count, win rate, drawdown) now uses the post-P0 cohort; the lifetime view is
+  retained as INFORMATIONAL only. If the P0 boundary sentinel is missing, the gate falls
+  back to lifetime so it always produces a verdict. The drawdown criterion uses
+  peak-to-trough (consistent with how the post-P0 cohort was already measured) and
+  **fails closed** when a non-empty cohort's bankroll curve has too few samples to
+  measure — preventing a silent 0%-drawdown false-pass on a safety gate. Report-only;
+  no change to the live trade-readiness gate (`tasks/trade_readiness_gate.py`) or
+  execution path.
+
 ## [0.33.7] - 2026-06-11
 
 ### Changed
