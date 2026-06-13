@@ -903,6 +903,21 @@ class PaperTrader:
             or _venue_string(getattr(analysis.market, "venue", None))
             or "kalshi"
         )
+        # PROFIT-VENUE-PARITY V12: the 'kalshi' default is correct for legacy
+        # pre-venue rows and native Kalshi objects (which carry no venue at all).
+        # But a NON-KX ticker landing on the default means a venue-stamped
+        # (e.g. Polymarket) object lost its venue upstream and would be misrouted
+        # to the Kalshi REST resolution path. Surface it instead of silently
+        # misfiling the trade. Observability-only; does not change the recorded
+        # venue or any decision.
+        if venue == "kalshi":
+            _ticker = str(getattr(analysis.market, "ticker", "") or "")
+            if _ticker and not _ticker.upper().startswith("KX"):
+                log.warning(
+                    "[VENUE_DEFAULT] non-KX ticker %s defaulted to venue='kalshi' "
+                    "(venue stamp missing upstream?) -- may misroute resolution",
+                    _ticker,
+                )
 
         side = str(analysis.side).lower()
         # Persist the executable edge for the side actually traded. Production

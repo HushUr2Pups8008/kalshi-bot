@@ -161,15 +161,22 @@ _NUMERIC_THRESHOLD_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Regex for Kalshi ticker segments that encode a date (their convention
-# signals specificity). Matches fragments like:
-#   -26MAY01, -26-APR24, -B260501, -25-26-APR24
+# Regex for ticker/slug segments that encode a date (a date in the identifier
+# signals an event-specific market). Matches fragments like:
+#   -26MAY01, -26-APR24, -B260501, -25-26-APR24 (Kalshi conventions)
+#   -2026-11-03 (Polymarket ISO slug date)
+# PROFIT-VENUE-PARITY V10: the ISO alternative restores ticker_specificity for
+# Polymarket slugs (e.g. ewc-usse-me-2026-11-03-dem) which the Kalshi-shaped
+# alternatives never matched -- a diagnostic-only score, never a decision input.
+# The full -YYYY-MM-DD shape is required so a bare year (handled separately by
+# _NUMERIC_THRESHOLD_PATTERN) is not double-counted here.
 _TICKER_DATE_PATTERN = re.compile(
     r"(?:"
     r"-\d{2}[A-Z]{3}\d{2}"                                   # -26MAY01
     r"|-\d{2}-[A-Z]{3}\d{2,4}"                               # -26-APR24
     r"|-B\d{6}"                                              # -B260501
     r"|-\d{2}-\d{2}-[A-Z]{3}\d{2}"                           # -25-26-APR24
+    r"|-\d{4}-\d{2}-\d{2}"                                   # -2026-11-03 (PM ISO)
     r")",
     re.IGNORECASE,
 )
