@@ -418,13 +418,19 @@ def test_match_polymarket_markets_applies_shared_token_weights():
         subtitle="2026 race",
         category="politics",
     )
+    # PROFIT-VENUE-PARITY V03/V17: token-downweight buckets are now PER-FAMILY.
+    # The key is "{market_prefix}:{token}" where market_prefix is the per-family
+    # series_ticker pm_domain_key("ewc-usgub-ks-2026-11-03-dem") ==
+    # "polymarket_us:ewc-usgub-ks". Efficacy: a downweight learned for THIS
+    # family floors the score (matches==[]); the OLD venue-wide
+    # "polymarket_us:<token>" keys are inert (belong to no family now).
     token_weights = {
+        "polymarket_us:ewc-usgub-ks:election": {"weight": 0.1},
+        "polymarket_us:ewc-usgub-ks:governor": {"weight": 0.1},
+        "polymarket_us:ewc-usgub-ks:kansas": {"weight": 0.1},
         "polymarket_us:election": {"weight": 0.1},
         "polymarket_us:governor": {"weight": 0.1},
         "polymarket_us:kansas": {"weight": 0.1},
-        "ewc:election": {"weight": 1.0},
-        "ewc:governor": {"weight": 1.0},
-        "ewc:kansas": {"weight": 1.0},
     }
 
     with patch("polymarket.paper_runtime.trade_log.log_match_weight_applied") as log_mock:
@@ -438,7 +444,9 @@ def test_match_polymarket_markets_applies_shared_token_weights():
 
     assert matches == []
     log_mock.assert_called_once()
-    assert log_mock.call_args.kwargs["market_prefix"] == "polymarket_us"
+    # PROFIT-VENUE-PARITY V03/V17: the downweight is logged against the PER-FAMILY
+    # prefix (the efficacy signal that PM feedback is now domain-scoped).
+    assert log_mock.call_args.kwargs["market_prefix"] == "polymarket_us:ewc-usgub-ks"
     assert log_mock.call_args.kwargs["final_multiplier"] == pytest.approx(0.1)
     assert log_mock.call_args.kwargs["post_weight_score"] < 0.08
 

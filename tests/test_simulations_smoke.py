@@ -353,7 +353,9 @@ def test_polymarket_feedback_roundtrip_closes_shared_loop(tmp_path):
     assert report.blend_enqueued is True
     assert report.trade_id
     assert report.paper_row["venue"] == "polymarket_us"
-    assert report.paper_row["series_ticker"] == "polymarket_us"
+    # PROFIT-VENUE-PARITY V03: per-family series_ticker (ticker
+    # "ewc-usgub-ks-2026-11-03-dem" -> pm_domain_key "polymarket_us:ewc-usgub-ks").
+    assert report.paper_row["series_ticker"] == "polymarket_us:ewc-usgub-ks"
     assert json.loads(report.paper_row["keywords_matched"]) == [
         "election",
         "governor",
@@ -363,10 +365,16 @@ def test_polymarket_feedback_roundtrip_closes_shared_loop(tmp_path):
     assert report.settlement_checked == 1
     assert report.settlement_resolved == 1
     assert report.resolved_row["resolved"] == 1
-    assert report.keyword_outcomes["election"]["series_ticker"] == "polymarket_us"
+    assert report.keyword_outcomes["election"]["series_ticker"] == "polymarket_us:ewc-usgub-ks"
     assert report.source_stats == {"posts_seen": 1, "signals": 1}
     assert report.source_credibility["total"] == 1
     assert report.calibration_samples["fast"] == 1
+    # V21 NOTE: the pipeline feedback report groups market-mix by the EVENT's
+    # market_prefix field (_market_prefix), which this sim emits at venue level
+    # ('polymarket_us') -- distinct from the DB series_ticker layer that V03 made
+    # per-family. Report-grouping per-family is a separate (lower-priority) item;
+    # the substantive V03 fix (per-family series_ticker / calibration / keyword
+    # buckets) is pinned by the assertions above.
     assert report.feedback_report["market_mix"]["by_prefix"]["polymarket_us"][
         "PAPER_TRADE"
     ] == 1

@@ -19,6 +19,39 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.16] - 2026-06-13
+
+### Changed
+
+- **Venue-parity Wave 2 — V07 gate + V03 root rekey (Polymarket-only; behavioral-paper)** —
+  `PROFIT-VENUE-PARITY-001`. Fixes the root defect from the Wave 1 audit: every Polymarket
+  market reported `series_ticker='polymarket_us'`, collapsing all PM matcher/keyword/calibration
+  feedback into one venue-wide bucket while the L2-a score-gate was a no-op for PM, poisoning the
+  shared bucket (68 `polymarket_us:*` weight keys on disk, subject tokens floored at 0.10).
+  - **V07 gate** — `polymarket/paper_runtime.py` `PolymarketMatchMeta.as_dict()` now emits the
+    generic `match_score` + `matched_tokens` keys (alongside the `polymarket_*` aliases), so
+    `signal_analyzer`'s MATCH_LLM_REVIEW carries `match_score` and the L2-a
+    `false_positive_neutral` score-gate fires for PM exactly as for Kalshi. Review-venue detection
+    switched `== "polymarket_us"` → `.startswith("polymarket_us")` for the per-family prefix.
+  - **V03 root rekey** — `PolymarketMarket.series_ticker` delegates to `pm_domain_key(market_id)`
+    → per-family `polymarket_us:<stem>` instead of the venue constant; threaded onto
+    `PolymarketExecutionMarket` via `candidate_adapter.py`. Auto-fixes V17 (token buckets),
+    V15 (calibration key), V18 (keyword_outcomes key); re-arms V08.
+  - **V08** — `is_market_defining_token` strips the constant `polymarket_us:` venue segment
+    before the substring test, so generic substrings (`market`, `poly`) don't falsely read as
+    market-defining across all PM families. Kalshi (KX*) prefixes untouched.
+  - **V22** — `scripts/edge_replay/build_corpus.py` `_row_families` is venue-aware so a coarse
+    `polymarket_us` family query matches per-family PM rows; Kalshi branch byte-identical.
+  - **Migration tool** — `scripts/reset_polymarket_token_weights.py` (+ tests): one-time reset of
+    the poisoned `polymarket_us:*` weight keys AND the `polymarket_us*` FP-counter rows (else the
+    next aggregation re-derives them). GLOB (not LIKE) predicate so the literal `_` in
+    `polymarket_us` is not a wildcard; backs up both files; dry-run default. **Operator-executed
+    at restart** (bot stopped → `--execute` → restart on this code); PM cold-starts at weight 1.0
+    (fail-safe, no penalty). Kalshi paths byte-identical throughout.
+  - Reviewed by independent kalshi-safety-reviewer (APPROVE; both NOTEs remediated) and
+    replay-evidence-reviewer (ADMIT under PROFIT-PHASE3-002 bootstrap exemption — no PM corpus,
+    0/5 PM resolved, corrupt weights discarded not relied upon). Full suite green (2683 passed).
+
 ## [0.33.15] - 2026-06-13
 
 ### Added

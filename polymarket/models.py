@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from polymarket.domain_key import pm_domain_key
 from trading.venue import Venue
 
 
@@ -31,7 +32,15 @@ class PolymarketMarket:
 
     @property
     def series_ticker(self) -> str:
-        return self.venue.value
+        # PROFIT-VENUE-PARITY V03: per-family identity instead of the venue
+        # constant. Previously every PM market returned 'polymarket_us',
+        # collapsing all PM matcher/keyword/calibration feedback into one bucket
+        # (and disarming the defining-token guard). pm_domain_key derives a
+        # stable 'polymarket_us:<family-stem>' from the slug (preserving the
+        # leading venue segment for coarse readers); a slug with no ISO date
+        # falls back to the bare venue value, so this is never empty / never
+        # raises for a PM market_id.
+        return pm_domain_key(self.market_id)
 
     @property
     def yes_price(self) -> int | None:

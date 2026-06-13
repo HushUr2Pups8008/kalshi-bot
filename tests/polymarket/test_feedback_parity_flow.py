@@ -111,7 +111,9 @@ async def test_polymarket_candidate_closes_shared_feedback_loop(tmp_path, monkey
     ).fetchone()
     assert trade["ticker"] == "ewc-usgub-ks-2026-11-03-dem"
     assert trade["venue"] == "polymarket_us"
-    assert trade["series_ticker"] == "polymarket_us"
+    # PROFIT-VENUE-PARITY V03/V15: persisted series_ticker is now per-family
+    # (so calibration/keyword_outcomes key per-family); venue stays the venue.
+    assert trade["series_ticker"] == "polymarket_us:ewc-usgub-ks"
     assert trade["resolved"] == 0
 
     source_row = paper._conn.execute(
@@ -144,7 +146,8 @@ async def test_polymarket_candidate_closes_shared_feedback_loop(tmp_path, monkey
         "SELECT series_ticker, correct FROM keyword_outcomes WHERE keyword = ?",
         ("election",),
     ).fetchone()
-    assert keyword_row["series_ticker"] == "polymarket_us"
+    # PROFIT-VENUE-PARITY V18: keyword_outcomes now keys per-family for PM.
+    assert keyword_row["series_ticker"] == "polymarket_us:ewc-usgub-ks"
     assert keyword_row["correct"] in (0, 1)
     assert calibration_task._state.lanes["fast"].sample_count == 1
 

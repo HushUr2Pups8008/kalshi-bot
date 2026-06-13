@@ -1565,8 +1565,14 @@ async def estimate_probability(
                     raw_venue = raw_venue.value
                 if raw_venue is not None:
                     review_venue = str(raw_venue).strip().lower() or None
-            if review_venue is None and ticker_prefix == "polymarket_us":
-                review_venue = ticker_prefix
+            if review_venue is None and ticker_prefix.startswith("polymarket_us"):
+                # PROFIT-VENUE-PARITY V03: ticker_prefix is now per-family for PM
+                # (e.g. 'polymarket_us:ewc-usse-me'), so an exact == check no
+                # longer fires. review_venue is normally already set from
+                # match_meta['venue']/market.venue above; this startswith keeps
+                # the last-resort fallback working and pins the venue (not the
+                # per-family prefix) as the review venue.
+                review_venue = "polymarket_us"
             # PROFIT-MATCH-003 (L2-a): carry the matcher score (threaded onto
             # match_meta by main._process_candidate) so the feedback loop can
             # score-gate the false_positive_neutral signal. None when absent

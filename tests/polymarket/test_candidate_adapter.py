@@ -107,7 +107,9 @@ def test_adapts_yes_side_analysis_to_polymarket_execution_contract():
     adapted = adapt_polymarket_analysis(_base_analysis(side="yes"), _polymarket_market())
 
     assert adapted.market.ticker == "will-example-happen-2026"
-    assert adapted.market.series_ticker == "polymarket_us"
+    # PROFIT-VENUE-PARITY V03: the execution market carries the per-family
+    # series_ticker (threaded from market.series_ticker), not the venue constant.
+    assert adapted.market.series_ticker == "polymarket_us:will-example-happen-2026"
     assert adapted.market.venue == Venue.POLYMARKET_US
     assert adapted.market.title == "Will example happen in 2026?"
     assert adapted.market.price_source == "polymarket_us_rest"

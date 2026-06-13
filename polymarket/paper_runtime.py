@@ -79,6 +79,16 @@ class PolymarketMatchMeta:
     def as_dict(self) -> dict[str, Any]:
         return {
             "venue": self.venue,
+            # PROFIT-VENUE-PARITY V07: emit the GENERIC match_score / matched_tokens
+            # keys (not only the polymarket_* aliases) so the L2-a
+            # false_positive_neutral score-gate fires for PM exactly as for Kalshi
+            # -- signal_analyzer reads match_meta['match_score'] (Kalshi sets it via
+            # _process_candidate's setdefault). Without this, every PM neutral
+            # verdict mapped to a missing score == 0.0 marginal (<0.12) and counted
+            # toward downweighting regardless of match quality, poisoning the
+            # feedback bucket. Aliases retained for the heartbeat log / back-compat.
+            "match_score": self.match_score,
+            "matched_tokens": self.matched_tokens,
             "polymarket_match_score": self.match_score,
             "polymarket_matched_tokens": self.matched_tokens,
         }
