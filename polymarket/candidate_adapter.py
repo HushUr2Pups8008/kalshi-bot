@@ -70,7 +70,12 @@ def adapt_polymarket_analysis(
     adapted.market = PolymarketExecutionMarket(
         venue=Venue.POLYMARKET_US,
         ticker=market.market_id,
-        series_ticker=Venue.POLYMARKET_US.value,
+        # PROFIT-VENUE-PARITY V03: carry the market's per-family series_ticker
+        # (pm_domain_key-derived) onto the execution market, NOT the venue
+        # constant -- so record_trade persists a per-family prefix and
+        # keyword_outcomes / calibration / replay key per-family. adapted.venue
+        # below stays the venue string for routing.
+        series_ticker=market.series_ticker,
         title=market.title,
         subtitle=market.subtitle,
         status=market.status,

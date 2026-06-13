@@ -39,7 +39,10 @@ def test_normalizes_binary_market_payload():
     assert market.is_tradeable()
     assert market.tradeable_id == "will-example-happen-2026"
     assert market.ticker == "will-example-happen-2026"
-    assert market.series_ticker == "polymarket_us"
+    # PROFIT-VENUE-PARITY V03: series_ticker is now the per-family pm_domain_key
+    # (no ISO date in this slug -> whole stem), NOT the bare venue constant.
+    assert market.series_ticker == "polymarket_us:will-example-happen-2026"
+    assert market.series_ticker.startswith("polymarket_us")
     assert market.yes_price == 42
     assert market.no_price == 59
     assert market.price_available is True

@@ -185,13 +185,22 @@ def _row_families(row: dict[str, Any], requested: Iterable[str]) -> list[str]:
     A row matches a family when either its ``series_ticker`` equals the
     family OR its ``ticker`` starts with the family token (case-insensitive).
     This mirrors the ``build_cycle17d_broader_corpus.py`` precedent.
+
+    PROFIT-VENUE-PARITY V22: Polymarket rows now carry a per-family
+    ``series_ticker`` of the form ``polymarket_us:<stem>`` (V03). So a coarse
+    ``polymarket_us`` family request matches every PM row via the
+    venue-prefix branch, and an exact ``polymarket_us:<stem>`` request matches
+    just that family via the equality branch. The extra branch is gated on the
+    ``polymarket_us`` prefix so the Kalshi matching path is byte-identical (a
+    Kalshi family like ``KXTRUMP`` never gains a new prefix match).
     """
     ticker = str(row.get("ticker") or "").upper()
     series = str(row.get("series_ticker") or "").upper()
     matched = []
     for fam in requested:
         f_upper = fam.upper()
-        if series == f_upper or ticker.startswith(f_upper):
+        pm_prefix_match = series.startswith("POLYMARKET_US") and series.startswith(f_upper)
+        if series == f_upper or ticker.startswith(f_upper) or pm_prefix_match:
             matched.append(fam)
     return matched
 

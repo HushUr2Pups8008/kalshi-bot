@@ -138,7 +138,18 @@ def is_market_defining_token(token: str, market_prefix: str) -> bool:
         return False
     if len(token) < _DEFINING_TOKEN_MIN_LEN:
         return False
-    return token.lower() in market_prefix.lower()
+    prefix = market_prefix.lower()
+    # PROFIT-VENUE-PARITY V08: for Polymarket per-family prefixes
+    # ('polymarket_us:<family-stem>'), match only against the family stem. The
+    # constant 'polymarket_us' venue segment is present in EVERY PM prefix, so
+    # without this strip a generic substring of it ('market', 'poly') would
+    # falsely read as a defining token across ALL PM families and be held at
+    # weight 1.0 — defeating downweight of exactly the kind of generic bridge
+    # token the loop exists to penalise. Kalshi (KX*) prefixes have no
+    # 'polymarket_us:' segment, so this branch never fires for them.
+    if prefix.startswith("polymarket_us:"):
+        prefix = prefix.split(":", 1)[1]
+    return token.lower() in prefix
 
 
 @dataclass(frozen=True)
