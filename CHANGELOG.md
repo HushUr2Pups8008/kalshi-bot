@@ -19,6 +19,36 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.15] - 2026-06-13
+
+### Added
+
+- **Venue-parity audit + Wave 1 (mechanical, no decision change)** — `PROFIT-VENUE-PARITY-001`.
+  A multi-agent audit found 25 Kalshi-vs-Polymarket signal-treatment divergences (6 HARMFUL,
+  5 inconsistent-neutral, 7 intentional, 7 transport). Central finding: the decision core
+  (`blend`/`kelly_bet`/`evaluate_readiness` G1–G6) is **venue-blind by construction**; all real
+  divergences live in the feedback/learning + recording layers, and 5 of the 6 harms are one
+  root defect — every Polymarket market reports `series_ticker='polymarket_us'`, collapsing all
+  PM matcher/keyword/calibration feedback into one bucket and disarming the defining-token
+  rescue (62 `polymarket_us:*` weight keys, 43 floored ≤0.11 on disk, throttling PM throughput).
+  Wave 1 ships the safe, no-decision-change pieces:
+  - `tests/test_decision_layer_venue_equivalence.py` — regression net: signature guards that the
+    decision core never grows a `venue`/`series_ticker` param, cross-venue readiness/blend/Kelly
+    equality, and the fast-lane-exempt-from-G2/G5/G6 pin (V13/V25). Closes the gap that left the
+    venue-blind invariant unguarded.
+  - `polymarket/domain_key.py::pm_domain_key()` — the single canonical per-family Polymarket key
+    (`polymarket_us:<stem>`, ISO-date/outcome stripped; preserves the coarse leading segment).
+    Tested, unused at runtime; the Wave-2 root rekey consumes it (resolves the audit's
+    reconcile-before-build risk: one derivation, not three).
+  - V10: ISO-date alternative in `market_specificity._TICKER_DATE_PATTERN` so PM slug dates score
+    `ticker_specificity` (diagnostic-only; never a decision input).
+  - V12: `[VENUE_DEFAULT]` warning when `record_trade`'s `'kalshi'` venue default fires for a
+    non-KX ticker (a venue-stamp-loss signal; observability only).
+  No persisted-state mutation, no behavioral change — safe while the bot runs. The full classified
+  inventory + the operator-gated Wave 2 (V07 gate + V03 root rekey + poisoned-weights reset) and
+  Wave 3 (deferred/volume-gated) plan are in `docs/profit_path_debt_log.md` PROFIT-VENUE-PARITY-001.
+  Full suite green (2677 passed).
+
 ## [0.33.14] - 2026-06-12
 
 ### Changed
