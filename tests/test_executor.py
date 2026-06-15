@@ -1345,3 +1345,142 @@ class TestPerPrefixPositionCap:
         a = _make_analysis(ticker="KX-C", side="yes", yes_price=50.0, edge=0.10)
         reason = ex._validate(a)
         assert reason is None or "per-prefix cap" not in (reason or "")
+
+    # ------------------------------------------------------------------
+    # PROFIT-VENUE-PARITY-001 — per-contest exposure key (fix/pm-exposure-cap-granularity)
+    #
+    # The cap key MUST be the *correlated-exposure* family, not the raw
+    # split('-',1)[0] token. For Kalshi the leading token IS the contest
+    # series (correct). For Polymarket the leading slug token ('ewc') is a
+    # market-MAKER prefix shared across ~30 INDEPENDENT contests (Maine
+    # Senate, Georgia Senate, Iowa Governor, ...). Lumping them into one
+    # 2-slot bucket over-throttles the venue whose binding constraint is
+    # opportunity throughput. The correct key is the canonical per-contest
+    # family stem from pm_domain_key, namespace-stripped so it startswith-
+    # matches the ticker (Portfolio.open_positions_by_prefix semantics).
+    #
+    # The mocks below reproduce the REAL open_positions_by_prefix matcher
+    # (ticker == prefix OR ticker.startswith(prefix+'-')) so the assertion
+    # turns purely on which prefix the executor derives.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _real_prefix_matcher(open_tickers):
+        """Mirror Portfolio.open_positions_by_prefix's exact-or-startswith match."""
+        positions = [SimpleNamespace(ticker=t) for t in open_tickers]
+
+        def lookup(prefix):
+            if not prefix:
+                return []
+            return [
+                p for p in positions
+                if p.ticker == prefix or p.ticker.startswith(f"{prefix}-")
+            ]
+
+        return lookup
+
+    def _pm_analysis(self, ticker, side="yes"):
+        a = _make_analysis(ticker=ticker, side=side, yes_price=50.0, edge=0.10)
+        # PolymarketExecutionMarket carries .venue == 'polymarket_us'; this is
+        # how the executor distinguishes PM markets from Kalshi ones.
+        a.market.venue = Venue.POLYMARKET_US.value
+        return a
+
+    def test_pm_independent_contests_not_lumped(self, monkeypatch):
+        # MONEY ASSERTION: two open positions in DIFFERENT ewc contests
+        # (Maine Senate + Iowa Governor) must NOT block a THIRD position in
+        # yet another independent ewc contest (Georgia Senate). Pre-fix all
+        # three collapsed to the 'ewc' bucket → blocked at cap=2. The fix
+        # keys on the per-contest stem ('ewc-usse-ga') which the two open
+        # contests do not match → 0 in bucket → passes.
+        open_tickers = [
+            "ewc-usse-me-2026-11-03-dem",   # Maine Senate
+            "ewc-usgub-ia-2026-11-03-dem",  # Iowa Governor
+        ]
+        ex, paper = self._setup(monkeypatch, cap=2)
+        paper.portfolio.open_positions_by_prefix = MagicMock(
+            side_effect=self._real_prefix_matcher(open_tickers)
+        )
+        a = self._pm_analysis("ewc-usse-ga-2026-11-03-dem")  # Georgia Senate
+        reason = ex._validate(a)
+        assert reason is None or "per-prefix cap" not in (reason or ""), (
+            "independent PM contests must not share an exposure bucket; "
+            f"got over-throttle: {reason}"
+        )
+
+    def test_pm_same_contest_outcomes_capped_together(self, monkeypatch):
+        # CORRELATION CONTROL: two outcomes of the SAME contest (Maine
+        # Senate dem + rep) are correlated exposure and MUST be capped
+        # together. A third position in that same contest IS blocked.
+        # pm_domain_key maps all three to 'polymarket_us:ewc-usse-me', so the
+        # stem 'ewc-usse-me' startswith-matches both open outcomes → cap hit.
+        open_tickers = [
+            "ewc-usse-me-2026-11-03-dem",
+            "ewc-usse-me-2026-11-03-rep",
+        ]
+        ex, paper = self._setup(monkeypatch, cap=2)
+        paper.portfolio.open_positions_by_prefix = MagicMock(
+            side_effect=self._real_prefix_matcher(open_tickers)
+        )
+        a = self._pm_analysis("ewc-usse-me-2026-11-03-grn")  # 3rd outcome, same contest
+        reason = ex._validate(a)
+        assert reason is not None and "per-prefix cap" in reason, (
+            "same-contest multi-outcome correlation control must still fire; "
+            f"got: {reason}"
+        )
+        # Assert on the DERIVED-PREFIX token in the reason ("open in <prefix>"),
+        # not a bare 'ewc-usse-me' substring — the latter also appears in the
+        # open=[...] ticker list pre-fix, making the check tautological. Pre-fix
+        # the reason reads "open in ewc"; only the fix makes it the per-contest
+        # stem "ewc-usse-me", so this distinguishes fixed from broken behavior.
+        assert "open in ewc-usse-me " in reason, (
+            "cap must key on the per-contest stem 'ewc-usse-me', not the coarse "
+            f"market-maker prefix 'ewc'; got: {reason}"
+        )
+
+    def test_pm_tagged_market_with_kx_ticker_does_not_crash(self):
+        # DEFENSIVE: pm_domain_key raises ValueError on KX* tickers. A market
+        # tagged venue='polymarket_us' but carrying a KX* ticker is impossible
+        # today, but the cap key derivation runs on EVERY trade decision, so an
+        # uncaught raise there would crash the decision path. The helper must
+        # swallow it and fall back to the coarse stem (over-group, not
+        # over-trade — the safe direction for a cap), never propagate.
+        from trading.executor import _correlated_exposure_prefix
+
+        market = SimpleNamespace(ticker="KXFOO-27-26JUL", venue=Venue.POLYMARKET_US.value)
+        assert _correlated_exposure_prefix(market) == "KXFOO"
+
+    def test_kalshi_prefix_byte_identical_blocks(self, monkeypatch):
+        # KALSHI BYTE-IDENTICAL: two open KXUSAIRANAGREEMENT-* outcomes block
+        # a third in the same series. Kalshi keeps split('-',1)[0] semantics;
+        # the fix must NOT change this. (No .venue attr → Kalshi default.)
+        open_tickers = [
+            "KXUSAIRANAGREEMENT-27-26JUL",
+            "KXUSAIRANAGREEMENT-27-26AUG",
+        ]
+        ex, paper = self._setup(monkeypatch, cap=2)
+        paper.portfolio.open_positions_by_prefix = MagicMock(
+            side_effect=self._real_prefix_matcher(open_tickers)
+        )
+        a = _make_analysis(ticker="KXUSAIRANAGREEMENT-27-26SEP",
+                           side="yes", yes_price=50.0, edge=0.10)
+        reason = ex._validate(a)
+        assert reason is not None and "per-prefix cap" in reason, (
+            f"Kalshi same-series cap must still block; got: {reason}"
+        )
+        assert "KXUSAIRANAGREEMENT" in reason
+
+    def test_kalshi_different_series_byte_identical_unaffected(self, monkeypatch):
+        # KALSHI BYTE-IDENTICAL: two KXFOO-* positions must NOT block a
+        # KXBAR-* position. Distinct series → distinct split('-',1)[0] key.
+        open_tickers = ["KXFOO-26JUN01", "KXFOO-26JUL01"]
+        ex, paper = self._setup(monkeypatch, cap=2)
+        paper.portfolio.open_positions_by_prefix = MagicMock(
+            side_effect=self._real_prefix_matcher(open_tickers)
+        )
+        a = _make_analysis(ticker="KXBAR-26JUN01",
+                           side="yes", yes_price=50.0, edge=0.10)
+        reason = ex._validate(a)
+        assert reason is None or "per-prefix cap" not in (reason or ""), (
+            f"distinct Kalshi series must stay independent; got: {reason}"
+        )
