@@ -21,13 +21,59 @@ from analysis.kelly import contracts_from_dollars
 from config import cfg, PAPER_MIN_EDGE, PAPER_BLOCK_SAME_SIDE_DUPLICATE
 from kalshi import OrderResult
 from kalshi.rest_client import KalshiRestClient
+from polymarket.domain_key import pm_domain_key
 from trading.paper_trader import PaperTrader
+from trading.venue import Venue
 from utils.logger import get_logger, trade_log, write_trade_log_async
 
 log = get_logger("executor")
 
 # Cooldowns moved to BotConfig (cfg.live_ticker_cooldown / cfg.paper_ticker_cooldown).
 # Read from cfg at call time so .env changes take effect without code edits.
+
+
+def _correlated_exposure_prefix(market: Any) -> str:
+    """Return the per-prefix cap key identifying a market's correlated-exposure family.
+
+    WHY this is venue-aware: the per-prefix cap exists to stop one news event
+    from opening N concurrent bets on the SAME underlying contest. The cap key
+    must therefore name the *contest family*, not just any shared leading token.
+
+    Kalshi: the leading ``ticker.split('-', 1)[0]`` token IS the contest series
+    (e.g. ``KXUSAIRANAGREEMENT-27-26JUL`` -> ``KXUSAIRANAGREEMENT``, shared by
+    all its multi-outcome contracts). Kept BYTE-IDENTICAL — this is the default
+    branch for anything not flagged as Polymarket.
+
+    Polymarket: the leading slug token is a market-MAKER prefix (e.g. ``ewc``)
+    shared across many INDEPENDENT contests (Maine Senate, Georgia Senate, Iowa
+    Governor, ...). Splitting on ``-`` would lump ~30 unrelated contests into one
+    cap bucket and over-throttle the venue. The canonical per-contest family is
+    ``pm_domain_key``'s stem (PROFIT-VENUE-PARITY-001 open-risk #1 mandates a
+    SINGLE PM family key — we delegate, never re-derive with a fresh regex). We
+    strip the leading ``polymarket_us:`` namespace so the bare stem
+    startswith-matches the ticker via ``Portfolio.open_positions_by_prefix``:
+    ``ewc-usse-me`` matches both ``...-dem`` and ``...-rep`` of the Maine Senate
+    contest (correctly capped together) but not ``ewc-usse-ga-...`` (Georgia,
+    correctly independent). If ``pm_domain_key`` degrades to the bare venue
+    segment (empty/unrecognized slug, no ``:``), fall back to the coarse
+    ``split('-', 1)[0]`` — the conservative direction for an exposure cap.
+    """
+    ticker = getattr(market, "ticker", "") or ""
+    if getattr(market, "venue", None) == Venue.POLYMARKET_US.value:
+        try:
+            key = pm_domain_key(ticker)
+        except ValueError:
+            # Defensive: a PM-tagged market carrying a non-PM (e.g. KX*) ticker
+            # makes pm_domain_key raise. Never let that crash the cap evaluation
+            # (it runs on every trade decision); fall back to the coarse stem —
+            # conservative direction (over-group, not over-trade) for a cap.
+            return ticker.split("-", 1)[0]
+        namespace, sep, stem = key.partition(":")
+        if sep and stem:
+            return stem
+        # Bare 'polymarket_us' (no stem) -> coarse fallback, never crash the cap.
+        return ticker.split("-", 1)[0]
+    return ticker.split("-", 1)[0]
 
 
 class TradeExecutor:
@@ -243,7 +289,7 @@ class TradeExecutor:
         # underlying topic; if the bot's read is wrong, losses compound.
         # cfg.max_open_positions_per_prefix (default 2) gates the Nth open.
         if cfg.max_open_positions_per_prefix > 0:
-            prefix = (analysis.market.ticker or "").split("-", 1)[0]
+            prefix = _correlated_exposure_prefix(analysis.market)
             if prefix:
                 open_in_prefix = self._paper.portfolio.open_positions_by_prefix(prefix)
                 if len(open_in_prefix) >= cfg.max_open_positions_per_prefix:

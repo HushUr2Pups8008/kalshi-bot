@@ -19,6 +19,31 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.17] - 2026-06-15
+
+### Fixed
+
+- **Polymarket per-prefix exposure-cap granularity** — `PROFIT-ALIGN-004` follow-on
+  (surfaced by the since-restart assessment + adversarial review). The concentration
+  cap (`cfg.max_open_positions_per_prefix=2`) derived its grouping key as
+  `ticker.split("-",1)[0]`. For Kalshi that is the contest series
+  (`KXUSAIRANAGREEMENT-…` → `KXUSAIRANAGREEMENT`, correct). For Polymarket it
+  collapsed to the market-maker slug token (`ewc-usse-me-…` → `ewc`), lumping ~30
+  **independent** contests (Maine Senate, Georgia Senate, Iowa Governor, …) into one
+  2-slot bucket and over-throttling the venue where opportunity throughput is the
+  documented binding constraint. Fix: new `trading/executor.py::_correlated_exposure_prefix(market)`
+  groups Polymarket markets by the canonical per-contest family stem via
+  `pm_domain_key` (delegating to the single canonical PM key per
+  `PROFIT-VENUE-PARITY-001` open-risk #1; namespace stripped so the stem
+  startswith-matches the ticker) — `ewc-usse-me` caps the Maine Senate dem/rep
+  outcomes together but leaves `ewc-usse-ga` independent. **Kalshi path byte-identical**
+  (`pm_domain_key` is never reached for KX*; defensive `try/except ValueError` falls
+  back to the coarse stem if a PM-tagged market ever carried a KX ticker). Reviewed by
+  independent kalshi-safety (byte-identical confirmed), replay-evidence (ADMIT under the
+  `PROFIT-PHASE3-002` bootstrap exemption — Polymarket-only, 0 PM resolutions, no corpus),
+  and silent-failure reviewers; two review notes (tautological test + uncaught-ValueError)
+  remediated. Full suite green (2688 passed).
+
 ## [0.33.16] - 2026-06-13
 
 ### Changed
