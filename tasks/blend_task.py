@@ -22,6 +22,7 @@ from analysis.dossier_builder import half_life_for_regime, recency_score
 from analysis.evidence_scorer import source_quality
 from config import PAPER_MIN_EDGE, cfg
 from kalshi import KalshiMarket
+from polymarket.domain_key import pm_domain_key
 from tasks import evidence_store
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
 from tasks.trade_readiness_gate import (
@@ -767,12 +768,30 @@ def _trade_candidate(
 
 
 def _series_prefix(ticker: str) -> str:
-    """PROFIT-EXEC-002 — extract the Kalshi series prefix from a ticker.
+    """PROFIT-EXEC-002 / PROFIT-VENUE-PARITY-001 — venue-aware family prefix.
 
-    Splits on `-` and returns the first component. Examples:
-    - `KXFISAEXTEND-26APR-MAY01` → `KXFISAEXTEND`
-    - `KXMOCTRUMP25-26-APR24` → `KXMOCTRUMP25`
-    - `KXTRUMPIRAN-26MAY01` → `KXTRUMPIRAN`
+    Keys the series-correlation guard (the in-window suppression at the
+    call site below) and the GATE_SUMMARY ``market_prefix`` field off the
+    *contest family* a market belongs to.
+
+    Kalshi: the leading ``ticker.split('-', 1)[0]`` token IS the real series
+    (e.g. ``KXFISAEXTEND-26APR-MAY01`` → ``KXFISAEXTEND``, shared by all the
+    series' multi-outcome contracts). Kept BYTE-IDENTICAL — this is the
+    default branch for anything ``pm_domain_key`` rejects (KX* raises) or
+    cannot resolve to a stem.
+
+    Polymarket: the leading slug token is a market-MAKER prefix (e.g. ``ewc``)
+    shared across many INDEPENDENT contests (Alaska Senate, Michigan Senate,
+    ...). Splitting on ``-`` would lump ~30 unrelated contests into one
+    correlation bucket and over-suppress the venue (the #148 over-grouping,
+    one layer up). The canonical per-contest family is ``pm_domain_key``'s
+    stem (PROFIT-VENUE-PARITY-001 open-risk #1 mandates a SINGLE PM family
+    key — we delegate, never re-derive with a fresh regex). The leading
+    ``polymarket_us:`` namespace is stripped so ``ewc-usse-me`` distinguishes
+    the Maine Senate contest (both dem/rep sides share it) from
+    ``ewc-usse-ak`` (Alaska, correctly independent). A bare ``polymarket_us``
+    result (no ``:``) means the slug had no recognizable stem → coarse split
+    fallback, never a crash.
     """
     if not ticker:
         # Per rules/risk_review.md "prefer raising over swallowing on
@@ -783,6 +802,15 @@ def _series_prefix(ticker: str) -> str:
         # upstream); this raise surfaces invariant violations instead
         # of masking them. (silent-failure-hunter finding 1 / EXEC-002.)
         raise ValueError(f"_series_prefix: empty or null ticker: {ticker!r}")
+    try:
+        key = pm_domain_key(ticker)
+    except ValueError:
+        # KX* (Kalshi) tickers raise — the leading token is the real series.
+        return ticker.split("-", 1)[0]
+    _namespace, sep, stem = key.partition(":")
+    if sep and stem:
+        return stem
+    # Bare 'polymarket_us' (unrecognized stem) → coarse split fallback.
     return ticker.split("-", 1)[0]
 
 

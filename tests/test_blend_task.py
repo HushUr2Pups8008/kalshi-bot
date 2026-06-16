@@ -1139,6 +1139,91 @@ def test_series_prefix_raises_on_empty_ticker() -> None:
         helper("")
 
 
+# ---------------------------------------------------------------------------
+# P3 (PROFIT-VENUE-PARITY-001) — `_series_prefix` must be venue-aware.
+#
+# WHY: the series-correlation guard (line 240) and the GATE_SUMMARY
+# market_prefix (line 521) both key off `_series_prefix(ticker)`. The
+# venue-blind `ticker.split('-', 1)[0]` collapses every Polymarket slug to
+# its market-MAKER token (`ewc`), lumping ~30 INDEPENDENT contests (Maine
+# Senate, Michigan Senate, Georgia Gov, ...) into one correlation bucket.
+# One news event then suppresses trades on unrelated contests — the exact
+# over-grouping #148 fixed for the executor exposure cap, one layer up.
+# The per-contest stem comes from the SINGLE canonical PM family key
+# (`pm_domain_key`); we delegate, never re-derive (open-risk #1).
+# ---------------------------------------------------------------------------
+
+
+def test_series_prefix_polymarket_independent_contests_get_distinct_prefixes() -> None:
+    """Two INDEPENDENT Polymarket contests must NOT share a correlation bucket.
+
+    Pre-fix this FAILS: `'ewc-usse-ak-...'.split('-', 1)[0]` and
+    `'ewc-usse-mi-...'.split('-', 1)[0]` BOTH collapse to `'ewc'`, so a trade
+    on the Alaska Senate race would suppress an unrelated Michigan Senate
+    trade inside the correlation window. The contest stem keeps them apart.
+    """
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
+        _bt_mod.BlendTask, "_series_prefix", None
+    )
+    assert helper is not None
+    alaska = helper("ewc-usse-ak-2026-11-03-rep")
+    michigan = helper("ewc-usse-mi-2026-11-03-rep")
+    assert alaska == "ewc-usse-ak", alaska
+    assert michigan == "ewc-usse-mi", michigan
+    assert alaska != michigan, (
+        "independent PM contests must get distinct correlation prefixes; "
+        "collapsing both to 'ewc' recreates the #148 over-grouping defect"
+    )
+
+
+def test_series_prefix_polymarket_same_contest_sides_share_prefix() -> None:
+    """dem/rep outcomes of the SAME contest must share one prefix.
+
+    The correlation guard's purpose is to stop one news event opening N
+    concurrent bets on the same underlying contest, so both sides of one
+    contest MUST collapse to a single bucket (date + trailing outcome
+    stripped by `pm_domain_key`).
+    """
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
+        _bt_mod.BlendTask, "_series_prefix", None
+    )
+    assert helper is not None
+    dem = helper("ewc-usse-me-2026-11-03-dem")
+    rep = helper("ewc-usse-me-2026-11-03-rep")
+    assert dem == "ewc-usse-me"
+    assert rep == "ewc-usse-me"
+    assert dem == rep, "same-contest sides must share a correlation prefix"
+
+
+def test_series_prefix_kalshi_unchanged_byte_identical() -> None:
+    """Kalshi tickers keep the EXACT pre-fix `split('-', 1)[0]` behavior.
+
+    The leading Kalshi token IS the real series; the fix must NOT alter it.
+    """
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
+        _bt_mod.BlendTask, "_series_prefix", None
+    )
+    assert helper is not None
+    assert helper("KXFISAEXTEND-26APR-MAY01") == "KXFISAEXTEND"
+    assert helper("KXMOCTRUMP25-26-APR24") == "KXMOCTRUMP25"
+    # Byte-identity invariant: result must equal the legacy derivation exactly.
+    for tk in ("KXFISAEXTEND-26APR-MAY01", "KXTRUMPIRAN-26MAY01"):
+        assert helper(tk) == tk.split("-", 1)[0]
+
+
+def test_series_prefix_polymarket_no_date_falls_back_to_split() -> None:
+    """A PM slug with no recognizable ISO date degrades to the coarse split,
+    never crashes — `pm_domain_key` returns the bare venue segment (no ':')
+    for an unrecognizable stem, which the helper treats as the split branch.
+    """
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
+        _bt_mod.BlendTask, "_series_prefix", None
+    )
+    assert helper is not None
+    # 'polymarket_us' bare slug -> pm_domain_key returns 'polymarket_us' (no ':')
+    assert helper("polymarket_us") == "polymarket_us"
+
+
 @pytest.mark.asyncio
 async def test_fisa_replay_three_same_series_only_one_enqueues() -> None:
     """The 2026-05-01 FISA case (3 trades within 7s) must collapse to 1."""

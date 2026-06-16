@@ -42,7 +42,22 @@ class PolymarketPublicSettlementSource:
         self._client = client
 
     def get_settlement(self, market_id: str) -> Mapping[str, Any] | None:
-        payload = self._client.get_market_payload(market_id)
+        try:
+            payload = self._client.get_market_payload(market_id)
+        except ValueError as exc:
+            # public_client._find_market_payload_by_slug_or_id raises
+            # ValueError("Polymarket market <id> not found") for an unfound slug.
+            # Honor this source's documented contract: translate ONLY the
+            # not-found case into SettlementNotFound so it flows through
+            # reconcile()'s per-ticker not_found path instead of aborting the
+            # whole remaining Polymarket batch for the cycle. Re-raise any other
+            # ValueError (a real defect, e.g. malformed payload shape) untouched
+            # so it is not masked as "not settled yet".
+            if "not found" in str(exc).lower():
+                raise SettlementNotFound(
+                    f"Polymarket market {market_id} not found"
+                ) from exc
+            raise
         if not _payload_is_settled(payload):
             raise SettlementNotFound(f"Polymarket market {market_id} is not settled")
         return payload
@@ -53,6 +68,7 @@ class SettlementReconcileResult:
     checked: int = 0
     resolved: int = 0
     not_found: int = 0
+    errors: int = 0
     lane_events: tuple[tuple[str, bool, str, str, float], ...] = ()
 
 
@@ -66,6 +82,7 @@ class SettlementReconciler:
         checked = 0
         resolved = 0
         not_found = 0
+        errors = 0
         lane_events: list[tuple[str, bool, str, str, float]] = []
 
         for ticker in tickers:
@@ -75,11 +92,47 @@ class SettlementReconciler:
             except SettlementNotFound:
                 not_found += 1
                 continue
+            except SettlementDriftError:
+                # Hard halt: a settled payload whose shape we cannot interpret is
+                # a data-integrity violation, not a transient per-ticker miss.
+                # Propagate so the operator sees a hard failure rather than a
+                # silently-isolated, miscounted "not settled yet".
+                raise
+            except Exception as exc:
+                # Per-ticker safety net (settlement state + observability path):
+                # an UNEXPECTED error on one ticker must NOT abort the whole
+                # remaining Polymarket batch for the cycle. Log LOUDLY with the
+                # ticker so operators can see the isolated failure -- never
+                # silently swallow -- then continue to the next ticker.
+                errors += 1
+                log.error(
+                    "Polymarket settlement reconcile: isolating failed ticker "
+                    "%s at FETCH stage: %s",
+                    ticker,
+                    exc,
+                    exc_info=True,
+                )
+                continue
 
-            resolved_yes = _resolved_yes_from_payload(ticker, payload)
-            resolved_lane_events = self._resolver._resolve_market_sync(
-                ticker, resolved_yes
-            )
+            try:
+                resolved_yes = _resolved_yes_from_payload(ticker, payload)
+                resolved_lane_events = self._resolver._resolve_market_sync(
+                    ticker, resolved_yes
+                )
+            except SettlementDriftError:
+                # See above: drift is a hard halt, not an isolated miss.
+                raise
+            except Exception as exc:
+                errors += 1
+                log.error(
+                    "Polymarket settlement reconcile: isolating failed ticker "
+                    "%s at RESOLUTION stage: %s",
+                    ticker,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+
             for trade_id, lane_name, lane_estimate in resolved_lane_events:
                 lane_events.append(
                     (ticker, resolved_yes, trade_id, lane_name, lane_estimate)
@@ -90,6 +143,7 @@ class SettlementReconciler:
             checked=checked,
             resolved=resolved,
             not_found=not_found,
+            errors=errors,
             lane_events=tuple(lane_events),
         )
 

@@ -1684,6 +1684,151 @@ class TestMainAsyncBlocking:
         bot.paper.resolve_market.assert_awaited_once_with("KXTEST-25DEC31", True)
         assert calls[-1] == ("reconcile", None)
 
+    def _wire_polymarket_reconciler(self, bot, monkeypatch, *, result):
+        """Route a single open Polymarket ticker to a fake reconciler.
+
+        Kalshi side is intentionally inert (no open Kalshi tickers) so the
+        only settlement-summary output under test comes from the Polymarket
+        reconcile path.
+        """
+        bot.rest = MagicMock()
+        bot.rest.get_market = MagicMock(return_value=None)
+
+        cursor_mock = MagicMock()
+        cursor_mock.fetchall.return_value = [
+            ("ewc-usgub-ks-2026-11-03-dem", "polymarket_us"),
+        ]
+        bot.paper._conn.execute.return_value = cursor_mock
+        bot.paper.resolve_market = AsyncMock(return_value=None)
+
+        class FakeReconciler:
+            def __init__(self, *, source, resolver):
+                pass
+
+            def reconcile(self, *, limit=None):
+                return result
+
+        monkeypatch.setattr(
+            main_module, "SettlementReconciler", FakeReconciler, raising=False
+        )
+        monkeypatch.setattr(
+            main_module,
+            "PolymarketPublicSettlementSource",
+            lambda: object(),
+            raising=False,
+        )
+        monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", True)
+        monkeypatch.setattr(main_module.cfg, "polymarket_us_enabled", True)
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_summary_includes_error_count(self, monkeypatch):
+        """A cycle where every Polymarket ticker errors must NOT look identical
+        to a cycle where nothing has settled yet.
+
+        WHY (silent-failure review of P2): the per-ticker errors are isolated by
+        ``SettlementReconciler.reconcile()``'s broad ``except Exception`` and only
+        land in the file log. The operator-facing summary line at the call site
+        previously logged checked/resolved/not_found but dropped ``result.errors``.
+        With ``checked=5 resolved=0 not_found=0`` an all-errors outage (public API
+        down) was indistinguishable from a quiet, healthy "nothing settled" cycle.
+        The summary line MUST surface the error count so the false-pass condition
+        is visible.
+        """
+        bot = self._make_bot()
+        self._wire_polymarket_reconciler(
+            bot,
+            monkeypatch,
+            result=SettlementReconcileResult(
+                checked=5, resolved=0, not_found=0, errors=5
+            ),
+        )
+
+        log_spy = MagicMock()
+        monkeypatch.setattr(main_module, "log", log_spy)
+
+        await bot._check_and_resolve()
+
+        # The summary INFO line must carry result.errors as a distinct arg so an
+        # outage is not rendered identically to "nothing settled yet".
+        summary_calls = [
+            call
+            for call in log_spy.info.call_args_list
+            if call.args and "Polymarket checked=" in str(call.args[0])
+        ]
+        assert summary_calls, "Polymarket settlement summary INFO line was never emitted"
+        summary = summary_calls[-1]
+        assert "errors=" in summary.args[0], (
+            "summary format string omits the error count; an all-errors outage "
+            "is indistinguishable from a quiet 'nothing settled' cycle"
+        )
+        # The error count value (5) must actually be passed through, not hardcoded 0.
+        assert 5 in summary.args[1:], (
+            "result.errors value not threaded into the summary log args"
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_warns_when_settlement_errors_present(self, monkeypatch):
+        """When result.errors > 0 a dedicated WARNING must fire so a human
+        scanning the daily summary notices the failures.
+
+        WHY: an INFO summary line alone can be lost in normal cycle noise. A
+        non-zero error count on the settlement (state-mutation + observability)
+        path is exactly the condition risk_review says must be loud, not silent.
+        """
+        bot = self._make_bot()
+        self._wire_polymarket_reconciler(
+            bot,
+            monkeypatch,
+            result=SettlementReconcileResult(
+                checked=5, resolved=0, not_found=0, errors=5
+            ),
+        )
+
+        log_spy = MagicMock()
+        monkeypatch.setattr(main_module, "log", log_spy)
+
+        await bot._check_and_resolve()
+
+        warn_msgs = [str(call.args[0]) for call in log_spy.warning.call_args_list if call.args]
+        assert any(
+            "error" in msg.lower() and "polymarket" in msg.lower()
+            for msg in warn_msgs
+        ), (
+            "no dedicated Polymarket settlement-error WARNING fired despite "
+            f"errors=5; warnings seen: {warn_msgs!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_no_warning_on_clean_settlement(self, monkeypatch):
+        """A clean cycle (errors == 0) must NOT emit the settlement-error
+        WARNING — the warning must be a true signal, not noise on every cycle.
+
+        WHY: a warning that fires unconditionally trains operators to ignore it,
+        defeating the whole point of surfacing the outage condition.
+        """
+        bot = self._make_bot()
+        self._wire_polymarket_reconciler(
+            bot,
+            monkeypatch,
+            result=SettlementReconcileResult(
+                checked=2, resolved=2, not_found=0, errors=0
+            ),
+        )
+
+        log_spy = MagicMock()
+        monkeypatch.setattr(main_module, "log", log_spy)
+
+        await bot._check_and_resolve()
+
+        warn_msgs = [str(call.args[0]) for call in log_spy.warning.call_args_list if call.args]
+        assert not any(
+            "error" in msg.lower() and "polymarket" in msg.lower()
+            for msg in warn_msgs
+        ), (
+            "settlement-error WARNING fired on a clean (errors=0) cycle; "
+            f"warnings seen: {warn_msgs!r}"
+        )
+
     @pytest.mark.asyncio
     async def test_open_trades_query_called_off_event_loop_thread(self):
         import threading
