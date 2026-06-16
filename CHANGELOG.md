@@ -19,6 +19,39 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.18] - 2026-06-16
+
+### Fixed
+
+- **P2 — PM settlement reconcile batch-abort isolation.** An unfound Polymarket slug
+  leaked a raw `ValueError` out of `SettlementReconciler.reconcile()` (which only caught
+  `SettlementNotFound`), aborting the entire remaining PM settlement batch for that cycle
+  (5 aborts observed 2026-06-16). Latent risk: the first real PM resolution (~06-23) could
+  be silently skipped behind an unfound sibling slug. Fix: `PolymarketPublicSettlementSource.get_settlement`
+  narrowly translates the not-found `ValueError` → `SettlementNotFound` (re-raising other
+  ValueErrors); `reconcile()` adds a per-ticker `except Exception` safety net (fetch +
+  resolution stages) that logs loudly at ERROR with the ticker + traceback, increments a
+  new `result.errors`, and continues — `SettlementDriftError` still hard-halts. `main.py`
+  auto-resolve summary surfaces `errors=` with an all-errors-outage WARNING sentinel.
+- **P3 — venue-aware `blend_task._series_prefix` (twin of #148).** Was venue-blind
+  `ticker.split("-",1)[0]`, collapsing Polymarket market-maker slugs (`ewc-usse-ak`,
+  `ewc-usse-mi` → `ewc`) into one series-correlation bucket — lumping ~30 independent PM
+  contests so one news event suppressed unrelated ones. Now delegates PM grouping to
+  `pm_domain_key` (per-contest stem; namespace stripped) while keeping Kalshi byte-identical
+  and the empty-ticker `ValueError` guard.
+- **P4 — go-live drawdown gate reconciled onto mark-to-market equity (`PROFIT-DRAWDOWN-001c`).**
+  `main.py::_check_go_live_gates` computed drawdown on raw notional free-cash (~61.6%) while
+  the authoritative §8 report uses MTM equity (~25.9%); #144 fixed only the report layer. The
+  enforcement gate now consumes the same `mark_open_positions.compute_open_position_marks`
+  basis (delegate, never re-derive), **fail-closed** (marking error / None / non-finite →
+  gate FAILS; never passes when MTM can't be established — stricter than the report).
+  `min_resolved`/`win_rate` gates untouched; stays NOT READY today.
+
+  All three are Polymarket-only or paper-gate changes; Kalshi paths byte-identical. Reviewed
+  by independent kalshi-safety + silent-failure + replay-evidence reviewers (one blocking
+  finding remediated; P3 admitted under the `PROFIT-PHASE3-002` bootstrap exemption — 0 PM
+  resolutions, no corpus). Full suite green (2707 passed).
+
 ## [0.33.17] - 2026-06-15
 
 ### Fixed
