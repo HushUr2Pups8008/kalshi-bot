@@ -53,6 +53,7 @@ import hashlib
 import itertools
 import json
 import logging
+import math
 import os
 import signal
 import sqlite3
@@ -1810,11 +1811,33 @@ class TradingBot:
                 resolved_count += result.resolved
                 if result.checked:
                     log.info(
-                        "Auto-resolve: Polymarket checked=%d resolved=%d not_found=%d",
+                        "Auto-resolve: Polymarket checked=%d resolved=%d "
+                        "not_found=%d errors=%d",
                         result.checked,
                         result.resolved,
                         result.not_found,
+                        result.errors,
                     )
+                if result.errors:
+                    # Loud, dedicated signal: per-ticker failures are isolated by
+                    # SettlementReconciler.reconcile()'s broad except and only land
+                    # in the file log. Without this an all-errors outage (e.g.
+                    # public API down) is indistinguishable from a quiet
+                    # "nothing settled yet" cycle in the operator summary.
+                    if result.errors >= result.checked:
+                        log.warning(
+                            "Auto-resolve: Polymarket settlement ALL %d checked "
+                            "tickers errored (resolved=0) -- public API outage "
+                            "likely; no settlements processed this cycle",
+                            result.checked,
+                        )
+                    else:
+                        log.warning(
+                            "Auto-resolve: Polymarket settlement had %d errored "
+                            "ticker(s) out of %d checked",
+                            result.errors,
+                            result.checked,
+                        )
                 if result.lane_events:
                     await self.paper.record_resolution_calibration_events(
                         result.lane_events
@@ -2655,11 +2678,58 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
                 f"Win rate: {win_rate:.1%} < minimum {cfg.go_live_min_win_rate:.1%}"
             )
 
-    drawdown_pct = (cfg.bankroll - notional) / cfg.bankroll if cfg.bankroll > 0 else 0.0
-    if drawdown_pct > cfg.go_live_max_drawdown_pct:
+    # P4 (PROFIT-DRAWDOWN-001c reconcile): gate drawdown on MARK-TO-MARKET
+    # equity, the SAME basis the authoritative section-8 daily report uses, not
+    # raw notional free-cash. The paper bankroll model deducts each open trade's
+    # FULL entry cost at placement, so notional understates true equity whenever
+    # open positions retain value and inflates the drawdown number (~61.6% raw
+    # vs ~25.9% MTM at the 2026-06 peak-to-trough). Two drawdown numbers for one
+    # live-cutover decision is a latent hazard at the 20% boundary; this pins the
+    # gate onto compute_open_position_marks (delegate, never re-derive).
+    #
+    # MTM equity = notional + marked_value of open positions. Unpriced positions
+    # already count as $0 inside marked_value (compute_open_position_marks
+    # excludes them), so lower equity -> higher drawdown -> more likely to FAIL
+    # -- the safe direction for go-live, exactly as the report does.
+    #
+    # Fail-closed on error: if marking raises, returns None (DB missing), or
+    # yields a non-finite marked_value, the gate FAILS. The report falls back to
+    # notional offline (conservative for a *report*), but the live-cutover GATE
+    # must never PASS when it cannot establish MTM equity.
+    from scripts.mark_open_positions import compute_open_position_marks
+
+    try:
+        marks = compute_open_position_marks()
+    except Exception as exc:  # live REST/Polymarket surface
+        marks = None
+        mark_error = str(exc)[:80]
+    else:
+        mark_error = None
+
+    if marks is None:
         failures.append(
-            f"Drawdown: {drawdown_pct:.1%} > maximum {cfg.go_live_max_drawdown_pct:.1%}"
+            "Drawdown: mark-to-market equity unavailable "
+            f"({mark_error or 'no position DB'}) -- gate fails closed"
         )
+    else:
+        marked_value = marks.get("marked_value", 0.0)
+        try:
+            marked_value = float(marked_value)
+        except (TypeError, ValueError):
+            marked_value = None
+        if marked_value is None or not math.isfinite(marked_value):
+            failures.append(
+                "Drawdown: mark-to-market value is non-finite -- gate fails closed"
+            )
+        else:
+            mtm_equity = notional + marked_value
+            drawdown_pct = (
+                (cfg.bankroll - mtm_equity) / cfg.bankroll if cfg.bankroll > 0 else 0.0
+            )
+            if drawdown_pct > cfg.go_live_max_drawdown_pct:
+                failures.append(
+                    f"Drawdown: {drawdown_pct:.1%} > maximum {cfg.go_live_max_drawdown_pct:.1%}"
+                )
 
     return failures
 

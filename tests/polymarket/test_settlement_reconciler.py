@@ -1,8 +1,10 @@
+import logging
 import sqlite3
 
 import pytest
 
 from polymarket.settlement_reconciler import (
+    PolymarketPublicSettlementSource,
     SettlementDriftError,
     SettlementNotFound,
     SettlementReconciler,
@@ -198,3 +200,129 @@ def test_reconciler_ignores_kalshi_and_resolved_rows(conn):
     assert result.checked == 0
     assert source.calls == []
     assert resolver.resolved == []
+
+
+def test_reconciler_isolates_unexpected_error_and_settles_later_ticker(conn, caplog):
+    # WHY: a single get_settlement raising an UNEXPECTED (non-SettlementNotFound)
+    # error -- e.g. the public_client Value('... not found') leaking pre-fix --
+    # must NOT abort the whole remaining Polymarket batch for the cycle. The
+    # latent risk is the first real PM resolution being silently skipped because
+    # it shares a cycle behind an unfound long-dated midterm slug. The bad
+    # ticker is isolated, LOGGED LOUDLY with its ticker (settlement state +
+    # observability path -- never silently swallowed), and the LATER ticker
+    # still resolves YES.
+    _insert_trade(conn, "pm-bad", "ewc-usse-me-2026-11-03-dem")
+    _insert_trade(conn, "pm-good", "will-real-resolution-2026")
+    source = FakeSettlementSource(
+        {
+            "ewc-usse-me-2026-11-03-dem": ValueError(
+                "Polymarket market 'ewc-usse-me-2026-11-03-dem' not found"
+            ),
+            "will-real-resolution-2026": {"settled": True, "resolvedOutcome": "YES"},
+        }
+    )
+    resolver = FakeResolver(conn)
+
+    with caplog.at_level(logging.WARNING, logger="polymarket_settlement"):
+        result = SettlementReconciler(source=source, resolver=resolver).reconcile()
+
+    # Both tickers were attempted -- the bad one did not short-circuit the loop.
+    assert source.calls == [
+        "ewc-usse-me-2026-11-03-dem",
+        "will-real-resolution-2026",
+    ]
+    # The later, genuinely-settled ticker STILL resolves YES.
+    assert result.resolved == 1
+    assert resolver.resolved == [("will-real-resolution-2026", True)]
+    good_row = conn.execute(
+        "SELECT resolved, resolved_yes FROM paper_trades WHERE ticker = ?",
+        ("will-real-resolution-2026",),
+    ).fetchone()
+    assert good_row["resolved"] == 1
+    assert good_row["resolved_yes"] == 1
+    # The bad ticker is counted as an isolated error, not as not_found.
+    assert result.errors == 1
+    assert result.not_found == 0
+    # LOUD log carries the ticker so operators can see the isolated failure.
+    assert any(
+        record.levelno >= logging.ERROR
+        and "ewc-usse-me-2026-11-03-dem" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_reconciler_isolates_arbitrary_unexpected_exception_and_logs(conn, caplog):
+    # WHY: the safety net is for ANY unexpected exception, not just the known
+    # not-found ValueError. A surprise RuntimeError on one ticker must be
+    # isolated + logged (never silent) so one bad ticker cannot abort the batch.
+    _insert_trade(conn, "pm-boom", "surprise-explosion-2026")
+    _insert_trade(conn, "pm-ok", "will-still-resolve-2026")
+    source = FakeSettlementSource(
+        {
+            "surprise-explosion-2026": RuntimeError("totally unexpected boom"),
+            "will-still-resolve-2026": {"settled": True, "resolvedOutcome": "NO"},
+        }
+    )
+    resolver = FakeResolver(conn)
+
+    with caplog.at_level(logging.WARNING, logger="polymarket_settlement"):
+        result = SettlementReconciler(source=source, resolver=resolver).reconcile()
+
+    assert result.errors == 1
+    assert result.resolved == 1
+    assert resolver.resolved == [("will-still-resolve-2026", False)]
+    # Not silent: the surprise error is logged with the offending ticker.
+    assert any(
+        record.levelno >= logging.ERROR
+        and "surprise-explosion-2026" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_public_source_translates_not_found_valueerror_to_settlement_not_found():
+    # WHY: PolymarketPublicSettlementSource.get_settlement documents
+    # "raise SettlementNotFound" but the underlying public_client raises
+    # ValueError('... not found') for unfound slugs. The KNOWN not-found case
+    # must flow through reconcile()'s existing not_found path, not escape as a
+    # raw ValueError that aborts the batch.
+    class NotFoundClient:
+        def get_market_payload(self, market_id):
+            raise ValueError(f"Polymarket market {market_id!r} not found")
+
+    source = PolymarketPublicSettlementSource(client=NotFoundClient())
+
+    with pytest.raises(SettlementNotFound):
+        source.get_settlement("ewc-usse-me-2026-11-03-dem")
+
+
+def test_public_source_does_not_mask_unrelated_valueerror():
+    # WHY: only the not-found ValueError is translated. A different ValueError
+    # (a real defect, e.g. malformed payload shape) must NOT be masked as
+    # SettlementNotFound -- it must propagate so the batch-level safety net can
+    # log it loudly instead of silently counting it as "not settled yet".
+    class BrokenClient:
+        def get_market_payload(self, market_id):
+            raise ValueError("Polymarket market payload must be an object")
+
+    source = PolymarketPublicSettlementSource(client=BrokenClient())
+
+    with pytest.raises(ValueError) as excinfo:
+        source.get_settlement("will-example-happen-2026")
+    assert not isinstance(excinfo.value, SettlementNotFound)
+
+
+def test_reconciler_still_halts_on_settlement_drift_error(conn):
+    # WHY: SettlementDriftError is an explicit payload-shape-violation HARD HALT
+    # (a settled payload we cannot interpret is a data-integrity problem, not a
+    # transient per-ticker miss). The new per-ticker safety net must NOT degrade
+    # this into a swallowed, isolated error -- drift still propagates out of
+    # reconcile() so the operator sees a hard failure. Pins the boundary between
+    # "isolate + continue" (unexpected) and "halt" (drift).
+    _insert_trade(conn, "pm-drift", "will-drift-2026")
+    source = FakeSettlementSource(
+        {"will-drift-2026": {"settled": True, "resolvedOutcome": "MAYBE"}}
+    )
+    resolver = FakeResolver(conn)
+
+    with pytest.raises(SettlementDriftError, match="resolvedOutcome"):
+        SettlementReconciler(source=source, resolver=resolver).reconcile()
