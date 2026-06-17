@@ -19,6 +19,39 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.19] - 2026-06-17
+
+### Fixed
+
+- **PM settlement: high-id resolved markets were structurally unreachable** (`PROFIT-PM-FEEDDROP-001`).
+  `polymarket/public_client.py::_find_market_payload_by_slug_or_id` paginated the `/v1/markets`
+  listing (`closed=false` then `closed=true`, limit 500) which terminates at the oldest
+  ~500–1000 ids — so a resolved **high-id** market was never reached (live-probed: id 8594 raised
+  "not found" under the scan but the server-side `?slug=` filter returns it instantly; the held
+  election positions sit at id 40542/44051). By-slug auto-settlement would have `SettlementNotFound`
+  **forever** once they resolved. Fix: resolve via the server-side exact-match filter
+  (`GET /v1/markets?slug=…`, then `?id=…` only for numeric identifiers), which crosses the
+  closed boundary on its own — with defensive re-confirmation (`wanted ∈ {slug,id}`, no blind
+  trust) and the **same** not-found `ValueError` contract preserved so P2 isolation + the transient-
+  drop path are unchanged. Kalshi path untouched.
+- **PM marking: snapshot fallback for transiently-absent markets** (measurement-only). During the
+  2026-06-17 transient PM feed drop (election category vanished ~10:13Z, recovered ~13–14:13Z),
+  all 14 held PM positions marked to $0, blinding MTM equity / the §8 drawdown reading. Marking now
+  falls back to the entry-time snapshot's last-known ask (via the existing conservative
+  `_poly_held_price_cents`) when the live mark is unavailable, labels the row `stale:`, and surfaces
+  a `snapshot_fallback_count` so an all-stale run is not mistaken for a fully-live one. Fail-safe
+  (missing/malformed snapshot → existing $0/unpriced, never raises); a live mark always wins; no
+  trade-decision input affected.
+
+  Investigation **rejected** the originally-hypothesized `condition_id` capture + by-id settlement
+  endpoint: live probes proved no path-style by-id GET exists (`/v1/markets/{id}`, `/v1/market/{id}`,
+  `/v1/markets/{slug}` all 404) — only the listing filter works, so id-capture would add nothing.
+  Money/sizing: **LET IT RUN** (the bankroll drop was 100% benign deployment, $0 realized loss; the
+  free-cash-floor guard was rejected). Reviewed by independent kalshi-safety + silent-failure +
+  replay-evidence reviewers (IC §16 does not bind — settlement/marking, no trade-decision change;
+  two silent-failure notes folded: `snapshot_fallback_count` visibility + fallback log at WARNING).
+  Full suite green (2716 passed).
+
 ## [0.33.18] - 2026-06-16
 
 ### Fixed

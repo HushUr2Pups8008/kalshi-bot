@@ -95,25 +95,65 @@ class PolymarketPublicClient:
         return payload
 
     def _find_market_payload_by_slug_or_id(self, market_id: str) -> dict[str, Any]:
+        # FIX-1 (PM feed-drop durable handling): resolve via the server-side
+        # exact-match filter on /v1/markets instead of a cursor-paginated scan.
+        #
+        # WHY the old cursor scan was structurally broken: it paged closed=false
+        # then closed=true at limit=500, but the closed=true listing terminates
+        # at the oldest ~500-1000 ids (cursor=None at every page), so a resolved
+        # HIGH-id market was never reached. Live-probed: id=8594
+        # (slug aqc-cbb-f4-2026-04-06-kan) raised 'not found' under the scan but
+        # the ?slug= filter returns it instantly. The held election positions sit
+        # at id 40542/44051 -- far beyond the scan's reach -- so by-slug auto-
+        # settlement would SettlementNotFound forever once they resolved.
+        #
+        # The filter MUST NOT pass a closed= param: it crosses the closed
+        # boundary on its own (live-probed: ?slug=...kan returns closed=true with
+        # no closed param), which is exactly what settlement needs at resolution.
+        #
+        # We DO NOT trust the filter blindly on this money/state path: every
+        # returned payload is re-confirmed to actually match the wanted
+        # slug-or-id before returning, and if neither filter yields a confirmed
+        # match we raise the SAME ValueError('... not found') as before so
+        # settlement_reconciler's SettlementNotFound translation and reconcile()'s
+        # per-ticker isolation (P2, #149) keep handling a transiently-absent
+        # market unchanged.
+        #
+        # The ?id= filter is ONLY issued when the stored identifier is numeric.
+        # Live-probed: ?slug=<absent> returns an empty list (clean miss), but
+        # ?id=<non-numeric> returns HTTP 400. The bot persists market_id =
+        # slug|id, so the held election positions are slug-keyed (non-numeric) --
+        # firing ?id= on a slug would 400 every cycle and, worse, escape this
+        # method as an HTTPError instead of the documented not-found ValueError,
+        # breaking the transient-drop contract. So a non-numeric wanted only ever
+        # tries ?slug=; a numeric wanted tries ?slug= then ?id=. A defensive 400
+        # guard on the id call (belt-and-suspenders) still degrades to a clean
+        # miss rather than leaking an HTTPError.
         wanted = str(market_id).strip()
-        for closed in ("false", "true"):
-            cursor = None
-            while True:
-                params: dict[str, Any] = {"limit": 500, "closed": closed}
-                if cursor:
-                    params["cursor"] = cursor
+        filter_keys = ["slug"]
+        if wanted.isdigit():
+            filter_keys.append("id")
+        for filter_key in filter_keys:
+            params: dict[str, Any] = {filter_key: wanted, "limit": 5}
+            try:
                 data = self._request("GET", "/v1/markets", params=params)
-                raw_markets = data.get("markets", []) if isinstance(data, dict) else data
-                for payload in raw_markets:
-                    if not isinstance(payload, dict):
-                        continue
-                    identifiers = {
-                        str(payload.get("slug") or "").strip(),
-                        str(payload.get("id") or "").strip(),
-                    }
-                    if wanted in identifiers:
-                        return payload
-                cursor = data.get("cursor") if isinstance(data, dict) else None
-                if not cursor:
-                    break
+            except HTTPError as exc:
+                status_code = getattr(
+                    getattr(exc, "response", None), "status_code", None
+                )
+                if filter_key == "id" and status_code == 400:
+                    # Filter rejected the identifier -> treat as no match and
+                    # fall through to the not-found ValueError contract.
+                    continue
+                raise
+            raw_markets = data.get("markets", []) if isinstance(data, dict) else data
+            for payload in raw_markets:
+                if not isinstance(payload, dict):
+                    continue
+                identifiers = {
+                    str(payload.get("slug") or "").strip(),
+                    str(payload.get("id") or "").strip(),
+                }
+                if wanted in identifiers:
+                    return payload
         raise ValueError(f"Polymarket market {market_id!r} not found")
