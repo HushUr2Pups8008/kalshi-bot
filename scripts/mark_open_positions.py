@@ -15,9 +15,11 @@ Usage:  python scripts/mark_open_positions.py
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -25,7 +27,10 @@ if str(REPO_ROOT) not in sys.path:
 
 # Shared constant so the go-live gate's MTM marks and the report's trades can
 # never silently read different DBs (PROFIT-DRAWDOWN-001c review note).
+from utils.logger import get_logger  # noqa: E402
 from utils.output_paths import PAPER_TRADES_DB as DB_PATH  # noqa: E402
+
+log = get_logger("mark_open_positions")
 
 
 def _kalshi_held_price_cents(market, side: str):
@@ -76,6 +81,45 @@ def _poly_held_price_cents(market, side: str):
     return float(held) if held is not None else None
 
 
+def _poly_snapshot_mark_cents(market_snapshot, side: str):
+    """FIX-2 (PM feed-drop MTM-blind mitigation): last-known mark for a held
+    Polymarket side from the entry-time ``market_snapshot`` JSON, used ONLY when
+    the live market is transiently unpriceable.
+
+    During the ~3-11h 2026-06-17 election-category feed drop, every held PM
+    position's slug returned 'market not found', so the live mark was None and
+    MTM equity read $0 for each -- distorting true paper equity / the go-live
+    gate's drawdown criterion. The snapshot already persists both asks at trade
+    time (PolymarketMarket.yes_ask_cents/no_ask_cents via
+    paper_trader._market_to_jsonable), so the fallback needs ZERO new API calls
+    and reuses the audited conservative ``_poly_held_price_cents`` mark.
+
+    MEASUREMENT-ONLY: this feeds the daily report's MTM equity (and the go-live
+    gate's drawdown read) and nothing else -- it touches no sizing/gating/EV
+    input. Direction caveat: a stale ask can be richer than the current market
+    and slightly OVERSTATE equity during a gap (the go-live gate's optimistic
+    direction), but it is strictly better than the $0 it replaces (which
+    UNDERSTATES) and the row is clearly labeled stale so the report distinguishes
+    live vs snapshot marks.
+
+    FAIL-SAFE: any missing/malformed snapshot returns None (-> the existing
+    unknown_cost/$0 path), never raises into the read-only report path.
+    """
+    try:
+        snap = json.loads(market_snapshot) if isinstance(market_snapshot, str) else None
+        if not isinstance(snap, dict):
+            return None
+        yes_ask = snap.get("yes_ask_cents")
+        no_ask = snap.get("no_ask_cents")
+        if yes_ask is None and no_ask is None:
+            return None
+        snap_obj = SimpleNamespace(yes_ask_cents=yes_ask, no_ask_cents=no_ask)
+        return _poly_held_price_cents(snap_obj, side)
+    except Exception as exc:
+        log.warning("snapshot-fallback mark unavailable for held PM side: %s", exc)
+        return None
+
+
 def compute_open_position_marks(db_path: Path = DB_PATH) -> dict | None:
     """Price every unresolved position at current market and return a summary.
 
@@ -106,8 +150,8 @@ def compute_open_position_marks(db_path: Path = DB_PATH) -> dict | None:
     except (TypeError, ValueError):
         bankroll = 0.0
     rows = conn.execute(
-        "SELECT ticker, venue, side, contracts, cost_dollars FROM paper_trades "
-        "WHERE resolved = 0 ORDER BY venue, ticker"
+        "SELECT ticker, venue, side, contracts, cost_dollars, market_snapshot "
+        "FROM paper_trades WHERE resolved = 0 ORDER BY venue, ticker"
     ).fetchall()
     conn.close()
 
@@ -117,6 +161,7 @@ def compute_open_position_marks(db_path: Path = DB_PATH) -> dict | None:
     total_cost = 0.0
     priced_count = 0
     unpriced_count = 0
+    snapshot_fallback_count = 0
     out_rows: list[dict] = []
 
     for r in rows:
@@ -146,6 +191,19 @@ def compute_open_position_marks(db_path: Path = DB_PATH) -> dict | None:
         except Exception as exc:  # pragma: no cover - live API surface
             note = "fetch error: %s" % str(exc)[:50]
 
+        # FIX-2: PM-only, fallback-only. When the live mark is unavailable
+        # (market transiently dropped from the feed, or a fetch error), recover
+        # the last-known mark from the entry-time snapshot so MTM equity is not
+        # blinded to $0 during a gap. A successful live mark always wins (we only
+        # enter here when cents is None). Measurement-only; no trade decision.
+        is_poly = not (venue.startswith("kalshi") or ticker.startswith("KX"))
+        if is_poly and cents is None:
+            snapshot_cents = _poly_snapshot_mark_cents(r["market_snapshot"], side)
+            if snapshot_cents is not None:
+                cents = snapshot_cents
+                note = "stale: last-known snapshot price (live market absent)"
+                snapshot_fallback_count += 1
+
         value = None
         if cents is None:
             unknown_cost += cost
@@ -172,6 +230,11 @@ def compute_open_position_marks(db_path: Path = DB_PATH) -> dict | None:
         "unknown_cost": unknown_cost,
         "priced_count": priced_count,
         "unpriced_count": unpriced_count,
+        # Surfaces how many priced positions used a STALE entry-time snapshot
+        # rather than a live mark (live market transiently absent). Without this
+        # an all-stale run looks like a normal fully-priced run; callers/reports
+        # should flag a non-zero value as a degraded-equity reading.
+        "snapshot_fallback_count": snapshot_fallback_count,
         "rows": out_rows,
     }
 

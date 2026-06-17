@@ -468,6 +468,27 @@ Closes the remaining items the assessment surfaced; the prior 5 assessment recom
 
 ---
 
+### PROFIT-PM-FEEDDROP-001 — Polymarket transient feed drop + structural by-slug settlement gap
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-PM-FEEDDROP-001 |
+| **Status** | RESOLVED (v0.33.19, 2026-06-17) — settlement reach + marking fallback shipped; id-capture/by-id-endpoint rejected as infeasible |
+| **Severity** | HIGH (the first-ever PM resolution would never auto-settle) |
+| **Owner** | Investigation+impl: Claude (workflow). Review: kalshi-safety + silent-failure + replay-evidence. Operator: merge gate. |
+
+**Finding (surfaced by the 2026-06-17 since-restart assessment).** The Polymarket feed dropped the entire election-contest category ~2026-06-17T10:13Z (markets 418→201 sports-only) and RECOVERED ~13–14:13Z (back to ~412). Root cause = UPSTREAM Polymarket re-scoping the live `/v1/markets?closed=false` listing, NOT a bot regression (#149 left PM fetch untouched). During the ~3–11h gap all 14 held PM positions' slugs returned `market not found` (unpriceable / unsettleable). The collapse was TRANSIENT — markets reappear — and P2 (#149) already isolates per-ticker not-found in `reconcile()` so a transient gap no longer aborts the batch and self-heals on recovery.
+
+**Decisive deeper bug (live-probed).** Independent of the transient drop, `_find_market_payload_by_slug_or_id` paginated `closed=true` only to the oldest ~500–1000 ids (cursor exhausts early), so a resolved HIGH-id market was structurally unreachable — id 8594 raised "not found" under the scan but `?slug=` returns it instantly; the held positions sit at id 40542/44051. **By-slug auto-settlement would `SettlementNotFound` forever once they resolved.** This (not the transient drop) is why `first_resolution_at_risk = yes`.
+
+**Shipped (v0.33.19).** FIX-1 (`public_client.py`): server-side exact-match `?slug=`/`?id=` filter (crosses the closed boundary; defensive re-confirm; same not-found `ValueError` contract → P2 path unchanged; Kalshi untouched). FIX-2 (`mark_open_positions.py`): measurement-only snapshot last-known-price fallback when a PM market is transiently unpriceable, `stale:`-labeled + `snapshot_fallback_count` surfaced, fail-safe.
+
+**Rejected / no-code.** (a) `condition_id` capture + (c) by-id settlement: live probes proved NO path-style by-id GET exists (`/v1/markets/{id}`, `/v1/market/{id}`, `/v1/markets/{slug}` all 404) — only the listing filter works, so id-capture adds nothing. Money/sizing: **LET IT RUN** (bankroll drop was 100% benign deployment, $0 realized loss; free-cash-floor guard rejected by review). IC §16 does not bind (settlement/marking; no trade-decision change).
+
+**Watch-item.** Monitor whether the upstream PM feed drops the election category again (operational; alert-only). Re-check the first PM resolution settles cleanly via the new filter path when it occurs (~06-23+).
+
+---
+
 ### PROFIT-DRAWDOWN-001
 
 | Field | Value |
