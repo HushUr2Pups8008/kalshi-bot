@@ -95,6 +95,9 @@ class BlendDecisionLogger(Protocol):
         trade_blocked_reason: str | None,
         evidence_ids_contributing: list[str],
         venue: str | None = None,
+        recency_score: float | None = None,
+        recency_threshold: float | None = None,
+        recency_distance: float | None = None,
     ) -> None: ...
 
     def log_skipped(self, **kwargs: Any) -> None: ...
@@ -266,6 +269,7 @@ class BlendTask:
             regime_confidence=regime_confidence,
             trade_blocked_reason=trade_blocked_reason,
             evidence_ids=evidence_ids,
+            readiness=readiness,
         )
 
         if trade_blocked_reason is not None:
@@ -456,6 +460,7 @@ class BlendTask:
         regime_confidence: float,
         trade_blocked_reason: str | None,
         evidence_ids: list[str],
+        readiness: ReadinessDecision,
     ) -> None:
         await write_trade_log_async(
             self._logger.log_blend_decision,
@@ -476,6 +481,9 @@ class BlendTask:
             trade_blocked_reason=trade_blocked_reason,
             evidence_ids_contributing=evidence_ids,
             venue=venue,
+            recency_score=readiness.recency_score,
+            recency_threshold=readiness.recency_threshold,
+            recency_distance=readiness.recency_distance,
         )
 
     async def _emit_lane_skips(
@@ -527,6 +535,9 @@ class BlendTask:
             g1_threshold=g1_threshold,
             g4_threshold=G4_REGIME_CONFIDENCE_THRESHOLD,
             gate_chain=_gate_chain(readiness, g1_threshold),
+            recency_score=readiness.recency_score,
+            recency_threshold=readiness.recency_threshold,
+            recency_distance=readiness.recency_distance,
         )
 
     async def _emit_skipped(
@@ -589,6 +600,9 @@ class BlendTask:
             "edge": edge,
             "min_edge_threshold": min_edge_threshold,
             "venue": venue,
+            "recency_score": readiness.recency_score,
+            "recency_threshold": readiness.recency_threshold,
+            "recency_distance": readiness.recency_distance,
         }
         signal_meta = fast_lane_result.signal_meta
         if signal_meta:
