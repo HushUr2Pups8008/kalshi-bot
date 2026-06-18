@@ -152,6 +152,9 @@ class ReadinessDecision:
     # (non-fast-lane). None for fast-lane (G2-exempt). Carried into signal_meta
     # so single- vs multi-source trade performance can be tracked.
     source_class_count: int | None = None
+    recency_score: float | None = None
+    recency_threshold: float | None = None
+    recency_distance: float | None = None
 
 
 def evaluate_readiness(blend_result: Any, regime_confidence: float) -> ReadinessDecision:
@@ -205,6 +208,9 @@ def evaluate_readiness(blend_result: Any, regime_confidence: float) -> Readiness
         failure_reasons.append("G4_regime_confidence")
 
     source_class_count: int | None = None
+    recency_score: float | None = None
+    recency_threshold: float | None = None
+    recency_distance: float | None = None
     if not is_fast_lane:
         applied_conditions.extend(["G2", "G5", "G6"])
         source_classes = _require_sequence(blend_result, "evidence_source_classes")
@@ -218,6 +224,8 @@ def evaluate_readiness(blend_result: Any, regime_confidence: float) -> Readiness
             failure_reasons.append("G5_dossier_drift_suspect")
 
         recency_score = _require_probability_field(blend_result, "recency_score")
+        recency_threshold = G6_RECENCY_THRESHOLD
+        recency_distance = recency_score - G6_RECENCY_THRESHOLD
         if recency_score < G6_RECENCY_THRESHOLD:
             failure_reasons.append("G6_recency_score")
 
@@ -233,6 +241,11 @@ def evaluate_readiness(blend_result: Any, regime_confidence: float) -> Readiness
         fail_safe_active=fail_safe_active,
         applied_conditions=tuple(applied_conditions),
         source_class_count=source_class_count,
+        recency_score=round(recency_score, 4) if recency_score is not None else None,
+        recency_threshold=recency_threshold,
+        recency_distance=(
+            round(recency_distance, 4) if recency_distance is not None else None
+        ),
     )
 
 

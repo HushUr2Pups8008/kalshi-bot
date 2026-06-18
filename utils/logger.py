@@ -735,6 +735,9 @@ class TradeLogger:
         min_edge_threshold: float | None = None,
         venue: str | None = None,
         signal_meta: dict[str, Any] | None = None,
+        recency_score: float | None = None,
+        recency_threshold: float | None = None,
+        recency_distance: float | None = None,
     ) -> None:
         """Emit a SKIPPED trade-log record.
 
@@ -792,6 +795,12 @@ class TradeLogger:
             record["min_edge_threshold"] = round(min_edge_threshold, 4)
         if venue:
             record["venue"] = venue
+        if recency_score is not None:
+            record["recency_score"] = round(float(recency_score), 4)
+        if recency_threshold is not None:
+            record["recency_threshold"] = round(float(recency_threshold), 4)
+        if recency_distance is not None:
+            record["recency_distance"] = round(float(recency_distance), 4)
         if signal_meta:
             record["signal_meta"] = signal_meta
         self._write(record)
@@ -1057,6 +1066,9 @@ class TradeLogger:
         trade_blocked_reason: str | None,
         evidence_ids_contributing: list[str],
         venue: str | None = None,
+        recency_score: float | None = None,
+        recency_threshold: float | None = None,
+        recency_distance: float | None = None,
     ) -> None:
         record = {
             "type": "BLEND_DECISION",
@@ -1079,6 +1091,12 @@ class TradeLogger:
         }
         if venue:
             record["venue"] = venue
+        if recency_score is not None:
+            record["recency_score"] = round(float(recency_score), 4)
+        if recency_threshold is not None:
+            record["recency_threshold"] = round(float(recency_threshold), 4)
+        if recency_distance is not None:
+            record["recency_distance"] = round(float(recency_distance), 4)
         self._write(record)
 
     def log_evidence_ingestion(
@@ -1314,6 +1332,9 @@ class TradeLogger:
         g1_threshold: float,
         g4_threshold: float,
         gate_chain: list[str],
+        recency_score: float | None = None,
+        recency_threshold: float | None = None,
+        recency_distance: float | None = None,
     ) -> None:
         """PROFIT-ALIGN-008 (2026-05-25): consolidated gate-decision diagnostic.
 
@@ -1334,7 +1355,7 @@ class TradeLogger:
         gate_chain enumerates which gates were checked + passed/failed in
         order. Surfaces in daily_review.
         """
-        self._write({
+        record = {
             "type": "GATE_SUMMARY",
             "ticker": ticker,
             "market_prefix": market_prefix,
@@ -1345,7 +1366,14 @@ class TradeLogger:
             "g1_threshold": round(float(g1_threshold), 4),
             "g4_threshold": round(float(g4_threshold), 4),
             "gate_chain": gate_chain,
-        })
+        }
+        if recency_score is not None:
+            record["recency_score"] = round(float(recency_score), 4)
+        if recency_threshold is not None:
+            record["recency_threshold"] = round(float(recency_threshold), 4)
+        if recency_distance is not None:
+            record["recency_distance"] = round(float(recency_distance), 4)
+        self._write(record)
 
     def log_match_llm_review(
         self,

@@ -237,6 +237,9 @@ async def test_ready_candidate_reads_lanes_logs_and_enqueues():
             "trade_blocked_reason": None,
             "evidence_ids_contributing": ["ev-1", "ev-2"],
             "venue": "kalshi",
+            "recency_score": pytest.approx(1.0),
+            "recency_threshold": pytest.approx(0.30),
+            "recency_distance": pytest.approx(0.70),
         }
     ]
     assert {call[0] for call in store.calls} == {
@@ -435,6 +438,25 @@ async def test_stale_accumulation_without_trigger_still_fails_g6():
     assert result.ready is False
     assert result.trade_blocked_reason == "G6_recency_score"
     assert "G6_recency_score" in result.readiness_decision.failure_reasons
+    assert result.readiness_decision.recency_score is not None
+    assert result.readiness_decision.recency_threshold == pytest.approx(0.30)
+    assert result.readiness_decision.recency_distance < 0
+    assert logger.gate_summary_records[0]["recency_score"] == pytest.approx(
+        result.readiness_decision.recency_score
+    )
+    assert logger.gate_summary_records[0]["recency_threshold"] == pytest.approx(0.30)
+    assert logger.gate_summary_records[0]["recency_distance"] == pytest.approx(
+        result.readiness_decision.recency_distance
+    )
+    assert logger.records[0]["recency_score"] == pytest.approx(
+        result.readiness_decision.recency_score
+    )
+    assert logger.skipped_records[0]["recency_score"] == pytest.approx(
+        result.readiness_decision.recency_score
+    )
+    assert logger.skipped_records[0]["recency_distance"] == pytest.approx(
+        result.readiness_decision.recency_distance
+    )
 
 
 @pytest.mark.asyncio
