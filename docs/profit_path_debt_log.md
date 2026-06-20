@@ -69,6 +69,23 @@
 > **Operator-facing edge dashboard.** Refresh by commit. Single page; replaces 100+ doc index for "are we making money?" questions.
 > **Last refresh:** 2026-05-26 Codex paper-trade pipeline architecture audit.
 
+### 2.0 Current Profit-Evidence Non-Goals (2026-06-20 Grok Assessment Workoff)
+
+The 2026-06-20 Grok assessment is directionally useful, but its broad recommendations are not authority to loosen money gates or add live-risk surfaces. The active implementation lane is evidence/reporting first:
+
+- Build one consolidated profit-evidence report that joins paper expectancy, replay EV, readiness status, and realized-edge proof.
+- Add missing operator leading indicators (`opportunities/day`, opportunity age, skipped rate, per-ticker trades/day) to existing reports.
+- Add an offline sizing-policy replay matrix before any Kelly, exposure, cooldown, or drawdown-policy change.
+- Keep Polymarket work in paper/settlement-proof mode until resolved sample size and feedback-chain evidence are adequate.
+
+Explicit non-goals for this lane:
+
+- No live trading enablement.
+- No live sizing, bankroll, threshold, freshness, or readiness-gate changes.
+- No Polymarket live order path or cross-venue arbitrage execution.
+- No local multi-model / agent-ensemble architecture until replay evidence proves current single-primary LLM inference is the limiting defect.
+- No runtime DB, matcher-weight, service-manager, or restart mutation without explicit operator approval in that turn.
+
 ### 2.0 v0.30.x Data/Runtime Alignment Audit (2026-05-13)
 
 Audit artifact: [`docs/_archive/governance/2026-05-13-v030x-data-runtime-alignment-audit.md`](_archive/governance/2026-05-13-v030x-data-runtime-alignment-audit.md)

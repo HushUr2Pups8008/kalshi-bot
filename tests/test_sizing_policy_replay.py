@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -8,6 +9,7 @@ import pytest
 from scripts.simulations.sizing_policy_replay import (
     PolicyParams,
     evaluate_grid,
+    load_paper_db,
     load_evidence,
 )
 
@@ -147,6 +149,108 @@ def test_load_evidence_accepts_json_array_and_jsonl(tmp_path):
     assert [r["ticker"] for r in load_evidence([json_array, jsonl])] == ["KXLOAD-1", "KXLOAD-2"]
 
 
+def test_load_paper_db_maps_resolved_trades_to_replay_records(tmp_path):
+    db_path = tmp_path / "paper_trades.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE paper_trades (
+                ts TEXT,
+                ticker TEXT,
+                venue TEXT,
+                side TEXT,
+                entry_price_cents REAL,
+                estimated_prob REAL,
+                edge REAL,
+                pnl_dollars REAL,
+                contracts INTEGER,
+                resolved INTEGER,
+                source_class TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_trades VALUES (
+                '2026-06-20T00:00:00Z', 'KXDB-1', 'kalshi', 'YES',
+                50.0, 0.62, 0.12, 2.0, 2, 1, 'official'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_trades VALUES (
+                '2026-06-20T01:00:00Z', 'KXDB-OPEN', 'kalshi', 'YES',
+                50.0, 0.62, 0.12, NULL, 2, 0, 'official'
+            )
+            """
+        )
+
+    records = load_paper_db(db_path)
+
+    assert records == [
+        {
+            "ts": "2026-06-20T00:00:00Z",
+            "ticker": "KXDB-1",
+            "venue": "kalshi",
+            "side": "YES",
+            "price_cents": 50.0,
+            "estimated_probability": 0.62,
+            "edge": 0.12,
+            "pnl": 2.0,
+            "contracts": 2,
+            "source_class": "official",
+            "resolution_ts": "2026-06-20T00:00:00Z",
+        }
+    ]
+
+
+def test_db_rows_without_close_time_do_not_remain_open_forever(tmp_path):
+    db_path = tmp_path / "paper_trades.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE paper_trades (
+                ts TEXT,
+                ticker TEXT,
+                venue TEXT,
+                side TEXT,
+                entry_price_cents REAL,
+                estimated_prob REAL,
+                edge REAL,
+                pnl_dollars REAL,
+                contracts INTEGER,
+                resolved INTEGER,
+                source_class TEXT
+            )
+            """
+        )
+        for ticker, ts in [
+            ("KXDB-A", "2026-06-20T00:00:00Z"),
+            ("KXDB-B", "2026-06-20T01:00:00Z"),
+        ]:
+            conn.execute(
+                """
+                INSERT INTO paper_trades VALUES (
+                    ?, ?, 'kalshi', 'YES', 50.0, 0.62, 0.12, 1.0, 1, 1, 'official'
+                )
+                """,
+                (ts, ticker),
+            )
+
+    records = load_paper_db(db_path)
+    report = evaluate_grid(
+        records,
+        [PolicyParams(0.5, 1.0, 1.0, 0, 1)],
+        bankroll=100.0,
+        max_bet_dollars=20.0,
+        min_edge=0.01,
+    )
+
+    assert report["results"][0]["simulated_trade_count"] == 2
+    assert report["results"][0]["skipped_by_category"] == {}
+
+
 def test_cli_prints_guardrail_lines_and_json(tmp_path):
     evidence = tmp_path / "trades.jsonl"
     evidence.write_text(
@@ -184,4 +288,59 @@ def test_cli_prints_guardrail_lines_and_json(tmp_path):
     payload = json.loads(proc.stdout[proc.stdout.index("{") :])
     assert payload["read_only"] is True
     assert payload["no_live_policy_change"] is True
+    assert payload["results"][0]["simulated_trade_count"] == 1
+
+
+def test_cli_accepts_paper_db_snapshot(tmp_path):
+    db_path = tmp_path / "paper_trades.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE paper_trades (
+                ts TEXT,
+                ticker TEXT,
+                venue TEXT,
+                side TEXT,
+                entry_price_cents REAL,
+                estimated_prob REAL,
+                edge REAL,
+                pnl_dollars REAL,
+                contracts INTEGER,
+                resolved INTEGER,
+                source_class TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_trades VALUES (
+                '2026-06-20T00:00:00Z', 'KXDBCLI-1', 'kalshi', 'YES',
+                50.0, 0.62, 0.12, 1.0, 1, 1, 'official'
+            )
+            """
+        )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/simulations/sizing_policy_replay.py",
+            "--paper-db",
+            str(db_path),
+            "--paper-ticker-cooldown",
+            "0",
+            "--max-open-positions-per-prefix",
+            "10",
+            "--max-ticker-exposure-pct",
+            "1.0",
+            "--json",
+        ],
+        cwd=Path(__file__).resolve().parent.parent,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+
+    payload = json.loads(proc.stdout[proc.stdout.index("{") :])
+    assert payload["input"]["records"] == 1
     assert payload["results"][0]["simulated_trade_count"] == 1

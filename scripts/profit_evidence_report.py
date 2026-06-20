@@ -135,8 +135,11 @@ def readiness_verdict(
             f"drawdown {_fmt_pct(paper.max_drawdown_pct)} above {_fmt_pct(max_drawdown_pct)}"
         )
 
-    scored = [item for item in replay if item.status == "scored"]
-    if not scored:
+    current_replay = _current_replay_items(replay)
+    scored = [item for item in current_replay if item.status == "scored"]
+    if current_replay and not scored:
+        reasons.append("missing current replay evidence")
+    elif not scored:
         reasons.append("missing replay evidence")
     elif not _replay_passes(scored[-1]):
         reasons.append("replay EV evidence failed")
@@ -397,6 +400,15 @@ def _replay_passes(item: ReplayEvidenceSummary) -> bool:
     if item.ev_ci_95_lo is not None and item.ev_ci_95_lo < 0:
         return False
     return True
+
+
+def _current_replay_items(
+    replay: list[ReplayEvidenceSummary],
+) -> list[ReplayEvidenceSummary]:
+    head_items = [item for item in replay if item.source.startswith("ci_runs/HEAD/")]
+    if head_items:
+        return head_items
+    return [item for item in replay if item.status == "scored"]
 
 
 def _replay_insufficient(source: str) -> ReplayEvidenceSummary:

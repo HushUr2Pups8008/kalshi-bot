@@ -10,12 +10,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sqlite3
 import sys
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import quote
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -242,6 +244,73 @@ def load_evidence(paths: Iterable[Path]) -> list[dict[str, Any]]:
     return sorted(records, key=lambda record: str(record.get("ts") or record.get("timestamp") or ""))
 
 
+def _available_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _select_expr(columns: set[str], aliases: tuple[str, ...], fallback: str) -> str:
+    for column in aliases:
+        if column in columns:
+            return column
+    return fallback
+
+
+def load_paper_db(path: Path) -> list[dict[str, Any]]:
+    uri = f"file:{quote(str(path.resolve()))}?mode=ro"
+    with sqlite3.connect(uri, uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        columns = _available_columns(conn, "paper_trades")
+        ts_expr = _select_expr(columns, ("ts", "created_at", "timestamp"), "NULL")
+        ticker_expr = _select_expr(columns, ("ticker", "market_ticker"), "NULL")
+        venue_expr = _select_expr(columns, ("venue",), "'kalshi'")
+        side_expr = _select_expr(columns, ("side", "executed_side"), "'YES'")
+        price_expr = _select_expr(
+            columns,
+            ("entry_price_cents", "executed_price_cents", "price_cents", "market_yes_price"),
+            "NULL",
+        )
+        prob_expr = _select_expr(
+            columns,
+            ("estimated_prob", "estimated_probability", "probability"),
+            "NULL",
+        )
+        edge_expr = _select_expr(columns, ("executed_edge", "edge"), "NULL")
+        pnl_expr = _select_expr(columns, ("pnl_dollars", "pnl", "realized_pnl"), "NULL")
+        contracts_expr = _select_expr(columns, ("contracts", "quantity"), "1")
+        source_class_expr = _select_expr(columns, ("source_class",), "'unknown'")
+        resolution_expr = _select_expr(
+            columns,
+            ("resolution_ts", "resolved_ts", "settled_ts", "close_ts", "close_time"),
+            ts_expr,
+        )
+        resolved_filter = "resolved = 1" if "resolved" in columns else "pnl_dollars IS NOT NULL"
+        rows = conn.execute(
+            f"""
+            SELECT
+                {ts_expr} AS ts,
+                {ticker_expr} AS ticker,
+                {venue_expr} AS venue,
+                {side_expr} AS side,
+                {price_expr} AS price_cents,
+                {prob_expr} AS estimated_probability,
+                {edge_expr} AS edge,
+                {pnl_expr} AS pnl,
+                {contracts_expr} AS contracts,
+                {source_class_expr} AS source_class,
+                {resolution_expr} AS resolution_ts
+            FROM paper_trades
+            WHERE {resolved_filter}
+            """
+        )
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            if not record.get("ticker") or record.get("pnl") is None:
+                continue
+            records.append(record)
+        return sorted(records, key=lambda record: str(record.get("ts") or ""))
+
+
 def _simulate_policy(
     records: list[dict[str, Any]],
     policy: PolicyParams,
@@ -464,6 +533,13 @@ def _default_input_paths() -> list[Path]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", action="append", type=Path, dest="inputs", help="JSON/JSONL evidence path")
+    parser.add_argument(
+        "--paper-db",
+        action="append",
+        type=Path,
+        dest="paper_dbs",
+        help="read-only paper_trades.db snapshot",
+    )
     parser.add_argument("--kelly-fraction", default=str(getattr(cfg, "kelly_fraction", 0.5)))
     parser.add_argument(
         "--floor-clamp-kelly-multiplier",
@@ -485,8 +561,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    paths = args.inputs or _default_input_paths()
-    records = load_evidence(paths)
+    records: list[dict[str, Any]] = []
+    for paper_db in args.paper_dbs or []:
+        records.extend(load_paper_db(paper_db))
+    paths = args.inputs or ([] if args.paper_dbs else _default_input_paths())
+    records.extend(load_evidence(paths))
     report = evaluate_grid(
         records,
         _policy_grid(args),

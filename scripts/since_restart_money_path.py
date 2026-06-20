@@ -24,9 +24,12 @@ CHAIN_TYPES = {
     "PAPER_TRADE",
     "LIVE_ORDER",
     "ANALYSIS_REJECTED",
+    "PAPER_RESOLUTION",
+    "MATCH_LLM_REVIEW",
 }
 TERMINAL_TYPES = {"SKIPPED", "PAPER_TRADE", "LIVE_ORDER"}
 G6_REASON = "G6_recency_score"
+POLYMARKET_FEEDBACK_MIN_RESOLVED = 10
 
 
 def parse_timestamp(value: Any) -> datetime | None:
@@ -373,6 +376,97 @@ def _summarize_app_warnings(
     return summary
 
 
+def _is_polymarket(record: dict[str, Any] | None) -> bool:
+    if not record:
+        return False
+    venue = record.get("venue")
+    if venue == "polymarket_us":
+        return True
+    ticker = _ticker(record)
+    return isinstance(ticker, str) and ticker.startswith("PM-")
+
+
+def _trade_id(record: dict[str, Any] | None) -> str | None:
+    if not record:
+        return None
+    value = record.get("trade_id") or record.get("id")
+    return value if isinstance(value, str) and value else None
+
+
+def _find_later_event(
+    events: Iterable[dict[str, Any]],
+    *,
+    ticker: str | None,
+    trade_id: str | None,
+    after_event: dict[str, Any],
+    event_type: str,
+) -> dict[str, Any] | None:
+    for event in events:
+        if event["type"] != event_type:
+            continue
+        if (
+            event["ts"],
+            event["sequence"],
+        ) <= (after_event["ts"], after_event["sequence"]):
+            continue
+        raw = event["raw"]
+        if trade_id and _trade_id(raw) == trade_id:
+            return event
+        if ticker is not None and event["ticker"] == ticker:
+            return event
+    return None
+
+
+def _summarize_polymarket_settlement_feedback(
+    events: list[dict[str, Any]],
+    *,
+    min_resolved: int = POLYMARKET_FEEDBACK_MIN_RESOLVED,
+) -> dict[str, Any]:
+    proof_rows: list[dict[str, Any]] = []
+    for event in events:
+        if event["type"] != "PAPER_TRADE" or not _is_polymarket(event["raw"]):
+            continue
+        ticker = event["ticker"]
+        trade_id = _trade_id(event["raw"])
+        resolution = _find_later_event(
+            events,
+            ticker=ticker,
+            trade_id=trade_id,
+            after_event=event,
+            event_type="PAPER_RESOLUTION",
+        )
+        if resolution is None or not _is_polymarket(resolution["raw"]):
+            continue
+        feedback = _find_later_event(
+            events,
+            ticker=ticker,
+            trade_id=None,
+            after_event=resolution,
+            event_type="MATCH_LLM_REVIEW",
+        )
+        raw_resolution = resolution["raw"]
+        raw_feedback = feedback["raw"] if feedback else {}
+        proof_rows.append({
+            "ticker": ticker,
+            "trade_id": trade_id,
+            "paper_trade_ts": _iso(event["ts"]),
+            "resolution_ts": _iso(resolution["ts"]),
+            "pnl_dollars": raw_resolution.get("pnl_dollars"),
+            "outcome": raw_resolution.get("outcome") or raw_resolution.get("result"),
+            "feedback_ts": _iso(feedback["ts"]) if feedback else None,
+            "market_prefix": raw_feedback.get("market_prefix"),
+        })
+    resolved_count = len(proof_rows)
+    return {
+        "status": "sufficient_sample"
+        if resolved_count >= min_resolved
+        else "insufficient_sample",
+        "resolved_count": resolved_count,
+        "min_resolved_required": min_resolved,
+        "proof_rows": proof_rows,
+    }
+
+
 def build_money_path_report(
     jsonl_path: str | Path,
     *,
@@ -412,6 +506,9 @@ def build_money_path_report(
         },
         "candidates": candidates,
         "no_keywords": _summarize_no_keywords(events),
+        "polymarket_settlement_feedback": _summarize_polymarket_settlement_feedback(
+            events
+        ),
         "app_warnings": _summarize_app_warnings(app_path, since_dt, until_dt),
     }
 
@@ -428,6 +525,25 @@ def format_text_report(report: dict[str, Any]) -> str:
     lines.append(f"G6 measurement gaps: {report['summary']['measurement_gaps']}")
     no_keywords = report["no_keywords"]
     lines.append(f"no_keywords: {no_keywords['count']}")
+    pm_feedback = report["polymarket_settlement_feedback"]
+    lines.append(
+        "Polymarket settlement feedback: "
+        f"{pm_feedback['status']} "
+        f"({pm_feedback['resolved_count']}/"
+        f"{pm_feedback['min_resolved_required']} resolved)"
+    )
+    proof_rows = pm_feedback.get("proof_rows", []) or []
+    if proof_rows:
+        lines.append("Polymarket settlement proof rows:")
+        for row in proof_rows[:5]:
+            lines.append(
+                "  "
+                f"{row.get('ticker') or 'n/a'} "
+                f"trade_id={row.get('trade_id') or 'n/a'} "
+                f"pnl={row.get('pnl_dollars')} "
+                f"feedback={row.get('feedback_ts') or 'none'} "
+                f"prefix={row.get('market_prefix') or 'none'}"
+            )
     markets_missing = report["app_warnings"]["markets_not_found"]
     lines.append(f"Markets not found warnings: {markets_missing['count']}")
     if report["candidates"]:

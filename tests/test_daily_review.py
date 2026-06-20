@@ -12,6 +12,7 @@ from scripts.daily_review import (
     _save_current_tier_state,
     build_daily_review,
 )
+from scripts.throughput_operator_metrics import ThroughputOperatorSummary
 
 
 def test_format_fresh_pass_conversion_lines_surfaces_funnel_pinch():
@@ -270,6 +271,20 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
         },
     )
     monkeypatch.setattr(
+        "scripts.daily_review.summarize_operator_throughput_from_trade_log",
+        lambda *args, **kwargs: ThroughputOperatorSummary(
+            opportunities=3,
+            skipped=1,
+            paper_trades=2,
+            window_days=2.0,
+            opportunities_per_day=1.5,
+            skipped_per_opportunity=0.3333333333,
+            top_ticker_trades_per_day=[("KX1", 1.0), ("KX2", 0.5)],
+            opportunity_age_p50_seconds=120.0,
+            opportunity_age_p90_seconds=300.0,
+        ),
+    )
+    monkeypatch.setattr(
         "scripts.daily_review.paper_performance_drilldown.summarize",
         lambda *args, **kwargs: {
             "total_trades": 2,
@@ -310,6 +325,20 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                 "measurement_gaps": 0,
             },
             "no_keywords": {"count": 3},
+            "polymarket_settlement_feedback": {
+                "status": "insufficient_sample",
+                "resolved_count": 1,
+                "min_resolved_required": 10,
+                "proof_rows": [
+                    {
+                        "ticker": "PM-IRAN-2026-06-20",
+                        "trade_id": "trade-pm-1",
+                        "pnl_dollars": 1.7,
+                        "feedback_ts": "2026-06-20T02:05:00+00:00",
+                        "market_prefix": "polymarket_us:iran",
+                    }
+                ],
+            },
             "candidates": [
                 {
                     "ticker": "KXTEST",
@@ -337,9 +366,16 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Candidates                       : 1" in rendered
     assert "Terminal outcomes                : SKIPPED=1" in rendered
     assert "No-keyword exits                 : 3" in rendered
+    assert "Polymarket settlement feedback   : insufficient_sample (1/10 resolved)" in rendered
+    assert "PM-IRAN-2026-06-20 trade_id=trade-pm-1 pnl=1.7" in rendered
     assert "1. INGESTION" in rendered
     assert "2. MATCHING" in rendered
     assert "3. ANALYSIS" in rendered
+    assert "OPERATOR THROUGHPUT LEADING INDICATORS" in rendered
+    assert "Opportunities/day              : 1.50" in rendered
+    assert "Skipped/opportunity ratio      : 0.333" in rendered
+    assert "Opportunity age p50/p90        : 2.0m / 5.0m" in rendered
+    assert "KX1: 1.00/day" in rendered
     assert "4. EDGE FORMATION" in rendered
     assert "5. EXECUTION" in rendered
     assert "6. LLM VALUE-ADD ANALYSIS" in rendered

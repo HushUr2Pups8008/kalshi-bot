@@ -156,6 +156,42 @@ def test_replay_artifacts_distinguish_scored_from_insufficient_corpus(tmp_path: 
     assert all(item.trade_count is None for item in insufficient)
 
 
+def test_verdict_uses_current_head_replay_over_stale_scored_cycle(tmp_path: Path) -> None:
+    db_path = tmp_path / "paper_trades.db"
+    _create_paper_db(
+        db_path,
+        [
+            _paper_row(f"trade-{idx}", resolved=True, pnl=0.30, edge=0.07)
+            for idx in range(20)
+        ],
+    )
+    replay_root = tmp_path / "edge_replay"
+    stale_dir = replay_root / "cycle99"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "counterfactual_scores.json").write_text(
+        json.dumps(
+            {
+                "trade_count": 25,
+                "win_rate": 0.60,
+                "realized_pnl": 5.0,
+                "per_trade_ev": 0.20,
+                "ev_ci_95_lo": 0.05,
+                "ev_ci_95_hi": 0.35,
+            }
+        )
+    )
+    head_dir = replay_root / "ci_runs" / "HEAD"
+    head_dir.mkdir(parents=True)
+    (head_dir / "verdict.json").write_text(
+        json.dumps({"pass": False, "failure_reason": "insufficient corpus"})
+    )
+
+    report = build_profit_evidence_report(db_path, replay_root)
+
+    assert report.verdict.ready is False
+    assert "missing current replay evidence" in report.verdict.reasons
+
+
 def test_verdict_requires_paper_and_replay_proof(tmp_path: Path) -> None:
     db_path = tmp_path / "paper_trades.db"
     rows = [

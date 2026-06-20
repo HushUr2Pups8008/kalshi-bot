@@ -296,3 +296,78 @@ def test_cli_text_output_includes_candidate_and_blocker_summary(tmp_path, capsys
     assert "Terminal: SKIPPED=1" in out
     assert "KXCLI" in out
     assert "measurement_gap=true" in out
+
+
+def test_polymarket_settlement_feedback_proof_marks_small_resolved_sample(tmp_path):
+    module = _load_module()
+    log_path = tmp_path / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "OPPORTUNITY",
+                "ts": "2026-06-20T01:00:00Z",
+                "ticker": "PM-IRAN-2026-06-20",
+                "source": "AP News",
+            },
+            {
+                "type": "BLEND_DECISION",
+                "ts": "2026-06-20T01:00:01Z",
+                "ticker": "PM-IRAN-2026-06-20",
+                "venue": "polymarket_us",
+            },
+            {
+                "type": "PAPER_TRADE",
+                "ts": "2026-06-20T01:00:02Z",
+                "ticker": "PM-IRAN-2026-06-20",
+                "venue": "polymarket_us",
+                "trade_id": "trade-pm-1",
+                "side": "YES",
+                "executed_edge": 0.08,
+            },
+            {
+                "type": "PAPER_RESOLUTION",
+                "ts": "2026-06-20T02:00:00Z",
+                "ticker": "PM-IRAN-2026-06-20",
+                "venue": "polymarket_us",
+                "trade_id": "trade-pm-1",
+                "resolved": True,
+                "pnl_dollars": 1.7,
+                "outcome": "win",
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-06-20T02:05:00Z",
+                "ticker": "PM-IRAN-2026-06-20",
+                "market_prefix": "polymarket_us:iran",
+                "venue": "polymarket_us",
+                "keywords": ["iran"],
+            },
+        ],
+    )
+
+    report = module.build_money_path_report(log_path, since="2026-06-20T00:00:00Z")
+
+    proof = report["polymarket_settlement_feedback"]
+    assert proof["status"] == "insufficient_sample"
+    assert proof["resolved_count"] == 1
+    assert proof["min_resolved_required"] == 10
+    assert proof["proof_rows"] == [
+        {
+            "ticker": "PM-IRAN-2026-06-20",
+            "trade_id": "trade-pm-1",
+            "paper_trade_ts": "2026-06-20T01:00:02+00:00",
+            "resolution_ts": "2026-06-20T02:00:00+00:00",
+            "pnl_dollars": 1.7,
+            "outcome": "win",
+            "feedback_ts": "2026-06-20T02:05:00+00:00",
+            "market_prefix": "polymarket_us:iran",
+        }
+    ]
+
+    rendered = module.format_text_report(report)
+    assert "Polymarket settlement feedback: insufficient_sample (1/10 resolved)" in rendered
+    assert (
+        "PM-IRAN-2026-06-20 trade_id=trade-pm-1 pnl=1.7 "
+        "feedback=2026-06-20T02:05:00+00:00 prefix=polymarket_us:iran"
+    ) in rendered
