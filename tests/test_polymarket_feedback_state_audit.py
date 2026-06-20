@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import sqlite3
 
+import scripts.polymarket_feedback_state_audit as pm_audit
 from scripts.polymarket_feedback_state_audit import (
+    apply_quarantine_plan,
     audit_feedback_state,
     build_quarantine_plan,
     main,
@@ -114,3 +116,102 @@ def test_cli_defaults_to_read_only_and_accepts_fixture_paths(tmp_path, capsys):
     assert "mode: read-only" in out
     assert "writes executed: no" in out
     assert counters.exists()
+
+
+def test_audit_counters_does_not_create_sqlite_sidecars_for_wal_db(tmp_path):
+    counters = tmp_path / "match_token_fp_counters.db"
+    weights = tmp_path / "matcher_token_weights.json"
+    _seed_counters(counters)
+    weights.write_text("{}", encoding="utf-8")
+
+    conn = sqlite3.connect(str(counters))
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    finally:
+        conn.close()
+    for suffix in ("-wal", "-shm"):
+        counters.with_name(counters.name + suffix).unlink(missing_ok=True)
+
+    audit_feedback_state(counters_path=counters, weights_path=weights)
+
+    assert not counters.with_name(counters.name + "-wal").exists()
+    assert not counters.with_name(counters.name + "-shm").exists()
+
+
+def test_audit_counters_opens_sqlite_database_in_uri_read_only_mode(tmp_path, monkeypatch):
+    counters = tmp_path / "match_token_fp_counters.db"
+    weights = tmp_path / "matcher_token_weights.json"
+    _seed_counters(counters)
+    weights.write_text("{}", encoding="utf-8")
+    calls = []
+    real_connect = sqlite3.connect
+
+    def spy_connect(database, *args, **kwargs):
+        calls.append((database, kwargs))
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(pm_audit.sqlite3, "connect", spy_connect)
+
+    audit_feedback_state(counters_path=counters, weights_path=weights)
+
+    assert calls
+    database, kwargs = calls[0]
+    assert database.startswith("file:")
+    assert "mode=ro" in database
+    assert "immutable=1" in database
+    assert kwargs.get("uri") is True
+
+
+def test_apply_quarantine_plan_removes_only_bare_pm_state_with_backup(tmp_path):
+    counters = tmp_path / "match_token_fp_counters.db"
+    weights = tmp_path / "matcher_token_weights.json"
+    backup_dir = tmp_path / "backup"
+    _seed_counters(counters)
+    weights.write_text(
+        json.dumps(
+            {
+                "polymarket_us": {"weight": 0.3},
+                "polymarket_us:trump": {"weight": 0.1},
+                "polymarket_us:ewc-usse-me:dem": {"weight": 0.4},
+                "KXFED:rate": {"weight": 0.9},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = apply_quarantine_plan(counters_path=counters, weights_path=weights, backup_dir=backup_dir)
+
+    assert summary["counters"]["bare_pm_removed"] == 2
+    assert summary["weights"]["bare_pm_removed"] == 2
+    assert summary["verify"]["bare_pm_counter_rows_remaining"] == 0
+    assert summary["verify"]["bare_pm_weight_keys_remaining"] == 0
+    assert summary["verify"]["family_pm_counter_rows_remaining"] == 2
+    assert summary["verify"]["family_pm_weight_keys_remaining"] == 1
+    assert (backup_dir / counters.name).exists()
+    assert (backup_dir / weights.name).exists()
+
+    remaining_weights = json.loads(weights.read_text(encoding="utf-8"))
+    assert sorted(remaining_weights) == ["KXFED:rate", "polymarket_us:ewc-usse-me:dem"]
+
+    conn = sqlite3.connect(str(counters))
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM match_token_fp_counters").fetchone()[0] == 3
+        assert conn.execute(
+            "SELECT COUNT(*) FROM match_token_fp_counters WHERE market_prefix GLOB 'polymarket_us:*'"
+        ).fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_cli_requires_explicit_apply_confirmation_for_quarantine(tmp_path, capsys):
+    counters = tmp_path / "match_token_fp_counters.db"
+    weights = tmp_path / "matcher_token_weights.json"
+    _seed_counters(counters)
+    weights.write_text(json.dumps({"polymarket_us:trump": {"weight": 0.1}}), encoding="utf-8")
+
+    code = main(["--counters", str(counters), "--weights", str(weights), "--apply-quarantine"])
+
+    out = capsys.readouterr().out
+    assert code == 2
+    assert "--confirm-runtime-mutation" in out
+    assert json.loads(weights.read_text(encoding="utf-8")) == {"polymarket_us:trump": {"weight": 0.1}}

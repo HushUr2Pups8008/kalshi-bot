@@ -1,5 +1,7 @@
+import json
 import sqlite3
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,6 +23,9 @@ OPTIONAL_COLUMNS = [
     ("resolved_ts", "TEXT"),
     ("signal_type", "TEXT"),
     ("series_ticker", "TEXT"),
+    ("venue", "TEXT"),
+    ("cost_dollars", "REAL"),
+    ("market_snapshot", "TEXT"),
 ]
 
 
@@ -391,6 +396,59 @@ def test_holding_period_summary_only_when_derivable(local_db_case):
     assert stats["holding_period_count"] == 2
     assert stats["holding_period_avg_hours"] == pytest.approx(18.0)
     assert stats["holding_period_median_hours"] == pytest.approx(18.0)
+
+
+def test_open_resolution_buckets_use_market_snapshot_close_time(local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(
+        keeper,
+        rows=[
+            {
+                "trade_id": "t1",
+                "ts": "2026-06-19T00:00:00+00:00",
+                "ticker": "KXFAST",
+                "signal_source": "Reuters",
+                "resolved": 0,
+                "pnl_dollars": None,
+                "venue": "polymarket",
+                "cost_dollars": 12.5,
+                "market_snapshot": json.dumps({"close_time": "2026-06-21T00:00:00+00:00"}),
+            },
+            {
+                "trade_id": "t2",
+                "ts": "2026-06-19T01:00:00+00:00",
+                "ticker": "KXSLOW",
+                "signal_source": "AP",
+                "resolved": 0,
+                "pnl_dollars": None,
+                "venue": "polymarket",
+                "cost_dollars": 7.5,
+                "market_snapshot": json.dumps({"market": {"close_time": "2026-07-25T00:00:00+00:00"}}),
+            },
+            {
+                "trade_id": "t3",
+                "ts": "2026-06-19T02:00:00+00:00",
+                "ticker": "KXUNKNOWN",
+                "signal_source": "AP",
+                "resolved": 0,
+                "pnl_dollars": None,
+                "venue": "kalshi",
+                "cost_dollars": 3.0,
+                "market_snapshot": "{}",
+            },
+        ],
+    )
+
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path, now=datetime(2026, 6, 19, tzinfo=timezone.utc))
+
+    rows = {(row["bucket"], row["venue"]): row for row in stats["open_resolution_buckets"]}
+    assert rows[("0-3d", "polymarket")]["trades"] == 1
+    assert rows[("0-3d", "polymarket")]["exposure"] == pytest.approx(12.5)
+    assert rows[(">30d", "polymarket")]["trades"] == 1
+    assert rows[(">30d", "polymarket")]["exposure"] == pytest.approx(7.5)
+    assert rows[("unknown", "kalshi")]["trades"] == 1
+    assert rows[("unknown", "kalshi")]["exposure"] == pytest.approx(3.0)
 
 
 def test_print_summary_missing_db(capsys):

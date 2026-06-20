@@ -17,6 +17,7 @@ from scripts.daily_review import (
 def test_format_fresh_pass_conversion_lines_surfaces_funnel_pinch():
     lines = _format_fresh_pass_conversion_lines(
         fresh_passes=186,
+        match_records=40,
         detail_rows=1,
         llm_attempted=0,
         opportunities=0,
@@ -25,7 +26,8 @@ def test_format_fresh_pass_conversion_lines_surfaces_funnel_pinch():
 
     assert lines == [
         "  Fresh-pass conversion            : 186 fresh -> 1 signal row -> 0 LLM attempts -> 0 opportunities -> 0 paper trades",
-        "    pinch                          : fresh_to_signal (185 fresh passes did not become signal-analysis rows)",
+        "    lifecycle gaps                 : fresh_to_match=146, match_to_analysis=39, analysis_to_opportunity=1, opportunity_to_trade=0",
+        "    pinch                          : fresh_to_match (146 fresh passes had no match diagnostic)",
     ]
 
 
@@ -133,6 +135,7 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                 "LIVE_ORDER": 0,
             },
             "analysis_rejected_reasons": {"stale_news": 2, "no_keywords": 1},
+            "analysis_rejected_categories": {"post_llm_neutral_empty_keywords": 1},
         },
     )
     monkeypatch.setattr(
@@ -157,6 +160,7 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                 "attempted": 1,
                 "skipped_routing": 2,
                 "skipped_routing_reasons": Counter({"price_band_excluded": 2}),
+                "pre_llm_would_block_and_useful": 1,
             },
             "skip_breakdown": {
                 "zero_edge": 1,
@@ -272,6 +276,23 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
             "open_trades": 1,
             "win_rate": 1.0,
             "total_pnl": 5.0,
+            "open_resolution_buckets": [
+                {"bucket": "0-3d", "venue": "polymarket", "trades": 1, "exposure": 12.5}
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "scripts.daily_review.keyword_feedback.summarize",
+        lambda *args, **kwargs: {
+            "no_keyword_misses": 3,
+            "corroborating_keyword_gate_records": 2,
+            "no_keyword_rejection_categories": Counter({"post_llm_neutral_empty_keywords": 3}),
+            "empty_keyword_llm_directional_rows": 1,
+            "empty_keyword_llm_neutral_rows": 2,
+            "unique_candidate_phrases": 4,
+            "grouped_phrases": {},
+            "top_no_keyword_sources": [("Reuters", 2), ("AP", 1)],
+            "top_no_keyword_tickers": [("KXIRAN", 2), ("KXTRUMP", 1)],
         },
     )
 
@@ -302,6 +323,7 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Drilldown: per-source freshness waterfall" in rendered
     assert "Fresh-pass conversion" in rendered
     assert "9 fresh -> 6 signal rows -> 1 LLM attempts -> 3 opportunities -> 2 paper trades" in rendered
+    assert "lifecycle gaps                 : fresh_to_match=1, match_to_analysis=2, analysis_to_opportunity=3, opportunity_to_trade=1" in rendered
     assert "Fresh assignment shadow         : 4 assigned, 5 unassigned, 0 malformed" in rendered
     assert "Drilldown: unassigned fresh-pass sources" in rendered
     assert "LLM rows                         : 1" in rendered
@@ -314,7 +336,17 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Market price bands by meaningful signal rate" in rendered
     assert "Rare non-neutral cases" in rendered
     assert "Ollama runtime                   : configured=qwen2.5:7b health=ok available=['qwen2.5:7b']" in rendered
+    assert "No-keyword analysis exits       : 3" in rendered
+    assert "post_llm_neutral_empty_keywords: 3" in rendered
+    assert "Empty-keyword LLM detail rows   : directional=1 neutral=2" in rendered
+    assert "Pre-LLM would-block useful rows : 1" in rendered
+    assert "Drilldown: top no-keyword analysis-exit sources" in rendered
+    assert "Reuters: 2" in rendered
+    assert "Drilldown: top no-keyword analysis-exit tickers" in rendered
+    assert "KXIRAN: 2" in rendered
     assert "Paper trades                     : 2" in rendered
+    assert "Drilldown: open exposure by resolution horizon" in rendered
+    assert "0-3d venue=polymarket trades=1 exposure=$12.50" in rendered
 
 
 # ---------------------------------------------------------------------------

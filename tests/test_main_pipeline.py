@@ -389,6 +389,13 @@ async def test_process_candidate_returns_early_when_no_keywords(monkeypatch):
     bot.ws.watch.assert_not_called()
     reject_mock.assert_called_once_with(
         reason="no_keywords",
+        rejection_category="no_signal_empty_keywords",
+        signal_branch="empty_keywords_no_llm_signal",
+        method=None,
+        llm_direction=None,
+        llm_magnitude=None,
+        llm_confidence=None,
+        keywords=[],
         ticker=market.ticker,
         source=news.source,
         headline=news.headline,
@@ -454,6 +461,13 @@ async def test_process_candidate_still_rejects_when_neither_signal_source_speaks
     bot.executor.execute.assert_not_called()
     reject_mock.assert_called_once_with(
         reason="no_keywords",
+        rejection_category="post_llm_neutral_empty_keywords",
+        signal_branch="empty_keywords_neutral_llm",
+        method="llm",
+        llm_direction="neutral",
+        llm_magnitude="none",
+        llm_confidence=0.95,
+        keywords=[],
         ticker=market.ticker,
         source=news.source,
         headline=news.headline,

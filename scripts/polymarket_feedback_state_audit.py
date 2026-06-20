@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_COUNTERS = _REPO_ROOT / "data" / "match_token_fp_counters.db"
 _DEFAULT_WEIGHTS = _REPO_ROOT / "data" / "matcher_token_weights.json"
+_DEFAULT_BACKUP_ROOT = _REPO_ROOT / "logs" / "backups"
 _PM_PREFIX = "polymarket_us"
 _PM_FAMILY_GLOB = _PM_PREFIX + ":*"
 
@@ -94,7 +98,8 @@ def audit_counters(counters_path: Path) -> CounterAudit:
     if not counters_path.exists():
         return CounterAudit(path=counters_path, exists=False)
 
-    conn = sqlite3.connect(str(counters_path))
+    db_uri = f"file:{quote(str(counters_path.resolve()))}?mode=ro&immutable=1"
+    conn = sqlite3.connect(db_uri, uri=True)
     try:
         table_exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'match_token_fp_counters'"
@@ -163,6 +168,74 @@ def audit_weights(weights_path: Path) -> WeightAudit:
         other_keys=len(keys) - len(bare_pm) - len(family_pm),
         bare_pm_key_sample=tuple(bare_pm[:10]),
     )
+
+
+def _copy_runtime_file_with_sidecars(path: Path, backup_dir: Path) -> None:
+    if path.exists():
+        shutil.copy2(path, backup_dir / path.name)
+    for suffix in ("-wal", "-shm"):
+        sidecar = path.with_name(path.name + suffix)
+        if sidecar.exists():
+            shutil.copy2(sidecar, backup_dir / sidecar.name)
+
+
+def apply_quarantine_plan(*, counters_path: Path, weights_path: Path, backup_dir: Path) -> dict:
+    """Quarantine legacy bare Polymarket feedback state.
+
+    This intentionally removes only the legacy bare ``polymarket_us`` counter
+    rows and runtime weight keys. Family-scoped ``polymarket_us:<family>:...``
+    state remains intact.
+    """
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    _copy_runtime_file_with_sidecars(counters_path, backup_dir)
+    _copy_runtime_file_with_sidecars(weights_path, backup_dir)
+
+    summary: dict = {
+        "backup_dir": str(backup_dir),
+        "counters": {"path": str(counters_path), "bare_pm_removed": 0},
+        "weights": {"path": str(weights_path), "bare_pm_removed": 0},
+        "verify": {},
+    }
+
+    if weights_path.exists():
+        data = json.loads(weights_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"weights file is not a JSON object: {weights_path}")
+        bare_keys = [key for key in data if _is_bare_pm_weight_key(str(key))]
+        for key in bare_keys:
+            del data[key]
+        summary["weights"]["bare_pm_removed"] = len(bare_keys)
+        if bare_keys:
+            tmp = weights_path.with_suffix(weights_path.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            tmp.replace(weights_path)
+
+    if counters_path.exists():
+        conn = sqlite3.connect(str(counters_path))
+        try:
+            with conn:
+                summary["counters"]["bare_pm_removed"] = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM match_token_fp_counters WHERE market_prefix = ?",
+                        (_PM_PREFIX,),
+                    ).fetchone()[0]
+                    or 0
+                )
+                conn.execute(
+                    "DELETE FROM match_token_fp_counters WHERE market_prefix = ?",
+                    (_PM_PREFIX,),
+                )
+        finally:
+            conn.close()
+
+    audit = audit_feedback_state(counters_path=counters_path, weights_path=weights_path)
+    summary["verify"] = {
+        "bare_pm_counter_rows_remaining": audit.counters.bare_pm_rows,
+        "family_pm_counter_rows_remaining": audit.counters.family_pm_rows,
+        "bare_pm_weight_keys_remaining": audit.weights.bare_pm_keys,
+        "family_pm_weight_keys_remaining": audit.weights.family_pm_keys,
+    }
+    return summary
 
 
 def build_quarantine_plan(*, counters_path: Path, weights_path: Path) -> QuarantinePlan:
@@ -248,7 +321,50 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--counters", type=Path, default=_DEFAULT_COUNTERS)
     parser.add_argument("--weights", type=Path, default=_DEFAULT_WEIGHTS)
+    parser.add_argument(
+        "--apply-quarantine",
+        action="store_true",
+        help="Mutate runtime files by quarantining legacy bare Polymarket feedback state.",
+    )
+    parser.add_argument(
+        "--confirm-runtime-mutation",
+        action="store_true",
+        help="Required with --apply-quarantine; confirms operator approval for runtime mutation.",
+    )
+    parser.add_argument("--backup-dir", type=Path)
     args = parser.parse_args(argv)
+
+    if args.apply_quarantine:
+        if not args.confirm_runtime_mutation:
+            print("--apply-quarantine requires --confirm-runtime-mutation")
+            return 2
+        backup_dir = args.backup_dir
+        if backup_dir is None:
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup_dir = _DEFAULT_BACKUP_ROOT / f"pm_feedback_bare_quarantine_{ts}"
+        summary = apply_quarantine_plan(
+            counters_path=args.counters,
+            weights_path=args.weights,
+            backup_dir=backup_dir,
+        )
+        print("Polymarket bare feedback quarantine")
+        print("mode: runtime mutation")
+        print(f"backup: {summary['backup_dir']}")
+        print(f"bare DB rows removed: {summary['counters']['bare_pm_removed']}")
+        print(f"bare runtime weight keys removed: {summary['weights']['bare_pm_removed']}")
+        print(
+            "verify: "
+            f"bare_db={summary['verify']['bare_pm_counter_rows_remaining']} "
+            f"family_db={summary['verify']['family_pm_counter_rows_remaining']} "
+            f"bare_weights={summary['verify']['bare_pm_weight_keys_remaining']} "
+            f"family_weights={summary['verify']['family_pm_weight_keys_remaining']}"
+        )
+        if (
+            summary["verify"]["bare_pm_counter_rows_remaining"]
+            or summary["verify"]["bare_pm_weight_keys_remaining"]
+        ):
+            return 1
+        return 0
 
     audit = audit_feedback_state(counters_path=args.counters, weights_path=args.weights)
     print(render_audit(audit), end="")

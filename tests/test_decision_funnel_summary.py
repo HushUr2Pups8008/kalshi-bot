@@ -37,7 +37,9 @@ def test_summarize_empty_file(local_tmp_dir):
     assert stats["records_kept"] == 0
     assert not stats["event_counts"]
     assert not stats["skip_reasons"]
+    assert not stats["skip_categories"]
     assert not stats["analysis_rejected_reasons"]
+    assert not stats["analysis_rejected_categories"]
     assert not stats["stale_news_age_buckets"]
     assert not stats["stale_news_sources"]
     assert not stats["stale_news_tickers"]
@@ -105,7 +107,9 @@ def test_summarize_handles_missing_optional_fields_gracefully(local_tmp_dir):
     assert stats["event_counts"]["SKIPPED"] == 1
     assert stats["event_counts"]["UNKNOWN"] == 2
     assert stats["skip_reasons"]["unknown"] == 1
+    assert stats["skip_categories"]["unknown"] == 1
     assert not stats["analysis_rejected_reasons"]
+    assert not stats["analysis_rejected_categories"]
     assert stats["path_counts"]["news"] == 1
     assert not stats["execution_paths"]
 
@@ -143,8 +147,8 @@ def test_summarize_aggregates_skip_reasons(local_tmp_dir):
         path,
         [
             {"type": "SKIPPED", "reason": "cooldown", "ts": "2026-04-11T00:00:00+00:00"},
-            {"type": "SKIPPED", "reason": "cooldown", "ts": "2026-04-11T00:01:00+00:00"},
-            {"type": "SKIPPED", "reason": "same-signal duplicate", "ts": "2026-04-11T00:02:00+00:00"},
+            {"type": "SKIPPED", "reason": "cooldown", "skip_category": "cooldown", "ts": "2026-04-11T00:01:00+00:00"},
+            {"type": "SKIPPED", "reason": "same-signal duplicate", "skip_category": "duplicate", "ts": "2026-04-11T00:02:00+00:00"},
         ],
     )
 
@@ -152,6 +156,9 @@ def test_summarize_aggregates_skip_reasons(local_tmp_dir):
 
     assert stats["skip_reasons"]["cooldown"] == 2
     assert stats["skip_reasons"]["same-signal duplicate"] == 1
+    assert stats["skip_categories"]["unknown"] == 1
+    assert stats["skip_categories"]["cooldown"] == 1
+    assert stats["skip_categories"]["duplicate"] == 1
 
 
 def test_summarize_aggregates_analysis_rejected_reasons(local_tmp_dir):
@@ -161,7 +168,12 @@ def test_summarize_aggregates_analysis_rejected_reasons(local_tmp_dir):
         [
             {"type": "ANALYSIS_REJECTED", "reason": "stale_news", "ts": "2026-04-11T00:00:00+00:00"},
             {"type": "ANALYSIS_REJECTED", "reason": "stale_news", "ts": "2026-04-11T00:01:00+00:00"},
-            {"type": "ANALYSIS_REJECTED", "reason": "no_keywords", "ts": "2026-04-11T00:02:00+00:00"},
+            {
+                "type": "ANALYSIS_REJECTED",
+                "reason": "no_keywords",
+                "rejection_category": "post_llm_neutral_empty_keywords",
+                "ts": "2026-04-11T00:02:00+00:00",
+            },
         ],
     )
 
@@ -170,6 +182,7 @@ def test_summarize_aggregates_analysis_rejected_reasons(local_tmp_dir):
     assert stats["event_counts"]["ANALYSIS_REJECTED"] == 3
     assert stats["analysis_rejected_reasons"]["stale_news"] == 2
     assert stats["analysis_rejected_reasons"]["no_keywords"] == 1
+    assert stats["analysis_rejected_categories"]["post_llm_neutral_empty_keywords"] == 1
     assert not stats["skip_reasons"]
 
 
@@ -375,7 +388,12 @@ def test_print_summary_includes_pre_signal_rejections_when_present(capsys, local
         path,
         [
             {"type": "ANALYSIS_REJECTED", "reason": "stale_news", "ts": "2026-04-11T00:00:00+00:00"},
-            {"type": "ANALYSIS_REJECTED", "reason": "no_keywords", "ts": "2026-04-11T00:01:00+00:00"},
+            {
+                "type": "ANALYSIS_REJECTED",
+                "reason": "no_keywords",
+                "rejection_category": "post_llm_neutral_empty_keywords",
+                "ts": "2026-04-11T00:01:00+00:00",
+            },
             {"type": "SIGNAL", "ts": "2026-04-11T00:02:00+00:00"},
         ],
     )
@@ -387,8 +405,10 @@ def test_print_summary_includes_pre_signal_rejections_when_present(capsys, local
     assert "Pre-signal rejections         : 2" in output
     assert "No-signal exits               : partially observable via ANALYSIS_REJECTED" in output
     assert "Pre-Signal Rejection Reasons" in output
+    assert "Pre-Signal Rejection Branches" in output
     assert "stale_news" in output
     assert "no_keywords" in output
+    assert "post_llm_neutral_empty_keywords" in output
 
 
 def test_print_summary_includes_stale_news_sections(capsys, local_tmp_dir):

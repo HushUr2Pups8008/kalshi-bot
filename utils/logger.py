@@ -723,6 +723,7 @@ class TradeLogger:
         self,
         *,
         reason: str,
+        skip_category: str | None = None,
         ticker: str | None = None,
         headline: str | None = None,
         source: str | None = None,
@@ -773,6 +774,8 @@ class TradeLogger:
             "ticker": ticker,
             "headline": headline,
         }
+        if skip_category is not None:
+            record["skip_category"] = skip_category
         if source is not None:
             record["source"] = source
         if method is not None:
@@ -813,6 +816,13 @@ class TradeLogger:
         source: str,
         headline: str,
         match_score: float,
+        rejection_category: str | None = None,
+        signal_branch: str | None = None,
+        method: str | None = None,
+        llm_direction: str | None = None,
+        llm_magnitude: str | None = None,
+        llm_confidence: float | None = None,
+        keywords: list[str] | None = None,
         age_seconds: float | None = None,
         threshold_seconds: int | None = None,
     ) -> None:
@@ -824,6 +834,21 @@ class TradeLogger:
             "headline": headline,
             "match_score": round(match_score, 4),
         }
+        if rejection_category is not None:
+            record["rejection_category"] = rejection_category
+        if signal_branch is not None:
+            record["signal_branch"] = signal_branch
+        if method is not None:
+            record["method"] = method
+        if llm_direction is not None:
+            record["llm_direction"] = llm_direction
+        if llm_magnitude is not None:
+            record["llm_magnitude"] = llm_magnitude
+        if llm_confidence is not None:
+            record["llm_confidence"] = round(float(llm_confidence), 4)
+        if keywords is not None:
+            record["keywords"] = list(keywords)
+            record["keyword_count"] = len(keywords)
         if age_seconds is not None:
             record["age_seconds"] = round(age_seconds, 2)
         if threshold_seconds is not None:
