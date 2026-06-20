@@ -82,6 +82,7 @@ def _filled_market_mix_counts(counter: Counter[str]) -> dict[str, int]:
 def summarize_events(paths: Iterable[Path], *, top_n: int = 10) -> dict[str, Any]:
     stage_counts = Counter({stage: 0 for stage in FUNNEL_STAGES})
     reasons: Counter[str] = Counter()
+    skip_categories: Counter[str] = Counter()
     tickers: Counter[str] = Counter()
     freshness_totals = Counter({stage: 0 for stage in FRESHNESS_STAGES})
     freshness_by_source: dict[str, Counter[str]] = defaultdict(Counter)
@@ -103,6 +104,10 @@ def summarize_events(paths: Iterable[Path], *, top_n: int = 10) -> dict[str, Any
         )
         if event_type and reason:
             reasons[f"{event_type}:{reason}"] += 1
+        if event_type == "SKIPPED":
+            category = event.get("skip_category")
+            if category:
+                skip_categories[str(category)] += 1
 
         ticker = event.get("ticker") or event.get("market_ticker")
         if ticker and event_type in FUNNEL_STAGES:
@@ -135,6 +140,7 @@ def summarize_events(paths: Iterable[Path], *, top_n: int = 10) -> dict[str, Any
         "funnel": {
             "stage_counts": dict(stage_counts),
             "top_reasons": _top(reasons, top_n),
+            "top_skip_categories": _top(skip_categories, top_n),
             "top_tickers": _top(tickers, top_n),
         },
         "freshness": {

@@ -139,3 +139,18 @@ class TestAnalysisRejectedRecordSchema:
             "post-fix invariant: threshold_seconds must default to None "
             "for back-compat with non-updated callers."
         )
+        for name in (
+            "rejection_category",
+            "signal_branch",
+            "method",
+            "llm_direction",
+            "llm_magnitude",
+            "llm_confidence",
+            "keywords",
+        ):
+            assert name in params, (
+                f"post-fix invariant: log_analysis_rejected must accept `{name}=` "
+                "so no_keywords exits can be split between pre-LLM, keyword-gate, "
+                "and post-LLM neutral branches."
+            )
+            assert params[name].default is None

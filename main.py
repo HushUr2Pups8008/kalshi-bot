@@ -1137,9 +1137,25 @@ class TradingBot:
         # validated real-market events in a 9-day window were killed here.
         llm_emitted_signal = llm_mag is not None and llm_mag != "none"
         if not keywords and not llm_emitted_signal:
+            saw_llm_result = llm_dir is not None or llm_mag is not None or llm_conf is not None
             await write_trade_log_async(
                 trade_log.log_analysis_rejected,
                 reason="no_keywords",
+                rejection_category=(
+                    "post_llm_neutral_empty_keywords"
+                    if saw_llm_result
+                    else "no_signal_empty_keywords"
+                ),
+                signal_branch=(
+                    "empty_keywords_neutral_llm"
+                    if saw_llm_result
+                    else "empty_keywords_no_llm_signal"
+                ),
+                method="llm" if saw_llm_result else None,
+                llm_direction=llm_dir,
+                llm_magnitude=llm_mag,
+                llm_confidence=llm_conf,
+                keywords=keywords,
                 ticker=market.ticker,
                 source=news.source,
                 headline=news.headline,

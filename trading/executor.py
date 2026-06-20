@@ -32,6 +32,20 @@ log = get_logger("executor")
 # Read from cfg at call time so .env changes take effect without code edits.
 
 
+def classify_skip_category(reason: str | None) -> str:
+    """Stable high-level bucket for executor SKIPPED reasons."""
+    text = str(reason or "").lower()
+    if not text.strip():
+        return "unknown"
+    if "cooldown" in text:
+        return "cooldown"
+    if "duplicate" in text or "same-signal" in text:
+        return "duplicate"
+    if "concentration" in text or "per-prefix cap" in text:
+        return "concentration"
+    return "other"
+
+
 def _correlated_exposure_prefix(market: Any) -> str:
     """Return the per-prefix cap key identifying a market's correlated-exposure family.
 
@@ -189,6 +203,7 @@ class TradeExecutor:
             )
             skipped_kwargs = {
                 "reason": skip_reason,
+                "skip_category": classify_skip_category(skip_reason),
                 "ticker": analysis.market.ticker,
                 "headline": analysis.news_item.headline[:80],
                 "source": analysis.news_item.source,

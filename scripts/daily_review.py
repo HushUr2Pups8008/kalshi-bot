@@ -226,6 +226,7 @@ def _summarize_fresh_pass_assignment_shadow(
 def _format_fresh_pass_conversion_lines(
     *,
     fresh_passes: int,
+    match_records: int,
     detail_rows: int,
     llm_attempted: int,
     opportunities: int,
@@ -239,11 +240,15 @@ def _format_fresh_pass_conversion_lines(
         f"{paper_trades} paper trades"
     ]
     deltas = [
-        ("fresh_to_signal", fresh_passes - detail_rows, "fresh passes did not become signal-analysis rows"),
-        ("signal_to_llm", detail_rows - llm_attempted, "signal rows did not attempt LLM"),
-        ("llm_to_opportunity", llm_attempted - opportunities, "LLM attempts did not create opportunities"),
+        ("fresh_to_match", fresh_passes - match_records, "fresh passes had no match diagnostic"),
+        ("match_to_analysis", match_records - detail_rows, "match diagnostics did not become signal-analysis rows"),
+        ("analysis_to_opportunity", detail_rows - opportunities, "signal-analysis rows did not create opportunities"),
         ("opportunity_to_trade", opportunities - paper_trades, "opportunities did not become paper trades"),
     ]
+    lines.append(
+        "    lifecycle gaps                 : "
+        + ", ".join(f"{label}={max(0, delta)}" for label, delta, _desc in deltas)
+    )
     positive = [(label, delta, desc) for label, delta, desc in deltas if delta > 0]
     if positive:
         label, delta, desc = max(positive, key=lambda item: item[1])
@@ -688,6 +693,7 @@ def build_daily_review(
     lines.extend(
         _format_fresh_pass_conversion_lines(
             fresh_passes=fresh_passes,
+            match_records=match_stats.get("match_records", 0),
             detail_rows=detail_rows,
             llm_attempted=llm_attempted,
             opportunities=opportunities,
@@ -778,9 +784,11 @@ def build_daily_review(
     match_records = match_stats.get("match_records", 0)
     low_quality = match_stats.get("low_quality_matches", 0)
     pre_llm_would_block = match_stats.get("pre_llm_would_block", 0)
+    pre_llm_useful = edge_stats.get("llm_observability", {}).get("pre_llm_would_block_and_useful", 0)
     lines.append(f"  Match diagnostics emitted        : {match_records}")
     lines.append(f"  Low-quality flagged              : {low_quality} ({fmt_pct(low_quality, match_records)})")
     lines.append(f"  Pre-LLM gate would-block         : {pre_llm_would_block} ({fmt_pct(pre_llm_would_block, match_records)})")
+    lines.append(f"  Pre-LLM would-block useful rows : {pre_llm_useful}")
     lines.append(f"  Suppression candidates           : {suppression_candidates}")
     lines.append(f"  Suppressed                       : {suppressed}")
     if match_flags:
@@ -887,9 +895,29 @@ def build_daily_review(
     no_keyword_misses = keyword_stats.get("no_keyword_misses", 0)
     corroborating_rows = keyword_stats.get("corroborating_keyword_gate_records", 0)
     unique_phrases = keyword_stats.get("unique_candidate_phrases", 0)
-    lines.append(f"  Keyword-gate no_keywords misses  : {no_keyword_misses}")
+    lines.append(f"  No-keyword analysis exits       : {no_keyword_misses}")
     lines.append(f"  Keyword-gate corroborating rows  : {corroborating_rows}")
+    lines.append(
+        "  Empty-keyword LLM detail rows   : "
+        f"directional={keyword_stats.get('empty_keyword_llm_directional_rows', 0)} "
+        f"neutral={keyword_stats.get('empty_keyword_llm_neutral_rows', 0)}"
+    )
     lines.append(f"  Unique candidate phrases         : {unique_phrases}")
+    no_keyword_categories = keyword_stats.get("no_keyword_rejection_categories") or Counter()
+    if no_keyword_categories:
+        lines.append("  Drilldown: no-keyword rejection branches")
+        for category, count in no_keyword_categories.most_common(top):
+            lines.append(f"    {category}: {count}")
+    top_no_keyword_sources = keyword_stats.get("top_no_keyword_sources") or []
+    if top_no_keyword_sources:
+        lines.append("  Drilldown: top no-keyword analysis-exit sources")
+        for source, count in top_no_keyword_sources[:top]:
+            lines.append(f"    {source}: {count}")
+    top_no_keyword_tickers = keyword_stats.get("top_no_keyword_tickers") or []
+    if top_no_keyword_tickers:
+        lines.append("  Drilldown: top no-keyword analysis-exit tickers")
+        for ticker, count in top_no_keyword_tickers[:top]:
+            lines.append(f"    {ticker}: {count}")
     strongest = keyword_stats.get("grouped_phrases", {}).get("strongest specific candidates", [])
     if strongest:
         lines.append("  Drilldown: strongest keyword-gate miss candidates")
@@ -947,6 +975,16 @@ def build_daily_review(
                     f"resolved={resolved} "
                     f"win_rate={paper_performance_drilldown.fmt_pct(row.get('win_rate'))} "
                     f"pnl={pnl_display}"
+                )
+        bucket_rows = paper_stats.get("open_resolution_buckets") or []
+        if bucket_rows:
+            lines.append("  Drilldown: open exposure by resolution horizon")
+            for row in bucket_rows[:top]:
+                lines.append(
+                    f"    {row.get('bucket') or 'unknown'} "
+                    f"venue={row.get('venue') or 'kalshi'} "
+                    f"trades={row.get('trades', 0)} "
+                    f"exposure={paper_performance_drilldown.fmt_bucket_exposure(row.get('exposure'))}"
                 )
     lines.append("")
 

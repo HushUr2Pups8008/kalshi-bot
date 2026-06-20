@@ -505,6 +505,7 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             "parse_ms_samples": [],
             "contention_observed": 0,
             "max_in_flight_at_entry": 0,
+            "pre_llm_would_block_and_useful": 0,
         },
         "llm_value_add": _default_llm_value_add(),
         "live_execution_attribution_limited": False,
@@ -751,6 +752,8 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                 stats["llm_observability"]["max_in_flight_at_entry"],
                 int(row["llm_in_flight_at_entry"]),
             )
+        if not is_probe and row.get("pre_llm_would_block_and_useful") is True:
+            stats["llm_observability"]["pre_llm_would_block_and_useful"] += 1
         if not is_probe and row.get("method") == "llm" and row.get("estimated_probability") is not None and row.get("market_price") is not None:
             est_prob = float(row["estimated_probability"])
             market_price = float(row["market_price"])

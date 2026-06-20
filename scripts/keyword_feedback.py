@@ -1,13 +1,17 @@
 """
-Read-only keyword feedback audit for missed keyword-gate events.
+Read-only keyword feedback audit for empty-keyword analysis exits.
 
 This script mines recent ANALYSIS_REJECTED(reason=no_keywords) records from
-the preferred trade-log root at logs/trades/ and surfaces repeated headline phrases as candidate
-keyword additions for human review.
+the preferred trade-log root at logs/trades/ and surfaces repeated headline
+phrases as candidate keyword additions for human review.
 
 Notes:
   - Candidate phrases are heuristic only and are not auto-promoted.
-  - The primary miss corpus is ANALYSIS_REJECTED(reason=no_keywords).
+  - The primary miss corpus is ANALYSIS_REJECTED(reason=no_keywords), split by
+    rejection_category when the emitter provides it.
+  - SIGNAL_ANALYSIS_DETAIL(method=llm, keywords=[]) rows are counted separately
+    as directional-empty or neutral-empty LLM context. They are mined only when
+    --include-empty-llm-detail-corpus is passed.
   - SIGNAL_ANALYSIS_DETAIL(method=keyword_gate, keywords=[]) is counted only as
     corroborating context, not as the primary mining corpus, to avoid double
     counting.
@@ -18,7 +22,7 @@ Notes:
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -122,6 +126,14 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=3,
         help="Example headlines to show per phrase (default: 3)",
+    )
+    parser.add_argument(
+        "--include-empty-llm-detail-corpus",
+        action="store_true",
+        help=(
+            "Also mine SIGNAL_ANALYSIS_DETAIL(method=llm, keywords=[]) rows. "
+            "Rows stay tagged by directional_empty_llm vs neutral_empty_llm."
+        ),
     )
     add_exclude_test_arg(
         parser,
@@ -231,7 +243,28 @@ def phrase_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def summarize(path: Path, since: datetime | None, until: datetime | None, exclude_test: bool = False) -> dict[str, Any]:
+def _empty_keywords(value: Any) -> bool:
+    return isinstance(value, list) and not value
+
+
+def _llm_empty_keyword_corpus(record: dict[str, Any]) -> str | None:
+    direction = str(record.get("llm_direction") or "").strip().lower()
+    magnitude = str(record.get("llm_magnitude") or "").strip().lower()
+    if direction in {"yes", "no"} and magnitude != "none":
+        return "directional_empty_llm"
+    if direction == "neutral" or magnitude == "none":
+        return "neutral_empty_llm"
+    return None
+
+
+def summarize(
+    path: Path,
+    since: datetime | None,
+    until: datetime | None,
+    exclude_test: bool = False,
+    *,
+    include_empty_llm_detail_corpus: bool = False,
+) -> dict[str, Any]:
     stats: dict[str, Any] = {
         "path": path,
         "lines_total": 0,
@@ -239,8 +272,15 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
         "records_kept": 0,
         "no_keyword_misses": 0,
         "corroborating_keyword_gate_records": 0,
+        "no_keyword_rejection_categories": Counter(),
+        "empty_keyword_llm_directional_rows": 0,
+        "empty_keyword_llm_neutral_rows": 0,
+        "top_empty_keyword_llm_directional_sources": [],
+        "top_empty_keyword_llm_neutral_sources": [],
         "phrases": [],
         "grouped_phrases": {},
+        "top_no_keyword_sources": [],
+        "top_no_keyword_tickers": [],
     }
 
     phrase_hits: dict[str, dict[str, Any]] = defaultdict(
@@ -252,6 +292,27 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             "tickers": set(),
         }
     )
+    source_counts: Counter[str] = Counter()
+    ticker_counts: Counter[str] = Counter()
+    directional_empty_sources: Counter[str] = Counter()
+    neutral_empty_sources: Counter[str] = Counter()
+
+    def add_phrase_hits(record: dict[str, Any], *, corpus: str) -> None:
+        headline = str(record.get("headline") or "").strip()
+        source = str(record.get("source") or "").strip()
+        ticker = str(record.get("ticker") or "").strip()
+        if not headline:
+            return
+        for phrase in iter_candidate_phrases(headline):
+            row = phrase_hits[phrase]
+            row["phrase"] = phrase
+            row["count"] += 1
+            row.setdefault("corpora", Counter())[corpus] += 1
+            row["sources"].add(source)
+            if ticker:
+                row["tickers"].add(ticker)
+            if headline not in row["examples"] and len(row["examples"]) < 5:
+                row["examples"].append(headline)
 
     read_stats = TradeLogReadStats()
     for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
@@ -264,8 +325,22 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
         if event_type == "SIGNAL_ANALYSIS_DETAIL":
             method = str(record.get("method") or "").strip()
             keywords = record.get("keywords")
-            if method == "keyword_gate" and isinstance(keywords, list) and not keywords:
+            if method == "keyword_gate" and _empty_keywords(keywords):
                 stats["corroborating_keyword_gate_records"] += 1
+            if method == "llm" and _empty_keywords(keywords):
+                corpus = _llm_empty_keyword_corpus(record)
+                if corpus == "directional_empty_llm":
+                    stats["empty_keyword_llm_directional_rows"] += 1
+                    source = str(record.get("source") or "").strip()
+                    if source:
+                        directional_empty_sources[source] += 1
+                elif corpus == "neutral_empty_llm":
+                    stats["empty_keyword_llm_neutral_rows"] += 1
+                    source = str(record.get("source") or "").strip()
+                    if source:
+                        neutral_empty_sources[source] += 1
+                if corpus and include_empty_llm_detail_corpus:
+                    add_phrase_hits(record, corpus=corpus)
 
         if event_type != "ANALYSIS_REJECTED" or record.get("reason") != "no_keywords":
             continue
@@ -277,15 +352,13 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             continue
 
         stats["no_keyword_misses"] += 1
-        for phrase in iter_candidate_phrases(headline):
-            row = phrase_hits[phrase]
-            row["phrase"] = phrase
-            row["count"] += 1
-            row["sources"].add(source)
-            if ticker:
-                row["tickers"].add(ticker)
-            if headline not in row["examples"] and len(row["examples"]) < 5:
-                row["examples"].append(headline)
+        category = str(record.get("rejection_category") or "legacy_no_keywords").strip() or "legacy_no_keywords"
+        stats["no_keyword_rejection_categories"][category] += 1
+        if source:
+            source_counts[source] += 1
+        if ticker:
+            ticker_counts[ticker] += 1
+        add_phrase_hits(record, corpus=category)
 
     stats["lines_total"] = read_stats.lines_total
     stats["lines_malformed"] = read_stats.lines_malformed
@@ -308,6 +381,7 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                 "examples": row["examples"],
                 "sources": sorted(source for source in row["sources"] if source),
                 "tickers": sorted(row["tickers"]),
+                "corpora": dict(row.get("corpora", {})),
                 "risk_flags": risk_flags,
                 "category": category,
                 "candidate_score": score,
@@ -318,6 +392,10 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
     phrase_rows.sort(key=phrase_sort_key)
     stats["phrases"] = phrase_rows
     stats["unique_candidate_phrases"] = len(phrase_rows)
+    stats["top_no_keyword_sources"] = source_counts.most_common()
+    stats["top_no_keyword_tickers"] = ticker_counts.most_common()
+    stats["top_empty_keyword_llm_directional_sources"] = directional_empty_sources.most_common()
+    stats["top_empty_keyword_llm_neutral_sources"] = neutral_empty_sources.most_common()
     grouped: dict[str, list[dict[str, Any]]] = {
         "strongest specific candidates": [],
         "watchlist / ambiguous candidates": [],
@@ -358,13 +436,40 @@ def print_summary(stats: dict[str, Any], top: int, min_count: int, max_examples:
     print("Available Miss Corpus")
     print("  Primary corpus: ANALYSIS_REJECTED(reason=no_keywords)")
     print("  Corroborating context: SIGNAL_ANALYSIS_DETAIL(method=keyword_gate, keywords=[])")
+    print("  LLM-empty context: SIGNAL_ANALYSIS_DETAIL(method=llm, keywords=[])")
     print("  Reliable fields: headline, source, ticker, ts, reason, match_score")
     print("  Not reliably available: market title on the miss event itself")
     print()
     print("Summary")
     print(f"  No-keyword misses considered     : {stats['no_keyword_misses']}")
     print(f"  Corroborating keyword-gate rows  : {stats['corroborating_keyword_gate_records']}")
+    print(
+        "  Empty-keyword LLM detail rows    : "
+        f"directional={stats['empty_keyword_llm_directional_rows']} "
+        f"neutral={stats['empty_keyword_llm_neutral_rows']}"
+    )
     print(f"  Unique candidate phrases surfaced: {stats['unique_candidate_phrases']}")
+    categories = stats.get("no_keyword_rejection_categories") or Counter()
+    if categories:
+        print("  No-keyword rejection branches")
+        for category, count in categories.most_common():
+            print(f"    {category}: {count}")
+    print()
+    print("Top no-keyword miss sources")
+    source_rows = stats.get("top_no_keyword_sources") or []
+    if source_rows:
+        for source, count in source_rows[:top]:
+            print(f"  {source}: {count}")
+    else:
+        print("  (none)")
+    print()
+    print("Top no-keyword miss tickers")
+    ticker_rows = stats.get("top_no_keyword_tickers") or []
+    if ticker_rows:
+        for ticker, count in ticker_rows[:top]:
+            print(f"  {ticker}: {count}")
+    else:
+        print("  (none)")
     print()
     print("Review Buckets")
     print("  Heuristic only. These buckets are review aids, not live recommendations.")
@@ -402,7 +507,13 @@ def main() -> int:
     since = parse_date_start(args.since)
     until = parse_date_end(args.until)
     warn_if_full_trade_root_scan(path, since=since, until=until)
-    stats = summarize(path, since=since, until=until, exclude_test=args.exclude_test)
+    stats = summarize(
+        path,
+        since=since,
+        until=until,
+        exclude_test=args.exclude_test,
+        include_empty_llm_detail_corpus=args.include_empty_llm_detail_corpus,
+    )
     print_summary(
         stats,
         top=args.top,

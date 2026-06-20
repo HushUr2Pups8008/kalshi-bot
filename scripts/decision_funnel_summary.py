@@ -117,7 +117,9 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
         "records_kept": 0,
         "event_counts": Counter(),
         "skip_reasons": Counter(),
+        "skip_categories": Counter(),
         "analysis_rejected_reasons": Counter(),
+        "analysis_rejected_categories": Counter(),
         "stale_news_age_buckets": Counter(),
         "stale_news_sources": Counter(),
         "stale_news_tickers": Counter(),
@@ -143,9 +145,14 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
         if event_type == "SKIPPED":
             reason = str(record.get("reason") or "unknown").strip() or "unknown"
             stats["skip_reasons"][reason] += 1
+            category = str(record.get("skip_category") or "unknown").strip() or "unknown"
+            stats["skip_categories"][category] += 1
         elif event_type == "ANALYSIS_REJECTED":
             reason = str(record.get("reason") or "unknown").strip() or "unknown"
             stats["analysis_rejected_reasons"][reason] += 1
+            category = str(record.get("rejection_category") or "").strip()
+            if category:
+                stats["analysis_rejected_categories"][category] += 1
             if reason == "stale_news":
                 bucket = stale_age_bucket(record.get("age_seconds"))
                 if bucket:
@@ -218,6 +225,11 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
         print(line)
 
     print()
+    print("Pre-Signal Rejection Branches")
+    for line in format_counter(stats["analysis_rejected_categories"], top=top):
+        print(line)
+
+    print()
     print("Stale-News Age Buckets")
     for line in format_counter(stats["stale_news_age_buckets"], top=max(top, len(stats["stale_news_age_buckets"]))):
         print(line)
@@ -230,6 +242,11 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
     print()
     print(f"Stale-News Tickers (top {top})")
     for line in format_counter(stats["stale_news_tickers"], top=top):
+        print(line)
+
+    print()
+    print("Executor Skip Categories")
+    for line in format_counter(stats["skip_categories"], top=top):
         print(line)
 
     print()

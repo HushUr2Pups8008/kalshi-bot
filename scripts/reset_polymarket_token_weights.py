@@ -15,6 +15,11 @@ Resets BOTH stores so the reset is not silently undone:
                                          re-derives weights from (else the next
                                          aggregation regenerates the poisoned weights).
 
+This is a FULL Polymarket reset: it removes the old bare bucket and new
+per-family ``polymarket_us:<family>:...`` rows/keys. For the narrower
+bare-bucket-only quarantine, use:
+``scripts/polymarket_feedback_state_audit.py --apply-quarantine --confirm-runtime-mutation``.
+
 ONLY ``polymarket_us``-prefixed keys/rows are removed; Kalshi (KX*) entries are
 left byte-identical. Dry-run by default; pass --execute to write. Backs up both
 files to logs/backups/<utc-ts>/ before writing.
@@ -150,7 +155,15 @@ def reset_polymarket_weights(
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--execute", action="store_true", help="Write changes (default: dry-run).")
+    p.add_argument(
+        "--execute",
+        action="store_true",
+        help=(
+            "Write full PM reset changes (default: dry-run). "
+            "For bare-only quarantine, use scripts/polymarket_feedback_state_audit.py "
+            "--apply-quarantine --confirm-runtime-mutation."
+        ),
+    )
     p.add_argument("--weights", type=Path, default=_DEFAULT_WEIGHTS)
     p.add_argument("--counters", type=Path, default=_DEFAULT_COUNTERS)
     args = p.parse_args(argv)

@@ -10,13 +10,22 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import config as _cfg_module
-from trading.executor import TradeExecutor
+from trading.executor import TradeExecutor, classify_skip_category
 from trading.venue import Venue
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def test_classify_skip_category_groups_controllable_executor_reasons():
+    assert classify_skip_category("paper cooldown: last trade 1.0h ago") == "cooldown"
+    assert classify_skip_category("same-signal skip: open YES -- no new information") == "duplicate"
+    assert classify_skip_category("paper duplicate skip: open YES") == "duplicate"
+    assert classify_skip_category("per-prefix cap: 2 open in polymarket_us:abc") == "concentration"
+    assert classify_skip_category("concentration limit: KX exposure would exceed cap") == "concentration"
+    assert classify_skip_category("edge +0.0100 below min_edge 0.04") == "other"
 
 def _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10):
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
@@ -679,6 +688,7 @@ class TestStructuredBoundaryLogging:
         assert trade_id is None
         trade_log_mock.log_skipped.assert_called_once_with(
             reason="edge +0.0100 below min_edge 0.04",
+            skip_category="other",
             ticker=analysis.market.ticker,
             headline=analysis.news_item.headline[:80],
             source=analysis.news_item.source,
@@ -699,6 +709,7 @@ class TestStructuredBoundaryLogging:
         with patch.object(logger, "_write") as write_mock:
             logger.log_skipped(
                 reason="edge +0.0100 below min_edge 0.04",
+                skip_category="other",
                 ticker="KXTEST-25DEC31",
                 headline="Test headline",
                 source="Reuters",
@@ -718,6 +729,7 @@ class TestStructuredBoundaryLogging:
         assert record["source"] == "Reuters"
         assert record["method"] == "keyword"
         assert record["venue"] == "polymarket_us"
+        assert record["skip_category"] == "other"
 
     @pytest.mark.asyncio
     async def test_execute_live_logs_edge_context_on_success(self, monkeypatch):

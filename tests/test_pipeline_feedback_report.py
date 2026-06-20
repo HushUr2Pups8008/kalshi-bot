@@ -41,6 +41,7 @@ class TestPipelineFunnelReport:
                     "type": "SKIPPED",
                     "ticker": "KXIRAN-26JUN01",
                     "reason": "G1_blended_confidence",
+                    "skip_category": "readiness_gate",
                 },
                 {
                     "type": "PAPER_TRADE",
@@ -70,6 +71,10 @@ class TestPipelineFunnelReport:
             "key": "SKIPPED:G1_blended_confidence",
             "count": 1,
         } in summary["funnel"]["top_reasons"]
+        assert {
+            "key": "readiness_gate",
+            "count": 1,
+        } in summary["funnel"]["top_skip_categories"]
         assert summary["funnel"]["top_tickers"][0] == {
             "key": "KXIRAN-26JUN01",
             "count": 4,
