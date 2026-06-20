@@ -166,6 +166,7 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                 "zero_edge": 1,
                 "below_threshold": 1,
                 "duplicate": 1,
+                "liquidity": 1,
                 "other": 0,
             },
             "audit_rows": [
@@ -295,6 +296,30 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
             "top_no_keyword_tickers": [("KXIRAN", 2), ("KXTRUMP", 1)],
         },
     )
+    monkeypatch.setattr(
+        "scripts.daily_review._latest_restart_timestamp_from_health_reports",
+        lambda: "2026-04-11T10:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        "scripts.daily_review.since_restart_money_path.build_money_path_report",
+        lambda *args, **kwargs: {
+            "window": {"since": "2026-04-11T10:00:00+00:00", "until": None},
+            "summary": {
+                "candidates": 1,
+                "terminal_counts": {"SKIPPED": 1},
+                "measurement_gaps": 0,
+            },
+            "no_keywords": {"count": 3},
+            "candidates": [
+                {
+                    "ticker": "KXTEST",
+                    "terminal_type": "SKIPPED",
+                    "terminal_venue": "kalshi",
+                    "terminal_reason": "price 1.0c is near limit (too illiquid)",
+                }
+            ],
+        },
+    )
 
     lines = build_daily_review(
         trades_path=Path("logs/trades/trades.jsonl"),
@@ -308,6 +333,10 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     rendered = "\n".join(lines)
 
     assert "PIPELINE REVIEW" in rendered
+    assert "SINCE-RESTART MONEY PATH" in rendered
+    assert "Candidates                       : 1" in rendered
+    assert "Terminal outcomes                : SKIPPED=1" in rendered
+    assert "No-keyword exits                 : 3" in rendered
     assert "1. INGESTION" in rendered
     assert "2. MATCHING" in rendered
     assert "3. ANALYSIS" in rendered
@@ -345,6 +374,7 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Drilldown: top no-keyword analysis-exit tickers" in rendered
     assert "KXIRAN: 2" in rendered
     assert "Paper trades                     : 2" in rendered
+    assert "Skipped liquidity/near-limit     : 1" in rendered
     assert "Drilldown: open exposure by resolution horizon" in rendered
     assert "0-3d venue=polymarket trades=1 exposure=$12.50" in rendered
 

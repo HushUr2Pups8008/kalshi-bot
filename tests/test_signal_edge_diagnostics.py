@@ -15,6 +15,7 @@ def test_classify_skip_reason_distinguishes_zero_edge_duplicate_and_other():
     assert classify_skip_reason({"reason": "edge +0.0000 below min_edge 0.02", "edge": 0.0}) == "zero_edge"
     assert classify_skip_reason({"reason": "paper duplicate skip: existing position"}) == "duplicate"
     assert classify_skip_reason({"reason": "edge +0.0100 below min_edge 0.02", "edge": 0.01}) == "below_threshold"
+    assert classify_skip_reason({"reason": "price 1.0c is near limit (too illiquid)"}) == "liquidity"
     assert classify_skip_reason({"reason": "market status=closed"}) == "other"
 
 
@@ -44,6 +45,9 @@ def test_summarize_builds_edge_audit_and_group_metrics():
                     "llm_in_flight_at_entry": 1,
                     "final_probability": 0.62,
                     "market_price": 0.62,
+                    "publish_ts": "2026-04-12T11:58:00+00:00",
+                    "age_at_analysis_seconds": 120.0,
+                    "analysis_threshold_seconds": 1800,
                     "ts": "2026-04-12T12:00:00+00:00",
                 },
                 {
@@ -168,7 +172,10 @@ def test_summarize_builds_edge_audit_and_group_metrics():
             row["price_band"]: row for row in stats["llm_value_add"]["segmentation"]["by_price_band"]
         }
         assert by_price_band_seg["0.60-0.80"]["llm_rows"] == 1
-        assert stats["llm_value_add"]["segmentation"]["timing"]["available"] is False
+        timing_seg = stats["llm_value_add"]["segmentation"]["timing"]
+        assert timing_seg["available"] is True
+        by_age_bucket = {row["age_bucket"]: row for row in timing_seg["by_age_bucket"]}
+        assert by_age_bucket["0-5m"]["llm_rows"] == 1
 
         first_row = stats["audit_rows"][0]
         second_row = stats["audit_rows"][1]

@@ -43,6 +43,13 @@ def classify_skip_category(reason: str | None) -> str:
         return "duplicate"
     if "concentration" in text or "per-prefix cap" in text:
         return "concentration"
+    if (
+        "illiquid" in text
+        or "near limit" in text
+        or "price unavailable" in text
+        or "not tradeable" in text
+    ):
+        return "liquidity"
     return "other"
 
 

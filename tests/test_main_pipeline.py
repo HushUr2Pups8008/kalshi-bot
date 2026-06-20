@@ -315,6 +315,7 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     # match_meta so the downstream MATCH_LLM_REVIEW emission carries it (the
     # feedback loop's score-gate is a no-op without this).
     assert match_meta["match_score"] == pytest.approx(0.42)
+    assert match_meta["source_class"] == "news"
     analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
     evidence = bot._evidence_queue.get_nowait()
     assert analysis.signal_meta["trigger_evidence_id"] == evidence.evidence_id
@@ -367,6 +368,9 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
         method="llm",
         llm_direction="yes",
         llm_magnitude="moderate",
+        venue="kalshi",
+        keywords=["missile strike"],
+        source_class="news",
     )
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -30,6 +31,7 @@ from scripts import keyword_feedback
 from scripts import match_quality_diagnostics
 from scripts import match_suppression_audit
 from scripts import paper_performance_drilldown
+from scripts import since_restart_money_path
 from scripts import signal_edge_diagnostics
 from scripts import source_scorecard
 from tasks.stats import observability_checkpoint
@@ -53,6 +55,7 @@ from utils.trade_log_reader import iter_trade_records
 
 REPORTS_DIR = DAILY_REPORTS_DIR
 DEFAULT_REPORT_PATH = REPORTS_DIR / f"daily_review_{datetime.now().strftime('%Y%m%d')}.txt"
+HEALTH_REPORTS_DIR = REPORTS_DIR.parent / "health"
 # Persisted day-over-day tier baseline used by section 1 status-change diff.
 # Two-deep history (current + previous) so same-day reruns don't blow away
 # yesterday's reference.
@@ -255,6 +258,53 @@ def _format_fresh_pass_conversion_lines(
         lines.append(f"    pinch                          : {label} ({delta} {desc})")
     else:
         lines.append("    pinch                          : none detected in this window")
+    return lines
+
+
+def _latest_restart_timestamp_from_health_reports(
+    health_dir: Path = HEALTH_REPORTS_DIR,
+) -> str | None:
+    candidates = sorted(
+        health_dir.glob("bothealth_*.md"),
+        key=lambda path: path.stat().st_mtime if path.exists() else 0,
+        reverse=True,
+    )
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        match = re.search(r"bot_runtime\.started_utc=([^\s]+)", text)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _format_since_restart_money_path_lines(report: dict[str, Any]) -> list[str]:
+    summary = report.get("summary", {})
+    no_keywords = report.get("no_keywords", {})
+    terminal_counts = summary.get("terminal_counts", {}) or {}
+    terminal_text = ", ".join(
+        f"{key}={value}" for key, value in sorted(terminal_counts.items())
+    ) or "none"
+    lines = [
+        "SINCE-RESTART MONEY PATH  [source: scripts/since_restart_money_path.py]",
+        f"  Window                           : {report.get('window', {}).get('since')} -> {report.get('window', {}).get('until') or 'open'}",
+        f"  Candidates                       : {summary.get('candidates', 0)}",
+        f"  Terminal outcomes                : {terminal_text}",
+        f"  Measurement gaps                 : {summary.get('measurement_gaps', 0)}",
+        f"  No-keyword exits                 : {no_keywords.get('count', 0)}",
+    ]
+    candidates = report.get("candidates", []) or []
+    if candidates:
+        lines.append("  Drilldown: recent since-restart candidates")
+        for row in candidates[:5]:
+            lines.append(
+                "    "
+                f"{row.get('ticker') or 'n/a'} terminal={row.get('terminal_type') or 'none'} "
+                f"venue={row.get('terminal_venue') or row.get('blend_venue') or 'unknown'} "
+                f"reason={row.get('terminal_reason') or 'none'}"
+            )
     return lines
 
 
@@ -606,9 +656,20 @@ def build_daily_review(
             # (A(i)) is always on inside summarize.
             recommendation_window_days=source_scorecard.DEFAULT_RECOMMENDATION_WINDOW_DAYS,
         )
+    with stage_timer("since-restart money path", enabled=show_profile):
+        restart_ts = _latest_restart_timestamp_from_health_reports()
+        since_restart_report = None
+        if restart_ts:
+            try:
+                since_restart_report = since_restart_money_path.build_money_path_report(
+                    trades_path,
+                    since=restart_ts,
+                )
+            except Exception as exc:  # reporting-only; never break daily review
+                since_restart_report = {"error": f"{type(exc).__name__}: {exc}"}
 
     if show_profile:
-        _eprint(f"[total] 8 stages completed in {time.perf_counter() - _t0:.1f}s")
+        _eprint(f"[total] 9 stages completed in {time.perf_counter() - _t0:.1f}s")
 
     event_counts = funnel_stats.get("event_counts", {})
     analysis_rejections = Counter(funnel_stats.get("analysis_rejected_reasons", {}))
@@ -642,6 +703,7 @@ def build_daily_review(
     below_threshold = skip_breakdown.get("below_threshold", 0)
     zero_edge = skip_breakdown.get("zero_edge", 0)
     duplicate = skip_breakdown.get("duplicate", 0)
+    liquidity_skip = skip_breakdown.get("liquidity", 0)
     other_skip = skip_breakdown.get("other", 0)
 
     lines: list[str] = []
@@ -672,6 +734,15 @@ def build_daily_review(
     except Exception as exc:  # observability must never break the daily report
         lines.append(f"GATES & EXPERIMENTS              : unavailable ({type(exc).__name__})")
     lines.append("")
+    if since_restart_report:
+        if "error" in since_restart_report:
+            lines.append(
+                "SINCE-RESTART MONEY PATH          : "
+                f"unavailable ({since_restart_report['error']})"
+            )
+        else:
+            lines.extend(_format_since_restart_money_path_lines(since_restart_report))
+        lines.append("")
 
     lines.append("1. INGESTION  [source: scripts/freshness_diagnostics.py + scripts/decision_funnel_summary.py]")
     observed_records = sum(
@@ -952,6 +1023,7 @@ def build_daily_review(
     lines.append(f"  Paper trades                     : {paper_trades}")
     lines.append(f"  Live orders                      : {live_orders}")
     lines.append(f"  Skipped duplicate position       : {duplicate}")
+    lines.append(f"  Skipped liquidity/near-limit     : {liquidity_skip}")
     lines.append(f"  Skipped below threshold          : {below_threshold}")
     lines.append(f"  Skipped other                    : {other_skip}")
     if paper_stats.get("total_trades", 0):

@@ -15,10 +15,11 @@ import asyncio
 import json as _json
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-from config import cfg, GEOPOLITICAL_SIGNALS
-from utils.runtime_overrides import is_keyword_disabled
+from config import cfg, GEOPOLITICAL_SIGNALS, EARLY_MAX_NEWS_AGE_SECONDS, EARLY_MAX_NEWS_AGE_BY_SOURCE
+from utils.runtime_overrides import get_threshold_override, is_keyword_disabled
 from feeds import NewsItem
 from kalshi import KalshiMarket
 from utils.log_records import SignalAnalysisDetail
@@ -168,6 +169,37 @@ def _signal_detail_venue(
         raw = raw.value
     text = str(raw).strip().lower()
     return text or "kalshi"
+
+
+def _early_max_news_age_seconds_for_source(source: str) -> int:
+    runtime = get_threshold_override(f"EARLY_MAX_NEWS_AGE_BY_SOURCE.{source}")
+    if runtime is not None:
+        return int(runtime)
+    if source in EARLY_MAX_NEWS_AGE_BY_SOURCE:
+        return EARLY_MAX_NEWS_AGE_BY_SOURCE[source]
+    source_lower = source.strip().lower()
+    for key, value in EARLY_MAX_NEWS_AGE_BY_SOURCE.items():
+        if key.strip().lower() == source_lower:
+            return value
+    return EARLY_MAX_NEWS_AGE_SECONDS
+
+
+def _signal_detail_timing_kwargs(
+    news: NewsItem,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    published = getattr(news, "published", None)
+    if published is None:
+        return {}
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    reference = now or datetime.now(timezone.utc)
+    return {
+        "publish_ts": published.isoformat(),
+        "age_at_analysis_seconds": (reference - published).total_seconds(),
+        "analysis_threshold_seconds": _early_max_news_age_seconds_for_source(news.source),
+    }
 
 
 async def _ollama_check_circuit() -> tuple[bool, dict[str, Any] | None]:
@@ -1351,6 +1383,7 @@ async def estimate_probability(
         keyword_signal_strength=keyword_signal_strength,
     )
     signal_detail_venue = _signal_detail_venue(market, match_meta)
+    signal_detail_timing = _signal_detail_timing_kwargs(news)
     probe_fields = (
         {"is_startup_probe": True, "is_synthetic_probe": True}
         if is_startup_probe
@@ -1498,6 +1531,7 @@ async def estimate_probability(
             final_probability=llm_prob,
             market_price=market.yes_prob,
             venue=signal_detail_venue,
+            **signal_detail_timing,
             llm_direction=llm_direction,
             llm_magnitude=llm_magnitude,
             llm_confidence=llm_confidence,
@@ -1578,6 +1612,7 @@ async def estimate_probability(
             # score-gate the false_positive_neutral signal. None when absent
             # (e.g. the startup probe) -> consumer treats it as marginal.
             review_match_score = None
+            review_source_class = None
             if isinstance(match_meta, dict):
                 raw_score = match_meta.get("match_score")
                 if raw_score is not None:
@@ -1585,6 +1620,9 @@ async def estimate_probability(
                         review_match_score = float(raw_score)
                     except (TypeError, ValueError):
                         review_match_score = None
+                raw_source_class = match_meta.get("source_class")
+                if raw_source_class is not None:
+                    review_source_class = str(raw_source_class).strip() or None
             await write_trade_log_async(
                 trade_log.log_match_llm_review,
                 ticker=market.ticker,
@@ -1600,6 +1638,8 @@ async def estimate_probability(
                 llm_confidence=float(llm_confidence) if llm_confidence is not None else 0.0,
                 verdict=verdict,
                 match_score=review_match_score,
+                keywords=keywords,
+                source_class=review_source_class,
             )
 
         return llm_prob, llm_confidence, keywords, reasoning, llm_direction, llm_magnitude, llm_confidence
@@ -1628,6 +1668,7 @@ async def estimate_probability(
             final_probability=market.yes_prob,
             market_price=market.yes_prob,
             venue=signal_detail_venue,
+            **signal_detail_timing,
             llm_result_used=False,
             llm_routing_passed=(routing_reason is None),
             llm_routing_reason=routing_reason,
@@ -1662,6 +1703,7 @@ async def estimate_probability(
         final_probability=kw_prob,
         market_price=market.yes_prob,
         venue=signal_detail_venue,
+        **signal_detail_timing,
         llm_result_used=False,
         llm_routing_passed=(routing_reason is None),
         llm_routing_reason=routing_reason,

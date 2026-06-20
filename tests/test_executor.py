@@ -25,6 +25,8 @@ def test_classify_skip_category_groups_controllable_executor_reasons():
     assert classify_skip_category("paper duplicate skip: open YES") == "duplicate"
     assert classify_skip_category("per-prefix cap: 2 open in polymarket_us:abc") == "concentration"
     assert classify_skip_category("concentration limit: KX exposure would exceed cap") == "concentration"
+    assert classify_skip_category("price 1.0c is near limit (too illiquid)") == "liquidity"
+    assert classify_skip_category("market is not tradeable: price unavailable") == "liquidity"
     assert classify_skip_category("edge +0.0100 below min_edge 0.04") == "other"
 
 def _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10):
