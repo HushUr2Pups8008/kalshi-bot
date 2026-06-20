@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import scripts.performance_analysis as pa
+from scripts.throughput_operator_metrics import ThroughputOperatorSummary
 
 
 SENTINEL = "2026-05-01T00:00:00+00:00"
@@ -528,6 +529,35 @@ def test_skip_breakdown_classifies_admission_gate_reasons_as_non_controllable():
     assert "series correlation gate" in output
     assert "KX1" not in output.split("Most-skipped tickers (controllable skips only):", 1)[1]
     assert "KX4" in output.split("Most-skipped tickers (controllable skips only):", 1)[1]
+
+
+def test_operator_throughput_section_renders_trade_log_metrics():
+    output = pa.section_operator_throughput(
+        ThroughputOperatorSummary(
+            opportunities=4,
+            skipped=2,
+            paper_trades=3,
+            window_days=2.0,
+            opportunities_per_day=2.0,
+            skipped_per_opportunity=0.5,
+            top_ticker_trades_per_day=[("KXHIGH", 1.0), ("KXLOW", 0.5)],
+            opportunity_age_p50_seconds=60.0,
+            opportunity_age_p90_seconds=180.0,
+        ),
+        trade_log_available=True,
+    )
+
+    assert "OPERATOR THROUGHPUT LEADING INDICATORS" in output
+    assert "Opportunities/day              : 2.00" in output
+    assert "Skipped/opportunity ratio      : 0.500" in output
+    assert "Opportunity age p50/p90        : 1.0m / 3.0m" in output
+    assert "KXHIGH: 1.00/day" in output
+
+
+def test_operator_throughput_section_keeps_db_only_runs_functional():
+    output = pa.section_operator_throughput(None, trade_log_available=False)
+
+    assert "trade-log metrics unavailable" in output
 
 
 def test_candidate_subreddits_summarizes_and_caps_large_tables(tmp_path, monkeypatch):

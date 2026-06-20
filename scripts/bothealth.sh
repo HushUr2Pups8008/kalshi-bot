@@ -530,6 +530,7 @@ if [[ "$RUN_DAILY_REVIEW" == "1" ]]; then
                     "$(wc -c <"$DAILY_REVIEW_REPORT" | tr -d ' ')" >>"$REPORT"
             fi
             printf 'daily_review body=standalone artifact only; not embedded in bothealth\n' >>"$REPORT"
+            printf 'operator_throughput section: see OPERATOR THROUGHPUT LEADING INDICATORS in daily_review report\n' >>"$REPORT"
         else
             DAILY_REVIEW_STATUS="failed"
             printf 'daily_review tail:\n' >>"$REPORT"
@@ -575,6 +576,7 @@ if [[ "$RUN_DAILY_REVIEW" == "1" ]]; then
                     "$(wc -c <"$PERFORMANCE_REPORT" | tr -d ' ')" >>"$REPORT"
             fi
             printf 'performance_analysis body=standalone artifact only; not embedded in bothealth\n' >>"$REPORT"
+            printf 'operator_throughput section: see 6c. OPERATOR THROUGHPUT LEADING INDICATORS in performance_analysis report\n' >>"$REPORT"
         else
             PERFORMANCE_STATUS="failed"
             printf 'performance_analysis tail:\n' >>"$REPORT"

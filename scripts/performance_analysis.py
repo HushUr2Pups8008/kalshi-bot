@@ -46,6 +46,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tabulate import tabulate
+from scripts.throughput_operator_metrics import (
+    ThroughputOperatorSummary,
+    format_operator_throughput_lines,
+    summarize_operator_throughput,
+)
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 from utils.output_paths import (
     PAPER_TRADES_DB,
@@ -1146,6 +1151,22 @@ def section_source_quality():
     return "\n".join(lines)
 
 
+def section_operator_throughput(
+    summary: ThroughputOperatorSummary | None,
+    *,
+    trade_log_available: bool,
+    include_title: bool = True,
+) -> str:
+    if not trade_log_available or summary is None:
+        lines = ["OPERATOR THROUGHPUT LEADING INDICATORS"]
+        lines.append("  trade-log metrics unavailable")
+    else:
+        lines = format_operator_throughput_lines(summary)
+    if not include_title:
+        lines = lines[1:]
+    return "\n".join(lines)
+
+
 def section_candidate_subreddits(max_rows=None):
     """
     Show subreddits discovered via Reddit post search (v0.21.0 discovery loop).
@@ -2011,6 +2032,16 @@ def main():
 
     # Load data
     entries = load_jsonl(since_dt, until_dt)
+    trade_log_available = JSONL_PATH.exists()
+    throughput_summary = (
+        summarize_operator_throughput(
+            entries,
+            window_start=since_dt,
+            window_end=until_dt,
+        )
+        if trade_log_available
+        else None
+    )
     db_trades_all = load_db_trades()
     db_trades = load_db_trades(since_dt, until_dt)
     state = load_db_state()
@@ -2072,6 +2103,15 @@ def main():
 
     report_lines.append(section_header("6b. CANDIDATE SUBREDDITS"))
     report_lines.append(section_candidate_subreddits())
+
+    report_lines.append(section_header("6c. OPERATOR THROUGHPUT LEADING INDICATORS"))
+    report_lines.append(
+        section_operator_throughput(
+            throughput_summary,
+            trade_log_available=trade_log_available,
+            include_title=False,
+        )
+    )
 
     report_lines.append(section_header("7. EDGE CALIBRATION"))
     report_lines.append(section_edge_calibration(db_trades))

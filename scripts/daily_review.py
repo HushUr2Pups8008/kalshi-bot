@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import Counter
-from datetime import datetime, time as dt_time, timezone
+from datetime import datetime, timedelta, time as dt_time, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,10 @@ from scripts import paper_performance_drilldown
 from scripts import since_restart_money_path
 from scripts import signal_edge_diagnostics
 from scripts import source_scorecard
+from scripts.throughput_operator_metrics import (
+    format_operator_throughput_lines,
+    summarize_operator_throughput_from_trade_log,
+)
 from tasks.stats import observability_checkpoint
 from utils.reporting_helpers import (
     DEFAULT_CURRENT_STATE_WINDOW_HOURS,
@@ -295,6 +299,26 @@ def _format_since_restart_money_path_lines(report: dict[str, Any]) -> list[str]:
         f"  Measurement gaps                 : {summary.get('measurement_gaps', 0)}",
         f"  No-keyword exits                 : {no_keywords.get('count', 0)}",
     ]
+    pm_feedback = report.get("polymarket_settlement_feedback", {}) or {}
+    if pm_feedback:
+        lines.append(
+            "  Polymarket settlement feedback   : "
+            f"{pm_feedback.get('status', 'unknown')} "
+            f"({pm_feedback.get('resolved_count', 0)}/"
+            f"{pm_feedback.get('min_resolved_required', 0)} resolved)"
+        )
+        proof_rows = pm_feedback.get("proof_rows", []) or []
+        if proof_rows:
+            lines.append("  Polymarket settlement proof rows :")
+            for row in proof_rows[:5]:
+                lines.append(
+                    "    "
+                    f"{row.get('ticker') or 'n/a'} "
+                    f"trade_id={row.get('trade_id') or 'n/a'} "
+                    f"pnl={row.get('pnl_dollars')} "
+                    f"feedback={row.get('feedback_ts') or 'none'} "
+                    f"prefix={row.get('market_prefix') or 'none'}"
+                )
     candidates = report.get("candidates", []) or []
     if candidates:
         lines.append("  Drilldown: recent since-restart candidates")
@@ -631,6 +655,15 @@ def build_daily_review(
             trades_path, since, until, exclude_test=exclude_test,
             progress_tracker=ProgressTracker() if show_progress else None,
         )
+    throughput_until = until or datetime.now(timezone.utc)
+    throughput_since = since or (throughput_until - timedelta(days=1))
+    with stage_timer("operator throughput", enabled=show_profile):
+        throughput_stats = summarize_operator_throughput_from_trade_log(
+            trades_path,
+            window_start=throughput_since,
+            window_end=throughput_until,
+            exclude_test=exclude_test,
+        )
     with stage_timer("paper performance", enabled=show_profile):
         paper_stats = paper_performance_drilldown.summarize(
             paper_db_path, exclude_test=exclude_test
@@ -669,7 +702,7 @@ def build_daily_review(
                 since_restart_report = {"error": f"{type(exc).__name__}: {exc}"}
 
     if show_profile:
-        _eprint(f"[total] 9 stages completed in {time.perf_counter() - _t0:.1f}s")
+        _eprint(f"[total] 10 stages completed in {time.perf_counter() - _t0:.1f}s")
 
     event_counts = funnel_stats.get("event_counts", {})
     analysis_rejections = Counter(funnel_stats.get("analysis_rejected_reasons", {}))
@@ -743,6 +776,9 @@ def build_daily_review(
         else:
             lines.extend(_format_since_restart_money_path_lines(since_restart_report))
         lines.append("")
+
+    lines.extend(format_operator_throughput_lines(throughput_stats, top=top))
+    lines.append("")
 
     lines.append("1. INGESTION  [source: scripts/freshness_diagnostics.py + scripts/decision_funnel_summary.py]")
     observed_records = sum(
