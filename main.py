@@ -1126,6 +1126,7 @@ class TradingBot:
         # match. Without this the score-gate sees no score and stays a no-op.
         if isinstance(match_meta, dict):
             match_meta.setdefault("match_score", round(float(match_score), 4))
+            match_meta.setdefault("source_class", _source_class_for_evidence(news.source))
 
         estimated_prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
             await estimate_probability(news, market, keyword_stats=self.keyword_stats, match_meta=match_meta)
@@ -1283,6 +1284,12 @@ class TradingBot:
             signal_strength=abs(edge),
             keywords_matched=keywords,
         )
+        raw_venue = match_meta.get("venue") if isinstance(match_meta, dict) else None
+        if raw_venue is None:
+            raw_venue = getattr(market, "venue", None)
+        if hasattr(raw_venue, "value"):
+            raw_venue = raw_venue.value
+        opportunity_venue = str(raw_venue).strip().lower() if raw_venue is not None else "kalshi"
         await write_trade_log_async(
             trade_log.log_opportunity,
             ticker=market.ticker,
@@ -1300,6 +1307,9 @@ class TradingBot:
             method=method,
             llm_direction=llm_dir,
             llm_magnitude=llm_mag,
+            venue=opportunity_venue or "kalshi",
+            keywords=keywords,
+            source_class=_source_class_for_evidence(news.source),
         )
         self.source_stats.increment_opportunities(news.source)
 

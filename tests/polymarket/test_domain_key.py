@@ -42,10 +42,14 @@ def test_leading_venue_segment_preserved_for_coarse_readers():
     assert pm_domain_key("ewc-usse-me-2026-11-03-dem").startswith("polymarket_us")
 
 
-def test_no_iso_date_falls_back_to_venue_segment_without_raising():
-    # Degrade to today's single-bucket behavior, never crash the matcher.
+def test_no_iso_date_uses_full_slug_family_without_bare_bucket():
+    # Do not degrade to the legacy single-bucket behavior that poisons PM state.
     assert pm_domain_key("some-undated-slug") == "polymarket_us:some-undated-slug"
-    assert pm_domain_key("") == "polymarket_us"
+
+
+def test_empty_slug_rejected_instead_of_bare_bucket():
+    with pytest.raises(ValueError):
+        pm_domain_key("")
 
 
 def test_kalshi_ticker_rejected():

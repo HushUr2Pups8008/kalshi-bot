@@ -788,6 +788,7 @@ class TestEstimateProbability:
         market.ticker = "ewc-usgub-ks-2026-11-03-dem"
         match_meta = {
             "venue": "polymarket_us",
+            "source_class": "news",
             "matched_tokens": ["election", "governor", "kansas"],
             "pre_llm_quality_pass": True,
             "pre_llm_semantic_overlap_count": 3,
@@ -806,8 +807,10 @@ class TestEstimateProbability:
             await estimate_probability(news, market, match_meta=match_meta)
 
         review_mock.assert_called_once()
-        assert review_mock.call_args.kwargs["market_prefix"] == "polymarket_us"
+        assert review_mock.call_args.kwargs["market_prefix"] == "polymarket_us:ewc-usgub-ks"
         assert review_mock.call_args.kwargs["venue"] == "polymarket_us"
+        assert review_mock.call_args.kwargs["source_class"] == "news"
+        assert isinstance(review_mock.call_args.kwargs["keywords"], list)
         assert review_mock.call_args.kwargs["matched_tokens"] == [
             "election",
             "governor",
@@ -913,6 +916,9 @@ class TestEstimateProbability:
         kwargs = _detail_to_kwargs(detail_mock)
         assert kwargs["ticker"] == "ewc-usgub-ks-2026-11-03-dem"
         assert kwargs["venue"] == "polymarket_us"
+        assert kwargs["publish_ts"] == news.published.isoformat()
+        assert kwargs["age_at_analysis_seconds"] >= 0
+        assert kwargs["analysis_threshold_seconds"] > 0
 
     @pytest.mark.asyncio
     async def test_match_meta_logs_would_block_without_keywords(self, monkeypatch):
@@ -2075,6 +2081,8 @@ class TestLogMatchLlmReview:
             llm_confidence=0.85,
             verdict="false_positive_neutral",
             match_score=0.1834,
+            keywords=["iran", "deal"],
+            source_class="news",
         )
         # Read back
         import json
@@ -2089,6 +2097,9 @@ class TestLogMatchLlmReview:
         assert rec["verdict"] == "false_positive_neutral"
         assert rec["llm_confidence"] == 0.85
         assert rec["llm_relevant"] is False
+        assert rec["keywords"] == ["iran", "deal"]
+        assert rec["keyword_count"] == 2
+        assert rec["source_class"] == "news"
         # PROFIT-MATCH-003 (L2-a): match_score is carried (rounded to 4dp) so the
         # feedback loop can score-gate the false_positive_neutral signal.
         assert rec["match_score"] == 0.1834

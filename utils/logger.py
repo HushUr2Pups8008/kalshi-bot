@@ -584,6 +584,9 @@ class TradeLogger:
         method: str | None = None,
         llm_direction: str | None = None,
         llm_magnitude: str | None = None,
+        venue: str | None = None,
+        keywords: list[str] | None = None,
+        source_class: str | None = None,
     ) -> None:
         record = {
             "type": "OPPORTUNITY",
@@ -608,6 +611,13 @@ class TradeLogger:
             record["llm_direction"] = llm_direction
         if llm_magnitude is not None:
             record["llm_magnitude"] = llm_magnitude
+        if venue is not None:
+            record["venue"] = venue
+        if keywords is not None:
+            record["keywords"] = list(keywords)
+            record["keyword_count"] = len(keywords)
+        if source_class is not None:
+            record["source_class"] = source_class
         self._write(record)
 
     def log_paper_trade(
@@ -899,6 +909,7 @@ class TradeLogger:
     _SAD_OPTIONAL_ROUND = frozenset({
         "llm_confidence", "pre_llm_semantic_overlap_ratio",
         "pre_llm_keyword_signal_strength", "llm_probability_movement",
+        "age_at_analysis_seconds",
     })
 
     def log_signal_analysis_detail(self, detail: SignalAnalysisDetail) -> None:
@@ -1416,6 +1427,8 @@ class TradeLogger:
         verdict: str,
         venue: str | None = None,
         match_score: float | None = None,
+        keywords: list[str] | None = None,
+        source_class: str | None = None,
     ) -> None:
         """PROFIT-MATCH-DYNAMIC (2026-05-24): per-LLM-call feedback signal.
 
@@ -1446,6 +1459,11 @@ class TradeLogger:
         }
         if venue:
             record["venue"] = venue
+        if keywords is not None:
+            record["keywords"] = list(keywords)
+            record["keyword_count"] = len(keywords)
+        if source_class:
+            record["source_class"] = source_class
         # PROFIT-MATCH-003 (L2-a): carry the matcher score so the feedback loop
         # can score-gate the false_positive_neutral signal. Omitted when None so
         # the consumer treats it as marginal (prior behaviour).

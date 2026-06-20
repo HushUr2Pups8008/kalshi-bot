@@ -31,6 +31,7 @@ _FULL_SNAPSHOT_KEYS = frozenset({
     "type", "ts",
     "ticker", "source", "headline", "method", "keywords", "venue",
     "base_probability", "final_probability", "market_price",
+    "publish_ts", "age_at_analysis_seconds", "analysis_threshold_seconds",
     "keyword_contributions",
     "llm_direction", "llm_magnitude", "llm_confidence",
     "llm_attempted", "llm_result_used", "llm_result_status", "llm_provider",
@@ -81,6 +82,9 @@ def _full_payload_detail() -> SignalAnalysisDetail:
         final_probability=0.65,
         market_price=0.5,
         venue="kalshi",
+        publish_ts="2026-06-20T01:00:00+00:00",
+        age_at_analysis_seconds=123.4567,
+        analysis_threshold_seconds=1800,
         llm_direction="yes",
         llm_magnitude="moderate",
         llm_confidence=0.85,
@@ -173,6 +177,7 @@ def test_logger_emits_required_only_record():
         # Required floats rounded to 4 decimals (round() of 0.5 yields 0.5)
         assert record["base_probability"] == 0.5
         # Optional None fields not emitted
+        assert "age_at_analysis_seconds" not in record
         assert "llm_direction" not in record
         assert "is_startup_probe" not in record
         # keyword_contributions=None falsy → not emitted
@@ -220,6 +225,7 @@ def test_logger_rounds_optional_floats_to_four_decimals():
         pre_llm_semantic_overlap_ratio=0.987654321,
         pre_llm_keyword_signal_strength=0.111111111,
         llm_probability_movement=0.222222222,
+        age_at_analysis_seconds=123.456789,
     )
     tmp = make_tmp_dir("log_records_rounding")
     try:
@@ -230,5 +236,6 @@ def test_logger_rounds_optional_floats_to_four_decimals():
         assert record["pre_llm_semantic_overlap_ratio"] == 0.9877
         assert record["pre_llm_keyword_signal_strength"] == 0.1111
         assert record["llm_probability_movement"] == 0.2222
+        assert record["age_at_analysis_seconds"] == 123.4568
     finally:
         _cleanup(tmp)

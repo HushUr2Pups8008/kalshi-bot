@@ -45,6 +45,10 @@ def test_pm_series_ticker_is_per_family_not_venue_constant():
     assert me.series_ticker.startswith("polymarket_us")
 
 
+def test_pm_domain_key_no_iso_slug_still_uses_non_bare_family_bucket():
+    assert pm_domain_key("custom-polymarket-market") == "polymarket_us:custom-polymarket-market"
+
+
 def test_learn_apply_market_prefix_consistency():
     """V03 open-risk #2: the LEARN-side key (PolymarketMarket, fed to match
     feedback) and the APPLY-side key (PolymarketExecutionMarket recorded on the

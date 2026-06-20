@@ -48,13 +48,30 @@ def test_market_prefix_for_prefers_series_ticker_then_ticker_prefix():
         series_ticker = "polymarket_us"
         ticker = "ewc-usgub-ks-2026-11-03-dem"
 
-    assert market_prefix_for(Market()) == "polymarket_us"
+    assert market_prefix_for(Market()) == "polymarket_us:ewc-usgub-ks"
 
     class LegacyMarket:
         series_ticker = ""
         ticker = "KXNEWDEAL-JUN01"
 
     assert market_prefix_for(LegacyMarket()) == "KXNEWDEAL"
+
+
+def test_ingest_review_events_skips_legacy_bare_polymarket_prefix(tmp_path):
+    db_path = tmp_path / "feedback.db"
+    applied = ingest_review_events(
+        [
+            _ev(["iran"], "polymarket_us", "false_positive_neutral", "2026-06-20"),
+            _ev(["iran"], "polymarket_us:ewc-usgub-ks", "false_positive_neutral", "2026-06-20"),
+        ],
+        db_path=db_path,
+    )
+
+    assert applied == 1
+    rows = aggregate_window(window_days=7, today_utc="2026-06-21", db_path=db_path)
+    assert [(row.token, row.market_prefix, row.fp_neutral) for row in rows] == [
+        ("iran", "polymarket_us:ewc-usgub-ks", 1)
+    ]
 
 
 class TestL2ScoreGatedFalsePositive:

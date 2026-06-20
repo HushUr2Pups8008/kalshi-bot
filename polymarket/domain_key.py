@@ -45,16 +45,16 @@ def pm_domain_key(market_id: str) -> str:
 
     Different outcomes/instances of the same contest collapse to one key
     (date + trailing outcome stripped); different contests yield different keys.
-    A slug with no recognizable ISO date falls back to the bare venue segment
-    (``'polymarket_us'``) WITHOUT raising — degrading to today's single-bucket
-    behavior rather than crashing the matcher.
+    A slug with no recognizable ISO date uses the full slug as the family stem
+    rather than falling back to the bare venue segment; bare ``polymarket_us``
+    feedback state is legacy-only and must not receive new writes.
 
     Raises ``ValueError`` on a Kalshi (KX*) identifier: Kalshi families come
     from the real ``series_ticker`` and must NOT be routed here.
     """
     slug = (market_id or "").strip()
     if not slug:
-        return _VENUE_SEGMENT
+        raise ValueError("pm_domain_key expects a non-empty Polymarket slug")
     if slug.upper().startswith("KX"):
         raise ValueError(
             f"pm_domain_key expects a Polymarket slug, got Kalshi-shaped {market_id!r}"

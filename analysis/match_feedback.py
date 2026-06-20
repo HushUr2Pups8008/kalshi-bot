@@ -39,6 +39,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from polymarket.domain_key import pm_domain_key
+
 # Tunables. Operator may bump via runtime overrides in a follow-up.
 MIN_TOTAL_FOR_DOWNWEIGHT: int = 10
 """Minimum (TP + FP) observations on a (token, prefix) pair before its
@@ -99,10 +101,16 @@ CREATE INDEX IF NOT EXISTS idx_match_token_fp_window
 def market_prefix_for(market: Any) -> str:
     """Return the matcher-feedback prefix used by review and weight events."""
     series_ticker = str(getattr(market, "series_ticker", "") or "").strip()
-    if series_ticker:
-        return series_ticker
     ticker = str(getattr(market, "ticker", "") or getattr(market, "market_id", "") or "")
+    if series_ticker and series_ticker != "polymarket_us":
+        return series_ticker
+    if series_ticker == "polymarket_us" and ticker and not ticker.upper().startswith("KX"):
+        return pm_domain_key(ticker)
     return ticker.split("-", 1)[0]
+
+
+def _is_bare_polymarket_prefix(market_prefix: str) -> bool:
+    return str(market_prefix or "").strip() == "polymarket_us"
 
 
 _DEFINING_TOKEN_MIN_LEN: int = 4
@@ -222,7 +230,7 @@ def ingest_review_events(
                 if not day_utc:
                     continue
                 prefix = ev.get("market_prefix") or ""
-                if not prefix:
+                if not prefix or _is_bare_polymarket_prefix(str(prefix)):
                     continue
                 tokens = ev.get("matched_tokens") or []
                 tp_col = "true_positive_count" if verdict == "true_positive" else "fp_neutral_count"
