@@ -212,6 +212,16 @@ PATH_TIER_RULES: list[dict[str, Any]] = [
     },
     {
         "tier": "T0",
+        "pattern": ".claude/**",
+        "matcher": lambda p: _matches_prefix(p, ".claude/"),
+    },
+    {
+        "tier": "T0",
+        "pattern": ".gitignore",
+        "matcher": lambda p: _eq(p, ".gitignore"),
+    },
+    {
+        "tier": "T0",
         "pattern": "scripts/launchd/**",
         "matcher": lambda p: _matches_prefix(p, "scripts/launchd/"),
     },
