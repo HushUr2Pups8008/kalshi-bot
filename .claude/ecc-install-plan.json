@@ -1,0 +1,197 @@
+{
+  "schema": "agent-sort/v1",
+  "project": "kalshi-bot",
+  "generated": "2026-06-21",
+  "status": "installed",
+  "installed_at": "2026-06-21",
+  "policy": {
+    "dedup": "superpowers-over-ecc",
+    "context_mode": "daily",
+    "install": true
+  },
+  "stack": {
+    "language": "python",
+    "python_files": 508,
+    "test_files": 254,
+    "lint": "ruff",
+    "test": "pytest+hypothesis",
+    "storage": "sqlite",
+    "deploy": "launchd",
+    "ci": "github-actions",
+    "domain": "kalshi-trading-bot"
+  },
+  "daily": {
+    "superpowers": {
+      "source": "~/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.2/skills/",
+      "install_to_project": false,
+      "skills": [
+        "using-superpowers",
+        "systematic-debugging",
+        "verification-before-completion",
+        "test-driven-development",
+        "requesting-code-review",
+        "receiving-code-review",
+        "brainstorming",
+        "writing-plans",
+        "executing-plans",
+        "subagent-driven-development"
+      ],
+      "supersedes_ecc": [
+        "tdd-workflow",
+        "verification-loop",
+        "code-review",
+        "implement",
+        "review",
+        "agent-introspection-debugging",
+        "blueprint",
+        "planner",
+        "tdd-guide",
+        "code-reviewer"
+      ]
+    },
+    "project_skills": {
+      "source": ".claude/skills/",
+      "install_to_project": true,
+      "already_present": [
+        "replay-gate-analyze",
+        "release-bump"
+      ],
+      "to_install_from_ecc": [
+        "python-patterns",
+        "llm-trading-agent-security",
+        "safety-guard",
+        "ai-regression-testing",
+        "regex-vs-llm-structured-text"
+      ],
+      "to_create": [
+        "skill-library"
+      ]
+    },
+    "marketplace_skills": {
+      "source": "plugins/marketplaces/context-mode/",
+      "install_to_project": false,
+      "skills": [
+        "context-mode"
+      ]
+    },
+    "agents": {
+      "project_native": [
+        "kalshi-safety-reviewer",
+        "replay-evidence-reviewer"
+      ],
+      "to_install_from_ecc": [
+        "python-reviewer",
+        "security-reviewer",
+        "silent-failure-hunter",
+        "pr-test-analyzer"
+      ],
+      "demoted_library": [
+        "code-reviewer",
+        "tdd-guide",
+        "code-explorer",
+        "planner"
+      ]
+    },
+    "commands": {
+      "invoke_on_demand": [
+        "santa-loop",
+        "python-review",
+        "test-coverage",
+        "quality-gate"
+      ],
+      "demoted_library": [
+        "plan",
+        "code-review",
+        "review-pr",
+        "checkpoint",
+        "feature-dev",
+        "refactor-clean",
+        "update-docs"
+      ]
+    },
+    "rules": {
+      "to_install": [
+        "rules/common/*",
+        "rules/python/*"
+      ],
+      "global_keep": [
+        "~/.claude/rules/agent_collaboration.md",
+        "~/.claude/rules/release_versioning.md",
+        "~/.claude/rules/risk_review.md",
+        "~/.claude/rules/validation.md"
+      ]
+    },
+    "mcp": [
+      "github",
+      "context7",
+      "context-mode",
+      "sequential-thinking"
+    ],
+    "hooks": {
+      "repo_authoritative": [
+        ".githooks/pre-commit",
+        ".githooks/prepare-commit-msg"
+      ],
+      "ecc_selective": [
+        "pre:edit-write:gateguard-fact-force",
+        "pre:config-protection",
+        "post:quality-gate"
+      ],
+      "ecc_disable": [
+        "stop:format-typecheck",
+        "post:edit:design-quality-check",
+        "post:bash:build-complete",
+        "pre:bash:auto-tmux-dev"
+      ]
+    }
+  },
+  "library": {
+    "ecc_skills_count": 177,
+    "ecc_commands_count": 64,
+    "ecc_agents_count": 44,
+    "ecc_rules_dirs": [
+      "typescript",
+      "golang",
+      "web",
+      "cpp",
+      "csharp",
+      "dart",
+      "java",
+      "kotlin",
+      "perl",
+      "php",
+      "rust",
+      "swift",
+      "zh"
+    ],
+    "router": ".claude/skills/skill-library/SKILL.md"
+  },
+  "install_actions": {
+    "copy_skills_to": ".claude/skills/",
+    "copy_agents_to": ".claude/agents/",
+    "copy_rules_to": ".claude/rules/",
+    "ecc_root": "~/.claude/plugins/cache/everything-claude-code/everything-claude-code/2.0.0-rc.1/",
+    "completed": [
+      "cp ECC python-patterns -> .claude/skills/python-patterns/",
+      "cp ECC llm-trading-agent-security -> .claude/skills/llm-trading-agent-security/",
+      "cp ECC safety-guard -> .claude/skills/safety-guard/",
+      "cp ECC ai-regression-testing -> .claude/skills/ai-regression-testing/",
+      "cp ECC regex-vs-llm-structured-text -> .claude/skills/regex-vs-llm-structured-text/",
+      "cp ECC python-reviewer -> .claude/agents/python-reviewer.md",
+      "cp ECC security-reviewer -> .claude/agents/security-reviewer.md",
+      "cp ECC silent-failure-hunter -> .claude/agents/silent-failure-hunter.md",
+      "cp ECC pr-test-analyzer -> .claude/agents/pr-test-analyzer.md",
+      "cp ECC rules/common + rules/python -> .claude/rules/"
+    ]
+  },
+  "counts": {
+    "daily_superpowers": 10,
+    "daily_project_skills": 7,
+    "daily_marketplace_skills": 1,
+    "daily_ecc_skills_to_install": 5,
+    "daily_agents": 6,
+    "daily_commands": 4,
+    "daily_mcp": 4,
+    "daily_total_surfaces": 33
+  }
+}

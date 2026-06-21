@@ -92,12 +92,20 @@ setup_service.ps1
 mac_archive/db_snapshots/
 mac_archive/pre_wave1_*/
 
-# Agent runtime scratch surfaces (Claude Code / Codex / Cursor / etc).
-# These directories contain plugin caches, scheduled-task locks, local
-# agent settings, and short-lived agent worktrees. Nothing inside them
-# should ever be committed; ignoring them guards against accidental
-# `git add -A` capturing 29 MB+ of local state. Audit rec #9
-# (v0.30.0 vertical-integration audit, 2026-05-13).
-.claude/
+# Agent harness (Claude Code / Codex / Cursor).
+# Commit shared surfaces (skills, agents, rules, install manifest).
+# Ignore local operator state (settings.local, worktrees, backups).
+.claude/*
+!.claude/skills/
+!.claude/skills/**
+!.claude/agents/
+!.claude/agents/**
+!.claude/rules/
+!.claude/rules/**
+!.claude/ecc-install-plan.json
+!.claude/settings.json
+.claude/settings.local.json
+.claude/settings.local.json.*
+.claude/worktrees/
 .codex/
 .cursor/
