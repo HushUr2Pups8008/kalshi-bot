@@ -46,6 +46,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tabulate import tabulate
+from polymarket.domain_key import pm_domain_key
 from scripts.throughput_operator_metrics import (
     ThroughputOperatorSummary,
     format_operator_throughput_lines,
@@ -260,6 +261,17 @@ def _p0_boundary_missing_message(section_name):
             % P0_PRICE_FIX_SENTINEL_KEY,
         ]
     )
+
+
+def _report_series_key(ticker, series_ticker):
+    series = str(series_ticker or "").strip()
+    ticker_value = str(ticker or "").strip()
+    if (not series or series == "polymarket_us") and ticker_value:
+        try:
+            return pm_domain_key(ticker_value)
+        except ValueError:
+            pass
+    return series or "(unknown)"
 
 
 def _has_table(conn, table_name):
@@ -1360,12 +1372,17 @@ def section_per_series_win_rate():
         boundary = _p0_cohort_boundary(conn)
         if boundary is None:
             return _p0_boundary_missing_message("Win rate by series")
+        if _has_columns(conn, "paper_trades", ("ticker",)):
+            conn.create_function("REPORT_SERIES_KEY", 2, _report_series_key)
+            series_expr = "REPORT_SERIES_KEY(ticker, series_ticker)"
+        else:
+            series_expr = "COALESCE(NULLIF(series_ticker, ''), '(unknown)')"
         cohort_rows = []
         for label, ts_filter, params in _p0_cohort_specs(boundary):
             rows = conn.execute(
-                """
+                f"""
                 SELECT
-                    COALESCE(NULLIF(series_ticker, ''), '(unknown)') AS series,
+                    {series_expr} AS series,
                     count(*) AS total,
                     sum(CASE WHEN pnl_dollars > 0 THEN 1 ELSE 0 END) AS wins,
                     sum(pnl_dollars) AS net_pnl

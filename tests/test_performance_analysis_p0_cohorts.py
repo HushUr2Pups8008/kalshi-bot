@@ -23,6 +23,7 @@ def _create_db(path: Path, *, sentinel: str | None = SENTINEL) -> None:
             CREATE TABLE paper_trades (
                 trade_id TEXT PRIMARY KEY,
                 ts TEXT,
+                ticker TEXT,
                 series_ticker TEXT,
                 resolved INTEGER,
                 pnl_dollars REAL,
@@ -90,6 +91,49 @@ def test_lifetime_sections_split_pre_and_post_p0_cohorts(tmp_path, monkeypatch):
     assert "Post-P0 cohort:" in kelly
     assert "Flat-5 (actual) vs Kelly shadow sizing (2 resolved trades):" in kelly
     assert "Flat-5 (actual) vs Kelly shadow sizing (4 resolved trades):" not in kelly
+
+
+def test_per_series_win_rate_normalizes_legacy_polymarket_series(tmp_path, monkeypatch):
+    db_path = tmp_path / "paper_trades.db"
+    _create_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executemany(
+            """
+            INSERT INTO paper_trades (
+                trade_id, ts, ticker, series_ticker, resolved, pnl_dollars,
+                match_score, contracts, kelly_contracts, price_cents, cost_dollars,
+                resolved_yes, side
+            )
+            VALUES (?, ?, ?, 'polymarket_us', 1, ?, 0.15, 5, 2, 50, 2.5, ?, 'yes')
+            """,
+            [
+                (
+                    "pm-legacy-win",
+                    "2026-05-02T10:00:00+00:00",
+                    "ewc-usse-me-2026-11-03-dem",
+                    1.0,
+                    1,
+                ),
+                (
+                    "pm-legacy-loss",
+                    "2026-05-02T11:00:00+00:00",
+                    "ewc-usse-me-2026-11-03-rep",
+                    -1.0,
+                    0,
+                ),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setattr(pa, "DB_PATH", db_path)
+
+    output = pa.section_per_series_win_rate()
+
+    post_section = output.split("Post-P0 cohort:", 1)[1]
+    assert "polymarket_us:ewc-usse-me" in post_section
+    assert "polymarket_us      " not in post_section
 
 
 def test_lifetime_sections_fail_soft_when_p0_boundary_missing(tmp_path, monkeypatch):

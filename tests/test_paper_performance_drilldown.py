@@ -330,6 +330,43 @@ def test_signal_type_breakdown_when_column_exists(local_db_case):
     assert names == {"news", "fade_tweet"}
 
 
+def test_series_breakdown_normalizes_legacy_polymarket_series(local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(
+        keeper,
+        rows=[
+            {
+                "trade_id": "pm1",
+                "ts": "2026-04-10T00:00:00+00:00",
+                "ticker": "ewc-usse-me-2026-11-03-dem",
+                "signal_source": "Reuters",
+                "resolved": 1,
+                "pnl_dollars": 1.0,
+                "series_ticker": "polymarket_us",
+                "venue": "polymarket_us",
+            },
+            {
+                "trade_id": "pm2",
+                "ts": "2026-04-10T01:00:00+00:00",
+                "ticker": "ewc-usse-me-2026-11-03-rep",
+                "signal_source": "AP",
+                "resolved": 1,
+                "pnl_dollars": -1.0,
+                "series_ticker": "polymarket_us",
+                "venue": "polymarket_us",
+            },
+        ],
+    )
+
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path)
+
+    series = {row["name"]: row for row in stats["series"]}
+    assert "polymarket_us:ewc-usse-me" in series
+    assert "polymarket_us" not in series
+    assert series["polymarket_us:ewc-usse-me"]["trades"] == 2
+
+
 def test_graceful_degradation_without_optional_columns(local_db_case):
     path, keeper, connect = local_db_case
     _make_db(

@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from polymarket.domain_key import pm_domain_key
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
@@ -265,6 +267,18 @@ def group_trade_rows(trades: list[dict[str, Any]], key_name: str, default_label:
     return result
 
 
+def report_series_key(trade: dict[str, Any]) -> str:
+    series = str(trade.get("series_ticker") or "").strip()
+    ticker = str(trade.get("ticker") or "").strip()
+    venue = str(trade.get("venue") or "").strip()
+    if ticker and (not series or series == "polymarket_us" or venue == "polymarket_us"):
+        try:
+            return pm_domain_key(ticker)
+        except ValueError:
+            pass
+    return series or "(unknown)"
+
+
 def summarize(path: Path, exclude_test: bool = False, *, now: datetime | None = None) -> dict[str, Any]:
     trades, columns = load_trades(path)
     now = now or datetime.now(timezone.utc)
@@ -339,7 +353,8 @@ def summarize(path: Path, exclude_test: bool = False, *, now: datetime | None = 
 
     stats["tickers"] = group_trade_rows(trades, "ticker", "(unknown)")
     if "series_ticker" in columns:
-        stats["series"] = group_trade_rows(trades, "series_ticker", "(unknown)")
+        series_trades = [{**trade, "_report_series": report_series_key(trade)} for trade in trades]
+        stats["series"] = group_trade_rows(series_trades, "_report_series", "(unknown)")
 
     holding_hours = []
     if "resolved_ts" in columns:
