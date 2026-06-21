@@ -242,6 +242,11 @@ PATH_TIER_RULES: list[dict[str, Any]] = [
     },
     {
         "tier": "T0",
+        "pattern": "scripts/edge_replay/tier_classifier.py",
+        "matcher": lambda p: _eq(p, "scripts/edge_replay/tier_classifier.py"),
+    },
+    {
+        "tier": "T0",
         "pattern": "scripts/install*.sh",
         "matcher": lambda p: (
             _matches_prefix(p, "scripts/install") and p.endswith(".sh")
