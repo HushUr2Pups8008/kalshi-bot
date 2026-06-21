@@ -18,7 +18,7 @@ Skeleton scope (this commit):
 * A template file for an additional ~25 production-derived cases that
   the operator hand-labels post-soak.
 * CLI: ``--model qwen3:14b``, ``--cases <fixture-path>``, ``--json``.
-* Output: ``logs/eval/llm_eval_<model>_<ts>.md`` plus a one-line verdict
+* Output: ``logs/reports/evaluations/llm_eval_<model>_<ts>.md`` plus a one-line verdict
   (precision / recall / Brier vs. the canonical anchors).
 
 What this harness does NOT do (intentional):
@@ -77,12 +77,13 @@ from analysis.signal_analyzer import _LLM_SYSTEM_PROMPT, _build_user_msg  # noqa
 from feeds import NewsItem  # noqa: E402
 from governance.llm import LocalQwenLLM  # noqa: E402
 from kalshi import KalshiMarket  # noqa: E402
+from utils.output_paths import EVALUATION_REPORTS_DIR  # noqa: E402
 
 
 _DEFAULT_FIXTURE = (
     _REPO_ROOT / "tests" / "fixtures" / "llm_eval_cases" / "edge_001_canonical.json"
 )
-_OUTPUT_DIR = _REPO_ROOT / "logs" / "eval"
+_OUTPUT_DIR = EVALUATION_REPORTS_DIR
 
 _MAGNITUDE_TO_PP = {"none": 0.0, "small": 0.055, "moderate": 0.14, "large": 0.30}
 

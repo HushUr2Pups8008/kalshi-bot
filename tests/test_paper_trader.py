@@ -147,6 +147,25 @@ def trader(monkeypatch):
     keeper.close()
 
 
+def test_record_trade_persists_llm_capture_join_key(trader):
+    """PROFIT-PHASE3 I-1: record_trade persists the capture join key
+    (signal::<ticker>::<news.item_id>) so the corpus builder can link the
+    resolved trade to its captured LLM decision. Also exercises the additive
+    migration end-to-end: the INSERT references llm_capture_row_id, so the
+    column must have been added at PaperTrader init."""
+    analysis = _make_mock_analysis(ticker="KXTRUMPIRAN-27", side="yes")
+    analysis.news_item.item_id = "news-xyz"
+
+    with patch("dataclasses.asdict", return_value={"series_ticker": "KXTRUMPIRAN"}):
+        trader.record_trade(analysis)
+
+    row = trader._conn.execute(
+        "SELECT llm_capture_row_id FROM paper_trades WHERE ticker = ?",
+        ("KXTRUMPIRAN-27",),
+    ).fetchone()
+    assert row["llm_capture_row_id"] == "signal::KXTRUMPIRAN-27::news-xyz"
+
+
 class TestBankrollAtomicity:
     """Regression for the bankroll desync bug fixed in v0.23.0."""
 
@@ -188,7 +207,9 @@ class TestBankrollAtomicity:
 
 class TestResolveMarketAccounting:
     def test_winning_yes_trade_positive_pnl(self, trader):
-        analysis = _make_mock_analysis(yes_price=40.0, side="yes")
+        # PROFIT-SIZING-001b: paper sizes by Kelly now. capped $2.00 @ 40c =>
+        # 5 contracts, so the resolution-math expectations below are unchanged.
+        analysis = _make_mock_analysis(yes_price=40.0, side="yes", capped_dollars=2.0)
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
             trader.record_trade(analysis)
         _run_resolve(trader, analysis.market.ticker, True)
@@ -200,7 +221,7 @@ class TestResolveMarketAccounting:
         assert row["pnl_dollars"] == pytest.approx(3.00, abs=0.01)
 
     def test_losing_yes_trade_negative_pnl(self, trader):
-        analysis = _make_mock_analysis(yes_price=40.0, side="yes")
+        analysis = _make_mock_analysis(yes_price=40.0, side="yes", capped_dollars=2.0)
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
             trader.record_trade(analysis)
         _run_resolve(trader, analysis.market.ticker, False)
@@ -208,11 +229,12 @@ class TestResolveMarketAccounting:
         row = trader._conn.execute(
             "SELECT pnl_dollars FROM paper_trades WHERE resolved=1"
         ).fetchone()
-        # Lost: cost = 5 * 0.40 = $2.00; payout = 0; pnl = -$2.00
+        # 5 contracts (capped $2 @ 40c). Lost: cost = $2.00; payout = 0; pnl = -$2.00
         assert row["pnl_dollars"] == pytest.approx(-2.00, abs=0.01)
 
     def test_winning_no_trade_positive_pnl(self, trader):
-        analysis = _make_mock_analysis(yes_price=60.0, side="no")
+        # NO at yes_price=60c => executed price 40c; capped $2.00 => 5 contracts.
+        analysis = _make_mock_analysis(yes_price=60.0, side="no", capped_dollars=2.0)
         with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
             trader.record_trade(analysis)
         _run_resolve(trader, analysis.market.ticker, False)
@@ -220,7 +242,6 @@ class TestResolveMarketAccounting:
         row = trader._conn.execute(
             "SELECT pnl_dollars FROM paper_trades WHERE resolved=1"
         ).fetchone()
-        # NO contract at yes_price=60c => price_cents = 100-60 = 40c
         # 5 contracts * 40c = $2.00 cost; win = 5 contracts = $5; pnl = $3.00
         assert row["pnl_dollars"] == pytest.approx(3.00, abs=0.01)
 
@@ -260,6 +281,26 @@ class TestKeywordOutcomes:
         assert row is not None
         assert row["correct"] in (0, 1)
 
+    def test_keyword_outcomes_use_stored_series_for_polymarket_resolution(self, trader):
+        analysis = _make_mock_analysis(
+            ticker="ewc-usgub-ks-2026-11-03-dem",
+            series_ticker="polymarket_us",
+            keywords=["election"],
+            signal_type="polymarket_news",
+        )
+        analysis.venue = "polymarket_us"
+        analysis.market.venue = "polymarket_us"
+        with patch("dataclasses.asdict", return_value={"series_ticker": "polymarket_us"}):
+            trader.record_trade(analysis)
+
+        _run_resolve(trader, analysis.market.ticker, True)
+
+        row = trader._conn.execute(
+            "SELECT series_ticker FROM keyword_outcomes WHERE keyword='election'"
+        ).fetchone()
+        assert row is not None
+        assert row["series_ticker"] == "polymarket_us"
+
 
 class TestKellyShadow:
     def test_kelly_contracts_column_populated(self, trader):
@@ -273,8 +314,10 @@ class TestKellyShadow:
         ).fetchone()
         assert row["kelly_contracts"] is not None
         assert row["kelly_contracts"] >= 1
-        # In paper mode, flat 5 contracts are placed regardless of Kelly
-        assert row["contracts"] == 5
+        # PROFIT-SIZING-001b: paper now mirrors live -- contracts == Kelly size,
+        # not flat-5. At 50c, $10 capped => 20 contracts.
+        assert row["contracts"] == row["kelly_contracts"]
+        assert row["contracts"] == 20
 
     def test_record_trade_logs_blended_signal_meta_when_present(self, trader):
         analysis = _make_mock_analysis(yes_price=50.0, capped_dollars=10.0)
@@ -293,10 +336,14 @@ class TestKellyShadow:
             trade_log_mock.log_paper_trade.call_args.kwargs["signal_meta"]
             == analysis.signal_meta
         )
+        assert trade_log_mock.log_paper_trade.call_args.kwargs[
+            "keywords_matched"
+        ] == analysis.keywords_matched
 
-    def test_kelly_contracts_independent_of_flat(self, trader):
-        """kelly_contracts reflects capped_dollars sizing, not PAPER_FLAT_CONTRACTS."""
-        # At 50c, $20 => 40 contracts; $2 => 4 contracts. Both still use flat 5 in contracts.
+    def test_paper_contracts_track_kelly_sizing(self, trader):
+        """PROFIT-SIZING-001b: paper sizes by Kelly (mirrors live), so recorded
+        contracts == kelly_contracts and scale with capped_dollars."""
+        # At 50c, $20 => 40 contracts; $2 => 4 contracts.
         analysis_big  = _make_mock_analysis(yes_price=50.0, capped_dollars=20.0)
         analysis_small = _make_mock_analysis(
             yes_price=50.0, capped_dollars=2.0, ticker="KXTEST-25DEC30"
@@ -311,9 +358,9 @@ class TestKellyShadow:
         big_kelly   = rows[0]["kelly_contracts"]
         small_kelly = rows[1]["kelly_contracts"]
         assert big_kelly > small_kelly
-        # Both use flat 5
-        assert rows[0]["contracts"] == 5
-        assert rows[1]["contracts"] == 5
+        # Paper now records the Kelly size, not flat-5.
+        assert rows[0]["contracts"] == big_kelly == 40
+        assert rows[1]["contracts"] == small_kelly == 4
 
     def test_record_trade_persists_executed_side_edge_yes(self, trader):
         """PROFIT-OBS-004 (closed 2026-05-02): yes-side trades persist
@@ -328,27 +375,23 @@ class TestKellyShadow:
         assert row["edge"] == pytest.approx(0.20)
 
     def test_record_trade_persists_executed_side_edge_no(self, trader):
-        """PROFIT-OBS-004 (closed 2026-05-02): no-side trades persist
-        -analysis.edge so the recorded value reflects the executed side.
-
-        Without this fix, every NO-side trade would persist a misleadingly
-        negative edge — exactly the symptom that surfaced on the 3
-        KXFISAEXTEND-26APR-MAY0{1,2,3} historical rows."""
-        # YES-side edge of -0.068 (estimated_prob 0.432, market_yes 50c).
-        # Executed-side edge for NO is +0.068.
+        """NO-side trades persist the chosen-side executable edge."""
+        # Production analysis.edge is already chosen-side after select_side().
+        # The recorder must not negate it back to the YES-side perspective.
         analysis = _make_mock_analysis(
-            side="no", yes_price=50.0, estimated_prob=0.432, edge=-0.068,
+            side="no", yes_price=70.0, estimated_prob=0.656, edge=0.044,
             ticker="KXOBS004-NO",
         )
-        with patch("dataclasses.asdict", return_value={"series_ticker": "KXOBS004"}):
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXOBS004"}), \
+             patch("trading.paper_trader.trade_log") as trade_log_mock:
             trader.record_trade(analysis)
         row = trader._conn.execute(
             "SELECT side, edge FROM paper_trades WHERE ticker='KXOBS004-NO'"
         ).fetchone()
         assert row["side"] == "no"
-        assert row["edge"] == pytest.approx(0.068), (
-            "PROFIT-OBS-004: NO-side trade must persist executed-side edge "
-            "(positive), not the YES-side perspective (negative)."
+        assert row["edge"] == pytest.approx(0.044)
+        assert trade_log_mock.log_paper_trade.call_args.kwargs["edge"] == pytest.approx(
+            0.044
         )
 
 
@@ -464,6 +507,60 @@ class TestStartupInitialization:
         assert "Notional bankroll initialised" not in caplog.text
         assert "Paper trading phase started" not in caplog.text
         assert "[PAPER_INIT]" not in caplog.text
+        keeper.close()
+
+    def test_sizing_regime_kelly_sentinel_is_stamped_on_first_startup(self, monkeypatch):
+        # PROFIT-SIZING-001b: the bot auto-stamps the flat-5 -> Kelly sizing
+        # cohort boundary at startup (no operator action, no .env var).
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+
+        from trading.paper_trader import PaperTrader
+
+        keeper, connect = _shared_memory_connect("sizing-sentinel-stamp")
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            pt = PaperTrader(db_path=":memory:", startup_context="test")
+            row = pt._conn.execute(
+                "SELECT value FROM bot_state WHERE key = ?",
+                ("sizing_regime_kelly_deployed_ts",),
+            ).fetchone()
+
+        assert row is not None
+        # Stored as a parseable UTC ISO timestamp (mirrors the P0 sentinel).
+        parsed = datetime.fromisoformat(row[0])
+        assert parsed.tzinfo is not None
+        keeper.close()
+
+    def test_sizing_regime_kelly_sentinel_is_never_overwritten(self, monkeypatch):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+
+        from trading.paper_trader import PaperTrader
+
+        original = "2026-06-01T00:00:00+00:00"
+        keeper, connect = _shared_memory_connect("sizing-sentinel-overwrite")
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            first = PaperTrader(db_path=":memory:", startup_context="test")
+            first._set_state("sizing_regime_kelly_deployed_ts", original)
+
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), \
+             patch("trading.paper_trader.SourceCredibility") as MockCred:
+            MockCred.return_value.get_multiplier.return_value = 1.0
+            second = PaperTrader(db_path=":memory:", startup_context="test")
+            row = second._conn.execute(
+                "SELECT value FROM bot_state WHERE key = ?",
+                ("sizing_regime_kelly_deployed_ts",),
+            ).fetchone()
+
+        # WHY: the cohort boundary must be permanent. A later restart must not
+        # move it, or flat-5-era vs Kelly-era resolved trades get mis-split.
+        assert row[0] == original
         keeper.close()
 
     def test_initialize_is_idempotent_on_same_instance(self, monkeypatch, caplog):
@@ -693,6 +790,71 @@ class TestMatchQualityReportSection:
         _ = real_open
 
 
+class TestMarketSourceHintsReportSection:
+    """MarketSourceHints report section is read-only and diagnostic-only."""
+
+    def test_returns_placeholder_when_no_market_source_hint_records(self, monkeypatch, tmp_path):
+        from trading import paper_trader as pt_module
+        empty = tmp_path / "empty.jsonl"
+        empty.write_text("", encoding="utf-8")
+        monkeypatch.setattr(pt_module, "TRADE_LOG_FILE", empty)
+
+        lines = pt_module._market_source_hints_report_section()
+
+        assert lines[0] == "MARKET SOURCE HINTS  (shadow-only diagnostics)"
+        assert "No MARKET_SOURCE_HINT_DIAGNOSTIC records yet" in lines[1]
+
+    def test_summarizes_market_source_hint_diagnostics_without_behavioral_claims(self, monkeypatch, tmp_path):
+        import json as _json
+        from trading import paper_trader as pt_module
+
+        records = [
+            {
+                "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                "ticker": "KXIRAN",
+                "mode": "shadow",
+                "shadow_only": True,
+                "targets": [
+                    {"source": "Reuters", "domain": "reuters.com", "query_count": 1, "feed_url_count": 0},
+                    {"source": "Associated Press", "domain": "apnews.com", "query_count": 1, "feed_url_count": 0},
+                ],
+                "rejected_labels": {"news outlets": "generic_or_unverifiable_label"},
+                "log_records": [],
+            },
+            {
+                "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                "ticker": "KXIRAN",
+                "mode": "advisory",
+                "shadow_only": True,
+                "targets": [
+                    {"source": "Reuters", "domain": "reuters.com", "query_count": 1, "feed_url_count": 0},
+                ],
+                "rejected_labels": {},
+                "log_records": [{"type": "MARKET_SOURCE_HINT_SHADOW", "shadow_only": True}],
+            },
+            {"type": "OTHER", "ticker": "ignored"},
+            "not-json",
+        ]
+        path = tmp_path / "trades.jsonl"
+        path.write_text(
+            "\n".join(r if isinstance(r, str) else _json.dumps(r) for r in records) + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(pt_module, "TRADE_LOG_FILE", path)
+
+        lines = pt_module._market_source_hints_report_section()
+        text = "\n".join(lines)
+
+        assert "Diagnostic records:       2" in text
+        assert "Shadow-only records:      2 (100%)" in text
+        assert "Modes observed:           advisory(1), shadow(1)" in text
+        assert "Top hinted sources:       Reuters(2), Associated Press(1)" in text
+        assert "Top tickers:              KXIRAN(2)" in text
+        assert "Rejected labels:          1" in text
+        assert "Child shadow records:     1" in text
+        assert "diagnostic only -- not consumed by readiness/admission/trading" in text
+
+
 class TestValidateStartupContext:
     """`_validate_startup_context` — rejects unsupported values."""
 
@@ -766,6 +928,16 @@ class TestMigrations:
                 "5, 50, 2.5, 0.6, 50.0, 0.1, 2.5, 2.5, 'h', 's', '[]', 'r', "
                 "'{\"series_ticker\": \"KXLEG\"}')"
             )
+            legacy_conn.execute(
+                "INSERT INTO paper_trades (trade_id, ts, ticker, market_title, side, "
+                "contracts, price_cents, cost_dollars, estimated_prob, market_yes_price, "
+                "edge, kelly_dollars, capped_dollars, signal_headline, signal_source, "
+                "keywords_matched, reasoning, market_snapshot) VALUES "
+                "('legacy-no-bad-edge', '2026-06-05T13:09:56+00:00', "
+                "'KXFISAEXTEND-26MAY-JUN15', 't', 'no', "
+                "5, 30, 1.5, 0.656, 70.0, -0.044, 1.5, 1.5, 'h', 's', '[]', 'r', "
+                "'{\"series_ticker\": \"KXFISAEXTEND\"}')"
+            )
             legacy_conn.commit()
 
             from trading.paper_trader import PaperTrader
@@ -789,6 +961,10 @@ class TestMigrations:
             ).fetchone()
             assert row["series_ticker"] == "KXLEG"
             assert row["entry_price_cents"] == 50.0
+            repaired = pt._conn.execute(
+                "SELECT edge FROM paper_trades WHERE trade_id='legacy-no-bad-edge'"
+            ).fetchone()
+            assert repaired["edge"] == pytest.approx(0.044)
         finally:
             keeper.close()
 
@@ -928,6 +1104,23 @@ class TestCalibrationEmission:
                 abs(c.kwargs["lane_estimate"] - 1.0)
             )
 
+    def test_resolve_market_emits_polymarket_venue_on_resolution_feedback(self, trader):
+        analysis = self._analysis_with_lanes(
+            ticker="ewc-usgub-ks-2026-11-03-dem",
+        )
+        analysis.venue = "polymarket_us"
+        analysis.market.venue = "polymarket_us"
+        analysis.market.series_ticker = "polymarket_us"
+        with patch("dataclasses.asdict", return_value={"series_ticker": "polymarket_us"}):
+            trader.record_trade(analysis)
+
+        with patch("trading.paper_trader.trade_log") as mock_log:
+            _run_resolve(trader, analysis.market.ticker, True)
+
+        assert mock_log.log_paper_resolution.call_args.kwargs["venue"] == "polymarket_us"
+        for call in mock_log.log_calibration_check.call_args_list:
+            assert call.kwargs["venue"] == "polymarket_us"
+
     def test_resolve_market_emits_zero_when_lane_columns_null(self, trader):
         """Historical rows (pre-v0.29.47, no lane data) must emit zero events."""
         analysis = _make_mock_analysis(yes_price=40.0, side="yes")
@@ -957,6 +1150,31 @@ class TestCalibrationEmission:
         }
         for lane in ("fast", "accumulation", "structural"):
             assert calibration_task._state.lanes[lane].sample_count == 1
+
+    def test_reconciled_settlement_lane_events_update_calibration_task(self, trader, monkeypatch):
+        from tasks.calibration_task import CalibrationTask
+
+        calibration_task = CalibrationTask()
+        monkeypatch.setattr(trader, "_calibration_task", calibration_task)
+
+        asyncio.run(
+            trader.record_resolution_calibration_events(
+                [
+                    ("ewc-usgub-ks-2026-11-03-dem", True, "trade-1", "fast", 0.62),
+                    (
+                        "ewc-usgub-ks-2026-11-03-dem",
+                        True,
+                        "trade-1",
+                        "accumulation",
+                        0.58,
+                    ),
+                ]
+            )
+        )
+
+        assert set(calibration_task._state.lanes.keys()) == {"fast", "accumulation"}
+        assert calibration_task._state.lanes["fast"].sample_count == 1
+        assert calibration_task._state.lanes["accumulation"].sample_count == 1
 
     def test_resolve_market_survives_calibration_task_error(
         self, trader, monkeypatch, caplog

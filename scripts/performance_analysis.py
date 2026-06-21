@@ -33,25 +33,39 @@ window.
 
 import argparse
 import json
+import math
 import os
 import sqlite3
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from tabulate import tabulate
+from polymarket.domain_key import pm_domain_key
+from scripts.throughput_operator_metrics import (
+    ThroughputOperatorSummary,
+    format_operator_throughput_lines,
+    summarize_operator_throughput,
+)
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
+from utils.output_paths import (
+    PAPER_TRADES_DB,
+    PERFORMANCE_REPORTS_DIR,
+    RAW_TRADES_DIR,
+)
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(__file__).parent.parent
-JSONL_PATH = REPO_ROOT / "logs" / "trades"
-DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
+JSONL_PATH = RAW_TRADES_DIR
+DB_PATH = PAPER_TRADES_DB
 CACHE_PATH = REPO_ROOT / "logs" / "market_resolution_cache.json"
-LOGS_DIR = REPO_ROOT / "logs"
-REPORTS_DIR = LOGS_DIR / "reports"
+REPORTS_DIR = PERFORMANCE_REPORTS_DIR
 
 PAPER_MIN_EDGE = 0.02
 PAPER_FLAT_CONTRACTS = 5
@@ -99,6 +113,16 @@ def _skip_category(reason):
     if not reason:
         return "unknown"
     r = reason.lower()
+    if "g1_blended_confidence" in r:
+        return "confidence gate"
+    if "g2_evidence_source_class_diversity" in r:
+        return "source diversity gate"
+    if "g3_disagreement_score" in r:
+        return "disagreement gate"
+    if "g6_recency_score" in r:
+        return "recency gate"
+    if "series_correlation" in r:
+        return "series correlation gate"
     if "status=active" in r:
         return "bug: market status=active (pre-v0.2.0)"
     if "cooldown" in r:
@@ -125,6 +149,11 @@ def _is_controllable(reason):
         "price illiquid",
         "insufficient balance",
         "unknown",
+        "confidence gate",
+        "source diversity gate",
+        "disagreement gate",
+        "recency gate",
+        "series correlation gate",
     )
 
 
@@ -160,6 +189,41 @@ def _fmt_pnl(v):
         return "--"
     sign = "+" if v >= 0 else ""
     return "%s$%.2f" % (sign, v)
+
+
+def _venue_name(trade):
+    venue = str(trade.get("venue") or "").strip()
+    return venue or "unknown"
+
+
+def _venue_performance_rows(db_trades):
+    rows = []
+    for venue in sorted({_venue_name(t) for t in db_trades}):
+        venue_trades = [t for t in db_trades if _venue_name(t) == venue]
+        resolved = [t for t in venue_trades if t.get("resolved")]
+        wins = [t for t in resolved if (t.get("pnl_dollars") or 0) > 0]
+        losses = [t for t in resolved if (t.get("pnl_dollars") or 0) <= 0]
+        net_pnl = sum(t.get("pnl_dollars") or 0 for t in resolved)
+        total_cost = sum(t.get("cost_dollars") or 0 for t in venue_trades)
+        avg_edge = (
+            sum(t.get("edge") or 0 for t in venue_trades) / len(venue_trades)
+            if venue_trades
+            else 0.0
+        )
+        rows.append(
+            [
+                venue,
+                len(venue_trades),
+                len(resolved),
+                len(venue_trades) - len(resolved),
+                _pct(len(wins), len(resolved)),
+                "%d W / %d L" % (len(wins), len(losses)),
+                _fmt_pnl(net_pnl),
+                "$%.2f" % total_cost,
+                "%+.4f" % avg_edge,
+            ]
+        )
+    return rows
 
 
 def _p0_cohort_boundary(conn):
@@ -199,6 +263,17 @@ def _p0_boundary_missing_message(section_name):
     )
 
 
+def _report_series_key(ticker, series_ticker):
+    series = str(series_ticker or "").strip()
+    ticker_value = str(ticker or "").strip()
+    if (not series or series == "polymarket_us") and ticker_value:
+        try:
+            return pm_domain_key(ticker_value)
+        except ValueError:
+            pass
+    return series or "(unknown)"
+
+
 def _has_table(conn, table_name):
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -221,6 +296,81 @@ def _p0_cohort_specs(boundary):
     )
 
 
+def _parse_p0_boundary(value):
+    """Parse a P0 sentinel timestamp string into a tz-aware UTC datetime, or None.
+
+    Mirrors the validation in ``_p0_cohort_boundary`` but operates on the value
+    already loaded into the ``state`` dict (bot_state KV) so section 8 can split
+    its cohort without re-opening the DB.
+    """
+    if value is None:
+        return None
+    value = str(value).strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _equity_max_drawdown(points):
+    """Running peak-to-trough max drawdown over an ordered equity series.
+
+    ``points`` is a list of positive bankroll samples in chronological order.
+    Returns the largest fractional decline from a running peak (0.0 if none).
+    Unlike start-vs-now, this captures intra-history dips even when the series
+    later recovers.
+    """
+    peak = None
+    max_dd = 0.0
+    for p in points:
+        if p is None or p <= 0:
+            continue
+        if peak is None or p > peak:
+            peak = p
+        elif peak > 0:
+            dd = (peak - p) / peak
+            if dd > max_dd:
+                max_dd = dd
+    return max_dd
+
+
+def _bankroll_equity_points(trades, bankroll_now):
+    """Chronological bankroll equity samples: each trade's pre-trade bankroll
+    snapshot (``notional_bankroll_before``) in ts order, plus the current
+    notional bankroll as the final point. Entry-sampled (coarse) but enough to
+    detect a peak-to-trough dip the start-vs-now metric misses.
+
+    Trades without a parseable ts are EXCLUDED — they cannot be placed on the
+    time axis, and forcing them to a sentinel (min/max) would mis-order the
+    curve and distort the peak-to-trough number.
+    """
+    dated = []
+    for trade in trades:
+        dt = _parse_ts(trade.get("ts"))
+        if dt is None:
+            continue
+        before = trade.get("notional_bankroll_before")
+        try:
+            before_value = float(before)
+        except (TypeError, ValueError):
+            continue
+        if before_value > 0:
+            dated.append((dt, before_value))
+    pts = [value for _, value in sorted(dated, key=lambda x: x[0])]
+    try:
+        now_value = float(bankroll_now)
+    except (TypeError, ValueError):
+        now_value = 0.0
+    if now_value > 0:
+        pts.append(now_value)
+    return pts
+
+
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
@@ -239,15 +389,34 @@ def load_jsonl(since_dt, until_dt):
     return entries
 
 
-def load_db_trades():
-    """Load all trades from paper_trades.db. Returns list of dicts."""
+def load_db_trades(since_dt=None, until_dt=None):
+    """Load trades from paper_trades.db. Returns list of dicts.
+
+    When a window is supplied, keep DB-derived report sections aligned with
+    the JSONL window instead of mixing windowed funnel counts with lifetime DB
+    performance.
+    """
     if not DB_PATH.exists():
         return []
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     rows = conn.execute("SELECT * FROM paper_trades ORDER BY ts").fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    trades = [dict(r) for r in rows]
+    if since_dt is None and until_dt is None:
+        return trades
+
+    filtered = []
+    for trade in trades:
+        dt = _parse_ts(trade.get("ts"))
+        if dt is None:
+            continue
+        if since_dt is not None and dt < since_dt:
+            continue
+        if until_dt is not None and dt > until_dt:
+            continue
+        filtered.append(trade)
+    return filtered
 
 
 def load_db_state():
@@ -423,6 +592,63 @@ def section_pipeline_funnel(entries, db_trades):
     return "\n".join(lines)
 
 
+def section_single_vs_multi_source(entries, db_trades):
+    """PROFIT-SOURCE-001: split resolved-trade performance by distinct evidence
+    source-class count (single-source vs multi-source), to evaluate whether
+    allowing single-source trades (G2 relaxed to 1) helps or hurts. The count is
+    captured per trade in the PAPER_TRADE event's signal_meta
+    (evidence_source_class_count); fast-lane trades have no count (unknown)."""
+    count_by_trade = {}
+    for e in entries:
+        if e.get("type") != "PAPER_TRADE":
+            continue
+        tid = e.get("trade_id")
+        sm = e.get("signal_meta")
+        if tid and isinstance(sm, dict):
+            c = sm.get("evidence_source_class_count")
+            if c is not None:
+                try:
+                    count_by_trade[tid] = int(c)
+                except (TypeError, ValueError):
+                    pass
+
+    buckets = {"single (1 source)": [], "multi (>=2 sources)": [], "unknown/fast-lane": []}
+    for t in db_trades:
+        if not t.get("resolved"):
+            continue
+        c = count_by_trade.get(t.get("trade_id"))
+        if c is None:
+            buckets["unknown/fast-lane"].append(t)
+        elif c <= 1:
+            buckets["single (1 source)"].append(t)
+        else:
+            buckets["multi (>=2 sources)"].append(t)
+
+    lines = [
+        "Single-source vs multi-source performance (resolved; PROFIT-SOURCE-001):",
+        "",
+        "  G2 now allows single-source (G2_MIN_SOURCE_CLASSES=1); this tracks how",
+        "  single- vs multi-source trades actually perform so the relaxation can be",
+        "  kept or reverted on evidence. Source-class count from PAPER_TRADE signal_meta.",
+        "",
+        "%-22s %9s %9s %11s" % ("Cohort", "Resolved", "Win Rate", "Net P&L"),
+        "-" * 54,
+    ]
+    any_data = False
+    for label, rows in buckets.items():
+        if not rows:
+            continue
+        any_data = True
+        wins = sum(1 for r in rows if (r.get("pnl_dollars") or 0) > 0)
+        net = sum(r.get("pnl_dollars") or 0 for r in rows)
+        wr = "%.0f%%" % (wins / len(rows) * 100)
+        lines.append("%-22s %9d %9s %+11.2f" % (label, len(rows), wr, net))
+    if not any_data:
+        lines.append("  No resolved trades with source-class tracking yet")
+        lines.append("  (single-source trades only started after the G2 relaxation).")
+    return "\n".join(lines)
+
+
 def section_placed_performance(entries, db_trades, resolution_map):
     db_by_id = {t["trade_id"]: t for t in db_trades}
 
@@ -444,6 +670,13 @@ def section_placed_performance(entries, db_trades, resolution_map):
 
     lines = []
     lines.append("Placed trades (from paper_trades.db):")
+    lines.append(
+        "  Cohort: IN-WINDOW (report window only). Go-live readiness (section 8)"
+    )
+    lines.append(
+        "  gates on the POST-P0 cohort, so its win rate / drawdown differ from"
+    )
+    lines.append("  the figures below.")
     lines.append("")
     lines.append("  Total trades  : %d" % len(db_trades))
     lines.append("  Resolved      : %d" % len(resolved))
@@ -456,6 +689,28 @@ def section_placed_performance(entries, db_trades, resolution_map):
     lines.append("  Total cost    : $%.2f" % total_cost)
     lines.append("  ROI on cost   : %.1f%%" % roi)
     lines.append("  Avg edge      : %+.4f" % avg_edge)
+
+    venue_rows = _venue_performance_rows(db_trades)
+    if venue_rows:
+        lines.append("")
+        lines.append("By venue:")
+        lines.append(
+            tabulate(
+                venue_rows,
+                headers=[
+                    "Venue",
+                    "Trades",
+                    "Resolved",
+                    "Open",
+                    "Win Rate",
+                    "W/L",
+                    "Net P&L",
+                    "Cost",
+                    "Avg Edge",
+                ],
+                tablefmt="simple",
+            )
+        )
 
     if resolved:
         best = max(resolved, key=lambda t: t.get("pnl_dollars") or -999)
@@ -570,6 +825,18 @@ def section_skip_breakdown(entries):
     top = sorted(ticker_counts.items(), key=lambda x: -x[1])[:10]
     for ticker, count in top:
         lines.append("  %3d  %s" % (count, ticker))
+
+    if by_cat.get("other"):
+        raw_counts = Counter(
+            (s.get("reason") or "unknown").strip() or "unknown"
+            for s in by_cat["other"]
+        )
+        lines.append("")
+        lines.append("Unclassified raw skip reasons:")
+        raw_rows = [[count, reason[:120]] for reason, count in raw_counts.most_common(10)]
+        lines.append(
+            tabulate(raw_rows, headers=["Count", "Raw Reason"], tablefmt="simple")
+        )
 
     return "\n".join(lines)
 
@@ -896,7 +1163,23 @@ def section_source_quality():
     return "\n".join(lines)
 
 
-def section_candidate_subreddits():
+def section_operator_throughput(
+    summary: ThroughputOperatorSummary | None,
+    *,
+    trade_log_available: bool,
+    include_title: bool = True,
+) -> str:
+    if not trade_log_available or summary is None:
+        lines = ["OPERATOR THROUGHPUT LEADING INDICATORS"]
+        lines.append("  trade-log metrics unavailable")
+    else:
+        lines = format_operator_throughput_lines(summary)
+    if not include_title:
+        lines = lines[1:]
+    return "\n".join(lines)
+
+
+def section_candidate_subreddits(max_rows=None):
     """
     Show subreddits discovered via Reddit post search (v0.21.0 discovery loop).
     Displays discovered_ts, query that found it, probe_count, last_probed, status.
@@ -914,6 +1197,41 @@ def section_candidate_subreddits():
             ORDER BY status ASC, probe_count DESC, discovered_ts DESC
             """
         ).fetchall()
+        max_probes = int(os.getenv("SUBREDDIT_CANDIDATE_MAX_PROBES", "3"))
+        has_source_stats = (
+            conn.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'source_stats'
+                """
+            ).fetchone()
+            is not None
+        )
+        if has_source_stats:
+            eligible_row = conn.execute(
+                """
+                SELECT count(*)
+                FROM subreddit_candidates c
+                LEFT JOIN source_stats s ON s.source = 'r/' || c.sub
+                WHERE c.status = 'candidate'
+                  AND c.probe_count >= ?
+                  AND COALESCE(s.signals, 0) = 0
+                  AND COALESCE(s.opportunities, 0) = 0
+                  AND COALESCE(s.trades, 0) = 0
+                """,
+                (max_probes,),
+            ).fetchone()
+        else:
+            eligible_row = conn.execute(
+                """
+                SELECT count(*)
+                FROM subreddit_candidates
+                WHERE status = 'candidate'
+                  AND probe_count >= ?
+                """,
+                (max_probes,),
+            ).fetchone()
+        max_probe_no_signal = int(eligible_row[0] if eligible_row else 0)
     except sqlite3.OperationalError:
         return (
             "subreddit_candidates table not found -- bot has not run with v0.21.0+ yet."
@@ -924,8 +1242,15 @@ def section_candidate_subreddits():
     if not rows:
         return "No candidate subreddits discovered yet."
 
+    if max_rows is None:
+        max_rows = int(os.getenv("PERFORMANCE_REPORT_MAX_SUBREDDIT_ROWS", "100"))
+    max_rows = max(1, max_rows)
+
+    status_counts = Counter(r["status"] for r in rows)
+    visible_rows = rows[:max_rows]
+
     table_rows = []
-    for r in rows:
+    for r in visible_rows:
         discovered = (r["discovered_ts"] or "")[:10]
         via = (r["discovered_via"] or "")[:25]
         last = (r["last_probed"] or "never")[:16]
@@ -941,6 +1266,22 @@ def section_candidate_subreddits():
         )
 
     lines = ["Candidate subreddits (discovered via Reddit post search):", ""]
+    summary = ", ".join(
+        "%s: %d" % (status, count)
+        for status, count in sorted(status_counts.items())
+    )
+    lines.append("  Status summary: %s" % summary)
+    if max_probe_no_signal:
+        lines.append(
+            "  Max-probe no-signal eligible: %d (SUBREDDIT_CANDIDATE_MAX_PROBES=%d)"
+            % (max_probe_no_signal, max_probes)
+        )
+    if len(rows) > len(visible_rows):
+        lines.append(
+            "  Showing %d of %d rows (set PERFORMANCE_REPORT_MAX_SUBREDDIT_ROWS to adjust)"
+            % (len(visible_rows), len(rows))
+        )
+    lines.append("")
     lines.append(
         tabulate(
             table_rows,
@@ -967,6 +1308,54 @@ def section_candidate_subreddits():
     return "\n".join(lines)
 
 
+def _state_float(state, key):
+    try:
+        value = state.get(key)
+    except AttributeError:
+        return None
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _starting_bankroll(db_trades, state):
+    for key in ("paper_starting_bankroll", "starting_bankroll", "initial_bankroll"):
+        value = _state_float(state, key)
+        if value is not None and value > 0:
+            return value
+
+    first_trade = None
+    for trade in db_trades:
+        before = trade.get("notional_bankroll_before")
+        if before is None:
+            continue
+        try:
+            before_value = float(before)
+        except (TypeError, ValueError):
+            continue
+        if before_value <= 0:
+            continue
+        dt = _parse_ts(trade.get("ts"))
+        sort_key = dt or datetime.max.replace(tzinfo=timezone.utc)
+        if first_trade is None or sort_key < first_trade[0]:
+            first_trade = (sort_key, before_value)
+    if first_trade is not None:
+        return first_trade[1]
+
+    env_value = os.getenv("BANKROLL")
+    if env_value:
+        try:
+            parsed = float(env_value)
+            if parsed > 0:
+                return parsed
+        except ValueError:
+            pass
+    return 500.0
+
+
 def section_per_series_win_rate():
     """
     7b. Per-series win rate (resolved trades grouped by series_ticker).
@@ -983,12 +1372,17 @@ def section_per_series_win_rate():
         boundary = _p0_cohort_boundary(conn)
         if boundary is None:
             return _p0_boundary_missing_message("Win rate by series")
+        if _has_columns(conn, "paper_trades", ("ticker",)):
+            conn.create_function("REPORT_SERIES_KEY", 2, _report_series_key)
+            series_expr = "REPORT_SERIES_KEY(ticker, series_ticker)"
+        else:
+            series_expr = "COALESCE(NULLIF(series_ticker, ''), '(unknown)')"
         cohort_rows = []
         for label, ts_filter, params in _p0_cohort_specs(boundary):
             rows = conn.execute(
-                """
+                f"""
                 SELECT
-                    COALESCE(NULLIF(series_ticker, ''), '(unknown)') AS series,
+                    {series_expr} AS series,
                     count(*) AS total,
                     sum(CASE WHEN pnl_dollars > 0 THEN 1 ELSE 0 END) AS wins,
                     sum(pnl_dollars) AS net_pnl
@@ -1276,7 +1670,18 @@ def _render_kelly_shadow_rows(rows):
     for r in rows:
         k_contracts = r["kelly_contracts"] or 0
         k_cost      = k_contracts * r["price_cents"] / 100.0
-        k_payout    = float(k_contracts) if r["resolved_yes"] else 0.0
+        # Side-aware payout: a YES contract pays $1 when the market resolves
+        # YES; a NO contract pays $1 when it resolves NO. The prior code assumed
+        # every position was YES, so a winning NO bet (e.g. NO bought at 92c that
+        # resolved NO) was booked as a total loss, corrupting the Kelly delta
+        # (PROFIT-REPORT-002). For unknown/blank side we keep the YES assumption
+        # (prior behaviour) rather than guess.
+        side = str(r["side"] or "").strip().lower()
+        if side == "no":
+            won = not r["resolved_yes"]
+        else:  # "yes" or unknown -> prior behaviour
+            won = bool(r["resolved_yes"])
+        k_payout    = float(k_contracts) if won else 0.0
         k_pnl       = k_payout - k_cost
 
         flat_pnl  += r["pnl_dollars"]
@@ -1433,74 +1838,165 @@ def section_edge_calibration(db_trades):
     return "\n".join(lines)
 
 
-def section_golive_readiness(db_trades, state):
-    resolved = [t for t in db_trades if t.get("resolved")]
-    wins = [t for t in resolved if (t.get("pnl_dollars") or 0) > 0]
-    win_rate = (len(wins) / len(resolved)) if resolved else 0.0
+def section_golive_readiness(db_trades, state, mtm=None):
+    resolved_all = [t for t in db_trades if t.get("resolved")]
 
     try:
         bankroll_now = float(state.get("notional_bankroll", 0))
     except (TypeError, ValueError):
         bankroll_now = 0.0
 
+    # PROFIT-DRAWDOWN-001c: the notional bankroll deducts each open trade's
+    # FULL entry cost at placement, so with many open positions the final
+    # equity point understates true equity and the drawdown criterion fails on
+    # a phantom number (2026-06-12: notional said 45.7%, true MTM equity said
+    # 18.9%). When a mark-to-market snapshot is supplied (mtm dict from
+    # scripts.mark_open_positions.compute_open_position_marks), the CURRENT
+    # equity point becomes bankroll + marked value of open positions. Unpriced
+    # positions count at $0 (fail-closed: unpriced == worthless). Marks are
+    # conservative per venue: Kalshi held-side mid (bounded last fallback only
+    # inside (0,100)); Polymarket min(held ask, 100 - opposite ask) -- residual
+    # optimism is bounded by half the Kalshi spread. Historical
+    # curve points remain entry-sampled notional snapshots — a past trough is
+    # never erased. When mtm is None (offline / fetch failure), fall back to
+    # the notional point and say so: notional overstates drawdown, which is the
+    # conservative failure direction for a go-live gate.
+    mtm_marked = None
+    if isinstance(mtm, dict):
+        try:
+            mtm_marked = float(mtm.get("marked_value", 0) or 0)
+        except (TypeError, ValueError):
+            mtm_marked = None
+        # NaN is truthy and float()-clean but would silently drop the final
+        # equity point downstream (_bankroll_equity_points skips non-positive,
+        # and NaN comparisons are all False) — gate would then see history
+        # only. Reject non-finite values outright (review finding).
+        if mtm_marked is not None and not math.isfinite(mtm_marked):
+            mtm_marked = None
+    equity_now = bankroll_now + mtm_marked if mtm_marked is not None else bankroll_now
+
     # Read config thresholds from env / defaults
     min_resolved = int(os.getenv("GO_LIVE_MIN_RESOLVED", "20"))
     min_win_rate = float(os.getenv("GO_LIVE_MIN_WIN_RATE", "0.52"))
     max_drawdown = float(os.getenv("GO_LIVE_MAX_DRAWDOWN_PCT", "0.20"))
+    bankroll_start = _starting_bankroll(db_trades, state)
 
-    bankroll_start = 500.0  # can't easily read from .env here; use known default
-    drawdown = (
+    def _cohort_stats(rows):
+        wins = [t for t in rows if (t.get("pnl_dollars") or 0) > 0]
+        wr = (len(wins) / len(rows)) if rows else 0.0
+        pts = _bankroll_equity_points(rows, equity_now)
+        ptt = _equity_max_drawdown(pts)
+        # A 0% peak-to-trough from a <2-point curve is "bankroll history could
+        # not be reconstructed", NOT "no drawdown". Flag it so the gate fails
+        # closed instead of silently passing a cohort with missing equity data
+        # (false-pass on a go-live safety gate).
+        dd_measurable = len(pts) >= 2
+        return len(rows), wr, ptt, dd_measurable
+
+    # PROFIT-REPORT-001a (operator decision 2026-06-11): GATE ON POST-P0.
+    # The pre-P0 cohort ran under the pre-fix Kalshi pricing bug and is excluded
+    # everywhere else (7b/7d/7e) as non-representative — gating go-live on it was
+    # leveraging known-broken functionality. The authoritative verdict now uses
+    # the post-P0 (current-regime) cohort; lifetime is informational only. If the
+    # P0 boundary sentinel is missing we fall back to lifetime (conservative) so
+    # the gate always produces a verdict.
+    boundary = _parse_p0_boundary(state.get(P0_PRICE_FIX_SENTINEL_KEY))
+    if boundary is not None:
+        gating = [
+            t for t in resolved_all
+            if (_parse_ts(t.get("ts")) is not None and _parse_ts(t.get("ts")) >= boundary)
+        ]
+        gate_basis = "POST-P0"
+    else:
+        gating = resolved_all
+        gate_basis = "LIFETIME (post-P0 boundary missing -- fallback)"
+
+    g_n, g_wr, g_ptt, g_dd_measurable = _cohort_stats(gating)
+    life_n, life_wr, life_ptt, _ = _cohort_stats(resolved_all)
+    life_dd_startnow = (
         (bankroll_start - bankroll_now) / bankroll_start if bankroll_start > 0 else 0.0
     )
+    dd_ok = g_dd_measurable and g_ptt <= max_drawdown
 
     def gate(val, threshold, mode):
-        if mode == "min":
-            ok = val >= threshold
-        else:
-            ok = val <= threshold
+        ok = val >= threshold if mode == "min" else val <= threshold
         return "PASS" if ok else "FAIL"
 
     lines = ["Go-live readiness:", ""]
+    lines.append("  Cohort basis    : %s (pre-P0 excluded -- ran under the" % gate_basis)
+    lines.append("                    pre-fix pricing bug; matches 7b/7d/7e).")
+    lines.append("")
     lines.append(
         "  Resolved trades : %d / %d required  [%s]"
-        % (len(resolved), min_resolved, gate(len(resolved), min_resolved, "min"))
+        % (g_n, min_resolved, gate(g_n, min_resolved, "min"))
     )
     lines.append(
         "  Win rate        : %.0f%% / %.0f%% required  [%s]"
-        % (win_rate * 100, min_win_rate * 100, gate(win_rate, min_win_rate, "min"))
+        % (g_wr * 100, min_win_rate * 100, gate(g_wr, min_win_rate, "min"))
     )
-    lines.append(
-        "  Drawdown        : %.1f%% / %.0f%% max  [%s]"
-        % (drawdown * 100, max_drawdown * 100, gate(drawdown, max_drawdown, "max"))
-    )
+    if g_dd_measurable:
+        lines.append(
+            "  Drawdown        : %.1f%% / %.0f%% max  [%s]  (peak-to-trough)"
+            % (g_ptt * 100, max_drawdown * 100, "PASS" if dd_ok else "FAIL")
+        )
+    else:
+        lines.append(
+            "  Drawdown        : n/a / %.0f%% max  [FAIL]  (peak-to-trough -- too"
+            " few bankroll samples to measure; failing closed)"
+            % (max_drawdown * 100)
+        )
     lines.append(
         "  Notional bankroll : $%.2f (started $%.2f)" % (bankroll_now, bankroll_start)
     )
+    if mtm_marked is not None:
+        unpriced = 0
+        if isinstance(mtm, dict):
+            unpriced = int(mtm.get("unpriced_count") or 0)
+        suffix = (
+            "  (%d unpriced positions counted at $0)" % unpriced if unpriced else ""
+        )
+        lines.append(
+            "  MTM equity        : $%.2f = notional + $%.2f open-position value;"
+            " drawdown gates on this%s" % (equity_now, mtm_marked, suffix)
+        )
+    else:
+        lines.append(
+            "  MTM equity        : unavailable -- drawdown gates on notional,"
+            " which counts open positions as worthless (overstates drawdown;"
+            " conservative)"
+        )
+    lines.append("")
+    lines.append(
+        "  Lifetime view (incl. frozen pre-P0; INFORMATIONAL, not gating):"
+    )
+    lines.append(
+        "    Resolved %d | Win rate %.0f%% | start-vs-now %.1f%% | peak-to-trough %.1f%%"
+        % (life_n, life_wr * 100, life_dd_startnow * 100, life_ptt * 100)
+    )
     lines.append("")
 
-    all_pass = (
-        len(resolved) >= min_resolved
-        and win_rate >= min_win_rate
-        and drawdown <= max_drawdown
-    )
+    all_pass = g_n >= min_resolved and g_wr >= min_win_rate and dd_ok
     if all_pass:
-        lines.append("  OVERALL: READY FOR LIVE TRADING")
+        lines.append("  OVERALL: READY FOR LIVE TRADING (%s cohort)" % gate_basis)
     else:
         missing = []
-        if len(resolved) < min_resolved:
-            missing.append(
-                "%d more resolved trades needed" % (min_resolved - len(resolved))
-            )
-        if win_rate < min_win_rate:
+        if g_n < min_resolved:
+            missing.append("%d more resolved trades needed" % (min_resolved - g_n))
+        if g_wr < min_win_rate:
             missing.append(
                 "win rate needs %.0f%% (currently %.0f%%)"
-                % (min_win_rate * 100, win_rate * 100)
+                % (min_win_rate * 100, g_wr * 100)
             )
-        if drawdown > max_drawdown:
-            missing.append(
-                "drawdown %.1f%% exceeds %.0f%% cap"
-                % (drawdown * 100, max_drawdown * 100)
-            )
+        if not dd_ok:
+            if not g_dd_measurable:
+                missing.append(
+                    "drawdown not measurable (too few bankroll samples)"
+                )
+            else:
+                missing.append(
+                    "drawdown %.1f%% exceeds %.0f%% cap"
+                    % (g_ptt * 100, max_drawdown * 100)
+                )
         lines.append("  OVERALL: NOT READY -- " + "; ".join(missing))
 
     return "\n".join(lines)
@@ -1526,6 +2022,15 @@ def main():
         action="store_true",
         help="Fetch market resolutions from Kalshi API for unresolved tickers.",
     )
+    parser.add_argument(
+        "--no-mtm",
+        action="store_true",
+        help=(
+            "Skip the open-position mark-to-market fetch; section 8's drawdown"
+            " then gates on the notional bankroll (overstates drawdown when"
+            " open positions retain value)."
+        ),
+    )
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
@@ -1544,9 +2049,20 @@ def main():
 
     # Load data
     entries = load_jsonl(since_dt, until_dt)
-    db_trades = load_db_trades()
+    trade_log_available = JSONL_PATH.exists()
+    throughput_summary = (
+        summarize_operator_throughput(
+            entries,
+            window_start=since_dt,
+            window_end=until_dt,
+        )
+        if trade_log_available
+        else None
+    )
+    db_trades_all = load_db_trades()
+    db_trades = load_db_trades(since_dt, until_dt)
     state = load_db_state()
-    resolution_map = build_resolution_map(db_trades, entries, args.enrich)
+    resolution_map = build_resolution_map(db_trades_all, entries, args.enrich)
 
     # Build report
     report_lines = []
@@ -1560,7 +2076,13 @@ def main():
         % (since_dt.strftime("%Y-%m-%d"), until_dt.strftime("%Y-%m-%d"))
     )
     report_lines.append("  JSONL     : %d entries in window" % len(entries))
-    report_lines.append("  DB trades : %d total" % len(db_trades))
+    if len(db_trades_all) == len(db_trades):
+        report_lines.append("  DB trades : %d in window" % len(db_trades))
+    else:
+        report_lines.append(
+            "  DB trades : %d in window (%d lifetime)"
+            % (len(db_trades), len(db_trades_all))
+        )
     report_lines.append("=" * 70)
 
     # Caveats
@@ -1590,11 +2112,23 @@ def main():
     report_lines.append(section_header("5. PER-SOURCE PERFORMANCE"))
     report_lines.append(section_source_performance(entries, db_trades))
 
+    report_lines.append(section_header("5b. SINGLE vs MULTI-SOURCE PERFORMANCE"))
+    report_lines.append(section_single_vs_multi_source(entries, db_trades))
+
     report_lines.append(section_header("6. SOURCE QUALITY FUNNEL"))
     report_lines.append(section_source_quality())
 
     report_lines.append(section_header("6b. CANDIDATE SUBREDDITS"))
     report_lines.append(section_candidate_subreddits())
+
+    report_lines.append(section_header("6c. OPERATOR THROUGHPUT LEADING INDICATORS"))
+    report_lines.append(
+        section_operator_throughput(
+            throughput_summary,
+            trade_log_available=trade_log_available,
+            include_title=False,
+        )
+    )
 
     report_lines.append(section_header("7. EDGE CALIBRATION"))
     report_lines.append(section_edge_calibration(db_trades))
@@ -1611,8 +2145,34 @@ def main():
     report_lines.append(section_header("7e. KELLY SHADOW SIZING"))
     report_lines.append(section_kelly_shadow())
 
+    # PROFIT-DRAWDOWN-001c: mark open positions to market so section 8's
+    # drawdown criterion reflects true paper equity, not the notional bankroll
+    # (which counts every open position as worthless). Fail-soft: any failure
+    # (offline, API error, missing creds) falls back to the notional point,
+    # which OVERSTATES drawdown -- the conservative direction for this gate.
+    # Default ON despite the --enrich opt-in convention because the gate's
+    # correctness depends on it and the fetch is bounded by open-position
+    # count; --no-mtm opts out.
+    mtm = None
+    if not args.no_mtm:
+        try:
+            from scripts.mark_open_positions import compute_open_position_marks
+
+            mtm = compute_open_position_marks()
+        except SystemExit as exc:
+            # config.BotConfig.__post_init__ sys.exit(1)s on missing/invalid
+            # creds, and the lazy KalshiRestClient import inside the pricing
+            # loop imports config. SystemExit is BaseException -- without this
+            # clause it would escape and kill the whole daily report instead
+            # of falling back to the notional drawdown (review finding).
+            print("WARNING: open-position mark-to-market failed: SystemExit(%s)" % exc)
+            mtm = None
+        except Exception as exc:
+            print("WARNING: open-position mark-to-market failed: %s" % exc)
+            mtm = None
+
     report_lines.append(section_header("8. GO-LIVE READINESS"))
-    report_lines.append(section_golive_readiness(db_trades, state))
+    report_lines.append(section_golive_readiness(db_trades_all, state, mtm=mtm))
 
     report_lines.append("")
     report_lines.append("=" * 70)

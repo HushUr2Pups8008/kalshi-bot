@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jake.kalshi-match-feedback-aggregator</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@VENV_PYTHON@</string>
+        <string>-m</string>
+        <string>scripts.match_feedback_aggregator</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@REPO_ROOT@</string>
+
+    <!-- PROFIT-MATCH-DYNAMIC commit 5/5: aggregator fires 4×/day on a 6h
+         cadence anchored to 08:55 America/Denver — 5 minutes before
+         daily_review (09:00) so the operator's morning surface includes
+         fresh weights. The other 3 fires (02:55, 14:55, 20:55) capture
+         within-day news-cycle shifts. Like the other non-self-cleaning
+         crons (bothealth, daily-review), this fires forever until removed. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key><integer>2</integer>
+            <key>Minute</key><integer>55</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>55</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>14</integer>
+            <key>Minute</key><integer>55</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>20</integer>
+            <key>Minute</key><integer>55</integer>
+        </dict>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>@REPO_ROOT@/logs/app/match_feedback_aggregator_launchd.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>@REPO_ROOT@/logs/app/match_feedback_aggregator_launchd.stderr.log</string>
+</dict>
+</plist>

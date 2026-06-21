@@ -267,6 +267,74 @@ def test_p0_rest_005_detail_endpoint_parses_cents_consistent():
     int(m.raw_payload_hash, 16)  # valid hex
 
 
+def test_market_detail_preserves_rules_and_source_metadata_shadow_only():
+    """Detail normalization preserves public resolution/source text as optional metadata.
+
+    This is shadow-only metadata for downstream hint generation; preserving it
+    must not alter the existing normalized market fields or price availability.
+    """
+    payload = {
+        "market": {
+            "ticker": "KXSOURCEHINT-TEST",
+            "title": "Will an official source confirm the event?",
+            "subtitle": "Before Jan 1, 2027",
+            "yes_bid_dollars": "0.4100",
+            "yes_ask_dollars": "0.4300",
+            "no_bid_dollars": "0.5700",
+            "no_ask_dollars": "0.5900",
+            "status": "active",
+            "close_time": "2027-01-01T00:00:00Z",
+            "rules_primary": (
+                "If the event is confirmed before Jan 1, 2027, then the "
+                "market resolves to Yes."
+            ),
+            "rules_secondary": (
+                "Evidence must be reported by at least one Source Agency "
+                "and may include official announcements or news reports."
+            ),
+            "resolution_source": (
+                "The market will use public reporting from Reuters, AP, "
+                "The Guardian, or official government agencies."
+            ),
+        }
+    }
+
+    m = normalize_market_detail(payload)
+
+    assert m.ticker == "KXSOURCEHINT-TEST"
+    assert m.title == "Will an official source confirm the event?"
+    assert m.subtitle == "Before Jan 1, 2027"
+    assert m.price_available is True
+    assert m.yes_bid_cents == 41
+    assert m.yes_ask_cents == 43
+    assert m.no_bid_cents == 57
+    assert m.no_ask_cents == 59
+    assert m.market_metadata == {
+        "rules_primary": payload["market"]["rules_primary"],
+        "rules_secondary": payload["market"]["rules_secondary"],
+        "resolution_source": payload["market"]["resolution_source"],
+    }
+
+
+def test_market_metadata_defaults_to_empty_isolated_dict():
+    market_a = normalize_market_list_entry({
+        "ticker": "KXMETA-A",
+        "title": "No metadata A",
+        "status": "active",
+        "close_time": "2027-01-01T00:00:00Z",
+    })
+    market_b = normalize_market_list_entry({
+        "ticker": "KXMETA-B",
+        "title": "No metadata B",
+        "status": "active",
+        "close_time": "2027-01-01T00:00:00Z",
+    })
+
+    assert market_a.market_metadata == {}
+    assert market_b.market_metadata == {}
+    assert market_a.market_metadata is not market_b.market_metadata
+
+
 # ---------------------------------------------------------------------------
 # P0-REST-006 — inverted spread rejected
 # ---------------------------------------------------------------------------

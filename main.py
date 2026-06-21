@@ -53,6 +53,7 @@ import hashlib
 import itertools
 import json
 import logging
+import math
 import os
 import signal
 import sqlite3
@@ -63,18 +64,23 @@ from types import ModuleType, SimpleNamespace
 from typing import Awaitable, Callable  # noqa: F401 — referenced in string annotations
 
 from analysis import SignalAnalysis
+from analysis.evidence_scorer import source_quality
 from analysis.kelly import kelly_bet
 from tasks.stats.keyword_stats import KeywordStats
 from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
+from polymarket.settlement_reconciler import (
+    PolymarketPublicSettlementSource,
+    SettlementReconciler,
+)
 from tasks.stats.source_stats import SourceStats
 from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, VERSION,
                     FADE_TWEET_FEED_URLS,
-                    MARKET_SERIES_BLOCKLIST_PREFIXES, MAX_NEWS_AGE_SECONDS,
+                    MARKET_SERIES_BLOCKLIST_PREFIXES,
                     EARLY_MAX_NEWS_AGE_SECONDS, EARLY_MAX_NEWS_AGE_BY_SOURCE,
                     EARLY_DROP_IF_NO_TIMESTAMP, SOURCE_PRIORITY_TIERS,
                     FADE_PRICE_HIGH_THRESHOLD, FADE_PRICE_LOW_THRESHOLD,
-                    DRIFT_ALERT_CENTS, DRIFT_LOG_COOLDOWN_SECS,
+                    DRIFT_LOG_COOLDOWN_SECS,
                     PRICE_MOVE_THRESHOLD_CENTS, PRICE_SEARCH_COOLDOWN_SECS,
                     PRICE_VELOCITY_WINDOW_SECS)
 from feeds import NewsItem
@@ -85,6 +91,7 @@ from feeds.reddit_monitor import run_reddit_monitor
 from feeds.rss_monitor import run_rss_monitor
 from kalshi.rest_client import KalshiRestClient
 from kalshi.websocket_client import KalshiWebSocketClient
+from kalshi.source_hints import build_market_source_hint_diagnostics
 from analysis.evidence_types import Evidence
 from tasks.accumulation_task import AccumulationTask
 from tasks.blend_task import BlendTask, TradeCandidate
@@ -108,6 +115,11 @@ _BOT_RUNTIME_LOCK = DATA_DIR / "bot_runtime.lock"
 # Monotonic counter used as PriorityQueue tiebreaker so NewsItem objects
 # are never compared against each other (dataclasses without __lt__ would raise).
 _news_counter = itertools.count()
+
+NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS = max(
+    1.0,
+    float(os.getenv("NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS", "20")),
+)
 
 
 def _validate_startup_observability_probe_record(record: dict, required_fields: tuple[str, ...]) -> list[str]:
@@ -137,6 +149,68 @@ def _source_priority(source: str) -> int:
         if key.strip().lower() == source_lower:
             return value
     return 2
+
+
+def _is_floor_clamp_suspected(
+    llm_direction: str | None,
+    llm_magnitude: str | None,
+    estimated_probability: float,
+    market_probability: float,
+    llm_confidence: float | None,
+) -> bool:
+    """PROFIT-ALIGN-003 (2026-05-25): detector for actual floor-clamps.
+
+    `analysis/signal_analyzer._parse_llm_response` clamps the estimated
+    probability at 0.05 (NO-side) / 0.95 (YES-side). When that clamp fires,
+    the LLM wanted to push further but the floor caught it — meaning our
+    true certainty about the exact prob is fuzzy. The 2026-05-25 trade audit
+    (KXUSAIRANAGREEMENT-27-26JUN) found bot estimated prob=0.05 against
+    market 0.08 (3pp edge) but the underlying LLM shift was 6.8pp,
+    clamped to 3pp. The bot's edge math then anchors against the floor,
+    manufacturing edge that isn't robustly supported.
+
+    Returns True when the floor was hit:
+      - LLM emitted a directional read (direction in {yes, no})
+      - LLM magnitude was non-trivial (not None / "none")
+      - final estimated_probability is exactly 0.05 or 0.95 (within tolerance)
+      - reconstructed raw probability crossed beyond the clamp boundary
+
+    Exact-boundary arithmetic is not enough. Example: market 0.13 with a
+    small×1.0 NO shift lands at 0.05 without being caught by the clamp.
+    Caller (main.py SignalAnalysis builder) multiplies kelly/capped dollars
+    by cfg.floor_clamp_kelly_multiplier (default 0.5) when this is True.
+    """
+    EPS = 1e-6
+    if llm_direction not in ("yes", "no"):
+        return False
+    if llm_magnitude not in ("small", "moderate", "large"):
+        return False
+    if llm_confidence is None:
+        return False
+    try:
+        confidence = float(llm_confidence)
+        market_prob = float(market_probability)
+    except (TypeError, ValueError):
+        return False
+    shift_table = {
+        "small": float(getattr(cfg, "magnitude_shift_small", 0.08)),
+        "moderate": float(getattr(cfg, "magnitude_shift_moderate", 0.15)),
+        "large": float(getattr(cfg, "magnitude_shift_large", 0.25)),
+    }
+    raw_probability = (
+        market_prob + shift_table[llm_magnitude] * confidence
+        if llm_direction == "yes"
+        else market_prob - shift_table[llm_magnitude] * confidence
+    )
+    if llm_direction == "no":
+        return (
+            abs(estimated_probability - 0.05) < EPS
+            and raw_probability < (0.05 - EPS)
+        )
+    return (
+        abs(estimated_probability - 0.95) < EPS
+        and raw_probability > (0.95 + EPS)
+    )
 
 
 def _early_max_news_age_seconds_for_source(source: str) -> int:
@@ -219,6 +293,61 @@ def _log_bankroll_summary(notional_bankroll: float) -> None:
                 notional_bankroll,
                 cfg.bankroll,
             )
+
+
+def _log_polymarket_account_summary(*, client_factory=None):
+    from polymarket.account_client import PolymarketAccountClient
+    from polymarket.status import PolymarketAccountStatus, count_positions
+
+    if client_factory is None:
+        client_factory = PolymarketAccountClient
+
+    status = PolymarketAccountStatus(
+        enabled=bool(cfg.polymarket_us_enabled),
+        live_trading=bool(cfg.polymarket_us_live_trading_enabled),
+        paper_execution="blend",
+    )
+    if not cfg.polymarket_us_enabled:
+        log.info(status.log_line())
+        return status
+
+    try:
+        client = client_factory()
+    except Exception as exc:
+        log.warning("Could not fetch Polymarket account summary: %s", exc)
+        status = PolymarketAccountStatus(
+            enabled=True,
+            live_trading=bool(cfg.polymarket_us_live_trading_enabled),
+            paper_execution="blend",
+            account_error=str(exc),
+        )
+        log.info(status.log_line())
+        return status
+
+    account_error = None
+    balance = None
+    positions_count = None
+    try:
+        balance = client.get_balance()
+        log.info("Polymarket account balance: $%.2f", balance)
+    except Exception as exc:
+        account_error = str(exc)
+        log.warning("Could not fetch Polymarket account balance: %s", exc)
+    try:
+        positions_count = count_positions(client.get_positions(limit=100))
+    except Exception as exc:
+        account_error = account_error or str(exc)
+        log.warning("Could not fetch Polymarket positions: %s", exc)
+    status = PolymarketAccountStatus(
+        enabled=True,
+        live_trading=bool(cfg.polymarket_us_live_trading_enabled),
+        paper_execution="blend",
+        account_balance=balance,
+        positions_count=positions_count,
+        account_error=account_error,
+    )
+    log.info(status.log_line())
+    return status
 
 
 class _RuntimeInstanceGuard:
@@ -369,29 +498,84 @@ def _evidence_id_for_signal(analysis: SignalAnalysis) -> str:
 
 
 def _source_class_for_evidence(source: str) -> str:
-    """Map runtime source labels into the evidence source-class contract."""
+    """Map runtime source labels into the evidence source-class contract.
+
+    Classes used by G2 (evidence source-class diversity gate):
+      social    — Reddit, social-feed sources
+      market    — Kalshi-internal / price-fade signals
+      official  — government, intergovernmental, or institutional press
+      news      — major news publications (US + UK domestic + international wires)
+      regional  — foreign regional news bureaus (Israeli, Ukrainian, Iranian,
+                  Turkish, etc.). Distinct from `news` so a dossier mixing
+                  e.g. NYT + Times of Israel surfaces 2 classes for G2,
+                  reflecting genuine independence-of-coverage.
+      other     — unclassified (default-fallback)
+
+    PROFIT-EDGE-006 (2026-05-24): expanded from PROFIT-EDGE-004 Lever A.1.
+    The pre-fix classifier bucketed 29% of live news evidence (2,843 events
+    from 39 distinct sources including The Washington Post, The Times of
+    Israel, Kyiv Post, Iran International, AOL.com, etc.) into `other`,
+    silently failing G2 even for dossiers with genuinely diverse coverage.
+    """
     source_text = (source or "").strip()
     lower = source_text.lower()
     if source_text.startswith("r/"):
         return "social"
     if lower == "price_fade" or lower.startswith("kalshi://"):
         return "market"
+    # PROFIT-EDGE-004 Lever A.1 — official sources
     if any(token in lower for token in (
         ".gov",
         "white house",
         "state department",
         "defense department",
+        "department of war",
+        "department of defense",
         "federal reserve",
         "supreme court",
         "congress",
         "parliament",
         "ministry",
         "official",
+        "un news",
+        "united nations",
+        "european commission",
+        "press releases",
+        "international atomic energy agency",
+        "iaea",
     )):
         return "official"
+    # PROFIT-EDGE-006 — regional news bureaus. Distinct from `news` so a
+    # dossier mixing e.g. NYT + Times of Israel registers 2 classes for G2.
+    # Regional bureaus are matched by publication name token; the geo
+    # token (`israel`, `iran`, etc.) alone is too broad — a US news outlet
+    # writing about Israel doesn't become an Israeli source.
+    if any(token in lower for token in (
+        "times of israel",
+        "kyiv post",
+        "kyiv independent",
+        "iran international",
+        "anadolu ajansı",
+        "anadolu ajansi",
+        "anadolu agency",
+        "shafaq news",
+        "newagebd",
+        "global banking",
+        "the daily nk",
+        "asia times",
+        "asahi shimbun",
+        "yomiuri shimbun",
+        "japan times",
+        "south china morning post",
+        "haaretz",
+        "jerusalem post",
+        "tehran times",
+    )):
+        return "regional"
     if source_text.endswith(" - Google News") or source_text.endswith(" - BingNews"):
         return "news"
     if any(token in lower for token in (
+        # PROFIT-EDGE-004 Lever A.1 baseline
         "reuters",
         "associated press",
         "ap news",
@@ -406,6 +590,39 @@ def _source_class_for_evidence(source: str) -> str:
         "politico",
         "politics",
         "just in news",
+        "defense news",
+        "breaking defense",
+        # PROFIT-EDGE-006 — additional major US/UK news publications that
+        # were silently bucketing as `other`. Verified frequencies in
+        # 24-day live log: WaPo=107, AOL=126, MSN=47, USA Today=21,
+        # Newsweek=18, The Independent=17, WRAL=15, NYT (long form)=25.
+        "the new york times",
+        "the washington post",
+        "washingtonpost",
+        "wapo",
+        "aol.com",
+        "msn",
+        "usa today",
+        "newsweek",
+        "the independent",
+        "wral",
+        "bloomberg",
+        "axios",
+        "the hill",
+        "cnn",
+        "abc news",
+        "nbc news",
+        "cbs news",
+        "fox news",
+        "huffpost",
+        "huffington post",
+        "the atlantic",
+        "wired",
+        "vox",
+        "vice news",
+        "buzzfeed",
+        "salon.com",
+        "slate",
     )):
         return "news"
     return "other"
@@ -468,6 +685,28 @@ class TradingBot:
         )
         self.source_stats  = SourceStats(db_path=DATA_DIR / "paper_trades.db")
         self.keyword_stats = KeywordStats(DATA_DIR / "paper_trades.db")
+        self.polymarket_paper_runtime = None
+        try:
+            from polymarket.paper_runtime import (
+                PolymarketPaperRuntime,
+                polymarket_paper_runtime_disabled_reason,
+            )
+
+            disabled_reason = polymarket_paper_runtime_disabled_reason(cfg)
+            if disabled_reason is None:
+                self.polymarket_paper_runtime = PolymarketPaperRuntime(
+                    route_analysis=self._route_analysis_through_blend,
+                    keyword_stats=self.keyword_stats,
+                    source_stats=self.source_stats,
+                )
+                log.info("[POLYMARKET_PAPER] active paper_execution=blend")
+            else:
+                log.info(
+                    "[POLYMARKET_PAPER] inactive reason=%s",
+                    disabled_reason,
+                )
+        except Exception as exc:
+            log.warning("[POLYMARKET_PAPER] initialization_failed error=%s", exc)
         self.ws.on_price_update(self._on_price_update)
         # Multi-lane queues and tasks.  BlendTask owns the trading queue; the
         # evidence queue feeds AccumulationTask independently of the fast lane.
@@ -486,6 +725,8 @@ class TradingBot:
         # Cross-source dedup: Reuters/AP/BBC often publish the same story within
         # minutes. Skip near-identical headlines seen in the last 15 minutes.
         self._dedup = HeadlineDedup()
+        self._shadow_assignment_tasks: set[asyncio.Task[None]] = set()
+        self._shadow_assignment_semaphore = asyncio.Semaphore(2)
         # Previous WS mid-price per ticker -- used to detect threshold crossings
         # for the price-based fade signal.
         self._ws_prev_prices: dict[str, float] = {}
@@ -497,6 +738,8 @@ class TradingBot:
         self._last_drift_logged: dict[str, float] = {}
         # Loop D: previous market ticker set for new-market detection
         self._known_market_tickers: set[str] = set()
+        self._known_polymarket_market_tickers: set[str] = set()
+        self._last_polymarket_yes_ask_cents: dict[str, int] = {}
         self._market_refresh_lock = asyncio.Lock()
         self._startup_started_monotonic = time.monotonic()
         self._startup_started_at = datetime.now(timezone.utc)
@@ -628,6 +871,9 @@ class TradingBot:
                 headline=headline,
                 age_seconds=age_secs,
             )
+            from config import ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW
+            if ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW:
+                self._schedule_fresh_pass_assignment_shadow(news)
         priority = _source_priority(source)
         if priority == 1:
             log.debug("[FAST_LANE] tier-1 source priority=%d source=[%s]: %s",
@@ -637,6 +883,44 @@ class TradingBot:
         except asyncio.QueueFull:
             log.warning("News queue full (%d items) -- dropping: %s",
                         self._news_queue.maxsize, headline[:60])
+
+    def _schedule_fresh_pass_assignment_shadow(self, news: NewsItem) -> None:
+        if not hasattr(self, "_shadow_assignment_tasks"):
+            self._shadow_assignment_tasks = set()
+        if not hasattr(self, "_shadow_assignment_semaphore"):
+            self._shadow_assignment_semaphore = asyncio.Semaphore(2)
+
+        if len(self._shadow_assignment_tasks) >= 25:
+            log.debug("[SHADOW_ASSIGNMENT] backlog full; dropping diagnostic row")
+            return
+        task = asyncio.create_task(
+            self._emit_fresh_pass_assignment_shadow(news),
+            name="fresh-pass-assignment-shadow",
+        )
+        self._shadow_assignment_tasks.add(task)
+        task.add_done_callback(self._shadow_assignment_tasks.discard)
+
+    async def _emit_fresh_pass_assignment_shadow(self, news: NewsItem) -> None:
+        try:
+            from analysis.candidate_assignment_shadow import build_shadow_assignment
+            from utils.logger import shadow_trade_log
+
+            if not self.matcher._cache.has_market_snapshot():
+                log.debug("[SHADOW_ASSIGNMENT] market cache cold; skipping diagnostic row")
+                return
+            async with self._shadow_assignment_semaphore:
+                shadow_row = await asyncio.wait_for(
+                    build_shadow_assignment(self.matcher, news),
+                    timeout=30.0,
+                )
+            await write_trade_log_async(
+                shadow_trade_log.log_fresh_pass_assignment_shadow,
+                shadow_row.to_record(),
+            )
+        except asyncio.TimeoutError:
+            log.warning("[SHADOW_ASSIGNMENT] timed out")
+        except Exception as exc:
+            log.warning("[SHADOW_ASSIGNMENT] failed: %s", exc)
 
     async def _news_consumer_task(self) -> None:
         """Drain the priority news queue, processing one item at a time."""
@@ -660,17 +944,98 @@ class TradingBot:
         log.info("[NEWS] [%s] %s", news.source, news.headline[:100])
         self.source_stats.increment_posts(news.source)
 
+        if self.polymarket_paper_runtime is not None:
+            try:
+                await self.polymarket_paper_runtime.process_news(news)
+            except Exception:
+                log.exception("[POLYMARKET_PAPER] consumer_error")
+
         # P-7: one-fetch-per-cycle exchange-status fail-closed gate.
         if not self._exchange_open_or_skip("news"):
             return
 
-        candidates = await self.matcher.find_candidates(news)
+        try:
+            candidates = await asyncio.wait_for(
+                self.matcher.find_candidates(news, refresh_cache=False),
+                timeout=NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            log.warning(
+                "News candidate discovery timed out after %.1fs; skipping Kalshi "
+                "candidate path for source=%s headline=%s",
+                NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS,
+                news.source,
+                news.headline[:80],
+            )
+            return
         if not candidates:
             log.debug("No matching markets for: %s", news.headline[:60])
             return
 
         for market, match_score, match_meta in candidates:
             await self._process_candidate(news, market, match_score, match_meta)
+
+    async def _emit_market_source_hint_diagnostics(self, market) -> None:
+        """Emit default-off, shadow-only MarketSourceHints diagnostics.
+
+        This path is intentionally non-behavioral: it never changes readiness,
+        admission, scoring, routing, fetch cadence, websocket watches, order
+        flow, DB state, or paper/live trading decisions. Diagnostic failures are
+        logged and ignored so the candidate pipeline continues unchanged.
+        """
+        mode = getattr(cfg, "market_source_hints_mode", "off")
+        emit_records = bool(getattr(cfg, "market_source_hints_emit_records", False))
+        if mode == "off":
+            return
+        try:
+            diagnostic = build_market_source_hint_diagnostics(
+                market,
+                mode=mode,
+                emit_records=emit_records,
+            )
+        except Exception as exc:  # pragma: no cover - tested via behavior, not log text
+            log.warning(
+                "[MARKET_SOURCE_HINTS] diagnostic build failed ticker=%s mode=%s: %s",
+                getattr(market, "ticker", "unknown"),
+                mode,
+                exc,
+            )
+            return
+
+        targets = [
+            {
+                "source": target.source.canonical_name,
+                "domain": target.source.domain,
+                "source_class": target.source.source_class.value,
+                "query_count": len(target.search_queries),
+                "feed_url_count": len(target.feed_urls),
+            }
+            for target in diagnostic.plan.targets
+        ]
+        log_fn = log.info if diagnostic.mode == "advisory" else log.debug
+        log_fn(
+            "[MARKET_SOURCE_HINTS] ticker=%s mode=%s shadow_only=%s targets=%d "
+            "rejected_labels=%d emit_records=%s",
+            diagnostic.ticker,
+            diagnostic.mode,
+            diagnostic.shadow_only,
+            len(targets),
+            len(diagnostic.plan.rejected_labels),
+            emit_records,
+        )
+        if emit_records:
+            from utils.logger import trade_log
+
+            await write_trade_log_async(
+                trade_log.log_market_source_hint_diagnostic,
+                ticker=diagnostic.ticker,
+                mode=diagnostic.mode,
+                shadow_only=diagnostic.shadow_only,
+                targets=targets,
+                counters=diagnostic.counters,
+                rejected_labels=diagnostic.plan.rejected_labels,
+                log_records=diagnostic.log_records,
+            )
 
     async def _process_candidate(self, news: NewsItem, market, match_score: float, match_meta: dict | None = None) -> None:
         from utils.logger import trade_log
@@ -701,10 +1066,23 @@ class TradingBot:
             )
             return
         # Staleness check: skip if the article is too old when we process it.
-        # With a queue, items can sit for several minutes; old news is already priced in.
+        # With a queue, items can sit for several minutes; old news is already
+        # priced in.
+        #
+        # PARITY INVARIANT (PROFIT-STALE-001, fix/stale-news-source-aware-analyzer):
+        # the analyzer-stage threshold MUST equal the intake-stage threshold
+        # for the same source. The pre-fix code used a flat
+        # MAX_NEWS_AGE_SECONDS=300, while intake admits items under the
+        # per-source EARLY_MAX_NEWS_AGE_BY_SOURCE override (1800s for ~25
+        # geopolitical sources). The result was a 19% analyzer-stage stale-
+        # loss in the 2026-05-24 audit — items that intake legitimately
+        # admitted then failed analyzer's stricter check with no recourse.
+        # See docs/profit_path_debt_log.md (PROFIT-STALE-001) for the audit
+        # data. Sharing the helper enforces the invariant in code.
+        threshold_secs = _early_max_news_age_seconds_for_source(news.source)
         age_secs = (datetime.now(timezone.utc) - news.published).total_seconds()
         market_yes_price = market.yes_price
-        if age_secs > MAX_NEWS_AGE_SECONDS:
+        if age_secs > threshold_secs:
             await write_trade_log_async(
                 trade_log.log_analysis_rejected,
                 reason="stale_news",
@@ -713,10 +1091,11 @@ class TradingBot:
                 headline=news.headline,
                 match_score=match_score,
                 age_seconds=age_secs,
+                threshold_seconds=threshold_secs,
             )
             log.debug(
-                "Stale news skipped (%.0fs > %ds): %s",
-                age_secs, MAX_NEWS_AGE_SECONDS, news.headline[:60],
+                "Stale news skipped (%.0fs > %ds for %s): %s",
+                age_secs, threshold_secs, news.source, news.headline[:60],
             )
             return
 
@@ -736,6 +1115,18 @@ class TradingBot:
             market.yes_price,
             market_yes_price,
         )
+        await self._emit_market_source_hint_diagnostics(market)
+
+        # PROFIT-MATCH-003 (L2-a): thread the matcher score onto match_meta so
+        # the downstream MATCH_LLM_REVIEW emission carries it. The feedback
+        # loop's score-gate (analysis/match_feedback.py) only counts a
+        # false_positive_neutral verdict toward downweighting when the match was
+        # MARGINAL (low score) -- a neutral on a clearly-correct (high-score)
+        # match is "right market, no edge from this headline", not a wrong
+        # match. Without this the score-gate sees no score and stays a no-op.
+        if isinstance(match_meta, dict):
+            match_meta.setdefault("match_score", round(float(match_score), 4))
+            match_meta.setdefault("source_class", _source_class_for_evidence(news.source))
 
         estimated_prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
             await estimate_probability(news, market, keyword_stats=self.keyword_stats, match_meta=match_meta)
@@ -747,9 +1138,25 @@ class TradingBot:
         # validated real-market events in a 9-day window were killed here.
         llm_emitted_signal = llm_mag is not None and llm_mag != "none"
         if not keywords and not llm_emitted_signal:
+            saw_llm_result = llm_dir is not None or llm_mag is not None or llm_conf is not None
             await write_trade_log_async(
                 trade_log.log_analysis_rejected,
                 reason="no_keywords",
+                rejection_category=(
+                    "post_llm_neutral_empty_keywords"
+                    if saw_llm_result
+                    else "no_signal_empty_keywords"
+                ),
+                signal_branch=(
+                    "empty_keywords_neutral_llm"
+                    if saw_llm_result
+                    else "empty_keywords_no_llm_signal"
+                ),
+                method="llm" if saw_llm_result else None,
+                llm_direction=llm_dir,
+                llm_magnitude=llm_mag,
+                llm_confidence=llm_conf,
+                keywords=keywords,
                 ticker=market.ticker,
                 source=news.source,
                 headline=news.headline,
@@ -825,6 +1232,31 @@ class TradingBot:
             time_discount_floor=cfg.time_discount_floor,
         )
 
+        # PROFIT-ALIGN-003 (2026-05-25): floor-clamp Kelly halving.
+        # See _is_floor_clamp_suspected() for the full rationale + audit
+        # context. Mitigation: when clamp is suspected, multiply the Kelly
+        # stake by cfg.floor_clamp_kelly_multiplier (default 0.5).
+        # Conservative; affects only clamped trades.
+        if (
+            _is_floor_clamp_suspected(
+                llm_dir,
+                llm_mag,
+                estimated_prob,
+                market.yes_prob,
+                llm_conf,
+            )
+            and cfg.floor_clamp_kelly_multiplier < 1.0
+        ):
+            _pre = capped_dollars
+            kelly_dollars *= cfg.floor_clamp_kelly_multiplier
+            capped_dollars *= cfg.floor_clamp_kelly_multiplier
+            log.debug(
+                "[KELLY] floor_clamp_halved ticker=%s side=%s "
+                "est_prob=%.4f mult=%.2f capped=$%.2f→$%.2f",
+                market.ticker, side, estimated_prob,
+                cfg.floor_clamp_kelly_multiplier, _pre, capped_dollars,
+            )
+
         log.debug(
             "[ANALYSIS] decision_input ticker=%s source=%s side=%s edge=%+.4f "
             "est_prob=%.3f market_prob=%.3f confidence=%.2f keywords=%d "
@@ -852,6 +1284,12 @@ class TradingBot:
             signal_strength=abs(edge),
             keywords_matched=keywords,
         )
+        raw_venue = match_meta.get("venue") if isinstance(match_meta, dict) else None
+        if raw_venue is None:
+            raw_venue = getattr(market, "venue", None)
+        if hasattr(raw_venue, "value"):
+            raw_venue = raw_venue.value
+        opportunity_venue = str(raw_venue).strip().lower() if raw_venue is not None else "kalshi"
         await write_trade_log_async(
             trade_log.log_opportunity,
             ticker=market.ticker,
@@ -869,6 +1307,9 @@ class TradingBot:
             method=method,
             llm_direction=llm_dir,
             llm_magnitude=llm_mag,
+            venue=opportunity_venue or "kalshi",
+            keywords=keywords,
+            source_class=_source_class_for_evidence(news.source),
         )
         self.source_stats.increment_opportunities(news.source)
 
@@ -944,6 +1385,12 @@ class TradingBot:
             analysis.signal_meta = {
                 **(analysis.signal_meta or {}),
                 "trigger_evidence_id": evidence.evidence_id,
+                "trigger_evidence_source": evidence.source,
+                "trigger_evidence_source_class": evidence.source_class,
+                "trigger_evidence_headline": evidence.headline,
+                "trigger_evidence_ingested_ts": evidence.ingested_ts,
+                "trigger_evidence_content_hash": evidence.content_hash,
+                "trigger_evidence_original_weight": source_quality(evidence.source_class),
             }
             try:
                 self._evidence_queue.put_nowait(evidence)
@@ -1084,14 +1531,19 @@ class TradingBot:
 
         # ── Loop C: open position drift logging ───────────────────────────────
         # If we have an open paper position on this ticker and the price has
-        # drifted >= DRIFT_ALERT_CENTS from entry, log a POSITION_DRIFT event.
+        # drifted >= cfg.position_drift_alert_threshold from entry, log a
+        # POSITION_DRIFT event. A threshold >= 1.0 disables emission.
         open_positions = self.paper.portfolio.open_positions(ticker)
         if open_positions:
             last_drift = self._last_drift_logged.get(ticker, 0.0)
             if now_mono - last_drift >= DRIFT_LOG_COOLDOWN_SECS:
                 for pos in open_positions:
                     drift = now_mid - pos.entry_price_cents
-                    if abs(drift) >= DRIFT_ALERT_CENTS:
+                    threshold_fraction = float(cfg.position_drift_alert_threshold)
+                    if threshold_fraction >= 1.0:
+                        continue
+                    threshold_cents = pos.entry_price_cents * threshold_fraction
+                    if abs(drift) >= threshold_cents:
                         self._last_drift_logged[ticker] = now_mono
                         from utils.logger import trade_log as _tl
                         _tl.log_position_drift(
@@ -1130,8 +1582,22 @@ class TradingBot:
             markets = await self.matcher._cache.get_markets()
             market  = next((m for m in markets if m.ticker == ticker), None)
             if market is None:
-                log.debug("[PRICE_MOVE] %s not in geo cache, skipping targeted search", ticker)
-                return
+                polymarket_runtime = getattr(self, "polymarket_paper_runtime", None)
+                polymarket_markets = (
+                    polymarket_runtime.cached_candidate_markets()
+                    if polymarket_runtime is not None
+                    else []
+                )
+                market = next(
+                    (m for m in polymarket_markets if m.ticker == ticker),
+                    None,
+                )
+                if market is None:
+                    log.debug(
+                        "[PRICE_MOVE] %s not in market caches, skipping targeted search",
+                        ticker,
+                    )
+                    return
 
             from feeds.search_news_monitor import _markets_to_queries, _gnews_url, _bing_url
             from feeds.rss_monitor import poll_feed
@@ -1263,16 +1729,6 @@ class TradingBot:
 
     # ── Scheduled tasks ───────────────────────────────────────────────────────
 
-    async def _daily_report_task(self) -> None:
-        from utils.logger import LOG_REPORTS_DIR
-        while True:
-            await asyncio.sleep(86_400)
-            await asyncio.to_thread(self.paper.daily_summary)
-            report      = await asyncio.to_thread(self.paper.generate_report)
-            report_path = LOG_REPORTS_DIR / f"report_{datetime.now(timezone.utc).strftime('%Y%m%d')}.txt"
-            await asyncio.to_thread(report_path.write_text, report, encoding="utf-8")
-            log.info("Daily report written to %s", report_path)
-
     async def _warm_ws_subscriptions(self) -> None:
         """
         Background task: wait for the initial market cache warmup to finish,
@@ -1319,18 +1775,32 @@ class TradingBot:
         self.source_stats.flush()
         open_trades = await asyncio.to_thread(
             lambda: self.paper._conn.execute(
-                "SELECT DISTINCT ticker FROM paper_trades WHERE resolved = 0"
+                "SELECT DISTINCT ticker, COALESCE(venue, 'kalshi') AS venue "
+                "FROM paper_trades WHERE resolved = 0"
             ).fetchall()
         )
         if not open_trades:
             return
 
-        tickers = [row[0] for row in open_trades]
-        log.debug("Auto-resolve: checking %d open tickers", len(tickers))
+        rows = []
+        for row in open_trades:
+            if hasattr(row, "keys"):
+                ticker = row["ticker"]
+                venue = row["venue"] if "venue" in row.keys() else "kalshi"
+            else:
+                ticker = row[0]
+                venue = row[1] if len(row) > 1 else "kalshi"
+            rows.append((str(ticker), str(venue or "kalshi")))
+        kalshi_tickers = [
+            ticker for ticker, venue in rows
+            if venue in ("", "kalshi")
+        ]
+        has_polymarket = any(venue == "polymarket_us" for _ticker, venue in rows)
+        log.debug("Auto-resolve: checking %d open tickers", len(rows))
 
         loop = asyncio.get_running_loop()
         resolved_count = 0
-        for ticker in tickers:
+        for ticker in kalshi_tickers:
             try:
                 market = await loop.run_in_executor(
                     None, self.rest.get_market, ticker
@@ -1356,11 +1826,56 @@ class TradingBot:
             except Exception as exc:
                 log.warning("Auto-resolve: failed to check %s: %s", ticker, exc)
 
+        if has_polymarket and cfg.polymarket_us_enabled:
+            try:
+                result = await asyncio.to_thread(
+                    lambda: SettlementReconciler(
+                        source=PolymarketPublicSettlementSource(),
+                        resolver=self.paper,
+                    ).reconcile()
+                )
+                resolved_count += result.resolved
+                if result.checked:
+                    log.info(
+                        "Auto-resolve: Polymarket checked=%d resolved=%d "
+                        "not_found=%d errors=%d",
+                        result.checked,
+                        result.resolved,
+                        result.not_found,
+                        result.errors,
+                    )
+                if result.errors:
+                    # Loud, dedicated signal: per-ticker failures are isolated by
+                    # SettlementReconciler.reconcile()'s broad except and only land
+                    # in the file log. Without this an all-errors outage (e.g.
+                    # public API down) is indistinguishable from a quiet
+                    # "nothing settled yet" cycle in the operator summary.
+                    if result.errors >= result.checked:
+                        log.warning(
+                            "Auto-resolve: Polymarket settlement ALL %d checked "
+                            "tickers errored (resolved=0) -- public API outage "
+                            "likely; no settlements processed this cycle",
+                            result.checked,
+                        )
+                    else:
+                        log.warning(
+                            "Auto-resolve: Polymarket settlement had %d errored "
+                            "ticker(s) out of %d checked",
+                            result.errors,
+                            result.checked,
+                        )
+                if result.lane_events:
+                    await self.paper.record_resolution_calibration_events(
+                        result.lane_events
+                    )
+            except Exception as exc:
+                log.warning("Auto-resolve: Polymarket settlement failed: %s", exc)
+
         if resolved_count:
             bankroll = await asyncio.to_thread(self.paper.get_notional_bankroll)
             log.info(
                 "Auto-resolve: resolved %d/%d tickers | bankroll=$%.2f",
-                resolved_count, len(tickers),
+                resolved_count, len(rows),
                 bankroll,
             )
 
@@ -1642,6 +2157,12 @@ class TradingBot:
         Waits 5 minutes on startup so the market cache is warm before the first pass.
         """
         from feeds.subreddit_discovery import run_discovery_pass
+        if not cfg.reddit_enabled:
+            log.info(
+                "[DISCOVERY] Reddit disabled (REDDIT_ENABLED not set) -- subreddit "
+                "discovery task exiting cleanly; no Reddit search to perform."
+            )
+            return
         await asyncio.sleep(300)  # Let market cache warm up
         while True:
             try:
@@ -1710,8 +2231,109 @@ class TradingBot:
     def _make_market_getter(self) -> "Callable[[], list]":
         """Sync callable returning the live market cache for search/GDELT query generation."""
         def _get() -> list:
-            return self.matcher._cache._markets
+            markets = list(self.matcher._cache._markets)
+            polymarket_runtime = getattr(self, "polymarket_paper_runtime", None)
+            if polymarket_runtime is not None:
+                markets.extend(polymarket_runtime.cached_candidate_markets())
+            return markets
         return _get
+
+    async def _warm_polymarket_paper_runtime_cache(self) -> int:
+        warmed = await TradingBot._refresh_polymarket_paper_runtime_cache(
+            self,
+            initial=True,
+        )
+        log.info("[POLYMARKET_PAPER] warm_cache_ready markets=%d", warmed)
+        return warmed
+
+    async def _refresh_polymarket_paper_runtime_cache(
+        self,
+        *,
+        initial: bool = False,
+    ) -> int:
+        polymarket_runtime = getattr(self, "polymarket_paper_runtime", None)
+        if polymarket_runtime is None:
+            return 0
+        warmed = await polymarket_runtime.warm_cache()
+        candidate_markets = list(polymarket_runtime.cached_candidate_markets())
+        current_tickers = {market.ticker for market in candidate_markets}
+        known_tickers = getattr(self, "_known_polymarket_market_tickers", set())
+        added: set[str] = set()
+
+        if known_tickers and not initial:
+            added = current_tickers - known_tickers
+            for market in candidate_markets:
+                if market.ticker not in added:
+                    continue
+                from utils.logger import trade_log as _tl
+
+                await write_trade_log_async(
+                    _tl.log_new_market,
+                    ticker=market.ticker,
+                    title=market.title,
+                    series_ticker=market.series_ticker,
+                )
+                log.info(
+                    "[POLYMARKET_NEW_MARKET] %s listed: '%s' -- triggering targeted search",
+                    market.ticker,
+                    market.title[:60],
+                )
+                asyncio.create_task(self._trigger_targeted_search(market.ticker))
+
+        last_prices = getattr(self, "_last_polymarket_yes_ask_cents", {})
+        if not initial and last_prices:
+            now = time.monotonic()
+            last_search = getattr(self, "_last_search_triggered", {})
+            for market in candidate_markets:
+                if market.ticker in added or market.yes_ask_cents is None:
+                    continue
+                previous_price = last_prices.get(market.ticker)
+                if previous_price is None:
+                    continue
+                move = abs(market.yes_ask_cents - previous_price)
+                if move < PRICE_MOVE_THRESHOLD_CENTS:
+                    continue
+                last_trigger = last_search.get(market.ticker, 0.0)
+                if now - last_trigger < PRICE_SEARCH_COOLDOWN_SECS:
+                    continue
+                last_search[market.ticker] = now
+                log.info(
+                    "[POLYMARKET_PRICE_MOVE] %s yes_ask %dc -> %dc "
+                    "(move=%dc) -- triggering targeted search",
+                    market.ticker,
+                    previous_price,
+                    market.yes_ask_cents,
+                    move,
+                )
+                asyncio.create_task(self._trigger_targeted_search(market.ticker))
+
+        self._last_polymarket_yes_ask_cents = {
+            market.ticker: market.yes_ask_cents
+            for market in candidate_markets
+            if market.yes_ask_cents is not None
+        }
+        self._known_polymarket_market_tickers = current_tickers
+        stats = polymarket_runtime.stats()
+        log.info(
+            "[POLYMARKET_PAPER] candidate_cache_ready markets=%d "
+            "candidate_markets=%d initial=%s",
+            stats.market_count,
+            len(candidate_markets),
+            initial,
+        )
+        return warmed
+
+    async def _polymarket_market_refresh_task(self) -> None:
+        from polymarket.paper_runtime import _DEFAULT_MARKET_CACHE_TTL_SECONDS
+
+        if getattr(self, "polymarket_paper_runtime", None) is None:
+            return
+        while True:
+            await asyncio.sleep(_DEFAULT_MARKET_CACHE_TTL_SECONDS)
+            try:
+                await self._refresh_polymarket_paper_runtime_cache()
+            except Exception as exc:
+                log.warning("[POLYMARKET_PAPER] market_refresh_task_error error=%s", exc)
 
     async def _check_llm_health(self) -> None:
         """Log LLM availability at startup so the operator knows what's active."""
@@ -1863,7 +2485,8 @@ class TradingBot:
                     self.source_stats.increment_trades(
                         candidate.fast_lane_analysis.news_item.source
                     )
-                self.ws.watch([candidate.market.ticker])
+                if self.executor._venue_value(candidate.market) == "kalshi":
+                    self.ws.watch([candidate.market.ticker])
             except Exception:
                 log.exception(
                     "[BLEND] consumer_error ticker=%s", candidate.market.ticker
@@ -1902,6 +2525,11 @@ class TradingBot:
         log.info("=" * 60)
         log.info("Kalshi Trading Bot v%s starting", VERSION)
         log.info("Mode:             %s", "PAPER TRADING" if cfg.is_paper_trading else "LIVE TRADING")
+        log.info(cfg.polymarket_us_startup_status())
+        if cfg.polymarket_us_enabled:
+            from polymarket.startup_probe import log_polymarket_startup_probe
+
+            await asyncio.to_thread(log_polymarket_startup_probe)
         _log_bankroll_summary(notional)
         log.info("Max bet (dynamic): $%.2f  (%.0f%% of bankroll, hard cap $%.2f)",
                  max_bet, cfg.max_bet_pct_bankroll * 100, cfg.max_bet_hard_cap)
@@ -1921,9 +2549,12 @@ class TradingBot:
             log.info("Kalshi account balance: $%.2f", balance)
         except Exception as exc:
             log.warning("Could not fetch Kalshi balance: %s", exc)
+        if cfg.polymarket_us_enabled:
+            await asyncio.to_thread(_log_polymarket_account_summary)
 
         await self._check_llm_health()
         await self._run_startup_observability_probe()
+        await self._warm_polymarket_paper_runtime_cache()
 
         tasks = [
             asyncio.create_task(run_rss_monitor(self._enqueue_news),    name="rss"),
@@ -1938,6 +2569,7 @@ class TradingBot:
                     queue_depth_fn=lambda: (
                         self._news_queue.qsize() / self._news_queue.maxsize
                     ),
+                    get_series_metadata=self.matcher._cache.get_series_metadata_snapshot,
                 ),
                 name="search",
             ),
@@ -1948,8 +2580,11 @@ class TradingBot:
             asyncio.create_task(self._news_consumer_task(),             name="news_consumer"),
             asyncio.create_task(self.ws.run(),                          name="websocket"),
             asyncio.create_task(self._warm_ws_subscriptions(),          name="ws_warm"),
-            asyncio.create_task(self._daily_report_task(),              name="daily_report"),
             asyncio.create_task(self._market_refresh_task(),            name="market_refresh"),
+            asyncio.create_task(
+                self._polymarket_market_refresh_task(),
+                name="polymarket_market_refresh",
+            ),
             asyncio.create_task(self._auto_resolve_task(),              name="auto_resolve"),
             asyncio.create_task(self._subreddit_discovery_task(),       name="sub_discovery"),
             asyncio.create_task(self._log_rotation_task(),              name="log_rotation"),
@@ -2069,11 +2704,58 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
                 f"Win rate: {win_rate:.1%} < minimum {cfg.go_live_min_win_rate:.1%}"
             )
 
-    drawdown_pct = (cfg.bankroll - notional) / cfg.bankroll if cfg.bankroll > 0 else 0.0
-    if drawdown_pct > cfg.go_live_max_drawdown_pct:
+    # P4 (PROFIT-DRAWDOWN-001c reconcile): gate drawdown on MARK-TO-MARKET
+    # equity, the SAME basis the authoritative section-8 daily report uses, not
+    # raw notional free-cash. The paper bankroll model deducts each open trade's
+    # FULL entry cost at placement, so notional understates true equity whenever
+    # open positions retain value and inflates the drawdown number (~61.6% raw
+    # vs ~25.9% MTM at the 2026-06 peak-to-trough). Two drawdown numbers for one
+    # live-cutover decision is a latent hazard at the 20% boundary; this pins the
+    # gate onto compute_open_position_marks (delegate, never re-derive).
+    #
+    # MTM equity = notional + marked_value of open positions. Unpriced positions
+    # already count as $0 inside marked_value (compute_open_position_marks
+    # excludes them), so lower equity -> higher drawdown -> more likely to FAIL
+    # -- the safe direction for go-live, exactly as the report does.
+    #
+    # Fail-closed on error: if marking raises, returns None (DB missing), or
+    # yields a non-finite marked_value, the gate FAILS. The report falls back to
+    # notional offline (conservative for a *report*), but the live-cutover GATE
+    # must never PASS when it cannot establish MTM equity.
+    from scripts.mark_open_positions import compute_open_position_marks
+
+    try:
+        marks = compute_open_position_marks()
+    except Exception as exc:  # live REST/Polymarket surface
+        marks = None
+        mark_error = str(exc)[:80]
+    else:
+        mark_error = None
+
+    if marks is None:
         failures.append(
-            f"Drawdown: {drawdown_pct:.1%} > maximum {cfg.go_live_max_drawdown_pct:.1%}"
+            "Drawdown: mark-to-market equity unavailable "
+            f"({mark_error or 'no position DB'}) -- gate fails closed"
         )
+    else:
+        marked_value = marks.get("marked_value", 0.0)
+        try:
+            marked_value = float(marked_value)
+        except (TypeError, ValueError):
+            marked_value = None
+        if marked_value is None or not math.isfinite(marked_value):
+            failures.append(
+                "Drawdown: mark-to-market value is non-finite -- gate fails closed"
+            )
+        else:
+            mtm_equity = notional + marked_value
+            drawdown_pct = (
+                (cfg.bankroll - mtm_equity) / cfg.bankroll if cfg.bankroll > 0 else 0.0
+            )
+            if drawdown_pct > cfg.go_live_max_drawdown_pct:
+                failures.append(
+                    f"Drawdown: {drawdown_pct:.1%} > maximum {cfg.go_live_max_drawdown_pct:.1%}"
+                )
 
     return failures
 

@@ -216,6 +216,7 @@ def collect_readiness(
     min_tickers: int,
     min_bin_admissions: int = DEFAULT_MIN_BIN_ADMISSIONS,
     min_completeness_ratio: float = DEFAULT_MIN_COMPLETENESS_RATIO,
+    venue: str | None = None,
 ) -> dict[str, Any]:
     """Build the readiness report as a plain dict.
 
@@ -235,24 +236,34 @@ def collect_readiness(
             _parse_iso(sentinel, label="sentinel") if sentinel is not None else None
         )
 
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(paper_trades)")}
         clean_start_iso = clean_start_dt.isoformat()
+        where_sql = "ts >= ?"
+        where_params: list[Any] = [clean_start_iso]
+        if venue is not None:
+            normalized_venue = str(venue).strip().lower()
+            if "venue" in columns:
+                where_sql += " AND venue = ?"
+                where_params.append(normalized_venue)
+            elif normalized_venue != "kalshi":
+                where_sql += " AND 1 = 0"
+
         post_count_row = conn.execute(
-            "SELECT count(*) FROM paper_trades WHERE ts >= ?",
-            (clean_start_iso,),
+            f"SELECT count(*) FROM paper_trades WHERE {where_sql}",
+            tuple(where_params),
         ).fetchone()
         post_count = int(post_count_row[0]) if post_count_row else 0
 
         post_tickers_row = conn.execute(
-            "SELECT count(DISTINCT ticker) FROM paper_trades WHERE ts >= ?",
-            (clean_start_iso,),
+            f"SELECT count(DISTINCT ticker) FROM paper_trades WHERE {where_sql}",
+            tuple(where_params),
         ).fetchone()
         post_distinct_tickers = int(post_tickers_row[0]) if post_tickers_row else 0
 
         post_rows = conn.execute(
-            "SELECT * FROM paper_trades WHERE ts >= ?",
-            (clean_start_iso,),
+            f"SELECT * FROM paper_trades WHERE {where_sql}",
+            tuple(where_params),
         ).fetchall()
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(paper_trades)")}
         complete_rows = [
             row for row in post_rows if _has_production_proxy_fields(row, columns)
         ]
@@ -334,7 +345,7 @@ def collect_readiness(
         verdict = "READY"
         reason = None
 
-    return {
+    report = {
         "db_path": str(db_path),
         "sentinel_ts": sentinel,
         "clean_start_ts": clean_start_iso,
@@ -356,6 +367,9 @@ def collect_readiness(
         "readiness": verdict,
         "reason": reason,
     }
+    if venue is not None:
+        report["venue"] = venue
+    return report
 
 
 def format_human_report(report: dict[str, Any]) -> str:

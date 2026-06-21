@@ -1,0 +1,73 @@
+{
+  "KXCABLEAVE:any": {
+    "_seed_reason": "Belt-and-suspenders. 'any' was added to _STOP_WORDS in commit 1/5 so the matcher shouldn't see this overlap anymore. Provisional downweight kept as backstop if a future tokenizer change re-exposes the bug.",
+    "_seed_status": "provisional",
+    "fp_rate": 1.0,
+    "pinned": false,
+    "total": 1,
+    "updated_utc": "2026-05-24T22:30:00+00:00",
+    "weight": 0.1
+  },
+  "KXCABLEAVE:trump": {
+    "_seed_reason": "PROFIT-MATCH-DYNAMIC commit 5/5: per-LLM-call audit (2026-05-24, 11 calls) found KXCABLEAVE matched to Iran-deal news via the [trump] token bridge. 'trump' is ubiquitous in political news and should never alone validate a Cabinet-leave market. Provisional at 0.10 (floor) until replay or live volume justifies an operator pin.",
+    "_seed_status": "provisional",
+    "fp_rate": 1.0,
+    "pinned": false,
+    "total": 2,
+    "updated_utc": "2026-05-24T22:30:00+00:00",
+    "weight": 0.1
+  },
+  "KXCHNBSPMI:china": {
+    "fp_rate": 1.0,
+    "pinned": false,
+    "total": 36,
+    "updated_utc": "2026-05-25T20:55:01.860438+00:00",
+    "weight": 0.1
+  },
+  "KXNEWDEAL:deal": {
+    "_seed_reason": "PROFIT-MATCH-DYNAMIC commit 5/5: 5/6 LLM calls on KXNEWDEAL (trade deal market) were on Iran peace-deal headlines that matched via the 'deal' token. 'deal' is polysemic: trade deal, peace deal, business deal, etc. Provisional at 0.25 (not floor) so legitimate trade-deal headlines can recover when the aggregator sees enough supporting evidence.",
+    "_seed_status": "provisional",
+    "fp_rate": 0.83,
+    "pinned": false,
+    "total": 6,
+    "updated_utc": "2026-05-24T22:30:00+00:00",
+    "weight": 0.25
+  },
+  "KXNEWDEAL:trump": {
+    "_seed_reason": "Same audit. 'trump' contributed to false positives on KXNEWDEAL via the [deal, trump] bridge. Less aggressive provisional downweight than 'deal' because Trump trade-deal announcements ARE a legitimate signal.",
+    "_seed_status": "provisional",
+    "fp_rate": 0.83,
+    "pinned": false,
+    "total": 6,
+    "updated_utc": "2026-05-24T22:30:00+00:00",
+    "weight": 0.4
+  },
+  "KXTRUMPIRAN:iran": {
+    "fp_rate": 0.8889,
+    "pinned": false,
+    "total": 27,
+    "updated_utc": "2026-05-25T20:55:01.860438+00:00",
+    "weight": 0.1111
+  },
+  "KXTRUMPIRAN:trump": {
+    "fp_rate": 0.9,
+    "pinned": false,
+    "total": 30,
+    "updated_utc": "2026-05-25T20:55:01.860438+00:00",
+    "weight": 0.1
+  },
+  "KXTXRUNOFFENDORSE:trump": {
+    "fp_rate": 1.0,
+    "pinned": false,
+    "total": 14,
+    "updated_utc": "2026-05-25T20:55:01.860438+00:00",
+    "weight": 0.1
+  },
+  "KXUSAIRANAGREEMENT:deal": {
+    "fp_rate": 1.0,
+    "pinned": false,
+    "total": 17,
+    "updated_utc": "2026-05-25T20:55:01.860438+00:00",
+    "weight": 0.1
+  }
+}

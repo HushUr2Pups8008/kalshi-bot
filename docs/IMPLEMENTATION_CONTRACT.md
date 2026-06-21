@@ -867,7 +867,10 @@ The incident in one sentence: 11 cycles of work shipped deployment safety, obser
 
 ### Rule 1 — Behavioral deploys require replayed-EV evidence
 
-Behavioral changes deploy only after a replayed-EV harness shows positive expected value on the relevant feature, with operator-stated confidence threshold (default: 95 % CI on per-trade EV across at least the last 30 resolved markets in the evidence window).
+Behavioral changes deploy only after a replayed-EV harness shows positive expected value on the relevant feature. The confidence threshold depends on the change's blast tier (see §16.7, added 2026-05-24 per the paper-mode rapid-learning framework v3):
+
+- **T3 (live-mode, sizing, capital, runtime-infrastructure):** 95 % CI on per-trade EV across at least the last 30 resolved markets in the evidence window. **Unchanged from the pre-amendment Rule 1.**
+- **T1/T2 (paper-mode behavioral):** Replay-as-CI gate verdict against ≥1 pre-registered holdout corpus from a different market regime AND ≥2 market families (per §16.7). Negative-evidence acceptance memo permitted per Rule 5. Pre-gate LLM cache coverage check (extended-key, per §16.7) must pass before the observation window opens.
 
 **Behavioral changes covered:**
 - Intake (`/feeds`): new RSS sources, classifier additions, source-class additions, per-source weight changes.
@@ -920,11 +923,120 @@ Applies to all behavioral changes deployed to the running bot. Does NOT apply to
 - Spec authoring (specs that describe a future deploy are fine; the deploy itself is gated).
 - Replay-harness construction (Cycle-12 work) — meta-level: replay infrastructure is the prerequisite, not subject to the gate.
 
+**Tier-routing addendum (added 2026-05-24 per framework v3):** For paper-mode behavioral changes, blast-tier routing per §16.7 governs. Rule 1's ≥30-markets threshold applies only to T3 (live-mode / sizing / capital / runtime-infrastructure). T1/T2 changes use the replay-as-CI gate threshold defined in §16.7. The Scope block continues to apply to all behavioral changes — §16.7 determines WHICH threshold applies per tier, not whether IC §16 applies.
+
 ### Rule 6 — Pre-fix vs post-fix replay cohorts
 
 When a behavioral fix changes the function producing `dossier_updates` or `paper_trades` rows (e.g., Cycle-15B extraction rebuild), pre-fix data is no longer ground truth for post-fix calibration validation. Future replay runs MUST distinguish PRE_FIX, POST_FIX_REBUILT, and POST_FIX_NEW cohorts via cohort flag or timestamp discriminator, and MUST preserve pre-fix rows in a separate table or backup file rather than overwriting them.
 
 See `docs/_archive/governance/2026-05-06-cycle-15b-paper-trades-cohort-note.md` for the load-bearing definitions (ARCHIVED Stream G R18).
+
+### §16.7 — Blast-tier routing (added 2026-05-24)
+
+Per the paper-mode rapid-learning framework v3 (`docs/superpowers/specs/2026-05-23-paper-mode-rapid-learning-framework-design.md`). The amendment narrows Rule 1's confidence threshold by blast tier; it does NOT relax IC §16's scope (see Scope block above).
+
+**Tier classifier.** Behavioral changes route by tier per the Risk Tier Matrix (framework v3 §2). The tier classifier (`scripts/edge_replay/tier_classifier.py`) assigns tier from changed-file list using the **max-wins rule** — for any PR touching files mapped to multiple tiers, the highest tier wins, no exceptions. The classifier ALSO consumes config/env edits, model/dependency manifest diffs, DB schema migrations, prompt-template diffs, and any other runtime-affecting artifact (semantic-scope expansion per Codex blocker B). Any unclassified runtime-affecting artifact routes to T3.
+
+**Per-tier gates:**
+
+- **T0** (observability / safety / mechanical): Rule 2 exempt as today.
+- **T1** (paper-mode behavioral, replay-decidable): Replay-as-CI gate (`scripts/edge_replay/replay_gate.py`) against ≥1 pre-registered holdout corpus from a different market regime AND ≥2 market families. Pre-gate LLM cache coverage ≥95 % for the extended-key tuples. No calendar floor. 72h variance-gate observation window. Contamination-window rows retained as a separate OOS evaluation corpus (per Codex blocker E).
+- **T2** (paper-mode behavioral, replay-indeterminate): Replay-as-CI gate + I-6 scenario suite + 5d calendar floor (compressed from §8.5.1's 14d) + pre-gate cache coverage check.
+- **T3** (live-mode / sizing / capital / runtime-infrastructure): Full Rule 1 (≥30 markets, 95 % CI), §8.5.1 floors unchanged, Wave-1 windows unchanged, dual-agent audit (`~/.claude/rules/agent_collaboration.md` high-assurance workflow), operator gate.
+
+**Corpus diversity standard.** T1/T2 gates require corpora spanning ≥1 different market regime AND ≥2 distinct market families (Codex blocker C — calendar-only diversity is not OOS). Regime labels are pre-registered in `docs/governance/corpus-regimes.md` BEFORE a corpus is built. Adjacent calendar-month slices from the same news cycle remain `IN_PERIOD_VALIDATION_ONLY` and cannot alone gate a T1 deploy.
+
+**T1 retrospective (I-11, Phase 3 deferred).** 7 days after every T1 deploy, the framework auto-runs a retrospective comparing the original replay-as-CI verdict's predicted EV to the actual paper EV over the 7-day window — but BOTH baseline code AND candidate code are replayed on the SAME flagged contamination-window rows after they resolve (apples-to-apples per Codex blocker F). Systematic sign divergence >25 % across T1 cycles suspends the framework per the §5 acceptance criteria.
+
+**Cache determinism (I-2 + I-3 + I-12).** Temperature=0 alone is NOT accepted as proof of determinism on Ollama+qwen3 multi-slot GPU (Codex blocker D). The cache key includes `seed, num_ctx, full sampler options, model_digest, ollama_version, endpoint_type, prompt_template_hash, hardware_backend_class, response_hash`. Each capture is repeat-verified at capture-time; mismatch poisons the row (`repeat_verification = "nondeterministic"` plus `poisoned = 1`). Poisoned rows are durably excluded from gate-eligible reads via `CachePoisonedError`. Pre-deploy corpora without populated extended-key fields are marked `LLM_CACHE_INCOMPLETE` and cannot gate LLM-touching T1 changes until reseeded. The temperature=0 pin and the cache-key extension are not overridable.
+
+**Tier downgrades require operator memo.** Tier upgrades are automatic on classifier ambiguity. The max-wins rule, semantic-scope expansion, temperature=0 pin, cache-key extension, and repeat-verification requirement are not overridable. Other defaults (regime/family standard relaxation, variance metric) carry an "OVERRIDE ALLOWED" annotation per framework v3 §3 / §8 and require a dated memo in `docs/governance/<date>-<topic>-memo.md` per override.
+
+**Anti-wheel-spinning safeguards** (framework v3 §6):
+- T0-budget cap: no more than 40 % of merged commits in any 14-day window may be T0-classified (`scripts/edge_replay/tier_budget_check.py`, final Phase 2 deliverable). Deadlock path: alarm + escalation memo, NOT hard block.
+- T1 staleness alarm: >14d without a T1 deploy → operator warning at session start.
+- Negative-evidence cycles count as T1 progress per Rule 5 (must name the hypothesis, corpus rows tested, EV signature observed).
+- Replay-as-CI verdict immutable post-merge (stored at `logs/edge_replay/ci_runs/<commit>/`).
+- Tier classifier audit trail at `logs/edge_replay/tier_classifications.jsonl` (append-only).
+- Mandatory 30-day framework review: owner = operator; threshold = any single signal in framework v3 §5 acceptance criteria out-of-target → framework suspension; pre-amendment IC §16 resumes.
+- T1 retrospective (I-11 Phase 3): sign-divergence > 25 % suspends the framework.
+
+**§16.7 status as of 2026-05-24 (post-PROFIT-PHASE3-001):**
+- Phase 1 (I-1, I-2, I-3, I-5, I-10, I-12): SHIPPED.
+- Phase 2 (I-4, I-6, I-8, I-13): SHIPPED. This amendment is the gating doc deliverable.
+- **Phase 3 activation: SHIPPED.** `.github/workflows/replay-ci-gate.yml` runs
+  `scripts.edge_replay.ci_entry` on every PR. I-5 tier classification routes
+  candidates by blast radius; T1+ changes get a Rule 4 verdict before
+  merge. Operator override via `REPLAY_GATE_OVERRIDE=1` env / workflow
+  input is logged in gate output for audit. I-11 retrospective cron
+  remains Phase 4 deferred; T1 retrospective is operator-run via
+  `python -m scripts.edge_replay.replay_gate` until the cron lands.
+- Phase 4 (I-7 variance gate + I-11 retrospective cron + first OOS
+  corpus refresh + 30-day review): pending; T1 uses fixed 72h paper
+  observation with the stamped variance metric (decision-rate
+  stability + unexpected-SKIPPED-bucket per framework v3 §3 I-7 /
+  §8 Q4) until I-7 ships.
+
+**Operator override (`REPLAY_GATE_OVERRIDE=1`).** The replay-CI gate
+supports a single operator-controlled override channel. This block
+specifies who can use it, when it's appropriate, how it audits, and
+what post-merge obligations attach. Agents must NOT set this variable
+unsupervised; it is operator-only authority.
+
+- **Mechanism.** Set `REPLAY_GATE_OVERRIDE=1` as an environment
+  variable on the CI run (workflow-dispatch input, repo/org secret
+  override, or job env block). The override is consumed by
+  `scripts/edge_replay/ci_entry.py`; the gate still EVALUATES Rule 4
+  and writes the verdict to `logs/edge_replay/ci_runs/<commit>/`, but
+  the CI exit code is forced to 0 regardless of pass/fail. The
+  verdict file always records the original pass/fail so the override
+  is non-destructive to the audit trail.
+- **Bootstrap pass-through (separate channel, PROFIT-PHASE3-002).**
+  Distinct from the operator override: when `corpus_dir` literally
+  does not exist on the runner (e.g., gitignored production corpus
+  not present on a fresh CI checkout), `run_replay_gate` emits a
+  pass-through verdict with explicit notes citing PROFIT-PHASE3-002
+  and "operator gate remains authoritative". The pass-through is
+  scoped narrowly to nonexistent corpus_dir — present-but-empty
+  corpora continue to fail per Rule 2. See
+  `scripts/edge_replay/replay_gate.py` and
+  `tests/test_replay_ci_entry.py::TestCorpusAbsentBootstrapPassThrough`.
+- **When override is appropriate** (operator judgment, not exhaustive):
+  - Wave-1 cutover where the replay corpus itself is the artifact
+    being changed (the gate cannot self-evaluate).
+  - Documented incident response where waiting on a fresh corpus
+    build would extend the live failure window.
+  - Tooling/CI infrastructure failure where the gate is broken in a
+    way unrelated to the PR's behavioral content (operator must
+    confirm by re-running locally per the operator-run replay
+    workflow).
+  - PR whose entire purpose is to fix the replay gate itself
+    (chicken-and-egg; same pattern as PR #45 admin-merge).
+- **When override is NOT appropriate.** Schedule pressure on a
+  routine T1/T2/T3 behavioral change is not a valid override reason;
+  the correct response is to either narrow the change to T0, run the
+  replay locally and attach the verdict, or wait for the gate. The
+  override is a safety valve, not a velocity tool.
+- **Audit obligations** (operator-owned, gate-enforced where
+  mechanical):
+  1. The PR description must cite "operator override" with a one-line
+     reason and a link to the affected `logs/edge_replay/ci_runs/<commit>/`
+     verdict.
+  2. The override appears in `CHANGELOG.md` under the released
+     version with the original gate verdict (pass/fail) and the
+     reason class (bootstrap / incident / tooling / gate-fix).
+  3. Every override is enumerated at the next 30-day framework
+     review (§16.7 above). Repeat overrides for the same reason
+     class are an operator-judgment signal that either the
+     tier-classifier seam is wrong or a real T0/T1 gate is missing;
+     the operator decides whether a root-cause memo at
+     `docs/governance/<date>-<topic>-memo.md` is warranted.
+- **Non-overridable items remain non-overridable.** Per §16.7 above:
+  max-wins tier rule, semantic-scope expansion, temperature=0 pin,
+  cache-key extension, and repeat-verification requirement cannot be
+  bypassed by `REPLAY_GATE_OVERRIDE`. The override forces only the
+  CI exit code; it does not silence verdict logging or relax the
+  underlying invariants.
 
 ### Cross-references
 

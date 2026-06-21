@@ -13,13 +13,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import config as _cfg_module
+import main as main_module
 from analysis import SignalAnalysis
 from feeds.subreddit_selector import filter_disabled_subreddits, select_subreddits
 from feeds.search_news_monitor import run_search_news_monitor
 from feeds.gdelt_monitor import run_gdelt_monitor
 from feeds import NewsItem
 from kalshi import KalshiMarket
+from kalshi.source_hints import MarketSourceHintDiagnostics, MarketSourceTargetPlan
 from main import TradingBot, _signal_to_evidence, _source_class_for_evidence
+from polymarket.settlement_reconciler import SettlementReconcileResult
 from trading.portfolio import Position
 
 
@@ -128,6 +131,27 @@ def _analysis_for_evidence(news: NewsItem | None = None) -> SignalAnalysis:
     )
 
 
+def _empty_source_hint_diagnostics(
+    market: KalshiMarket,
+    *,
+    mode: str = "shadow",
+    records: list[dict[str, object]] | None = None,
+) -> MarketSourceHintDiagnostics:
+    return MarketSourceHintDiagnostics(
+        ticker=market.ticker,
+        mode=mode,
+        shadow_only=True,
+        plan=MarketSourceTargetPlan(
+            ticker=market.ticker,
+            shadow_only=True,
+            targets=(),
+            rejected_labels={},
+        ),
+        counters={},
+        log_records=records or [],
+    )
+
+
 def test_signal_to_evidence_uses_deterministic_id():
     news = _make_news()
     news.published = datetime(2026, 4, 20, 1, 2, 3, tzinfo=timezone.utc)
@@ -150,6 +174,108 @@ def test_signal_to_evidence_preserves_source_class_diversity():
     assert _source_class_for_evidence("White House official statement") == "official"
     assert _source_class_for_evidence("price_fade") == "market"
     assert _source_class_for_evidence("Reuters") == "news"
+
+
+@pytest.mark.asyncio
+async def test_market_source_hint_runtime_default_off_is_noop(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_mode", "off")
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_emit_records", False)
+    bot = _make_bot_stub()
+    market = _make_market()
+
+    with patch("main.build_market_source_hint_diagnostics") as diagnostics_mock, \
+         patch("utils.logger.trade_log.log_market_source_hint_diagnostic") as log_mock:
+        await bot._emit_market_source_hint_diagnostics(market)
+
+    diagnostics_mock.assert_not_called()
+    log_mock.assert_not_called()
+    bot.ws.watch.assert_not_called()
+    bot._blend_task.process_fast_lane_result.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_market_source_hint_runtime_shadow_builds_in_memory_only(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_mode", "shadow")
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_emit_records", False)
+    bot = _make_bot_stub()
+    market = _make_market()
+    diagnostic = _empty_source_hint_diagnostics(market, mode="shadow")
+
+    with patch("main.build_market_source_hint_diagnostics", return_value=diagnostic) as diagnostics_mock, \
+         patch("utils.logger.trade_log.log_market_source_hint_diagnostic") as log_mock:
+        await bot._emit_market_source_hint_diagnostics(market)
+
+    diagnostics_mock.assert_called_once_with(
+        market,
+        mode="shadow",
+        emit_records=False,
+    )
+    log_mock.assert_not_called()
+    bot.ws.watch.assert_not_called()
+    bot._blend_task.process_fast_lane_result.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_market_source_hint_runtime_advisory_emits_shadow_only_record_when_enabled(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_mode", "advisory")
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_emit_records", True)
+    bot = _make_bot_stub()
+    market = _make_market()
+    diagnostic = _empty_source_hint_diagnostics(
+        market,
+        mode="advisory",
+        records=[{
+            "type": "MARKET_SOURCE_HINT_SHADOW",
+            "ticker": market.ticker,
+            "source": "Reuters",
+            "domain": "reuters.com",
+            "hit": False,
+            "freshness_age_seconds": None,
+            "shadow_only": True,
+        }],
+    )
+
+    with patch("main.build_market_source_hint_diagnostics", return_value=diagnostic), \
+         patch("utils.logger.trade_log.log_market_source_hint_diagnostic") as log_mock:
+        await bot._emit_market_source_hint_diagnostics(market)
+
+    log_mock.assert_called_once_with(
+        ticker=market.ticker,
+        mode="advisory",
+        shadow_only=True,
+        targets=[],
+        counters={},
+        rejected_labels={},
+        log_records=diagnostic.log_records,
+    )
+    bot.ws.watch.assert_not_called()
+    bot._blend_task.process_fast_lane_result.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_market_source_hint_runtime_failure_does_not_block_candidate(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_mode", "shadow")
+    monkeypatch.setattr(_cfg_module.cfg, "market_source_hints_emit_records", False)
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
+    monkeypatch.setattr(_cfg_module.cfg, "min_bet_dollars", 2.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_half_life", 14.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_floor", 0.20)
+    monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
+    bot = _make_bot_stub()
+    news = _make_news()
+    market = _make_market()
+
+    with patch("main.build_market_source_hint_diagnostics", side_effect=RuntimeError("diagnostic boom")), \
+         patch("main.estimate_probability", new=AsyncMock(return_value=(
+             0.65, 0.8, ["missile strike"], "test reasoning", "yes", "moderate", 0.8
+         ))), patch("main.kelly_bet", return_value=(0.12, 15.0, 12.0)), \
+         patch("utils.logger.trade_log.log_signal"), \
+         patch("utils.logger.trade_log.log_opportunity"):
+        await bot._process_candidate(news, market, 0.42, {})
+
+    bot._blend_task.process_fast_lane_result.assert_awaited_once()
+    bot.ws.watch.assert_called_with([market.ticker])
 
 
 @pytest.mark.asyncio
@@ -185,9 +311,20 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
         keyword_stats=bot.keyword_stats,
         match_meta=match_meta,
     )
+    # PROFIT-MATCH-003 (L2-a): _process_candidate threads the matcher score onto
+    # match_meta so the downstream MATCH_LLM_REVIEW emission carries it (the
+    # feedback loop's score-gate is a no-op without this).
+    assert match_meta["match_score"] == pytest.approx(0.42)
+    assert match_meta["source_class"] == "news"
     analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
     evidence = bot._evidence_queue.get_nowait()
     assert analysis.signal_meta["trigger_evidence_id"] == evidence.evidence_id
+    assert analysis.signal_meta["trigger_evidence_source"] == evidence.source
+    assert analysis.signal_meta["trigger_evidence_source_class"] == evidence.source_class
+    assert analysis.signal_meta["trigger_evidence_headline"] == evidence.headline
+    assert analysis.signal_meta["trigger_evidence_ingested_ts"] == evidence.ingested_ts
+    assert analysis.signal_meta["trigger_evidence_content_hash"] == evidence.content_hash
+    assert analysis.signal_meta["trigger_evidence_original_weight"] > 0.0
     assert analysis.news_item is news
     assert analysis.market.ticker == "KXTEST-25DEC31"
     assert analysis.estimated_probability == pytest.approx(0.65)
@@ -231,6 +368,9 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
         method="llm",
         llm_direction="yes",
         llm_magnitude="moderate",
+        venue="kalshi",
+        keywords=["missile strike"],
+        source_class="news",
     )
 
 
@@ -253,6 +393,13 @@ async def test_process_candidate_returns_early_when_no_keywords(monkeypatch):
     bot.ws.watch.assert_not_called()
     reject_mock.assert_called_once_with(
         reason="no_keywords",
+        rejection_category="no_signal_empty_keywords",
+        signal_branch="empty_keywords_no_llm_signal",
+        method=None,
+        llm_direction=None,
+        llm_magnitude=None,
+        llm_confidence=None,
+        keywords=[],
         ticker=market.ticker,
         source=news.source,
         headline=news.headline,
@@ -318,6 +465,13 @@ async def test_process_candidate_still_rejects_when_neither_signal_source_speaks
     bot.executor.execute.assert_not_called()
     reject_mock.assert_called_once_with(
         reason="no_keywords",
+        rejection_category="post_llm_neutral_empty_keywords",
+        signal_branch="empty_keywords_neutral_llm",
+        method="llm",
+        llm_direction="neutral",
+        llm_magnitude="none",
+        llm_confidence=0.95,
+        keywords=[],
         ticker=market.ticker,
         source=news.source,
         headline=news.headline,
@@ -327,11 +481,18 @@ async def test_process_candidate_still_rejects_when_neither_signal_source_speaks
 
 @pytest.mark.asyncio
 async def test_process_candidate_skips_stale_news_before_estimation(monkeypatch):
+    # PROFIT-STALE-001: analyzer-stage stale check now uses the per-source
+    # threshold via _early_max_news_age_seconds_for_source(news.source).
+    # _make_news() defaults to source="Reuters", which is not in the
+    # EARLY_MAX_NEWS_AGE_BY_SOURCE override map; it falls through to
+    # EARLY_MAX_NEWS_AGE_SECONDS.
+    # PROFIT-STALE-002 (2026-05-24): default raised 300s → 1800s. Age the
+    # news 2000s past published so this case stays stale under the new
+    # default. If the default changes again, bump this offset.
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
-    monkeypatch.setattr("main.MAX_NEWS_AGE_SECONDS", 300)
     bot = _make_bot_stub()
     news = _make_news()
-    news.published = datetime.now(timezone.utc) - timedelta(seconds=600)
+    news.published = datetime.now(timezone.utc) - timedelta(seconds=2000)
     market = _make_market()
 
     with patch("main.estimate_probability", new=AsyncMock()) as estimate_mock, \
@@ -348,7 +509,7 @@ async def test_process_candidate_skips_stale_news_before_estimation(monkeypatch)
     assert kwargs["source"] == news.source
     assert kwargs["headline"] == news.headline
     assert kwargs["match_score"] == 0.20
-    assert kwargs["age_seconds"] == pytest.approx(600.0, abs=5.0)
+    assert kwargs["age_seconds"] == pytest.approx(2000.0, abs=5.0)
 
 
 @pytest.mark.asyncio
@@ -809,6 +970,31 @@ async def test_news_consumer_task_continues_after_handler_exception():
 
 
 @pytest.mark.asyncio
+async def test_on_news_item_times_out_kalshi_matching_without_starving_polymarket(monkeypatch):
+    monkeypatch.setattr(main_module, "NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS", 0.01)
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = MagicMock()
+    bot.polymarket_paper_runtime.process_news = AsyncMock(return_value=0)
+
+    async def _never_returns(_news, **_kwargs):
+        await asyncio.Event().wait()
+
+    bot.matcher.find_candidates = AsyncMock(side_effect=_never_returns)
+    first = _make_news()
+    second = _make_news()
+    second.headline = "Second fresh headline"
+    second.item_id = "id-2"
+
+    await bot.on_news_item(first)
+    await bot.on_news_item(second)
+
+    assert bot.polymarket_paper_runtime.process_news.await_count == 2
+    assert bot.matcher.find_candidates.await_count == 2
+    for call in bot.matcher.find_candidates.await_args_list:
+        assert call.kwargs["refresh_cache"] is False
+
+
+@pytest.mark.asyncio
 async def test_process_fade_tweet_returns_early_without_pattern():
     bot = _make_bot_stub()
     tweet = _make_news()
@@ -1137,7 +1323,7 @@ async def test_on_price_update_logs_position_drift_from_entry_price_cents():
 
     with patch("main.time.monotonic", side_effect=[100.0, 101.0]), \
          patch("main.PRICE_MOVE_THRESHOLD_CENTS", 999.0), \
-         patch("main.DRIFT_ALERT_CENTS", 2.0), \
+         patch.object(_cfg_module.cfg, "position_drift_alert_threshold", 0.04), \
          patch("main.DRIFT_LOG_COOLDOWN_SECS", 0.0), \
          patch("analysis.fade_signal.detect_price_fade", return_value=None), \
          patch("utils.logger.trade_log.log_position_drift") as drift_mock:
@@ -1421,61 +1607,8 @@ class TestMainAsyncBlocking:
         bot.paper.get_notional_bankroll.return_value = 490.0
         return bot
 
-    @pytest.mark.asyncio
-    async def test_daily_summary_called_off_event_loop_thread(self):
-        import threading
-        bot = self._make_bot()
-
-        event_loop_thread = threading.current_thread().name
-        call_threads: list[str] = []
-
-        original = bot.paper.daily_summary.side_effect
-
-        def tracking_daily_summary():
-            call_threads.append(threading.current_thread().name)
-
-        bot.paper.daily_summary.side_effect = tracking_daily_summary
-
-        report_path = MagicMock()
-        with patch("main.asyncio.sleep", new=AsyncMock(side_effect=Exception("stop"))), \
-             patch("utils.logger.LOG_REPORTS_DIR", MagicMock()):
-            try:
-                await bot._daily_report_task()
-            except Exception:
-                pass
-
-        if call_threads:
-            assert all(t != event_loop_thread for t in call_threads), (
-                f"daily_summary called on event loop thread ({event_loop_thread!r}). "
-                "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
-            )
-
-    @pytest.mark.asyncio
-    async def test_generate_report_called_off_event_loop_thread(self):
-        import threading
-        bot = self._make_bot()
-
-        event_loop_thread = threading.current_thread().name
-        call_threads: list[str] = []
-
-        def tracking_generate_report():
-            call_threads.append(threading.current_thread().name)
-            return "report text"
-
-        bot.paper.generate_report.side_effect = tracking_generate_report
-
-        with patch("main.asyncio.sleep", new=AsyncMock(side_effect=Exception("stop"))), \
-             patch("utils.logger.LOG_REPORTS_DIR", MagicMock()):
-            try:
-                await bot._daily_report_task()
-            except Exception:
-                pass
-
-        if call_threads:
-            assert all(t != event_loop_thread for t in call_threads), (
-                f"generate_report called on event loop thread ({event_loop_thread!r}). "
-                "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
-            )
+    def test_operator_reports_are_not_generated_from_bot_runtime_loop(self):
+        assert not hasattr(TradingBot, "_daily_report_task")
 
     @pytest.mark.asyncio
     async def test_resolve_market_called_off_event_loop_thread(self):
@@ -1519,6 +1652,199 @@ class TestMainAsyncBlocking:
         assert all(t != event_loop_thread for t in call_threads), (
             f"resolve_market sync body called on event loop thread ({event_loop_thread!r}). "
             "Must be dispatched via asyncio.to_thread() — MAC-ASYNC-002."
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_routes_polymarket_rows_to_settlement_reconciler(self, monkeypatch):
+        bot = self._make_bot()
+
+        finalized_market = MagicMock()
+        finalized_market.status = "finalized"
+        finalized_market.result = "yes"
+        bot.rest = MagicMock()
+        bot.rest.get_market = MagicMock(return_value=finalized_market)
+
+        cursor_mock = MagicMock()
+        cursor_mock.fetchall.return_value = [
+            ("KXTEST-25DEC31", "kalshi"),
+            ("ewc-usgub-ks-2026-11-03-dem", "polymarket_us"),
+        ]
+        bot.paper._conn.execute.return_value = cursor_mock
+        bot.paper.resolve_market = AsyncMock(return_value=None)
+
+        calls = []
+
+        class FakeReconciler:
+            def __init__(self, *, source, resolver):
+                calls.append(("init", source, resolver))
+
+            def reconcile(self, *, limit=None):
+                calls.append(("reconcile", limit))
+                return SettlementReconcileResult(
+                    checked=1,
+                    resolved=1,
+                    not_found=0,
+                )
+
+        monkeypatch.setattr(main_module, "SettlementReconciler", FakeReconciler, raising=False)
+        monkeypatch.setattr(
+            main_module,
+            "PolymarketPublicSettlementSource",
+            lambda: object(),
+            raising=False,
+        )
+        monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", True)
+        monkeypatch.setattr(main_module.cfg, "polymarket_us_enabled", True)
+
+        await bot._check_and_resolve()
+
+        bot.rest.get_market.assert_called_once_with("KXTEST-25DEC31")
+        bot.paper.resolve_market.assert_awaited_once_with("KXTEST-25DEC31", True)
+        assert calls[-1] == ("reconcile", None)
+
+    def _wire_polymarket_reconciler(self, bot, monkeypatch, *, result):
+        """Route a single open Polymarket ticker to a fake reconciler.
+
+        Kalshi side is intentionally inert (no open Kalshi tickers) so the
+        only settlement-summary output under test comes from the Polymarket
+        reconcile path.
+        """
+        bot.rest = MagicMock()
+        bot.rest.get_market = MagicMock(return_value=None)
+
+        cursor_mock = MagicMock()
+        cursor_mock.fetchall.return_value = [
+            ("ewc-usgub-ks-2026-11-03-dem", "polymarket_us"),
+        ]
+        bot.paper._conn.execute.return_value = cursor_mock
+        bot.paper.resolve_market = AsyncMock(return_value=None)
+
+        class FakeReconciler:
+            def __init__(self, *, source, resolver):
+                pass
+
+            def reconcile(self, *, limit=None):
+                return result
+
+        monkeypatch.setattr(
+            main_module, "SettlementReconciler", FakeReconciler, raising=False
+        )
+        monkeypatch.setattr(
+            main_module,
+            "PolymarketPublicSettlementSource",
+            lambda: object(),
+            raising=False,
+        )
+        monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", True)
+        monkeypatch.setattr(main_module.cfg, "polymarket_us_enabled", True)
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_summary_includes_error_count(self, monkeypatch):
+        """A cycle where every Polymarket ticker errors must NOT look identical
+        to a cycle where nothing has settled yet.
+
+        WHY (silent-failure review of P2): the per-ticker errors are isolated by
+        ``SettlementReconciler.reconcile()``'s broad ``except Exception`` and only
+        land in the file log. The operator-facing summary line at the call site
+        previously logged checked/resolved/not_found but dropped ``result.errors``.
+        With ``checked=5 resolved=0 not_found=0`` an all-errors outage (public API
+        down) was indistinguishable from a quiet, healthy "nothing settled" cycle.
+        The summary line MUST surface the error count so the false-pass condition
+        is visible.
+        """
+        bot = self._make_bot()
+        self._wire_polymarket_reconciler(
+            bot,
+            monkeypatch,
+            result=SettlementReconcileResult(
+                checked=5, resolved=0, not_found=0, errors=5
+            ),
+        )
+
+        log_spy = MagicMock()
+        monkeypatch.setattr(main_module, "log", log_spy)
+
+        await bot._check_and_resolve()
+
+        # The summary INFO line must carry result.errors as a distinct arg so an
+        # outage is not rendered identically to "nothing settled yet".
+        summary_calls = [
+            call
+            for call in log_spy.info.call_args_list
+            if call.args and "Polymarket checked=" in str(call.args[0])
+        ]
+        assert summary_calls, "Polymarket settlement summary INFO line was never emitted"
+        summary = summary_calls[-1]
+        assert "errors=" in summary.args[0], (
+            "summary format string omits the error count; an all-errors outage "
+            "is indistinguishable from a quiet 'nothing settled' cycle"
+        )
+        # The error count value (5) must actually be passed through, not hardcoded 0.
+        assert 5 in summary.args[1:], (
+            "result.errors value not threaded into the summary log args"
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_warns_when_settlement_errors_present(self, monkeypatch):
+        """When result.errors > 0 a dedicated WARNING must fire so a human
+        scanning the daily summary notices the failures.
+
+        WHY: an INFO summary line alone can be lost in normal cycle noise. A
+        non-zero error count on the settlement (state-mutation + observability)
+        path is exactly the condition risk_review says must be loud, not silent.
+        """
+        bot = self._make_bot()
+        self._wire_polymarket_reconciler(
+            bot,
+            monkeypatch,
+            result=SettlementReconcileResult(
+                checked=5, resolved=0, not_found=0, errors=5
+            ),
+        )
+
+        log_spy = MagicMock()
+        monkeypatch.setattr(main_module, "log", log_spy)
+
+        await bot._check_and_resolve()
+
+        warn_msgs = [str(call.args[0]) for call in log_spy.warning.call_args_list if call.args]
+        assert any(
+            "error" in msg.lower() and "polymarket" in msg.lower()
+            for msg in warn_msgs
+        ), (
+            "no dedicated Polymarket settlement-error WARNING fired despite "
+            f"errors=5; warnings seen: {warn_msgs!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_no_warning_on_clean_settlement(self, monkeypatch):
+        """A clean cycle (errors == 0) must NOT emit the settlement-error
+        WARNING — the warning must be a true signal, not noise on every cycle.
+
+        WHY: a warning that fires unconditionally trains operators to ignore it,
+        defeating the whole point of surfacing the outage condition.
+        """
+        bot = self._make_bot()
+        self._wire_polymarket_reconciler(
+            bot,
+            monkeypatch,
+            result=SettlementReconcileResult(
+                checked=2, resolved=2, not_found=0, errors=0
+            ),
+        )
+
+        log_spy = MagicMock()
+        monkeypatch.setattr(main_module, "log", log_spy)
+
+        await bot._check_and_resolve()
+
+        warn_msgs = [str(call.args[0]) for call in log_spy.warning.call_args_list if call.args]
+        assert not any(
+            "error" in msg.lower() and "polymarket" in msg.lower()
+            for msg in warn_msgs
+        ), (
+            "settlement-error WARNING fired on a clean (errors=0) cycle; "
+            f"warnings seen: {warn_msgs!r}"
         )
 
     @pytest.mark.asyncio
@@ -1584,6 +1910,31 @@ class TestRuntimeThresholdOverride:
     must take precedence over the static EARLY_MAX_NEWS_AGE_BY_SOURCE
     map. Without a reader registered, behavior is identical to pre-Phase-1.
     """
+
+    def test_global_default_is_1800s(self):
+        """PROFIT-STALE-002 — global default EARLY_MAX_NEWS_AGE_SECONDS
+        must be 1800s, not the legacy 300s. Reverting to 300s silently
+        re-introduces the ~97/day loss of premium-publisher items
+        attributed via google_news_query (Washington Post, Bloomberg,
+        The Hill, etc.) that 7-day funnel diagnostic 2026-05-24 found.
+
+        The per-source map in config.EARLY_MAX_NEWS_AGE_BY_SOURCE is
+        now documentation-of-intent rather than the exhaustive list of
+        what gets the longer window; bumping the default removes the
+        per-source-list-maintenance burden the operator flagged.
+        """
+        import config
+        from utils import runtime_overrides as ro
+        ro._global_reader = None
+        from main import _early_max_news_age_seconds_for_source
+        assert config.EARLY_MAX_NEWS_AGE_SECONDS == 1800, (
+            "Global default regressed below 1800s. The per-source-override "
+            "approach replaced by PROFIT-STALE-002 is now load-bearing — "
+            "do not revert without an explicit operator sign-off and an "
+            "audit of the funnel-loss numbers."
+        )
+        # An unlisted source must inherit the new default.
+        assert _early_max_news_age_seconds_for_source("Some Unlisted Publisher") == 1800
 
     def test_runtime_threshold_overrides_static_value(self, monkeypatch):
         from utils import runtime_overrides as ro
@@ -1699,12 +2050,10 @@ class TestSourceClassClassifierLeverA1:
     expansion.
     """
 
-    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
     def test_department_of_war_classifies_as_official(self):
         """`Department of War News Feed` (defense.gov RSS) must be `official`."""
         assert _source_class_for_evidence("Department of War News Feed") == "official"
 
-    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
     def test_un_news_classifies_as_official(self):
         """`UN News - Global perspective Human stories` must be `official`."""
         assert (
@@ -1712,12 +2061,10 @@ class TestSourceClassClassifierLeverA1:
             == "official"
         )
 
-    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
     def test_european_commission_press_releases_classifies_as_official(self):
         """European Commission `Press releases - RSS` must be `official`."""
         assert _source_class_for_evidence("Press releases - RSS") == "official"
 
-    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
     def test_iaea_classifies_as_official(self):
         """IAEA top-stories feed must be `official`."""
         assert (
@@ -1725,12 +2072,10 @@ class TestSourceClassClassifierLeverA1:
             == "official"
         )
 
-    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
     def test_defense_news_classifies_as_news(self):
         """Defense industry press wire must be `news` (not `other`)."""
         assert _source_class_for_evidence("Defense News") == "news"
 
-    @pytest.mark.xfail(reason=_LEVER_A_A1_XFAIL_REASON, strict=True)
     def test_breaking_defense_classifies_as_news(self):
         """Breaking Defense industry wire must be `news` (not `other`)."""
         assert _source_class_for_evidence("Breaking Defense") == "news"
@@ -1814,14 +2159,17 @@ class TestSourceClassClassifierLeverA1PlusAnalysisBranch:
     def test_kyiv_post_already_lands_in_known_class_today(self):
         """Positive control: Kyiv Post (currently in RSS_FEEDS) is one of
         the specialist analyst sources Codex's audit credited with 3/3
-        historical PAPER_TRADE. It currently buckets as `other` (no token
-        match). The A.1+ analysis-branch addition should bucket it as
-        `analysis` too — but that's not pinned here because Kyiv Post is
-        in the news-adjacent ambiguous zone (some operators may classify
-        as `news` instead). Pinned looser to avoid over-constraining."""
+        historical PAPER_TRADE. Multiple defensible buckets exist:
+          - `other` (pre-Lever-A.1 / pre-PROFIT-EDGE-006 fallback)
+          - `analysis` (the A.1+ analysis-branch goal)
+          - `news` (operators classifying it as a news-adjacent source)
+          - `regional` (PROFIT-EDGE-006: foreign-bureau classification)
+        Pinned looser to avoid over-constraining as the taxonomy evolves.
+        """
         result = _source_class_for_evidence("Kyiv Post")
-        assert result in {"other", "analysis", "news"}, (
-            f"Kyiv Post must bucket as one of other/analysis/news; got {result!r}"
+        assert result in {"other", "analysis", "news", "regional"}, (
+            f"Kyiv Post must bucket as one of other/analysis/news/regional; "
+            f"got {result!r}"
         )
 
 
@@ -1906,3 +2254,77 @@ class TestSourceClassClassifierLeverA1Plus15LegalBranch:
         token in the legal branch over-claims and shadows the generic
         Reuters wire which currently buckets as `news`."""
         assert _source_class_for_evidence("Reuters") == "news"
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-ALIGN-003 (2026-05-25) — _is_floor_clamp_suspected
+# ---------------------------------------------------------------------------
+
+class TestFloorClampSuspected:
+    """Pins the floor-clamp detector. Trade-audit (2026-05-25,
+    KXUSAIRANAGREEMENT-27-26JUN) showed the bot's edge anchored against the
+    0.05 floor, manufacturing a 3pp edge from a 6.8pp LLM shift. Detector
+    enables Kelly halving on clamped trades."""
+
+    def test_no_directional_returns_false(self):
+        from main import _is_floor_clamp_suspected
+        assert not _is_floor_clamp_suspected("neutral", "small", 0.95, 0.87, 1.0)
+        assert not _is_floor_clamp_suspected(None, "moderate", 0.05, 0.20, 1.0)
+
+    def test_no_magnitude_returns_false(self):
+        from main import _is_floor_clamp_suspected
+        assert not _is_floor_clamp_suspected("yes", "none", 0.95, 0.95, 1.0)
+        assert not _is_floor_clamp_suspected("no", None, 0.05, 0.05, 1.0)
+
+    def test_floor_at_no_side(self):
+        from main import _is_floor_clamp_suspected
+        assert _is_floor_clamp_suspected("no", "small", 0.05, 0.08, 0.85)
+        assert _is_floor_clamp_suspected("no", "moderate", 0.05, 0.12, 1.0)
+        assert _is_floor_clamp_suspected("no", "large", 0.05, 0.20, 1.0)
+
+    def test_floor_at_yes_side(self):
+        from main import _is_floor_clamp_suspected
+        assert _is_floor_clamp_suspected("yes", "small", 0.95, 0.92, 1.0)
+        assert _is_floor_clamp_suspected("yes", "large", 0.95, 0.80, 1.0)
+
+    def test_unclamped_returns_false(self):
+        from main import _is_floor_clamp_suspected
+        # Bot estimated 0.30 — clearly unclamped
+        assert not _is_floor_clamp_suspected("yes", "moderate", 0.30, 0.15, 1.0)
+        assert not _is_floor_clamp_suspected("no", "large", 0.62, 0.87, 1.0)
+
+    def test_within_tolerance(self):
+        from main import _is_floor_clamp_suspected
+        # Float exact-match with small tolerance (1e-6)
+        assert _is_floor_clamp_suspected("no", "small", 0.0500001, 0.08, 0.85)
+        assert not _is_floor_clamp_suspected("no", "small", 0.06, 0.08, 0.85)
+        assert not _is_floor_clamp_suspected("no", "small", 0.04, 0.08, 0.85)
+
+    def test_exact_boundary_without_raw_crossing_is_not_suspected(self):
+        """A final 0.05 / 0.95 is not enough evidence by itself."""
+        from main import _is_floor_clamp_suspected
+        # market 0.13 - small×1.0 0.08 lands exactly on 0.05, not below it.
+        assert not _is_floor_clamp_suspected("no", "small", 0.05, 0.13, 1.0)
+        # market 0.87 + small×1.0 0.08 lands exactly on 0.95, not above it.
+        assert not _is_floor_clamp_suspected("yes", "small", 0.95, 0.87, 1.0)
+
+
+class TestFloorClampHalvingConfig:
+    """Pins the cfg.floor_clamp_kelly_multiplier default. Operator can
+    override via FLOOR_CLAMP_KELLY_MULTIPLIER env var; default = 0.5."""
+
+    def test_default_is_in_valid_range(self):
+        # Read the current attribute. Env may have been set externally;
+        # assert it's a finite number in (0, 1]. Default is 0.5.
+        # NOTE: do NOT importlib.reload(config) — reloading pollutes
+        # module-level singletons consumed by other test files
+        # (test_main_startup.py, test_paper_trader.py mode-selection).
+        import config as cfg_mod
+        m = cfg_mod.cfg.floor_clamp_kelly_multiplier
+        assert isinstance(m, float)
+        assert 0.0 < m <= 1.0
+
+    def test_max_open_positions_per_prefix_default(self):
+        import config as cfg_mod
+        assert isinstance(cfg_mod.cfg.max_open_positions_per_prefix, int)
+        assert cfg_mod.cfg.max_open_positions_per_prefix >= 0

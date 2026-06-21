@@ -23,16 +23,26 @@ import urllib.parse
 from collections import OrderedDict
 from typing import Callable, Awaitable, Sequence
 
-from config import DISABLED_SOURCE_FAMILIES, MARKET_SERIES_BLOCKLIST_PREFIXES
+from config import (
+    DISABLED_SOURCE_FAMILIES,
+    ENABLE_MARKET_FIRST_QUERY_SHADOW,
+    ENABLE_NEWS_EDGE_PRIORITIZATION,
+    MARKET_SERIES_BLOCKLIST_PREFIXES,
+    NEWS_EDGE_SERIES,
+)
 from feeds import NewsItem
 from feeds.rss_monitor import poll_feed
 from kalshi import KalshiMarket
+from kalshi.series_metadata import KalshiSeriesMetadata
+from kalshi.source_hints import build_market_contract_context, build_market_first_queries
+from tasks.stats.edge_series import active_edge_series
 from utils.logger import get_logger
 
 log = get_logger("search_monitor")
 
 SEARCH_POLL_INTERVAL = 300   # seconds between full fetch cycles
-SEARCH_MAX_QUERIES   = 25    # max distinct queries per cycle (prioritized by open_interest)
+SEARCH_MAX_QUERIES   = 25    # max distinct queries per cycle (ranked by open_interest×uncertainty;
+                            # news-edge series first when ENABLE_NEWS_EDGE_PRIORITIZATION)
 SEARCH_MAX_SEEN      = 2000  # dedup cache entry limit
 
 # Hard bounds for the AIMD articles-per-query controller
@@ -94,7 +104,7 @@ _SPORTS_TOKENS = frozenset({
 _ECONOMIC_TOKENS = frozenset({
     # Interest rates / bonds
     "treasury", "yield", "yields", "note", "notes", "bond", "bonds",
-    "coupon", "maturity", "spread", "basis",
+    "coupon", "maturity", "spread", "basis", "fed", "rate", "rates",
     # Inflation / macro indicators
     "cpi", "pce", "inflation", "deflation", "gdp", "deficit", "debt",
     "yoy", "qoq", "mom",          # year-over-year / quarter-over-quarter / month-over-month
@@ -149,21 +159,79 @@ def _tokenize(text: str) -> list[str]:
     ]
 
 
-def _markets_to_queries(markets: Sequence[KalshiMarket]) -> list[str]:
+def _market_query_text(market: KalshiMarket) -> str:
+    return " ".join(
+        part
+        for part in (
+            getattr(market, "title", ""),
+            getattr(market, "question", ""),
+            getattr(market, "subtitle", ""),
+        )
+        if part
+    )
+
+
+def _dedupe_preserving_order(tokens: list[str]) -> list[str]:
+    return list(dict.fromkeys(tokens))
+
+
+def _markets_to_queries(
+    markets: Sequence[KalshiMarket],
+    edge_series: "frozenset[str] | set[str] | None" = None,
+    *,
+    series_metadata_by_ticker: "dict[str, KalshiSeriesMetadata] | None" = None,
+    market_first_query_shadow: bool = False,
+) -> list[str]:
     """
     Convert active market titles to deduplicated search queries.
 
-    Markets are ranked by open_interest * (1 - |price - 50| / 50), which
-    prioritizes contested markets (price near 50c) with meaningful volume over
-    already-decided or illiquid ones. Fresh news moves contested markets most.
-    Each market contributes up to 4 key tokens. Markets with identical token
-    sets are skipped (deduped). Capped at SEARCH_MAX_QUERIES.
+    Markets on the active news-edge set (series with demonstrated news-edge) are
+    ranked first so they always receive targeted retrieval within the
+    SEARCH_MAX_QUERIES budget — otherwise high-open-interest macro / "mention"
+    markets the bot has no news-edge on crowd them out (option A, 2026-05-30).
+    The edge set is **self-maintaining** (option A-2): ``active_edge_series``
+    derives it from a rolling window of OPPORTUNITY history (auto-promote /
+    auto-age-out), with the static ``config.NEWS_EDGE_SERIES`` used only as a
+    cold-start seed. Callers may inject ``edge_series`` directly (tests).
+    Within each tier markets are ranked by open_interest * (1 - |price - 50|/50),
+    which prioritizes contested markets (price near 50c) with meaningful volume
+    over already-decided or illiquid ones. Fresh news moves contested markets
+    most. Each market contributes up to 4 key tokens. Markets with identical
+    token sets are skipped (deduped). Capped at SEARCH_MAX_QUERIES.
     """
+    if edge_series is None:
+        # DECISION-AFFECTING + IC §16-gated: default OFF -> empty set -> pure
+        # open_interest×uncertainty ranking (prior production behavior). Only an
+        # operator who has flipped ENABLE_NEWS_EDGE_PRIORITIZATION (with replay-EV
+        # evidence / override) gets edge-first prioritization.
+        edge_series = (
+            active_edge_series(seed=NEWS_EDGE_SERIES)
+            if ENABLE_NEWS_EDGE_PRIORITIZATION
+            else frozenset()
+        )
+
+    def _is_edge_series(m: KalshiMarket) -> int:
+        series = (
+            (getattr(m, "series_ticker", None) or getattr(m, "ticker", "") or "")
+            .split("-")[0]
+            .upper()
+        )
+        return 1 if series in edge_series else 0
+
+    def _interest_weight(m: KalshiMarket) -> float:
+        return float(
+            getattr(m, "open_interest", 0)
+            or getattr(m, "open_interest_dollars", 0)
+            or getattr(m, "volume_dollars", 0)
+            or 1.0
+        )
+
     sorted_markets = sorted(
         markets,
         key=lambda m: (
-            getattr(m, "open_interest", 0)
-            * (1.0 - abs(getattr(m, "yes_price", 50) - 50) / 50.0)
+            _is_edge_series(m),
+            _interest_weight(m)
+            * (1.0 - abs(getattr(m, "yes_price", 50) - 50) / 50.0),
         ),
         reverse=True,
     )
@@ -179,7 +247,7 @@ def _markets_to_queries(markets: Sequence[KalshiMarket]) -> list[str]:
         _ticker = (getattr(market, "series_ticker", None) or market.ticker).upper()
         if any(_ticker.startswith(p) for p in MARKET_SERIES_BLOCKLIST_PREFIXES):
             continue
-        tokens = _tokenize(market.title)[:4]
+        tokens = _dedupe_preserving_order(_tokenize(_market_query_text(market)))[:4]
         if len(tokens) < 2:
             continue
         # Secondary gate: content-based off-topic token filter.
@@ -193,6 +261,23 @@ def _markets_to_queries(markets: Sequence[KalshiMarket]) -> list[str]:
             continue
         seen_sets.add(token_set)
         queries.append(" ".join(tokens))
+        if market_first_query_shadow and len(queries) < SEARCH_MAX_QUERIES:
+            series_key = (
+                (getattr(market, "series_ticker", None) or getattr(market, "ticker", "") or "")
+                .split("-")[0]
+                .upper()
+            )
+            series_metadata = (series_metadata_by_ticker or {}).get(series_key)
+            context = build_market_contract_context(market, series_metadata)
+            for shadow_query in build_market_first_queries(
+                context,
+                max_queries=SEARCH_MAX_QUERIES - len(queries),
+            ):
+                if shadow_query in queries:
+                    continue
+                queries.append(shadow_query)
+                if len(queries) >= SEARCH_MAX_QUERIES:
+                    break
 
     return queries
 
@@ -202,6 +287,7 @@ async def run_search_news_monitor(
     get_markets: Callable[[], Sequence[KalshiMarket]],
     poll_interval: int = SEARCH_POLL_INTERVAL,
     queue_depth_fn: "Callable[[], float] | None" = None,
+    get_series_metadata: "Callable[[], dict[str, KalshiSeriesMetadata]] | None" = None,
 ) -> None:
     """
     Poll Google News RSS and Bing News RSS for queries derived from active
@@ -238,7 +324,16 @@ async def run_search_news_monitor(
     while True:
         try:
             markets = get_markets()
-            queries = _markets_to_queries(markets)
+            series_metadata = (
+                get_series_metadata()
+                if ENABLE_MARKET_FIRST_QUERY_SHADOW and get_series_metadata is not None
+                else None
+            )
+            queries = _markets_to_queries(
+                markets,
+                series_metadata_by_ticker=series_metadata,
+                market_first_query_shadow=ENABLE_MARKET_FIRST_QUERY_SHADOW,
+            )
 
             if not queries:
                 log.debug("Search news: no active markets, skipping cycle")

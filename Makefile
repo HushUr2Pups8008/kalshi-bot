@@ -1,6 +1,6 @@
 PYTHON ?= .venv/bin/python
 
-.PHONY: test-safe test-safe-detached run-history db-wal-check db-wal-checkpoint gitlab-ci-usage lint lint-fix coverage botcheck trade-summary decision-funnel freshness pipeline-impact governance-monitor governance-review soak-invariant hook-health
+.PHONY: test-safe test-safe-detached run-history db-wal-check db-wal-checkpoint gitlab-ci-usage lint lint-fix coverage botcheck trade-summary decision-funnel freshness pipeline-impact governance-monitor governance-review msh-diagnostics soak-invariant hook-health
 
 test-safe:
 	scripts/run_tests.sh
@@ -31,6 +31,9 @@ governance-monitor:
 
 governance-review:
 	$(PYTHON) scripts/governance_decision_review.py --since $$(date -u -v-1d +%Y-%m-%d 2>/dev/null || date -u -d yesterday +%Y-%m-%d)
+
+msh-diagnostics:
+	$(PYTHON) scripts/market_source_hints_diagnostics.py --path logs/trades/live/trades.jsonl --exclude-test --since-hours 24
 
 soak-invariant:
 	bash scripts/check_soak_invariant.sh

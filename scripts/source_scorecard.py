@@ -24,7 +24,7 @@ import argparse
 import sqlite3
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +49,16 @@ from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 
 DEFAULT_LOG_PATH = REPO_ROOT / "logs" / "trades"
 DEFAULT_DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
+
+# The "remove immediately" / stale-prune recommendation judges a source's
+# zero-signal + staleness over THIS many days, not the report's display window.
+# The bot emits ~1 SIGNAL/day across ALL sources combined, so a 24h window is far
+# too short to conclude a single source produces nothing -- judging over ~45d is
+# the smallest horizon where "zero signals" is meaningful. Paired with the
+# lifetime-yield veto (``has_lifetime_yield``), which never auto-removes a source
+# that has ever produced a signal/opportunity/trade. See PROFIT-ROT-002.
+DEFAULT_RECOMMENDATION_WINDOW_DAYS = 45
+DEFAULT_INCUBATION_MIN_LIFETIME_POSTS = 30
 
 KNOWN_PUBLISHER_MARKERS = (
     "Reuters",
@@ -95,6 +105,16 @@ def parse_args() -> argparse.Namespace:
         "--hide-disabled",
         action="store_true",
         help="Hide the 'Disabled by Config' section",
+    )
+    parser.add_argument(
+        "--recommendation-window-days",
+        type=int,
+        default=DEFAULT_RECOMMENDATION_WINDOW_DAYS,
+        help=(
+            "Horizon (days) over which zero-signal/staleness is judged for tier "
+            f"recommendations (default: {DEFAULT_RECOMMENDATION_WINDOW_DAYS}). "
+            "Lifetime-yield veto is always applied. Pass 0 to use the display window."
+        ),
     )
     return parser.parse_args()
 
@@ -168,6 +188,17 @@ def classify_source_family(source: str) -> str:
     return "other"
 
 
+def _apply_event(row: dict[str, Any], event_type: str, reason: str) -> None:
+    """Accumulate one trade-log record into a per-source metric row."""
+    row["observed_records"] += 1
+    if event_type == "EARLY_STALE_DROP" and reason == "stale_by_source_policy":
+        row["early_stale_drops"] += 1
+    elif event_type == "ANALYSIS_REJECTED" and reason == "stale_news":
+        row["analysis_stale_rejections"] += 1
+    elif event_type == "SIGNAL":
+        row["signals"] += 1
+
+
 def collect_log_metrics(
     path: Path,
     since: datetime | None,
@@ -191,20 +222,61 @@ def collect_log_metrics(
         if not source:
             continue
 
-        row = metrics[source]
-        row["observed_records"] += 1
-
-        if event_type == "EARLY_STALE_DROP" and str(record.get("reason") or "") == "stale_by_source_policy":
-            row["early_stale_drops"] += 1
-        elif event_type == "ANALYSIS_REJECTED" and str(record.get("reason") or "") == "stale_news":
-            row["analysis_stale_rejections"] += 1
-        elif event_type == "SIGNAL":
-            row["signals"] += 1
+        _apply_event(metrics[source], event_type, str(record.get("reason") or ""))
 
     meta["lines_total"] = read_stats.lines_total
     meta["lines_malformed"] = read_stats.lines_malformed
 
     return dict(metrics), meta
+
+
+def collect_log_metrics_windowed(
+    path: Path,
+    rec_since: datetime | None,
+    rec_until: datetime | None,
+    display_since: datetime | None,
+    display_until: datetime | None,
+    exclude_test: bool,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, int]]:
+    """One pass over the wide [rec_since, rec_until] window yielding BOTH the
+    display-window metrics and the recommendation-window metrics.
+
+    The recommendation window is always a strict superset of the display window,
+    so scanning twice re-reads the same (large) archive. This single bucketed
+    pass accumulates rec metrics for every in-range record and display metrics
+    only for records whose ts also falls in [display_since, display_until].
+    ``meta`` counts the DISPLAY window so the report's "Input Coverage" line
+    keeps its stated-window meaning.
+    """
+    rec_metrics: dict[str, dict[str, Any]] = defaultdict(default_source_metrics)
+    display_metrics: dict[str, dict[str, Any]] = defaultdict(default_source_metrics)
+    meta = {"lines_total": 0, "lines_malformed": 0, "records_kept": 0}
+
+    read_stats = TradeLogReadStats()
+    for record in iter_trade_records(path, since=rec_since, until=rec_until, stats=read_stats):
+        event_type = str(record.get("type") or "").strip()
+        source = str(record.get("source") or "").strip()
+        ticker = str(record.get("ticker") or "").strip()
+
+        if exclude_test and is_test_source_ticker(source, ticker):
+            continue
+
+        in_display = in_window(parse_iso_ts(record.get("ts")), display_since, display_until)
+        if in_display:
+            meta["records_kept"] += 1
+
+        if not source:
+            continue
+
+        reason = str(record.get("reason") or "")
+        _apply_event(rec_metrics[source], event_type, reason)
+        if in_display:
+            _apply_event(display_metrics[source], event_type, reason)
+
+    meta["lines_total"] = read_stats.lines_total
+    meta["lines_malformed"] = read_stats.lines_malformed
+
+    return dict(display_metrics), dict(rec_metrics), meta
 
 
 def collect_db_metrics(
@@ -256,17 +328,108 @@ def collect_db_metrics(
         conn.close()
 
 
+def has_lifetime_yield(row: dict[str, Any]) -> bool:
+    """True if the source is a RECENTLY-proven producer (the A(i) veto).
+
+    A source with lifetime funnel output (signal/opportunity/trade) AND a last
+    signal inside the recommendation window is never auto-flagged "remove
+    immediately" / "likely prune" no matter how dry the recent report window --
+    its dryness is upstream funnel starvation, not the source dying.
+
+    ``summarize`` precomputes the recency-bounded answer onto ``lifetime_yield_recent``
+    (it has the as-of time + window + last_signal). When that key is present it is
+    authoritative. When absent (legacy callers / bare unit rows) we fall back to
+    raw lifetime fields so pre-existing behavior is unchanged. The recency bound
+    is load-bearing: without it a source that fired once and died 45+ days ago
+    keeps permanent immunity (PROFIT-ROT-002 review finding).
+    """
+    if "lifetime_yield_recent" in row:
+        return bool(row["lifetime_yield_recent"])
+    return (
+        row.get("lifetime_signals", 0) > 0
+        or row.get("lifetime_opportunities", 0) > 0
+        or row.get("lifetime_trades", 0) > 0
+    )
+
+
+def _lifetime_yield_recent(
+    row: dict[str, Any], now_ref: datetime, window_days: int | None
+) -> bool:
+    """Recency-bounded form of the lifetime-yield veto used by ``summarize``.
+
+    Proven AND last signal within ``window_days`` of ``now_ref``. A source that
+    produced a signal/opportunity/trade but has been signal-dead longer than the
+    recommendation window is NOT recently proven -> it loses veto immunity and
+    falls through to normal auto-disable/stale-prune logic. Tied to the same
+    horizon as the rec window so the two cannot diverge (PROFIT-ROT-002).
+
+    With no window configured (``window_days`` falsy) any lifetime yield counts
+    as proven -- matching the pre-recency single-window behavior.
+    """
+    proven = (
+        row.get("lifetime_signals", 0) > 0
+        or row.get("lifetime_opportunities", 0) > 0
+        or row.get("lifetime_trades", 0) > 0
+    )
+    if not proven:
+        return False
+    if not window_days:
+        return True
+    last = parse_iso_ts(row.get("lifetime_last_signal"))
+    if last is None:
+        # Proven by counter but no signal timestamp -> cannot confirm recency;
+        # do not grant immunity on unverifiable recency.
+        return False
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    ref = now_ref if now_ref.tzinfo is not None else now_ref.replace(tzinfo=timezone.utc)
+    return (ref - last) <= timedelta(days=window_days)
+
+
+# --- recommendation-window accessors (A(ii)) -------------------------------
+# The tier recommendation judges observation/zero-signal/staleness over the wide
+# recommendation window (rec_*), attached by ``summarize``. When rec_* is absent
+# (unit rows, ad-hoc callers) these fall back to the display-window fields so
+# behavior is identical to the single-window past.
+def _rec_observed(row: dict[str, Any]) -> int:
+    return row.get("rec_observed_records", row.get("observed_records", 0))
+
+
+def _rec_signals(row: dict[str, Any]) -> int:
+    return row.get("rec_signals", row.get("signals", 0))
+
+
+def _rec_stale_burden(row: dict[str, Any]) -> int:
+    if "rec_stale_burden" in row:
+        return row["rec_stale_burden"]
+    return row.get("early_stale_drops", 0) + row.get("analysis_stale_rejections", 0)
+
+
+def _rec_stale_ratio(row: dict[str, Any]) -> float | None:
+    if "rec_stale_drop_ratio" in row:
+        return row["rec_stale_drop_ratio"]
+    return row.get("stale_drop_ratio")
+
+
 def classify_source(row: dict[str, Any]) -> str:
     resolved = row["resolved_paper_trades"]
     pnl = row["total_pnl"] if resolved > 0 else None
     win_rate = row["win_rate"]
-    stale_burden = row["early_stale_drops"] + row["analysis_stale_rejections"]
 
     if resolved >= 2 and pnl is not None and pnl > 0 and win_rate is not None and win_rate >= 0.5:
         return "likely keep"
     if resolved >= 2 and pnl is not None and pnl < 0:
         return "likely prune"
-    if row["observed_records"] >= 5 and row["signals"] == 0 and row["paper_trades"] == 0 and stale_burden >= 3:
+    # Stale-prune only for sources with NO lifetime track record (A(i) veto) and
+    # only when zero-signal holds over the wide recommendation window (A(ii)). A
+    # proven producer in a dry window is "investigate" (-> watch), never pruned.
+    if (
+        not has_lifetime_yield(row)
+        and _rec_observed(row) >= 5
+        and _rec_signals(row) == 0
+        and row["paper_trades"] == 0
+        and _rec_stale_burden(row) >= 3
+    ):
         return "likely prune"
     return "investigate"
 
@@ -297,29 +460,55 @@ def rank_tuple(row: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def auto_disable_candidate(row: dict[str, Any]) -> bool:
-    if row["observed_records"] < 15:
+    if is_incubating_source(row):
         return False
-    if row["signals"] != 0 or row["paper_trades"] != 0:
+    # A(i): never auto-remove a source with a proven lifetime track record.
+    if has_lifetime_yield(row):
         return False
-    burden = row["stale_drop_ratio"]
+    # A(ii): judge observation, zero-signal, and staleness over the wide
+    # recommendation window rather than a single starved display window.
+    if _rec_observed(row) < 15:
+        return False
+    if _rec_signals(row) != 0 or row["paper_trades"] != 0:
+        return False
+    burden = _rec_stale_ratio(row)
     return burden is not None and burden >= 0.80
 
 
 def watchlist_candidate(row: dict[str, Any]) -> bool:
+    if is_incubating_source(row):
+        return False
     if auto_disable_candidate(row):
         return False
-    if row["observed_records"] < 10:
+    if _rec_observed(row) < 10:
         return False
     if row["paper_trades"] != 0:
         return False
-    burden = row["stale_drop_ratio"]
+    burden = _rec_stale_ratio(row)
     if burden is None:
         return False
-    return burden >= 0.60 and row["signals"] <= 1
+    return burden >= 0.60 and _rec_signals(row) <= 1
+
+
+def is_incubating_source(row: dict[str, Any]) -> bool:
+    """True while a newly tracked source lacks enough lifetime sample to prune.
+
+    Freshly added RSS desks can generate large stale-drop counts from old feed
+    backfill before source_stats has observed enough fresh posts to judge the
+    feed. Only rows with an explicit source_stats record are eligible for this
+    state; old untracked/noisy sources retain the existing prune behavior.
+    """
+    if not row.get("has_lifetime_stats"):
+        return False
+    if has_lifetime_yield(row):
+        return False
+    return row.get("lifetime_posts", 0) < DEFAULT_INCUBATION_MIN_LIFETIME_POSTS
 
 
 def recommendation_tier(row: dict[str, Any]) -> str:
     classification = row["classification"]
+    if is_incubating_source(row):
+        return "incubating"
     if auto_disable_candidate(row):
         return "remove immediately"
     if classification == "likely prune":
@@ -339,9 +528,46 @@ def summarize(
     since: datetime | None,
     until: datetime | None,
     exclude_test: bool = False,
+    recommendation_window_days: int | None = None,
+    source_stats_db_path: Path | None = None,
 ) -> dict[str, Any]:
-    log_metrics, log_meta = collect_log_metrics(logs_path, since, until, exclude_test)
+    # Function-local only to keep the source_stats read lazy. (No import cycle
+    # exists -- source_stats does not import this script -- and config is already
+    # imported at module top; laziness is the sole reason.)
+    from tasks.stats.source_stats import read_lifetime_totals
+
+    # As-of reference for the recency-bounded veto: the report's upper bound when
+    # given, else now. Anchored to `until` so the rec window and the recency gate
+    # share one horizon and cannot drift apart.
+    now_ref = until or datetime.now(timezone.utc)
+
+    # A(ii): the tier recommendation judges zero-signal/staleness over a wide
+    # recommendation window, independent of the report's display window. One
+    # bucketed pass yields BOTH (the rec window is a strict superset of display),
+    # avoiding a redundant second full-archive scan.
+    if recommendation_window_days:
+        if until is not None:
+            rec_since = until - timedelta(days=recommendation_window_days)
+            if since is not None and since < rec_since:
+                rec_since = since
+            rec_until = until
+        else:
+            # No display upper bound -> widen to full history for the judgment.
+            # `since` is intentionally ignored here: the zero-signal/veto call
+            # only benefits from seeing MORE lifetime activity, never less.
+            rec_since, rec_until = None, None
+        log_metrics, rec_metrics, log_meta = collect_log_metrics_windowed(
+            logs_path, rec_since, rec_until, since, until, exclude_test
+        )
+    else:
+        log_metrics, log_meta = collect_log_metrics(logs_path, since, until, exclude_test)
+        rec_metrics = log_metrics
+
     db_metrics, db_columns, db_exists = collect_db_metrics(db_path, since, until, exclude_test)
+
+    # A(i): lifetime per-source funnel (source_stats) -> never auto-remove a
+    # RECENTLY-proven producer on a starved window. Fail-soft to {} when absent.
+    lifetime_totals = read_lifetime_totals(source_stats_db_path or db_path)
 
     sources = sorted(set(log_metrics) | set(db_metrics))
     rows: list[dict[str, Any]] = []
@@ -360,7 +586,29 @@ def summarize(
         row["win_rate"] = (row["wins"] / resolved) if resolved else None
         stale_total = row["early_stale_drops"] + row["analysis_stale_rejections"]
         row["stale_drop_ratio"] = (stale_total / row["observed_records"]) if row["observed_records"] > 0 else None
+
+        lifetime = lifetime_totals.get(source, {})
+        row["has_lifetime_stats"] = source in lifetime_totals
+        row["lifetime_posts"] = lifetime.get("posts_seen", 0)
+        row["lifetime_signals"] = lifetime.get("signals", 0)
+        row["lifetime_opportunities"] = lifetime.get("opportunities", 0)
+        row["lifetime_trades"] = lifetime.get("trades", 0)
+        row["lifetime_last_signal"] = lifetime.get("last_signal")
+        row["lifetime_yield_recent"] = _lifetime_yield_recent(
+            row, now_ref, recommendation_window_days
+        )
+
+        rec = rec_metrics.get(source, {})
+        rec_observed = rec.get("observed_records", 0)
+        rec_stale = rec.get("early_stale_drops", 0) + rec.get("analysis_stale_rejections", 0)
+        row["rec_observed_records"] = rec_observed
+        row["rec_signals"] = rec.get("signals", 0)
+        row["rec_stale_burden"] = rec_stale
+        row["rec_stale_drop_ratio"] = (rec_stale / rec_observed) if rec_observed > 0 else None
+
         row["is_disabled"], row["disabled_reason"] = disabled_status(row["source"], row["source_family"])
+        # classify_source + recommendation_tier consume the lifetime/rec fields
+        # above, so they must be attached before classification.
         row["classification"] = classify_source(row)
         rows.append(row)
 
@@ -368,6 +616,7 @@ def summarize(
         "remove immediately": [],
         "prune": [],
         "watch / investigate": [],
+        "incubating": [],
         "keep": [],
         "top performers": [],
         "disabled by source": [],
@@ -426,7 +675,13 @@ def format_group_rows(rows: list[dict[str, Any]], top: int) -> list[str]:
             f"paper={row['paper_trades']:>{trade_width}}  "
             f"resolved={row['resolved_paper_trades']:>{resolved_width}}  "
             f"win_rate={fmt_pct(row['win_rate'])}  "
-            f"pnl={fmt_money(row['total_pnl']) if row['resolved_paper_trades'] else 'n/a'}"
+            f"pnl={fmt_money(row['total_pnl']) if row['resolved_paper_trades'] else 'n/a'}  "
+            # B: lifetime funnel -- a tier verdict ("remove immediately") never
+            # prints without the source's real all-time yield beside it.
+            f"life_posts={row.get('lifetime_posts', 0)}  "
+            f"life_sig={row.get('lifetime_signals', 0)}  "
+            f"life_opp={row.get('lifetime_opportunities', 0)}  "
+            f"life_trade={row.get('lifetime_trades', 0)}"
         )
     return lines
 
@@ -469,6 +724,7 @@ def print_summary(stats: dict[str, Any], top: int, hide_disabled: bool = False) 
         "top performers",
         "keep",
         "watch / investigate",
+        "incubating",
         "prune",
         "remove immediately",
     ):
@@ -480,6 +736,8 @@ def print_summary(stats: dict[str, Any], top: int, hide_disabled: bool = False) 
             print("  Sources producing acceptable signals with no major issues")
         elif title == "watch / investigate":
             print("  Mixed performance; needs more data or review")
+        elif title == "incubating":
+            print("  Newly tracked sources below minimum lifetime sample; do not prune yet")
         elif title == "prune":
             print("  Low value; consider removal soon")
         elif title == "remove immediately":
@@ -519,6 +777,7 @@ def main() -> int:
         since=since,
         until=until,
         exclude_test=args.exclude_test,
+        recommendation_window_days=(args.recommendation_window_days or None),
     )
     print_summary(stats, top=max(1, args.top), hide_disabled=args.hide_disabled)
     return 0

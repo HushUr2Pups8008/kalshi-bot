@@ -8,6 +8,9 @@ from scripts.source_scorecard import (
     classify_source,
     classify_source_family,
     disabled_status,
+    format_group_rows,
+    has_lifetime_yield,
+    is_incubating_source,
     is_disabled_source,
     parse_date_end,
     parse_date_start,
@@ -17,7 +20,34 @@ from scripts.source_scorecard import (
     top_performer,
     watchlist_candidate,
 )
+from tasks.stats.source_stats import read_lifetime_totals
 from tests._helpers import cleanup_tmp_dir, make_tmp_dir, write_jsonl
+
+_SOURCE_STATS_DDL = (
+    "CREATE TABLE source_stats ("
+    "source TEXT PRIMARY KEY, posts_seen INTEGER, signals INTEGER, "
+    "opportunities INTEGER, trades INTEGER, last_signal TEXT, last_updated TEXT)"
+)
+
+
+def _write_source_stats(db_path: Path, rows: list[tuple]) -> None:
+    # Each row: (source, posts_seen, signals, opportunities, trades[, last_signal]).
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(_SOURCE_STATS_DDL)
+        for r in rows:
+            r = tuple(r)
+            source, posts, signals, opps, trades = r[:5]
+            last_signal = r[5] if len(r) > 5 else ""
+            conn.execute(
+                "INSERT INTO source_stats "
+                "(source, posts_seen, signals, opportunities, trades, last_signal, last_updated) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (source, posts, signals, opps, trades, last_signal, last_signal),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 _REAL_SQLITE_CONNECT = sqlite3.connect
 
@@ -317,7 +347,7 @@ def test_summarize_separates_disabled_sources_from_active_groups():
         disabled_sources = {row["source"] for row in stats["grouped"]["disabled by source"]}
         active_sources = {
             row["source"]
-            for bucket in ("remove immediately", "prune", "watch / investigate", "keep", "top performers")
+            for bucket in ("remove immediately", "prune", "watch / investigate", "keep", "top performers", "incubating")
             for row in stats["grouped"][bucket]
         }
 
@@ -347,7 +377,7 @@ def test_summarize_separates_family_disabled_sources_from_active_groups():
         disabled_rows = {row["source"]: row for row in stats["grouped"]["disabled by family"]}
         active_sources = {
             row["source"]
-            for bucket in ("remove immediately", "prune", "watch / investigate", "keep", "top performers")
+            for bucket in ("remove immediately", "prune", "watch / investigate", "keep", "top performers", "incubating")
             for row in stats["grouped"][bucket]
         }
 
@@ -435,7 +465,7 @@ def test_summarize_assigns_each_active_source_to_one_recommendation_tier():
         assert rows["Active Keep"]["source_family"] == "other"
         assert rows["Active Top"]["source_family"] == "other"
         memberships = {}
-        for bucket in ("remove immediately", "prune", "watch / investigate", "keep", "top performers"):
+        for bucket in ("remove immediately", "prune", "watch / investigate", "keep", "top performers", "incubating"):
             for row in stats["grouped"][bucket]:
                 memberships.setdefault(row["source"], []).append(bucket)
 
@@ -444,6 +474,44 @@ def test_summarize_assigns_each_active_source_to_one_recommendation_tier():
         assert memberships["Active Keep"] == ["keep"]
         assert memberships["Active Top"] == ["top performers"]
         conn.close()
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_new_feed_incubates_before_prune_even_with_stale_log_volume():
+    tmp = make_tmp_dir("source_scorecard")
+    try:
+        logs_root = tmp / "trades"
+        write_jsonl(
+            logs_root / "live" / "trades.jsonl",
+            [
+                {
+                    "type": "EARLY_STALE_DROP",
+                    "reason": "stale_by_source_policy",
+                    "source": "NYT > U.S. > Politics",
+                    "ticker": "KX1",
+                    "ts": f"2026-05-29T00:{i:02d}:00+00:00",
+                }
+                for i in range(20)
+            ],
+        )
+        stats_db = tmp / "paper_trades.db"
+        _write_source_stats(stats_db, [("NYT > U.S. > Politics", 2, 0, 0, 0)])
+
+        stats = summarize(
+            logs_root,
+            tmp / "missing_paper_trades.db",
+            since=parse_date_start("2026-05-29"),
+            until=parse_date_end("2026-05-30"),
+            exclude_test=False,
+            recommendation_window_days=45,
+            source_stats_db_path=stats_db,
+        )
+        row = next(r for r in stats["rows"] if r["source"] == "NYT > U.S. > Politics")
+
+        assert is_incubating_source(row) is True
+        assert _tier_of(stats, "NYT > U.S. > Politics") == "incubating"
+        assert _tier_of(stats, "NYT > U.S. > Politics") != "prune"
     finally:
         cleanup_tmp_dir(tmp)
 
@@ -508,6 +576,7 @@ def test_print_summary_shows_disabled_section_by_default(capsys):
             "remove immediately": [],
             "prune": [],
             "watch / investigate": [],
+            "incubating": [],
             "keep": [],
             "top performers": [],
             "disabled by source": [
@@ -557,6 +626,7 @@ def test_print_summary_hides_disabled_section_when_requested(capsys):
             "remove immediately": [],
             "prune": [],
             "watch / investigate": [],
+            "incubating": [],
             "keep": [],
             "top performers": [],
             "disabled by source": [
@@ -619,6 +689,7 @@ def test_print_summary_includes_tiered_recommendation_sections(capsys):
             ],
             "prune": [],
             "watch / investigate": [],
+            "incubating": [],
             "keep": [],
             "top performers": [],
             "disabled by source": [],
@@ -652,6 +723,7 @@ def test_print_summary_shows_family_disabled_reason(capsys):
             "remove immediately": [],
             "prune": [],
             "watch / investigate": [],
+            "incubating": [],
             "keep": [],
             "top performers": [],
             "disabled by source": [],
@@ -746,3 +818,349 @@ def test_top_performer_and_recommendation_tier_heuristics():
     assert recommendation_tier(keep_row) == "keep"
     assert recommendation_tier(prune_row) == "prune"
     assert recommendation_tier(remove_row) == "remove immediately"
+
+
+# ---------------------------------------------------------------------------
+# A(i) lifetime-yield veto + A(ii) wide recommendation window + B funnel render.
+#
+# Why: the 24h display window flagged the bot's two largest lifetime opportunity
+# producers ("Middle East and north Africa | The Guardian" = 140 sig / 123 opp,
+# "NYT > World News" = 62 sig / 54 opp) as "remove immediately" because they
+# emitted zero SIGNAL events during a single starved day. The bot emits ~158
+# SIGNAL events over its entire lifetime (~1/day across ALL sources), so judging
+# any single source over 24h is structurally broken. These tests pin the fix:
+# a source with demonstrated lifetime yield is never auto-removed, and the
+# zero-signal judgment uses a horizon long enough to be meaningful.
+# ---------------------------------------------------------------------------
+
+
+def test_has_lifetime_yield_detects_any_funnel_output():
+    assert has_lifetime_yield({"lifetime_signals": 1}) is True
+    assert has_lifetime_yield({"lifetime_opportunities": 1}) is True
+    assert has_lifetime_yield({"lifetime_trades": 1}) is True
+    assert has_lifetime_yield({"lifetime_signals": 0, "lifetime_opportunities": 0,
+                               "lifetime_trades": 0}) is False
+    # Missing lifetime fields (legacy callers) must not crash and must read as
+    # "no proven yield" so existing behavior is preserved.
+    assert has_lifetime_yield({}) is False
+
+
+def test_auto_disable_vetoed_by_lifetime_yield():
+    # The NYT/MENA case: stale + zero recent signals, but a proven lifetime
+    # producer. Must NOT be auto-removed; falls through to watch / investigate.
+    proven_but_dry = {
+        "observed_records": 30,
+        "signals": 0,
+        "paper_trades": 0,
+        "resolved_paper_trades": 0,
+        "win_rate": None,
+        "total_pnl": 0.0,
+        "stale_drop_ratio": 0.95,
+        "lifetime_signals": 62,
+        "lifetime_opportunities": 54,
+        "lifetime_trades": 1,
+        "classification": "investigate",
+    }
+    assert auto_disable_candidate(proven_but_dry) is False
+    assert recommendation_tier(proven_but_dry) == "watch / investigate"
+
+
+def test_auto_disable_still_fires_for_zero_lifetime_yield():
+    # A source with high staleness, zero recent signals AND zero lifetime yield is
+    # genuinely useless -- removal must stay recommended.
+    genuinely_dead = {
+        "observed_records": 30,
+        "signals": 0,
+        "paper_trades": 0,
+        "resolved_paper_trades": 0,
+        "win_rate": None,
+        "total_pnl": 0.0,
+        "stale_drop_ratio": 0.95,
+        "lifetime_signals": 0,
+        "lifetime_opportunities": 0,
+        "lifetime_trades": 0,
+        "classification": "investigate",
+    }
+    assert auto_disable_candidate(genuinely_dead) is True
+    assert recommendation_tier(genuinely_dead) == "remove immediately"
+
+
+def test_stale_prune_path_vetoed_by_lifetime_yield():
+    # classify_source's stale-prune branch must also honor lifetime yield: a proven
+    # source in a dry window is "investigate" (-> watch), never "likely prune".
+    proven = {
+        "resolved_paper_trades": 0,
+        "total_pnl": 0.0,
+        "win_rate": None,
+        "observed_records": 8,
+        "signals": 0,
+        "paper_trades": 0,
+        "early_stale_drops": 4,
+        "analysis_stale_rejections": 1,
+        "lifetime_opportunities": 123,
+    }
+    assert classify_source(proven) == "investigate"
+    # Same shape, no lifetime track record -> still prunes (unchanged behavior).
+    unproven = dict(proven)
+    unproven.pop("lifetime_opportunities")
+    assert classify_source(unproven) == "likely prune"
+
+
+def test_recommendation_window_widens_signal_horizon():
+    # A(ii): zero-signal is judged over recommendation_window_days, not the 1-day
+    # display window. A source whose only SIGNAL fell 10 days ago (outside the
+    # display window, inside the rec window) and which has no source_stats lifetime
+    # record must NOT be removed -- the wide window sees the signal.
+    tmp = make_tmp_dir("source_scorecard")
+    try:
+        logs_root = tmp / "trades"
+        records = [
+            {
+                "type": "EARLY_STALE_DROP",
+                "reason": "stale_by_source_policy",
+                "source": "Quiet Wire",
+                "ticker": "KX1",
+                "ts": f"2026-05-28T00:{i:02d}:00+00:00",
+            }
+            for i in range(20)
+        ]
+        records.append(
+            {
+                "type": "SIGNAL",
+                "source": "Quiet Wire",
+                "headline": "fired 10 days before the display window",
+                "ts": "2026-05-19T00:00:00+00:00",
+            }
+        )
+        write_jsonl(logs_root / "live" / "trades.jsonl", records)
+        db_path = tmp / "missing_paper_trades.db"
+
+        # Display window = single day; rec window = 45d back -> includes the signal.
+        stats = summarize(
+            logs_root,
+            db_path,
+            since=parse_date_start("2026-05-28"),
+            until=parse_date_end("2026-05-29"),
+            exclude_test=False,
+            recommendation_window_days=45,
+        )
+        row = next(r for r in stats["rows"] if r["source"] == "Quiet Wire")
+        assert row["signals"] == 0  # display-window value unchanged
+        assert row["rec_signals"] == 1  # wide window sees the older signal
+        removed = {r["source"] for r in stats["grouped"]["remove immediately"]}
+        assert "Quiet Wire" not in removed
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_summarize_attaches_lifetime_funnel_and_vetoes_remove():
+    # End-to-end: stale + signal-less in the window, but a proven lifetime producer
+    # in source_stats. Its lifetime funnel is attached to the row and it is NOT
+    # recommended for removal -- it lands in watch / investigate instead.
+    tmp = make_tmp_dir("source_scorecard")
+    try:
+        logs_root = tmp / "trades"
+        write_jsonl(
+            logs_root / "live" / "trades.jsonl",
+            [
+                {
+                    "type": "EARLY_STALE_DROP",
+                    "reason": "stale_by_source_policy",
+                    "source": "NYT > World News",
+                    "ticker": "KX1",
+                    "ts": f"2026-05-28T00:{i:02d}:00+00:00",
+                }
+                for i in range(20)
+            ],
+        )
+        stats_db = tmp / "paper_trades.db"
+        _write_source_stats(stats_db, [("NYT > World News", 1287, 62, 54, 1)])
+
+        stats = summarize(
+            logs_root,
+            tmp / "missing_paper_trades.db",
+            since=None,
+            until=None,
+            exclude_test=False,
+            source_stats_db_path=stats_db,
+        )
+        nyt = next(r for r in stats["rows"] if r["source"] == "NYT > World News")
+        assert nyt["lifetime_signals"] == 62
+        assert nyt["lifetime_opportunities"] == 54
+        assert nyt["lifetime_posts"] == 1287
+        assert nyt["lifetime_trades"] == 1
+
+        removed = {r["source"] for r in stats["grouped"]["remove immediately"]}
+        watch = {r["source"] for r in stats["grouped"]["watch / investigate"]}
+        assert "NYT > World News" not in removed
+        assert "NYT > World News" in watch
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_format_group_rows_includes_lifetime_funnel():
+    # B: every recommendation row prints its lifetime funnel so "remove immediately"
+    # can never appear without the operator seeing the source's real yield.
+    rows = [
+        {
+            "source": "NYT > World News",
+            "source_family": "publisher_rss",
+            "disabled_reason": None,
+            "observed_records": 20,
+            "early_stale_drops": 20,
+            "analysis_stale_rejections": 0,
+            "signals": 0,
+            "paper_trades": 0,
+            "resolved_paper_trades": 0,
+            "win_rate": None,
+            "total_pnl": 0.0,
+            "stale_drop_ratio": 1.0,
+            "lifetime_posts": 1287,
+            "lifetime_signals": 62,
+            "lifetime_opportunities": 54,
+            "lifetime_trades": 1,
+        }
+    ]
+    out = "\n".join(format_group_rows(rows, top=5))
+    assert "life_posts=1287" in out
+    assert "life_sig=62" in out
+    assert "life_opp=54" in out
+    assert "life_trade=1" in out
+
+
+def test_read_lifetime_totals_reads_source_stats_table(tmp_path):
+    db = tmp_path / "paper_trades.db"
+    _write_source_stats(db, [("NYT > World News", 1287, 62, 54, 1)])
+    totals = read_lifetime_totals(db)
+    assert totals["NYT > World News"]["signals"] == 62
+    assert totals["NYT > World News"]["opportunities"] == 54
+    assert totals["NYT > World News"]["posts_seen"] == 1287
+    assert totals["NYT > World News"]["trades"] == 1
+
+
+def test_read_lifetime_totals_missing_db_or_table_returns_empty(tmp_path):
+    assert read_lifetime_totals(tmp_path / "nope.db") == {}
+    empty = tmp_path / "empty.db"
+    sqlite3.connect(str(empty)).close()
+    assert read_lifetime_totals(empty) == {}
+
+
+def test_read_lifetime_totals_coerces_null_counts(tmp_path):
+    # Load-bearing: a partially-written/legacy source_stats row with NULL counts
+    # must coerce to 0, never propagate None into has_lifetime_yield (None > 0
+    # raises TypeError and crashes the whole scorecard render).
+    db = tmp_path / "paper_trades.db"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(_SOURCE_STATS_DDL)
+        conn.execute("INSERT INTO source_stats (source) VALUES ('NullSrc')")
+        conn.commit()
+    finally:
+        conn.close()
+    totals = read_lifetime_totals(db)
+    assert totals["NullSrc"] == {
+        "posts_seen": 0,
+        "signals": 0,
+        "opportunities": 0,
+        "trades": 0,
+        "last_signal": None,
+    }
+    # And the coerced row must not crash has_lifetime_yield.
+    assert has_lifetime_yield({"lifetime_signals": 0, "lifetime_opportunities": 0,
+                               "lifetime_trades": 0}) is False
+
+
+def _tier_of(stats: dict, source: str) -> str | None:
+    for tier, rows in stats["grouped"].items():
+        if any(r["source"] == source for r in rows):
+            return tier
+    return None
+
+
+def test_lifetime_veto_expires_when_signal_dead_past_window():
+    # A(i) recency bound (PROFIT-ROT-002): a source proven long ago but signal-dead
+    # beyond the recommendation window LOSES veto immunity and is flagged again.
+    # Without the recency gate one ancient signal grants permanent immunity -- the
+    # inverse of the original bug, hiding "proven once, dead now" sources forever.
+    tmp = make_tmp_dir("source_scorecard")
+    try:
+        logs_root = tmp / "trades"
+        records = []
+        for src in ("Faded Wire", "Fresh Wire"):
+            records += [
+                {
+                    "type": "EARLY_STALE_DROP",
+                    "reason": "stale_by_source_policy",
+                    "source": src,
+                    "ticker": "KX1",
+                    "ts": f"2026-05-29T00:{i:02d}:00+00:00",
+                }
+                for i in range(20)
+            ]
+        write_jsonl(logs_root / "live" / "trades.jsonl", records)
+        stats_db = tmp / "paper_trades.db"
+        _write_source_stats(
+            stats_db,
+            [
+                # proven (5 signals) but last signal 80 days before `until` -> stale
+                ("Faded Wire", 500, 5, 0, 0, "2026-03-10T00:00:00+00:00"),
+                # proven and last signal 5 days before `until` -> still recent
+                ("Fresh Wire", 500, 5, 0, 0, "2026-05-25T00:00:00+00:00"),
+            ],
+        )
+        stats = summarize(
+            logs_root,
+            tmp / "missing_paper_trades.db",
+            since=parse_date_start("2026-05-29"),
+            until=parse_date_end("2026-05-30"),
+            exclude_test=False,
+            recommendation_window_days=45,
+            source_stats_db_path=stats_db,
+        )
+        # Veto expired -> flagged for removal; veto still valid -> protected.
+        assert _tier_of(stats, "Faded Wire") == "remove immediately"
+        assert _tier_of(stats, "Fresh Wire") == "watch / investigate"
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_rec_window_is_bounded_signal_outside_window_still_flags():
+    # A(ii) lookback is genuinely bounded: a SIGNAL older than the recommendation
+    # window does NOT rescue a source. A buggy "scan all history" would keep
+    # rec_signals>0 and silently hide it. (No source_stats -> no lifetime veto, so
+    # only the window math is under test.)
+    tmp = make_tmp_dir("source_scorecard")
+    try:
+        logs_root = tmp / "trades"
+        records = [
+            {
+                "type": "SIGNAL",
+                "source": "Old Echo",
+                "headline": "ancient signal 90 days before until",
+                "ts": "2026-03-01T00:00:00+00:00",
+            }
+        ]
+        records += [
+            {
+                "type": "EARLY_STALE_DROP",
+                "reason": "stale_by_source_policy",
+                "source": "Old Echo",
+                "ticker": "KX1",
+                "ts": f"2026-05-29T00:{i:02d}:00+00:00",
+            }
+            for i in range(20)
+        ]
+        write_jsonl(logs_root / "live" / "trades.jsonl", records)
+        stats = summarize(
+            logs_root,
+            tmp / "missing_paper_trades.db",
+            since=parse_date_start("2026-05-29"),
+            until=parse_date_end("2026-05-30"),
+            exclude_test=False,
+            recommendation_window_days=45,
+        )
+        row = next(r for r in stats["rows"] if r["source"] == "Old Echo")
+        assert row["rec_signals"] == 0  # ancient signal excluded -> window bounded
+        assert _tier_of(stats, "Old Echo") == "remove immediately"
+    finally:
+        cleanup_tmp_dir(tmp)

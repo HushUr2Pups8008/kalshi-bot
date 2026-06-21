@@ -23,18 +23,20 @@
 
 | Field | Value |
 |-------|-------|
-| Last Updated | 2026-05-16 (PROFIT-CUTOVER-001 / PROFIT-PHASE2-001 closed; active edge queue pointer corrected to PROFIT-EDGE-012 POST_FIX_NEW readiness) |
+| Last Updated | 2026-06-01 (Market-first fresh-pass assignment plan corrected after adversarial review under PROFIT-THRUPUT-001: partial infrastructure exists, but missing series metadata persistence, `tasks/`-owned metadata snapshots, `source_hints.py`-based query planning, retrieval/candidate-assignment counterfactual capture, and precision audit gates mean every-fresh-pass→signal remains shadow-first only.) Prior 2026-05-31: **v0.33.0 Track B increment deployed live** — PR #68 merged/restarted; Reddit ingestion disabled by default with no new 403 polling storm; B3.1 publisher desks added and ingesting; PRs #56-#65 still frame the paper-trade arc: the bot can paper-trade, but the binding blocker remains a structurally tiny edge surface plus current-source starvation. Next readout is opportunity/day over the v0.33.0 soak; deeper lever remains B2 market-driven retrieval, replay-EV-gated. Prior 2026-05-30: PROFIT-REPORT-001 implemented; PROFIT-THRUPUT-001 opened; PROFIT-ROT-002 shipped v0.32.6; output artifacts consolidated under the new `logs/reports`, `logs/state/derived`, and `logs/backups` contract. Paper-only posture preserved. |
+| Previously Updated | 2026-05-24 (PROFIT-PHASE3-003 registered as DEFERRED — first OOS corpus build blocked on paper-trade volume. Operator picked path A1 over A2/A3/A4 and over option B (storage cost). Schema audit found `cohort_extension` column already present — no migration work needed. Current state: 8/30 resolved paper trades = 27% of Rule 1 floor; pipeline (`build_corpus.py` → `replay_gate.py` → `ci_entry.py` → `.github/workflows/replay-ci-gate.yml`) wired end-to-end and verified by PR #46. PROFIT-PHASE3-002 pass-through is the operational interim; every CI run auto-passes with explicit "operator gate remains authoritative" note until A1 closes. Recent unblocks (PR #41-#44) may move the resolution rate enough to clear the 30-row threshold before the IC §16.7 30-day framework-review deadline; operator decides.) |
+| Previously Updated (older) | 2026-05-23 (Wave-1 backup-branch replay shipped via v0.30.2 / PR #16 — closes the open-fix bookkeeping flagged by `8b2473e` 2026-05-10; 5 backup-branch commits + 6 reviewer-driven follow-on remediations landed on `main`; 4 post-deploy observation canaries remain xfail-strict until soak completes; backup branch retained as forensic anchor through soak. See §2.2 Wave-1 Replay Closure for full SHA map.) |
 | Audit Source | Expanded profit-path audit — Codex 2026-04-20; incorporates prior migration audit from commit 2315a1d; Claude 2026-04-22 observation-window code-hygiene sweep; Claude 2026-04-23 S4.5b closure and PROFIT-RUNTIME-001 unblock; Claude 2026-04-23 PROFIT-CAL-001 emission-wiring investigation; Claude 2026-04-23 PROFIT-CAL-001 elevation to pre-live-trading blocker; Claude 2026-04-23 news-sources evaluation and PROFIT-SOURCE-001 registration of Reddit degraded-permanent state; Claude 2026-04-25 governance Phase 2 execution-time decision on signal-analyzer LLM unification deferral (PROFIT-LLM-001); Claude 2026-04-26 S4.5c soak evidence sweep on PROFIT-RUNTIME-001 ahead of operator travel; Claude 2026-04-26 systematic-debugging investigation of "always ends with no edge" symptom and identification + fix of PROFIT-EDGE-001 (main.py:688 over-strict no_keywords kill); Claude 2026-04-26 G1 simulation post-EDGE-001 + PROFIT-EDGE-002 multi-bug investigation (regime-classifier categorical-prior coverage gap, G4 threshold mis-calibration, sport-prefix blocklist gap KXPSL, structural-recompute silent failure logging); Claude 2026-04-26 PROFIT-EDGE-003 G1 calibration follow-up (G1=0.35→0.05) grounded in 154 production BLEND_DECISIONs over the 9-day no-edge window; Claude 2026-04-28 v0.29.58 post-deploy audit (~48h runtime since 2026-04-27T13:03:19Z LaunchAgent boot): EDGE-001/002/003 fix stack confirmed flowing via 34 BLEND_DECISION/OPPORTUNITY events on KXMOCTRUMP25-26-MAY01 with new EDGE-002 categorical priors firing in production (regime_weights (0.65, 0.25, 0.10) on KXTRUMPCHINA, regime_confidence 0.220 ≥ G4 = 0.20, scaled_confidence ≈ 0.084 ≥ G1 = 0.05, executor PAPER_MIN_EDGE = 0.02 the new binding constraint at edge = 0.0); kill point relocated cleanly from readiness G1 to executor; LLM emitted directional view on 0 real headlines vs the EDGE-001 9-day baseline of 5/666 (0.75%, within statistical noise for n=240); PROFIT-EDGE-004 registered for matcher signal-quality / market-mix root cause (the "directionally correct P0.5/P3.4 diagnosis" EDGE-001 Notes flagged as the long-term strategic answer, now operationally surfaced); PROFIT-OBS-003 registered for the OPPORTUNITY → SKIPPED arithmetic gap (31/34 silent exits); PROFIT-STRUCT-002 registered to close EDGE-002 sub-fix #4's runtime verification gap; **Claude 2026-05-01 13-day MacBook paper soak post-cutover audit (full v0.29.5 → v0.29.58 paper era, 2026-04-18T02:11:24Z paper_start_time → 2026-05-01T13:05:54Z final shutdown)**: lifetime trade-log totals 260 SIGNAL = 260 OPPORTUNITY = 252 BLEND_DECISION (8-event drift attributed to startup-probe + early-window emission ordering, within tolerance for an audit) → **17 SKIPPED + 3 PAPER_TRADE = 20 visible exits vs 260 OPPORTUNITY = 240 silent exits (92.3%)**, with 17/17 SKIPPED reasons identical (`"edge +0.0000 below min_edge 0.02"`); OPPORTUNITY edge distribution shows 255/260 at edge=0.0, 3 at -0.068 (the FISAEXTEND trades that *did* emit despite negative edge — see PROFIT-OBS-004), and **2 OPPORTUNITY at non-trivial positive edge (+0.06 and +0.064) that produced no PAPER_TRADE** — fresh evidence that PROFIT-OBS-003 swallows positive-edge candidates too, not just edge=0.0 candidates. PROFIT-OBS-003 promoted from MEDIUM/LATER to HIGH/NOW based on the corrected gap scope. CALIBRATION_CHECK fired 3 times in production (matching the 3 PAPER_RESOLUTION events) — small but real PROFIT-CAL-001 production-soak evidence, footnote updated. New entries opened: **PROFIT-OBS-004** (edge-sign display bug — `paper_trades.edge` records the YES-side edge regardless of trade side, confusing every retrospective audit), **PROFIT-CUTOVER-001** (MacBook → Mac Studio operational handoff: bot stopped on MacBook 2026-05-01T13:05:54Z; SQL-dump migration to Mac Studio via `transfer/macbook_handoff_2026-05-01/`; MacBook now archive-only), **PROFIT-PHASE2-001** (Phase 2 shadow-soak clock: launchd jobs `com.kalshi.governance.fast` + `.deep` were never bootstrapped on MacBook (`launchctl list` zero kalshi.governance entries), bootstrapped on Mac Studio 2026-05-01 ~14:00 UTC; §8.5 14-day acceptance target ETA 2026-05-15) |
 | Previous Tracker Name | `docs/macos_migration_debt.md` |
 | Current Tracker Name | `docs/profit_path_debt_log.md` |
-| Total Items | 67 |
+| Total Items | 71 |
 | Last Updated (P0 closure) | 2026-05-12 (PROFIT-API-001 — Kalshi API Contract Stabilization P0 closure landed on `feature/kalshi-api-contract-p0`; VERSION 0.29.59 → 0.30.0; P-1 through P-10 complete; PAPER-ONLY posture preserved) |
-| Open — HIGH | 3 |
-| Open — MEDIUM | 1 |
+| Open — HIGH | 5 (incl. PROFIT-THRUPUT-001 — opportunity-throughput reframe / readiness strategy) |
+| Open — MEDIUM | 2 |
 | Open — LOW | 1 |
-| Items IN_PROGRESS | 0 |
-| Items ACTIVE | 1 (PROFIT-EDGE-012 — active tracker entry; Cycle-17D HALTED 2026-05-10 pre-experiment per operator pick β; earliest readiness re-check 2026-06-14) |
-| Items BLOCKED | 1 (PROFIT-EVID-001 — awaiting contract decision on non-trading evidence intake) |
+| Items IN_PROGRESS | 1 (PROFIT-ALIGN-001 — architecture-review cluster; 9/12 sub-items active or opt-in-wired as of 2026-05-25 Codex follow-up, 1/12 documented-only, 1/12 cross-linked, 1/12 volume-gated for data-driven closure) |
+| Items ACTIVE | 2 (PROFIT-PIPELINE-001 — active architecture-gap tracker for paper-trade conversion attrition; PROFIT-EDGE-012 — active tracker entry, Cycle-17D HALTED 2026-05-10 pre-experiment per operator pick β, earliest readiness re-check 2026-06-14) |
+| Items BLOCKED | 2 (PROFIT-EVID-001 — awaiting contract decision on non-trading evidence intake; PROFIT-PHASE3-003 — first OOS corpus build deferred / blocked on paper-trade volume crossing the ≥30 resolved Rule 1 floor) |
 | Items RESOLVED | 3 (PROFIT-SEC-001 — Kalshi signing fail-fast, Phase-2 commit `ce70924`; PROFIT-OBS-006 — subreddit selector observability, Phase-2 commit `1d0714c`; PROFIT-DOC-001 — governance LLM gotchas in CLAUDE.md, Phase-2 commit `b1e1a0c`) |
 | Items COMPLETE | 54 (MAC-ASYNC-001, MAC-ASYNC-002, MAC-DB-001, MAC-DB-002, MAC-DB-003, MAC-DB-004, MAC-DB-005, MAC-CLI-001, MAC-CLI-002, MAC-DOC-001, MAC-DOC-002, MAC-DOC-003, MAC-FS-001, MAC-LOG-001, MAC-PLAT-001, MAC-TEST-001, MAC-TEST-002, MAC-TEST-003, MAC-TEST-004, PROFIT-TRACE-001, PROFIT-REPLAY-001, PROFIT-EVID-002, PROFIT-EXEC-001, PROFIT-OBS-001, PROFIT-OBS-002, PROFIT-PERF-001, PROFIT-VALID-001, PROFIT-STARTUP-001, PROFIT-CFG-001, PROFIT-STRUCT-001, PROFIT-STRUCT-002, PROFIT-CAL-001, PROFIT-RUNTIME-001, PROFIT-EDGE-001, PROFIT-EDGE-002, PROFIT-EDGE-003, PROFIT-EDGE-005, PROFIT-EDGE-006, PROFIT-EDGE-007, PROFIT-EDGE-008, PROFIT-EDGE-009, PROFIT-EDGE-010, PROFIT-EDGE-011, PROFIT-DOSSIER-001, PROFIT-GOV-001, PROFIT-GOV-002, PROFIT-DOC-002, PROFIT-OBS-003, PROFIT-OBS-004, PROFIT-CUTOVER-001, PROFIT-PHASE2-001, PROFIT-DEBT-OQ1-SHIM, PROFIT-SOURCE-001, PROFIT-DEBT-WAVE1-DRAFTS) |
 | Consolidated From | `docs/EDGE_STATUS.md` (merged 2026-05-09 → §Current Status); `docs/governance/edge-004-closure-path-tldr-v3.md` (lever map + EDGE-004 closure criteria merged 2026-05-09 → §Current Status §2.3) |
@@ -65,7 +67,24 @@
 <!-- Merged from docs/EDGE_STATUS.md on 2026-05-09 (docs/ consolidation initiative). EDGE_STATUS.md deleted post-merge. EDGE-004 closure-path TLDR v2.2 + v3 archived to docs/_archive/2026-05-09-docs-consolidation/. -->
 
 > **Operator-facing edge dashboard.** Refresh by commit. Single page; replaces 100+ doc index for "are we making money?" questions.
-> **Last refresh:** 2026-05-07 cycle-16E scorer-forensics run.
+> **Last refresh:** 2026-05-26 Codex paper-trade pipeline architecture audit.
+
+### 2.0 Current Profit-Evidence Non-Goals (2026-06-20 Grok Assessment Workoff)
+
+The 2026-06-20 Grok assessment is directionally useful, but its broad recommendations are not authority to loosen money gates or add live-risk surfaces. The active implementation lane is evidence/reporting first:
+
+- Build one consolidated profit-evidence report that joins paper expectancy, replay EV, readiness status, and realized-edge proof.
+- Add missing operator leading indicators (`opportunities/day`, opportunity age, skipped rate, per-ticker trades/day) to existing reports.
+- Add an offline sizing-policy replay matrix before any Kelly, exposure, cooldown, or drawdown-policy change.
+- Keep Polymarket work in paper/settlement-proof mode until resolved sample size and feedback-chain evidence are adequate.
+
+Explicit non-goals for this lane:
+
+- No live trading enablement.
+- No live sizing, bankroll, threshold, freshness, or readiness-gate changes.
+- No Polymarket live order path or cross-venue arbitrage execution.
+- No local multi-model / agent-ensemble architecture until replay evidence proves current single-primary LLM inference is the limiting defect.
+- No runtime DB, matcher-weight, service-manager, or restart mutation without explicit operator approval in that turn.
 
 ### 2.0 v0.30.x Data/Runtime Alignment Audit (2026-05-13)
 
@@ -131,7 +150,19 @@ Per R-9 single-tracker rule: this table is the work-state record for the 10-PR r
 
 | ID | Status | Owner | Branch | MR | Second-agent review | Operator gate | Restart req. | Depends on | Spec |
 |---|---|---|---|---|---|---|---|---|---|
-| PR-1 — scaffolding (signed-HTTP client skeleton) | **OPEN** | Either (bias Claude Code) | `feat/polymarket-pr1-signed-http-skeleton` (not yet created) | — | yes (signing/credentials surface per agent_collaboration.md) | merge only | no | — | design § 3 + § 9 PR-1 row |
+| Task 0 — contract prep / staged rollout record | **COMPLETE** (`0e2cf7e`; corrected by `98ce51d`) | Codex | `codex/polymarket-contract-prep` | #84, #85 | no | no | no | — | prep audit + tracker correction |
+| Stage 1 — venue namespace helpers | **COMPLETE** (`1e15247`) | Codex | `codex/venue-namespace` | #86 | no | no | no | Task 0 | actual implementation uses `venue` / `polymarket_us` terminology |
+| Stage 2 — venue client protocol | **COMPLETE** (`6a71d73`) | Codex | `codex/venue-client-protocol` | #87 | no | no | no | Stage 1 | protocol surface for multi-venue clients |
+| Stage 3 — disabled Polymarket config | **COMPLETE** (`4825aa1`) | Codex | `codex/polymarket-disabled-config` | #88 | no | no | no | Stage 2 | config remains disabled by default |
+| Stage 4 — Ed25519 auth helper | **COMPLETE** (`d74b306`) | Codex | `codex/polymarket-auth-helper` | #89 | no | no | no | Stage 3 | signing helper only; no live POST |
+| Stage 4B — secret hygiene + preflight | **COMPLETE** (`6a9158f`) | Codex | `codex/polymarket-secret-hygiene` | #90 | no | no | no | Stage 4 | no secret logging; same-day enablement preflight |
+| Stage 5 — binary market model / normalizer | **COMPLETE** (`77863e0`) | Codex | `codex/polymarket-normalizer` | #91 | no | no | no | Stage 4B | fail-closed binary market parsing |
+| Stage 6 — read-only public market client | **COMPLETE** (`2686c06`) | Codex | `codex/polymarket-public-client` | #92 | no | no | no | Stage 5 | GET-only public client |
+| Stage 6B — authenticated account probe client | **COMPLETE** (`8225139`) | Codex | `codex/polymarket-account-probe` | #93 | no | no | no | Stage 6 | account/balance probes; order placement hard-gated |
+| Stage 7 / design PR-4 — paper-trade venue persistence | **COMPLETE** (`934e1d7`) | Codex | `codex-paper-trade-venue` | #94 | no | replay override only | no runtime restart performed | Stage 6B | `paper_trades.venue TEXT NOT NULL DEFAULT 'kalshi'`; legacy fallback |
+| Design PR-8 — settlement reconciler | **COMPLETE** (`6cff081`) | Codex | `codex-polymarket-settlement-reconciler` | #95 | no | replay override only | no | Stage 7 | additive `SettlementReconciler`; reuses `_resolve_market_sync` by protocol |
+| Design PR-9 — venue-split observability | **COMPLETE** (`0c9c977`) | Codex | `codex-polymarket-observability-split` | #96 | no | replay override only | no | PR-8 | daily review / readiness split by `venue` |
+| Design PR-10 — paper-mode soak window | **OPEN / OPERATOR-ONLY** | Operator | — | — | no | yes | operator decides | PR-9 | N-day paper soak; no code files touched |
 
 Rules specific to this queue:
 
@@ -139,6 +170,7 @@ Rules specific to this queue:
 - A row may not transition to `COMPLETE` until the matching design § 9 acceptance criteria are satisfied AND a second-agent adversarial review has approved the diff.
 - The Day-1 invariants in design § 8 must be enforceable before PR-1 merges (in particular: `PolymarketSignedHttpClient.post(...)` raises `NotImplementedError`; `_allow_post: bool = False` constructor kwarg with no caller setting True; sign-failure raises rather than returning partial headers; ASCII-only runtime strings; no credential reads from `.env`; no new env vars; no Kalshi-side refactor).
 - Live-capable transitions (lifting the `NotImplementedError` raise; introducing `POLYMARKET_LIVE_TRADING_ENABLED`; first POST against the Polymarket REST API) are operator-gated per design § 11 and require dual-agent adversarial review per CLAUDE.md agent-collaboration policy.
+- Implementation note 2026-06-08: the landed rollout uses `venue='polymarket_us'` rather than the original design's `exchange='polymarket'` spelling. The replay-CI failure class on #94-#96 was the approved staged-integration override class: `tier=T3` / `InsufficientCorpusError: 0 usable corpora`; normal CI checks passed before each merge.
 
 ### 2.1 Edge Verdict
 
@@ -158,11 +190,11 @@ Cycle-16D charter-locked verdict label `extraction_fixed_but_information_frontie
 
 **Cycle-16E delivered by Codex (`c913ffd`); Claude N3+N4+N5+N6+N7+N9+N10 review complete.** Production-proxy gates ported faithfully line-by-line vs `executor.py:200-244`. Verdict per locked task-split outcome 2: `scorer_fixed_no_signal_confirmed`. **Cycle-17 §B/§C operator decision RESTORED (un-deferred).**
 
-Per cycle-17 skeletons, Cycle-17 routing:
+Per cycle-17 skeletons, Cycle-17 routing was restored after Cycle-16E:
 - §B source onboarding (2-4 weeks; mandatory pre-onboarding re-trace requirement RELAXED since anti-correlation hypothesis withdrawn)
 - §C strategic redesign / pause / paper-only research
 
-Operator picks. PROFIT-EDGE-011 active.
+Operator picked §C(b). `PROFIT-EDGE-011` is closed; execution moved to `PROFIT-EDGE-012`, which remains halted pending POST_FIX_NEW readiness (≥200 production-proxy-complete rows, ≥1 four-axis bin with ≥10 admissions, ≥95% completeness; earliest re-check 2026-06-14).
 
 #### Replay verdict log
 
@@ -179,7 +211,7 @@ Operator picks. PROFIT-EDGE-011 active.
 
 | wave | status | gate |
 |---|---|---|
-| Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **HISTORICAL PLAN — original 2026-05-08 cleanup/observability bundle descoped; OBS-003 only shipped 2026-05-09; does NOT claim edge** | exempt under IC §16 Rule 2 (mechanical / observability / governance) |
+| Wave-1 (OBS-005, MATCH-001, OBS-003, EXEC-002, GOV-003, Lever A.1) | **SHIPPED 2026-05-23 via v0.30.2** — 5 backup-branch commits replayed on `main` (PR #16 merged commit `d108558`; tag `v0.30.2` on `7dbfb47`). OBS-003 was already on main via `92b1d11`. Cluster does NOT claim edge — replay closes the open-fix bookkeeping flagged by `8b2473e` (2026-05-10 backup-branch verify). 4 post-deploy observation canaries (24h/48h/72h/7d) remain xfail-strict; close at soak completion. | exempt under IC §16 Rule 2 (mechanical / observability / governance) |
 | Wave-2 (Lever A.1+ feed onboarding, Branch C legal-analyst) | **HALTED POST-VERDICT** | Cycle-17 operator decision is closed; resume is gated on POST_FIX_NEW accumulation clearing IC §16 (earliest readiness re-check 2026-06-14). |
 | Wave-3 (Lever B G1=0.04, Lever C cross-series) | **HALTED POST-VERDICT — Lever B counterindicated** | loosening admission on a model with 0 IC §16-eligible slices on audited scorer widens losses without expected gain; same POST_FIX_NEW readiness gate as Wave-2. |
 | Branch D escalation (PROFIT-LLM-001 / P4-GATE Appendix A) | **HALTED POST-VERDICT** | each candidate fix needs replay evidence under audited scorer; same POST_FIX_NEW readiness gate as Wave-2. |
@@ -212,6 +244,51 @@ When that row exists, the slice it identifies (e.g., "Reuters × KXTRUMPCHINA ×
 | Bot health | GREEN (`scripts/bothealth.sh` cycle-13) |
 | Gate-6 capacity | **AT RISK** — 0.663 reviewable fraction at 80/day budget; needs Path 1 (raise budget to ≥169) per `2026-05-06-gate-6-capacity-resolution-plan.md` |
 | §8.5.2 carve-out commits surfaced | 5 (3 INVOKED, 2 OUT-OF-SCOPE; gate 7 clean via attestation) |
+
+#### Wave-1 Replay Closure (2026-05-23 — v0.30.2)
+
+Closes the open-fix bookkeeping flagged by `8b2473e` ("backup-branch verify" Task B.4, 2026-05-10), which audited `origin/backup/wave-1-dry-run-2026-05-05` and found 5 of 6 commits still missing on `main`.
+
+**Replay path (PR #16, merged `d108558`, tag `v0.30.2` on release commit `7dbfb47`):**
+
+| Backup SHA | Ticket | Replay SHA on main | Notes |
+|---|---|---|---|
+| `e3d4e8d` | PROFIT-GOV-003 | `2b2c5fa` | `governance_monitor` path + event-type-set fix |
+| `0531367` | PROFIT-OBS-005 | `fd5d87a` | cooldown sentinel `0.0` → `float("-inf")` |
+| `edf38c1` | PROFIT-MATCH-001 (B') | `b50d6d3` | token-guard predicate inversion |
+| `5828ad2` | PROFIT-EDGE-004 A.1 | `cdfec79` | source-class classifier 10-token expansion (partial cherry-pick — VERSION/CHANGELOG/README hunks stripped because main already at 0.30.1) |
+| `9d6cce3` | PROFIT-EXEC-002 | `540ef54` | new series-correlation guard in BlendTask |
+| `921c275` | PROFIT-OBS-003 | already landed via `92b1d11` | skipped — equivalent on main since 2026-05-09 |
+
+**Reviewer-driven follow-on remediations landed on the same branch before merge** (silent-failure-hunter findings; operator-elected against the silent-failure-hunter's recommendations on MATCH-001):
+- `0127f84` — clamp `series_correlation_window_seconds` to non-negative (3-reviewer consensus)
+- `8117591` — `_series_prefix` raises on empty ticker (`risk_review.md` enforcement)
+- `1eb65aa` — record series enqueue BEFORE queue put with `.pop(prefix, None)` revert-on-fail (closes the `CancelledError` window that could re-introduce the FISA multi-trade scenario)
+- `a498d8b` — wrap MATCH-001 (B') suppression-writes in `try/except` (operator override matching pre-existing series-fetch precedent at `market_matcher.py:460`)
+- `76a571b` — pin empty-ticker `pytest.raises` via `match=` (python-reviewer nit)
+- `95fe040` — `log.warning` before guard revert (python-reviewer nit; adds module-level `log = get_logger("blend_task")`)
+
+**Wave-1 does not claim edge.** The cluster is mechanical/observability/governance per IC §16 Rule 2; the replay restores already-specced behavior that should have been on `main` since the original 2026-05-04 authorship. Edge claims remain gated on the POST_FIX_NEW corpus per row 2.2 above.
+
+**Post-deploy observation canaries** in `tests/test_wave1_postdeploy_validation_windows.py` remain `xfail-strict`. Operator closes each by appending the `<TICKET> Nh validation: PASS` line to `docs/_archive/governance/wave-1-post-deploy-observation-plan.md` then removing the corresponding decorator:
+- OBS-005 24h
+- OBS-003 48h
+- MATCH-001 72h
+- EXEC-002 7d
+
+**Backup branch `backup/wave-1-dry-run-2026-05-05` retained.** Slated for deletion only after the EXEC-002 7d observation window passes (earliest 2026-05-30 + soak success). Provides the only forensic anchor for the replay path if a rollback becomes necessary.
+
+**Known follow-ups deferred** (silent-failure-hunter findings filed but not blocking; paper-mode only, no live-money exposure):
+- `_recent_series_enqueues` unbounded growth in long-uptime processes (bounded by Kalshi ~9k series; reset on restart).
+- Pre-existing DB state-poisoning DoS at `trading/executor.py:98` (portfolio-seed writer with future-timestamp `latest_ts` could permanently block a ticker until restart). Surfaced by OBS-005 security review; NOT introduced by the replay.
+
+#### v0.30.2 OOS Cohort Marker (2026-05-23T21:22:16Z)
+
+The bot restarted on the v0.30.2 release commit at **2026-05-23T21:22:16Z** (PID 19702, kickstart via launchctl after PR #16 merge). This timestamp is the formal start of the **post-v0.30.2 OOS cohort window** that the rapid-learning framework v2 (`docs/superpowers/specs/2026-05-23-paper-mode-rapid-learning-framework-design.md` §3 Q9) needs for an out-of-period replay corpus.
+
+The eventual I-1 corpus builder will consume this window. Until then, a minimal read-only seed extractor lives at `scripts/edge_replay/oos_corpus_seed.py` and produces a JSONL annotated with cohort metadata (`cohort_tag="POST_V030_2_OOS_SEED"`, `corpus_window_start_utc="2026-05-23T21:22:16Z"`, `oos_seed_version=1`). Operator runs the extractor whenever a snapshot is needed; the script is idempotent.
+
+**Status as of 2026-05-23:** bot accumulating rows organically. Run `python scripts/edge_replay/oos_corpus_seed.py` at any time to capture the current state. Per framework v2 stamped default Q1 (≥500 rows across corpora used in a gate) the seed is gating-usable only when the row count crosses that threshold; expect ~30+ days at current ~0.8 trade/day rate, faster if v0.30.2 fixes increase the trade rate.
 
 ### 2.3 EDGE-004 Closure Path
 
@@ -285,6 +362,322 @@ Probability of intake-side closure: ~30 % + (1 − 0.30) × 0.40 = **~58 %**. Re
 ## Current Open Profit-Path Items
 
 These items were added during the 2026-04-20 expanded audit. They do not replace the completed `MAC-*` migration work below; they extend the same single tracking mechanism to all issues that could impair profitable, safe, auditable trading.
+
+---
+
+### PROFIT-MATCH-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-MATCH-002 |
+| **Title** | Kalshi matcher did not apply the defining-token guard (PR #130 gap) |
+| **Category** | Opportunity Throughput / Matcher Feedback |
+| **Severity** | HIGH (throughput; binding constraint on trade volume) |
+| **Status** | IMPLEMENTED on branch `fix/kalshi-matcher-defining-token-guard` (`12df3a0`, v0.33.1) — PENDING operator merge gate |
+| **Priority** | NOW |
+| **primary_agent** | Claude Code (implement) |
+| **second_agent_review_required** | YES — done: `kalshi-safety-reviewer` (APPROVE-WITH-NITS on code) |
+| **operator_gate_required** | YES — touches signal-generating ingestion that drives trade decisions; operator approves merge/push |
+| **recommended_workflow** | high-assurance (implement → independent adversarial review → operator gate) |
+| **safe_while_bot_running** | YES to merge code (read-time guard, only raises weights to 1.0); does NOT mutate live state |
+| **recommended_execution_mode** | paper (no live-mode change) |
+
+**Description**
+The matcher-feedback loop's only negative signal is verdict `false_positive_neutral` (the LLM saw the *right* market but the headline gave no directional edge). A correctly-matched high-traffic market (e.g. KXVISITIRAN, total≈1058) drives its own ticker-defining token (`iran`) to fp_rate≈0.97, and the loop floors that token to `DOWNWEIGHT_FLOOR=0.10`. The Kalshi matcher applies `score *= mean(per-token weights)` then drops candidates `< 0.06`, so a single-overlap match on a floored defining token scores ≈0.012 and the correct market silently leaves the candidate funnel (a 14-day-window oscillation, not permanent). PR #130 added `is_market_defining_token` + guarded `match_feedback.get_token_weight` and the Polymarket runtime, but the **Kalshi** `analysis/market_matcher.py` inlines the weight lookup in `_combined_token_downweight` / `_token_downweight_details` and never calls `get_token_weight`, so it stayed unguarded.
+
+**Why it matters to profitability / safety / reliability**
+CLAUDE.md identifies opportunity throughput (news→tradeable-market match) as the current binding constraint on trade volume; go-live readiness has been stuck at 14/20 resolved trades for 5 straight daily reports. Self-poisoning the matcher against correctly-matched markets directly suppresses the trade volume needed to clear the readiness bar — without improving precision (the match was never wrong).
+
+**Evidence / Source**
+- Diagnosed from `logs/reports/performance/analysis_20260610_1100.txt` (workflow `wmb18mrf8`).
+- `analysis/market_matcher.py` `_combined_token_downweight` (:184) / `_token_downweight_details` (:206) inline `weights.get(...)`; no `get_token_weight` call (confirmed `count=0` in HEAD).
+- PR #130 (`0af4cef`) touched match_feedback/signal_analyzer/polymarket only — not market_matcher.
+
+**Fix (implemented)**
+Apply the already-merged `is_market_defining_token` predicate in the Kalshi matcher scoring path (force weight 1.0, skip downweight) and mirror it in `scripts/simulations/matcher_weight_replay.py::score_multiplier` for replay-CI fidelity. The guard only ever raises a weight to 1.0 — it never bypasses the structural precision gate (geo-entity / 2+ generic) or the `< 0.06` score threshold, so it cannot admit a structurally-invalid match. Tests: `tests/test_market_matcher.py::TestDefiningTokenGuard`, `tests/test_match_feedback.py::TestIsMarketDefiningToken` + `test_defining_token_bypasses_floored_weight`, `tests/test_matcher_weight_replay.py` parity test.
+
+**Open follow-up — PROFIT-MATCH-002a (precision trade-off, operator decision)**
+The shared predicate `is_market_defining_token` = `len(token) >= 4 and token.lower() in market_prefix.lower()` is blunt: it also protects generic words that are merely substrings of compound tickers — e.g. `KXTRUMPTOPIC:trump`, `KXLEAVECONGRESS:congress`, `KXSENATEREC:senate`, `KXVOTESAVEAMERICA:vote`, `KXTRUMPSUPREMELEADER:leader` (≈37 currently-downweighted entries forced to 1.0). The `KX…TRUMP…:trump` cases are exactly the entity-prefix bridges PROFIT-MATCH-001 (B') chose NOT to auto-preserve. Single-entity matches are still backstopped by the `_pure_single_entity` suppression path, so the residual risk is multi-generic-token matches losing a legitimate bridge-token downweight. This trade-off was accepted by PR #130 for `get_token_weight`/Polymarket; this item extends it to Kalshi consistently. If precision degrades, refine the predicate (e.g. distinguish subject words from generic substrings, or exclude a small denylist of ubiquitous bridge tokens) as a separate operator-gated change touching all venues.
+
+**Acceptance Criteria**
+- Kalshi matcher keeps a market's own ticker-defining token at full weight (regression test pins `0.12` survives the 0.06 gate, NOT `0.012`).
+- No EV/confidence/score-threshold/Kelly/sizing/readiness gate behavior changed.
+- Replay sim stays in parity with production scoring.
+- Operator approves merge; precision trade-off (002a) explicitly accepted or refinement scheduled.
+
+> **Note (separate, pre-existing):** `data/matcher_token_weights.json` is dirty in the working tree (runtime aggregator overwrote the committed cold-start seed: `KXCABLEAVE:trump` `_seed_status`/`_seed_reason` dropped, total 2→982). This breaks `tests/test_match_feedback.py::TestSeedWeightsFile::test_seed_provisional_entries_include_audit_findings` independent of the code change. It is the documented `data/*.json live-churn` condition and is **not** part of `12df3a0`. Operator decides whether to restore the seed (`git checkout HEAD -- data/matcher_token_weights.json`) or promote the runtime snapshot via a separate review.
+
+---
+
+### PROFIT-REPORT-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-REPORT-001 |
+| **Title** | Go-live readiness (report §8) measured on lifetime/frozen-polluted cohort; two-cohort win-rate ambiguity |
+| **Category** | Reporting / Readiness-Gate Transparency |
+| **Severity** | MEDIUM (operator-decision quality; not a trading-path defect) |
+| **Status** | IMPLEMENTED on branch `fix/golive-readiness-cohort-transparency` (v0.33.2) — PENDING operator merge gate |
+| **Priority** | NOW |
+| **primary_agent** | Claude Code (implement) |
+| **second_agent_review_required** | YES — done: `kalshi-safety-reviewer` (APPROVE-WITH-NITS; gate-unchanged claim could not be refuted) |
+| **operator_gate_required** | YES — readiness-gate display surface; operator approves merge. Switching the gate to post-P0 is a SEPARATE operator-only decision (loosens the gate). |
+| **recommended_workflow** | high-assurance (implement → independent review → operator gate) |
+| **safe_while_bot_running** | YES — reporting-only (`scripts/`); no execution/sizing/gate-computation change |
+| **recommended_execution_mode** | paper (no live-mode change) |
+
+**Description**
+Section 8 (`section_golive_readiness`) computes win-rate and start-vs-now drawdown over the LIFETIME un-cohorted DB cohort, which includes the frozen pre-P0 trades that sections 7b/7d/7e exclude as non-representative. The 2026-06-10 review showed this reads as 43% win / 38.2% drawdown (lifetime) vs 60% / smaller (post-P0). Section 2 (placed trades, in-window) reports 60% while §8 reports 43%, both previously bare-labeled "Win rate" — high operator-misread risk. The drawdown metric is also start-vs-now, not peak-to-trough.
+
+**Why it matters**
+The go-live gate is the highest-consequence report section; unlabeled lifetime/frozen-polluted numbers can mislead the paper→live decision. (Note: post-P0 has only 5 resolved trades, so the `min_resolved=20` criterion fails under either cohort — the binding constraint is trade VOLUME, surfaced by PROFIT-MATCH-002, not win-rate/drawdown.)
+
+**Fix (implemented — transparency, not gate-loosening)**
+(1) §8 labels its cohort basis LIFETIME (includes frozen pre-P0); (2) drawdown labeled "decline from starting bankroll, not peak-to-trough" + informational true peak-to-trough added; (3) INFORMATIONAL post-P0 view added (resolved/win-rate/peak-to-trough, marked "NOT the gating basis"); (4) P0-boundary-missing guard mirrors 7b/7d/7e; (5) §2 labeled IN-WINDOW with cross-reference. The authoritative PASS/FAIL is byte-for-byte unchanged (lifetime cohort, same `GO_LIVE_*` thresholds) — verified by `test_golive_post_p0_view_is_informational_not_gating`.
+
+**Open follow-up — PROFIT-REPORT-001a (operator decision)**
+Should the go-live gate judge on the post-P0 (current-regime) cohort instead of lifetime? That would loosen the gate (excludes frozen losses) and is an explicit operator/safety decision — NOT applied here. Note it would not currently make the bot READY anyway (post-P0 resolved 5/20 and drawdown both still fail).
+
+**Acceptance Criteria**
+- §8 cohort basis is labeled; post-P0 view present and marked informational.
+- Authoritative gate verdict unchanged (regression test enforces post-P0 cannot flip a lifetime FAIL to READY).
+- Peak-to-trough reported distinct from start-vs-now; §2 labeled in-window.
+- Operator approves merge; the post-P0-gating question (001a) explicitly decided.
+
+---
+
+### PROFIT-VENUE-PARITY-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-VENUE-PARITY-001 |
+| **Title** | Kalshi vs Polymarket signal-treatment parity audit — 25 divergences, root-cause `series_ticker` collapse |
+| **Category** | Cross-venue parity / signal-quality / learning-loop fidelity |
+| **Severity** | HIGH (the harm cluster throttles Polymarket paper-trade volume on the binding constraint) |
+| **Status** | AUDITED 2026-06-13 (multi-agent workflow); Wave 1 IMPLEMENTED (v0.33.15); Wave 2 IMPLEMENTED (v0.33.16, this PR — code+migration tool landed; operator executes the data reset at restart); Wave 3 deferred/volume-gated |
+| **Owner** | Audit: workflow. Wave 1/2: Claude (adversarial review: kalshi-safety-reviewer + replay-evidence-reviewer). Wave 2 data migration + restart: operator-gated. Wave 3: operator-gated (behavioral / volume-gated). |
+
+**Audit method.** Multi-agent dynamic workflow: 6 codebase-wide sweeps → 80 raw findings → 25 canonical divergences (V01–V25) → adversarial per-divergence classification (read actual code, skeptical of "intentional") → per-subsystem patch design → synthesis. Verified against `main` v0.33.14 (commit 9b2e179).
+
+**Classification (25):** 6 HARMFUL (V03, V07, V08, V17, V18, V22) · 5 INCONSISTENT_NEUTRAL (V06, V10, V13, V15, V25) · 7 INTENTIONAL_USEFUL (V01, V09, V11, V12, V19, V21, V23) · 7 NECESSARY_TRANSPORT (V02, V04, V05, V14, V16, V20, V24).
+
+**Central finding — the decision core is venue-blind by construction.** `blend()`, `kelly_bet()`, and `evaluate_readiness()` (G1–G6) carry NO venue/series parameter; both venues converge on the shared `_route_analysis_through_blend → process_fast_lane_result` path. PM's "separate runtime" (V01) is only the FRONT half (fetch+match — genuinely different transport: slug tickers, ask-only, public client, politics allowlist); it rejoins the identical decision back-half. So gating/sizing parity already holds; every real divergence is in the FEEDBACK/LEARNING and RECORDING layers.
+
+**The harm cluster is ONE defect with five blast radii.** Every PM market reports `series_ticker='polymarket_us'` (the venue constant; `polymarket/models.py:33-34`, re-hardcoded `candidate_adapter.py:73`). That single overloaded field collapses match-feedback token buckets (V17), `keyword_outcomes` (V18), calibration (V15), per-family reporting (V21), and the replay-corpus family filter (V22) into one venue-wide bucket; and the `is_market_defining_token` rescue (a substring test vs the prefix) can never fire against the constant (V08). **V07** is the active poisoner: the L2-a `false_positive_neutral` score-gate is a permanent no-op for 100% of PM matches because PM never sets the generic `match_score` meta key (`signal_analyzer.py` reads only `match_meta['match_score']`; PM emits only `polymarket_match_score`), so every PM neutral verdict counts toward downweighting regardless of match quality. **Live proof on disk:** `data/matcher_token_weights.json` had 62 `polymarket_us:*` keys, 43 floored ≤0.11 — subject tokens `election` (w=0.10, n=1366, fp_rate=0.96), `carolina` (n=983), `governor` (n=1074) all at the floor, 0 pinned. In `match_polymarket_markets` the score is multiplied ~10× down → valid PM markets drop below `min_score` → never surface → throttles PM paper volume on the documented binding constraint (opportunity throughput).
+
+**Keep-as-is (transport / intentional, with evidence):** V02 ask-only (venue publishes no bids; EV gate symmetric on the ask). V04 KX-blocklist vs category-allowlist (API-shape-forced; same political-only set). V05 status vocab differ. V09 PM pure-fast regime (rc=1.0 clears G4 with no dilution — correct for a fast-lane-only venue; routing PM through `_time_prior` would DROP rc to ~0.22). V11 candidate adapter (supplies Kalshi-shaped regime_weights/provenance the raw normalizer lacks). V12 venue default 'kalshi' (additive-migration pattern; PM stamps end-to-end, test-pinned). V14 execution refetch is Kalshi-RSA-PSS-only (a PM slug would 404). V16 dual settlement FETCH (API-shape-forced; both converge on `_resolve_market_sync`). V19 source_credibility keys on publisher not venue (by design). V20 MTM formula divergence (forced by ask-only; the tested PROFIT-DRAWDOWN-001c conservative form). V21 per-family reporting: V03 makes the persisted/DB `series_ticker` per-family, but whether the aggregate `pipeline_feedback_report` `market_mix.by_prefix` groups per-family for PM is NOT assumed-resolved by V03 — it depends on whether the emitted event carries the per-family `series_ticker` (the parity tests use venue-level fixtures; `_market_prefix` reads `market_prefix`→`series_ticker`→`venue`). Report-layer per-family grouping is a tracked follow-on; V21 stays classified intentional/low-priority. V23 feature-gate/separate-creds (deliberate staged-rollout/transport boundaries). V24 WS price-fade Kalshi-only (PM price-move signal already replicated via polling).
+
+**Migration waves (fix order is load-bearing: V07 gate BEFORE V03 rekey, or the rekey re-poisons the fresh per-family keys).**
+
+- **Wave 1 — mechanical / no decision change (this PR, v0.33.15, no operator gate beyond review).** (a) `tests/test_decision_layer_venue_equivalence.py` — the regression net: signature guard that blend/kelly_bet/evaluate_readiness never grow a venue/series param + cross-venue readiness/blend/kelly equality + V13 fast-lane-exempt pin. (b) `polymarket/domain_key.py::pm_domain_key()` — the CANONICAL per-family PM key (resolves open-risk #1: one derivation, namespaced `polymarket_us:<stem>`, preserves the coarse leading segment); tested, unused at runtime, consumed by Wave 2. (c) V10 ISO-date alternative in `_TICKER_DATE_PATTERN` (diagnostic-only). (d) V12 `[VENUE_DEFAULT]` warning when the kalshi default fires for a non-KX ticker. No persisted-state mutation; safe while the bot runs.
+- **Wave 2 — V07 gate + V03 root rekey (behavioral-paper; IMPLEMENTED v0.33.16).** **V07** (`polymarket/paper_runtime.py` `PolymarketMatchMeta.as_dict()`): now emits the generic `match_score` + `matched_tokens` keys alongside the `polymarket_*` aliases, so `signal_analyzer`'s MATCH_LLM_REVIEW carries `match_score` and the L2-a `false_positive_neutral` score-gate fires for PM (was a permanent no-op). `signal_analyzer.py` review-venue detection switched `== "polymarket_us"` → `.startswith("polymarket_us")`. **V03** (`polymarket/models.py` `PolymarketMarket.series_ticker`): one-line delegate to `pm_domain_key(self.market_id)` → per-family `polymarket_us:<stem>` instead of the venue constant; threaded onto `PolymarketExecutionMarket` via `candidate_adapter.py`. This auto-fixes V17 (re-scopes token buckets), V15 (per-family calibration key), V18 (per-family keyword_outcomes key), and re-arms V08. **V08 over-fire fix** (`analysis/match_feedback.is_market_defining_token`, from kalshi-safety-reviewer NOTE): strip the constant `polymarket_us:` venue segment before the substring test so generic substrings (`market`, `poly`) don't read as defining across all PM families; KX prefixes untouched. **V22** (`scripts/edge_replay/build_corpus.py` `_row_families`): venue-aware so a coarse `polymarket_us` family query matches per-family PM rows; Kalshi branch byte-identical. **Migration tool** (`scripts/reset_polymarket_token_weights.py` + tests): resets the poisoned `polymarket_us:*` keys (68 on disk) from `matcher_token_weights.json` AND the `polymarket_us*` FP-counter rows from `match_token_fp_counters.db` (else the next aggregation re-derives them); GLOB (not LIKE) predicate so the literal `_` in `polymarket_us` is not a wildcard; backs up both files; dry-run default. The `polymarket_match_score`/`polymarket_matched_tokens` alias retirement (original P2) is DEFERRED — the dual-key emit is harmless (single-read downstream, no double-count, verified by review) and retiring the aliases is a pure cleanup with its own blast radius. **Gate satisfied:** dual independent adversarial review (kalshi-safety APPROVE-WITH-CAVEAT, both NOTEs remediated; replay-evidence ADMIT under PROFIT-PHASE3-002 bootstrap exemption — no PM corpus, 0/5 PM resolved, corrupt weights discarded not relied upon). **Operator-executed at restart:** bot STOPPED → `python scripts/reset_polymarket_token_weights.py --execute` (backup auto) → restart on the V03/V07 code. PM cold-starts at weight 1.0 (fail-safe, no penalty); KX* untouched.
+- **Wave 3 — deferred / volume-gated (each own gate; do NOT co-apply).** V22 replay family filter (needs V03-data: additive `paper_trades` family column). V18 per-domain keyword_outcomes (GATED on PM (keyword×domain) volume ≥ MIN_SAMPLES=10 — premature split pins multipliers to 1.0, strictly worse). V15 category-sourced calibration suffix (GATED on `_ALLOWED_CATEGORIES` widening). V16 decouple PM auto-resolve from the live `polymarket_us_enabled` flag (state-transition change). V23 make key_id/secret requirement conditional on `live_trading_enabled` not `enabled` (so PM paper runs on the public client without live creds; money-config-adjacent). V06 factor a shared matcher scoring core (replay-EV-mandated, lowest priority).
+
+**Open risks:** (1) RECONCILE root derivation — `pm_domain_key` is now the single canonical PM family key; any Wave 2/3 consumer (resolve_family, series_ticker) MUST delegate to it, never re-derive. (2) Learn/apply key-space must stay identical (both route through `market_prefix_for`; test-pin). (3) `matcher_token_weights.json` is LIVE CHURN — migration only with the bot stopped (see [[feedback_main_sync_stash_gotcha]], [[project_live_churn_test_flakes]]). (4) V08: the over-fire introduced by V03 (the constant `polymarket_us` venue segment in every per-family prefix made generic substrings `market`/`poly` read as "defining") is FIXED in v0.33.16 by stripping the venue segment before the substring test. The residual word-level inertness remains (PM slug stems are abbreviations: `usgub` not `governor`, so the stem rarely contains a headline subject token) — bucket fragmentation (V17) fixes the dominant harm; abbreviation→subject mapping is a tracked follow-on, not assumed. (5) PM cold-start is intentional + fail-safe (weight 1.0 = no penalty) but discards ~weeks of corrupt FP learning — operator must accept. (6) PM lacks the analyzer-stage staleness re-check (V01 residual; intake staleness IS shared) — small over-admission, tracked.
+
+**Wave 2 follow-on — PROFIT-ALIGN-004 exposure-cap granularity (IMPLEMENTED v0.33.17, 2026-06-15).** The since-restart assessment + adversarial review found the per-prefix concentration cap (`PROFIT-ALIGN-004`, `cfg.max_open_positions_per_prefix=2`) keyed on `ticker.split("-",1)[0]` — for Kalshi the contest series (correct) but for Polymarket the market-maker slug token (`ewc-usse-me-…` → `ewc`), lumping ~30 independent PM contests into one 2-slot bucket and over-throttling the binding-constraint venue. This is a consequence of V03: per-family identity now exists (`pm_domain_key`) but the cap was still using the coarse stem. Fix: `trading/executor.py::_correlated_exposure_prefix(market)` delegates PM grouping to `pm_domain_key` (honoring open-risk #1 — single canonical key, no re-derive) and strips the `polymarket_us:` namespace so the stem startswith-matches the ticker; same-contest multi-outcome (dem/rep) still capped together, independent contests freed. Kalshi byte-identical (`pm_domain_key` unreached for KX*; defensive `try/except ValueError` fallback). EV direction is throughput-positive (frees independent PM entries) but magnitude unproven (0 PM resolutions) → admitted under the `PROFIT-PHASE3-002` bootstrap exemption with dual independent review. Watch-item: re-check after PM resolutions accrue whether `cap=2` is the right ceiling for the freed surface.
+
+**Post-capfix follow-ons P2/P3/P4 (IMPLEMENTED v0.33.18, 2026-06-16; surfaced by the 2026-06-16 since-restart assessment).**
+- **P2 — PM settlement reconcile batch-abort isolation.** `SettlementReconciler.reconcile()` only caught `SettlementNotFound`, so a not-found `ValueError` from `public_client` (unfound long-dated slug) aborted the whole remaining PM settlement batch per cycle (5 aborts 2026-06-16 01:14–03:15). Latent: the first real PM resolution (~2026-06-23) could be silently skipped behind an unfound sibling. Fix: narrow not-found `ValueError`→`SettlementNotFound` translation in `get_settlement` + per-ticker `except Exception` safety net (logs loudly at ERROR w/ ticker + traceback, increments `result.errors`, continues; `SettlementDriftError` still hard-halts) + `main.py` summary surfaces `errors=` with an all-errors-outage sentinel. Settlement state/observability path — no silent swallow (risk_review).
+- **P3 — venue-aware `blend_task._series_prefix`** (twin of the #148 cap fix, one layer up in the `series_correlation_in_window` guard). Same coarse-prefix PM over-grouping; same `pm_domain_key` delegation fix; Kalshi byte-identical. $0 realized cost to date (the 3 in-window PM correlation-skips were all edge ≤ 0) — admitted under the bootstrap exemption.
+- **P4 — go-live drawdown gate reconciled onto MTM equity** (`PROFIT-DRAWDOWN-001c` enforcement-layer completion; #144 fixed only the §8 report). `_check_go_live_gates` now uses `compute_open_position_marks` MTM basis (delegate), **fail-closed** (marking error → gate FAILS, never passes — stricter than the report's offline notional fallback). High blast radius (live-cutover authority) but only reachable via the kill-switch-gated `--go-live` path; stays NOT READY today. Operator merge-gated.
+Closes the remaining items the assessment surfaced; the prior 5 assessment recommendations stay rejected (re-tested). Full suite green (2707 passed).
+
+---
+
+### PROFIT-PM-FEEDDROP-001 — Polymarket transient feed drop + structural by-slug settlement gap
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-PM-FEEDDROP-001 |
+| **Status** | RESOLVED (v0.33.19, 2026-06-17) — settlement reach + marking fallback shipped; id-capture/by-id-endpoint rejected as infeasible |
+| **Severity** | HIGH (the first-ever PM resolution would never auto-settle) |
+| **Owner** | Investigation+impl: Claude (workflow). Review: kalshi-safety + silent-failure + replay-evidence. Operator: merge gate. |
+
+**Finding (surfaced by the 2026-06-17 since-restart assessment).** The Polymarket feed dropped the entire election-contest category ~2026-06-17T10:13Z (markets 418→201 sports-only) and RECOVERED ~13–14:13Z (back to ~412). Root cause = UPSTREAM Polymarket re-scoping the live `/v1/markets?closed=false` listing, NOT a bot regression (#149 left PM fetch untouched). During the ~3–11h gap all 14 held PM positions' slugs returned `market not found` (unpriceable / unsettleable). The collapse was TRANSIENT — markets reappear — and P2 (#149) already isolates per-ticker not-found in `reconcile()` so a transient gap no longer aborts the batch and self-heals on recovery.
+
+**Decisive deeper bug (live-probed).** Independent of the transient drop, `_find_market_payload_by_slug_or_id` paginated `closed=true` only to the oldest ~500–1000 ids (cursor exhausts early), so a resolved HIGH-id market was structurally unreachable — id 8594 raised "not found" under the scan but `?slug=` returns it instantly; the held positions sit at id 40542/44051. **By-slug auto-settlement would `SettlementNotFound` forever once they resolved.** This (not the transient drop) is why `first_resolution_at_risk = yes`.
+
+**Shipped (v0.33.19).** FIX-1 (`public_client.py`): server-side exact-match `?slug=`/`?id=` filter (crosses the closed boundary; defensive re-confirm; same not-found `ValueError` contract → P2 path unchanged; Kalshi untouched). FIX-2 (`mark_open_positions.py`): measurement-only snapshot last-known-price fallback when a PM market is transiently unpriceable, `stale:`-labeled + `snapshot_fallback_count` surfaced, fail-safe.
+
+**Rejected / no-code.** (a) `condition_id` capture + (c) by-id settlement: live probes proved NO path-style by-id GET exists (`/v1/markets/{id}`, `/v1/market/{id}`, `/v1/markets/{slug}` all 404) — only the listing filter works, so id-capture adds nothing. Money/sizing: **LET IT RUN** (bankroll drop was 100% benign deployment, $0 realized loss; free-cash-floor guard rejected by review). IC §16 does not bind (settlement/marking; no trade-decision change).
+
+**Watch-item.** Monitor whether the upstream PM feed drops the election category again (operational; alert-only). Re-check the first PM resolution settles cleanly via the new filter path when it occurs (~06-23+).
+
+---
+
+### PROFIT-DRAWDOWN-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-DRAWDOWN-001 |
+| **Title** | "38–42% drawdown" is mostly capital-at-risk in open positions, not realized loss |
+| **Category** | Reporting interpretation / Risk |
+| **Severity** | MEDIUM (decision quality; the go-live drawdown "blocker" is largely an accounting artifact) |
+| **Status** | DIAGNOSED 2026-06-10 (workflow `wy8xsxioo`); reframe documented |
+| **operator_gated** | mark-to-market pass (001a) requires a read-only REST price fetch — operator gate |
+
+**Finding (drawdown attribution, reconciles exactly to $0.0000)**
+Bankroll $50.00 → $28.65 (−$21.35). Decomposition: **realized P&L −$6.75** (32% of the decline) + **$14.60 cash committed to 12 still-open POST-P0 positions** (68%). The paper bankroll model subtracts an open trade's full entry cost at placement, so an unresolved bet depresses the bankroll dollar-for-dollar with no loss incurred. `50.00 − 6.75 − 14.60 = 28.65`. The realized loss is small-N and **pre-P0-dominated**: pre-P0 −$7.50 (9 trades, 33%); **post-P0 is +$0.75** (5 trades, 60%). True realized peak-to-trough is only ~5.6%; the 31–42% figures are dominated by open-position entry-cost deduction.
+
+**Largest realized-loss cluster — KXFISAEXTEND (audit item)**
+−$7.50 across 3 NO bets placed within ~7 seconds on 2026-05-01T01:57, all from `VitalLaw.com`, all resolved YES (thesis backwards) — one correlated same-thesis cluster exceeding total net realized P&L. Pre-P0, so likely already mitigated by the series-correlation gate (`series_correlation_window_seconds=3600`) + per-prefix cap (2) added since. **Action:** confirm those guards would now suppress 3 sibling-contract same-series bets in one minute; review `VitalLaw.com` directional reliability.
+
+**PROFIT-DRAWDOWN-001a — mark-to-market (DONE 2026-06-10, operator-approved)**
+Ran `scripts/mark_open_positions.py` (read-only: signed Kalshi GET + Polymarket public GET). Result: the 8 **Kalshi** open positions are worth **$5.45 current vs $4.60 entry** (slightly *in the money* — e.g. KXFISAEXTEND-JUN15 NO now ~75.5c). The 4 **Polymarket** positions ($10.00 entry) could NOT be priced — `get_market(<stored ticker>)` 404s because the stored ticker is not the Polymarket public-API market-id (pricing gap, see 001b). **True paper equity = $34.10 .. $44.10** (low = Polymarket worthless; high = Polymarket at entry), i.e. **true drawdown ~12–32%, NOT the reported 42.7%.** Confirms the headline: the drawdown is dominated by capital-at-risk in unresolved (mostly-retaining-value) positions, not realized destruction.
+
+**PROFIT-DRAWDOWN-001b — Polymarket MTM pricing gap (FIXED 2026-06-11, v0.33.11, operator-directed)**
+`scripts/mark_open_positions.py` could not price Polymarket positions: the `ticker` stored in `paper_trades` (e.g. `ewc-usse-me-2026-11-03-dem`) is the Polymarket **slug**, but `PolymarketPublicClient.get_market` issued `GET /v1/markets/{ticker}` which only resolves the numeric **id** → 404 → every open Polymarket position reported value-unknown, inflating the apparent paper drawdown.
+
+**Root-cause fix (not a tool patch):** `get_market` now delegates to `get_market_payload`, which already had a 404→slug/id fallback (`_find_market_payload_by_slug_or_id` paginates the markets list and matches `payload["slug"]`/`["id"]`), then normalizes the result. `normalize_polymarket_market` sets `market_id = slug|id`, so the stored ticker matches by slug. This aligns `get_market` with the settlement path (`settlement_reconciler` already used `get_market_payload`). The only Polymarket `get_market` caller is `scripts/mark_open_positions.py`; the other `get_market` callers (`scripts/performance_analysis.py`, `scripts/edge_replay/fetch_resolved_markets.py`) use the unrelated `KalshiRestClient.get_market` and are not affected. Strictly better on the 404 path (previously raised; now resolves when the market exists). No change needed to `mark_open_positions.py` itself. Test: `test_get_market_falls_back_to_slug_lookup_on_404`. The MTM tool can now price the open Polymarket positions, collapsing the equity *range* to a point estimate.
+
+**PROFIT-DRAWDOWN-001c — go-live gate drawdown now MTM-based (IMPLEMENTED 2026-06-12, v0.33.13, operator-directed)**
+First full MTM run (2026-06-12, all 13 open positions priced incl. 5 Polymarket via 001b): **true paper equity $40.53 → true drawdown 18.9%**, *under* the 20% go-live cap — while report §8 simultaneously failed its drawdown criterion at **45.7%** on the notional bankroll (which deducts each open trade's full entry cost at placement). The gate was failing on a phantom number. Fix: `scripts/mark_open_positions.py` pricing core extracted to importable `compute_open_position_marks()`; `performance_analysis.py` calls it fail-soft and §8's current equity point becomes `notional + marked open-position value`. Conservatism preserved: unpriced positions count at **$0** (fail-closed); historical curve points stay notional (past troughs never erased); fetch failure → notional fallback **with explicit label** (notional overstates drawdown — the conservative failure direction). Runs by default in the daily report (bounded by open-position count; `--no-mtm` opts out — chosen over the `--enrich` opt-in convention because the gate's correctness depends on it). Tests: 3 §8 cases + `tests/test_mark_open_positions.py`. **Adversarial review (kalshi-safety-reviewer) found and this PR remediated four issues before merge:** (1) `last=0` on an empty book valued a held NO at full contract value (false-pass direction) → `last` fallback now bounded to (0,100), else unpriced; (2) Polymarket held-side ask-marking absorbed the full spread as phantom equity → now `min(held ask, 100 − opposite ask)` bid-equivalent; (3) config's creds `sys.exit(1)` (SystemExit escapes `except Exception`) could kill the now-default-on daily report → caught explicitly, falls back to notional; (4) NaN `marked_value` would silently drop the current equity point → non-finite rejected. Residual known optimism: Kalshi mid-mark carries ≤ half-spread.
+
+---
+
+### PROFIT-EDGE-014
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-EDGE-014 |
+| **Title** | G1 confidence-gate skips are NEAR-MISSES (median scaled 0.044 vs 0.05), not no-signal — lane dilution × regime ceiling |
+| **Category** | Signal quality / readiness gate calibration |
+| **Severity** | MEDIUM (largest single gate category; ~50% of gate skips in recent report windows) |
+| **Status** | OPTION B IMPLEMENTED 2026-06-12 (v0.33.14) — operator picked confidence-weighted lane blending over the G1→0.04 lever and no-change. Replay-EV validation owed when corpus exists (bootstrap state). |
+| **Owner** | Operator (picked option b 2026-06-12); Claude implemented |
+
+**Diagnosis (2026-06-12, 16 G1-blocked decisions since 2026-06-05, BLEND_DECISION/SKIPPED/GATE_SUMMARY records):**
+- `blended_confidence`: min 0.105 / med 0.187 / max 0.197 — **NOT zero**. These are real signals, refuting a pure PROFIT-EDGE-004 "no-signal ceiling" framing for this cohort. `fast_lane_confidence` is **0.75–0.85** on the same decisions.
+- `regime_confidence`: 0.22–0.28 (the fast-dominant `_time_prior` regime, clears G4).
+- `scaled_confidence = bc × rc`: min 0.029 / **med 0.044 / max 0.0493** vs threshold **0.05** — agonizing near-misses; the max missed by 0.0007.
+- Counterfactuals: **16/16** would pass if either factor were 1.0 — the multiplicative structure is the mechanism: a 0.75–0.85-confident fast-lane signal is diluted by low-confidence accumulation (~0.21) / structural (~0.12) lanes into blended ~0.16–0.19 (the PROFIT-PRIORS-001 dilution gotcha), then ×~0.25 regime → just under the bar.
+- Rate correction: daily reports show ~78–81 "confidence gate" skips **per ~30-day report window** (~2.7/day), not per day as an earlier readout implied. Still the largest category (next: series-correlation ~29, source-diversity ~25/window).
+
+**Implemented (option b, v0.33.14 — operator-directed 2026-06-12):** `analysis/decision_blender.py` `blended_confidence` is now the interp-weight-weighted **mean of lane confidences** (`Σ conf_i·w_i / Σ w_i`); the prior formula divided the eff-conf mass by lane COUNT (`total_eff / len(active)`) — with 3 lanes and interp weights summing to ~1.0 that was exactly the 3× dilution behind the near-miss cluster. Properties: bounded by the lanes' own confidences (no overshoot); single-lane blends adopt the lane's own confidence (old math contradicted the documented degeneration); DER-2 dominant mode adopts the dominant lane's raw confidence (old output inverted: dominance reported LOWER confidence than a contested blend). Unchanged: `blended_p` (DER-1 contract pins only the p formula), dominance trigger, DER-3/4, disagreement, all G1–G6 thresholds. The production near-miss shape (fast 0.75 / acc 0.43 / struct 0.18 @ rc 0.25) goes scaled 0.041→0.123, clearing both G1 thresholds. **IC §16 honesty:** behavioral change (more candidates clear G1) shipped under the PROFIT-PHASE3 bootstrap state on operator direction; replay-EV validation owed when the corpus exists; deploy boundary = the next bot restart (compare BLEND_DECISION `blended_confidence` distributions and §§5b/7b before/after, over the IC §16.7 **72h paper observation window** — decision-rate stability + unexpected-SKIPPED-bucket; note #141 L2-a deployed the same restart, so the two observation windows are **confounded** and must be read jointly). Tests: `TestConfidenceWeightedBlend` (6). **Review-noted magnitude:** for SINGLE-LANE fast candidates (others_total=0 ⇒ DER-2 dominance), blended_confidence is now the lane's raw confidence (0.85 vs old ~0.35), so G1 effectively stops binding for confident fast-lane candidates (rc ≥ ~0.067 suffices at conf 0.75, below G4=0.20) — G4 + min-edge become the binding gates there. Larger loosening than the 3-lane ~3× framing; intended, recorded for monitoring. **Review remediations shipped in the same PR:** LLM `confidence` clamped to [0,1] at the parse site (old count-mean numerically masked out-of-range values; raw propagation would have turned a malformed LLM value into a per-candidate `ReadinessInputError`), and the tier-classifier's stale `analysis/blender.py` rule corrected to `analysis/decision_blender.py` (blender PRs were misrouting to T3-unknown).
+
+**Operator options (as presented; option b chosen):**
+1. **G1 0.05 → 0.04** — admits the median near-miss; prior art exists (Wave-2 "Lever B" harness, `test_lever_b_g1_004_admits_candidate_between_004_and_005`). Smallest change; replay-validate when corpus volume allows, else accept as paper-mode experiment with §5b/§7b tracking.
+2. **Confidence-weighted lane blending** — stop letting a 0.12-confidence structural lane dilute a 0.85-confidence fast lane. Root-cause shaped, larger blast (touches blend math; high-assurance + replay evidence per IC §16).
+3. **No change** — conservative; accept ~2.7/day near-miss attrition while volume accumulates.
+
+**Watch items (re-check by 2026-06-14):**
+- **#143 capture-key persist UNVERIFIED**: 0 trades recorded since the 2026-06-12 10:15 UTC restart as of ~13:30Z; first post-restart trade must show `paper_trades.llm_capture_row_id = signal::<ticker>::<item_id>`.
+- **KXNEWDEAL:deal floored pre-#141**: live aggregator (08:55Z, pre-restart) drove it to weight 0.1 / fp_rate 1.0 / n=13 under OLD counting rules (every neutral counted) and dropped the `_seed_status` metadata on rewrite. Watch whether #141's score-gate eases it; the metadata drop also makes `test_seed_provisional_entries_include_audit_findings` fail against the live working tree (it reads the mutable `data/matcher_token_weights.json` — test-design flaw, CI unaffected since it checks out the committed file).
+
+**Efficacy context (2026-06-12 assessment):** post-P0 cohort 6 resolved / 50% WR / +$0.60 (≈break-even, n too small); trades placed per window 8→22 while opportunities flat (conversion up from the matcher/G2 changes); true MTM drawdown 18.9% vs notional 45.7% (001c closes that artifact). Binding constraints: resolved-trade volume (6/20) and signal confidence (this entry), not throughput plumbing.
+
+---
+
+### PROFIT-REPORT-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-REPORT-002 |
+| **Title** | Kelly-shadow renderer (report §7e) booked winning NO bets as losses (not side-aware) |
+| **Category** | Reporting correctness |
+| **Severity** | MEDIUM (corrupted the flat-5-vs-Kelly comparison that informs the sizing decision) |
+| **Status** | FIXED 2026-06-10 (this PR); `_render_kelly_shadow_rows` now side-aware |
+| **operator_gated** | NO (reporting-only); the downstream SIZING decision stays operator-gated |
+
+**Description**
+`_render_kelly_shadow_rows` computed `k_payout = contracts if resolved_yes else 0`, assuming every position was YES. A winning NO bet (e.g. NO bought at 92c that resolved NO) was booked as a total loss. This produced the bogus **post-P0 Kelly ROI −43.7% / delta −48.9%** that underpinned the "don't switch to Kelly" call. Fix: payout is now side-aware (`side=="no" → won = not resolved_yes`; YES/unknown keep prior behaviour). Tests: `test_kelly_shadow_payout_is_side_aware_no_win` + NO-loss + YES-unchanged. **Consequence:** the prior "Kelly underperforms" conclusion was computed on bad data — re-evaluate the Kelly-vs-flat-5 question once the next report regenerates §7e (still operator-gated; do not switch sizing on the corrected number without review).
+
+---
+
+### PROFIT-MATCH-003
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-MATCH-003 |
+| **Title** | L2 design — stop counting `false_positive_neutral` as a downweight signal on correct matches |
+| **Category** | Matcher feedback (root cause behind PROFIT-MATCH-002) |
+| **Severity** | MEDIUM |
+| **Status** | IMPLEMENTED end-to-end (L2-a) 2026-06-11 (v0.33.10), this PR — operator-directed; supersedes no-op draft #137. EV-validation via replay still pending (corpus bootstrap). |
+| **operator_gated** | YES (reshapes the learning signal) — operator approved implementation now; validate EV via the bootstrap corpus when available |
+
+**Problem**
+The matcher-feedback loop's only negative signal is `verdict=false_positive_neutral` (LLM saw the *right* market, no directional edge from THIS headline). `fp_rate = fp_neutral/(fp_neutral+true_positive)`. A correctly-matched high-traffic market accrues neutral reviews and gets its tokens floored. PROFIT-MATCH-002 (#131) guards a market's *own ticker-defining* token, but **non-defining** correct-market tokens are still vulnerable. Root cause: "no edge from this headline" ≠ "wrong market", yet both feed `fp_neutral`.
+
+**Design options**
+- **L2-a (recommended) — score-gated false positive.** Only count a neutral verdict toward downweighting when the match was *structurally marginal* (low `match_score` / weak-match flags). A neutral verdict on a high-score, clearly-correct match is "no edge", not "wrong market" → no downweight. **Feasible with no prompt/schema change:** `MATCH_LLM_REVIEW` already carries `match_score` (`utils/logger.py` `log_match_llm_review`); `match_feedback.ingest_review_events` just ignores it today. Add a `match_score` threshold (e.g. count fp only when score < ~0.10–0.12 band) to the ingestion rule.
+- **L2-b — explicit LLM relevance field.** Add `market_relevance: relevant|irrelevant` to the signal LLM output; downweight only on `irrelevant`. Cleanest root fix but touches the prompt/JSON schema (qwen3 `think:False` / JSON-grammar gotchas) — higher blast.
+- **L2-c — base-rate normalization.** Most matched headlines are no-edge (high neutral rate is the BASE rate). Downweight a token only when its neutral rate is *anomalously high* vs the corpus baseline, not on absolute `fp_rate`. No new fields; changes the activation rule globally.
+
+**Recommendation:** L2-a (lowest blast, no schema change). **Prerequisite:** a usable replay corpus to validate the EV impact (currently `InsufficientCorpusError`/T3 — corpus-gated, see Decisions below). Do not ship until the post-P0 open cohort resolves and a corpus exists.
+
+**Implemented end-to-end (L2-a), v0.33.10 — operator-directed (supersedes #137).** The design above assumed L2-a needed "no schema change" because "`MATCH_LLM_REVIEW` already carries `match_score`." **That assumption was wrong** — the event never emitted a score (0/985 events), which is exactly why the consumer-only draft #137 was a no-op in production. This PR wires both sides:
+- **Producer:** `main._process_candidate` threads the matcher score onto `match_meta` (`match_meta.setdefault("match_score", round(score, 4))`); `analysis/signal_analyzer.py` reads it at the `MATCH_LLM_REVIEW` emission site; `utils/logger.py::log_match_llm_review` gained a `match_score` param and records it (OMITTED when `None`).
+- **Consumer:** `match_feedback.ingest_review_events` now skips a `false_positive_neutral` verdict when `match_score >= L2_NEUTRAL_FP_MARGINAL_MAX_SCORE` (0.12). `true_positive` always counts; missing `match_score` → treated as marginal (counts), preserving prior behaviour for the synthetic startup probe and any legacy events.
+
+This stops correct high-score markets from being floored — the root behind PROFIT-MATCH-002's defining-token symptom, now extended to non-defining tokens. The 0.12 band protects clearly-strong matches while still penalizing near-threshold (likely-wrong) bridges. **Caveat:** single-token correct matches scoring < 0.12 are still counted, but #131's defining-token guard already protects those; the residual is non-defining weak-score matches (genuinely ambiguous). Tests: `TestL2ScoreGatedFalsePositive` (consumer), `TestLogMatchLlmReview` + signal-analyzer call-site + `_process_candidate` injection (producer). **EV impact unmeasured until a replay corpus exists** (bootstrap, PROFIT-PHASE3); the change is behaviorally conservative (strictly removes some downweights) but should still be replay-validated before tightening the threshold.
+
+---
+
+### 2026-06-10 Performance-Review — Decisions & Monitoring
+
+**Replay-CI corpus deadlock (policy).** Every scoring PR currently trips `replay-ci-gate` with `InsufficientCorpusError: 0 usable corpora` (T3) — #130/#131/#132 all merged on required checks (`lint`/`tests`/`sims-smoke`/`p0-gate`) with replay red. **Operative policy (recommended default):** treat `replay-ci-gate` as **advisory until a resolved-trade corpus exists**; merges proceed on the 4 required checks + manual review + independent adversarial review for scoring/sizing/gate changes. Do NOT bootstrap the corpus by lowering thresholds / `allow_in_period_only` (weakens the EV gate on too little data). Revisit once ≥1 diverse corpus is available (gated by resolved-trade volume — the same binding constraint as go-live).
+
+**Throughput baseline (post-#131/#132, 2026-06-10) — re-measure with `scripts/perf_throughput_diff.py`.** 7d funnel: 29 SIGNAL / 29 OPPORTUNITY / 12 PAPER_TRADE / 66 SKIPPED; 42,322 MATCH_WEIGHT_APPLIED; defining-token guard fired **152×** (all 2026-06-10; e.g. KXVISITIRAN:iran ×96), **0 rescues yet** (none of the 7 fired prefixes is in the 9-entry seed — the guard is day-0 forward insurance; of 152 fires, ~26 *would* be floored < 0.06 if their prefix accrued an fp_rate→1.0). Go-live resolved stuck at 14/20. **Monitoring trigger:** re-run `perf_throughput_diff.py` on the next daily reports over 7–14 days; the matcher fix is confirmed if OPPORTUNITY/PAPER_TRADE rise and resolved-count climbs toward 20. Hold `PAPER_MIN_MATCH_SCORE=0.06` and `DOWNWEIGHT_FLOOR=0.10` constant so deltas are attributable.
+
+**No-action decisions (recorded so they are not re-litigated):**
+- **Kelly sizing:** do not switch — but the prior −48.9% was a bugged number (PROFIT-REPORT-002); re-evaluate on the corrected §7e, still operator-gated.
+- **Match-score / edge thresholds:** no change (calibration n=5, not statistically robust).
+- **PROFIT-REPORT-001a (gate on post-P0):** leave on lifetime; wouldn't pass anyway (5/20 resolved + open-cost drawdown).
+- **PROFIT-MATCH-002a (predicate precision):** monitor match-quality logs; refine only if precision degrades.
+- **GitLab mirror:** no-sync. `gitlab/main` is 296 commits behind `origin/main` (0 ahead) — migrated GitHub-primary, mirror effectively abandoned. Force-pushing 296 commits to a stale mirror (possible CI/cost side effects) is not warranted; the recommendation was conditional ("sync if GitLab used").
+
+---
+
+### PROFIT-SIZING-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-SIZING-001 |
+| **Title** | Min-bet floor removed (paper + live); paper to mirror live Kelly sizing |
+| **Category** | Bet sizing / Execution path |
+| **Severity** | HIGH (live money sizing; positive-EV gating net-of-fees) |
+| **Status** | PART 1 DONE — min-bet removed (`min_bet_dollars` default 2.0→0.0), this PR. PART 2 (paper→Kelly) + the fee-gate follow-up PENDING |
+| **primary_agent** | Claude Code (implement) |
+| **second_agent_review_required** | YES — `kalshi-safety-reviewer` (bet-sizing surface) |
+| **operator_gate_required** | YES — operator approves merge; **and** owns the paper→live MODE cutover (this change only alters sizing logic, not trading mode) |
+| **recommended_execution_mode** | paper (bot is paper-active; live behaviour is latent until the operator's mode cutover) |
+
+**Decision (operator, 2026-06-11)**
+Remove the min-bet floor from both paper and live; let the bot trade freely on Kelly down to the natural 1-contract floor (`contracts_from_dollars` returns ≥1). Rationale: paper should mirror live so the paper cohort predicts live; flat-5 was inflating paper trade count vs what live would do.
+
+**Mechanics removed (verified)**
+`min_bet_dollars` did double duty: (1) rejection in `kelly_bet` (`kelly_dollars < min_bet → return 0,0,0`), (2) floor on `dynamic_max_bet`'s cap (`max(min_bet, …)`). Default → 0.0 removes both. `contracts_from_dollars` keeps a hard floor of 1 contract, so the smallest trade is 1 contract. Live still rejects `capped_dollars<=0` (zero/negative edge), so **positive-EV gating at the edge level (`min_edge`) is preserved**.
+
+**CAVEAT — load-bearing (operator accepted)**
+Fees are **not modelled** anywhere in the EV/Kelly path. So `min_bet_dollars` was the *implicit* fee-floor: with it at 0, a tiny positive-edge **live** trade can be net-negative after Kalshi fees. Positive-EV gating no longer holds *net-of-fees*. Operator explicitly accepted this and directed removal now.
+
+**Follow-ups**
+- **PROFIT-SIZING-001a (fee-aware EV gate)** — add a Kalshi-fee model to the EV/Kelly path (or a per-trade fee-vs-edge check) so positive-EV gating holds net-of-fees before relying on live profitability. RECOMMENDED before live cutover. Bot is paper-active, so no live money is at risk yet.
+- **PROFIT-SIZING-001b (paper → Kelly) — DONE 2026-06-11 (v0.33.6).** Paper now sizes by Kelly (mirrors live): `trading/paper_trader.py` records `contracts = kelly_contracts`; `trading/executor.py` concentration pre-check uses the Kelly contract cost; `scripts/simulations/paper_trade_roundtrip.py` expected-cost mirrors the Kelly math. `PAPER_FLAT_CONTRACTS` no longer sets recorded contracts directly, but is **NOT fully retired** (PR #136 review correction): it still seeds `capped_dollars` for the **no-edge placeholder** in `main.py` and `polymarket/paper_runtime.py` (when Kelly returns 0), which Kelly then re-sizes — so no-edge paper trades land ~5 contracts (4 at 13 price points via `int()` truncation). **Scope:** the shared `PaperTrader.record_trade` means **Polymarket** paper also switched flat-5→Kelly (intended, consistent). **Blast radius:** Kelly can size a paper trade well above flat-5 (up to `dynamic_max_bet`); `_debit_bankroll` does not clamp at 0, so paper notional drawdown moves faster. Report attribution (`scripts/performance_analysis.py` hardcodes flat-5=5) and §7e still assume flat-5 → reporting follow-up. Full suite green (2634 passed). **Cohort marker — PROFIT-SIZING-001c (bot auto-stamped, v0.33.9):** the sizing regime changed at deploy — flat-5-era resolved trades should not be blended with the new Kelly-era cohort. The original recommendation here was for the *operator* to set a `bot_state` marker by hand; that was wrong (it contradicts the no-manual-deploy-steps stance, and the boundary is unrecoverable if not captured at deploy time). Resolved by making the bot do it: `PaperTrader._ensure_sizing_regime_kelly_sentinel()` idempotently stamps `bot_state.sizing_regime_kelly_deployed_ts` at the first startup under the Kelly code (mirroring the P0 sentinel) — no operator action, no `.env` var, written once and never overwritten. Stamped at first-startup so it can trail the actual v0.33.6 deploy slightly; harmless because the Kelly-era resolved cohort is empty at planting time. The report does not yet *read* this marker; wiring `section_kelly_shadow` / §7e to split on it is the remaining reporting follow-up. **§7e reframe (follow-up):** post-cutover paper *is* Kelly, so the §7e "Flat-5 (actual) vs Kelly shadow" comparison is only meaningful for the flat-5-era rows; for Kelly-era rows the "actual" column already reflects Kelly. A clean reframe (label the era, swap the shadow) is a small reporting follow-up.
+
+---
+
+### PROFIT-SOURCE-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-SOURCE-001 |
+| **Title** | Allow single-source trades (relax G2) + track single- vs multi-source performance |
+| **Category** | Trade selectivity / Readiness gate / Tracking |
+| **Severity** | MEDIUM (throughput vs corroboration trade-off; reversible) |
+| **Status** | IMPLEMENTED 2026-06-11 (v0.33.7), this PR — operator-directed |
+| **operator_gated** | YES — relaxes a selectivity gate; operator approved. Env-revertible. |
+
+**Decision (operator, 2026-06-11):** the only 2 opportunities in the first 12h post-restart were both skipped by `G2_evidence_source_class_diversity` (single-source). To unblock throughput (the binding constraint), allow single-source trades **and** track how they perform so the relaxation can be kept or reverted on evidence.
+
+**Implemented:**
+- `tasks/trade_readiness_gate.py`: `G2_MIN_SOURCE_CLASSES` default 2→1 (env-overridable `G2_MIN_SOURCE_CLASSES` — set to 2 in `.env` to revert instantly). Single distinct source class now clears G2. Fast-lane was already G2-exempt. Other gates (G1/G3/G4/G6, edge, EV) unchanged — only the diversity requirement is relaxed.
+- **Tracking:** `ReadinessDecision.source_class_count` (gate computes `len(set(evidence_source_classes))`) → carried into `signal_meta.evidence_source_class_count` (blend_task) → logged on every PAPER_TRADE JSONL event. No DB migration.
+- **Surfacing:** report §5b `section_single_vs_multi_source` splits resolved-trade win-rate + net P&L into single (1 source) / multi (≥2) / unknown (fast-lane). Populates as single-source trades resolve.
+- Tests: `test_single_source_allowed_and_count_tracked`, `test_single_vs_multi_source_breakout`; existing G2-mechanism tests pinned to `G2_MIN=2`. Full suite green (2642 passed).
+
+**Evaluation plan:** after single-source trades accumulate + resolve, compare §5b single vs multi win-rate/P&L. If single-source materially underperforms, revert (`G2_MIN_SOURCE_CLASSES=2`). Gated on trade volume + resolution (runtime).
 
 ---
 
@@ -1043,17 +1436,17 @@ Deferred until the Stage 5 Phase 2 (P2.2) 72-hour paper-mode observation window 
 | Field | Value |
 |-------|-------|
 | **ID** | PROFIT-SOURCE-001 |
-| **Title** | Reddit intake is degraded-permanent; Reddit OAuth is externally blocked |
+| **Title** | Reddit intake is permanently unavailable; disable and replace it |
 | **Category** | Intake / Source Availability |
 | **Severity** | MEDIUM |
-| **Status** | COMPLETE |
+| **Status** | RUNTIME DISABLE DEPLOYED 2026-05-31 (v0.33.0, PR #68, `cfg.reddit_enabled` default-off; restarted live on PID 34864) — AC#1 met. Source-health reclassification (AC#2/3) remains open; replacement feeds tracked under PROFIT-THRUPUT-001 (B3.1). |
 | **Priority** | NOW (mitigation is cheap; unblock is externally gated) |
 | **Owner** | Shared |
-| **Depends On** | Reddit Responsible Builder Policy review (externally blocked; app submitted, no response) |
-| **Blocks** | — (Reddit-unique signal assessed as thin per `docs/_archive/studies/news_sources_evaluation.md` §7) |
+| **Depends On** | Operator finding complete: Reddit app approval denied; no OAuth path exists |
+| **Blocks** | Track B source replacement / opportunity-throughput recovery |
 
 **Description**  
-Reddit intake runs in public-JSON mode because OAuth credentials are not available — the operator submitted an application per Reddit's Responsible Builder Policy and has received no response. Public-JSON polling is rate-limited per-IP and triggers structural 403 storms; on 2026-04-22 the 403 storm tripped `reddit_monitor.py`'s global circuit breaker within ~11 seconds of startup ("100% of subreddits failed (1/1), suspending all Reddit polling for 30m"). The circuit-breaker behavior is the *intended* response to 403 storms, not a bug — but it means Reddit contributes effectively zero signal whenever the circuit is open, which is most of the time during cold polling cycles.
+Reddit intake runs in public-JSON mode because OAuth credentials are not available. The operator submitted a Reddit app approval request per Reddit's current approval flow, and the request was denied because the app did not show community benefit. That removes the practical OAuth path. Public-JSON polling is rate-limited per-IP and triggers structural 403 storms; on 2026-04-22 the 403 storm tripped `reddit_monitor.py`'s global circuit breaker within ~11 seconds of startup ("100% of subreddits failed (1/1), suspending all Reddit polling for 30m"). The circuit-breaker behavior is the *intended* response to 403 storms, not a bug — but it means Reddit contributes effectively zero signal whenever the circuit is open, which is most of the time during cold polling cycles. Treat Reddit as dead for planning purposes.
 
 **Why it matters to profitability / safety / reliability**  
 Reddit contributes a small but non-zero share of the signal mix when it works. Losing it permanently is a coverage reduction, not a correctness or safety issue. The full evaluation in `docs/_archive/studies/news_sources_evaluation.md` §7 concludes Reddit-unique content is thin (most is wire-service repost; analytical content is slower than ISW/CSIS RSS; firsthand-witness content is replaceable by Bluesky/Mastodon/Telegram when those integrations are authorized). The residual risk is that downstream diagnostics (`source_scorecard`, feedback loops that attribute signal to Reddit posts) silently report a distorted source mix if Reddit is treated as "active" while it's actually degraded.
@@ -1061,29 +1454,34 @@ Reddit contributes a small but non-zero share of the signal mix when it works. L
 **Evidence / Source**  
 - `logs/app/bot.log` 2026-04-22T11:16:43 UTC — "Reddit access denied for r/ArmedConflicts (403) -- backing off 120s", followed by 30+ similar lines across all 20 polled subreddits within 10 seconds, followed by "Reddit global circuit open -- suspending all Reddit polling for 30m".
 - `feeds/reddit_monitor.py:19` starts with the log message "Reddit monitor started (public JSON -- degraded, expect rate limits). Set REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET in .env for OAuth2" — the module itself acknowledges the degraded state at every startup.
-- Operator confirmation (2026-04-23): Reddit app submitted via Responsible Builder Policy intake; no response. Treat as permanently blocked for planning purposes.
+- Operator confirmation (2026-04-23): Reddit app submitted via Responsible Builder Policy intake; no response at that time. Treat as externally blocked for planning purposes.
+- Operator confirmation (2026-05-29): Reddit app creation now requires Reddit approval, approval was denied, and no OAuth path exists. Treat Reddit as permanently unavailable.
 
 **Proposed Fix**  
-Two-track strategy per `docs/_archive/studies/news_sources_evaluation.md` §7.2:
+Two-track strategy per `docs/_archive/studies/news_sources_evaluation.md` §7.2, updated for the 2026-05-29 operator denial:
 
-*Track A — mitigation (cheap, post-S4.5c close):*
-1. Trim `REDDIT_SUBREDDITS` polling pool from 20 to a curated 2-3 (candidates: `r/ArmedConflicts`, `r/CredibleDefense`, plus 1-2 region-specific rotated in by `subreddit_selector.py`) to reduce the 403-storm attack surface.
-2. Downgrade Reddit-related log lines at startup from INFO to DEBUG where they're not actionable, to stop polluting the `bot.log` signal.
-3. Ensure `SOURCE_HEALTH` telemetry (planned in the same evaluation) distinguishes "Reddit circuit open (expected)" from "Reddit circuit open (unexpected)" — only the latter should alert.
+*Track A — clean disable (cheap, current path):*
+1. Disable `run_reddit_monitor` cleanly behind an explicit config/launch-time switch so the bot does not spend cycles on a known-dead source or emit expected 403 noise as operational signal.
+2. Preserve source-health reporting, but classify Reddit as "disabled/permanently unavailable" rather than "active but circuit open."
+3. Keep historical Reddit attribution in reports, but exclude Reddit from current-source availability and opportunity-throughput expectations.
 
-*Track B — unblock (gated externally):*
-1. Do not spend further engineering effort on Reddit OAuth until Reddit responds to the pending app.
-2. If Reddit approves the app, migrate `reddit_monitor.py` to OAuth2 — that's a config-credential change plus a small code change to the auth flow, not a re-architecture.
-3. If Reddit denies or stays silent past a configurable patience window (suggest 90 days post-submission), formally deprecate Reddit intake and repurpose the polling loop for a replacement (Bluesky journalist timeline is the leading candidate per Appendix A Tier 2).
+*Track B — replace (binding throughput path):*
+1. Do not spend further engineering effort on Reddit OAuth unless the operator supplies a new Reddit approval path.
+2. Use the Track B evidence refresh to quantify per-source opportunity yield and identify replacement-feed to series mappings.
+3. Repurpose the polling capacity toward authorized replacement sources. Leading candidates remain Bluesky journalist timelines, Mastodon/Telegram where authorized, and higher-yield RSS/API sources already mapped to active Kalshi series.
 
 **Acceptance Criteria**  
-- Track A mitigations deployed post-S4.5c close and observed in `bot.log` (circuit-open events drop significantly in volume; no unexpected-outage false positives in `SOURCE_HEALTH` emissions).
-- This debt-log entry transitions to COMPLETE under either (a) Track B succeeds and OAuth is active, OR (b) Reddit formally deprecated and replacement source integrated.
-- **(c) Operator-override (added 2026-05-10):** Reddit may be declared `PERMANENTLY_DEGRADED` and this entry CLOSED without replacement integration when the operator decides intake-mix simplification outweighs replacement-source velocity. Replacement-source work transfers to a successor entry (`PROFIT-SOURCE-002`).
-- `docs/_archive/studies/news_sources_evaluation.md` §7.2 steps 1-5 are executed or consciously re-deferred.
+- `run_reddit_monitor` is not started by default in the production launch path unless an explicit operator override enables it.
+- Source-health/reporting classifies Reddit as disabled/permanently unavailable, not as an active degraded source that keeps generating 403/circuit-open noise.
+- Current-source availability and opportunity-throughput reports exclude Reddit from expected live coverage while preserving historical attribution.
+- Replacement-source work is either integrated here or transferred to a successor Track B / `PROFIT-SOURCE-002` entry with per-source opportunity-yield evidence.
 
 **Notes**  
 Do not treat this as a go-live blocker. Per `docs/_archive/studies/news_sources_evaluation.md` §6, the operator-confirmed priority is correctness over velocity, and the Reddit-unique signal is thin enough that going live without Reddit is acceptable provided the source mix is honestly reported. The go-live blocker is `PROFIT-CAL-001`, not this item.
+
+**REOPENED 2026-05-31:** Prior closure declared the planning posture (`PERMANENTLY_DEGRADED`) but did not remove the live runtime behavior. Current evidence still shows Reddit monitor 403/circuit-open noise and source starvation, so the remaining work is runtime hygiene plus replacement-feed evidence, not OAuth restoration.
+
+**RUNTIME DISABLE DEPLOYED 2026-05-31 (v0.33.0; PR #68 / merge `49d0cde`; restarted live on PID 34864):** `cfg.reddit_enabled` master switch (default off; `REDDIT_ENABLED=true` re-enables) early-exits `run_reddit_monitor`, `run_discovery_pass`, and `_subreddit_discovery_task` before any network work (TDD, 5 tests) — satisfies Acceptance Criterion #1 (not started by default absent an explicit operator override). Evidence (workflow `wypdcusfl`) reconfirms 0 signals / 0 opportunities / 0 trades lifetime across 47 subs; G2-safe (0 `social`-class evidence in either dossier store). Live restart evidence showed `reddit_monitor: "Reddit ingestion disabled"` plus `[DISCOVERY] Reddit disabled ... exiting cleanly`, with no new Reddit 403 polling storm from the v0.33.0 process. Replacement-feed work (B3.1 publisher-desk RSS — NYT Politics/US, The Hill, Guardian US) shipped in the same v0.33.0 batch, tracked under `PROFIT-THRUPUT-001`. **Still open (AC#2/3):** the runtime no longer polls Reddit, but `source_scorecard` / source-health reporting still needs the explicit "disabled / permanently unavailable" classification (vs "active degraded") — reporting-layer change, separate from this ingestion disable.
 
 **CLOSED 2026-05-10 (Operator override):** Reddit declared `PERMANENTLY_DEGRADED`. Reasoning: (i) `feeds/reddit_monitor.py` global circuit breaker fires on every cold-start 403 storm — Reddit contributes effectively zero signal in steady state; (ii) Reddit Responsible Builder Policy app submitted 2026-04-23, no response; 90-day patience window not yet expired (2026-07-22) but operator electing immediate deprecation under acceptance criterion (c). (iii) Track A mitigations (subreddit pool trim, log downgrade, SOURCE_HEALTH semantics) NOT executed — superseded by deprecation. Replacement-source integration deferred to `PROFIT-SOURCE-002`. No code changes in this closure.
 
@@ -5175,22 +5573,1132 @@ because there are no post-clean-start rows.
 
 ---
 
+### PROFIT-PHASE3-003
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-PHASE3-003 |
+| **Title** | First OOS corpus build — wait for paper-trade volume to cross Rule 1 floor |
+| **Category** | Replay-CI gate / Framework activation completeness |
+| **Severity** | LOW (operational; framework is shipped + active; only the EV-evaluation arm is on pass-through until volume accumulates) |
+| **Status** | DEFERRED — blocked on paper-trade volume (operator-chosen path A1, 2026-05-24) |
+| **Priority** | n/a (deferred; resumed when volume crosses threshold) |
+| **Owner** | Operator (gating decision); Claude / Codex (corpus-build execution when volume crosses) |
+| **Depends On** | PROFIT-PHASE3-001 (framework activation, COMPLETE), PROFIT-PHASE3-002 (corpus-absent CI pass-through, COMPLETE) |
+| **Blocks** | First real Rule 4 EV verdict in CI on any T1/T2/T3 PR. While DEFERRED, every CI run passes via PROFIT-PHASE3-002 pass-through; operator gate remains the only behavioral-regression check. |
+
+**Context**
+
+The paper-mode rapid-learning framework v3 (IC §16.7) ships the
+replay-CI gate as the canonical Rule 4 EV evaluator. The gate auto-
+discovers I-1-format corpora under `logs/edge_replay/corpus_*.jsonl`
+and computes per-corpus EV with a 95% CI. The gate is wired end-to-end
+(`build_corpus.py` → `replay_gate.py` → `ci_entry.py` →
+`.github/workflows/replay-ci-gate.yml`), but on 2026-05-24 the first
+real CI invocation revealed two simultaneous reasons it could not
+evaluate real EV:
+
+1. **No corpus on the runner.** Production corpora live under
+   gitignored `logs/edge_replay/`. Fixed for CI plumbing by
+   PROFIT-PHASE3-002 (bootstrap pass-through when `corpus_dir`
+   literally does not exist on disk).
+2. **No corpus exists to ship.** `data/paper_trades.db` carried **9
+   total / 8 resolved** rows across the entire 13-day archive (May 1–11
+   trades, no resolved rows post-May-11). Rule 1's floor is **≥30
+   markets, 95% CI**. We're at 27% of the floor. The pipeline is
+   wired; the input data is missing.
+
+**Update 2026-06-11 (PROFIT-PHASE3 I-1 cache-key join completion, v0.33.12, operator-directed).**
+Investigating "build the corpus bootstrap" revealed the actual gap was NOT I-3 or I-2 (both already shipped and firing — `scripts/edge_replay/llm_capture.py` has captured **2453** production LLM responses into `llm_capture.jsonl`, and `scripts/edge_replay/llm_cache.py` is the SQLite read-path with `migrate_jsonl_to_sqlite` + coverage). The missing piece was the **capture↔trade join + corpus cache-key stamping**: `build_corpus.py` stamped none of the 13 cache-key fields, and nothing linked a resolved trade to its captured decision. Also found a latent defect — the signal-path capture key used `news.id` (which does not exist on `NewsItem`; it is `item_id`), so every signal on a ticker collided on one empty-news-id key. This PR:
+- Adds a single-source-of-truth join key `signal_capture_row_id(ticker, news_item_id)` in `llm_capture.py`; the signal-analyzer capture site (`_i3_capture_signal_llm_call`) now uses it with `news.item_id` (fixes the degenerate key).
+- Persists that key as an additive nullable `paper_trades.llm_capture_row_id` column (idempotent migration, mirrors `_P0_PROVENANCE_COLUMNS`) set in `record_trade` via the same helper, so the keys match exactly.
+- Adds an offline `index_captures_by_row_id()` read helper and wires `build_corpus.py` to stamp the 13 cache-key fields onto each corpus row by joining `llm_capture_row_id` → capture index. Absent captures leave the row cache-uncovered (never fabricated) — honest signal for the gate's coverage check.
+**Scope/limits:** forward-looking — only trades recorded AFTER this deploys carry the join key; the 6 existing post-P0 resolved trades remain best-effort/un-joinable. Does NOT place any corpus in the gate's auto-discovered `corpus_dir`, so the PROFIT-PHASE3-002 pass-through is unaffected (no CI-flip). The Rule-1 ≥30 volume blocker (this entry) and the OOS regime-diversity blocker (Phase 4, ~60–90d organic) still stand; this only removes the cache-coverage blocker for future gate-eligible corpora.
+
+**Why A1 (wait), not A2 / A3**
+
+Operator considered four sub-paths (2026-05-24 transcript):
+
+- **A1.** Schema migrate + wait for ≥30 resolved trades, then build.
+  Chosen. Schema audit found `cohort_extension` column already exists
+  on `paper_trades` (idx 43); `build_corpus.py` reads it as an
+  exclusion filter and tolerates pre-migration NULL via the
+  `cohort_extension_present` guard at line 333 of `build_corpus.py`.
+  No schema work needed. Pipeline is ready; only paper-trade volume
+  is missing.
+- **A2.** Synthesize an I-1 corpus from legacy `logs/edge_replay/cycle*/replay_dataset.jsonl`
+  files (cycle13/14/15b/16d/16e/17c/17d ≈ 5.7 MB on disk, 272+ rows
+  per cycle). Rejected — `pnl_dollars` in those files is a
+  retrospective `model_prob × resolution` estimate, not actual paper-
+  trade settlement. The same dossier probabilities the bot uses to
+  decide would be scoring themselves, which is self-affirming
+  evidence under Rule 4. (Also: gate explicitly does not recurse
+  subdirectories — see `replay_gate.py:254` "legacy / hand-built
+  artifacts that pre-date the I-1 contract".)
+- **A3.** Commit a placeholder synthetic corpus (≥30 obviously fake
+  rows) so the gate exercises Rule 4 machinery on every PR. Rejected
+  — exercises plumbing but produces an honestly-failing verdict on
+  every PR, which is no different from the pass-through except more
+  noise.
+- **A4.** Stay on PROFIT-PHASE3-002 pass-through indefinitely.
+  Rejected as a permanent state — that is the gap A1 closes — but is
+  the current operational state until A1's volume threshold is met.
+- **Option B** (CI fetches corpus from an artifact store) was
+  considered first and abandoned 2026-05-24 because storage cost
+  isn't currently in budget. Re-opens if A1 generates a corpus large
+  enough that committing it to the repo becomes a repo-bloat problem
+  (the first real corpus is likely small, so this is years away).
+
+**Acceptance criteria**
+
+A1 closes when ALL of the following hold:
+
+1. `data/paper_trades.db` has **≥30 resolved rows** (i.e.,
+   `SELECT COUNT(*) FROM paper_trades WHERE pnl_dollars IS NOT NULL >= 30`).
+2. The 30+ rows span **≥2 distinct market families** per IC §16.7
+   ("Corpus diversity standard" — calendar-only diversity is not
+   OOS).
+3. The 30+ rows fall under a **registered regime label** in
+   `docs/governance/corpus-regimes.md` (current candidates:
+   `pre_p0`, `post_p0_hotfix`, `post_v030_2_oos_seed`; new regime
+   label requires operator memo entry per existing convention).
+4. `python -m scripts.edge_replay.build_corpus --start-ts <…> --end-ts <…>
+   --market-families <…> --cohort-tag <…> --regime-label <…>` writes
+   a `logs/edge_replay/corpus_*.jsonl` file at the **repo root path**
+   that `replay_gate._discover_all_diverse_corpora` actually scans
+   (not a subdirectory).
+5. That corpus is **force-added** via `git add -f logs/edge_replay/corpus_*.jsonl`
+   (overriding the `.gitignore` entry at `.gitignore:30`) in a PR
+   labeled `PROFIT-PHASE3-003`. CHANGELOG entry documents the
+   cohort_tag, regime_label, start_ts/end_ts, row count, families,
+   and Rule 4 verdict from the first CI run.
+6. CHANGELOG entry must also note that the PROFIT-PHASE3-002
+   pass-through remains in `replay_gate.py` but is now dormant on
+   `main` because `corpus_dir` exists with diverse corpora present.
+   Pass-through is NOT removed (keeps the dev-checkout path working
+   when `logs/edge_replay/` is gitignored locally).
+
+**Operational interim while DEFERRED**
+
+- PROFIT-PHASE3-002 pass-through fires on every CI run.
+  Every T1/T2/T3 PR shows `replay-ci-gate ✓` automatically; the gate
+  output explicitly notes operator gate remains authoritative.
+- Operator-gate workflow is the *only* behavioral-regression check
+  in CI until A1 closes. This is acceptable for paper-mode but is
+  the gap the framework was built to close — repeat-overrides via
+  `REPLAY_GATE_OVERRIDE=1` should NOT be used to paper over this;
+  the pass-through is the intended safety valve.
+- 30-day framework review (per IC §16.7 framework v3 §5): if
+  paper-trade resolution rate stays at ~0/week, the framework's
+  acceptance criteria are out-of-target and §16.7 calls for
+  framework suspension. Operator decides whether the recent
+  unblocks (PR #41-#44: lane-aware blender, source-class taxonomy,
+  fast-dominant priors, fallback widening) move resolution rate
+  enough to clear the threshold before the review fires.
+
+**Cross-references**
+
+- IC §16.7 — Blast-tier routing (operator override sub-block adds
+  language about the bootstrap pass-through being a separate channel
+  from the override; this entry is the back-pointer)
+- CHANGELOG `[0.31.0]` — PROFIT-PHASE3-001 framework activation
+- CHANGELOG `[0.31.1]` — PROFIT-PHASE3-002 corpus-absent pass-through
+- `scripts/edge_replay/build_corpus.py` — wired, awaits volume
+- `scripts/edge_replay/replay_gate.py` — `_discover_all_diverse_corpora`
+  is the discovery surface
+- `docs/governance/corpus-regimes.md` — regime registry
+- `data/paper_trades.db` — source of truth for resolved-row count
+
+---
+
+### PROFIT-ALIGN-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-ALIGN-001 |
+| **Title** | Architecture-review alignment cluster (12 items: 6 missing / 3 too-complicated / 3 too-simple) |
+| **Category** | Sizing / calibration / architecture / observability |
+| **Severity** | MEDIUM (each individual item is medium-leverage; cluster is the entire roadmap distilled by independent 2026-05-25 trade-audit) |
+| **Status** | IN_PROGRESS — sub-items shipped + deferred per the table below (2026-05-25) |
+| **Priority** | Mixed — see per-sub-item priority |
+| **Owner** | Mixed — Claude (Opus 4.7) audit + implementation; operator gate at merge for behavior changes |
+| **Depends On** | PROFIT-PHASE3-003 (calibration evidence needs paper-trade volume) |
+| **Blocks** | Future LLM-prompt / sizing / lane / gate tuning that should be data-driven rather than gut-feel |
+
+**Background**
+
+2026-05-25 operator asked for independent audit of the first paper trade
+post-PROFIT-MATCH-DYNAMIC (KXUSAIRANAGREEMENT-27-26JUN, $4.60 NO bet at
+92¢, +$0.15 EV). Audit raised three concerns:
+  (A) floor-clamping in `_parse_llm_response` manufactures NO-side edge
+      on low-priced YES markets
+  (B) magnitude=small shift of 6.8pp may be too aggressive for one
+      headline (single-data-point Bayesian update normally smaller)
+  (C) bot may concentrate bets on KXUSAIRANAGREEMENT-style markets
+      with similar polysemy/news-flow signature, compounding loss
+
+Operator then asked for comprehensive architecture review +
+"align kalshi-bot behavior with your analysis" (no waiting 14d).
+Architecture review surfaced 12 items across 3 buckets.
+
+**The 12 items and their status**
+
+*Missing (6 items)*
+
+| Item | Description | Status (2026-05-25) | Tracking |
+|---|---|---|---|
+| 1 | **Calibration measurement.** Bot has been paper-trading for weeks; we have 8 resolved trades and no calibration curve. Biggest gap. | **SHIPPED** v0.32.1 PROFIT-ALIGN-002 — `CALIBRATION_OBSERVATION` emission on every resolved trade | v0.32.1 |
+| 2 | **EV-by-archetype tracking.** No bucket-level EV stats by (market_prefix × magnitude × side). | **SHIPPED** v0.32.2 PROFIT-ALIGN-005 — `scripts/calibration_aggregator.py` reads CALIBRATION_OBSERVATION events, emits per-bucket Brier-score + win-rate + mean-pnl. Buckets <5 obs flagged `insufficient_evidence`. | v0.32.2 |
+| 3 | **Floor-aware sizing.** `_parse_llm_response` clamps prob at 0.05/0.95; bot computes edge against the floor → manufactured edge. | **SHIPPED / CORRECTED** v0.32.1 PROFIT-ALIGN-003; Codex follow-up replaced final-prob-only heuristic with raw pre-clamp reconstruction before `cfg.floor_clamp_kelly_multiplier` halve | v0.32.1 + 2026-05-25 follow-up |
+| 4 | **Position-concentration tracking by prefix.** Same-signal-guard catches exact ticker but not multi-outcome series. | **SHIPPED** v0.32.1 PROFIT-ALIGN-004 — `Portfolio.open_positions_by_prefix` + `cfg.max_open_positions_per_prefix=2` cap | v0.32.1 |
+| 5 | **Position exit logic / drift observability.** Bot holds positions until resolution; no signal-update path. | **WIRED-OBSERVABILITY** v0.32.2 PROFIT-ALIGN-007 — `cfg.position_drift_alert_threshold` now drives open-position `POSITION_DRIFT` emission. Auto-exit logic remains deferred until CALIBRATION_OBSERVATION evidence informs drift-vs-resolution trade-off | v0.32.2 + 2026-05-25 follow-up |
+| 6 | **Per-source predictive-value Bayesian.** `source_credibility` exists but coarse (per-source multiplier). No joint P(market-mover | source × topic) estimate. | **DOCUMENTED** v0.32.2 PROFIT-ALIGN-012 — needs ≥100 resolved trades × ≥10 sources for stable Bayesian estimates. Tracked via existing `source_credibility` evolution + future expansion. No new code. | v0.32.2 (deferred-with-tracking) |
+
+*Too complicated (3 items)*
+
+| Item | Description | Status (2026-05-25) | Tracking |
+|---|---|---|---|
+| 7 | **Three-lane blender computed for every market.** Accumulation + structural lanes contribute meaningfully on a minority of trades; fast lane dominates 80%+. Theater + compute. | **WIRED-OPT-IN** v0.32.2 PROFIT-ALIGN-006 — `cfg.enable_lane_skip_when_no_data` remains default False, but BlendTask now emits `LANE_SKIPPED` for missing accumulation/structural inputs when enabled. PR #42 `dominant_lane` mode still covers the visible 80% case. | v0.32.2 + 2026-05-25 follow-up |
+| 8 | **18 gates total (G1-G6 + E1-E12).** Some redundant (G4 is real binding constraint, surfaced as G1 per CLAUDE.md gotcha). | **WIRED** v0.32.2 PROFIT-ALIGN-008 — `log_gate_summary` now fires from BlendTask readiness evaluation with explicit `binding_constraint` field (G4_regime_low / G1_blended_confidence / G3_disagreement_score / passed). Operators no longer mentally translate G1-displayed-but-G4-caused fail-safe. | v0.32.2 + 2026-05-25 follow-up |
+| 9 | **Series priors as hand-curated lookup.** 30+ priors hand-curated; doesn't scale. Could be derived from market metadata (resolution type, calendar window). | **SHIPPED-opt-in** v0.32.2 PROFIT-ALIGN-009 — `_derive_series_prior_from_metadata` covers 5 clusters (polling/macro/political-event/weather/crypto). Gated by `cfg.enable_derived_series_priors` (default False). Falls back to `_time_prior` as today. | v0.32.2 |
+
+*Too simple (3 items)*
+
+| Item | Description | Status (2026-05-25) | Tracking |
+|---|---|---|---|
+| 10 | **Single-shot LLM call per (headline, market).** Same headline at 3 sources → 3 LLM calls on identical content. | **SHIPPED / CORRECTED** v0.32.2 PROFIT-ALIGN-010 — `analysis/llm_dedup_cache.py` now keys by full prompt text and stores LLM verdict fields only; `signal_analyzer.estimate_probability` recomputes final probability against the current market. Distinct from replay-CI `llm_cache.sqlite`. | v0.32.2 + 2026-05-25 follow-up |
+| 11 | **Constant `_MAGNITUDE_SHIFT` table.** `{none:0, small:0.08, moderate:0.15, large:0.25}` operator-set, not data-driven. | **SHIPPED** v0.32.2 PROFIT-ALIGN-011 — moved to `cfg.magnitude_shift_{small,moderate,large}` with env overrides. Defaults preserve historical values. Operator re-tunes from CALIBRATION_OBSERVATION evidence once ≥30 resolved trades. | v0.32.2 |
+| 12 | **No backtest-on-deploy.** PROFIT-PHASE3 framework is wired but waiting on volume. | TRACKED separately under [[PROFIT-PHASE3-003]] (corpus-volume blocker). | PROFIT-PHASE3-003 |
+
+**2026-05-25 Codex independent-review follow-up**
+
+Codex reviewed the post-PR #54 direction adversarially and found three places
+where the implementation over-claimed safety:
+
+1. `main._is_floor_clamp_suspected` treated any final `0.05` / `0.95` as a
+   clamp. That could halve legitimate boundary arithmetic. The detector now
+   reconstructs raw pre-clamp probability from market price, LLM direction,
+   magnitude, and confidence, and only fires when raw probability crosses
+   beyond the clamp.
+2. `analysis/llm_dedup_cache.py` keyed too narrowly
+   `(headline, market_title, 5pp price bucket)` and cached final probability.
+   It now keys on the full prompt text (source/body/resolution/close included)
+   and caches only verdict fields; final probability is recomputed using the
+   current market quote on cache hit.
+3. `data/matcher_token_weights.json` treated an 11-call audit as permanent
+   pinned downweights. Seed entries are now explicit `provisional` hints, and
+   matcher scoring combines overlap-token weights instead of letting one
+   generic downweighted token min-dominate a multi-token match.
+
+Scaffold follow-through also landed: position-drift threshold config is wired
+to the price-update loop, lane-skip config emits `LANE_SKIPPED` when enabled,
+and the gate-summary writer is called from BlendTask readiness evaluation.
+These are observability changes; paper-only posture and runtime/env state were
+not changed by the Codex pass.
+
+**This PR's deliverables (PROFIT-ALIGN commits 1-3 of 3)**
+
+1. `feat(align): floor-clamp Kelly halving + per-prefix position cap` —
+   PROFIT-ALIGN-003 + PROFIT-ALIGN-004. Conservative bot-sizing changes
+   addressing concerns (A) and (C). Tests: 16 new.
+2. `feat(align): CALIBRATION_OBSERVATION emission on resolution` —
+   PROFIT-ALIGN-002. Pure observability for concern (B) and future
+   data-driven tuning. Tests: 2 new.
+3. `docs(debt-log): PROFIT-ALIGN-001 + VERSION 0.32.0 → 0.32.1` —
+   this entry, CHANGELOG update, README sync.
+
+**Acceptance criteria** for this entry to close:
+
+1. Items 1, 3, 4 shipped (this PR — done).
+2. Items 2, 5, 6, 7, 8, 9, 10, 11 have follow-on entries in this
+   debt log when prioritized (this PR documents but does not ship).
+3. Item 12 cross-linked to PROFIT-PHASE3-003 (done).
+4. Operator reviews the calibration-observation evidence after ≥10
+   resolved trades; tightens the floor-clamp / magnitude / position-
+   cap defaults from gut-feel constants to empirical ones.
+
+**Cross-references**
+
+- 2026-05-25 trade audit conversation in operator session (KXUSAIRANAGREEMENT-27-26JUN
+  bet inspection + 12-item architecture review)
+- CHANGELOG `[0.32.1]` — PROFIT-ALIGN-002/003/004
+- `analysis/signal_analyzer._parse_llm_response` — floor-clamp source
+- `main._is_floor_clamp_suspected` — detector
+- `trading/portfolio.open_positions_by_prefix` — per-prefix query
+- `trading/executor._validate` — per-prefix cap site
+- `trading/paper_trader._resolve_market_sync` — calibration-observation emission site
+- `utils/logger.log_calibration_observation` — schema
+- `data/paper_trades.db` + `logs/trades/live/trades.jsonl` — paired evidence sources
+
+---
+
+### PROFIT-PIPELINE-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-PIPELINE-001 |
+| **Title** | Paper-trade conversion funnel architecture gap inventory |
+| **Category** | Architecture / observability / signal-quality |
+| **Severity** | HIGH (trade volume is the binding constraint for every data-driven calibration plan) |
+| **Status** | ACTIVE — feedback-loop observability shipped 2026-05-26; runtime tuning remains operator-gated |
+| **Priority** | NOW for read-only instrumentation/planning; behavior changes still require operator approval |
+| **Owner** | Operator + next implementation agent; Codex authored current gap reconciliation |
+| **Depends On** | Current paper logs, `data/paper_trades.db`, PROFIT-ALIGN-001 surfaces, PROFIT-MATCH-DYNAMIC feedback |
+| **Blocks** | Empirical closure of PROFIT-PHASE3-003, PROFIT-ALIGN data-driven tuning, and any confidence in readiness-gate changes |
+
+**Current finding**
+
+The architecture is not hard-blocked from paper trading. Current evidence shows
+the paper execution path is live:
+
+- `data/paper_trades.db`: 10 lifetime paper trades, 8 resolved, latest trade
+  `2026-05-25T18:36:44Z` on `KXUSAIRANAGREEMENT-27-26JUN`.
+- `logs/trades/archive/2026/05/2026-05-25.jsonl`: 54,236 events with
+  397 `EARLY_FRESH_PASS`, 197 `MATCH_DIAGNOSTIC`, 66
+  `SIGNAL_ANALYSIS_DETAIL`, 54 `MATCH_LLM_REVIEW`, 1 `SIGNAL`, 1
+  `OPPORTUNITY`, 1 `BLEND_DECISION`, and 1 `PAPER_TRADE`.
+- `logs/trades/live/trades.jsonl` after midnight UTC on 2026-05-26 showed
+  only intake freshness events so far (12 `EARLY_FRESH_PASS`, 486
+  `EARLY_STALE_DROP`), not a fresh execution-path failure.
+
+Therefore the current architecture gap is **conversion and auditability**, not
+"pipeline cannot reach executor." The pipeline reaches paper execution rarely;
+the binding questions are where good candidates die, whether matcher recovery is
+letting useful multi-token candidates through without silently re-admitting known
+bad bridges, and whether source/market mix produces enough non-neutral LLM
+verdicts to make calibration evidence accumulate.
+
+**Reconciliation against existing plans**
+
+- `PROFIT-EDGE-012` remains active, but its 2026-05-16 "0 post-clean-start
+  rows" readiness framing is no longer the freshest operating fact. Keep it as
+  the Cycle-17 redesign gate; do not use it as proof of an executor reachability
+  blocker.
+- `PROFIT-EDGE-004` remains historical/currently-not-blocking. Its broad
+  matcher / market-mix / source-mix diagnosis is still directionally useful,
+  but active execution belongs here plus `PROFIT-EDGE-012`.
+- `PROFIT-OBS-003` remains complete. The old 240/260 silent-exit era should not
+  be re-opened unless a fresh OPPORTUNITY-without-SKIPPED/PAPER_TRADE gap
+  recurs in current logs.
+- `PROFIT-PHASE3-003` remains blocked on corpus volume. The latest DB state
+  (8 resolved / 30 minimum) confirms this is a data-volume gate, not a missing
+  replay-framework gate.
+- `PROFIT-ALIGN-001` remains in progress for data-driven closure. The Codex
+  follow-up made floor-clamp, LLM-dedup, and scaffolded observability safer, but
+  it also created one new audit need: explicit matcher-weight breakdowns after
+  mean-composition.
+- `PROFIT-VALID-001` remains in the pre-go-live table as a reproducibility
+  harness requirement. It is not the immediate paper-trade-volume blocker.
+
+**Implemented feedback-loop surfaces, priority order**
+
+1. **PROFIT-MATCH-OBS-001 — matcher-weight breakdowns.** Shipped in
+   `78f00f6`: `MATCH_WEIGHT_APPLIED` records overlapped tokens, per-token
+   weights/status (`default` / `provisional` / `automatic` / `pinned`), mean
+   composition rule, final multiplier, and pre/post weight score. Test:
+   `tests/test_market_matcher.py::TestFindCandidates::test_match_weight_applied_logs_per_token_mean_multiplier`.
+2. **Feedback-weight status summary.** Shipped in `9f14113`:
+   `analysis.match_feedback.summarize_weight_status()` makes current weight
+   state auditable as provisional, pinned, automatic, or recovered. Test:
+   `tests/test_match_feedback.py::TestSummarizeWeightStatus`.
+3. **PROFIT-FUNNEL-001 — daily paper-trade conversion funnel.** Shipped in
+   `f9af903`: `scripts/pipeline_feedback_report.py` summarizes
+   fresh-pass -> matcher -> weight -> LLM-review -> signal -> blend -> skipped
+   -> paper-trade counts, top reasons, and top tickers. Test:
+   `tests/test_pipeline_feedback_report.py::TestPipelineFunnelReport`.
+4. **PROFIT-SOURCE-FRESH-001 — stale-source admission audit.** Shipped in
+   `806fefc`: the same report groups `EARLY_FRESH_PASS` /
+   `EARLY_STALE_DROP` by source, source class, and reason so stale churn can be
+   separated from true source starvation. Test:
+   `tests/test_pipeline_feedback_report.py::TestSourceFreshnessReport`.
+5. **PROFIT-MARKET-MIX-001 — LLM-neutral / market-universe audit.** Shipped in
+   `ab0b939`: the same report groups `MATCH_DIAGNOSTIC`,
+   `MATCH_LLM_REVIEW`, neutral/true-positive LLM verdicts, `SIGNAL`, and
+   `OPPORTUNITY` by market prefix and source class. Test:
+   `tests/test_pipeline_feedback_report.py::TestMarketMixReport`.
+
+**Explicit non-deletions / not-current blockers**
+
+Do not delete `PROFIT-EDGE-004`, the old OBS-003 silent-exit audit, or the
+Cycle-17 readiness history. They remain useful forensic context. Mark them as
+historical/currently-not-blocking for the live paper-trade question because the
+current DB/log state proves paper execution can happen.
+
+**Acceptance criteria for this entry to close**
+
+1. `PROFIT-MATCH-OBS-001` or equivalent matcher-weight observability lands —
+   done in `78f00f6`.
+2. A repeatable conversion-funnel report exists and is linked here — done in
+   `f9af903`.
+3. Freshness/source audit distinguishes harmless stale churn from true source
+   starvation — reporting surface done in `806fefc`; interpretation remains a
+   rolling operator review task.
+4. Market-mix/LLM-neutral audit identifies whether recall changes improve
+   signal yield or mainly increase neutral review volume — reporting surface
+   done in `ab0b939`; interpretation remains a rolling operator review task.
+5. Operator explicitly decides whether any resulting behavior changes are in
+   scope; this entry itself must not change gates, sizing, runtime state, or
+   paper/live mode.
+
+**Cross-references**
+
+- `logs/trades/archive/2026/05/2026-05-25.jsonl` — latest full-day conversion
+  evidence with one `PAPER_TRADE`.
+- `logs/trades/live/trades.jsonl` — current rolling log.
+- `data/paper_trades.db` — paper-trade corpus (10 total / 8 resolved as of
+  2026-05-26 audit).
+- `analysis/market_matcher.py` — matcher downweight composition.
+- `analysis/match_feedback.py` + `data/matcher_token_weights.json` — dynamic
+  feedback and provisional seed weights.
+- `scripts/pipeline_feedback_report.py` — repeatable funnel / freshness /
+  market-mix feedback report.
+- `analysis/signal_analyzer.py` + `tasks/blend_task.py` + `trading/executor.py`
+  — signal, blend/readiness, and execution funnel stages.
+
+---
+
+### PROFIT-ROT-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-ROT-001 |
+| **Title** | Hardcoded / time-bound "rot surface" durability inventory |
+| **Category** | Durability / observability / maintainability |
+| **Severity** | MEDIUM (silent throughput / signal-quality decay over time; no immediate trade-safety risk — these surfaces affect retrieval priority and scoring inputs, not the trade gate) |
+| **Status** | PARTIAL — 6 high-value surfaces fixed 2026-05-30 (working tree, operator-deploy pending); 6 lower-value surfaces filed below |
+| **Priority** | Done items shipped; remainder batched / low-priority |
+| **Owner** | Operator + implementation agent (Claude authored the audit + fixes; decision-affecting ones need replay-EV + operator deploy) |
+| **Depends On** | `tasks/stats/` audit pattern, `scripts/match_feedback_aggregator.py`, `feeds/subreddit_discovery.py` + `analysis/match_feedback.py` (durable patterns mirrored) |
+| **Blocks** | Nothing hard; prevents silent decay of news-retrieval quality + regime calibration |
+
+**Context.** An end-to-end audit (2026-05-30) found ~14 hand-curated / hardcoded
+surfaces that go silently wrong over time with no feedback/aging loop — same
+failure mode as the obsolete `KALSHI_GEOPOLITICAL_SERIES` allowlist. Durability
+principle adopted: *every hardcoded list/threshold needs a feedback or aging loop,
+or it rots.* The bot already had the patterns to fix them (`subreddit_discovery`
+candidate + `ZERO_SIGNAL_POSTS` suppression; `match_feedback` recomputed artifact;
+`source_stats`); the fixes reuse them.
+
+**Fixed (working tree, 2026-05-30 — observability-only items are safe; behavior-affecting
+ones (edge set, geo dedup) preserve behavior and still need operator deploy):**
+
+- **NEWS_EDGE_SERIES → self-maintaining** (`tasks/stats/edge_series.py`): rolling
+  45-day OPPORTUNITY window auto-promotes/ages series; `config.NEWS_EDGE_SERIES` is now a
+  cold-start seed; refreshed by the match-feedback aggregator. Consumed by `search_news_monitor`.
+- **Geo named-entity single-source dedup** (`analysis/geo_entities.py`): roster shared by
+  `market_matcher` + `market_specificity`, can no longer drift. Behavior-preserving.
+- **Dossier review-deadline tripwire** (`tests/test_dossier_review_deadline.py`): the
+  `2026-06-08` comment-date is now an enforced test (fails when it passes).
+- **`_SERIES_PRIORS` Phase 1a observability** (`tasks/stats/regime_prior_audit.py`): surfaces
+  orphaned priors + missing-prior candidates; first run flagged **8 stale priors**
+  (KXVANCEPAKISTAN, KXVISITVENEZUELA, KXTRUMPCRYPTOCONF, KXEFFTARIFF, KXSBUDGETRES,
+  KXELECTIONEMERGENCY, KXLTGOVGANOMR, KXCPIEU). Read-only.
+- **RSS feed health** (`tasks/stats/feed_health.py`): probes `RSS_FEEDS` for live/stale/empty/
+  unreachable; first run 21/21 live.
+- **Market-horizon observability** (`tasks/stats/market_horizon_audit.py`): live close-time
+  distribution vs `MAX_MARKET_DAYS_TO_EXPIRY`/`_DAYS_TO_CLOSE_CAP`; first run 16k markets,
+  p90=14.9d, 0% drift — assumptions currently well-calibrated, now monitored.
+
+  *Scheduling:* both network-probing audits are wired into the daily
+  `scripts/match_feedback_aggregator.py` (launchd job), run LAST and
+  exception-isolated so a slow/failed fetch cannot affect the matcher-weight job;
+  skip with `--skip-network-audits` for offline/creds-less runs. The log-derived
+  edge-series refresh + regime-prior audit run there too. (A latent missing-import
+  in that wiring — `refresh_edge_series` — was caught and fixed during this work.)
+
+**Filed for batched future work (low marginal value / existing mitigation):**
+
+- **#7 DISABLED_NEWS_SOURCES reactivation** — largely moot: 26 of 30 disabled are dead-Reddit
+  subs; only 3 non-Reddit (Foreign Policy, Defense One, NPR World) — a manual check.
+- **#8 MARKET_SERIES_BLOCKLIST_PREFIXES drift** — already mitigated by the `_SPORTS_TOKENS`
+  secondary gate in `search_news_monitor` + matcher.
+- **#9 `_GEO_SERIES_KEYWORDS`** — partial discovery loop already exists (`subreddit_discovery`).
+- **#10 EARLY_MAX_NEWS_AGE_BY_SOURCE source-string fragility** — low value; the 1800s global
+  default already covers unlisted sources.
+- **#13 source-credibility params** — instrument-only; current values reasonable.
+- **#14 `matcher_token_weights.json`** — has the loop; add scheduled recompute + orphan-prune.
+
+### PROFIT-ROT-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-ROT-002 |
+| **Title** | Source-scorecard tier recommendation was staleness-only over a 24h window |
+| **Category** | Observability honesty / operator-facing recommendation quality |
+| **Severity** | MEDIUM (advisory output only — "remove immediately" is a printed recommendation, NOT an auto-disable; the real disable lists are `config.DISABLED_NEWS_SOURCES`. No trade-path / sizing / signing / persisted-state risk. The harm is an operator trusting the recommendation and manually deleting top producers.) |
+| **Status** | FIXED in working tree v0.32.6 (operator-deploy pending). Four LOW followups deferred below. |
+| **Owner** | Operator + implementation agent (Claude implemented + an independent 4-lens adversarial review reconciled; reporting-only so no replay-EV gate, but operator approves the deploy). |
+| **Depends On** | `tasks/stats/source_stats.py` (`source_stats` table + `last_signal`), `scripts/source_scorecard.py`, `scripts/daily_review.py`. |
+| **Blocks** | Nothing hard; restores trust in the `daily` source-tier recommendations. |
+
+**Context.** The `daily` report recommended **"remove immediately"** for the bot's two
+largest lifetime opportunity producers — "Middle East and north Africa | The Guardian"
+(140 lifetime signals / 123 opportunities) and "NYT > World News" (62 / 54). Root cause:
+`source_scorecard.auto_disable_candidate` judged `stale_drop_ratio ≥ 0.80 + signals == 0`
+over the report's **24h display window** (`DEFAULT_CURRENT_STATE_WINDOW_HOURS = 24`). The
+bot emits **~1 SIGNAL/day across all sources combined** (~158 lifetime), so any single
+source shows `signals == 0` in almost any 24h window — the judging window was ~100× shorter
+than the per-source signal inter-arrival time. The recommendation was structurally broken
+for a selective, low-signal-rate bot. The yield data to fix it already existed (`source_stats`
+lifetime funnel) but the recommendation never consulted it and the report never showed it.
+
+**Fixed (working tree, v0.32.6).**
+
+- **A(i) lifetime-yield veto** (`has_lifetime_yield` + `read_lifetime_totals`): a source that
+  has produced a signal/opportunity/trade is never auto-flagged "remove immediately" /
+  "likely prune"; it falls through to `watch / investigate`.
+- **Recency bound** (`_lifetime_yield_recent`): the veto requires `last_signal` within the
+  recommendation window, tied to the same 45d horizon as A(ii) so the two cannot diverge. A
+  source proven once and signal-dead past the window loses immunity and is flagged again —
+  closes the inverse-dishonesty risk an unbounded veto would create (a single ancient signal =
+  permanent immunity). Surfaced by the adversarial review against live data (14 sources were
+  signal-dead >30d with lifetime yield).
+- **A(ii) wide window** (`collect_log_metrics_windowed`, `DEFAULT_RECOMMENDATION_WINDOW_DAYS = 45`):
+  zero-signal/staleness judged over 45d in a single bucketed log pass (no redundant second scan).
+- **B funnel render**: `daily` Section 8 + scorecard group rows print
+  `life: posts/sig/opp/trade` beside every verdict.
+- Verified on live data: MENA Guardian / NYT World / Politics / Defense News / Ukraine|Guardian
+  moved `remove immediately → watch / investigate`; genuinely-zero-yield "World | Deutsche Welle"
+  correctly stays `prune`; the `remove immediately` bucket now holds only zero-lifetime sources.
+- Tests: `tests/test_source_scorecard.py` (+11 incl. veto, recency-expiry, rec-window-boundary,
+  NULL coercion), `tests/test_daily_review.py` (kwarg + Section 8 funnel regression guard).
+  Full suite 2474 passed (1 pre-existing unrelated `matcher_token_weights.json` failure).
+
+**Deferred followups (LOW — from the adversarial review).**
+
+- **Daily-report cost:** the 45d recommendation scan adds ~3s to every `daily` run (the
+  inherent cost of a 45d log judgment; the bucketed pass already removed the redundant 24h
+  re-read). Optional cheaper path: derive signal-recency from `source_stats` (free DB read)
+  and keep staleness on the display window, avoiding the 45d log scan entirely. Tunable:
+  `DEFAULT_RECOMMENDATION_WINDOW_DAYS`.
+- **Recency horizon tuning:** the veto recency bound = 45d (tied to the rec window). 30d would
+  flag borderline cases sooner (e.g. Defense News, last signal ~30d ago). Operator preference.
+- **Test isolation hygiene:** several pre-existing shared-memory tests in
+  `tests/test_source_scorecard.py` close their SQLite connection inside `try` rather than
+  `finally`, leaking a `cache=shared` in-memory DB on assertion failure. Deterministically
+  green here (0/25 runs; `pytest-randomly` not installed), but move `conn.close()` into `finally`.
+- **Window-scoped sources:** a source present only in `source_stats` (proven, but zero records in
+  the display/rec window) is not scored/rendered — matches the report's explicit window-scoping,
+  noted so a future reader does not treat the omission as a bug.
+- **`_SERIES_PRIORS` Phase 1b/2/3** — per-decision shape-mismatch telemetry, then replay-EV-gated
+  auto-derivation (extend `_derive_series_prior_from_metadata`), then prune the 8 orphans.
+
+**References.** New modules: `tasks/stats/{edge_series,regime_prior_audit,feed_health,market_horizon_audit}.py`,
+`analysis/geo_entities.py`. New artifacts: `data/{news_edge_series,regime_prior_audit,feed_health,market_horizon_audit}.json`.
+Detailed scope/inventory in the operator's session plans (`~/.claude/plans/{rot-surface-inventory,
+news-ingestion-implementation,series-priors-durability-scope}.md`).
+
+---
+
+### PROFIT-THRUPUT-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-THRUPUT-001 |
+| **Title** | Opportunity-throughput reframe + "C" execution plan (the path to GREEN is edge-quality, not volume) |
+| **Category** | Profit-path / readiness strategy / structural ceiling |
+| **Severity** | HIGH (this is the binding constraint on reaching live readiness; misframing it wastes cycles building negative-EV volume) |
+| **Status** | OPEN — PR #56-#65 review complete; easy "pipeline broken" doors closed. Current state: bot can paper-trade, but readiness remains RED from structural edge scarcity (`0/200` POST_FIX_NEW; C3 EV-quality bar adopted but corpus-coupled). v0.33.0 Track B/B3.1 is live and still in soak; do not judge the new desks from tiny lifetime samples. Next active throughput lever remains B2 market-driven retrieval, replay-EV-gated. |
+| **Owner** | Operator (governance fork C3) + implementation agent (C1 read-only now; C2 levers replay-EV-gated + operator deploy). |
+| **Depends On** | Nothing for C1 (read-only). C2 levers depend on C1 findings + replay-EV harness. C3 depends on operator/governance decision. |
+| **Blocks** | Live-readiness (PROFIT-EDGE-012 / POST_FIX_NEW 200-bar), the OOS corpus (PROFIT-PHASE3-003), and ultimately paper→live cutover. |
+| **Cross-links** | Consolidates the throughput framing of `PROFIT-PIPELINE-001` (conversion attrition), `PROFIT-EDGE-004` (market-scope ceiling), `PROFIT-MATCH-001` (match quality), `PROFIT-EDGE-012` (readiness gate), `PROFIT-PHASE3-003` (OOS corpus). Supersedes the throughput sections of `~/.claude/plans/{news-ingestion-implementation,track-b-opportunity-throughput}.md` (both self-superseded in-doc). |
+
+**The reframe (evidence-backed 2026-05-30; falsifies the "pump the dry funnel" premise).**
+Reaching live readiness is NOT a news-volume problem. The funnel works as designed; the
+binding constraint is a **structurally small news-edge surface**, and most "throughput" levers
+manufacture negative-EV volume on markets the bot has no edge on (INV-6/7 violation). Measured
+over 15 day-partitions (2026-05-16 .. 2026-05-30):
+
+- **99.19% stale-drop is correct, not a bottleneck.** 775,667 stale / 781,994 observed; **80.1%
+  of drops are genuinely >7d old** (bad-timestamp backfill), only ~0.5% (~270/day) are <1h late.
+  All 158 historical opportunities had news age **<30min** (median 2m). Loosening freshness admits
+  junk. The 1,800s early gate + 300s consumer gate stay.
+- **Matching/analysis are not killing real opportunity.** All 3,557 `MATCH_SUPPRESSED` carry
+  `single_named_entity + minimal_overlap` (spurious); `ANALYSIS_REJECTED` (stale_news 735,
+  no_keywords 529) is relevance filtering. Both remove junk, not signal.
+- **Market-driven retrieval already exists + is dominant** (`feeds/search_news_monitor`, ~40 of 63
+  opps). Reddit is **permanently dead** (app-creation denied; 262 circuit-open warnings on the last
+  day) — absorb the loss, do not chase it.
+- **71% of the Kalshi universe** (37% macro + 34% "mention" + sports) is un-tradeable by news
+  interpretation. The edge surface is intrinsically ~13 event-driven series.
+- **Net throughput:** ~2.73 OPPORTUNITY/day; **39/41 carry positive edge** yet **33/41 die at the
+  readiness gate** (G1 the largest blocker) → ~0.07 realized paper-trades/day (1 in 15 days; 10
+  all-time). At this rate **200 resolved trades = years.**
+
+**The trap the operator named (2026-05-30): the EV-validation framework needs trades that won't come.**
+Every COUNT-based gate is structurally unreachable at 0.07 trades/day: POST_FIX_NEW (200 resolved),
+the OOS corpus (≥30 resolved). The structural answer is twofold: (1) raise the realized trade RATE
+from *existing* opportunity flow by recovering gate-blocked positive-edge opportunities (C1a — needs
+no new trades); (2) where validation is still required, prefer the **replay-EV harness** (replays
+decisions over RECORDED data — no new live trades) and, ultimately, **change the bar itself** (C3) so
+"ready" means demonstrated edge, not an unreachable count.
+
+**Forbidden zone (manufactures negative-EV volume / softens selectivity — NOT C work).**
+Loosen freshness, relax `ENABLE_LOW_QUALITY_MATCH_SUPPRESSION`, lower `*_MIN_MATCH_SCORE` (0.06),
+generic RSS breadth, official macro feeds (L1), broaden `SEARCH_MAX_QUERIES` to high-OI no-edge
+markets, or touch G1/G4 thresholds. All add volume on no-edge markets or soften the safety gate.
+
+**C1 — read-only diagnostics (zero trade-path risk; no new trades required; DO FIRST).**
+- **C1a — Resolve the gate question (highest value).** 39/41 positive-edge opportunities die at the
+  gate. Read the actual `GATE_SUMMARY` / `SKIPPED` records: is the gate *correctly* rejecting
+  genuinely-low-confidence signals, or *over-blocking* real positive-EV ones? ⚠️ CLAUDE.md flags this
+  as the classic misread — G1 compares `scaled = blended_confidence × regime_confidence` (regime
+  pinned ~0.2201 here, fast-lane-only), NOT blended alone. **Do not touch G1** until this proves a
+  real, fixable over-block. If it is over-blocking, this raises the trade rate from CURRENT flow —
+  the direct answer to the "200 trades = years" trap.
+- **C1b — False-negative match audit.** Of 3,557 suppressed, quantify any legitimate matches lost to
+  the entity-prefix free-pass (`_token_not_in_ticker`). Anchor: `scripts/simulations/match_score_audit.py`;
+  must preserve canonical EDGE-001 anchors (KXTRUMPIRAN events 3+5).
+- **C1c — Edge-prioritization A/B readout (passive-monitor only).** AFTER cohort 0/10 resolved →
+  years away → DEMOTED to passive monitor (`data/edge_activation_compare.json`), not an active gate.
+
+**C2 — small EV-positive levers (each replay-EV-gated, one at a time, operator deploy).**
+- **C2a — `PAPER_MAX_CANDIDATES` 3→5** (config.py:760; config comment endorses 8–10 on faster HW).
+  LLM sees past top-3 Jaccard matches. Pure throughput, no gate softening. Low risk.
+- **C2b — Match B' guard refinement** *iff* C1b finds recoverable false-negatives. Recovers real
+  matches; does NOT loosen precision. Replay-EV + soak gated.
+- **C2c — 2–3 targeted RSS feeds** on under-served PROVEN edge series (Iran/China/tariff). Ingestion-only.
+- **C2d — Disable dead Reddit** (`main.py` reddit monitor + subreddit_discovery). Stops circuit-spam +
+  wasted cycles. 0 yield, low risk.
+
+**C3 — the governance fork (the real unlock; operator/governance authority).**
+At a structurally-small edge surface, raw 200-count is the wrong bar — unreachable without softening
+selectivity (forbidden). Redefine "ready" as **demonstrated edge**: positive replayed EV (95% CI) on
+≥30 resolved across ≥2 families (the IC §16.7 OOS standard the codebase already has), unifying the
+readiness gate with the OOS-corpus gate. Redefines the live-flip criterion → route through operator +
+governance, referencing the Cycle-17D charter that set 200.
+
+**Evidence Log (append-only; updated as C1/C2 produce findings).**
+- 2026-05-30 — Document opened. Funnel measured (15 partitions): 99.19% stale (80% >7d), 2.73 opp/day,
+  39/41 positive-edge, 33/41 gate-blocked, 0.07 trades/day. Reddit dead. Sources: workflow `wi8nwqd04`.
+- 2026-05-30 — **C1a gate diagnostic → VERDICT `gate_correct_reject` (the gate is NOT over-blocking).**
+  All 33 G1-blocks are dated 2026-05-18..24 (PRE-PROFIT-PRIORS-002): a strong fast-lane LLM signal
+  (conf 0.75–0.90) was DILUTED by the old interpretation/structural-dominant `_time_prior` against
+  empty dossier/structural lanes → blended collapsed to 0.12–0.29, regime_conf to 0.063–0.23, scaled
+  (=blended×regime) to 0.008–0.035 — far under even the normal 0.05 floor. Gate code confirmed
+  (`tasks/trade_readiness_gate.py:159/171/175`; the `G1_blended_confidence` string is misleadingly
+  named — it compares *scaled*). **Already remediated:** PROFIT-PRIORS-002 (2026-05-24) reshaped
+  uninstrumented-series priors fast-dominant (0.65/0.25/0.10); post-fix (05-25..28) G1 blocks = 0,
+  same news now blends ~0.34 and PASSES. ZERO recoverable by gate tuning (forbidden + don't pass 0.05).
+  Post-fix residual blocks are G2 (source diversity) + G6 (recency) — recoverable ONLY by POPULATING
+  the interpretation/dossier lane (real multi-source evidence + fresh recency), never by weakening a
+  gate. Source: workflow `wdo7j1nnv`.
+- 2026-05-30 — **C1b false-negative match audit → VERDICT `not_worth_it`.** The B' guard is ALREADY
+  SHIPPED (commit b50d6d3, 2026-05-23, substring form). Current-regime suppressed (n=451 of the 3,557,
+  post-fix) = **100% correctly junk** (single entity already in the ticker prefix, zero supporting
+  token, e.g. "Pilgrims flock to hajj in Mecca"→"Will Trump visit Iran"); ~0% legitimate false-negatives.
+  The proposed refinement is a no-op under substring semantics or actively harmful under tokenized
+  semantics (re-floods 451 junk matches, cuts retained OPPORTUNITY 260→87 per debt-log:3560-3566 — the
+  guard is load-bearing for noise suppression). The canonical EDGE-001 anchors (KXTRUMPIRAN events 3+5)
+  DO currently fail, but from matcher SCORING (entity buried in ticker prefix; the deferred
+  PROFIT-MATCH-002 "Option C": peel the entity out, require non-entity overlap), NOT from suppression.
+  Source: workflow `wdo7j1nnv`.
+- 2026-05-30 — **C1 synthesis: both easy doors are closed, honestly.** No gate over-block, no match
+  false-negatives — the historical failure modes were already root-caused and fixed (PROFIT-PRIORS-002;
+  b50d6d3). This *confirms* the structural ceiling rather than finding a free lever. Two genuine
+  technical levers remain, both DEEP not broad (improve the edge, don't pump volume): **(L-dossier)**
+  populate the interpretation/dossier lane so fast-lane-only event series clear G2/G6 and blend more
+  robustly — raises CONVERSION of existing opportunities; **(L-matcher / PROFIT-MATCH-002)** fix matcher
+  scoring to recover the canonical anchors the bot is currently blind to on its core edge series
+  (KXTRUMPIRAN). Both high-blast-radius (anchor-harness + archive-replay gated). **Crucially, both are
+  un-sizeable from current data** (post-fix sample is ~7 graded decisions) — which is itself the
+  argument for C3: we cannot reach OR even measure against a count-based bar at this volume. C3
+  (reframe "ready" to demonstrated EV-quality, ≥30 resolved + positive replayed EV vs the unreachable
+  200) is the evidence-forced path; L-dossier raises conversion to reach even that smaller bar faster.
+- 2026-05-30 — **C3 governance proposal DRAFTED** (operator decision pending):
+  `docs/governance/2026-05-30-readiness-bar-ev-quality-proposal.md`. Re-anchors live-readiness from the
+  raw 200-resolved POST_FIX_NEW count to the IC §16.7 EV-quality criterion (positive replayed EV,
+  `ev_ci_95_lo > 0` strict, on ≥30 resolved across ≥2 families under a registered regime), collapsing two
+  redundant count-gates into one. Grounded: 200 was a structural-sufficiency proxy (cohort size vs the
+  ~237-272 frozen corpora that failed), NOT a statistical floor (debt-log:2333); the EV-CI form is
+  stricter and measures the end goal directly. Invariants preserved verbatim (INV-6/7, n≥30 CLT floor,
+  strict CI>0, ≥2-family OOS, actual-settlement pnl, cohort discipline, operator-gated cutover, R-5).
+  HONEST: necessary-not-sufficient — even 30 is far at 0.07 trades/day (8/30 now); pairs with L-dossier.
+  Source: workflow `wspcz01dz`.
+- 2026-05-30 — **L-dossier SCOPED** (read-only): `~/.claude/plans/l-dossier-lane-population-scope.md`.
+  Key reframe from the live `evidence_store.db` (58 dossiers / 406 evidence): the interpretation/dossier
+  lane is **populated-but-inert and ACTIVELY DILUTING**, not empty. 37/58 dossiers pinned at p=0.5;
+  323/406 updates are confidence-only (estimate frozen at the 0.5 seed by monoculture evidence:
+  news=296/other=108 → same-class → never a "state" update). A 0.5 dossier at confidence 0.747
+  (KXTRUMPIRAN) is classified "real" → drags blended_p toward 0.5 → pushes strong fast signals below G1.
+  Plus TWO latent bugs: (i) regime-weight KEY MISMATCH (`interpretation` weights vs `accumulation`
+  lane_id → `get(lane_id,0.0)` zeros the lane); (ii) structural `_build_context` hardcodes
+  `llm_called=False` → confidence ceiling 0.50 < 0.70 fail-safe → structural lane never triggers. Levers
+  tiered: Tier A (fix key-mismatch + fallback-filter inert-0.5 = stop dilution, lower-risk, do first),
+  Tier B (make estimates move / source diversity / structural LLM, HIGH risk), Tier C (async sync,
+  highest risk). All HIGH blast radius (trade-decision inputs) → high-assurance + replay-EV + operator
+  deploy; levers target lane DATA, never gate thresholds. Upside: directional only (~8 resolved), "a
+  handful/day", MUST replay-EV the sign. Source: workflow `wspcz01dz`.
+- 2026-05-30 — **L-dossier Tier-A SIZING (read-only) → VERDICT GO-WITH-CAVEATS, Half A only.** Source:
+  workflow `wni1c3mvr`. DB (`evidence_store.db`): 58 dossiers, 39 inert (p≈0.5), **32 inert-but-"real"**
+  (conf≥0.20 → dilute; conf median 0.29, max 0.76); 35/58 G2-monoculture; **all 58 structural priors
+  <0.70** (llm_called=False, can never fail-safe). Counterfactual recovery (158 BLEND_DECISIONs, blend
+  math reproduced 158/158): 43 diluted, 17 gross G1-clears on inert-lane-drop **but 13 have blended_p=0.5
+  (zero edge → never trade)** → real prize **~4 full-corpus / ~1 post-fix; edge-recoverable = 0**.
+  Existence-proof, single-digit n — NOT a rate. The dominant post-fix blocker is G2/G6 + opportunity
+  throughput (5 of 8 post-fix blocks are G2/G6), which Tier A does NOT touch. **CONFIRMED BUG (the 158/158
+  reproduction proves it):** the regime-weight KEY MISMATCH — `regime_weights.get("accumulation",0.0)=0.0`
+  because `compute_regime_weights` emits `{fast,interpretation,structural}` but the lane is `lane_id=
+  "accumulation"` (`decision_blender.py:169` vs `blend_task.py:411` vs `regime_classifier.py:359`); the
+  accumulation lane is silently zeroed for every dossier-backed blend (worse as rc rises). **Recommendation:**
+  fix the key-mismatch (Half A) on **CORRECTNESS** grounds (not the tiny recovery), gated TDD + adversarial
+  review + `replay-gate-analyze` + operator deploy; **DEFER** Half B (fallback-filter widening — un-sizeable,
+  false-negative risk, two-edged). Two confirmed blender defects worth filing (key-mismatch; structural
+  `llm_called=False`). **Meta-pattern: every technical lever (gate, match, dossier Tier-A) sizes to
+  tiny/un-sizeable on single-digit data — the strongest evidence-forced argument yet for C3.**
+- 2026-05-30 — **OPERATOR DECISIONS.** (1) **C3 ADOPTED** — live-readiness re-anchored to the IC §16.7
+  EV-quality criterion (`docs/governance/2026-05-30-readiness-bar-ev-quality-proposal.md`, Status ADOPTED).
+  Governance decision made; code implementation (§7) is gated + corpus-coupled, lands with
+  PROFIT-PHASE3-003 (no live-flip effect until ≥30 resolved exists + passes the replay-gate T3 EV test;
+  PAPER-ONLY holds). (2) **Key-mismatch fix authorized** (Tier-A Half A) — fix the regime-weight key
+  mismatch on correctness grounds, under high-assurance (TDD + adversarial review + replay-gate-analyze +
+  operator deploy). Half B (fallback-filter widening) DEFERRED. Filing as PROFIT-BLENDER-002.
+- 2026-05-30 — **Edge-prioritization "option 2" wired: replay-based (cross-sectional) EV eval.**
+  The temporal A/B (`edge_activation_compare.compare_verdict`) can't read out — `0/10 resolved
+  AFTER` at the throughput ceiling. Added `stratify_by_edge_series` (pure, tested) +
+  `compare().stratification` + an observability line: it stratifies ALL recorded resolved trades
+  by whether their series is in the CURRENT active edge set (`active_edge_series`, applied
+  RETROACTIVELY at report time — a trade moves strata as the set ages), reporting series + n.
+  **CORRECTION to a same-day hand check** that used the wrong membership set (seed∪active union →
+  "0 non-edge, un-evaluable"): under the actual criterion the split IS populated — **currently-active-edge
+  n=5 EV −$0.50 / 40% win [single series: KXTRUMPCHINA] vs currently-aged-out n=3 EV −$2.50 [single
+  series: KXFISAEXTEND]**. This is **DESCRIPTIVE, not causal** (per Codex review): a stratification of
+  historical outcomes by *current* edge-set membership — NOT evidence the flag steered toward better
+  markets at trade time (single-series strata; n=5 vs 3 → no statistical power). This is the recorded-corpus
+  alternative to waiting for live AFTER trades; it does NOT need the bootstrap corpus. Files:
+  `tasks/stats/edge_activation_compare.py`, `tasks/stats/observability_checkpoint.py` (+tests).
+  Note: a literal `replay_gate` run can't evaluate edge-prioritization (it's input-selection, not
+  decision-logic; the un-fetched counterfactual news isn't recorded) — stratification is the
+  coherent replay-based proxy.
+- 2026-05-31 — **Last-10-PR arc review (PR #56-#65) + current action decision.** Reviewed the merged
+  paper-trade/profit-path sequence:
+  **#56** dynamic matcher/source/market feedback loop; **#57** trigger-evidence admission + matcher
+  weight replay; **#58** rot audits + inert flag-gated edge retrieval; **#59** edge-prioritization
+  temporal EV monitor; **#60** shared GATES & EXPERIMENTS checkpoint; **#61** value-aware source
+  recommendations; **#62/#64** C3 EV-quality readiness proposal/adoption; **#63** blend
+  accumulation→interpretation regime-key correctness fix; **#65** descriptive edge-set EV split +
+  Codex review fixes. Synthesis: the paper execution path is live; the problem is no longer "pipeline
+  cannot reach executor." The current blocker is **edge-surface scarcity and source starvation**:
+  live readiness still reads `NOT_READY` (`0/200` production-proxy-complete rows; C3 adopted but
+  corpus-coupled), current-day funnel is `658 stale-drop / 6 fresh-pass / 2 match-weight /
+  0 opportunity / 0 trade`, and Reddit is circuit-open (`9/9` subreddits returning 403). Already
+  investigated and do NOT reopen without new evidence: broad freshness loosening, generic news-volume
+  expansion, Reddit-free volume pumping, lowering readiness gates just to create trades, or literal
+  replay of unrecorded edge-prioritization counterfactual fetches. Still-open technical lanes:
+  structural `llm_called=False`; Half B inert-0.5 dossier exclusion after ≥20 post-fix blends;
+  post-blender-fix G1/readiness audit; production-faithful LLM eval transport; matcher-weight
+  runtime/seed hygiene. **2026-05-31 correction:** do not pursue Reddit restore as the immediate
+  path. `PROFIT-SOURCE-001` now records the operator finding that Reddit app approval was denied and
+  no OAuth path exists. **Pre-v0.33.0 decision:** no bot restart and no trade-path mutation until a
+  reviewed Track B increment lands. The cheapest active move toward GREEN is a
+  **Track B replacement-feed evidence refresh** plus a clean plan to disable `run_reddit_monitor`:
+  quantify current source attrition/yield, map authorized replacement feeds to active Kalshi series,
+  classify Reddit as permanently unavailable in source health, and only then implement the runtime
+  disable/replacement wiring. Continue structural-lane / Half-B work only when their documented
+  volume gates are met.
+- 2026-05-31 — **Track B EXECUTED: Reddit runtime-disabled + B3.1 replacement feeds (first batch) deployed**
+  (v0.33.0, PR #68 / merge `49d0cde`, restarted live on PID 34864).
+  Executes the plan prescribed in the entry above (evidence refresh → classify Reddit unavailable →
+  implement runtime disable + replacement wiring).
+  **Evidence refresh** (workflow `wypdcusfl`, read-only): Reddit confirmed **0 signals / 0 opportunities
+  / 0 trades lifetime** (47 r/ subs, 61 posts, off-topic sports/entertainment) → marginal yield ≈ 0;
+  throughput **collapsing** 5.36 → 1.43 → 0 opp/day (full / last-7d / last-24h; 55h zero-opp gap).
+  Per-source yield (`source_stats`): demand is 100% US-political/geopolitical RSS (Guardian-MENA 123 opps,
+  NYT World 54, Guardian World 51, Al Jazeera 32).
+  **Reddit disable** (satisfies `PROFIT-SOURCE-001` AC#1): `cfg.reddit_enabled` default-off + early-exit
+  gates in `run_reddit_monitor`, `run_discovery_pass`, `_subreddit_discovery_task` (TDD, 5 tests). G2-safe —
+  0 `social`-class evidence in `evidence_store.db` / `dossier_updates_post_fix.db`, so removal cannot change
+  a diversity-gate outcome.
+  **B3.1 first batch**: 5 publisher desks (NYT Politics/US, The Hill News/Senate, Guardian US) appended to
+  `config.RSS_FEEDS`, all live-probed (HTTP 200, fresh), each with a 1800s freshness override (TDD, 3 tests).
+  **Honest divergences from the evidence pack (validation caught all four):** (i) the pack's "30-min default
+  covers them" was WRONG — the default cutoff is 300s → publisher RSS is dead-on-arrival without the 1800s
+  override; (ii) WaPo **deferred** — its generic "Politics"/"National" feed titles collide with Politico's
+  source label (attribution corruption); (iii) gov feeds **non-viable** (USTR 404; State press/Iran return
+  non-RSS); (iv) macro feeds (BLS/BEA/FRED) **refuted** — 0 macro-series opportunities ever; would inject
+  noise the `_ECONOMIC_TOKENS` gate filters.
+  **Adversarial review (2 independent lenses) reconciled:** input-breadth-only — **NOT** a §16 decision-logic
+  change (matcher/blend/gate math untouched; every item still clears the same unchanged selectivity);
+  INV-6/7 preserved; no cohort reset warranted (0/200, nothing lost); layer-isolated (`/feeds` + config only);
+  deploy gate = OPERATOR restart. Findings fixed: discovery-task clean early-exit + log; strengthened
+  source-label collision test; date/comment hygiene.
+  **Deferred follow-ups:** WaPo direct (needs a per-feed source-name override); B2 market-driven retrieval
+  (the deep lever — replay-EV gated); Bluesky (`PROFIT-SOURCE-002`); NPR/Axios (format/freshness validation).
+  Source: workflow `wypdcusfl`.
+- 2026-05-31 — **Daily/health report review after v0.33.0 restart: keep B3.1 in soak; expose the real pinch.**
+  Reports reviewed: `logs/reports/daily/daily_review_20260531.txt` and
+  `logs/reports/health/bothealth_2026-05-31.md`. Evidence: readiness remains RED (`0/200`
+  POST_FIX_NEW); last-24h trades = 0; feeds healthy (`26 live, 0 unhealthy`); ingestion observed
+  `186` fresh passes but only `1` `SIGNAL_ANALYSIS_DETAIL`, `0` LLM attempts, `0` opportunities,
+  `0` paper trades. B3.1 desks showed only tiny lifetime fresh samples (2-9 posts) while stale
+  backfill inflated observed/drop counts, so the prior scorecard `prune` label was premature. Reporting
+  follow-up: add an explicit `incubating` source-scorecard tier for sources with source_stats coverage
+  but `<30` lifetime fresh posts and no lifetime yield, and add a daily "fresh-pass conversion" line to
+  surface `fresh -> signal rows -> LLM attempts -> opportunities -> paper trades` plus the largest pinch.
+  Decision unchanged: let B3.1 soak longer before judging; B2 market-driven retrieval remains the next
+  real throughput lever, gated by replay-EV rather than volume pumping or gate relaxation.
+- 2026-06-01 — **Fresh-pass → signal-analysis bypass impact check (read-only): simple gate bypass is not
+  the missing lever.** On the 2026-06-01 UTC window, the live log had `309` `EARLY_FRESH_PASS` events,
+  `36` `SIGNAL_ANALYSIS_DETAIL` rows, and `21` `ANALYSIS_REJECTED(no_keywords)` rows. The `no_keywords`
+  check in `main.py` runs **after** `analysis/signal_analyzer.py` has already emitted
+  `SIGNAL_ANALYSIS_DETAIL`, so bypassing it would add **0** signal-analysis rows; it would only allow up
+  to `21` additional downstream `SIGNAL` attempts, many already LLM-neutral/no-keyword. The actual
+  fresh→signal gap is upstream: `178/302` unique fresh items were fresh-only with no ticker candidate in
+  the trade log, `92` had match-weight evidence but no analysis row, and only `4` unique fresh items were
+  suppressed by match-quality. Post-clean-start totals show the same shape: `8,658` fresh-pass events,
+  `1,111` signal-analysis rows, `879` no-keyword rejections, and `4,470/8,360` unique fresh items with no
+  downstream candidate at all. Therefore "allow all fresh passes to flow into signal rows" is not a
+  one-line keyword-gate bypass; it requires changing market-candidate assignment/matching semantics so
+  every fresh item is attached to a ticker, which is signal-generating and must be replay-EV / precision
+  audited before implementation. B2 market-driven retrieval remains the cleaner throughput lever.
+- 2026-06-01 — **Market-first fresh-pass assignment plan corrected after adversarial review.** Planning pass
+  confirms partial infrastructure exists: the bot already consumes Kalshi market/series surfaces, builds a
+  series-scoped open-market universe, runs title-derived targeted search, has shadow-only source-hint helpers,
+  and has match/replay diagnostics. It is not sufficient to flip all fresh passes into signal rows. The
+  corrected implementation plan now treats the first-draft critical defects as constraints: `find_candidates()`
+  tuples must be explicitly unpacked before writing shadow rows; exact `site:{domain} "{full market title}"`
+  queries are replaced by entity/topic query construction; `kalshi/source_hints.py` is extended rather than
+  duplicated; durable metadata snapshots are owned by `tasks/`; shadow rows write to a partitioned
+  `logs/trades/shadow/` surface; and the audit must fail on assigned rows without tickers or scores. Missing
+  pieces remain typed `GET /series/{series_ticker}` metadata persistence (`settlement_sources`, contract
+  terms, tags/category/update timestamp), source-hints-based query planning from Kalshi settlement metadata,
+  captured retrieval/candidate-assignment counterfactuals, and a precision audit harness for fresh-item→ticker
+  assignment. Implementation plan:
+  `docs/superpowers/plans/2026-06-01-market-first-fresh-pass-signal-plan.md`. Posture remains shadow-first;
+  no signal-generating behavior change until precision gates and operator approval.
+
+---
+
+### PROFIT-BLENDER-002
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-BLENDER-002 |
+| **Title** | Blend regime-weight key mismatch silently zeroed the accumulation lane |
+| **Category** | Trade-decision correctness (blend math / G1 input) |
+| **Severity** | MEDIUM (correctness defect on a trade-decision input; paper-mode; EV-safe per counterfactual — corrective not degrading) |
+| **Status** | DEPLOYED (PR #63 / v0.32.7; live before v0.33.0 restart) — Half A fixed. Half B inert-0.5 dossier exclusion remains a separate fast-follow after >=20 post-fix blends. |
+| **Owner** | Implementation agent (TDD + fix) + independent adversarial review; operator approves merge (blend-math/G1-input change). |
+| **Cross-links** | PROFIT-THRUPUT-001 (L-dossier Tier-A Half A); PROFIT-BLENDER-001 (fallback classifier — Half B's surface); PROFIT-PRIORS-002 (regime weights). |
+
+**Bug.** The middle blend lane is `accumulation` in lane space (`LaneInput.lane_id`,
+calibration, telemetry, `source_lane`) but `interpretation` in regime-weight space
+(`analysis/regime_classifier.compute_regime_weights` emits `{fast, interpretation, structural}`).
+`analysis/decision_blender._effective_confidences` did `regime_weights.get(lane.lane_id, 0.0)` →
+`get("accumulation", 0.0)` = **0.0**, silently zeroing the accumulation lane's regime weight for
+every dossier-backed blend (production never emits an `accumulation` key). Proven by a simulator
+reproducing all 158 recorded blends 158/158 only under the buggy key.
+
+**Fix.** Single-point alias `_LANE_TO_REGIME_KEY = {"accumulation": "interpretation"}` resolved at
+the one lookup where the conventions interface; `lane_id` not renamed (entrenched + load-bearing).
+Fictional `"accumulation"`-keyed test fixtures corrected to the production `"interpretation"` key
+(now guard the behavior) + `TestRegimeWeightKeyMapping` (bug-sensitive routing + emitter↔alias
+contract test). `python -B` full suite 2477 passed (1 pre-existing unrelated failure).
+
+**EV-safety (adversarial counterfactual, 158 recorded BLEND_DECISIONs).** 80 change; **0 edge-sign
+flips, 0 spurious DER-2 dominance**; all 16 mode flips are `dominant_lane→weighted_blend` (removes
+bug-manufactured fast dominance); 4 binding-G1 losses, all over-confident marginals haircut by a
+corroborating dossier (same side of 0.5). Corrective, not degrading. **Lens-1 reviewer BLOCK
+("fix not applied") REFUTED** — stale-bytecode artifact in the reviewer's environment; live tree
+verified by Read + git diff + runtime `[0.25,0.25]` + `-B` pytest.
+
+**Fast-follows (tracked, non-blocking).**
+- **Half B** (exclude inert-0.5 dossiers from the blend — the PROFIT-BLENDER-001 fallback classifier
+  cohort with conf≥0.20, 32/58 live dossiers): re-run this exact counterfactual once ≥20 post-fix
+  BLEND_DECISIONs accumulate (post-fix regime currently ~8, bootstrap-blocked). Kept SEPARATE from
+  the Half-A correctness fix (single-variable discipline).
+- **Structural lane `llm_called=False`** (`tasks/structural_task.py`): all 58 structural priors
+  capped <0.70, never reach the fail-safe — separate defect, separate fix.
+
+---
+
+### PROFIT-REPORT-001a
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-REPORT-001a |
+| **Title** | Go-live readiness gates on POST-P0 cohort; Polymarket daily ack-gate removed |
+| **Category** | Reporting / go-live gate / config friction |
+| **Severity** | MEDIUM |
+| **Status** | IMPLEMENTED 2026-06-11 — VERSION 0.33.8, branch `fix/gate-corrections-polymarket-ack-and-post-p0`. Paper-only posture preserved; no live-execution path touched. |
+| **Owner** | Claude implemented; operator owns merge + (eventual) live cutover. |
+| **Depends On** | P-8 P0 cohort sentinel (`bot_state.p0_price_fix_deployed_ts`). |
+| **Blocks** | Trustworthy go-live verdict; unattended Polymarket operation. |
+
+**Two operator-decision corrections (2026-06-11), bundled (both are gate/config, neither touches the execution path):**
+
+**F — Go-live readiness (performance report §8) now gates on the POST-P0 cohort.**
+Previously §8's authoritative READY/NOT-READY verdict used the LIFETIME cohort, with post-P0 shown only as informational. The pre-P0 cohort ran under the pre-fix Kalshi pricing bug (P-1..P-10, closed 2026-05-12) and is excluded as non-representative everywhere else (report §§7b/7d/7e). Operator: *"No, post0. Pre post0 didn't work correctly, why leverage improper functionality as the gate?"* Now the verdict (resolved count, win rate, drawdown) uses post-P0; lifetime is INFORMATIONAL only; falls back to lifetime if the P0 boundary sentinel is missing so a verdict is always produced. Drawdown criterion = peak-to-trough (the metric post-P0 was already measured by, since a sub-cohort has no clean start-vs-now baseline) and **fails closed** when a non-empty cohort's bankroll curve has <2 samples — closing a silent 0%-drawdown false-pass on a safety gate. `scripts/performance_analysis.py::section_golive_readiness`; tests in `tests/test_performance_analysis_p0_cohorts.py`. Note: post-P0 currently has well under the 20-resolved floor, so §8 still reports NOT READY (operator: *"we're not ready anyways"*).
+
+**A — Removed the daily Polymarket eligibility-ack gate.**
+`config.py` built and a startup preflight `sys.exit(1)`-ed unless `POLYMARKET_US_ELIGIBILITY_ACK_DATE` equalled *today's* UTC date — forcing a manual daily `.env` edit to keep Polymarket trading (and breaking local pytest on every date rollover). Operator: *"I shouldn't have to change the .env daily… I don't have that for kalshi and everything functions properly. Fix that."* Fully removed: the env var, the `polymarket_us_eligibility_ack_date` field, `require_polymarket_enablement_preflight()`, the `__post_init__` call site, and the `.env.example` line. A regression test pins that config builds without the var. Polymarket now trades whenever `POLYMARKET_US_ENABLED=true`; live orders remain separately gated by `POLYMARKET_US_LIVE_TRADING_ENABLED`. Historical design doc `docs/governance/2026-06-06_111138-polymarket-trading-integration.md` left intact as a frozen record. Supersedes memory `feedback_polymarket_ack_date_daily_gate` (the daily-refresh burden no longer exists).
+
+### PROFIT-REPORT-001
+
+| Field | Value |
+|-------|-------|
+| **ID** | PROFIT-REPORT-001 |
+| **Title** | Consolidated analysis and reporting output contract |
+| **Category** | Observability / reporting / launchd hygiene |
+| **Severity** | MEDIUM |
+| **Status** | IMPLEMENTED 2026-05-30 — repo contract, writer migration, artifact migration, guardrails, and verification complete. Installed launchd services were audited but not restarted. |
+| **Owner** | Codex implemented repo/migration; operator owns any future launchd bootstrap/restart. |
+| **Depends On** | None. |
+| **Blocks** | Operator reporting reliability; repeatable daily/pipeline reports; launchd output hygiene. |
+
+**Problem.** Analysis and reporting outputs do not have one clear contract. Runtime facts,
+operator-facing reports, launchd stdout/stderr, replay artifacts, governance events, and
+derived caches are all stored under repo-local `logs/*` and `data/*` with mixed semantics.
+Current visible spread:
+
+- `logs/app/` contains operational logs, launchd stdout/stderr, and human Markdown reports
+  (`bot.log`, `errors.log`, `launchd.*`, `bothealth_YYYY-MM-DD.md`, daily-review launcher logs,
+  db-backup launcher logs, match-feedback launcher logs).
+- `logs/reports/` contains human reports plus state (`report_YYYYMMDD.txt`,
+  `daily_review_YYYYMMDD.txt`, `source_tier_state.json`).
+- `logs/trades/` is the canonical event stream root (`live/trades.jsonl` plus archived daily
+  partitions).
+- `logs/governance/` is the governance decision stream and governance launchd stdout/stderr.
+- `logs/edge_replay/` stores replay corpora, CI run artifacts, LLM capture/cache output, and
+  replay diagnostics.
+- `data/` stores canonical mutable state (`paper_trades.db`, `evidence_store.db`) and derived
+  machine artifacts (`news_edge_series.json`, `calibration_summary.json`,
+  `matcher_token_weights.json`, `feed_health.json`, audit JSON files).
+- Launchd jobs currently point stdout/stderr at `logs/app/*` or `logs/governance/*`:
+  `com.jake.kalshi-bot`, `com.jake.kalshi-bothealth`, `com.jake.kalshi-daily-review`,
+  `com.jake.kalshi-match-feedback-aggregator`, `com.jake.kalshi-soak-check`,
+  `com.kalshi.db-backup`, `com.kalshi.governance.fast`, and `com.kalshi.governance.deep`.
+
+**Target architecture.** Keep one canonical reporting root while preserving the distinction
+between raw source facts and generated summaries. Raw facts remain the only durable source of
+truth; reports are reproducible views over those facts and must not duplicate raw records.
+
+```text
+runtime_outputs/
+  raw/
+    app/                 # bot.log, errors.log, launchd stdout/stderr
+    trades/              # canonical event stream: live + archive
+    governance/          # canonical governance event stream + governance process logs
+    edge_replay/         # replay corpora, run manifests, LLM replay artifacts
+  state/
+    db/                  # paper_trades.db, evidence_store.db, runtime lock/sentinels
+    derived/             # recomputable machine artifacts, one owner each
+  reports/
+    daily/               # daily_review_YYYYMMDD.txt
+    health/              # bothealth_YYYY-MM-DD.md
+    performance/         # report_YYYYMMDD.txt / performance_analysis output
+    evaluations/         # llm_eval and similar explicit eval artifacts
+  backups/
+    db_snapshots/        # online-safe DB backups
+```
+
+This root may initially map to `logs/` for compatibility, but the code should use named
+helpers/env vars rather than hard-coded `logs/app`, `logs/reports`, and `data` paths. The durable
+rule is contract-first: every writer declares whether it emits raw telemetry, mutable state,
+derived state, report artifact, process log, or backup.
+
+**What we should be doing.**
+
+- Use `logs/trades/live/trades.jsonl` and its archive only as raw event telemetry, not as a
+  report destination.
+- Treat `data/paper_trades.db` and `data/evidence_store.db` as canonical mutable state until a
+  deliberate `state/db` migration is approved.
+- Treat `bothealth`, `daily_review`, `performance_analysis`, and eval outputs as generated report
+  artifacts under one report namespace.
+- Treat launchd stdout/stderr as process logs, not report artifacts.
+- Keep derived JSON artifacts single-owner and recomputable. If a JSON artifact is stateful and
+  operationally consumed (`matcher_token_weights.json`), classify it as derived state with owner
+  and retention, not a report.
+- Prefer links/references in reports back to raw facts over copying raw JSONL/DB extracts into new
+  files.
+- Add a manifest/inventory test so new writers cannot silently add unclassified output paths.
+
+**Discrepancies found 2026-05-30.**
+
+- `utils/logger.py` centralizes `LOGS_DIR`, `_LOG_APP_DIR`, `_LOG_TRADES_DIR`,
+  `_LOG_REPORTS_DIR`, and trade-log archive paths, but scripts still hard-code output defaults
+  (`scripts/daily_review.py`, `scripts/performance_analysis.py`, `scripts/llm_eval.py`,
+  `tasks/stats/edge_series.py`, `scripts/calibration_aggregator.py`).
+- `config.py` supports `KALSHI_LOG_ROOT`, but only for `LOGS_DIR`; `DATA_DIR` remains fixed at
+  repo `data/`, so "single root" is not fully configurable.
+- Human reports are split between `logs/app/bothealth_YYYY-MM-DD.md` and
+  `logs/reports/{daily_review_YYYYMMDD.txt,report_YYYYMMDD.txt}`.
+- `logs/reports/source_tier_state.json` is a state file colocated with human reports.
+- `scripts/setup_launchd.sh` still emits legacy daily-review launchd paths under
+  `logs/launchd_daily_review*.log`, while current launchd templates use
+  `logs/app/daily_review_launchd.*.log`.
+- Current live launchd `com.jake.kalshi-daily-review` has `last exit code = 1`; consolidation
+  should not hide this failure behind path changes.
+- Current tests intentionally encode the trade-log split (`tests/test_report_default_paths.py`),
+  but there is no equivalent test that classifies report/process/derived-state output destinations.
+- Multiple analysis scripts print report content to stdout and sometimes also write files. That is
+  acceptable for interactive use, but launchd jobs should have one durable artifact path plus
+  separate stdout/stderr process logs.
+
+**Implementation plan.**
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
+> (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use
+> checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Consolidate analysis/reporting outputs behind one explicit output contract without
+duplicating raw telemetry or breaking existing live readers.
+
+**Architecture:** Add a small path-contract module first, then migrate writers by category. Keep
+compatibility aliases/fallback reads only where needed; do not move live telemetry until launchd
+and tests prove the new contract. Raw event streams and DB state remain canonical sources; reports
+become reproducible views.
+
+**Tech Stack:** Python stdlib `pathlib`, existing shell launchd templates, existing pytest suite,
+macOS launchd.
+
+#### Task 1: Output contract module and tests
+
+**Files:** create `utils/output_paths.py`; modify `config.py`; test
+`tests/test_output_paths_contract.py`.
+
+- [x] Add `KALSHI_OUTPUT_ROOT` with default `REPO_ROOT / "logs"` for phase-1 compatibility.
+- [x] Define named paths for `raw.app`, `raw.trades`, `raw.governance`, `raw.edge_replay`,
+  `reports.daily`, `reports.health`, `reports.performance`, `reports.evaluations`,
+  `state.derived`, and `backups.db_snapshots`.
+- [x] Preserve existing `KALSHI_LOG_ROOT` behavior as an alias/deprecated compatibility input.
+- [x] Add tests proving all named paths resolve under one root and no report path points into raw
+  telemetry directories.
+
+#### Task 2: Migrate human report writers
+
+**Files:** modify `scripts/daily_review.py`, `scripts/bothealth.sh`,
+`scripts/performance_analysis.py`, `scripts/llm_eval.py`; test `tests/test_report_default_paths.py`,
+`tests/test_daily_review.py`, `tests/shell/test_bothealth_verdict.sh`,
+`tests/test_report_snapshots.py`.
+
+- [x] Move daily review default output from `logs/reports/daily_review_YYYYMMDD.txt` to the new
+  daily-report path.
+- [x] Move bothealth Markdown from `logs/app/bothealth_YYYY-MM-DD.md` to the new health-report path
+  while keeping launcher stdout/stderr in raw app logs.
+- [x] Move `performance_analysis` report output under the new performance-report path.
+- [x] Move `llm_eval` Markdown output under the new evaluations path.
+- [x] Keep stdout printing behavior for manual commands, but make durable file writes use the path
+  contract.
+
+#### Task 3: Classify derived machine artifacts
+
+**Files:** modify `scripts/daily_review.py`, `tasks/stats/edge_series.py`,
+`scripts/calibration_aggregator.py`, `scripts/match_feedback_aggregator.py`; test existing script
+tests plus new contract tests.
+
+- [x] Move `source_tier_state.json` out of reports and into derived state.
+- [x] Move or explicitly classify `news_edge_series.json`, `calibration_summary.json`, and
+  `matcher_token_weights.json`.
+- [x] Document which derived artifacts are recomputable and which are runtime-consumed.
+- [x] Avoid duplicating these artifacts in both `data/` and report directories.
+
+#### Task 4: Launchd template and installed-job migration
+
+**Files:** modify `ops/launchd/*.plist.template`, `scripts/setup_launchd.sh`,
+`tests/test_launchd_install_script.py`, `tests/fixtures/installed_plists/*.plist`.
+
+- [x] Update templates so stdout/stderr are process logs under the raw app/governance path contract.
+- [x] Remove legacy `scripts/setup_launchd.sh` paths under `logs/launchd_daily_review*.log`.
+- [x] Add a dry-run/audit command that prints installed launchd labels and expected output paths.
+- [x] Before any live bootstrap/bootout, verify the current daily-review exit-code-1 failure is
+  understood and fixed or deliberately preserved.
+
+#### Task 5: Inventory guardrail
+
+**Files:** create `scripts/output_path_inventory.py`; test `tests/test_output_path_inventory.py`.
+
+- [x] Scan repo source for output-path literals.
+- [x] Fail if a writer introduces an unclassified `logs/`, `data/`, `reports/`, or
+  `analysis_outputs/` path.
+- [x] Allow documented read-only legacy paths during migration.
+- [ ] Add the guardrail to CI only after initial migration lands and false positives are triaged.
+
+#### Task 6: Migration and retention
+
+**Files:** create `scripts/migrate_runtime_outputs.py`; update this tracker item.
+
+- [x] Dry-run current filesystem moves and print source/destination pairs.
+- [x] Move only generated reports and process logs first; leave `logs/trades`, `logs/governance`,
+  and DB files in place until live readers are verified.
+- [x] Do not copy raw JSONL/DB data into report directories.
+- [x] Keep a timestamped migration manifest with checksums/counts.
+- [x] Run post-migration verification: report generation, bothealth, daily review, launchd plist
+  lint, and current-state readers.
+
+**Execution note 2026-05-30.**
+
+- Contract module: `utils/output_paths.py`.
+- Report artifacts now route to `logs/reports/{daily,health,performance,evaluations}/`.
+- Recomputable derived report state now routes to `logs/state/derived/`
+  (`source_tier_state.json`, `news_edge_series.json`, `calibration_summary.json`,
+  `feed_health.json`, `regime_prior_audit.json`, `market_horizon_audit.json`,
+  `edge_activation_compare.json`).
+- Runtime-consumed matcher weights remain at `data/matcher_token_weights.json` by design.
+- DB state remains in `data/` by design.
+- DB snapshots now route to `logs/backups/db_snapshots/`.
+- Applied migration manifest:
+  `logs/state/derived/runtime_output_migration_20260530T173900Z.json`; 71 generated
+  report/derived/backup artifacts moved, 0 raw JSONL/DB records copied into report directories.
+- `scripts/launchd_output_path_audit.py` reported all 8 installed launchd output paths matching
+  rendered templates; no `launchctl bootout`, `bootstrap`, `kickstart`, or service restart was run.
+- Daily-review launchd exit-code-1 cause was direct-script import bootstrap; fixed in
+  `scripts/daily_review.py` and pinned by `tests/test_launchd_install_script.py`.
+- CI integration for `scripts/output_path_inventory.py` remains a follow-up after the operator
+  decides whether this guardrail should run on every push or stay manual during the first soak.
+
+**Verification 2026-05-30.**
+
+- `.venv/bin/ruff check ...` on touched Python files: pass.
+- `bash -n scripts/bothealth.sh scripts/db_snapshot_backup.sh scripts/setup_launchd.sh`: pass.
+- Focused output/launchd/daily-review/report tests:
+  `68 passed` after the direct-entrypoint regression test.
+- `bash tests/shell/test_bothealth_verdict.sh`: pass.
+- `tests/test_report_snapshots.py tests/test_pipeline_feedback_report.py`: `7 passed`.
+- `scripts/output_path_inventory.py`: pass, no unclassified output writers.
+- `scripts/migrate_runtime_outputs.py`: dry-run move count `0` after applied migration.
+- `scripts/launchd_output_path_audit.py`: pass, 8/8 installed output paths matched templates.
+- `scripts/daily_review.py --top 1 --exclude-test`: generated
+  `logs/reports/daily/daily_review_20260530.txt`.
+- Broader stats/reporting reader suite: 50 passed, 1 pre-existing failure in
+  `tests/test_match_feedback.py::TestSeedWeightsFile::test_seed_provisional_entries_include_audit_findings`
+  due to runtime-modified `data/matcher_token_weights.json` missing `_seed_status` for
+  `KXCABLEAVE:trump`; left untouched because the file was already dirty and runtime-owned.
+
+**Acceptance criteria.**
+
+- One documented root owns all analysis/reporting outputs.
+- Every writer is classified as raw telemetry, mutable state, derived state, report artifact,
+  process log, or backup.
+- No report artifact duplicates raw JSONL/DB contents.
+- `bothealth`, `daily_review`, `performance_analysis`, and launchd stdout/stderr write to contract
+  paths.
+- `tests/test_report_default_paths.py` and new output-contract tests pass.
+- Live launchd templates and installed plists agree before any service restart.
+- Operator can generate a daily/pipeline report without knowing whether inputs came from
+  `logs/app`, `logs/reports`, `logs/trades`, `logs/governance`, or `data`.
+
+---
+
 ## Execution Views
 
 ---
 
 ### A. Current Profit-Path Fix Queue
 
-Open or blocked items, ordered for safe sequential execution. **Updated 2026-05-16 post-Phase-2 close and POST_FIX_NEW readiness audit** to remove closed cutover/soak/OBS-003/OBS-004 items and route active edge work through `PROFIT-EDGE-012`.
+Open or blocked items, ordered for safe sequential execution. **Updated 2026-05-26 paper-trade pipeline architecture audit** to add the current conversion-funnel gap (`PROFIT-PIPELINE-001`) while retaining historical Cycle-17 / EDGE framing for governance continuity.
 
 | Order | ID | Title | Why this order |
 |-------|----|-------|---------------|
-| 1 | PROFIT-EDGE-012 | Cycle-17C/D redesign halted pending POST_FIX_NEW corpus readiness | ACTIVE edge tracker. 2026-05-16 read-only audit: `NOT_READY` (0 post-clean-start rows; strict floor 200). Next action is scheduled re-check / watcher hardening, not deploy. |
-| 2 | PROFIT-EDGE-004 | Pipeline reaches executor with `edge = 0.0`; matcher / market-mix / source-mix root cause | Historical parent/root-cause cluster. Active execution moved to `PROFIT-EDGE-012` after IC §16 replayed-EV gate and Cycle-17D halt. |
-| 3 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible; needed before P4-GATE. |
-| 4 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Blocked on contract decision for rejected-evidence intake semantics. |
-| 5 | PROFIT-STRUCT-002 | Verify EDGE-002 sub-fix #4 runtime cause-emission format | Verification-only; small observability gap; can run in parallel with higher-priority read-only audits. |
-| 6 | PROFIT-CAL-001 follow-up sample | Calibration outcome feedback | Core item complete; next footnote milestone is ≥10-resolution sample with ≥2 distinct lanes populated, which depends on EDGE-012 / EDGE-004 progress. |
+| 1★ | PROFIT-THRUPUT-001 | Opportunity-throughput reframe + "C" execution plan | **Lead framing 2026-05-30.** Consolidates the throughput story of items 1–3 below. Path to GREEN = edge-quality (C3 governance fork), not volume; most throughput levers are forbidden (negative-EV). Start C1 read-only diagnostics (no new trades needed); C1a resolves whether the gate over-blocks the 39/41 positive-edge opportunities already flowing. |
+| 1 | PROFIT-PIPELINE-001 | Paper-trade conversion funnel architecture gap inventory | ACTIVE current blocker framing. Pipeline can execute paper trades; the next safe work is read-only conversion/observability, especially matcher-weight breakdowns and daily funnel reporting. |
+| 2 | PROFIT-EDGE-012 | Cycle-17C/D redesign halted pending POST_FIX_NEW corpus readiness | ACTIVE governance/experiment tracker. 2026-05-16 read-only audit remains historical gate evidence, but current paper DB/log evidence supersedes the "0 post-clean-start rows" fact for executor reachability. |
+| 3 | PROFIT-EDGE-004 | Pipeline reaches executor with `edge = 0.0`; matcher / market-mix / source-mix root cause | Historical/currently-not-blocking parent cluster. Keep as forensic context; active execution moved to `PROFIT-PIPELINE-001` + `PROFIT-EDGE-012`. |
+| 4 | PROFIT-VALID-001 | No first-class baseline-vs-multi-lane harness | The 2x trade-frequency constraint must be reproducible; needed before P4-GATE, not the immediate paper-trade-volume blocker. |
+| 5 | PROFIT-EVID-001 | Accumulation only learns from keyword-positive survivors | Blocked on contract decision for rejected-evidence intake semantics. |
+| 6 | PROFIT-STRUCT-002 | Verify EDGE-002 sub-fix #4 runtime cause-emission format | Verification-only; small observability gap; can run in parallel with higher-priority read-only audits. |
+| 7 | PROFIT-CAL-001 follow-up sample | Calibration outcome feedback | Core item complete; next footnote milestone is ≥10-resolution sample with ≥2 distinct lanes populated, which depends on paper-trade volume improving. |
 
 **Execution note:** Do not bundle these into broad rewrites. Each item touches a different safety boundary and should close with focused tests and evidence. **Cutover-specific note (2026-05-01):** items 3–10 are all Mac Studio work — do not re-run any of them on the MacBook. The MacBook is read-only archive after 2026-05-01T13:05:54Z.
 

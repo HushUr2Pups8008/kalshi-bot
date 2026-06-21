@@ -6,6 +6,7 @@ from tasks.trade_readiness_gate import (
     G1_CONFIDENCE_THRESHOLD,
     G3_OVERRIDE_MULTIPLIER,
     G4_REGIME_CONFIDENCE_THRESHOLD,
+    G6_RECENCY_THRESHOLD,
     ReadinessInputError,
     evaluate_readiness,
 )
@@ -59,7 +60,11 @@ def test_g1_scaled_confidence_is_enforced():
     assert decision.trade_blocked_reason == "G1_blended_confidence"
 
 
-def test_g2_source_class_diversity_is_enforced_for_dossiers():
+def test_g2_source_class_diversity_is_enforced_for_dossiers(monkeypatch):
+    # PROFIT-SOURCE-001: G2 default is now 1 (single-source allowed). Pin it to 2
+    # to test the diversity-enforcement MECHANISM. Relaxed-policy behaviour is
+    # covered by test_blend_task.py::test_single_source_allowed_and_count_tracked.
+    monkeypatch.setattr("tasks.trade_readiness_gate.G2_MIN_SOURCE_CLASSES", 2)
     decision = evaluate_readiness(
         _dossier_candidate(evidence_source_classes=["news", "news"]),
         regime_confidence=0.80,
@@ -67,6 +72,7 @@ def test_g2_source_class_diversity_is_enforced_for_dossiers():
 
     assert decision.passed is False
     assert decision.failure_reasons == ("G2_evidence_source_class_diversity",)
+    assert decision.source_class_count == 1
 
 
 def test_g3_blocks_above_disagreement_threshold():
@@ -213,6 +219,30 @@ def test_g6_recency_score_is_enforced_for_dossiers():
 
     assert decision.passed is False
     assert decision.failure_reasons == ("G6_recency_score",)
+    assert decision.recency_score == pytest.approx(0.2999)
+    assert decision.recency_threshold == pytest.approx(G6_RECENCY_THRESHOLD)
+    assert decision.recency_distance == pytest.approx(-0.0001)
+
+
+def test_passing_dossier_records_g6_recency_margin():
+    decision = evaluate_readiness(
+        _dossier_candidate(recency_score=0.80),
+        regime_confidence=0.80,
+    )
+
+    assert decision.passed is True
+    assert decision.recency_score == pytest.approx(0.80)
+    assert decision.recency_threshold == pytest.approx(G6_RECENCY_THRESHOLD)
+    assert decision.recency_distance == pytest.approx(0.80 - G6_RECENCY_THRESHOLD)
+
+
+def test_fast_lane_has_no_g6_recency_telemetry():
+    decision = evaluate_readiness(_fast_candidate(), regime_confidence=0.80)
+
+    assert decision.passed is True
+    assert decision.recency_score is None
+    assert decision.recency_threshold is None
+    assert decision.recency_distance is None
 
 
 def test_fast_lane_exempts_dossier_only_conditions():

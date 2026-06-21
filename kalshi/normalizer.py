@@ -49,6 +49,7 @@ _LEGACY_CENTS_FIELDS = (
 # Side/price keywords used to detect unrecognized "drift" price contracts.
 _SIDE_TOKENS = ("yes", "no")
 _PRICE_TOKENS = ("bid", "ask", "price")
+_MARKET_METADATA_KEY_TERMS = ("rules", "source", "resolution", "settlement")
 
 
 class UnsupportedPayloadContractError(ValueError):
@@ -78,6 +79,18 @@ def _hash_payload(payload: dict) -> str:
     """SHA-256 of a deterministic JSON serialization (LD-16)."""
     serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _extract_market_metadata(payload: dict) -> dict[str, str]:
+    """Preserve public rules/source/resolution text without affecting execution."""
+    metadata: dict[str, str] = {}
+    for key, value in payload.items():
+        if not isinstance(key, str) or not isinstance(value, str) or value == "":
+            continue
+        key_lower = key.lower()
+        if any(term in key_lower for term in _MARKET_METADATA_KEY_TERMS):
+            metadata[key] = value
+    return metadata
 
 
 def _to_cents(dollar_value: Any) -> int:
@@ -125,6 +138,16 @@ def _optional_datetime(payload: dict, key: str) -> Optional[datetime]:
     try:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
+        return None
+
+
+def _optional_int(payload: dict, key: str) -> Optional[int]:
+    raw = payload.get(key)
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
         return None
 
 
@@ -329,6 +352,13 @@ def _build_market(
         series_ticker=str(payload.get("series_ticker", "")),
         subtitle=str(payload.get("subtitle", "")),
         result=str(payload.get("result", "")),
+        market_metadata=_extract_market_metadata(payload),
+        rules_primary=str(payload.get("rules_primary") or ""),
+        rules_secondary=str(payload.get("rules_secondary") or ""),
+        settlement_timer_seconds=_optional_int(payload, "settlement_timer_seconds"),
+        early_close_condition=str(payload.get("early_close_condition") or ""),
+        expected_expiration_time=str(payload.get("expected_expiration_time") or ""),
+        expiration_time=str(payload.get("expiration_time") or ""),
         yes_bid_cents=yes_bid_cents,
         yes_ask_cents=yes_ask_cents,
         no_bid_cents=no_bid_cents,

@@ -174,3 +174,45 @@ class TestPortfolioLoadFromDb:
         positions = p.open_positions("KXLEG")
         assert len(positions) == 1
         assert positions[0].entry_price_cents == 51.0
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-ALIGN-004 (2026-05-25) — open_positions_by_prefix
+# ---------------------------------------------------------------------------
+
+class TestOpenPositionsByPrefix:
+    def test_returns_positions_matching_prefix(self):
+        p = Portfolio()
+        p.add(_pos("t1", "KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH"))
+        p.add(_pos("t2", "KXTXRUNOFFENDORSE-26MAY26-DJT-KPAX"))
+        p.add(_pos("t3", "KXTRUMPIRAN-26JUN01"))
+        results = p.open_positions_by_prefix("KXTXRUNOFFENDORSE")
+        assert len(results) == 2
+        assert {r.ticker for r in results} == {
+            "KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH",
+            "KXTXRUNOFFENDORSE-26MAY26-DJT-KPAX",
+        }
+
+    def test_prefix_match_requires_word_boundary(self):
+        """KXFOO must not match KXFOOBAR — prefix must be followed by '-' or end."""
+        p = Portfolio()
+        p.add(_pos("t1", "KXFOOBAR-26MAY26"))
+        assert p.open_positions_by_prefix("KXFOO") == []
+        assert len(p.open_positions_by_prefix("KXFOOBAR")) == 1
+
+    def test_empty_prefix_returns_empty_list(self):
+        p = Portfolio()
+        p.add(_pos("t1", "KXTEST"))
+        assert p.open_positions_by_prefix("") == []
+
+    def test_exact_ticker_match_works(self):
+        """Some tickers may be the prefix itself (no -suffix)."""
+        p = Portfolio()
+        p.add(_pos("t1", "KXTEST"))
+        assert len(p.open_positions_by_prefix("KXTEST")) == 1
+
+    def test_no_match_returns_empty(self):
+        p = Portfolio()
+        p.add(_pos("t1", "KXONE-A"))
+        p.add(_pos("t2", "KXONE-B"))
+        assert p.open_positions_by_prefix("KXTWO") == []

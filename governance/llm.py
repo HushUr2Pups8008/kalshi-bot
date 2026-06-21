@@ -169,7 +169,60 @@ def parse_llm_response_to_decision(
     )
 
 
+import hashlib
+import logging as _i3_logging
+import time
 import urllib.request
+
+_i3_log = _i3_logging.getLogger(__name__)
+
+
+def _i3_capture_governance_llm_call(
+    *,
+    system: str,
+    user: str,
+    model: str,
+    payload: dict,
+    response_text: str,
+) -> None:
+    """I-3 capture hook for the governance LLM path.
+
+    Additive: any exception inside the capture layer is swallowed by
+    ``capture_llm_response`` itself; this wrapper additionally defends
+    against import errors / missing-config so production behavior is
+    unchanged on capture failure. The repeat-call argument is ``None``
+    here (I-3 ships the WRITE path; I-2 wires the read+replay path with
+    its own re-invocation policy for governance native endpoint).
+
+    Row-id is constructed from a sha256 of (system+user) plus a
+    nanosecond timestamp (``time.time_ns()``) so concurrent governance
+    calls within the same millisecond do not collide on the same row_id.
+    The I-2 SQLite migration may treat row_id as a unique key, so
+    collision avoidance is a forward-compatibility requirement.
+
+    Endpoint type is ``"native"`` because this caller uses Ollama's
+    ``/api/generate`` (NOT ``/chat/completions``); CLAUDE.md gotcha:
+    ``think: False`` only works on the native endpoint, so cache-key
+    parity with replay requires routing the correct endpoint type.
+    """
+    try:
+        from scripts.edge_replay.llm_capture import capture_llm_response
+
+        content_hash = hashlib.sha256((system + "\n" + user).encode("utf-8")).hexdigest()[:12]
+        row_id = f"gov::{content_hash}::{time.time_ns()}"
+        capture_llm_response(
+            row_id=row_id,
+            prompt_template=system,
+            prompt_filled=user,
+            model_id=model,
+            endpoint_type="native",
+            request_payload=payload,
+            response=response_text,
+            repeat_call=None,
+            logger=_i3_log,
+        )
+    except Exception as exc:  # noqa: BLE001 — additive hook, never fail production
+        _i3_log.debug("I-3 governance capture wrapper swallowed: %s", exc)
 
 
 class LocalQwenLLM:
@@ -218,7 +271,21 @@ class LocalQwenLLM:
         )
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        return str(data.get("response", ""))
+        response_text = str(data.get("response", ""))
+
+        # I-3 capture hook (rapid-learning framework v3) — additive only.
+        # endpoint_type="native" because this path uses Ollama's /api/generate
+        # (NOT /chat/completions). The `think: False` in `payload` above is
+        # load-bearing per PROFIT-GOV-001 / CLAUDE.md gotcha; capture records
+        # the payload so future replays can verify it stayed pinned.
+        _i3_capture_governance_llm_call(
+            system=system,
+            user=user,
+            model=self.model,
+            payload=payload,
+            response_text=response_text,
+        )
+        return response_text
 
     def model_name(self) -> str:
         return self.model

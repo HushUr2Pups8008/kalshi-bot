@@ -15,10 +15,11 @@ import asyncio
 import json as _json
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-from config import cfg, GEOPOLITICAL_SIGNALS
-from utils.runtime_overrides import is_keyword_disabled
+from config import cfg, GEOPOLITICAL_SIGNALS, EARLY_MAX_NEWS_AGE_SECONDS, EARLY_MAX_NEWS_AGE_BY_SOURCE
+from utils.runtime_overrides import get_threshold_override, is_keyword_disabled
 from feeds import NewsItem
 from kalshi import KalshiMarket
 from utils.log_records import SignalAnalysisDetail
@@ -151,6 +152,53 @@ def _build_llm_meta_kwargs(llm_meta: dict[str, Any]) -> dict[str, Any]:
         **{f"llm_{k}": llm_meta.get(k) for k in _LLM_META_PROJECTION_KEYS[2:]},
         "llm_result_status": llm_meta["status"],
         "llm_provider": llm_meta["provider"],
+    }
+
+
+def _signal_detail_venue(
+    market: KalshiMarket, match_meta: dict[str, Any] | None
+) -> str:
+    raw = None
+    if isinstance(match_meta, dict):
+        raw = match_meta.get("venue")
+    if raw is None:
+        raw = getattr(market, "venue", None)
+    if raw is None:
+        return "kalshi"
+    if hasattr(raw, "value"):
+        raw = raw.value
+    text = str(raw).strip().lower()
+    return text or "kalshi"
+
+
+def _early_max_news_age_seconds_for_source(source: str) -> int:
+    runtime = get_threshold_override(f"EARLY_MAX_NEWS_AGE_BY_SOURCE.{source}")
+    if runtime is not None:
+        return int(runtime)
+    if source in EARLY_MAX_NEWS_AGE_BY_SOURCE:
+        return EARLY_MAX_NEWS_AGE_BY_SOURCE[source]
+    source_lower = source.strip().lower()
+    for key, value in EARLY_MAX_NEWS_AGE_BY_SOURCE.items():
+        if key.strip().lower() == source_lower:
+            return value
+    return EARLY_MAX_NEWS_AGE_SECONDS
+
+
+def _signal_detail_timing_kwargs(
+    news: NewsItem,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    published = getattr(news, "published", None)
+    if published is None:
+        return {}
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    reference = now or datetime.now(timezone.utc)
+    return {
+        "publish_ts": published.isoformat(),
+        "age_at_analysis_seconds": (reference - published).total_seconds(),
+        "analysis_threshold_seconds": _early_max_news_age_seconds_for_source(news.source),
     }
 
 
@@ -617,8 +665,28 @@ def keyword_estimate(
 
 # ── Optional LLM estimation ───────────────────────────────────────────────────
 
-# Magnitude -> probability shift mapping (applied in code, not by the LLM)
-_MAGNITUDE_SHIFT = {"none": 0.0, "small": 0.08, "moderate": 0.15, "large": 0.25}
+# Magnitude -> probability shift mapping (applied in code, not by the LLM).
+# PROFIT-ALIGN-011 (2026-05-25): make the table runtime-tunable via cfg so
+# operators can recalibrate from empirical CALIBRATION_OBSERVATION evidence
+# (PROFIT-ALIGN-002) without code changes. Defaults preserve the historical
+# constants. Env overrides: MAGNITUDE_SHIFT_SMALL / _MODERATE / _LARGE.
+def _magnitude_shift_table() -> dict[str, float]:
+    """Return the magnitude→shift table from cfg (env-overridable).
+
+    Re-read on every call so an operator override via runtime_overrides
+    (future) or env-reload picks up immediately. Performance-trivial.
+    """
+    return {
+        "none":     0.0,
+        "small":    float(getattr(cfg, "magnitude_shift_small", 0.08)),
+        "moderate": float(getattr(cfg, "magnitude_shift_moderate", 0.15)),
+        "large":    float(getattr(cfg, "magnitude_shift_large", 0.25)),
+    }
+
+
+# Legacy module-level mapping retained for tests + existing call sites that
+# import `_MAGNITUDE_SHIFT` directly. Reflects current cfg defaults.
+_MAGNITUDE_SHIFT = _magnitude_shift_table()
 
 _LLM_SYSTEM_PROMPT = """You are a geopolitical prediction market analyst.
 
@@ -729,6 +797,30 @@ def _emit_llm_prompt_response_debug(
     )
 
 
+def _probability_from_llm_verdict(
+    *,
+    market,
+    confidence: float,
+    direction: str,
+    magnitude: str,
+    relevant: bool = True,
+    new_information: bool = True,
+) -> float:
+    """Apply the parsed LLM verdict to the current market price."""
+    if (
+        not relevant
+        or not new_information
+        or direction == "neutral"
+        or magnitude == "none"
+    ):
+        return market.yes_prob
+    base_shift = _magnitude_shift_table().get(magnitude, 0.0)
+    shift = base_shift * confidence
+    if direction == "yes":
+        return min(0.95, market.yes_prob + shift)
+    return max(0.05, market.yes_prob - shift)
+
+
 def _parse_llm_response(parsed: dict, market) -> tuple[float, float, str, str, str]:
     """
     Shared helper: extract (prob, confidence, reasoning, direction, magnitude)
@@ -738,22 +830,55 @@ def _parse_llm_response(parsed: dict, market) -> tuple[float, float, str, str, s
     unchanged when the model signals no new information.
     Returns raw direction and magnitude for storage in paper_trades.
     """
-    confidence = float(parsed.get("confidence", 0.5))
+    # PROFIT-EDGE-014 review finding: clamp to [0,1]. The old blend math
+    # (eff-conf mass / lane count) numerically masked an out-of-range LLM
+    # confidence; the confidence-weighted blend propagates a single/dominant
+    # lane's RAW confidence to blended_confidence, where the readiness gate's
+    # probability-field validation raises on >1.0 -- a malformed LLM value
+    # would become a per-candidate exception instead of a bad-but-bounded
+    # input. Clamp at the producer.
+    confidence = max(0.0, min(1.0, float(parsed.get("confidence", 0.5))))
     reasoning  = parsed.get("reasoning", "")
     relevant   = parsed.get("relevant", True)
     new_info   = parsed.get("new_information", True)
     direction  = parsed.get("direction", "neutral")
     magnitude  = parsed.get("magnitude", "none")
 
-    if not relevant or not new_info or direction == "neutral" or magnitude == "none":
-        prob = market.yes_prob
-    else:
-        base_shift = _MAGNITUDE_SHIFT.get(magnitude, 0.0)
-        shift = base_shift * confidence
-        if direction == "yes":
-            prob = min(0.95, market.yes_prob + shift)
-        else:
-            prob = max(0.05, market.yes_prob - shift)
+    # PROFIT-LLM-002 (2026-05-24): Reconcile internally-inconsistent LLM
+    # output. The prompt enforces ONE side of the consistency rule
+    # (new_information=false → direction="neutral" AND magnitude="none")
+    # but does NOT enforce the converse. In production, ~3% of LLM runs
+    # emit direction in {yes, no} with high confidence (≥0.6) BUT
+    # magnitude="none" — silently zeroing out the shift. 7-day funnel
+    # diagnostic (2026-05-24) found 10 such records, ALL on
+    # KXTXRUNOFFENDORSE markets where Trump's Paxton-over-Cornyn
+    # endorsement was the resolution-grade news the bot saw, parsed
+    # correctly as direction=no with confidence=0.95, but produced no
+    # trade because magnitude was "none". Upgrading to "small" here
+    # restores the minimum-credible shift (8 pp * confidence) when the
+    # LLM is confident enough in a direction. Threshold 0.6 chosen
+    # because the production anomalies cluster at confidence=0.95;
+    # 0.6 leaves room for variants without admitting low-conviction
+    # directions. NOTE: this modifies the magnitude returned by this
+    # function, so downstream stores in paper_trades + SIGNAL_ANALYSIS_DETAIL
+    # will record the upgraded magnitude ("small"). The raw LLM output
+    # is captured in llm_capture.jsonl (PROFIT-PHASE3-001) for audit;
+    # see scripts/edge_replay/llm_capture.py.
+    if (
+        direction in ("yes", "no")
+        and magnitude == "none"
+        and confidence >= 0.6
+    ):
+        magnitude = "small"
+
+    prob = _probability_from_llm_verdict(
+        market=market,
+        confidence=confidence,
+        direction=direction,
+        magnitude=magnitude,
+        relevant=relevant,
+        new_information=new_info,
+    )
 
     return prob, confidence, reasoning, direction, magnitude
 
@@ -957,6 +1082,55 @@ def _ollama_extract_and_validate(text, market, t0, http_round_trip_ms, prompt_te
     )
 
 
+def _i3_capture_signal_llm_call(*, news, market, prompt_text, payload, response_text):
+    """I-3 capture hook for the signal-analyzer LLM path.
+
+    Additive: any exception inside the capture layer is swallowed by
+    ``capture_llm_response`` itself. This wrapper exists so the call site
+    in ``_ollama_estimate_detailed`` stays a single line, and so the
+    response-parsing failure (``response_text`` is JSON-extracted text, not
+    a structured dict) is also fail-soft.
+
+    The ``response`` field handed to the capture layer is the raw response
+    text — preserving operator visibility into the actual bytes the model
+    emitted. The repeat-call for verification is intentionally disabled
+    here for now; enabling it requires routing an HTTP-bound re-post
+    through the same circuit-breaker as ``_ollama_post`` (deferred to a
+    follow-up: I-3 ships the WRITE path; I-2 wires the read+replay path).
+    """
+    try:
+        from scripts.edge_replay.llm_capture import (
+            capture_llm_response,
+            signal_capture_row_id,
+        )
+
+        # PROFIT-PHASE3 I-1: build the join key via the shared helper so it
+        # exactly matches what PaperTrader.record_trade persists on the trade
+        # row (enabling the capture->trade join the corpus builder needs).
+        # Uses news.item_id (the dedup hash) -- NOT news.id, which does not
+        # exist on NewsItem and previously made every signal on a ticker
+        # collide on one empty-news-id key.
+        row_id = signal_capture_row_id(
+            getattr(market, "ticker", "unknown"),
+            getattr(news, "item_id", "") or "",
+        )
+        capture_llm_response(
+            row_id=row_id,
+            prompt_template=_LLM_SYSTEM_PROMPT,
+            prompt_filled=prompt_text,
+            model_id=cfg.ollama_model,
+            endpoint_type="openai_compat",
+            request_payload=payload,
+            response=response_text,
+            repeat_call=None,
+            logger=log,
+        )
+    except Exception:  # noqa: BLE001 — additive hook, never fail production
+        # capture_llm_response is itself fail-soft, but defend against import
+        # errors / unforeseen failures (e.g. cfg.ollama_model missing).
+        pass
+
+
 async def _ollama_estimate_detailed(news, market):
     """
     Call local Ollama server (OpenAI-compatible endpoint).
@@ -996,6 +1170,20 @@ async def _ollama_estimate_detailed(news, market):
             _ollama_down_until = 0.0
         log.debug("Ollama: dir=%s mag=%s conf=%.2f -> prob=%.3f for %s",
                   result[3], result[4], result[1], result[0], market.ticker)
+
+        # I-3 capture (rapid-learning v3) — additive only. Failures inside
+        # capture_llm_response are swallowed; production return path is
+        # untouched. Endpoint type is "openai_compat" per CLAUDE.md gotcha:
+        # this path posts to /v1/chat/completions and `think: False` does
+        # NOT apply here.
+        _i3_capture_signal_llm_call(
+            news=news,
+            market=market,
+            prompt_text=prompt_text,
+            payload=payload,
+            response_text=text,
+        )
+
         return result, meta
 
     except aiohttp.ClientConnectorError:
@@ -1194,6 +1382,8 @@ async def estimate_probability(
         keyword_override_mode=keyword_override_mode,
         keyword_signal_strength=keyword_signal_strength,
     )
+    signal_detail_venue = _signal_detail_venue(market, match_meta)
+    signal_detail_timing = _signal_detail_timing_kwargs(news)
     probe_fields = (
         {"is_startup_probe": True, "is_synthetic_probe": True}
         if is_startup_probe
@@ -1256,8 +1446,45 @@ async def estimate_probability(
         )
         llm_result = None
     else:
-        # Try LLM if available
-        llm_result, llm_meta = await llm_estimate_detailed(news, market)
+        # PROFIT-ALIGN-010 (2026-05-25): runtime LLM dedup cache. Same
+        # prompt within TTL → reuse prior LLM verdict fields, skip the LLM
+        # call, then recompute probability against the current market quote.
+        # Distinct from the replay-CI llm_cache.sqlite
+        # (deterministic-replay only). See analysis/llm_dedup_cache.py.
+        from analysis.llm_dedup_cache import (
+            lookup as _llm_dedup_lookup,
+            store as _llm_dedup_store,
+        )
+        _cache_ttl = int(getattr(cfg, "llm_dedup_cache_ttl_seconds", 0))
+        _prompt_text = _build_prompt_text(news, market)
+        _cached = _llm_dedup_lookup(
+            prompt_text=_prompt_text,
+            ttl_seconds=_cache_ttl,
+        )
+        if _cached is not None:
+            _confidence, _reasoning, _direction, _magnitude = _cached
+            _prob = _probability_from_llm_verdict(
+                market=market,
+                confidence=float(_confidence),
+                direction=str(_direction),
+                magnitude=str(_magnitude),
+            )
+            llm_result = (_prob, _confidence, _reasoning, _direction, _magnitude)
+            llm_meta = _llm_meta(
+                attempted=False,
+                status="llm_dedup_cache_hit",
+                provider="cache",
+                result_used=True,
+            )
+        else:
+            llm_result, llm_meta = await llm_estimate_detailed(news, market)
+            if llm_result is not None:
+                _, _confidence, _reasoning, _direction, _magnitude = llm_result
+                _llm_dedup_store(
+                    prompt_text=_prompt_text,
+                    result=(_confidence, _reasoning, _direction, _magnitude),
+                    ttl_seconds=_cache_ttl,
+                )
         _emit_llm_prompt_response_debug(
             llm_meta,
             news=news,
@@ -1303,6 +1530,8 @@ async def estimate_probability(
             base_probability=base_probability,
             final_probability=llm_prob,
             market_price=market.yes_prob,
+            venue=signal_detail_venue,
+            **signal_detail_timing,
             llm_direction=llm_direction,
             llm_magnitude=llm_magnitude,
             llm_confidence=llm_confidence,
@@ -1316,6 +1545,103 @@ async def estimate_probability(
             **pre_llm_fields,
         )
         await write_trade_log_async(trade_log.log_signal_analysis_detail, detail)
+
+        # PROFIT-MATCH-DYNAMIC (commit 2/5): emit per-call feedback signal
+        # for the matcher learning loop. Inference rules:
+        #   - direction in {yes, no}                      → true_positive
+        #   - dir=neutral + mag=none + confidence >= 0.7  → false_positive_neutral
+        #   - otherwise (low-confidence neutral)          → undetermined, skip
+        # Aggregator (see scripts/match_feedback_aggregator.py) rolls these
+        # into per-(token × market_prefix) FP counters that feed the runtime
+        # downweight list at data/matcher_token_weights.json.
+        verdict = None
+        if llm_direction in ("yes", "no"):
+            verdict = "true_positive"
+        elif (
+            llm_direction == "neutral"
+            and llm_magnitude == "none"
+            and llm_confidence is not None
+            and float(llm_confidence) >= 0.7
+        ):
+            verdict = "false_positive_neutral"
+        if verdict:
+            try:
+                from analysis.market_matcher import _tokenize as _matcher_tokenize
+                meta_tokens = []
+                if isinstance(match_meta, dict):
+                    raw_tokens = (
+                        match_meta.get("matched_tokens")
+                        or match_meta.get("polymarket_matched_tokens")
+                        or match_meta.get("pre_llm_semantic_overlap_tokens")
+                    )
+                    if isinstance(raw_tokens, list):
+                        meta_tokens = [str(token) for token in raw_tokens]
+                overlap_tokens = (
+                    sorted(meta_tokens)
+                    if meta_tokens
+                    else sorted(
+                        _matcher_tokenize(market.title or "")
+                        & _matcher_tokenize(news.headline or "")
+                    )
+                )
+            except Exception:
+                overlap_tokens = []
+            from analysis.match_feedback import market_prefix_for as _market_prefix_for
+            ticker_prefix = _market_prefix_for(market)
+            review_venue = None
+            if isinstance(match_meta, dict):
+                raw_venue = match_meta.get("venue")
+                if raw_venue is not None:
+                    review_venue = str(raw_venue).strip().lower() or None
+            if review_venue is None:
+                raw_venue = getattr(market, "venue", None)
+                if hasattr(raw_venue, "value"):
+                    raw_venue = raw_venue.value
+                if raw_venue is not None:
+                    review_venue = str(raw_venue).strip().lower() or None
+            if review_venue is None and ticker_prefix.startswith("polymarket_us"):
+                # PROFIT-VENUE-PARITY V03: ticker_prefix is now per-family for PM
+                # (e.g. 'polymarket_us:ewc-usse-me'), so an exact == check no
+                # longer fires. review_venue is normally already set from
+                # match_meta['venue']/market.venue above; this startswith keeps
+                # the last-resort fallback working and pins the venue (not the
+                # per-family prefix) as the review venue.
+                review_venue = "polymarket_us"
+            # PROFIT-MATCH-003 (L2-a): carry the matcher score (threaded onto
+            # match_meta by main._process_candidate) so the feedback loop can
+            # score-gate the false_positive_neutral signal. None when absent
+            # (e.g. the startup probe) -> consumer treats it as marginal.
+            review_match_score = None
+            review_source_class = None
+            if isinstance(match_meta, dict):
+                raw_score = match_meta.get("match_score")
+                if raw_score is not None:
+                    try:
+                        review_match_score = float(raw_score)
+                    except (TypeError, ValueError):
+                        review_match_score = None
+                raw_source_class = match_meta.get("source_class")
+                if raw_source_class is not None:
+                    review_source_class = str(raw_source_class).strip() or None
+            await write_trade_log_async(
+                trade_log.log_match_llm_review,
+                ticker=market.ticker,
+                market_title=market.title or "",
+                market_prefix=ticker_prefix,
+                venue=review_venue,
+                headline=news.headline or "",
+                source=news.source or "",
+                matched_tokens=overlap_tokens,
+                llm_relevant=(verdict != "false_positive_neutral"),
+                llm_direction=llm_direction,
+                llm_magnitude=llm_magnitude,
+                llm_confidence=float(llm_confidence) if llm_confidence is not None else 0.0,
+                verdict=verdict,
+                match_score=review_match_score,
+                keywords=keywords,
+                source_class=review_source_class,
+            )
+
         return llm_prob, llm_confidence, keywords, reasoning, llm_direction, llm_magnitude, llm_confidence
 
     if not keywords:
@@ -1341,6 +1667,8 @@ async def estimate_probability(
             base_probability=base_probability,
             final_probability=market.yes_prob,
             market_price=market.yes_prob,
+            venue=signal_detail_venue,
+            **signal_detail_timing,
             llm_result_used=False,
             llm_routing_passed=(routing_reason is None),
             llm_routing_reason=routing_reason,
@@ -1374,6 +1702,8 @@ async def estimate_probability(
         base_probability=base_probability,
         final_probability=kw_prob,
         market_price=market.yes_prob,
+        venue=signal_detail_venue,
+        **signal_detail_timing,
         llm_result_used=False,
         llm_routing_passed=(routing_reason is None),
         llm_routing_reason=routing_reason,

@@ -45,6 +45,7 @@ verify the harnesses themselves stay green under code changes.
 | [`blend_task_integration.py`](blend_task_integration.py) | Full `BlendTask.process_fast_lane_result` integration with seeded dossier + structural prior + recent evidence for KXTRUMPIRAN; surfaces accumulation-lane disagreement and any post-blend gate that wouldn't fire on the no-dossier readiness simulation | PROFIT-EDGE-004 (Task B of pipeline simulation buildout) |
 | [`baseline_vs_multilane.py`](baseline_vs_multilane.py) | Fast-lane baseline vs multi-lane S4.5 comparison over identical canonical intake; reports evaluated candidates, paper trades, frequency, acceptance rate, and blend pass/block counts | PROFIT-VALID-001 |
 | [`paper_trade_roundtrip.py`](paper_trade_roundtrip.py) | Paper-trade INSERT path against a real `PaperTrader` over a temp SQLite DB; per-event row write, bankroll debit, and source-credibility persistence | PROFIT-EDGE-004 (Task C of pipeline simulation buildout) |
+| [`polymarket_feedback_roundtrip.py`](polymarket_feedback_roundtrip.py) | Polymarket match → BlendTask queue → TradeExecutor paper row → settlement → keyword/source/calibration/report feedback over a temp SQLite DB | Polymarket parity follow-up |
 | [`trading_queue_handoff.py`](trading_queue_handoff.py) | Replicates `main._trading_queue_consumer_task` wiring against an in-memory queue + recording executor stub; FIFO drain + back-pressure (no-drop) contracts | PROFIT-EDGE-004 (Task D of pipeline simulation buildout) |
 | [`governance_fast_cycle.py`](governance_fast_cycle.py) | Drives `governance.agent.run_cycle` for one fast cadence with `FakeLLM` against a temp filesystem; pins shadow-mode invariant, audit JSONL append-only, and kill-switch (`GOVERNANCE_READONLY`) demotion of real → shadow | PROFIT-EDGE-004 (Task E of pipeline simulation buildout) |
 | [`resolution_calibration.py`](resolution_calibration.py) | YES-wins / NO-wins resolution loop against a temp DB; pins `paper_trades` row mutation, bankroll credit math, source-credibility update, and per-lane `record_calibration_check` callback (PROFIT-CAL-001 wiring) | PROFIT-EDGE-004 (Task F of pipeline simulation buildout) |
@@ -99,6 +100,10 @@ once committed.
 # Paper-trade INSERT path (real PaperTrader against a temp SQLite DB):
 .venv/bin/python scripts/simulations/paper_trade_roundtrip.py
 .venv/bin/python scripts/simulations/paper_trade_roundtrip.py --json
+
+# Polymarket full feedback loop (temp SQLite DB):
+.venv/bin/python scripts/simulations/polymarket_feedback_roundtrip.py
+.venv/bin/python scripts/simulations/polymarket_feedback_roundtrip.py --json
 
 # Trading-queue → executor handoff (FIFO + back-pressure):
 .venv/bin/python scripts/simulations/trading_queue_handoff.py

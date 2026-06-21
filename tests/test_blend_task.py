@@ -56,6 +56,8 @@ class SpyLogger:
     def __init__(self) -> None:
         self.records: list[dict] = []
         self.skipped_records: list[dict] = []
+        self.gate_summary_records: list[dict] = []
+        self.lane_skipped_records: list[dict] = []
 
     def log_blend_decision(self, **kwargs) -> None:
         self.records.append(kwargs)
@@ -63,6 +65,12 @@ class SpyLogger:
     def log_skipped(self, **kwargs) -> None:
         # Captures BlendTask-emitted SKIPPED records per PROFIT-OBS-003 (post-soak).
         self.skipped_records.append(kwargs)
+
+    def log_gate_summary(self, **kwargs) -> None:
+        self.gate_summary_records.append(kwargs)
+
+    def log_lane_skipped(self, **kwargs) -> None:
+        self.lane_skipped_records.append(kwargs)
 
 
 class FailingQueue(asyncio.Queue):
@@ -228,6 +236,10 @@ async def test_ready_candidate_reads_lanes_logs_and_enqueues():
             "trade_considered": True,
             "trade_blocked_reason": None,
             "evidence_ids_contributing": ["ev-1", "ev-2"],
+            "venue": "kalshi",
+            "recency_score": pytest.approx(1.0),
+            "recency_threshold": pytest.approx(0.30),
+            "recency_distance": pytest.approx(0.70),
         }
     ]
     assert {call[0] for call in store.calls} == {
@@ -255,6 +267,62 @@ async def test_missing_slow_lane_context_uses_fast_lane_exemptions():
     assert logger.records[0]["accumulation_p"] is None
     assert logger.records[0]["structural_p"] is None
     assert logger.records[0]["evidence_ids_contributing"] == []
+
+
+@pytest.mark.asyncio
+async def test_lane_skip_flag_emits_no_data_lane_events(monkeypatch):
+    monkeypatch.setattr(cfg, "enable_lane_skip_when_no_data", True)
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(_analysis())
+
+    assert result.ready is True
+    assert logger.lane_skipped_records == [
+        {
+            "market_ticker": "KXBLEND-1",
+            "lane_id": "accumulation",
+            "reason": "no_dossier_estimate",
+        },
+        {
+            "market_ticker": "KXBLEND-1",
+            "lane_id": "structural",
+            "reason": "no_structural_prior",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_readiness_gate_summary_logs_g4_as_binding_constraint():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    market = _market(regime_weights={
+        "fast": 1 / 3,
+        "interpretation": 1 / 3,
+        "structural": 1 / 3,
+    })
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(_analysis(market=market))
+
+    assert result.ready is False
+    assert logger.gate_summary_records
+    summary = logger.gate_summary_records[0]
+    assert summary["market_prefix"] == "KXBLEND"
+    assert summary["binding_constraint"] == "G4_regime_low"
+    assert summary["g4_threshold"] == pytest.approx(0.20)
+    assert any("G4" in item for item in summary["gate_chain"])
 
 
 @pytest.mark.asyncio
@@ -305,7 +373,136 @@ async def test_trigger_evidence_id_is_deduplicated_with_recent_evidence():
 
 
 @pytest.mark.asyncio
-async def test_blocked_candidate_logs_reason_and_does_not_enqueue():
+async def test_trigger_evidence_counts_for_g6_before_dossier_catches_up():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    now = datetime(2026, 4, 20, 12, tzinfo=UTC)
+    stale_ts = datetime(2026, 4, 18, 12, tzinfo=UTC).isoformat()
+    store = FakeStore(
+        dossier=_dossier(),
+        structural_prior=_structural_prior(),
+        evidence=[
+            _evidence("ev-old-news", source_class="news", ingested_ts=stale_ts),
+            _evidence("ev-old-official", source_class="official", ingested_ts=stale_ts),
+        ],
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=store,
+        logger=logger,
+        is_paper_mode=True,
+        now=lambda: now,
+    )
+    analysis = _analysis()
+    analysis.signal_meta = {
+        "trigger_evidence_id": "ev-trigger",
+        "trigger_evidence_source": "Reuters",
+        "trigger_evidence_source_class": "news",
+        "trigger_evidence_headline": "Fresh trigger",
+        "trigger_evidence_ingested_ts": now.isoformat(),
+        "trigger_evidence_content_hash": "hash-ev-trigger",
+        "trigger_evidence_original_weight": 0.8,
+    }
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.ready is True
+    assert result.trade_blocked_reason is None
+    assert "G6_recency_score" not in result.readiness_decision.failure_reasons
+
+
+@pytest.mark.asyncio
+async def test_stale_accumulation_without_trigger_still_fails_g6():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    now = datetime(2026, 4, 20, 12, tzinfo=UTC)
+    stale_ts = datetime(2026, 4, 18, 12, tzinfo=UTC).isoformat()
+    store = FakeStore(
+        dossier=_dossier(),
+        structural_prior=_structural_prior(),
+        evidence=[
+            _evidence("ev-old-news", source_class="news", ingested_ts=stale_ts),
+            _evidence("ev-old-official", source_class="official", ingested_ts=stale_ts),
+        ],
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=store,
+        logger=logger,
+        is_paper_mode=True,
+        now=lambda: now,
+    )
+
+    result = await task.process_fast_lane_result(_analysis())
+
+    assert result.ready is False
+    assert result.trade_blocked_reason == "G6_recency_score"
+    assert "G6_recency_score" in result.readiness_decision.failure_reasons
+    assert result.readiness_decision.recency_score is not None
+    assert result.readiness_decision.recency_threshold == pytest.approx(0.30)
+    assert result.readiness_decision.recency_distance < 0
+    assert logger.gate_summary_records[0]["recency_score"] == pytest.approx(
+        result.readiness_decision.recency_score
+    )
+    assert logger.gate_summary_records[0]["recency_threshold"] == pytest.approx(0.30)
+    assert logger.gate_summary_records[0]["recency_distance"] == pytest.approx(
+        result.readiness_decision.recency_distance
+    )
+    assert logger.records[0]["recency_score"] == pytest.approx(
+        result.readiness_decision.recency_score
+    )
+    assert logger.skipped_records[0]["recency_score"] == pytest.approx(
+        result.readiness_decision.recency_score
+    )
+    assert logger.skipped_records[0]["recency_distance"] == pytest.approx(
+        result.readiness_decision.recency_distance
+    )
+
+
+@pytest.mark.asyncio
+async def test_trigger_evidence_source_class_counts_for_g2():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    now = datetime(2026, 4, 18, 12, tzinfo=UTC)
+    store = FakeStore(
+        dossier=_dossier(),
+        structural_prior=_structural_prior(),
+        evidence=[_evidence("ev-news", source_class="news", ingested_ts=now.isoformat())],
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=store,
+        logger=logger,
+        is_paper_mode=True,
+        now=lambda: now,
+    )
+    analysis = _analysis()
+    analysis.signal_meta = {
+        "trigger_evidence_id": "ev-trigger",
+        "trigger_evidence_source": "White House",
+        "trigger_evidence_source_class": "official",
+        "trigger_evidence_headline": "Fresh official trigger",
+        "trigger_evidence_ingested_ts": now.isoformat(),
+        "trigger_evidence_content_hash": "hash-ev-trigger",
+        "trigger_evidence_original_weight": 0.8,
+    }
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.ready is True
+    assert result.trade_blocked_reason is None
+    assert (
+        "G2_evidence_source_class_diversity"
+        not in result.readiness_decision.failure_reasons
+    )
+
+
+@pytest.mark.asyncio
+async def test_blocked_candidate_logs_reason_and_does_not_enqueue(monkeypatch):
+    # PROFIT-SOURCE-001: G2 default is now 1 (single-source allowed). Pin it back
+    # to 2 here so a single-source candidate still BLOCKS -- this test exercises
+    # the block-logging + no-enqueue path, not the G2 policy itself.
+    monkeypatch.setattr("tasks.trade_readiness_gate.G2_MIN_SOURCE_CLASSES", 2)
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     logger = SpyLogger()
     store = FakeStore(
@@ -328,6 +525,37 @@ async def test_blocked_candidate_logs_reason_and_does_not_enqueue():
     assert queue.empty()
     assert logger.records[0]["trade_considered"] is True
     assert logger.records[0]["trade_blocked_reason"] == "G2_evidence_source_class_diversity"
+
+
+@pytest.mark.asyncio
+async def test_single_source_allowed_and_count_tracked(monkeypatch):
+    """PROFIT-SOURCE-001: with G2_MIN=1 (default), a single-source candidate is
+    NO LONGER blocked, and its source-class count (1) is recorded on the
+    readiness decision + propagated into signal_meta for performance tracking."""
+    monkeypatch.setattr("tasks.trade_readiness_gate.G2_MIN_SOURCE_CLASSES", 1)
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    store = FakeStore(
+        dossier=_dossier(),
+        structural_prior=_structural_prior(),
+        evidence=[_evidence("ev-1", source_class="news")],
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=store,
+        logger=logger,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(_analysis())
+
+    assert (
+        "G2_evidence_source_class_diversity"
+        not in result.readiness_decision.failure_reasons
+    )
+    assert result.readiness_decision.source_class_count == 1
+    if result.candidate is not None:
+        assert result.candidate.signal_meta["evidence_source_class_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -589,6 +817,7 @@ async def test_blocked_blend_emits_skipped_record(trade_blocked_reason: str) -> 
     )
     assert logger.skipped_records[0]["reason"] == trade_blocked_reason
     assert logger.skipped_records[0]["ticker"] == "KXBLEND-1"
+    assert logger.skipped_records[0]["venue"] == "kalshi"
 
 
 @pytest.mark.asyncio
@@ -901,7 +1130,6 @@ def _analysis_for_series(ticker: str) -> SignalAnalysis:
     )
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
 @pytest.mark.parametrize(
     "ticker,expected_prefix",
     [
@@ -923,7 +1151,101 @@ def test_series_prefix_extraction(ticker: str, expected_prefix: str) -> None:
     assert helper(ticker) == expected_prefix
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
+def test_series_prefix_raises_on_empty_ticker() -> None:
+    """Empty ticker must raise rather than return "" (silent-failure-hunter EXEC-002)."""
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
+        _bt_mod.BlendTask, "_series_prefix", None
+    )
+    assert helper is not None
+    with pytest.raises(ValueError, match=r"empty or null ticker"):
+        helper("")
+
+
+# ---------------------------------------------------------------------------
+# P3 (PROFIT-VENUE-PARITY-001) — `_series_prefix` must be venue-aware.
+#
+# WHY: the series-correlation guard (line 240) and the GATE_SUMMARY
+# market_prefix (line 521) both key off `_series_prefix(ticker)`. The
+# venue-blind `ticker.split('-', 1)[0]` collapses every Polymarket slug to
+# its market-MAKER token (`ewc`), lumping ~30 INDEPENDENT contests (Maine
+# Senate, Michigan Senate, Georgia Gov, ...) into one correlation bucket.
+# One news event then suppresses trades on unrelated contests — the exact
+# over-grouping #148 fixed for the executor exposure cap, one layer up.
+# The per-contest stem comes from the SINGLE canonical PM family key
+# (`pm_domain_key`); we delegate, never re-derive (open-risk #1).
+# ---------------------------------------------------------------------------
+
+
+def test_series_prefix_polymarket_independent_contests_get_distinct_prefixes() -> None:
+    """Two INDEPENDENT Polymarket contests must NOT share a correlation bucket.
+
+    Pre-fix this FAILS: `'ewc-usse-ak-...'.split('-', 1)[0]` and
+    `'ewc-usse-mi-...'.split('-', 1)[0]` BOTH collapse to `'ewc'`, so a trade
+    on the Alaska Senate race would suppress an unrelated Michigan Senate
+    trade inside the correlation window. The contest stem keeps them apart.
+    """
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
+        _bt_mod.BlendTask, "_series_prefix", None
+    )
+    assert helper is not None
+    alaska = helper("ewc-usse-ak-2026-11-03-rep")
+    michigan = helper("ewc-usse-mi-2026-11-03-rep")
+    assert alaska == "ewc-usse-ak", alaska
+    assert michigan == "ewc-usse-mi", michigan
+    assert alaska != michigan, (
+        "independent PM contests must get distinct correlation prefixes; "
+        "collapsing both to 'ewc' recreates the #148 over-grouping defect"
+    )
+
+
+def test_series_prefix_polymarket_same_contest_sides_share_prefix() -> None:
+    """dem/rep outcomes of the SAME contest must share one prefix.
+
+    The correlation guard's purpose is to stop one news event opening N
+    concurrent bets on the same underlying contest, so both sides of one
+    contest MUST collapse to a single bucket (date + trailing outcome
+    stripped by `pm_domain_key`).
+    """
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
+        _bt_mod.BlendTask, "_series_prefix", None
+    )
+    assert helper is not None
+    dem = helper("ewc-usse-me-2026-11-03-dem")
+    rep = helper("ewc-usse-me-2026-11-03-rep")
+    assert dem == "ewc-usse-me"
+    assert rep == "ewc-usse-me"
+    assert dem == rep, "same-contest sides must share a correlation prefix"
+
+
+def test_series_prefix_kalshi_unchanged_byte_identical() -> None:
+    """Kalshi tickers keep the EXACT pre-fix `split('-', 1)[0]` behavior.
+
+    The leading Kalshi token IS the real series; the fix must NOT alter it.
+    """
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
+        _bt_mod.BlendTask, "_series_prefix", None
+    )
+    assert helper is not None
+    assert helper("KXFISAEXTEND-26APR-MAY01") == "KXFISAEXTEND"
+    assert helper("KXMOCTRUMP25-26-APR24") == "KXMOCTRUMP25"
+    # Byte-identity invariant: result must equal the legacy derivation exactly.
+    for tk in ("KXFISAEXTEND-26APR-MAY01", "KXTRUMPIRAN-26MAY01"):
+        assert helper(tk) == tk.split("-", 1)[0]
+
+
+def test_series_prefix_polymarket_no_date_falls_back_to_split() -> None:
+    """A PM slug with no recognizable ISO date degrades to the coarse split,
+    never crashes — `pm_domain_key` returns the bare venue segment (no ':')
+    for an unrecognizable stem, which the helper treats as the split branch.
+    """
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
+        _bt_mod.BlendTask, "_series_prefix", None
+    )
+    assert helper is not None
+    # 'polymarket_us' bare slug -> pm_domain_key returns 'polymarket_us' (no ':')
+    assert helper("polymarket_us") == "polymarket_us"
+
+
 @pytest.mark.asyncio
 async def test_fisa_replay_three_same_series_only_one_enqueues() -> None:
     """The 2026-05-01 FISA case (3 trades within 7s) must collapse to 1."""
@@ -995,7 +1317,6 @@ async def test_cross_series_burst_does_not_interfere() -> None:
     ), "no series_correlation_in_window SKIPPED expected for cross-series traffic"
 
 
-@pytest.mark.xfail(reason=_EXEC002_XFAIL_REASON, strict=True)
 @pytest.mark.asyncio
 async def test_window_expiry_allows_second_same_series_candidate(monkeypatch) -> None:
     """Same series, second candidate arriving after the window has expired.
@@ -1082,3 +1403,116 @@ async def test_window_override_zero_disables_guard(monkeypatch) -> None:
 # deque, injected guard object, or module-level helper would have failed even with
 # correct FISA-replay behavior. Behavior is already pinned by the runtime tests
 # above (FISA replay + cross-series + window-expiry + window-override).
+
+
+# ── PROFIT-BLENDER-001 caller-side flag setting ─────────────────────────────────
+#
+# Spec: docs/superpowers/specs/2026-05-24-lane-aware-blender-design.md.
+#
+# These tests pin that `_build_accumulation_lane` and `_build_structural_lane`
+# correctly set `signal_kind="fallback"` when the upstream producer returned a
+# default-neutral value (p≈0.5 with low confidence), and `signal_kind="real"`
+# otherwise. The blender filter consumes these flags downstream — the
+# load-bearing contract is set HERE, not in the blender.
+
+import asyncio as _asyncio
+
+
+def _make_minimal_task() -> BlendTask:
+    """Construct a BlendTask with empty fake-store. We only invoke the
+    helper methods directly; the queue/logger/calibration are stubs."""
+    return BlendTask(
+        trading_queue=_asyncio.Queue(),
+        store=FakeStore(),  # empty stub
+        logger=None,
+        is_paper_mode=True,
+    )
+
+
+class TestProfitBlender001CallerFlagSetting:
+    """Pin that `_build_accumulation_lane` and `_build_structural_lane`
+    correctly classify lanes per the PROFIT-BLENDER-001 contract."""
+
+    def test_dossier_with_real_signal_yields_real_lane(self):
+        """Dossier with non-neutral estimate + meaningful confidence
+        produces a `signal_kind="real"` lane."""
+        task = _make_minimal_task()
+        dossier = _dossier(current_estimate=0.30, confidence=0.70)
+        lane = task._build_accumulation_lane(dossier)
+        assert lane is not None
+        assert lane.signal_kind == "real"
+        assert lane.p == pytest.approx(0.30)
+
+    def test_dossier_with_neutral_default_yields_fallback_lane(self):
+        """Dossier returning p≈0.5 with low confidence is treated as
+        a fallback — the producer's "no data" branch. This is the
+        condition that produced the 2026-05-24 incident."""
+        task = _make_minimal_task()
+        # mimic: thin dossier returns p=0.50 (uniform neutral default) at
+        # low confidence (0.15) — common when an empty/near-empty dossier
+        # exposes no real evidence yet.
+        dossier = _dossier(current_estimate=0.50, confidence=0.15)
+        lane = task._build_accumulation_lane(dossier)
+        assert lane is not None
+        assert lane.signal_kind == "fallback", (
+            f"neutral default dossier must be classified as fallback; "
+            f"got signal_kind={lane.signal_kind!r}"
+        )
+
+    def test_dossier_with_low_confidence_NON_neutral_stays_real(self):
+        """Codex-flagged boundary: a low-confidence signal that is NOT
+        near 0.5 carries real information and must stay classified as
+        real. The fallback flag is for "no data," not "weak data."""
+        task = _make_minimal_task()
+        dossier = _dossier(current_estimate=0.25, confidence=0.15)
+        lane = task._build_accumulation_lane(dossier)
+        assert lane is not None
+        assert lane.signal_kind == "real"
+
+    def test_structural_prior_with_real_signal_yields_real_lane(self):
+        """A structural prior with non-neutral estimate (e.g. IRON_CAP
+        base rate of 0.1) is real even at modest confidence — it carries
+        a meaningful prior."""
+        task = _make_minimal_task()
+        prior = StructuralPriorRecord(
+            market_ticker="KXTEST-1",
+            prior_estimate=0.10,
+            confidence=0.25,
+            computed_ts="2026-05-24T00:00:00+00:00",
+            recompute_trigger="initial",
+            input_source_count=1,
+            llm_called=False,
+        )
+        lane = task._build_structural_lane(prior)
+        assert lane is not None
+        assert lane.signal_kind == "real"
+
+    def test_structural_prior_neutral_default_yields_fallback_lane(self):
+        """Structural prior returning p=0.5 at low confidence (no
+        external data) is a fallback. Must be excluded from blend."""
+        task = _make_minimal_task()
+        prior = StructuralPriorRecord(
+            market_ticker="KXTEST-1",
+            prior_estimate=0.50,
+            confidence=0.10,
+            computed_ts="2026-05-24T00:00:00+00:00",
+            recompute_trigger="initial",
+            input_source_count=0,
+            llm_called=False,
+        )
+        lane = task._build_structural_lane(prior)
+        assert lane is not None
+        assert lane.signal_kind == "fallback"
+
+    def test_none_inputs_produce_none_lane_no_classification(self):
+        """None inputs produce no lane (caller behavior pre-fix preserved)."""
+        task = _make_minimal_task()
+        assert task._build_accumulation_lane(None) is None
+        assert task._build_structural_lane(None) is None
+
+    def test_dossier_with_null_current_estimate_yields_no_lane(self):
+        """Pre-fix invariant preserved: dossier with no current_estimate
+        produces no lane at all."""
+        task = _make_minimal_task()
+        dossier = _dossier(current_estimate=None)
+        assert task._build_accumulation_lane(dossier) is None

@@ -42,7 +42,15 @@ from typing import Any, Callable, Optional, TypeVar
 
 import colorlog
 
-from config import LOGS_DIR
+from utils.output_paths import (
+    HEALTH_REPORTS_DIR,
+    PERFORMANCE_REPORTS_DIR,
+    RAW_APP_DIR,
+    RAW_TRADES_ARCHIVE_DIR,
+    RAW_TRADES_DIR,
+    RAW_TRADES_LIVE_DIR,
+    RAW_TRADES_SHADOW_DIR,
+)
 from utils.log_records import SignalAnalysisDetail
 
 
@@ -108,13 +116,23 @@ CALIBRATION_CHECK_REQUIRED_FIELDS: tuple[str, ...] = (
 )
 
 # ── Subdirectory layout ───────────────────────────────────────────────────────
-_LOG_APP_DIR     = LOGS_DIR / "app"
-_LOG_TRADES_DIR  = LOGS_DIR / "trades"
-_LOG_TRADES_LIVE_DIR = _LOG_TRADES_DIR / "live"
-_LOG_REPORTS_DIR = LOGS_DIR / "reports"
-_LOG_ARCHIVE_DIR = LOGS_DIR / "trades" / "archive"
+_LOG_APP_DIR = RAW_APP_DIR
+_LOG_TRADES_DIR = RAW_TRADES_DIR
+_LOG_TRADES_LIVE_DIR = RAW_TRADES_LIVE_DIR
+_LOG_TRADES_SHADOW_DIR = RAW_TRADES_SHADOW_DIR
+_LOG_REPORTS_DIR = PERFORMANCE_REPORTS_DIR
+_LOG_HEALTH_REPORTS_DIR = HEALTH_REPORTS_DIR
+_LOG_ARCHIVE_DIR = RAW_TRADES_ARCHIVE_DIR
 
-for _d in (_LOG_APP_DIR, _LOG_TRADES_DIR, _LOG_TRADES_LIVE_DIR, _LOG_REPORTS_DIR, _LOG_ARCHIVE_DIR):
+for _d in (
+    _LOG_APP_DIR,
+    _LOG_TRADES_DIR,
+    _LOG_TRADES_LIVE_DIR,
+    _LOG_TRADES_SHADOW_DIR,
+    _LOG_REPORTS_DIR,
+    _LOG_HEALTH_REPORTS_DIR,
+    _LOG_ARCHIVE_DIR,
+):
     _d.mkdir(parents=True, exist_ok=True)
 
 # ── Log file paths ────────────────────────────────────────────────────────────
@@ -122,6 +140,7 @@ APP_LOG_FILE   = _LOG_APP_DIR    / "bot.log"
 ERROR_LOG_FILE = _LOG_APP_DIR    / "errors.log"   # WARNING+ only -- quick triage
 LEGACY_TRADE_LOG_FILE = _LOG_TRADES_DIR / "trades.jsonl"  # temporary legacy read path during cutover validation
 TRADE_LOG_FILE = _LOG_TRADES_LIVE_DIR / "trades.jsonl"    # preferred active newline-delimited JSON target
+SHADOW_ASSIGNMENT_LOG_FILE = _LOG_TRADES_SHADOW_DIR / "fresh_pass_assignment_shadow.jsonl"
 LOG_REPORTS_DIR = _LOG_REPORTS_DIR                # for paper_trader report output
 
 # ── Formatters ────────────────────────────────────────────────────────────────
@@ -565,6 +584,9 @@ class TradeLogger:
         method: str | None = None,
         llm_direction: str | None = None,
         llm_magnitude: str | None = None,
+        venue: str | None = None,
+        keywords: list[str] | None = None,
+        source_class: str | None = None,
     ) -> None:
         record = {
             "type": "OPPORTUNITY",
@@ -589,6 +611,13 @@ class TradeLogger:
             record["llm_direction"] = llm_direction
         if llm_magnitude is not None:
             record["llm_magnitude"] = llm_magnitude
+        if venue is not None:
+            record["venue"] = venue
+        if keywords is not None:
+            record["keywords"] = list(keywords)
+            record["keyword_count"] = len(keywords)
+        if source_class is not None:
+            record["source_class"] = source_class
         self._write(record)
 
     def log_paper_trade(
@@ -608,12 +637,16 @@ class TradeLogger:
         reasoning: str,
         signal_headline: str,
         signal_source: str,
+        keywords_matched: list[str] | None = None,
         signal_meta: dict[str, Any] | None = None,
+        bankroll_delta_dollars: float | None = None,
+        venue: str = "kalshi",
     ) -> None:
         record = {
             "type": "PAPER_TRADE",
             "trade_id": trade_id,
             "ticker": ticker,
+            "venue": venue,
             "market_title": market_title,
             "side": side,
             "contracts": contracts,
@@ -627,8 +660,12 @@ class TradeLogger:
             "signal_headline": signal_headline,
             "signal_source": signal_source,
         }
+        if keywords_matched is not None:
+            record["keywords_matched"] = keywords_matched
         if signal_meta:
             record["signal_meta"] = signal_meta
+        if bankroll_delta_dollars is not None:
+            record["bankroll_delta_dollars"] = round(bankroll_delta_dollars, 2)
         self._write(record)
 
     def log_paper_resolution(
@@ -638,14 +675,21 @@ class TradeLogger:
         ticker: str,
         resolved_yes: bool,
         pnl_dollars: float,
+        bankroll_delta_dollars: float | None = None,
+        venue: str | None = None,
     ) -> None:
-        self._write({
+        record = {
             "type": "PAPER_RESOLUTION",
             "trade_id": trade_id,
             "ticker": ticker,
             "resolved_yes": resolved_yes,
             "pnl_dollars": round(pnl_dollars, 2),
-        })
+        }
+        if venue:
+            record["venue"] = venue
+        if bankroll_delta_dollars is not None:
+            record["bankroll_delta_dollars"] = round(bankroll_delta_dollars, 2)
+        self._write(record)
 
     def log_live_order(
         self,
@@ -689,6 +733,7 @@ class TradeLogger:
         self,
         *,
         reason: str,
+        skip_category: str | None = None,
         ticker: str | None = None,
         headline: str | None = None,
         source: str | None = None,
@@ -699,7 +744,11 @@ class TradeLogger:
         market_price: float | None = None,
         edge: float | None = None,
         min_edge_threshold: float | None = None,
+        venue: str | None = None,
         signal_meta: dict[str, Any] | None = None,
+        recency_score: float | None = None,
+        recency_threshold: float | None = None,
+        recency_distance: float | None = None,
     ) -> None:
         """Emit a SKIPPED trade-log record.
 
@@ -735,6 +784,8 @@ class TradeLogger:
             "ticker": ticker,
             "headline": headline,
         }
+        if skip_category is not None:
+            record["skip_category"] = skip_category
         if source is not None:
             record["source"] = source
         if method is not None:
@@ -755,6 +806,14 @@ class TradeLogger:
             record["edge"] = round(edge, 4)
         if min_edge_threshold is not None:
             record["min_edge_threshold"] = round(min_edge_threshold, 4)
+        if venue:
+            record["venue"] = venue
+        if recency_score is not None:
+            record["recency_score"] = round(float(recency_score), 4)
+        if recency_threshold is not None:
+            record["recency_threshold"] = round(float(recency_threshold), 4)
+        if recency_distance is not None:
+            record["recency_distance"] = round(float(recency_distance), 4)
         if signal_meta:
             record["signal_meta"] = signal_meta
         self._write(record)
@@ -767,7 +826,15 @@ class TradeLogger:
         source: str,
         headline: str,
         match_score: float,
+        rejection_category: str | None = None,
+        signal_branch: str | None = None,
+        method: str | None = None,
+        llm_direction: str | None = None,
+        llm_magnitude: str | None = None,
+        llm_confidence: float | None = None,
+        keywords: list[str] | None = None,
         age_seconds: float | None = None,
+        threshold_seconds: int | None = None,
     ) -> None:
         record = {
             "type": "ANALYSIS_REJECTED",
@@ -777,8 +844,25 @@ class TradeLogger:
             "headline": headline,
             "match_score": round(match_score, 4),
         }
+        if rejection_category is not None:
+            record["rejection_category"] = rejection_category
+        if signal_branch is not None:
+            record["signal_branch"] = signal_branch
+        if method is not None:
+            record["method"] = method
+        if llm_direction is not None:
+            record["llm_direction"] = llm_direction
+        if llm_magnitude is not None:
+            record["llm_magnitude"] = llm_magnitude
+        if llm_confidence is not None:
+            record["llm_confidence"] = round(float(llm_confidence), 4)
+        if keywords is not None:
+            record["keywords"] = list(keywords)
+            record["keyword_count"] = len(keywords)
         if age_seconds is not None:
             record["age_seconds"] = round(age_seconds, 2)
+        if threshold_seconds is not None:
+            record["threshold_seconds"] = int(threshold_seconds)
         self._write(record)
 
     def log_early_stale_drop(
@@ -825,6 +909,7 @@ class TradeLogger:
     _SAD_OPTIONAL_ROUND = frozenset({
         "llm_confidence", "pre_llm_semantic_overlap_ratio",
         "pre_llm_keyword_signal_strength", "llm_probability_movement",
+        "age_at_analysis_seconds",
     })
 
     def log_signal_analysis_detail(self, detail: SignalAnalysisDetail) -> None:
@@ -945,6 +1030,58 @@ class TradeLogger:
             record["market_specificity_score"] = round(market_specificity_score, 4)
         self._write(record)
 
+    def log_match_weight_applied(
+        self,
+        *,
+        source: str,
+        headline: str,
+        ticker: str,
+        market_title: str,
+        market_prefix: str,
+        tokens: list[str],
+        token_weights: dict[str, dict[str, Any]],
+        composition_rule: str,
+        final_multiplier: float,
+        pre_weight_score: float,
+        post_weight_score: float,
+    ) -> None:
+        self._write({
+            "type": "MATCH_WEIGHT_APPLIED",
+            "source": source,
+            "headline": headline,
+            "ticker": ticker,
+            "market_title": market_title,
+            "market_prefix": market_prefix,
+            "tokens": tokens,
+            "token_weights": token_weights,
+            "composition_rule": composition_rule,
+            "final_multiplier": round(final_multiplier, 4),
+            "pre_weight_score": round(pre_weight_score, 4),
+            "post_weight_score": round(post_weight_score, 4),
+        })
+
+    def log_market_source_hint_diagnostic(
+        self,
+        *,
+        ticker: str,
+        mode: str,
+        shadow_only: bool,
+        targets: list[dict[str, Any]],
+        counters: dict[str, dict[str, int | None]],
+        rejected_labels: dict[str, str],
+        log_records: list[dict[str, object]],
+    ) -> None:
+        self._write({
+            "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+            "ticker": ticker,
+            "mode": mode,
+            "shadow_only": shadow_only,
+            "targets": targets,
+            "counters": counters,
+            "rejected_labels": rejected_labels,
+            "log_records": log_records,
+        })
+
     def log_blend_decision(
         self,
         *,
@@ -964,6 +1101,10 @@ class TradeLogger:
         trade_considered: bool,
         trade_blocked_reason: str | None,
         evidence_ids_contributing: list[str],
+        venue: str | None = None,
+        recency_score: float | None = None,
+        recency_threshold: float | None = None,
+        recency_distance: float | None = None,
     ) -> None:
         record = {
             "type": "BLEND_DECISION",
@@ -984,6 +1125,14 @@ class TradeLogger:
             "trade_blocked_reason": trade_blocked_reason,
             "evidence_ids_contributing": evidence_ids_contributing,
         }
+        if venue:
+            record["venue"] = venue
+        if recency_score is not None:
+            record["recency_score"] = round(float(recency_score), 4)
+        if recency_threshold is not None:
+            record["recency_threshold"] = round(float(recency_threshold), 4)
+        if recency_distance is not None:
+            record["recency_distance"] = round(float(recency_distance), 4)
         self._write(record)
 
     def log_evidence_ingestion(
@@ -1041,6 +1190,20 @@ class TradeLogger:
             "in_recovery": in_recovery,
         }
         self._write(record)
+
+    def log_lane_skipped(
+        self,
+        *,
+        market_ticker: str,
+        lane_id: str,
+        reason: str,
+    ) -> None:
+        self._write({
+            "type": "LANE_SKIPPED",
+            "market_ticker": market_ticker,
+            "lane_id": lane_id,
+            "reason": reason,
+        })
 
     def log_structural_prior_recompute(
         self,
@@ -1138,6 +1301,176 @@ class TradeLogger:
             record["matched_tokens"] = matched_tokens
         self._write(record)
 
+    def log_calibration_observation(
+        self,
+        *,
+        trade_id: str,
+        ticker: str,
+        market_prefix: str,
+        side: str,
+        estimated_probability: float,
+        realized_outcome: int,
+        entry_price_cents: float,
+        pnl_dollars: float,
+        cost_dollars: float,
+        llm_magnitude: str | None,
+        llm_confidence: float | None,
+        signal_source: str,
+        ts_entry: str,
+        ts_resolved: str,
+    ) -> None:
+        """PROFIT-ALIGN-002 (2026-05-25): per-resolved-trade calibration observation.
+
+        Emitted once per resolved paper trade as the primary feedback signal
+        for the calibration tracker (the largest missing piece flagged in the
+        2026-05-25 architecture review). Downstream aggregator computes
+        Brier score / calibration curve per (market_prefix, magnitude_bucket)
+        archetype; surfaces in daily_review.
+
+        ``realized_outcome`` is 1 if the bot's chosen side won (got paid),
+        0 otherwise — i.e. it's the probability the BOT'S BET realizes, not
+        the YES probability. This makes the Brier score `(p̂ - 1)²` on wins
+        and `(p̂ - 0)²` on losses where p̂ is the bot's stated probability
+        for its chosen side. Calibration target: mean(p̂) ≈ mean(realized).
+
+        Schema is forward-compatible — the aggregator tolerates absent
+        magnitude/confidence fields by bucketing them as "unknown".
+        """
+        self._write({
+            "type": "CALIBRATION_OBSERVATION",
+            "trade_id": trade_id,
+            "ticker": ticker,
+            "market_prefix": market_prefix,
+            "side": side,
+            "estimated_probability": round(float(estimated_probability), 4),
+            "realized_outcome": int(realized_outcome),
+            "entry_price_cents": round(float(entry_price_cents), 2),
+            "pnl_dollars": round(float(pnl_dollars), 2),
+            "cost_dollars": round(float(cost_dollars), 2),
+            "llm_magnitude": llm_magnitude,
+            "llm_confidence": (
+                round(float(llm_confidence), 4) if llm_confidence is not None else None
+            ),
+            "signal_source": signal_source,
+            "ts_entry": ts_entry,
+            "ts_resolved": ts_resolved,
+        })
+
+    def log_gate_summary(
+        self,
+        *,
+        ticker: str,
+        market_prefix: str,
+        binding_constraint: str,
+        scaled_confidence: float,
+        regime_confidence: float,
+        blended_confidence: float,
+        g1_threshold: float,
+        g4_threshold: float,
+        gate_chain: list[str],
+        recency_score: float | None = None,
+        recency_threshold: float | None = None,
+        recency_distance: float | None = None,
+    ) -> None:
+        """PROFIT-ALIGN-008 (2026-05-25): consolidated gate-decision diagnostic.
+
+        Per CLAUDE.md gotcha: G1 reads `scaled_confidence = blended * regime`,
+        but the binding constraint when fail-safe mode fires is G4
+        (`regime_confidence < 0.20`). Operators reading SKIPPED logs see
+        G1 first and miss that G4 is the upstream cause.
+
+        This event makes the actual binding constraint explicit:
+
+          binding_constraint ∈ {
+            "G4_regime_low",       # rc < 0.20 → fail-safe G1=0.10
+            "G1_blended_confidence",  # rc ≥ 0.20 but sc < 0.05
+            "G1_fail_safe",        # in fail-safe mode AND sc < 0.10
+            "passed",              # both G1 and G4 OK
+          }
+
+        gate_chain enumerates which gates were checked + passed/failed in
+        order. Surfaces in daily_review.
+        """
+        record = {
+            "type": "GATE_SUMMARY",
+            "ticker": ticker,
+            "market_prefix": market_prefix,
+            "binding_constraint": binding_constraint,
+            "scaled_confidence": round(float(scaled_confidence), 4),
+            "regime_confidence": round(float(regime_confidence), 4),
+            "blended_confidence": round(float(blended_confidence), 4),
+            "g1_threshold": round(float(g1_threshold), 4),
+            "g4_threshold": round(float(g4_threshold), 4),
+            "gate_chain": gate_chain,
+        }
+        if recency_score is not None:
+            record["recency_score"] = round(float(recency_score), 4)
+        if recency_threshold is not None:
+            record["recency_threshold"] = round(float(recency_threshold), 4)
+        if recency_distance is not None:
+            record["recency_distance"] = round(float(recency_distance), 4)
+        self._write(record)
+
+    def log_match_llm_review(
+        self,
+        *,
+        ticker: str,
+        market_title: str,
+        market_prefix: str,
+        headline: str,
+        source: str,
+        matched_tokens: list[str],
+        llm_relevant: bool,
+        llm_direction: str,
+        llm_magnitude: str,
+        llm_confidence: float,
+        verdict: str,
+        venue: str | None = None,
+        match_score: float | None = None,
+        keywords: list[str] | None = None,
+        source_class: str | None = None,
+    ) -> None:
+        """PROFIT-MATCH-DYNAMIC (2026-05-24): per-LLM-call feedback signal.
+
+        Emitted ONCE per signal-analyzer LLM call after parse, regardless of
+        verdict. Downstream aggregator (`scripts/match_feedback_aggregator.py`)
+        rolls these into per-(token × market_prefix) FP-rate counters that
+        feed the runtime downweight list at `data/matcher_token_weights.json`.
+
+        `verdict` is one of:
+          - "false_positive_relevance"  — LLM said relevant=False
+          - "false_positive_neutral"    — relevant=True but dir=neutral + mag=none
+                                          + conf>=0.7 (LLM judged not actionable)
+          - "true_positive"             — relevant=True with directional signal
+        """
+        record = {
+            "type": "MATCH_LLM_REVIEW",
+            "ticker": ticker,
+            "market_title": market_title[:200],
+            "market_prefix": market_prefix,
+            "headline": headline[:200],
+            "source": source,
+            "matched_tokens": matched_tokens,
+            "llm_relevant": llm_relevant,
+            "llm_direction": llm_direction,
+            "llm_magnitude": llm_magnitude,
+            "llm_confidence": round(float(llm_confidence), 4),
+            "verdict": verdict,
+        }
+        if venue:
+            record["venue"] = venue
+        if keywords is not None:
+            record["keywords"] = list(keywords)
+            record["keyword_count"] = len(keywords)
+        if source_class:
+            record["source_class"] = source_class
+        # PROFIT-MATCH-003 (L2-a): carry the matcher score so the feedback loop
+        # can score-gate the false_positive_neutral signal. Omitted when None so
+        # the consumer treats it as marginal (prior behaviour).
+        if match_score is not None:
+            record["match_score"] = round(float(match_score), 4)
+        self._write(record)
+
     def log_position_drift(
         self,
         *,
@@ -1182,19 +1515,46 @@ class TradeLogger:
         lane_estimate: float,
         final_resolution: float,
         error: float,
+        venue: str | None = None,
     ) -> None:
-        self._write({
+        record = {
             "type": "CALIBRATION_CHECK",
             "market_ticker": market_ticker,
             "lane": lane,
             "lane_estimate": round(lane_estimate, 4),
             "final_resolution": round(final_resolution, 4),
             "error": round(error, 4),
-        })
+        }
+        if venue:
+            record["venue"] = venue
+        self._write(record)
+
+
+class ShadowTradeLogger:
+    """Partitioned writer for diagnostic-only shadow rows."""
+
+    def __init__(self, path: Path = SHADOW_ASSIGNMENT_LOG_FILE) -> None:
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _write(self, record: dict[str, Any]) -> None:
+        record = dict(record)
+        record.setdefault("ts", datetime.now(timezone.utc).isoformat())
+        record.setdefault("shadow_only", True)
+        with self.path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, sort_keys=True) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+
+    def log_fresh_pass_assignment_shadow(self, record: dict[str, Any]) -> None:
+        if record.get("type") != "FRESH_PASS_ASSIGNMENT_SHADOW":
+            raise ValueError("unexpected shadow record type")
+        self._write(record)
 
 
 # Module-level singletons
 trade_log = TradeLogger()
+shadow_trade_log = ShadowTradeLogger()
 
 
 def emit_opportunity(

@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterable
 
 if TYPE_CHECKING:
     from tasks.calibration_task import CalibrationTask
@@ -30,7 +30,7 @@ from tabulate import tabulate
 import config as config_module
 from analysis import SignalAnalysis
 from tasks.stats.source_credibility import SourceCredibility
-from config import cfg, DATA_DIR, PAPER_FLAT_CONTRACTS
+from config import cfg, DATA_DIR
 from trading.portfolio import Portfolio, Position
 from utils.logger import get_logger, trade_log, TRADE_LOG_FILE
 
@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     trade_id                TEXT PRIMARY KEY,
     ts                      TEXT NOT NULL,
     ticker                  TEXT NOT NULL,
+    venue                   TEXT NOT NULL DEFAULT 'kalshi',
     market_title            TEXT NOT NULL,
     side                    TEXT NOT NULL,
     contracts               INTEGER NOT NULL,
@@ -137,6 +138,10 @@ _P0_PROVENANCE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("price_retrieved_at", "TEXT"),
     ("raw_payload_hash", "TEXT"),
     ("p0_contract_version", "INTEGER DEFAULT 1"),
+)
+
+_VENUE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("venue", "TEXT NOT NULL DEFAULT 'kalshi'"),
 )
 
 
@@ -232,6 +237,85 @@ def _match_quality_report_section() -> list[str]:
     return lines
 
 
+def _market_source_hints_report_section() -> list[str]:
+    """Return a compact MarketSourceHints section for the daily report.
+
+    Reads MARKET_SOURCE_HINT_DIAGNOSTIC records from trades.jsonl (read-only).
+    Diagnostic only -- no readiness/admission/scoring/routing/trading behavior
+    is affected by these metrics.
+    """
+    heading = "MARKET SOURCE HINTS  (shadow-only diagnostics)"
+    if not TRADE_LOG_FILE.exists():
+        return [heading, "  No trades.jsonl found.", ""]
+
+    from collections import Counter
+
+    total = 0
+    shadow_only = 0
+    child_shadow_records = 0
+    rejected_label_count = 0
+    mode_counts: Counter[str] = Counter()
+    source_counts: Counter[str] = Counter()
+    ticker_counts: Counter[str] = Counter()
+    try:
+        with TRADE_LOG_FILE.open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") != "MARKET_SOURCE_HINT_DIAGNOSTIC":
+                    continue
+                total += 1
+                if ev.get("shadow_only") is True:
+                    shadow_only += 1
+                mode = str(ev.get("mode") or "unknown").strip() or "unknown"
+                mode_counts[mode] += 1
+                ticker = str(ev.get("ticker") or "").strip()
+                if ticker:
+                    ticker_counts[ticker] += 1
+                for target in ev.get("targets") or []:
+                    if isinstance(target, dict):
+                        source = str(target.get("source") or "").strip()
+                        if source:
+                            source_counts[source] += 1
+                rejected_labels = ev.get("rejected_labels") or {}
+                if isinstance(rejected_labels, dict):
+                    rejected_label_count += len(rejected_labels)
+                for record in ev.get("log_records") or []:
+                    if isinstance(record, dict) and record.get("shadow_only") is True:
+                        child_shadow_records += 1
+    except OSError:
+        return [heading, "  Could not read trades.jsonl.", ""]
+
+    if total == 0:
+        return [heading, "  No MARKET_SOURCE_HINT_DIAGNOSTIC records yet.", ""]
+
+    shadow_pct = 100 * shadow_only / total
+    lines = [
+        heading,
+        "  diagnostic only -- not consumed by readiness/admission/trading",
+        f"  Diagnostic records:       {total}",
+        f"  Shadow-only records:      {shadow_only} ({shadow_pct:.0f}%)",
+    ]
+    if mode_counts:
+        modes = ", ".join(f"{mode}({count})" for mode, count in sorted(mode_counts.items()))
+        lines.append(f"  Modes observed:           {modes}")
+    if source_counts:
+        sources = ", ".join(f"{source}({count})" for source, count in source_counts.most_common(5))
+        lines.append(f"  Top hinted sources:       {sources}")
+    if ticker_counts:
+        tickers = ", ".join(f"{ticker}({count})" for ticker, count in ticker_counts.most_common(5))
+        lines.append(f"  Top tickers:              {tickers}")
+    lines.append(f"  Rejected labels:          {rejected_label_count}")
+    lines.append(f"  Child shadow records:     {child_shadow_records}")
+    lines.append("")
+    return lines
+
+
 class PaperTrader:
     """Paper trading engine backed by SQLite."""
 
@@ -280,6 +364,7 @@ class PaperTrader:
         self._log_startup_diagnostics(startup_state)
         self._log_state_initialization(startup_state)
         self._ensure_p0_cohort_sentinel()
+        self._ensure_sizing_regime_kelly_sentinel()
         if self._startup_context == "runtime":
             type(self)._runtime_owner_pid = os.getpid()
         self._initialized = True
@@ -316,6 +401,49 @@ class PaperTrader:
         if self._startup_context != "test":
             log.info(
                 "[P-9 / LD-7] Inserted bot_state.p0_price_fix_deployed_ts=%s",
+                deployed_ts,
+            )
+
+    def _ensure_sizing_regime_kelly_sentinel(self) -> None:
+        """Idempotent insert of bot_state.sizing_regime_kelly_deployed_ts.
+
+        Paper sizing switched flat-5 -> Kelly in v0.33.6 (PROFIT-SIZING-001b).
+        Resolved trades from the two sizing regimes are not comparable, so the
+        performance report needs a boundary to split the flat-5-era cohort from
+        the Kelly-era cohort (mirroring the P0 pricing-fix sentinel).
+
+        The bot stamps this automatically at the first startup that runs the
+        Kelly-sizing code -- there is NO operator action and NO .env variable
+        (an explicit decision: the operator should not have to set deploy
+        markers by hand). Like the P0 sentinel, the value is written once and
+        NEVER overwritten, so the boundary is anchored permanently. Stamping at
+        first-startup-under-this-code means the recorded instant can trail the
+        actual v0.33.6 code deploy slightly; this is harmless because the
+        Kelly-era resolved cohort is empty at planting time, so no resolved
+        trade is mis-attributed across the boundary.
+        """
+        sentinel_key = "sizing_regime_kelly_deployed_ts"
+        existing = self._conn.execute(
+            "SELECT value FROM bot_state WHERE key = ?",
+            (sentinel_key,),
+        ).fetchone()
+        if existing is not None:
+            return  # already set; never overwrite the historical boundary
+
+        deployed_ts = datetime.now(timezone.utc).isoformat()
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO bot_state(key, value) VALUES (?, ?)",
+                    (sentinel_key, deployed_ts),
+                )
+        except sqlite3.IntegrityError:
+            # Race: another PaperTrader inserted between our SELECT and INSERT.
+            # The other process won; never overwrite the boundary.
+            return
+        if self._startup_context != "test":
+            log.info(
+                "Inserted bot_state.sizing_regime_kelly_deployed_ts=%s",
                 deployed_ts,
             )
 
@@ -375,6 +503,10 @@ class PaperTrader:
         if "market_snapshot" not in cols and self._ensure_paper_trades_column("market_snapshot", "TEXT", cols):
             added_cols.append("market_snapshot")
 
+        for name, ddl in _VENUE_COLUMNS:
+            if name not in cols and self._ensure_paper_trades_column(name, ddl, cols):
+                added_cols.append(name)
+
         # v0.22.0: feedback-loop columns
         new_cols = [
             ("series_ticker",  "TEXT"),
@@ -397,6 +529,24 @@ class PaperTrader:
             ("accumulation_confidence", "REAL"),
             ("structural_p",            "REAL"),
             ("structural_confidence",   "REAL"),
+            # I-10 (framework v3, closes Codex blocker E): cohort_extension
+            # holds the contamination-window tag
+            # ``contamination_window:<change_id>:<window_id>`` for paper
+            # trades written while a T1/T2 observation window is active
+            # (see scripts/edge_replay/contamination_corpus_manager.py).
+            # Nullable: a NULL value means the trade is part of the normal
+            # corpus and is eligible for pre-deploy gates; a non-NULL value
+            # means the I-1 corpus builder must exclude the row by default
+            # but the I-11 retrospective consumes it as the gold-standard
+            # OOS measurement for the named change.
+            ("cohort_extension",        "TEXT"),
+            # PROFIT-PHASE3 I-1: durable join key linking this trade to its
+            # captured LLM decision (llm_capture.jsonl row_id). Lets the corpus
+            # builder stamp the 13-field cache key onto the corpus row so the
+            # replay gate's cache-coverage check can resolve it. Nullable:
+            # historical rows (and non-LLM signals) have no captured decision
+            # and join lossily / not at all.
+            ("llm_capture_row_id",      "TEXT"),
         ]
         for col, col_type in new_cols:
             if col not in cols and self._ensure_paper_trades_column(col, col_type, cols):
@@ -424,11 +574,78 @@ class PaperTrader:
             except Exception as exc:
                 log.warning("DB backfill of series_ticker failed: %s", exc)
 
+        self._repair_executed_side_edges()
+
         if added_cols:
             log.info("DB migration complete (added: %s)", ", ".join(added_cols))
 
     def _paper_trades_columns(self) -> set[str]:
         return {row[1] for row in self._conn.execute("PRAGMA table_info(paper_trades)")}
+
+    def _repair_executed_side_edges(self) -> None:
+        """Canonicalize stored trade edge to the executed side."""
+        try:
+            cur = self._conn.execute(
+                """UPDATE paper_trades
+                   SET edge = CASE lower(side)
+                       WHEN 'yes' THEN estimated_prob - (price_cents / 100.0)
+                       WHEN 'no' THEN (1.0 - estimated_prob) - (price_cents / 100.0)
+                       ELSE edge
+                   END
+                   WHERE side IS NOT NULL
+                     AND edge IS NOT NULL
+                     AND estimated_prob IS NOT NULL
+                     AND price_cents IS NOT NULL
+                     AND lower(side) IN ('yes', 'no')
+                     AND abs(edge - CASE lower(side)
+                       WHEN 'yes' THEN estimated_prob - (price_cents / 100.0)
+                       WHEN 'no' THEN (1.0 - estimated_prob) - (price_cents / 100.0)
+                       ELSE edge
+                     END) > 0.0000001"""
+            )
+            self._conn.commit()
+            if cur.rowcount:
+                log.info("DB repaired executed-side edge for %d paper trades", cur.rowcount)
+        except Exception as exc:
+            log.warning("DB executed-side edge repair failed: %s", exc)
+
+    @staticmethod
+    def _resolve_cohort_extension() -> str | None:
+        """Return the active contamination-window tag, or ``None``.
+
+        I-10 (framework v3, closes Codex blocker E). Imports the
+        contamination manager lazily so a missing or broken module never
+        blocks the trade write. The entire body is wrapped in a single
+        ``try/except Exception`` -> ``None`` for the same reason: this
+        helper is observational machinery and must never break the
+        money-path INSERT. See ``rules/risk_review.md``: observability
+        write paths should not silently swallow exceptions, but here we
+        explicitly accept the silent-skip tradeoff because the alternative
+        (raising) would block paper-trade persistence. The contamination
+        machinery is best-effort label propagation, not a safety gate.
+        """
+        try:
+            from scripts.edge_replay.contamination_corpus_manager import (
+                cohort_extension_tag,
+                get_active_window,
+            )
+
+            window = get_active_window()
+            if window is None:
+                return None
+            return cohort_extension_tag(window)
+        except Exception:
+            # Per python-reviewer MEDIUM: warn on swallow so a corrupt
+            # sentinel or import failure is distinguishable from
+            # "no active window" in production logs. The paper-trade
+            # persistence guarantee is unaffected; only observability
+            # improves. Using the module-level `log` keeps the message
+            # in the trade-path log stream where operators look first.
+            log.warning(
+                "[I-10] _resolve_cohort_extension failed; labeling skipped",
+                exc_info=True,
+            )
+            return None
 
     def _ensure_paper_trades_column(self, col: str, col_type: str, cols: set[str]) -> bool:
         try:
@@ -639,15 +856,14 @@ class PaperTrader:
 
         trade_id    = str(uuid.uuid4())[:12]
         price_cents = max(1, min(99, int(analysis.executed_price_cents)))
-        # Kelly shadow: always compute what Kelly would size, even in flat paper mode.
-        # Stored as kelly_contracts for post-hoc analytics comparing flat-5 vs Kelly P&L.
+        # kelly_contracts: what Kelly sizes for this trade. Retained as a stored
+        # column for analytics (and the §7e flat-vs-Kelly history pre-cutover).
         kelly_contracts = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
-        # Paper training mode: flat contracts -- no bankroll gating so we
-        # maximise trade volume and accumulate signal-quality data.
-        if cfg.is_paper_trading:
-            contracts    = PAPER_FLAT_CONTRACTS
-        else:
-            contracts    = kelly_contracts
+        # PROFIT-SIZING-001b: paper now MIRRORS live -- size by Kelly (not flat-5)
+        # so the paper cohort predicts live behaviour. With the min-bet floor
+        # removed (PROFIT-SIZING-001) trades size down to the natural 1-contract
+        # floor in contracts_from_dollars. Both modes now use kelly_contracts.
+        contracts    = kelly_contracts
         cost_dollars = contracts * price_cents / 100.0
 
         bankroll_before = self.get_notional_bankroll()
@@ -675,18 +891,44 @@ class PaperTrader:
             provenance_retrieved_str = None
         provenance_hash = getattr(_market, "raw_payload_hash", None)
 
-        # PROFIT-OBS-004 (closed 2026-05-02): persist the EXECUTED-side edge,
-        # not the YES-side edge. analysis.edge is set upstream as
-        # (estimated_probability - market.yes_prob), which is the YES-side
-        # perspective regardless of which side the executor traded. For
-        # NO-side trades the executed-side edge is the negation. The 3
-        # historical KXFISAEXTEND-26APR-MAY0{1,2,3} rows persisted under the
-        # old YES-side convention are backfilled in the same commit; from
-        # this point forward every paper_trades.edge value is the side the
-        # executor actually traded.
-        executed_edge = (
-            analysis.edge if analysis.side == "yes" else -analysis.edge
+        def _venue_string(value: Any) -> str | None:
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped:
+                    return stripped
+            return None
+
+        venue = (
+            _venue_string(getattr(analysis, "venue", None))
+            or _venue_string(getattr(analysis.market, "venue", None))
+            or "kalshi"
         )
+        # PROFIT-VENUE-PARITY V12: the 'kalshi' default is correct for legacy
+        # pre-venue rows and native Kalshi objects (which carry no venue at all).
+        # But a NON-KX ticker landing on the default means a venue-stamped
+        # (e.g. Polymarket) object lost its venue upstream and would be misrouted
+        # to the Kalshi REST resolution path. Surface it instead of silently
+        # misfiling the trade. Observability-only; does not change the recorded
+        # venue or any decision.
+        if venue == "kalshi":
+            _ticker = str(getattr(analysis.market, "ticker", "") or "")
+            if _ticker and not _ticker.upper().startswith("KX"):
+                log.warning(
+                    "[VENUE_DEFAULT] non-KX ticker %s defaulted to venue='kalshi' "
+                    "(venue stamp missing upstream?) -- may misroute resolution",
+                    _ticker,
+                )
+
+        side = str(analysis.side).lower()
+        # Persist the executable edge for the side actually traded. Production
+        # analysis.edge is already chosen-side, while older replay/test paths may
+        # still carry YES-side edge, so derive from probability + entry price.
+        entry_prob = (
+            analysis.estimated_probability
+            if side == "yes"
+            else 1.0 - analysis.estimated_probability
+        )
+        executed_edge = entry_prob - (price_cents / 100.0)
 
         # PROFIT-CAL-001: per-lane estimates arrive via signal_meta, populated by
         # BlendTask when the candidate is built. Fast-lane-only paths leave these
@@ -709,25 +951,51 @@ class PaperTrader:
         lane_struct_p    = _lane_float("structural_p")
         lane_struct_conf = _lane_float("structural_confidence")
 
+        # I-10 (framework v3, closes Codex blocker E): stamp the contamination
+        # tag on every paper trade taken under an active observation window.
+        # Additive label only — does not change any decision logic. Fail-soft:
+        # the helper swallows every exception and returns None so trade
+        # persistence is never blocked by sentinel-file machinery.
+        cohort_extension = self._resolve_cohort_extension()
+
+        # PROFIT-PHASE3 I-1: persist the capture join key so a resolved trade can
+        # be linked to its captured LLM decision (the corpus builder keys on
+        # this). Built via the SAME shared helper the signal-analyzer capture
+        # site uses, so the keys match exactly. Lazy import + None fallback keeps
+        # trade persistence fail-soft (a missing helper loses only the corpus
+        # join for these rows, never the trade). Non-LLM signals have an empty
+        # item_id -> a degenerate key with no matching capture (joins to nothing,
+        # which is correct).
+        try:
+            from scripts.edge_replay.llm_capture import signal_capture_row_id
+
+            llm_capture_row_id = signal_capture_row_id(
+                analysis.market.ticker,
+                getattr(analysis.news_item, "item_id", "") or "",
+            )
+        except Exception:  # noqa: BLE001 — additive join key, never block a trade
+            llm_capture_row_id = None
+
         self._conn.execute(
             """INSERT INTO paper_trades
-               (trade_id, ts, ticker, market_title, side, contracts, price_cents,
-                cost_dollars, estimated_prob, entry_price_cents, edge, kelly_dollars,
-                capped_dollars, signal_headline, signal_source, keywords_matched,
-                reasoning, source_multiplier, notional_bankroll_before, notional_bankroll_after,
+               (trade_id, ts, ticker, venue, market_title, side, contracts, price_cents,
+                 cost_dollars, estimated_prob, entry_price_cents, edge, kelly_dollars,
+                 capped_dollars, signal_headline, signal_source, keywords_matched,
+                 reasoning, source_multiplier, notional_bankroll_before, notional_bankroll_after,
                 market_snapshot, series_ticker, signal_type, match_score,
                 llm_direction, llm_magnitude, llm_confidence, kelly_contracts,
-                fast_lane_p, fast_lane_confidence, accumulation_p, accumulation_confidence,
-                structural_p, structural_confidence,
-                price_source, price_method, price_retrieved_at, raw_payload_hash,
-                p0_contract_version)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 fast_lane_p, fast_lane_confidence, accumulation_p, accumulation_confidence,
+                 structural_p, structural_confidence,
+                 price_source, price_method, price_retrieved_at, raw_payload_hash,
+                 p0_contract_version, cohort_extension, llm_capture_row_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 trade_id,
                 datetime.now(timezone.utc).isoformat(),
                 analysis.market.ticker,
+                venue,
                 analysis.market.title,
-                analysis.side,
+                side,
                 contracts,
                 price_cents,
                 cost_dollars,
@@ -762,6 +1030,8 @@ class PaperTrader:
                 provenance_retrieved_str,
                 provenance_hash,
                 1,
+                cohort_extension,
+                llm_capture_row_id,
             ),
         )
         self._conn.commit()
@@ -770,7 +1040,8 @@ class PaperTrader:
         self.portfolio.add(Position(
             trade_id=trade_id,
             ticker=analysis.market.ticker,
-            side=analysis.side,
+            venue=venue,
+            side=side,
             contracts=contracts,
             cost_dollars=cost_dollars,
             price_cents=price_cents,
@@ -784,18 +1055,21 @@ class PaperTrader:
         paper_trade_kwargs = {
             "trade_id": trade_id,
             "ticker": analysis.market.ticker,
+            "venue": venue,
             "market_title": analysis.market.title,
-            "side": analysis.side,
+            "side": side,
             "contracts": contracts,
             "price_cents": price_cents,
             "cost_dollars": cost_dollars,
             "estimated_probability": analysis.estimated_probability,
             "entry_price_cents": float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0,
-            "edge": analysis.edge,
+            "edge": executed_edge,
             "kelly_dollars": analysis.kelly_dollars,
             "reasoning": analysis.reasoning,
             "signal_headline": analysis.news_item.headline,
             "signal_source": analysis.news_item.source,
+            "keywords_matched": analysis.keywords_matched,
+            "bankroll_delta_dollars": bankroll_after - bankroll_before,
         }
         signal_meta = vars(analysis).get("signal_meta")
         if signal_meta:
@@ -806,8 +1080,8 @@ class PaperTrader:
         log.info(
             "[PAPER] %s: BUY %d%s %s @ %dc | cost=$%.2f | edge=%+.3f | "
             "bankroll=$%.2f->$%.2f | src_mult=%.2fx | %s",
-            trade_id, contracts, kelly_note, analysis.side.upper(), price_cents,
-            cost_dollars, analysis.edge,
+            trade_id, contracts, kelly_note, side.upper(), price_cents,
+            cost_dollars, executed_edge,
             bankroll_before, bankroll_after,
             source_mult, analysis.market.ticker,
         )
@@ -831,8 +1105,31 @@ class PaperTrader:
         )
         if not lane_events:
             return
-        final_resolution = 1.0 if resolved_yes else 0.0
-        for trade_id, lane_name, lane_estimate in lane_events:
+        await self.record_resolution_calibration_events(
+            (
+                (ticker, resolved_yes, trade_id, lane_name, lane_estimate)
+                for trade_id, lane_name, lane_estimate in lane_events
+            )
+        )
+
+    async def record_resolution_calibration_events(
+        self,
+        lane_events: Iterable[tuple[str, bool, str, str, float]],
+    ) -> None:
+        """Emit calibration feedback for already-committed resolved trades."""
+        for ticker, resolved_yes, trade_id, lane_name, lane_estimate in lane_events:
+            venue_row = self._conn.execute(
+                "SELECT venue FROM paper_trades WHERE trade_id = ?",
+                (trade_id,),
+            ).fetchone()
+            venue = (
+                str(venue_row["venue"]).strip()
+                if venue_row is not None
+                and "venue" in venue_row.keys()
+                and str(venue_row["venue"] or "").strip()
+                else None
+            )
+            final_resolution = 1.0 if resolved_yes else 0.0
             error = abs(lane_estimate - final_resolution)
             trade_log.log_calibration_check(
                 market_ticker=ticker,
@@ -840,6 +1137,7 @@ class PaperTrader:
                 lane_estimate=lane_estimate,
                 final_resolution=final_resolution,
                 error=error,
+                venue=venue,
             )
             if self._calibration_task is not None:
                 try:
@@ -892,7 +1190,15 @@ class PaperTrader:
             total_payout += payout
 
         now_ts = datetime.now(timezone.utc).isoformat()
-        series_ticker = ticker.split("-")[0]  # e.g. "KXTRUMPIRAN-26APR01" -> "KXTRUMPIRAN"
+        series_ticker = next(
+            (
+                str(t["series_ticker"]).strip()
+                for t, _won, _payout, _pnl in outcomes
+                if "series_ticker" in t.keys()
+                and str(t["series_ticker"] or "").strip()
+            ),
+            ticker.split("-")[0],
+        )
 
         # Atomically mark all trades resolved and credit bankroll in one transaction.
         # _credit_bankroll calls _set_state which commits -- both the UPDATE rows and
@@ -925,7 +1231,55 @@ class PaperTrader:
                 ticker=ticker,
                 resolved_yes=resolved_yes,
                 pnl_dollars=pnl,
+                bankroll_delta_dollars=payout,
+                venue=t["venue"] if "venue" in t.keys() else None,
             )
+            # PROFIT-ALIGN-002 (2026-05-25): per-resolved-trade calibration
+            # observation. The biggest missing-piece flagged in the
+            # 2026-05-25 architecture review: bot has been paper-trading
+            # for weeks but we have no calibration curve / Brier score.
+            # Emit one observation row per resolved trade; downstream
+            # aggregator (scripts/calibration_aggregator.py, follow-on)
+            # rolls these into per-(market_prefix × magnitude_bucket)
+            # calibration metrics.
+            #
+            # realized_outcome = 1 iff the bot's chosen side won.
+            # estimated_probability is the bot's stated probability for
+            # its chosen side (already conditional on side in
+            # paper_trades.estimated_prob).
+            try:
+                # paper_trades.estimated_prob stores the bot's YES-side
+                # probability estimate; the chosen-side probability is
+                # estimated_prob for side=yes, (1 - estimated_prob) for
+                # side=no. Mirror that convention so the calibration
+                # tracker's "p̂ for our bet" semantics are clean.
+                est_yes_prob = float(t["estimated_prob"])
+                est_chosen_side_prob = (
+                    est_yes_prob if t["side"] == "yes" else (1.0 - est_yes_prob)
+                )
+                trade_log.log_calibration_observation(
+                    trade_id=t["trade_id"],
+                    ticker=ticker,
+                    market_prefix=series_ticker,
+                    side=t["side"],
+                    estimated_probability=est_chosen_side_prob,
+                    realized_outcome=int(won),
+                    entry_price_cents=float(t["entry_price_cents"] or 0.0),
+                    pnl_dollars=pnl,
+                    cost_dollars=float(t["cost_dollars"] or 0.0),
+                    llm_magnitude=t["llm_magnitude"] if "llm_magnitude" in t.keys() else None,
+                    llm_confidence=(
+                        t["llm_confidence"] if "llm_confidence" in t.keys() else None
+                    ),
+                    signal_source=t["signal_source"] or "",
+                    ts_entry=t["ts"] or "",
+                    ts_resolved=now_ts,
+                )
+            except Exception as exc:  # noqa: BLE001 — observability must not break resolve
+                log.warning(
+                    "PROFIT-ALIGN-002: calibration observation emit failed for %s: %s",
+                    t["trade_id"], exc,
+                )
             log.info(
                 "[RESOLVED] %s %s YES=%s | pnl=$%+.2f | bankroll=$%.2f",
                 t["trade_id"], ticker, resolved_yes, pnl,
@@ -1057,6 +1411,7 @@ class PaperTrader:
         ]
 
         lines += _match_quality_report_section()
+        lines += _market_source_hints_report_section()
 
         # Resolved trades table (last 20)
         if resolved:

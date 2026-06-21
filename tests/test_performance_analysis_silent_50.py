@@ -194,3 +194,61 @@ def test_section_placed_performance_renders_missing_price_as_na():
     assert "43c" in output, output
     # KX-ZERO row preserves the explicit "0c" — not coerced to "n/a".
     assert "0c" in output, output
+
+
+def test_section_placed_performance_renders_venue_breakdown():
+    db_trades = [
+        {
+            "trade_id": "kalshi-win",
+            "ticker": "KX-A",
+            "venue": "kalshi",
+            "ts": "2026-05-13T00:30:00+00:00",
+            "side": "yes",
+            "edge": 0.05,
+            "estimated_prob": 0.55,
+            "entry_price_cents": 40,
+            "cost_dollars": 2.00,
+            "pnl_dollars": 3.00,
+            "resolved": True,
+            "resolved_yes": True,
+            "signal_source": "test",
+        },
+        {
+            "trade_id": "pm-open",
+            "ticker": "ewc-test",
+            "venue": "polymarket_us",
+            "ts": "2026-05-13T00:31:00+00:00",
+            "side": "no",
+            "edge": 0.06,
+            "estimated_prob": 0.35,
+            "entry_price_cents": 65,
+            "cost_dollars": 3.25,
+            "pnl_dollars": None,
+            "resolved": False,
+            "resolved_yes": None,
+            "signal_source": "test",
+        },
+        {
+            "trade_id": "pm-loss",
+            "ticker": "ewc-test-2",
+            "venue": "polymarket_us",
+            "ts": "2026-05-13T00:32:00+00:00",
+            "side": "yes",
+            "edge": 0.03,
+            "estimated_prob": 0.57,
+            "entry_price_cents": 54,
+            "cost_dollars": 2.70,
+            "pnl_dollars": -2.70,
+            "resolved": True,
+            "resolved_yes": False,
+            "signal_source": "test",
+        },
+    ]
+
+    output = section_placed_performance([], db_trades, {})
+
+    assert "By venue:" in output, output
+    assert "kalshi" in output, output
+    assert "polymarket_us" in output, output
+    assert "+$3.00" in output, output
+    assert "$-2.70" in output, output

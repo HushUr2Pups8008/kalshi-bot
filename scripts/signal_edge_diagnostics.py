@@ -104,6 +104,8 @@ def classify_skip_reason(record: dict[str, Any]) -> str:
     min_edge = safe_float(record.get("min_edge_threshold"))
     if "duplicate" in reason or "same-signal" in reason:
         return "duplicate"
+    if "illiquid" in reason or "near limit" in reason or "price unavailable" in reason or "not tradeable" in reason:
+        return "liquidity"
     if "below min_edge" in reason:
         if edge is not None and abs(edge) < 0.00005:
             return "zero_edge"
@@ -254,6 +256,18 @@ def _llm_market_price_band(market_price: float) -> str:
     if market_price < 0.80:
         return "0.60-0.80"
     return "0.80-1.00"
+
+
+def _llm_timing_bucket(age_seconds: float) -> str:
+    if age_seconds < 5 * 60:
+        return "0-5m"
+    if age_seconds < 30 * 60:
+        return "5-30m"
+    if age_seconds < 2 * 60 * 60:
+        return "30m-2h"
+    if age_seconds < 24 * 60 * 60:
+        return "2h-24h"
+    return "24h+"
 
 
 def _update_llm_segment_metrics(
@@ -488,6 +502,7 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             "zero_edge": 0,
             "below_threshold": 0,
             "duplicate": 0,
+            "liquidity": 0,
             "other": 0,
         },
         "llm_observability": {
@@ -505,6 +520,7 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             "parse_ms_samples": [],
             "contention_observed": 0,
             "max_in_flight_at_entry": 0,
+            "pre_llm_would_block_and_useful": 0,
         },
         "llm_value_add": _default_llm_value_add(),
         "live_execution_attribution_limited": False,
@@ -522,6 +538,7 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
     llm_source_segments: dict[str, dict[str, int]] = defaultdict(_default_llm_segment_metrics)
     llm_ticker_segments: dict[str, dict[str, int]] = defaultdict(_default_llm_segment_metrics)
     llm_price_band_segments: dict[str, dict[str, int]] = defaultdict(_default_llm_segment_metrics)
+    llm_timing_segments: dict[str, dict[str, int]] = defaultdict(_default_llm_segment_metrics)
 
     read_stats = TradeLogReadStats()
     for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
@@ -638,6 +655,9 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                     else None
                 ),
                 "llm_probability_movement": safe_float(record.get("llm_probability_movement")),
+                "publish_ts": str(record.get("publish_ts") or "").strip() or None,
+                "age_at_analysis_seconds": safe_float(record.get("age_at_analysis_seconds")),
+                "analysis_threshold_seconds": safe_float(record.get("analysis_threshold_seconds")),
                 "estimated_probability": safe_float(record.get("final_probability")),
                 "market_price": safe_float(record.get("market_price")),
                 "edge": (
@@ -706,6 +726,8 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             if event["skip_type"] == "duplicate"
             else "opportunity skipped: below threshold"
             if event["skip_type"] == "below_threshold"
+            else "opportunity skipped: liquidity"
+            if event["skip_type"] == "liquidity"
             else "opportunity skipped: other"
         ),
     )
@@ -751,6 +773,8 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                 stats["llm_observability"]["max_in_flight_at_entry"],
                 int(row["llm_in_flight_at_entry"]),
             )
+        if not is_probe and row.get("pre_llm_would_block_and_useful") is True:
+            stats["llm_observability"]["pre_llm_would_block_and_useful"] += 1
         if not is_probe and row.get("method") == "llm" and row.get("estimated_probability") is not None and row.get("market_price") is not None:
             est_prob = float(row["estimated_probability"])
             market_price = float(row["market_price"])
@@ -812,6 +836,13 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                 abs_edge=abs_edge,
                 impact=impact,
             )
+            if row.get("age_at_analysis_seconds") is not None:
+                _update_llm_segment_metrics(
+                    llm_timing_segments[_llm_timing_bucket(float(row["age_at_analysis_seconds"]))],
+                    movement_bucket=movement_bucket,
+                    abs_edge=abs_edge,
+                    impact=impact,
+                )
         source = row["source"]
         ticker = row["ticker"]
         if source:
@@ -881,6 +912,14 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
         llm_price_band_segments,
         key_name="price_band",
     )
+    if llm_timing_segments:
+        stats["llm_value_add"]["segmentation"]["timing"] = {
+            "available": True,
+            "by_age_bucket": _finalize_llm_segment_rows(
+                llm_timing_segments,
+                key_name="age_bucket",
+            ),
+        }
     stats["by_source"] = sorted(
         [finalize_group(name, metrics, "source") for name, metrics in source_groups.items()],
         key=lambda row: (-row["signals"], -(row["opportunities"]), row["source"].lower()),
@@ -992,6 +1031,7 @@ def print_summary(
     print(f"  Zero-edge skips           : {stats['skip_breakdown']['zero_edge']}")
     print(f"  Non-zero below-threshold  : {stats['skip_breakdown']['below_threshold']}")
     print(f"  Duplicate-position skips  : {stats['skip_breakdown']['duplicate']}")
+    print(f"  Liquidity skips           : {stats['skip_breakdown']['liquidity']}")
     print(f"  Other skip reasons        : {stats['skip_breakdown']['other']}")
 
     print()

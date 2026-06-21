@@ -180,19 +180,87 @@ class TestParseLlmResponse:
         assert prob == pytest.approx(0.45, abs=0.001)
         assert direction == "neutral"
 
-    def test_magnitude_none_returns_market_price(self):
+    def test_magnitude_none_with_low_confidence_returns_market_price(self):
+        """Low-confidence directional + magnitude=none stays as the LLM
+        emitted it: prob = market.yes_prob unchanged, magnitude = "none".
+
+        PROFIT-LLM-002 (2026-05-24): the magnitude-bump for the converse
+        consistency rule fires only when confidence >= 0.6. Below that
+        threshold, the LLM's "none" is preserved to avoid converting
+        low-conviction directionals into spurious shifts.
+        """
         parsed = {
             "relevant": True,
             "new_information": True,
             "direction": "yes",
             "magnitude": "none",
-            "confidence": 0.8,
-            "reasoning": "no impact",
+            "confidence": 0.55,  # below 0.6 floor
+            "reasoning": "weak signal",
         }
         market = _make_market(55.0)
         prob, _, _, _, magnitude = _parse_llm_response(parsed, market)
         assert prob == pytest.approx(0.55, abs=0.001)
         assert magnitude == "none"
+
+    def test_magnitude_none_with_high_confidence_bumped_to_small(self):
+        """PROFIT-LLM-002 (2026-05-24): when the LLM returns
+        direction in {yes, no} with confidence >= 0.6 BUT
+        magnitude="none", reconcile the internally-inconsistent output
+        by bumping magnitude to "small". This restores the minimum-
+        credible shift (8 pp * confidence) when the LLM is confident
+        enough in a direction.
+
+        Load-bearing failure mode: the 2026-05-24 7-day funnel found
+        10 LLM responses on KXTXRUNOFFENDORSE markets with
+        direction="no", confidence=0.95, magnitude="none" — the
+        Paxton-over-Cornyn endorsement was the resolution-grade news
+        for the JCOR outcome contracts, the LLM read it correctly,
+        but magnitude="none" silently zeroed out the shift and no
+        trade emitted. Without this test, a future revert of the
+        magnitude bump would silently reintroduce that miss pattern.
+        """
+        parsed = {
+            "relevant": True,
+            "new_information": True,
+            "direction": "no",
+            "magnitude": "none",
+            "confidence": 0.95,
+            "reasoning": "Trump endorsed Paxton, not Cornyn",
+        }
+        market = _make_market(55.0)
+        prob, _, _, direction, magnitude = _parse_llm_response(parsed, market)
+        # Bumped to "small" → shift = 0.08 * 0.95 = 0.076 → prob = 0.55 - 0.076 = 0.474
+        assert prob == pytest.approx(0.474, abs=0.001), (
+            "expected magnitude bump from 'none' to 'small' for "
+            "direction=no, confidence=0.95"
+        )
+        assert direction == "no"
+        assert magnitude == "small", (
+            "expected magnitude bumped from 'none' to 'small'. If this "
+            "fails, PROFIT-LLM-002 magnitude-bump has regressed."
+        )
+
+    def test_magnitude_none_with_neutral_direction_not_bumped(self):
+        """The magnitude bump fires ONLY when direction in {yes, no}.
+        With direction='neutral' (LLM signaled no actionable view),
+        the bump must NOT fire — magnitude stays "none" and prob is
+        unchanged. This prevents the bump from inadvertently turning
+        true-neutral responses into directional bets."""
+        parsed = {
+            "relevant": True,
+            "new_information": True,
+            "direction": "neutral",
+            "magnitude": "none",
+            "confidence": 0.95,
+            "reasoning": "no clear direction",
+        }
+        market = _make_market(55.0)
+        prob, _, _, direction, magnitude = _parse_llm_response(parsed, market)
+        assert prob == pytest.approx(0.55, abs=0.001)
+        assert direction == "neutral"
+        assert magnitude == "none", (
+            "neutral direction must NEVER trigger the magnitude bump"
+        )
 
     def test_prob_clamped_at_0_95(self):
         parsed = {
@@ -401,6 +469,61 @@ class TestEstimateProbability:
         assert detail.llm_probability_movement == pytest.approx(0.14)
         assert detail.llm_useful is True
         assert detail.pre_llm_would_block_and_useful is False
+
+    @pytest.mark.asyncio
+    async def test_llm_dedup_recomputes_probability_for_current_market_price(self, monkeypatch):
+        """Cache the LLM verdict, not the old final probability.
+
+        The prompt no longer includes current price, so a same-prompt cache hit
+        should reuse direction/magnitude/confidence but recompute probability
+        against the current market. Old behavior returned the first final prob.
+        """
+        news = _make_news("Quarterly corporate earnings beat expectations")
+        first_market = _make_full_market(yes_price=51.0)
+        second_market = _make_full_market(yes_price=52.0)
+        calls = 0
+
+        async def _fake_llm(_news, market):
+            nonlocal calls
+            calls += 1
+            return (
+                (market.yes_prob + 0.08, 1.0, "same verdict", "yes", "small"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail"):
+            first = await estimate_probability(news, first_market)
+            second = await estimate_probability(news, second_market)
+
+        assert calls == 1
+        assert first[0] == pytest.approx(0.59)
+        assert second[0] == pytest.approx(0.60)
+
+    @pytest.mark.asyncio
+    async def test_llm_dedup_key_includes_prompt_body_and_source(self, monkeypatch):
+        """Same headline/market with different source/body needs a fresh call."""
+        news_1 = _make_news("Quarterly corporate earnings beat expectations", body="Initial short bulletin")
+        news_2 = _make_news("Quarterly corporate earnings beat expectations", body="Follow-up adds material context")
+        news_2.source = "Associated Press"
+        market = _make_full_market()
+        calls = 0
+
+        async def _fake_llm(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return (
+                (0.58 + calls / 100, 0.9, f"verdict {calls}", "yes", "small"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail"):
+            first = await estimate_probability(news_1, market)
+            second = await estimate_probability(news_2, market)
+
+        assert calls == 2
+        assert first[3] != second[3]
 
     @pytest.mark.asyncio
     async def test_non_probe_llm_call_logs_prompt_and_raw_response_at_debug(self, monkeypatch, caplog):
@@ -653,6 +776,149 @@ class TestEstimateProbability:
         assert kwargs["method"] == "llm"
         assert kwargs["llm_routing_passed"] is True
         assert "llm_routing_reason" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_match_llm_review_uses_explicit_match_meta_for_non_kalshi_venues(self, monkeypatch):
+        news = _make_news("Kansas governor election tightens after new polling")
+        market = _make_full_market(
+            title="Democratic Party",
+            subtitle="Kansas Governor Election Winner",
+            series_ticker="polymarket_us",
+        )
+        market.ticker = "ewc-usgub-ks-2026-11-03-dem"
+        match_meta = {
+            "venue": "polymarket_us",
+            "source_class": "news",
+            "matched_tokens": ["election", "governor", "kansas"],
+            "pre_llm_quality_pass": True,
+            "pre_llm_semantic_overlap_count": 3,
+            "pre_llm_semantic_overlap_ratio": 0.75,
+            "pre_llm_gate_reason": None,
+        }
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "LLM found relevant directional information", "yes", "moderate"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_match_llm_review") as review_mock:
+            await estimate_probability(news, market, match_meta=match_meta)
+
+        review_mock.assert_called_once()
+        assert review_mock.call_args.kwargs["market_prefix"] == "polymarket_us:ewc-usgub-ks"
+        assert review_mock.call_args.kwargs["venue"] == "polymarket_us"
+        assert review_mock.call_args.kwargs["source_class"] == "news"
+        assert isinstance(review_mock.call_args.kwargs["keywords"], list)
+        assert review_mock.call_args.kwargs["matched_tokens"] == [
+            "election",
+            "governor",
+            "kansas",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_match_llm_review_carries_match_score_from_match_meta(self, monkeypatch):
+        # PROFIT-MATCH-003 (L2-a): the matcher score threaded onto match_meta
+        # must reach log_match_llm_review, or the feedback loop's score-gate
+        # has no score and stays a no-op.
+        news = _make_news("Kansas governor election tightens after new polling")
+        market = _make_full_market(
+            title="Democratic Party",
+            subtitle="Kansas Governor Election Winner",
+            series_ticker="polymarket_us",
+        )
+        market.ticker = "ewc-usgub-ks-2026-11-03-dem"
+        match_meta = {
+            "venue": "polymarket_us",
+            "matched_tokens": ["election", "governor", "kansas"],
+            "match_score": 0.1875,
+            "pre_llm_quality_pass": True,
+            "pre_llm_semantic_overlap_count": 3,
+            "pre_llm_semantic_overlap_ratio": 0.75,
+            "pre_llm_gate_reason": None,
+        }
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "LLM found relevant directional information", "yes", "moderate"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_match_llm_review") as review_mock:
+            await estimate_probability(news, market, match_meta=match_meta)
+
+        review_mock.assert_called_once()
+        assert review_mock.call_args.kwargs["match_score"] == pytest.approx(0.1875)
+
+    @pytest.mark.asyncio
+    async def test_match_llm_review_match_score_none_when_absent(self, monkeypatch):
+        # No match_score on match_meta -> passed as None -> record omits it ->
+        # consumer treats it as marginal (prior behaviour).
+        news = _make_news("Kansas governor election tightens after new polling")
+        market = _make_full_market(
+            title="Democratic Party",
+            subtitle="Kansas Governor Election Winner",
+            series_ticker="polymarket_us",
+        )
+        market.ticker = "ewc-usgub-ks-2026-11-03-dem"
+        match_meta = {
+            "venue": "polymarket_us",
+            "matched_tokens": ["election", "governor", "kansas"],
+            "pre_llm_quality_pass": True,
+            "pre_llm_semantic_overlap_count": 3,
+            "pre_llm_semantic_overlap_ratio": 0.75,
+            "pre_llm_gate_reason": None,
+        }
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "LLM found relevant directional information", "yes", "moderate"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_match_llm_review") as review_mock:
+            await estimate_probability(news, market, match_meta=match_meta)
+
+        review_mock.assert_called_once()
+        assert review_mock.call_args.kwargs["match_score"] is None
+
+    @pytest.mark.asyncio
+    async def test_signal_analysis_detail_uses_explicit_match_meta_venue(self, monkeypatch):
+        news = _make_news("Kansas governor election tightens after new polling")
+        market = _make_full_market(
+            title="Democratic Party",
+            subtitle="Kansas Governor Election Winner",
+            series_ticker="polymarket_us",
+        )
+        market.ticker = "ewc-usgub-ks-2026-11-03-dem"
+        match_meta = {
+            "venue": "polymarket_us",
+            "matched_tokens": ["election", "governor", "kansas"],
+            "pre_llm_quality_pass": True,
+            "pre_llm_semantic_overlap_count": 3,
+            "pre_llm_semantic_overlap_ratio": 0.75,
+            "pre_llm_gate_reason": None,
+        }
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "LLM found relevant directional information", "yes", "moderate"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
+            await estimate_probability(news, market, match_meta=match_meta)
+
+        kwargs = _detail_to_kwargs(detail_mock)
+        assert kwargs["ticker"] == "ewc-usgub-ks-2026-11-03-dem"
+        assert kwargs["venue"] == "polymarket_us"
+        assert kwargs["publish_ts"] == news.published.isoformat()
+        assert kwargs["age_at_analysis_seconds"] >= 0
+        assert kwargs["analysis_threshold_seconds"] > 0
 
     @pytest.mark.asyncio
     async def test_match_meta_logs_would_block_without_keywords(self, monkeypatch):
@@ -1734,3 +2000,271 @@ class TestOllamaPost:
         text, early_meta, _rt, _status = await _ollama_post({}, "PROMPT", time.monotonic())
         assert text is None
         assert early_meta["status"] == "ollama_malformed_response"
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-MATCH-DYNAMIC (commit 2/5) — MATCH_LLM_REVIEW emission verdict logic
+# ---------------------------------------------------------------------------
+
+class TestMatchLlmReviewVerdict:
+    """Pins the verdict-inference rules used by signal_analyzer to classify
+    each LLM result as true_positive / false_positive_neutral / undetermined.
+    Encoded inline at signal_analyzer.py (call site of log_match_llm_review).
+    Mirrored here as a pure function so the boundary is testable.
+    """
+
+    @staticmethod
+    def _classify(direction: str, magnitude: str, confidence: float | None) -> str | None:
+        if direction in ("yes", "no"):
+            return "true_positive"
+        if (direction == "neutral"
+                and magnitude == "none"
+                and confidence is not None
+                and float(confidence) >= 0.7):
+            return "false_positive_neutral"
+        return None
+
+    def test_directional_yes_is_true_positive(self):
+        assert self._classify("yes", "small", 0.85) == "true_positive"
+
+    def test_directional_no_is_true_positive(self):
+        assert self._classify("no", "moderate", 0.95) == "true_positive"
+
+    def test_directional_low_confidence_still_true_positive(self):
+        # If LLM commits to a side at all, matcher gets a "match was useful"
+        # signal even at low confidence. Don't punish the matcher for LLM
+        # uncertainty when the match itself was topic-correct.
+        assert self._classify("yes", "small", 0.3) == "true_positive"
+
+    def test_confident_neutral_none_is_false_positive(self):
+        """Per PROFIT-MATCH-DYNAMIC commit 2/5: confident neutral + none is
+        the LLM saying 'this match was topic-wrong'. Penalize the matcher."""
+        assert self._classify("neutral", "none", 0.85) == "false_positive_neutral"
+        assert self._classify("neutral", "none", 0.7) == "false_positive_neutral"
+        assert self._classify("neutral", "none", 0.95) == "false_positive_neutral"
+
+    def test_low_confidence_neutral_is_undetermined(self):
+        """Below 0.7 confidence on neutral, we don't know if the match was
+        bad or if the LLM was uncertain. Skip the feedback signal — don't
+        punish the matcher for LLM low confidence."""
+        assert self._classify("neutral", "none", 0.55) is None
+        assert self._classify("neutral", "none", 0.3) is None
+
+    def test_neutral_with_magnitude_is_undetermined(self):
+        """Neutral direction but non-none magnitude is an LLM inconsistency
+        (caught separately by Phase B PROFIT-LLM-002 bump). Don't feed the
+        matcher loop here — different signal."""
+        assert self._classify("neutral", "small", 0.95) is None
+
+
+class TestLogMatchLlmReview:
+    """Schema pin for the trade_log.log_match_llm_review writer."""
+
+    def test_log_match_llm_review_writes_expected_keys(self, tmp_path, monkeypatch):
+        # Redirect log root so we don't pollute prod logs
+        monkeypatch.setenv("KALSHI_LOG_ROOT", str(tmp_path))
+        # Force fresh logger import bound to the new root
+        import importlib, utils.logger as logger_mod
+        importlib.reload(logger_mod)
+        tl = logger_mod.TradeLogger(tmp_path / "trades.jsonl")
+        tl.log_match_llm_review(
+            ticker="KXCABLEAVE-26MAY22-26JUN",
+            market_title="Will any member of Trump's Cabinet leave before Jun 2026?",
+            market_prefix="KXCABLEAVE",
+            venue="kalshi",
+            headline="LIVE: Trump says Iran deal not 'fully negotiated yet'",
+            source="Some Outlet",
+            matched_tokens=["trump"],
+            llm_relevant=False,
+            llm_direction="neutral",
+            llm_magnitude="none",
+            llm_confidence=0.85,
+            verdict="false_positive_neutral",
+            match_score=0.1834,
+            keywords=["iran", "deal"],
+            source_class="news",
+        )
+        # Read back
+        import json
+        path = tmp_path / "trades.jsonl"
+        line = path.read_text(encoding="utf-8").strip().splitlines()[-1]
+        rec = json.loads(line)
+        assert rec["type"] == "MATCH_LLM_REVIEW"
+        assert rec["ticker"] == "KXCABLEAVE-26MAY22-26JUN"
+        assert rec["market_prefix"] == "KXCABLEAVE"
+        assert rec["venue"] == "kalshi"
+        assert rec["matched_tokens"] == ["trump"]
+        assert rec["verdict"] == "false_positive_neutral"
+        assert rec["llm_confidence"] == 0.85
+        assert rec["llm_relevant"] is False
+        assert rec["keywords"] == ["iran", "deal"]
+        assert rec["keyword_count"] == 2
+        assert rec["source_class"] == "news"
+        # PROFIT-MATCH-003 (L2-a): match_score is carried (rounded to 4dp) so the
+        # feedback loop can score-gate the false_positive_neutral signal.
+        assert rec["match_score"] == 0.1834
+
+    def test_log_match_llm_review_omits_match_score_when_none(self, tmp_path, monkeypatch):
+        # WHY: a missing match_score must be ABSENT from the record (not 0.0) so
+        # the consumer treats it as marginal/prior-behaviour rather than as a
+        # genuine zero score.
+        monkeypatch.setenv("KALSHI_LOG_ROOT", str(tmp_path))
+        import importlib, utils.logger as logger_mod
+        importlib.reload(logger_mod)
+        tl = logger_mod.TradeLogger(tmp_path / "trades.jsonl")
+        tl.log_match_llm_review(
+            ticker="KXCABLEAVE-26MAY22-26JUN",
+            market_title="Will any member of Trump's Cabinet leave before Jun 2026?",
+            market_prefix="KXCABLEAVE",
+            headline="LIVE: synthetic probe headline",
+            source="Some Outlet",
+            matched_tokens=["trump"],
+            llm_relevant=True,
+            llm_direction="yes",
+            llm_magnitude="small",
+            llm_confidence=0.85,
+            verdict="true_positive",
+        )
+        import json
+        path = tmp_path / "trades.jsonl"
+        line = path.read_text(encoding="utf-8").strip().splitlines()[-1]
+        rec = json.loads(line)
+        assert "match_score" not in rec
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-ALIGN-002 (2026-05-25) — log_calibration_observation schema
+# ---------------------------------------------------------------------------
+
+class TestLogCalibrationObservation:
+    """Schema pin for trade_log.log_calibration_observation. Emitted once
+    per resolved paper trade by paper_trader._resolve_market_sync. Downstream
+    aggregator computes Brier score / calibration curve per archetype."""
+
+    def test_log_calibration_writes_expected_keys(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KALSHI_LOG_ROOT", str(tmp_path))
+        import importlib, utils.logger as logger_mod
+        importlib.reload(logger_mod)
+        tl = logger_mod.TradeLogger(tmp_path / "trades.jsonl")
+        tl.log_calibration_observation(
+            trade_id="abc123",
+            ticker="KXTRUMPIRAN-26JUN01",
+            market_prefix="KXTRUMPIRAN",
+            side="no",
+            estimated_probability=0.95,
+            realized_outcome=1,
+            entry_price_cents=92.0,
+            pnl_dollars=0.40,
+            cost_dollars=4.60,
+            llm_magnitude="small",
+            llm_confidence=0.85,
+            signal_source="NYT > World News",
+            ts_entry="2026-05-25T18:36:44+00:00",
+            ts_resolved="2026-06-01T12:00:00+00:00",
+        )
+        import json
+        line = (tmp_path / "trades.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1]
+        rec = json.loads(line)
+        assert rec["type"] == "CALIBRATION_OBSERVATION"
+        assert rec["trade_id"] == "abc123"
+        assert rec["market_prefix"] == "KXTRUMPIRAN"
+        assert rec["side"] == "no"
+        assert rec["estimated_probability"] == 0.95
+        assert rec["realized_outcome"] == 1
+        assert rec["pnl_dollars"] == 0.40
+        assert rec["llm_magnitude"] == "small"
+        assert rec["llm_confidence"] == 0.85
+
+    def test_log_calibration_with_null_llm_fields(self, tmp_path, monkeypatch):
+        """Some legacy trades may have null LLM fields. Writer must tolerate."""
+        monkeypatch.setenv("KALSHI_LOG_ROOT", str(tmp_path))
+        import importlib, utils.logger as logger_mod
+        importlib.reload(logger_mod)
+        tl = logger_mod.TradeLogger(tmp_path / "trades.jsonl")
+        tl.log_calibration_observation(
+            trade_id="legacy1",
+            ticker="KXOLD-26MAY01",
+            market_prefix="KXOLD",
+            side="yes",
+            estimated_probability=0.65,
+            realized_outcome=0,
+            entry_price_cents=55.0,
+            pnl_dollars=-2.75,
+            cost_dollars=2.75,
+            llm_magnitude=None,
+            llm_confidence=None,
+            signal_source="r/test",
+            ts_entry="2026-05-01T00:00:00+00:00",
+            ts_resolved="2026-05-15T00:00:00+00:00",
+        )
+        import json
+        line = (tmp_path / "trades.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1]
+        rec = json.loads(line)
+        assert rec["llm_magnitude"] is None
+        assert rec["llm_confidence"] is None
+        assert rec["realized_outcome"] == 0
+
+
+class TestI3CaptureJoinKey:
+    """PROFIT-PHASE3 I-1: the signal-analyzer capture must build its row_id from
+    news.item_id via the shared helper, so the key matches what record_trade
+    persists on the trade (the capture->trade join). Regression guard against
+    the prior bug that used news.id (nonexistent on NewsItem -> empty tail ->
+    every signal on a ticker collided on one key)."""
+
+    def test_i3_capture_uses_item_id_join_key(self, monkeypatch):
+        from types import SimpleNamespace
+        import analysis.signal_analyzer as sa
+
+        captured: dict = {}
+
+        def _fake_capture(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(
+            "scripts.edge_replay.llm_capture.capture_llm_response", _fake_capture
+        )
+        news = SimpleNamespace(
+            item_id="news-xyz",
+            id="SHOULD_NOT_BE_USED",
+            headline="h",
+            source="s",
+        )
+        market = SimpleNamespace(ticker="KXFOO-1")
+
+        sa._i3_capture_signal_llm_call(
+            news=news,
+            market=market,
+            prompt_text="filled prompt",
+            payload={},
+            response_text="raw response",
+        )
+
+        assert captured.get("row_id") == "signal::KXFOO-1::news-xyz"
+
+
+class TestLlmConfidenceClamp:
+    """PROFIT-EDGE-014 review finding: out-of-range LLM confidence must be
+    clamped at the producer. The confidence-weighted blend propagates a
+    single/dominant lane's RAW confidence to blended_confidence, where the
+    readiness gate's probability validation raises on >1.0 — unclamped, a
+    malformed LLM value becomes a per-candidate exception instead of a
+    bounded input."""
+
+    def test_confidence_clamped_to_unit_interval(self):
+        from types import SimpleNamespace
+        import analysis.signal_analyzer as sa
+
+        market = SimpleNamespace(yes_prob=0.50, ticker="KXCLAMP-1")
+        over = sa._parse_llm_response(
+            {"confidence": 7.0, "direction": "yes", "magnitude": "small",
+             "relevant": True, "new_information": True, "reasoning": "r"},
+            market,
+        )
+        under = sa._parse_llm_response(
+            {"confidence": -3.0, "direction": "yes", "magnitude": "small",
+             "relevant": True, "new_information": True, "reasoning": "r"},
+            market,
+        )
+        assert over[1] == 1.0
+        assert under[1] == 0.0

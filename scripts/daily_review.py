@@ -11,14 +11,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
 import urllib.request
 from collections import Counter
-from datetime import datetime, time as dt_time, timezone
+from datetime import datetime, timedelta, time as dt_time, timezone
 from pathlib import Path
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from scripts import decision_funnel_summary
 from scripts import freshness_diagnostics
@@ -26,8 +31,14 @@ from scripts import keyword_feedback
 from scripts import match_quality_diagnostics
 from scripts import match_suppression_audit
 from scripts import paper_performance_drilldown
+from scripts import since_restart_money_path
 from scripts import signal_edge_diagnostics
 from scripts import source_scorecard
+from scripts.throughput_operator_metrics import (
+    format_operator_throughput_lines,
+    summarize_operator_throughput_from_trade_log,
+)
+from tasks.stats import observability_checkpoint
 from utils.reporting_helpers import (
     DEFAULT_CURRENT_STATE_WINDOW_HOURS,
     ProgressTracker,
@@ -35,26 +46,35 @@ from utils.reporting_helpers import (
     stage_timer,
     _eprint,
 )
+from utils.output_paths import (
+    DAILY_REPORTS_DIR,
+    DERIVED_STATE_DIR,
+    PAPER_TRADES_DB,
+    RAW_TRADES_LIVE_DIR,
+)
+from utils.diagnostic_reporting_helpers import format_counter
+from utils.diagnostics_script_helpers import is_test_record_source_only
+from utils.trade_log_reader import iter_trade_records
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-REPORTS_DIR = REPO_ROOT / "logs" / "reports"
+REPORTS_DIR = DAILY_REPORTS_DIR
 DEFAULT_REPORT_PATH = REPORTS_DIR / f"daily_review_{datetime.now().strftime('%Y%m%d')}.txt"
+HEALTH_REPORTS_DIR = REPORTS_DIR.parent / "health"
 # Persisted day-over-day tier baseline used by section 1 status-change diff.
 # Two-deep history (current + previous) so same-day reruns don't blow away
 # yesterday's reference.
-SOURCE_TIER_STATE_PATH = REPORTS_DIR / "source_tier_state.json"
+SOURCE_TIER_STATE_PATH = DERIVED_STATE_DIR / "source_tier_state.json"
 # Default to the active live file -- daily review is a current-state report.
 # Pass --path logs/trades to include archive data for historical analysis.
-DEFAULT_TRADES_LOG_PATH = REPO_ROOT / "logs" / "trades" / "live" / "trades.jsonl"
-DEFAULT_PAPER_DB_PATH = REPO_ROOT / "data" / "paper_trades.db"
+DEFAULT_TRADES_LOG_PATH = RAW_TRADES_LIVE_DIR / "trades.jsonl"
+DEFAULT_PAPER_DB_PATH = PAPER_TRADES_DB
 RECENT_MATCH_EXAMPLES = 5
 RECENT_EDGE_AUDIT = 5
 
 # Source-scorecard tiers we keep visible in section 1's per-source waterfall.
 # Sources in any other tier (prune / remove immediately / disabled) are folded
 # into a one-line summary referencing section 8.
-_VISIBLE_TIERS: tuple[str, ...] = ("top performers", "keep", "watch / investigate")
+_VISIBLE_TIERS: tuple[str, ...] = ("top performers", "keep", "watch / investigate", "incubating")
 _HIDDEN_TIERS: tuple[str, ...] = (
     "prune",
     "remove immediately",
@@ -66,6 +86,7 @@ _TIER_ORDER: dict[str, int] = {
     "top performers": 0,
     "keep": 1,
     "watch / investigate": 2,
+    "incubating": 2,
     "prune": 3,
     "remove immediately": 4,
     "disabled by source": 5,
@@ -156,6 +177,159 @@ def fmt_counter_line(counter: Counter[str], keys: list[tuple[str, str]]) -> str:
     if not counter:
         return "n/a"
     return ", ".join(f"{label}={counter.get(key, 0)}" for key, label in keys)
+
+
+def _fresh_pass_assignment_shadow_path(trades_path: Path) -> Path:
+    if trades_path.is_dir():
+        trades_root = trades_path
+    elif trades_path.name == "trades.jsonl" and trades_path.parent.name == "live":
+        trades_root = trades_path.parent.parent
+    else:
+        trades_root = trades_path.parent
+    return trades_root / "shadow" / "fresh_pass_assignment_shadow.jsonl"
+
+
+def _summarize_fresh_pass_assignment_shadow(
+    trades_path: Path,
+    *,
+    since: datetime | None,
+    until: datetime | None,
+    exclude_test: bool = False,
+) -> dict[str, Any]:
+    shadow_path = _fresh_pass_assignment_shadow_path(trades_path)
+    stats: dict[str, Any] = {
+        "path": shadow_path,
+        "rows": 0,
+        "assigned": 0,
+        "unassigned": 0,
+        "malformed": 0,
+        "top_unassigned_sources": Counter(),
+    }
+    if not shadow_path.exists():
+        return stats
+
+    for record in iter_trade_records(
+        shadow_path,
+        since=since,
+        until=until,
+        event_types={"FRESH_PASS_ASSIGNMENT_SHADOW"},
+    ):
+        if exclude_test and is_test_record_source_only(record):
+            continue
+        stats["rows"] += 1
+        if bool(record.get("malformed")):
+            stats["malformed"] += 1
+            continue
+        if bool(record.get("assigned")):
+            stats["assigned"] += 1
+        else:
+            stats["unassigned"] += 1
+            source = str(record.get("source") or "").strip()
+            if source:
+                stats["top_unassigned_sources"][source] += 1
+    return stats
+
+
+def _format_fresh_pass_conversion_lines(
+    *,
+    fresh_passes: int,
+    match_records: int,
+    detail_rows: int,
+    llm_attempted: int,
+    opportunities: int,
+    paper_trades: int,
+) -> list[str]:
+    signal_label = "signal row" if detail_rows == 1 else "signal rows"
+    lines = [
+        "  Fresh-pass conversion            : "
+        f"{fresh_passes} fresh -> {detail_rows} {signal_label} -> "
+        f"{llm_attempted} LLM attempts -> {opportunities} opportunities -> "
+        f"{paper_trades} paper trades"
+    ]
+    deltas = [
+        ("fresh_to_match", fresh_passes - match_records, "fresh passes had no match diagnostic"),
+        ("match_to_analysis", match_records - detail_rows, "match diagnostics did not become signal-analysis rows"),
+        ("analysis_to_opportunity", detail_rows - opportunities, "signal-analysis rows did not create opportunities"),
+        ("opportunity_to_trade", opportunities - paper_trades, "opportunities did not become paper trades"),
+    ]
+    lines.append(
+        "    lifecycle gaps                 : "
+        + ", ".join(f"{label}={max(0, delta)}" for label, delta, _desc in deltas)
+    )
+    positive = [(label, delta, desc) for label, delta, desc in deltas if delta > 0]
+    if positive:
+        label, delta, desc = max(positive, key=lambda item: item[1])
+        lines.append(f"    pinch                          : {label} ({delta} {desc})")
+    else:
+        lines.append("    pinch                          : none detected in this window")
+    return lines
+
+
+def _latest_restart_timestamp_from_health_reports(
+    health_dir: Path = HEALTH_REPORTS_DIR,
+) -> str | None:
+    candidates = sorted(
+        health_dir.glob("bothealth_*.md"),
+        key=lambda path: path.stat().st_mtime if path.exists() else 0,
+        reverse=True,
+    )
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        match = re.search(r"bot_runtime\.started_utc=([^\s]+)", text)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _format_since_restart_money_path_lines(report: dict[str, Any]) -> list[str]:
+    summary = report.get("summary", {})
+    no_keywords = report.get("no_keywords", {})
+    terminal_counts = summary.get("terminal_counts", {}) or {}
+    terminal_text = ", ".join(
+        f"{key}={value}" for key, value in sorted(terminal_counts.items())
+    ) or "none"
+    lines = [
+        "SINCE-RESTART MONEY PATH  [source: scripts/since_restart_money_path.py]",
+        f"  Window                           : {report.get('window', {}).get('since')} -> {report.get('window', {}).get('until') or 'open'}",
+        f"  Candidates                       : {summary.get('candidates', 0)}",
+        f"  Terminal outcomes                : {terminal_text}",
+        f"  Measurement gaps                 : {summary.get('measurement_gaps', 0)}",
+        f"  No-keyword exits                 : {no_keywords.get('count', 0)}",
+    ]
+    pm_feedback = report.get("polymarket_settlement_feedback", {}) or {}
+    if pm_feedback:
+        lines.append(
+            "  Polymarket settlement feedback   : "
+            f"{pm_feedback.get('status', 'unknown')} "
+            f"({pm_feedback.get('resolved_count', 0)}/"
+            f"{pm_feedback.get('min_resolved_required', 0)} resolved)"
+        )
+        proof_rows = pm_feedback.get("proof_rows", []) or []
+        if proof_rows:
+            lines.append("  Polymarket settlement proof rows :")
+            for row in proof_rows[:5]:
+                lines.append(
+                    "    "
+                    f"{row.get('ticker') or 'n/a'} "
+                    f"trade_id={row.get('trade_id') or 'n/a'} "
+                    f"pnl={row.get('pnl_dollars')} "
+                    f"feedback={row.get('feedback_ts') or 'none'} "
+                    f"prefix={row.get('market_prefix') or 'none'}"
+                )
+    candidates = report.get("candidates", []) or []
+    if candidates:
+        lines.append("  Drilldown: recent since-restart candidates")
+        for row in candidates[:5]:
+            lines.append(
+                "    "
+                f"{row.get('ticker') or 'n/a'} terminal={row.get('terminal_type') or 'none'} "
+                f"venue={row.get('terminal_venue') or row.get('blend_venue') or 'unknown'} "
+                f"reason={row.get('terminal_reason') or 'none'}"
+            )
+    return lines
 
 
 def _collect_kalshi_drift_state() -> tuple[dict[str, Any], str | None]:
@@ -481,6 +655,15 @@ def build_daily_review(
             trades_path, since, until, exclude_test=exclude_test,
             progress_tracker=ProgressTracker() if show_progress else None,
         )
+    throughput_until = until or datetime.now(timezone.utc)
+    throughput_since = since or (throughput_until - timedelta(days=1))
+    with stage_timer("operator throughput", enabled=show_profile):
+        throughput_stats = summarize_operator_throughput_from_trade_log(
+            trades_path,
+            window_start=throughput_since,
+            window_end=throughput_until,
+            exclude_test=exclude_test,
+        )
     with stage_timer("paper performance", enabled=show_profile):
         paper_stats = paper_performance_drilldown.summarize(
             paper_db_path, exclude_test=exclude_test
@@ -495,14 +678,40 @@ def build_daily_review(
         )
     with stage_timer("source scorecard", enabled=show_profile):
         scorecard_stats = source_scorecard.summarize(
-            trades_path, paper_db_path, since, until, exclude_test=exclude_test,
+            trades_path,
+            paper_db_path,
+            since,
+            until,
+            exclude_test=exclude_test,
+            # A(ii): judge tier recommendations over a wide horizon, not the 24h
+            # display window -- "zero signals" is only meaningful over ~45d given
+            # the bot emits ~1 SIGNAL/day across all sources. Lifetime-yield veto
+            # (A(i)) is always on inside summarize.
+            recommendation_window_days=source_scorecard.DEFAULT_RECOMMENDATION_WINDOW_DAYS,
         )
+    with stage_timer("since-restart money path", enabled=show_profile):
+        restart_ts = _latest_restart_timestamp_from_health_reports()
+        since_restart_report = None
+        if restart_ts:
+            try:
+                since_restart_report = since_restart_money_path.build_money_path_report(
+                    trades_path,
+                    since=restart_ts,
+                )
+            except Exception as exc:  # reporting-only; never break daily review
+                since_restart_report = {"error": f"{type(exc).__name__}: {exc}"}
 
     if show_profile:
-        _eprint(f"[total] 8 stages completed in {time.perf_counter() - _t0:.1f}s")
+        _eprint(f"[total] 10 stages completed in {time.perf_counter() - _t0:.1f}s")
 
     event_counts = funnel_stats.get("event_counts", {})
     analysis_rejections = Counter(funnel_stats.get("analysis_rejected_reasons", {}))
+    assignment_shadow_stats = _summarize_fresh_pass_assignment_shadow(
+        trades_path,
+        since=since,
+        until=until,
+        exclude_test=exclude_test,
+    )
     skip_breakdown = edge_stats.get("skip_breakdown", {})
     match_flags = Counter(match_stats.get("heuristic_flags", {}))
     llm_rows = sum(
@@ -519,11 +728,15 @@ def build_daily_review(
     )
     suppressed = event_counts.get("MATCH_SUPPRESSED", 0)
     suppression_candidates = event_counts.get("MATCH_SUPPRESSION_CANDIDATE", 0)
+    detail_rows = edge_stats.get("counts", {}).get("SIGNAL_ANALYSIS_DETAIL", 0)
+    llm_attempted = edge_stats.get("llm_observability", {}).get("attempted", 0)
     opportunities = edge_stats.get("counts", {}).get("OPPORTUNITY", 0)
     executed = edge_stats.get("counts", {}).get("EXECUTED", 0)
+    paper_trades = event_counts.get("PAPER_TRADE", 0)
     below_threshold = skip_breakdown.get("below_threshold", 0)
     zero_edge = skip_breakdown.get("zero_edge", 0)
     duplicate = skip_breakdown.get("duplicate", 0)
+    liquidity_skip = skip_breakdown.get("liquidity", 0)
     other_skip = skip_breakdown.get("other", 0)
 
     lines: list[str] = []
@@ -545,6 +758,28 @@ def build_daily_review(
     halt_state, cohort_ts = _collect_kalshi_drift_state()
     lines.extend(_format_kalshi_drift_lines(halt_state, cohort_ts))
 
+    # Gates & experiments: live-readiness (POST_FIX_NEW), the edge-prioritization
+    # A/B verdict, and the rot-audit layer — the decision-relevant state added
+    # since 2026-05 that the funnel sections below do not cover. Sourced from the
+    # shared tasks/stats/observability_checkpoint (also used by pipeline_impact_audit).
+    try:
+        lines.extend(observability_checkpoint.summary_lines())
+    except Exception as exc:  # observability must never break the daily report
+        lines.append(f"GATES & EXPERIMENTS              : unavailable ({type(exc).__name__})")
+    lines.append("")
+    if since_restart_report:
+        if "error" in since_restart_report:
+            lines.append(
+                "SINCE-RESTART MONEY PATH          : "
+                f"unavailable ({since_restart_report['error']})"
+            )
+        else:
+            lines.extend(_format_since_restart_money_path_lines(since_restart_report))
+        lines.append("")
+
+    lines.extend(format_operator_throughput_lines(throughput_stats, top=top))
+    lines.append("")
+
     lines.append("1. INGESTION  [source: scripts/freshness_diagnostics.py + scripts/decision_funnel_summary.py]")
     observed_records = sum(
         row.get("observed_records", 0)
@@ -561,9 +796,29 @@ def build_daily_review(
     lines.append(f"  Source-attributed items observed : {observed_records}")
     lines.append(f"  Fresh passes                     : {fresh_passes}")
     lines.append(f"  Dropped early stale              : {early_stale}")
-    lines.append("  Dropped disabled sources         : not directly observable in current logs")
-    lines.append("  Dropped deduped                  : not directly observable in current logs")
     lines.append(f"  Rejected stale at analysis       : {analysis_rejections.get('stale_news', 0)}")
+    lines.extend(
+        _format_fresh_pass_conversion_lines(
+            fresh_passes=fresh_passes,
+            match_records=match_stats.get("match_records", 0),
+            detail_rows=detail_rows,
+            llm_attempted=llm_attempted,
+            opportunities=opportunities,
+            paper_trades=paper_trades,
+        )
+    )
+    if assignment_shadow_stats.get("rows", 0) > 0:
+        lines.append(
+            "  Fresh assignment shadow         : "
+            f"{assignment_shadow_stats.get('assigned', 0)} assigned, "
+            f"{assignment_shadow_stats.get('unassigned', 0)} unassigned, "
+            f"{assignment_shadow_stats.get('malformed', 0)} malformed"
+        )
+        top_unassigned = assignment_shadow_stats.get("top_unassigned_sources", Counter())
+        if top_unassigned:
+            lines.append("  Drilldown: unassigned fresh-pass sources")
+            for line in format_counter(top_unassigned, top=top):
+                lines.append(line)
     top_stale_sources = _top_source_rows(freshness_stats, limit=top)
     if top_stale_sources:
         lines.append("  Drilldown: top stale sources")
@@ -636,9 +891,11 @@ def build_daily_review(
     match_records = match_stats.get("match_records", 0)
     low_quality = match_stats.get("low_quality_matches", 0)
     pre_llm_would_block = match_stats.get("pre_llm_would_block", 0)
+    pre_llm_useful = edge_stats.get("llm_observability", {}).get("pre_llm_would_block_and_useful", 0)
     lines.append(f"  Match diagnostics emitted        : {match_records}")
     lines.append(f"  Low-quality flagged              : {low_quality} ({fmt_pct(low_quality, match_records)})")
     lines.append(f"  Pre-LLM gate would-block         : {pre_llm_would_block} ({fmt_pct(pre_llm_would_block, match_records)})")
+    lines.append(f"  Pre-LLM would-block useful rows : {pre_llm_useful}")
     lines.append(f"  Suppression candidates           : {suppression_candidates}")
     lines.append(f"  Suppressed                       : {suppressed}")
     if match_flags:
@@ -692,7 +949,6 @@ def build_daily_review(
     lines.append("")
 
     lines.append("3. ANALYSIS  [source: scripts/decision_funnel_summary.py + scripts/signal_edge_diagnostics.py + scripts/keyword_feedback.py]")
-    detail_rows = edge_stats.get("counts", {}).get("SIGNAL_ANALYSIS_DETAIL", 0)
     total_rejections = sum(analysis_rejections.values())
     lines.append(f"  Signal analysis detail rows      : {detail_rows}")
     lines.append(f"  Passed keyword gate              : {detail_rows - keyword_gate_rows}")
@@ -746,9 +1002,29 @@ def build_daily_review(
     no_keyword_misses = keyword_stats.get("no_keyword_misses", 0)
     corroborating_rows = keyword_stats.get("corroborating_keyword_gate_records", 0)
     unique_phrases = keyword_stats.get("unique_candidate_phrases", 0)
-    lines.append(f"  Keyword-gate no_keywords misses  : {no_keyword_misses}")
+    lines.append(f"  No-keyword analysis exits       : {no_keyword_misses}")
     lines.append(f"  Keyword-gate corroborating rows  : {corroborating_rows}")
+    lines.append(
+        "  Empty-keyword LLM detail rows   : "
+        f"directional={keyword_stats.get('empty_keyword_llm_directional_rows', 0)} "
+        f"neutral={keyword_stats.get('empty_keyword_llm_neutral_rows', 0)}"
+    )
     lines.append(f"  Unique candidate phrases         : {unique_phrases}")
+    no_keyword_categories = keyword_stats.get("no_keyword_rejection_categories") or Counter()
+    if no_keyword_categories:
+        lines.append("  Drilldown: no-keyword rejection branches")
+        for category, count in no_keyword_categories.most_common(top):
+            lines.append(f"    {category}: {count}")
+    top_no_keyword_sources = keyword_stats.get("top_no_keyword_sources") or []
+    if top_no_keyword_sources:
+        lines.append("  Drilldown: top no-keyword analysis-exit sources")
+        for source, count in top_no_keyword_sources[:top]:
+            lines.append(f"    {source}: {count}")
+    top_no_keyword_tickers = keyword_stats.get("top_no_keyword_tickers") or []
+    if top_no_keyword_tickers:
+        lines.append("  Drilldown: top no-keyword analysis-exit tickers")
+        for ticker, count in top_no_keyword_tickers[:top]:
+            lines.append(f"    {ticker}: {count}")
     strongest = keyword_stats.get("grouped_phrases", {}).get("strongest specific candidates", [])
     if strongest:
         lines.append("  Drilldown: strongest keyword-gate miss candidates")
@@ -779,11 +1055,11 @@ def build_daily_review(
     lines.append("")
 
     lines.append("5. EXECUTION  [source: scripts/decision_funnel_summary.py + scripts/paper_performance_drilldown.py]")
-    paper_trades = event_counts.get("PAPER_TRADE", 0)
     live_orders = event_counts.get("LIVE_ORDER", 0)
     lines.append(f"  Paper trades                     : {paper_trades}")
     lines.append(f"  Live orders                      : {live_orders}")
     lines.append(f"  Skipped duplicate position       : {duplicate}")
+    lines.append(f"  Skipped liquidity/near-limit     : {liquidity_skip}")
     lines.append(f"  Skipped below threshold          : {below_threshold}")
     lines.append(f"  Skipped other                    : {other_skip}")
     if paper_stats.get("total_trades", 0):
@@ -793,6 +1069,31 @@ def build_daily_review(
         lines.append(f"    Open: {paper_stats['open_trades']}")
         lines.append(f"    Win rate: {paper_performance_drilldown.fmt_pct(paper_stats.get('win_rate'))}")
         lines.append(f"    Total P&L: {fmt_money(paper_stats.get('total_pnl'))}")
+        venue_rows = paper_stats.get("venues") or []
+        if len(venue_rows) > 1 or any(
+            str(row.get("name") or "") != "kalshi" for row in venue_rows
+        ):
+            lines.append("  Drilldown: paper performance by venue")
+            for row in venue_rows:
+                resolved = row.get("resolved") or 0
+                pnl_display = fmt_money(row.get("pnl")) if resolved else "n/a"
+                lines.append(
+                    f"    {row.get('name') or 'kalshi'}: "
+                    f"trades={row.get('trades', 0)} "
+                    f"resolved={resolved} "
+                    f"win_rate={paper_performance_drilldown.fmt_pct(row.get('win_rate'))} "
+                    f"pnl={pnl_display}"
+                )
+        bucket_rows = paper_stats.get("open_resolution_buckets") or []
+        if bucket_rows:
+            lines.append("  Drilldown: open exposure by resolution horizon")
+            for row in bucket_rows[:top]:
+                lines.append(
+                    f"    {row.get('bucket') or 'unknown'} "
+                    f"venue={row.get('venue') or 'kalshi'} "
+                    f"trades={row.get('trades', 0)} "
+                    f"exposure={paper_performance_drilldown.fmt_bucket_exposure(row.get('exposure'))}"
+                )
     lines.append("")
 
     llm_value = edge_stats.get("llm_value_add", {})
@@ -959,6 +1260,7 @@ def build_daily_review(
         ("Top performers", "top performers"),
         ("Keep", "keep"),
         ("Watch / investigate", "watch / investigate"),
+        ("Incubating", "incubating"),
         ("Prune", "prune"),
         ("Remove immediately", "remove immediately"),
     ):
@@ -975,7 +1277,14 @@ def build_daily_review(
                     f"paper={row.get('paper_trades', 0)} "
                     f"resolved={resolved} "
                     f"win_rate={paper_performance_drilldown.fmt_pct(row.get('win_rate'))} "
-                    f"pnl={pnl_display}"
+                    f"pnl={pnl_display} "
+                    # B: lifetime funnel beside each tier verdict, so a "remove
+                    # immediately" recommendation is always shown with the source's
+                    # real all-time yield (posts -> signals -> opportunities -> trades).
+                    f"| life: posts={row.get('lifetime_posts', 0)} "
+                    f"sig={row.get('lifetime_signals', 0)} "
+                    f"opp={row.get('lifetime_opportunities', 0)} "
+                    f"trade={row.get('lifetime_trades', 0)}"
                 )
     disabled_source = grouped.get("disabled by source", []) or []
     disabled_family = grouped.get("disabled by family", []) or []

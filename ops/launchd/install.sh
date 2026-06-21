@@ -35,11 +35,14 @@ GOVERNANCE_LLM_MODEL="${GOVERNANCE_LLM_MODEL:-qwen3:14b}"
 TEMPLATES=(
     "com.jake.kalshi-bot"
     "com.jake.kalshi-bothealth"
-    "com.jake.kalshi-daily-review"
+    "com.jake.kalshi-match-feedback-aggregator"
     "com.jake.kalshi-soak-check"
     "com.kalshi.db-backup"
     "com.kalshi.governance.fast"
     "com.kalshi.governance.deep"
+)
+LEGACY_LABELS=(
+    "com.jake.kalshi-daily-review"
 )
 
 # ── Mode parsing ──────────────────────────────────────────────────────────────
@@ -63,7 +66,7 @@ done
 # ── Sanity checks ─────────────────────────────────────────────────────────────
 if [[ ! -x "$VENV_PYTHON" ]]; then
     echo "ERROR: venv python not found at $VENV_PYTHON" >&2
-    echo "       run: python3.14 -m venv .venv && pip install -r requirements.txt" >&2
+    echo "       run: python3.11 -m venv .venv && pip install -r requirements.txt" >&2
     exit 1
 fi
 
@@ -140,13 +143,26 @@ case "$MODE" in
                 exit 1
             fi
         done
+        for label in "${LEGACY_LABELS[@]}"; do
+            target="gui/$(id -u)/$label"
+            local_dest="$INSTALL_DIR/$label.plist"
+            if launchctl print "$target" >/dev/null 2>&1; then
+                echo "  bootout legacy: $target"
+                launchctl bootout "gui/$(id -u)" "$local_dest" 2>/dev/null || \
+                    launchctl bootout "$target" 2>/dev/null || true
+            fi
+            if [[ -f "$local_dest" ]]; then
+                rm -f "$local_dest"
+                echo "  removed legacy: $local_dest"
+            fi
+        done
         echo
         echo "Done. Plists are generated but NOT loaded into launchctl."
         echo "To bootstrap a service, run e.g.:"
         echo "  launchctl bootstrap gui/\$(id -u) $INSTALL_DIR/com.jake.kalshi-bot.plist"
         ;;
     uninstall)
-        for label in "${TEMPLATES[@]}"; do
+        for label in "${TEMPLATES[@]}" "${LEGACY_LABELS[@]}"; do
             target="gui/$(id -u)/$label"
             local_dest="$INSTALL_DIR/$label.plist"
             if launchctl print "$target" >/dev/null 2>&1; then

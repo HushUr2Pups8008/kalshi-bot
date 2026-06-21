@@ -17,11 +17,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from polymarket.domain_key import pm_domain_key
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -100,6 +103,12 @@ def fmt_duration_hours(value: float | None) -> str:
     return f"{value / 24:.1f}d"
 
 
+def fmt_bucket_exposure(value: float | None) -> str:
+    if value is None:
+        return "$0.00"
+    return f"${value:.2f}"
+
+
 def format_counter_lines(counter: Counter[str], top: int) -> list[str]:
     if not counter:
         return ["  (none)"]
@@ -126,6 +135,83 @@ def format_group_table(rows: list[dict[str, Any]], top: int) -> list[str]:
             f"pnl={fmt_money(row['pnl'])}"
         )
     return lines
+
+
+def _find_close_time(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for key in ("close_time", "closeTime", "close_ts", "closeDate", "end_date_iso"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate
+        for child in value.values():
+            found = _find_close_time(child)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _find_close_time(child)
+            if found:
+                return found
+    return None
+
+
+def close_time_from_snapshot(raw_snapshot: Any) -> datetime | None:
+    if not isinstance(raw_snapshot, str) or not raw_snapshot.strip():
+        return None
+    try:
+        snapshot = json.loads(raw_snapshot)
+    except json.JSONDecodeError:
+        return None
+    return parse_ts(_find_close_time(snapshot))
+
+
+def resolution_bucket(close_time: datetime | None, now: datetime) -> str:
+    if close_time is None:
+        return "unknown"
+    days = (close_time - now).total_seconds() / 86400.0
+    if days < 0:
+        return "past_close"
+    if days <= 3:
+        return "0-3d"
+    if days <= 7:
+        return "4-7d"
+    if days <= 14:
+        return "8-14d"
+    if days <= 30:
+        return "15-30d"
+    return ">30d"
+
+
+_BUCKET_ORDER = {
+    "0-3d": 0,
+    "4-7d": 1,
+    "8-14d": 2,
+    "15-30d": 3,
+    ">30d": 4,
+    "past_close": 5,
+    "unknown": 6,
+}
+
+
+def open_resolution_bucket_rows(
+    open_trades: list[dict[str, Any]],
+    columns: set[str],
+    now: datetime,
+) -> list[dict[str, Any]]:
+    if "market_snapshot" not in columns:
+        return []
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for trade in open_trades:
+        bucket = resolution_bucket(close_time_from_snapshot(trade.get("market_snapshot")), now)
+        venue = str(trade.get("venue") or "kalshi").strip() or "kalshi"
+        key = (bucket, venue)
+        row = grouped.setdefault(key, {"bucket": bucket, "venue": venue, "trades": 0, "exposure": 0.0})
+        row["trades"] += 1
+        row["exposure"] += safe_float(trade.get("cost_dollars")) or 0.0
+    return sorted(
+        grouped.values(),
+        key=lambda row: (_BUCKET_ORDER.get(row["bucket"], 99), row["venue"]),
+    )
 
 
 def load_trades(path: Path) -> tuple[list[dict[str, Any]], set[str]]:
@@ -181,8 +267,21 @@ def group_trade_rows(trades: list[dict[str, Any]], key_name: str, default_label:
     return result
 
 
-def summarize(path: Path, exclude_test: bool = False) -> dict[str, Any]:
+def report_series_key(trade: dict[str, Any]) -> str:
+    series = str(trade.get("series_ticker") or "").strip()
+    ticker = str(trade.get("ticker") or "").strip()
+    venue = str(trade.get("venue") or "").strip()
+    if ticker and (not series or series == "polymarket_us" or venue == "polymarket_us"):
+        try:
+            return pm_domain_key(ticker)
+        except ValueError:
+            pass
+    return series or "(unknown)"
+
+
+def summarize(path: Path, exclude_test: bool = False, *, now: datetime | None = None) -> dict[str, Any]:
     trades, columns = load_trades(path)
+    now = now or datetime.now(timezone.utc)
     if exclude_test:
         trades = [trade for trade in trades if not is_test_trade(trade)]
     stats: dict[str, Any] = {
@@ -200,11 +299,13 @@ def summarize(path: Path, exclude_test: bool = False) -> dict[str, Any]:
         "avg_loss": None,
         "sources": [],
         "signal_types": [],
+        "venues": [],
         "tickers": [],
         "series": [],
         "holding_period_count": 0,
         "holding_period_avg_hours": None,
         "holding_period_median_hours": None,
+        "open_resolution_buckets": [],
     }
 
     if not trades:
@@ -233,6 +334,8 @@ def summarize(path: Path, exclude_test: bool = False) -> dict[str, Any]:
         stats["avg_loss"] = sum(loss_values) / len(loss_values) if loss_values else None
 
     stats["sources"] = group_trade_rows(trades, "signal_source", "(unknown)")
+    stats["venues"] = group_trade_rows(trades, "venue", "kalshi")
+    stats["open_resolution_buckets"] = open_resolution_bucket_rows(open_trades, columns, now)
 
     signal_type_key = "signal_type" if "signal_type" in columns else ""
     if signal_type_key:
@@ -250,7 +353,8 @@ def summarize(path: Path, exclude_test: bool = False) -> dict[str, Any]:
 
     stats["tickers"] = group_trade_rows(trades, "ticker", "(unknown)")
     if "series_ticker" in columns:
-        stats["series"] = group_trade_rows(trades, "series_ticker", "(unknown)")
+        series_trades = [{**trade, "_report_series": report_series_key(trade)} for trade in trades]
+        stats["series"] = group_trade_rows(series_trades, "_report_series", "(unknown)")
 
     holding_hours = []
     if "resolved_ts" in columns:
@@ -307,6 +411,21 @@ def print_summary(stats: dict[str, Any], top: int) -> None:
         print(f"  Median hold              : {fmt_duration_hours(stats['holding_period_median_hours'])}")
     else:
         print("  Holding period summary not reliably derivable from current rows.")
+
+    print()
+    print("Open Exposure by Resolution Horizon")
+    bucket_rows = stats.get("open_resolution_buckets") or []
+    if bucket_rows:
+        for row in bucket_rows[:top]:
+            print(
+                "  "
+                f"{row['bucket']:<8} "
+                f"venue={row['venue']} "
+                f"trades={row['trades']} "
+                f"exposure={fmt_bucket_exposure(row['exposure'])}"
+            )
+    else:
+        print("  Resolution horizon not reliably derivable from current rows.")
 
     print()
     print(f"By Source (top {top})")

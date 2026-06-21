@@ -20,7 +20,7 @@ INSTALL_SH = REPO_ROOT / "ops" / "launchd" / "install.sh"
 TEMPLATES = (
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-bot.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-bothealth.plist.template",
-    REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-daily-review.plist.template",
+    REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-match-feedback-aggregator.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-soak-check.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.kalshi.db-backup.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.kalshi.governance.fast.plist.template",
@@ -124,6 +124,8 @@ def test_print_emits_both_plists():
     out = _run_print()
     assert "<string>com.kalshi.governance.fast</string>" in out
     assert "<string>com.kalshi.governance.deep</string>" in out
+    assert "<string>com.jake.kalshi-daily-review</string>" not in out
+    assert "<string>--daily-review</string>" in out
     assert out.count("<string>--run-source</string>") >= 2
     assert out.count("<string>launchd</string>") >= 2
 
@@ -183,6 +185,27 @@ def test_install_script_exposes_explicit_allow_drift_bypass():
     assert "--allow-drift" in body
     assert "--allow-drift-confirm ALLOW-DRIFT" in body
     assert "Type ALLOW-DRIFT to continue" in body
+
+
+def test_setup_launchd_uses_contract_process_log_paths():
+    body = (REPO_ROOT / "scripts" / "setup_launchd.sh").read_text()
+    assert "logs/launchd_daily_review.log" not in body
+    assert "logs/launchd_daily_review_err.log" not in body
+    assert "logs/app/daily_review_launchd.stdout.log" in body
+    assert "logs/app/daily_review_launchd.stderr.log" in body
+
+
+def test_daily_review_launchd_entrypoint_imports_from_direct_script_execution():
+    result = subprocess.run(
+        [str(REPO_ROOT / ".venv" / "bin" / "python"), str(REPO_ROOT / "scripts/daily_review.py"), "--help"],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "usage: daily_review.py" in result.stdout
+    assert "--path" in result.stdout
 
 
 def test_allow_drift_non_tty_requires_explicit_confirmation(tmp_path: Path):

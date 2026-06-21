@@ -42,6 +42,14 @@ class SignalAnalysisDetail:
     final_probability: float
     market_price: float
 
+    # Market identity — optional for backwards compatibility with historical records
+    venue: str | None = None
+
+    # Publish/event timing — optional for backwards compatibility with historical records
+    publish_ts: str | None = None
+    age_at_analysis_seconds: float | None = None
+    analysis_threshold_seconds: int | None = None
+
     # Optional — emitted only when truthy; preserves prior `if keyword_contributions:` guard
     keyword_contributions: list[dict[str, Any]] | None = None
 

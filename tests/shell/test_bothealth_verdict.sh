@@ -21,6 +21,12 @@ assert_contains() {
     [[ "$haystack" == *"$needle"* ]] || fail "expected [$needle] in: $haystack"
 }
 
+assert_not_contains() {
+    local haystack="$1"
+    local needle="$2"
+    [[ "$haystack" != *"$needle"* ]] || fail "did not expect [$needle] in: $haystack"
+}
+
 make_fixture() {
     local root="$1"
     mkdir -p "$root/bin" "$root/data/runtime" "$root/logs/app" "$root/logs/governance" "$root/scripts/edge_replay"
@@ -61,11 +67,13 @@ EOF
 
 run_bothealth() {
     local root="$1"
+    shift || true
     local capture="$root/osascript.args"
     BOTHEALTH_REPO_ROOT="$root" \
+    KALSHI_OUTPUT_ROOT="$root/logs" \
     BOTHEALTH_OSASCRIPT_CAPTURE="$capture" \
     PATH="$root/bin:$PATH" \
-    bash "$BOTHEALTH"
+    bash "$BOTHEALTH" "$@"
 }
 
 fixture="$TMP_ROOT/green"
@@ -76,6 +84,53 @@ assert_contains "$out" "Verdict: **GREEN**"
 toast="$(cat "$fixture/osascript.args")"
 assert_contains "$toast" "kalshi_drift=ok"
 assert_contains "$toast" "p0_cohort=2026-05-12T23:50:04+00:00 rows_since=1"
+
+fixture="$TMP_ROOT/governance-parse-error-lifetime"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+printf '{"type":"GOVERNANCE_DECISION_PARSE_ERROR","cycle_id":"gc_2026-05-02_030140","error":"old parse error"}\n' >"$fixture/logs/governance/decisions.jsonl"
+out="$(run_bothealth "$fixture")"
+assert_contains "$out" "Verdict: **GREEN**"
+report="$(find "$fixture/logs/reports/health" -name 'bothealth_*.md' -print -quit)"
+report_body="$(cat "$report")"
+assert_contains "$report_body" "PARSE_ERROR_24H (must=0): 0"
+assert_contains "$report_body" "PARSE_ERROR_lifetime : 1"
+assert_not_contains "$report_body" "PARSE_ERROR          : 1"
+
+fixture="$TMP_ROOT/daily-review"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+cat >"$fixture/scripts/daily_review.py" <<'EOF'
+#!/usr/bin/env python3
+import os
+from pathlib import Path
+root = Path(os.environ["KALSHI_OUTPUT_ROOT"])
+(root / "reports" / "daily").mkdir(parents=True, exist_ok=True)
+(root / "reports" / "daily" / "daily_review_marker.txt").write_text("ok\n")
+print("daily review body should stay out of bothealth")
+EOF
+cat >"$fixture/scripts/performance_analysis.py" <<'EOF'
+#!/usr/bin/env python3
+import os
+from pathlib import Path
+root = Path(os.environ["KALSHI_OUTPUT_ROOT"])
+target = root / "reports" / "performance" / "analysis_marker.txt"
+target.parent.mkdir(parents=True, exist_ok=True)
+target.write_text("ok\n")
+print("performance body should stay out of bothealth")
+print(f"Report saved to: {target}")
+EOF
+out="$(run_bothealth "$fixture" --daily-review)"
+assert_contains "$out" "Verdict: **GREEN**"
+report="$(find "$fixture/logs/reports/health" -name 'bothealth_*.md' -print -quit)"
+report_body="$(cat "$report")"
+assert_contains "$report_body" "daily_review exit_status=0"
+assert_contains "$report_body" "performance_analysis exit_status=0"
+assert_contains "$report_body" "performance_analysis report=$fixture/logs/reports/performance/analysis_marker.txt"
+assert_not_contains "$report_body" "daily review body should stay out of bothealth"
+assert_not_contains "$report_body" "performance body should stay out of bothealth"
+[[ -f "$fixture/logs/reports/daily/daily_review_marker.txt" ]] || fail "daily review marker not written"
+[[ -f "$fixture/logs/reports/performance/analysis_marker.txt" ]] || fail "performance report marker not written"
 
 fixture="$TMP_ROOT/missing-sentinel"
 make_fixture "$fixture"

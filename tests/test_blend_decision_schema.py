@@ -110,3 +110,15 @@ def test_log_blend_decision_fast_lane_only_uses_empty_evidence_list(tmp_path: Pa
     assert record["structural_p"] is None
     assert record["structural_confidence"] is None
     assert record["evidence_ids_contributing"] == []
+
+
+def test_log_blend_decision_emits_optional_venue_when_present(tmp_path: Path):
+    logger = TradeLogger(path=tmp_path / "trades.jsonl")
+    kwargs = _valid_blend_decision_kwargs()
+    kwargs["venue"] = "polymarket_us"
+
+    with patch.object(logger, "_write") as write_mock:
+        logger.log_blend_decision(**kwargs)
+
+    record = write_mock.call_args.args[0]
+    assert record["venue"] == "polymarket_us"

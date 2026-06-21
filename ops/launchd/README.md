@@ -17,7 +17,7 @@ generated `*.plist` files are per-machine artifacts ignored by git.
 | label | purpose | trigger |
 |---|---|---|
 | `com.jake.kalshi-bot` | main paper-trading bot via `caffeinate -dimsu @VENV_PYTHON@ main.py` | `RunAtLoad`, restart on non-success exit |
-| `com.jake.kalshi-bothealth` | bot health report wrapper | local 08:00 America/Denver daily |
+| `com.jake.kalshi-bothealth` | bot health report wrapper | local 05:00 America/Denver daily |
 | `com.jake.kalshi-soak-check` | one-shot soak check report wrapper | one-shot pinned 2026-05-03 09:07 local |
 | `com.kalshi.db-backup` | online-safe SQLite snapshot backup | local 06:00 daily plus `RunAtLoad` |
 | `com.kalshi.governance.fast` | governance fast cadence | every 2 hours |

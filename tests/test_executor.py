@@ -10,12 +10,24 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import config as _cfg_module
-from trading.executor import TradeExecutor
+from trading.executor import TradeExecutor, classify_skip_category
+from trading.venue import Venue
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def test_classify_skip_category_groups_controllable_executor_reasons():
+    assert classify_skip_category("paper cooldown: last trade 1.0h ago") == "cooldown"
+    assert classify_skip_category("same-signal skip: open YES -- no new information") == "duplicate"
+    assert classify_skip_category("paper duplicate skip: open YES") == "duplicate"
+    assert classify_skip_category("per-prefix cap: 2 open in polymarket_us:abc") == "concentration"
+    assert classify_skip_category("concentration limit: KX exposure would exceed cap") == "concentration"
+    assert classify_skip_category("price 1.0c is near limit (too illiquid)") == "liquidity"
+    assert classify_skip_category("market is not tradeable: price unavailable") == "liquidity"
+    assert classify_skip_category("edge +0.0100 below min_edge 0.04") == "other"
 
 def _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10):
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
@@ -482,6 +494,79 @@ class TestValidateSkipReasons:
 
 class TestBlendedCandidateCompatibility:
     @pytest.mark.asyncio
+    async def test_non_kalshi_blended_candidate_skips_kalshi_refetch(self, monkeypatch):
+        ex, rest, _ = _make_paper_executor(monkeypatch)
+        ex._execute_paper = AsyncMock(return_value="paper-trade-id")
+        base = _make_analysis(
+            ticker="will-example-event-happen-2026",
+            edge=0.23,
+            estimated_prob=0.65,
+            yes_price=42.0,
+        )
+        base.market.venue = Venue.POLYMARKET_US
+        base.market.series_ticker = Venue.POLYMARKET_US.value
+        base.market.status = "open"
+        base.market.yes_ask_cents = 42
+        base.market.no_ask_cents = 59
+        candidate = _make_blended_candidate(
+            base_analysis=base,
+            blended_probability=0.65,
+            signal_meta={
+                "source_lane": "blend",
+                "venue": "polymarket_us",
+                "readiness_gate_min_edge_override": 0.01,
+            },
+        )
+
+        with patch("trading.executor.trade_log"):
+            trade_id = await ex.execute(candidate)
+
+        assert trade_id == "paper-trade-id"
+        rest.get_market.assert_not_called()
+        routed_analysis = ex._execute_paper.await_args.args[0]
+        assert routed_analysis.market.venue == Venue.POLYMARKET_US
+        assert routed_analysis.market.ticker == "will-example-event-happen-2026"
+        assert routed_analysis.executed_price_cents == 42
+        assert routed_analysis.edge == pytest.approx(0.23)
+
+    @pytest.mark.asyncio
+    async def test_non_kalshi_blended_executor_skip_logs_venue(self, monkeypatch):
+        ex, rest, _ = _make_paper_executor(monkeypatch)
+        ex._execute_paper = AsyncMock(return_value="paper-trade-id")
+        base = _make_analysis(
+            ticker="will-example-event-happen-2026",
+            edge=0.01,
+            estimated_prob=0.43,
+            yes_price=42.0,
+        )
+        base.market.venue = Venue.POLYMARKET_US
+        base.market.series_ticker = Venue.POLYMARKET_US.value
+        base.market.status = "open"
+        base.market.yes_ask_cents = 42
+        base.market.no_ask_cents = 59
+        candidate = _make_blended_candidate(
+            base_analysis=base,
+            blended_probability=0.43,
+            signal_meta={
+                "source_lane": "blend",
+                "venue": "polymarket_us",
+                "readiness_gate_min_edge_override": None,
+            },
+        )
+
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            trade_id = await ex.execute(candidate)
+
+        assert trade_id is None
+        rest.get_market.assert_not_called()
+        ex._execute_paper.assert_not_called()
+        trade_log_mock.log_skipped.assert_called_once()
+        kwargs = trade_log_mock.log_skipped.call_args.kwargs
+        assert kwargs["reason"] == "edge +0.0100 below min_edge 0.02"
+        assert kwargs["venue"] == "polymarket_us"
+        assert kwargs["signal_meta"] == candidate.signal_meta
+
+    @pytest.mark.asyncio
     async def test_execute_accepts_blended_candidate_and_uses_override_only_for_edge_gate(
         self,
         monkeypatch,
@@ -536,6 +621,7 @@ class TestBlendedCandidateCompatibility:
         assert kwargs["reason"] == "edge +0.0050 below min_edge 0.02"
         assert kwargs["min_edge_threshold"] == pytest.approx(0.02)
         assert kwargs["signal_meta"] == candidate.signal_meta
+        assert kwargs["venue"] == "kalshi"
 
     def test_override_validation_fails_closed_for_malformed_metadata(self, monkeypatch):
         ex, _, _ = _make_paper_executor(monkeypatch)
@@ -604,6 +690,7 @@ class TestStructuredBoundaryLogging:
         assert trade_id is None
         trade_log_mock.log_skipped.assert_called_once_with(
             reason="edge +0.0100 below min_edge 0.04",
+            skip_category="other",
             ticker=analysis.market.ticker,
             headline=analysis.news_item.headline[:80],
             source=analysis.news_item.source,
@@ -614,6 +701,7 @@ class TestStructuredBoundaryLogging:
             market_price=float(analysis.executed_price_cents),
             edge=analysis.edge,
             min_edge_threshold=0.04,
+            venue="kalshi",
         )
 
     def test_log_skipped_computes_probability_price_diffs_with_precision(self):
@@ -623,6 +711,7 @@ class TestStructuredBoundaryLogging:
         with patch.object(logger, "_write") as write_mock:
             logger.log_skipped(
                 reason="edge +0.0100 below min_edge 0.04",
+                skip_category="other",
                 ticker="KXTEST-25DEC31",
                 headline="Test headline",
                 source="Reuters",
@@ -631,6 +720,7 @@ class TestStructuredBoundaryLogging:
                 market_price=0.50001,
                 edge=0.01233,
                 min_edge_threshold=0.04,
+                venue="polymarket_us",
             )
 
         record = write_mock.call_args.args[0]
@@ -640,6 +730,8 @@ class TestStructuredBoundaryLogging:
         assert record["absolute_diff"] == pytest.approx(0.0123)
         assert record["source"] == "Reuters"
         assert record["method"] == "keyword"
+        assert record["venue"] == "polymarket_us"
+        assert record["skip_category"] == "other"
 
     @pytest.mark.asyncio
     async def test_execute_live_logs_edge_context_on_success(self, monkeypatch):
@@ -1084,7 +1176,6 @@ class TestCooldownSentinelOBS005:
     PROFIT-OBS-005 lands. The set-on-trade write at line ~171 is unaffected.
     """
 
-    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
     def test_all_last_traded_get_call_sites_use_neg_inf_sentinel(self):
         """Every `_last_traded.get(ticker, <default>)` must default to float('-inf')."""
         sites = _last_traded_get_lines()
@@ -1103,7 +1194,6 @@ class TestCooldownSentinelOBS005:
             + "\n".join(f"  line {ln}: {tx}" for ln, tx in bad_sites)
         )
 
-    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
     def test_paper_cooldown_call_site_uses_neg_inf(self):
         """Paper path (executor.py:208 area) — sentinel pinned for the paper site."""
         sites = _last_traded_get_lines()
@@ -1118,7 +1208,6 @@ class TestCooldownSentinelOBS005:
                 return
         pytest.fail("could not locate paper-mode `_last_traded.get(...)` call site")
 
-    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
     def test_live_cooldown_call_site_uses_neg_inf(self):
         """Live path (executor.py:276 area) — sentinel pinned for the live site."""
         sites = _last_traded_get_lines()
@@ -1132,7 +1221,6 @@ class TestCooldownSentinelOBS005:
                 return
         pytest.fail("could not locate live-mode `_last_traded.get(...)` call site")
 
-    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
     def test_paper_never_traded_runtime_behavior_under_small_monotonic(self, monkeypatch):
         """F1 (Codex review): runtime-behavior pin to complement the source-inspection pins.
 
@@ -1171,7 +1259,6 @@ class TestCooldownSentinelOBS005:
             f"(no cooldown trip and no sibling-branch regression); got: {result!r}"
         )
 
-    @pytest.mark.xfail(reason=_OBS005_XFAIL_REASON, strict=True)
     def test_ci_conftest_no_longer_zeroes_cooldowns(self):
         """Spec §7 acceptance: tests/conftest.py:_ci_stub_env must drop the
         PAPER_TICKER_COOLDOWN=0 / LIVE_TICKER_COOLDOWN=0 stubs once the fix lands.
@@ -1194,4 +1281,220 @@ class TestCooldownSentinelOBS005:
         assert bad == [], (
             f"conftest.py still zeroes cooldowns ({bad}); spec §7 requires removing "
             "these stubs once the executor sentinel fix lands."
+        )
+
+
+# ---------------------------------------------------------------------------
+# PROFIT-ALIGN-004 (2026-05-25) — per-prefix open-position cap
+# ---------------------------------------------------------------------------
+
+class TestPerPrefixPositionCap:
+    """Pins the cfg.max_open_positions_per_prefix gate in _validate.
+
+    The matcher can produce multiple outcome-contract candidates in the same
+    series (e.g. KXTXRUNOFFENDORSE-DJT-BOTH / -KPAX / -JCOR). Without this
+    cap, one news event could open N concurrent bets against the same
+    underlying topic.
+    """
+
+    def _setup(self, monkeypatch, *, open_in_prefix=None, cap=2):
+        # Paper-mode executor — avoid live-only balance gates in _validate.
+        # Mirrors the pattern used by test_paper_cooldown_skips.
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "max_open_positions_per_prefix", cap)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_ticker_cooldown", 0)
+        monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
+        rest = MagicMock()
+        paper = MagicMock()
+        paper.get_notional_bankroll.return_value = 500.0
+        paper.portfolio.open_positions.return_value = []
+        paper.portfolio.is_concentration_ok.return_value = True
+        paper.portfolio.exposure.return_value = 0.0
+        paper.portfolio.open_positions_by_prefix = MagicMock(return_value=open_in_prefix or [])
+        ex = TradeExecutor(rest, paper)
+        return ex, paper
+
+    def test_below_cap_passes(self, monkeypatch):
+        ex, paper = self._setup(monkeypatch, open_in_prefix=[], cap=2)
+        a = _make_analysis(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH",
+                           side="yes", yes_price=50.0, edge=0.10)
+        reason = ex._validate(a)
+        assert reason is None or "per-prefix cap" not in (reason or ""), (
+            f"empty prefix should not trigger cap; got: {reason}"
+        )
+
+    def test_at_cap_blocks(self, monkeypatch):
+        # 2 already open in KXTXRUNOFFENDORSE prefix
+        existing = [
+            SimpleNamespace(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH"),
+            SimpleNamespace(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-KPAX"),
+        ]
+        ex, paper = self._setup(monkeypatch, open_in_prefix=existing, cap=2)
+        a = _make_analysis(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-JCOR",
+                           side="yes", yes_price=50.0, edge=0.10)
+        reason = ex._validate(a)
+        assert reason is not None
+        assert "per-prefix cap" in reason
+        assert "KXTXRUNOFFENDORSE" in reason
+
+    def test_different_prefix_unaffected(self, monkeypatch):
+        # 2 open in KXTRUMPIRAN, but trade is on KXTXRUNOFFENDORSE
+        existing = [
+            SimpleNamespace(ticker="KXTRUMPIRAN-26JUN01"),
+            SimpleNamespace(ticker="KXTRUMPIRAN-26JUL01"),
+        ]
+        ex, paper = self._setup(monkeypatch, open_in_prefix=[], cap=2)
+        # _setup wired open_positions_by_prefix to return [] regardless
+        # of args; we want to assert different-prefix lookup returns 0
+        paper.portfolio.open_positions_by_prefix = MagicMock(side_effect=lambda pfx: existing if pfx == "KXTRUMPIRAN" else [])
+        a = _make_analysis(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH",
+                           side="yes", yes_price=50.0, edge=0.10)
+        reason = ex._validate(a)
+        assert reason is None or "per-prefix cap" not in (reason or "")
+
+    def test_cap_disabled_when_zero(self, monkeypatch):
+        # cfg.max_open_positions_per_prefix = 0 → cap disabled even with N open
+        existing = [SimpleNamespace(ticker="KX-A"), SimpleNamespace(ticker="KX-B")]
+        ex, paper = self._setup(monkeypatch, open_in_prefix=existing, cap=0)
+        a = _make_analysis(ticker="KX-C", side="yes", yes_price=50.0, edge=0.10)
+        reason = ex._validate(a)
+        assert reason is None or "per-prefix cap" not in (reason or "")
+
+    # ------------------------------------------------------------------
+    # PROFIT-VENUE-PARITY-001 — per-contest exposure key (fix/pm-exposure-cap-granularity)
+    #
+    # The cap key MUST be the *correlated-exposure* family, not the raw
+    # split('-',1)[0] token. For Kalshi the leading token IS the contest
+    # series (correct). For Polymarket the leading slug token ('ewc') is a
+    # market-MAKER prefix shared across ~30 INDEPENDENT contests (Maine
+    # Senate, Georgia Senate, Iowa Governor, ...). Lumping them into one
+    # 2-slot bucket over-throttles the venue whose binding constraint is
+    # opportunity throughput. The correct key is the canonical per-contest
+    # family stem from pm_domain_key, namespace-stripped so it startswith-
+    # matches the ticker (Portfolio.open_positions_by_prefix semantics).
+    #
+    # The mocks below reproduce the REAL open_positions_by_prefix matcher
+    # (ticker == prefix OR ticker.startswith(prefix+'-')) so the assertion
+    # turns purely on which prefix the executor derives.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _real_prefix_matcher(open_tickers):
+        """Mirror Portfolio.open_positions_by_prefix's exact-or-startswith match."""
+        positions = [SimpleNamespace(ticker=t) for t in open_tickers]
+
+        def lookup(prefix):
+            if not prefix:
+                return []
+            return [
+                p for p in positions
+                if p.ticker == prefix or p.ticker.startswith(f"{prefix}-")
+            ]
+
+        return lookup
+
+    def _pm_analysis(self, ticker, side="yes"):
+        a = _make_analysis(ticker=ticker, side=side, yes_price=50.0, edge=0.10)
+        # PolymarketExecutionMarket carries .venue == 'polymarket_us'; this is
+        # how the executor distinguishes PM markets from Kalshi ones.
+        a.market.venue = Venue.POLYMARKET_US.value
+        return a
+
+    def test_pm_independent_contests_not_lumped(self, monkeypatch):
+        # MONEY ASSERTION: two open positions in DIFFERENT ewc contests
+        # (Maine Senate + Iowa Governor) must NOT block a THIRD position in
+        # yet another independent ewc contest (Georgia Senate). Pre-fix all
+        # three collapsed to the 'ewc' bucket → blocked at cap=2. The fix
+        # keys on the per-contest stem ('ewc-usse-ga') which the two open
+        # contests do not match → 0 in bucket → passes.
+        open_tickers = [
+            "ewc-usse-me-2026-11-03-dem",   # Maine Senate
+            "ewc-usgub-ia-2026-11-03-dem",  # Iowa Governor
+        ]
+        ex, paper = self._setup(monkeypatch, cap=2)
+        paper.portfolio.open_positions_by_prefix = MagicMock(
+            side_effect=self._real_prefix_matcher(open_tickers)
+        )
+        a = self._pm_analysis("ewc-usse-ga-2026-11-03-dem")  # Georgia Senate
+        reason = ex._validate(a)
+        assert reason is None or "per-prefix cap" not in (reason or ""), (
+            "independent PM contests must not share an exposure bucket; "
+            f"got over-throttle: {reason}"
+        )
+
+    def test_pm_same_contest_outcomes_capped_together(self, monkeypatch):
+        # CORRELATION CONTROL: two outcomes of the SAME contest (Maine
+        # Senate dem + rep) are correlated exposure and MUST be capped
+        # together. A third position in that same contest IS blocked.
+        # pm_domain_key maps all three to 'polymarket_us:ewc-usse-me', so the
+        # stem 'ewc-usse-me' startswith-matches both open outcomes → cap hit.
+        open_tickers = [
+            "ewc-usse-me-2026-11-03-dem",
+            "ewc-usse-me-2026-11-03-rep",
+        ]
+        ex, paper = self._setup(monkeypatch, cap=2)
+        paper.portfolio.open_positions_by_prefix = MagicMock(
+            side_effect=self._real_prefix_matcher(open_tickers)
+        )
+        a = self._pm_analysis("ewc-usse-me-2026-11-03-grn")  # 3rd outcome, same contest
+        reason = ex._validate(a)
+        assert reason is not None and "per-prefix cap" in reason, (
+            "same-contest multi-outcome correlation control must still fire; "
+            f"got: {reason}"
+        )
+        # Assert on the DERIVED-PREFIX token in the reason ("open in <prefix>"),
+        # not a bare 'ewc-usse-me' substring — the latter also appears in the
+        # open=[...] ticker list pre-fix, making the check tautological. Pre-fix
+        # the reason reads "open in ewc"; only the fix makes it the per-contest
+        # stem "ewc-usse-me", so this distinguishes fixed from broken behavior.
+        assert "open in ewc-usse-me " in reason, (
+            "cap must key on the per-contest stem 'ewc-usse-me', not the coarse "
+            f"market-maker prefix 'ewc'; got: {reason}"
+        )
+
+    def test_pm_tagged_market_with_kx_ticker_does_not_crash(self):
+        # DEFENSIVE: pm_domain_key raises ValueError on KX* tickers. A market
+        # tagged venue='polymarket_us' but carrying a KX* ticker is impossible
+        # today, but the cap key derivation runs on EVERY trade decision, so an
+        # uncaught raise there would crash the decision path. The helper must
+        # swallow it and fall back to the coarse stem (over-group, not
+        # over-trade — the safe direction for a cap), never propagate.
+        from trading.executor import _correlated_exposure_prefix
+
+        market = SimpleNamespace(ticker="KXFOO-27-26JUL", venue=Venue.POLYMARKET_US.value)
+        assert _correlated_exposure_prefix(market) == "KXFOO"
+
+    def test_kalshi_prefix_byte_identical_blocks(self, monkeypatch):
+        # KALSHI BYTE-IDENTICAL: two open KXUSAIRANAGREEMENT-* outcomes block
+        # a third in the same series. Kalshi keeps split('-',1)[0] semantics;
+        # the fix must NOT change this. (No .venue attr → Kalshi default.)
+        open_tickers = [
+            "KXUSAIRANAGREEMENT-27-26JUL",
+            "KXUSAIRANAGREEMENT-27-26AUG",
+        ]
+        ex, paper = self._setup(monkeypatch, cap=2)
+        paper.portfolio.open_positions_by_prefix = MagicMock(
+            side_effect=self._real_prefix_matcher(open_tickers)
+        )
+        a = _make_analysis(ticker="KXUSAIRANAGREEMENT-27-26SEP",
+                           side="yes", yes_price=50.0, edge=0.10)
+        reason = ex._validate(a)
+        assert reason is not None and "per-prefix cap" in reason, (
+            f"Kalshi same-series cap must still block; got: {reason}"
+        )
+        assert "KXUSAIRANAGREEMENT" in reason
+
+    def test_kalshi_different_series_byte_identical_unaffected(self, monkeypatch):
+        # KALSHI BYTE-IDENTICAL: two KXFOO-* positions must NOT block a
+        # KXBAR-* position. Distinct series → distinct split('-',1)[0] key.
+        open_tickers = ["KXFOO-26JUN01", "KXFOO-26JUL01"]
+        ex, paper = self._setup(monkeypatch, cap=2)
+        paper.portfolio.open_positions_by_prefix = MagicMock(
+            side_effect=self._real_prefix_matcher(open_tickers)
+        )
+        a = _make_analysis(ticker="KXBAR-26JUN01",
+                           side="yes", yes_price=50.0, edge=0.10)
+        reason = ex._validate(a)
+        assert reason is None or "per-prefix cap" not in (reason or ""), (
+            f"distinct Kalshi series must stay independent; got: {reason}"
         )

@@ -5,11 +5,80 @@ from pathlib import Path
 
 from scripts.daily_review import (
     _build_tier_by_source,
+    _format_fresh_pass_conversion_lines,
+    _summarize_fresh_pass_assignment_shadow,
     _format_tier_change_lines,
     _load_previous_tier_state,
     _save_current_tier_state,
     build_daily_review,
 )
+from scripts.throughput_operator_metrics import ThroughputOperatorSummary
+
+
+def test_format_fresh_pass_conversion_lines_surfaces_funnel_pinch():
+    lines = _format_fresh_pass_conversion_lines(
+        fresh_passes=186,
+        match_records=40,
+        detail_rows=1,
+        llm_attempted=0,
+        opportunities=0,
+        paper_trades=0,
+    )
+
+    assert lines == [
+        "  Fresh-pass conversion            : 186 fresh -> 1 signal row -> 0 LLM attempts -> 0 opportunities -> 0 paper trades",
+        "    lifecycle gaps                 : fresh_to_match=146, match_to_analysis=39, analysis_to_opportunity=1, opportunity_to_trade=0",
+        "    pinch                          : fresh_to_match (146 fresh passes had no match diagnostic)",
+    ]
+
+
+def test_summarize_fresh_pass_assignment_shadow_counts_assignment_outcomes(tmp_path):
+    trades_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    shadow_path = tmp_path / "logs" / "trades" / "shadow" / "fresh_pass_assignment_shadow.jsonl"
+    shadow_path.parent.mkdir(parents=True)
+    trades_path.parent.mkdir(parents=True)
+    trades_path.write_text("", encoding="utf-8")
+    shadow_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "FRESH_PASS_ASSIGNMENT_SHADOW",
+                        "ts": "2026-04-11T12:00:00+00:00",
+                        "source": "Reuters",
+                        "headline": "Assigned",
+                        "assigned": True,
+                        "candidate_count": 2,
+                        "top_ticker": "KXASSIGNED",
+                        "top_score": 0.12,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "FRESH_PASS_ASSIGNMENT_SHADOW",
+                        "ts": "2026-04-11T13:00:00+00:00",
+                        "source": "AP",
+                        "headline": "Unassigned",
+                        "assigned": False,
+                        "candidate_count": 0,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    stats = _summarize_fresh_pass_assignment_shadow(
+        trades_path,
+        since=datetime(2026, 4, 11, tzinfo=timezone.utc),
+        until=datetime(2026, 4, 11, 23, 59, tzinfo=timezone.utc),
+    )
+
+    assert stats["rows"] == 2
+    assert stats["assigned"] == 1
+    assert stats["unassigned"] == 1
+    assert stats["top_unassigned_sources"] == Counter({"AP": 1})
 
 
 def test_build_daily_review_formats_pipeline_stages(monkeypatch):
@@ -67,6 +136,17 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                 "LIVE_ORDER": 0,
             },
             "analysis_rejected_reasons": {"stale_news": 2, "no_keywords": 1},
+            "analysis_rejected_categories": {"post_llm_neutral_empty_keywords": 1},
+        },
+    )
+    monkeypatch.setattr(
+        "scripts.daily_review._summarize_fresh_pass_assignment_shadow",
+        lambda *args, **kwargs: {
+            "rows": 9,
+            "assigned": 4,
+            "unassigned": 5,
+            "malformed": 0,
+            "top_unassigned_sources": Counter({"Reuters": 3, "AP": 2}),
         },
     )
     monkeypatch.setattr(
@@ -81,11 +161,13 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                 "attempted": 1,
                 "skipped_routing": 2,
                 "skipped_routing_reasons": Counter({"price_band_excluded": 2}),
+                "pre_llm_would_block_and_useful": 1,
             },
             "skip_breakdown": {
                 "zero_edge": 1,
                 "below_threshold": 1,
                 "duplicate": 1,
+                "liquidity": 1,
                 "other": 0,
             },
             "audit_rows": [
@@ -189,6 +271,20 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
         },
     )
     monkeypatch.setattr(
+        "scripts.daily_review.summarize_operator_throughput_from_trade_log",
+        lambda *args, **kwargs: ThroughputOperatorSummary(
+            opportunities=3,
+            skipped=1,
+            paper_trades=2,
+            window_days=2.0,
+            opportunities_per_day=1.5,
+            skipped_per_opportunity=0.3333333333,
+            top_ticker_trades_per_day=[("KX1", 1.0), ("KX2", 0.5)],
+            opportunity_age_p50_seconds=120.0,
+            opportunity_age_p90_seconds=300.0,
+        ),
+    )
+    monkeypatch.setattr(
         "scripts.daily_review.paper_performance_drilldown.summarize",
         lambda *args, **kwargs: {
             "total_trades": 2,
@@ -196,6 +292,61 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
             "open_trades": 1,
             "win_rate": 1.0,
             "total_pnl": 5.0,
+            "open_resolution_buckets": [
+                {"bucket": "0-3d", "venue": "polymarket", "trades": 1, "exposure": 12.5}
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "scripts.daily_review.keyword_feedback.summarize",
+        lambda *args, **kwargs: {
+            "no_keyword_misses": 3,
+            "corroborating_keyword_gate_records": 2,
+            "no_keyword_rejection_categories": Counter({"post_llm_neutral_empty_keywords": 3}),
+            "empty_keyword_llm_directional_rows": 1,
+            "empty_keyword_llm_neutral_rows": 2,
+            "unique_candidate_phrases": 4,
+            "grouped_phrases": {},
+            "top_no_keyword_sources": [("Reuters", 2), ("AP", 1)],
+            "top_no_keyword_tickers": [("KXIRAN", 2), ("KXTRUMP", 1)],
+        },
+    )
+    monkeypatch.setattr(
+        "scripts.daily_review._latest_restart_timestamp_from_health_reports",
+        lambda: "2026-04-11T10:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        "scripts.daily_review.since_restart_money_path.build_money_path_report",
+        lambda *args, **kwargs: {
+            "window": {"since": "2026-04-11T10:00:00+00:00", "until": None},
+            "summary": {
+                "candidates": 1,
+                "terminal_counts": {"SKIPPED": 1},
+                "measurement_gaps": 0,
+            },
+            "no_keywords": {"count": 3},
+            "polymarket_settlement_feedback": {
+                "status": "insufficient_sample",
+                "resolved_count": 1,
+                "min_resolved_required": 10,
+                "proof_rows": [
+                    {
+                        "ticker": "PM-IRAN-2026-06-20",
+                        "trade_id": "trade-pm-1",
+                        "pnl_dollars": 1.7,
+                        "feedback_ts": "2026-06-20T02:05:00+00:00",
+                        "market_prefix": "polymarket_us:iran",
+                    }
+                ],
+            },
+            "candidates": [
+                {
+                    "ticker": "KXTEST",
+                    "terminal_type": "SKIPPED",
+                    "terminal_venue": "kalshi",
+                    "terminal_reason": "price 1.0c is near limit (too illiquid)",
+                }
+            ],
         },
     )
 
@@ -211,9 +362,20 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     rendered = "\n".join(lines)
 
     assert "PIPELINE REVIEW" in rendered
+    assert "SINCE-RESTART MONEY PATH" in rendered
+    assert "Candidates                       : 1" in rendered
+    assert "Terminal outcomes                : SKIPPED=1" in rendered
+    assert "No-keyword exits                 : 3" in rendered
+    assert "Polymarket settlement feedback   : insufficient_sample (1/10 resolved)" in rendered
+    assert "PM-IRAN-2026-06-20 trade_id=trade-pm-1 pnl=1.7" in rendered
     assert "1. INGESTION" in rendered
     assert "2. MATCHING" in rendered
     assert "3. ANALYSIS" in rendered
+    assert "OPERATOR THROUGHPUT LEADING INDICATORS" in rendered
+    assert "Opportunities/day              : 1.50" in rendered
+    assert "Skipped/opportunity ratio      : 0.333" in rendered
+    assert "Opportunity age p50/p90        : 2.0m / 5.0m" in rendered
+    assert "KX1: 1.00/day" in rendered
     assert "4. EDGE FORMATION" in rendered
     assert "5. EXECUTION" in rendered
     assert "6. LLM VALUE-ADD ANALYSIS" in rendered
@@ -224,6 +386,11 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Drilldown: pre-LLM would-block by source (top)" in rendered
     assert "Drilldown: pre-LLM would-block by market (top)" in rendered
     assert "Drilldown: per-source freshness waterfall" in rendered
+    assert "Fresh-pass conversion" in rendered
+    assert "9 fresh -> 6 signal rows -> 1 LLM attempts -> 3 opportunities -> 2 paper trades" in rendered
+    assert "lifecycle gaps                 : fresh_to_match=1, match_to_analysis=2, analysis_to_opportunity=3, opportunity_to_trade=1" in rendered
+    assert "Fresh assignment shadow         : 4 assigned, 5 unassigned, 0 malformed" in rendered
+    assert "Drilldown: unassigned fresh-pass sources" in rendered
     assert "LLM rows                         : 1" in rendered
     assert "LLM attempted (post-filter)       : 1" in rendered
     assert "LLM skipped (routing)             : 2" in rendered
@@ -234,7 +401,18 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Market price bands by meaningful signal rate" in rendered
     assert "Rare non-neutral cases" in rendered
     assert "Ollama runtime                   : configured=qwen2.5:7b health=ok available=['qwen2.5:7b']" in rendered
+    assert "No-keyword analysis exits       : 3" in rendered
+    assert "post_llm_neutral_empty_keywords: 3" in rendered
+    assert "Empty-keyword LLM detail rows   : directional=1 neutral=2" in rendered
+    assert "Pre-LLM would-block useful rows : 1" in rendered
+    assert "Drilldown: top no-keyword analysis-exit sources" in rendered
+    assert "Reuters: 2" in rendered
+    assert "Drilldown: top no-keyword analysis-exit tickers" in rendered
+    assert "KXIRAN: 2" in rendered
     assert "Paper trades                     : 2" in rendered
+    assert "Skipped liquidity/near-limit     : 1" in rendered
+    assert "Drilldown: open exposure by resolution horizon" in rendered
+    assert "0-3d venue=polymarket trades=1 exposure=$12.50" in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +426,7 @@ def test_build_tier_by_source_flattens_grouped_dict():
             "top performers": [{"source": "Reuters"}],
             "keep": [{"source": "AP"}, {"source": "BBC"}],
             "watch / investigate": [],
+            "incubating": [{"source": "NewDesk"}],
             "prune": [{"source": "NoiseFeed"}],
             "remove immediately": [{"source": "DeadFeed"}],
             "disabled by source": [{"source": "BlockedFeed"}],
@@ -259,6 +438,7 @@ def test_build_tier_by_source_flattens_grouped_dict():
         "Reuters": "top performers",
         "AP": "keep",
         "BBC": "keep",
+        "NewDesk": "incubating",
         "NoiseFeed": "prune",
         "DeadFeed": "remove immediately",
         "BlockedFeed": "disabled by source",
@@ -521,20 +701,33 @@ def test_build_daily_review_filters_waterfall_by_tier_and_appends_summary(monkey
             "unique_candidate_phrases": 0, "grouped_phrases": {},
         },
     )
-    monkeypatch.setattr(
-        "scripts.daily_review.source_scorecard.summarize",
-        lambda *args, **kwargs: {
+    captured_scorecard_kwargs = {}
+
+    def _capture_scorecard(*args, **kwargs):
+        captured_scorecard_kwargs.update(kwargs)
+        return {
             "rows": [], "log_meta": {"records_kept": 0}, "db_exists": False,
             "grouped": {
                 "top performers": [],
                 "keep": [{"source": "Reuters"}],
                 "watch / investigate": [],
+                "incubating": [],
                 "prune": [{"source": "NoiseFeed"}],
-                "remove immediately": [{"source": "DeadFeed"}],
+                # DeadFeed carries a lifetime funnel so Section 8 must render it
+                # beside the "remove immediately" verdict (B). An operator who
+                # sees a bare verdict without the funnel could delete a producer.
+                "remove immediately": [{
+                    "source": "DeadFeed",
+                    "lifetime_posts": 300, "lifetime_signals": 5,
+                    "lifetime_opportunities": 2, "lifetime_trades": 1,
+                }],
                 "disabled by source": [],
                 "disabled by family": [],
             },
-        },
+        }
+
+    monkeypatch.setattr(
+        "scripts.daily_review.source_scorecard.summarize", _capture_scorecard
     )
 
     state_path = tmp_path / "tier_state.json"
@@ -545,6 +738,22 @@ def test_build_daily_review_filters_waterfall_by_tier_and_appends_summary(monkey
         tier_state_path=state_path,
     )
     rendered = "\n".join(lines)
+
+    # Regression guard (PROFIT-ROT-002): build_daily_review MUST pass the wide
+    # recommendation window into the scorecard. If a refactor drops this kwarg the
+    # operator report silently reverts to the broken 24h judgment that flagged the
+    # bot's top producers for deletion -- and nothing else in the suite catches it.
+    from scripts import source_scorecard
+
+    assert (
+        captured_scorecard_kwargs.get("recommendation_window_days")
+        == source_scorecard.DEFAULT_RECOMMENDATION_WINDOW_DAYS
+    )
+    # Section 8 renders the lifetime funnel beside every tier verdict, so
+    # "remove immediately" can never print without the source's real yield.
+    section8 = rendered.split("8. SOURCE SCORECARD")[1]
+    assert "DeadFeed" in section8
+    assert "| life: posts=300 sig=5 opp=2 trade=1" in section8
 
     assert "operationally-relevant tiers only" in rendered
     # Reuters (keep) is shown.
@@ -643,7 +852,8 @@ def test_build_daily_review_uses_persisted_state_for_change_diff(monkeypatch, tm
             "rows": [], "log_meta": {"records_kept": 0}, "db_exists": False,
             "grouped": {
                 "top performers": [], "keep": [{"source": "Reuters"}],
-                "watch / investigate": [], "prune": [], "remove immediately": [],
+                "watch / investigate": [], "incubating": [],
+                "prune": [], "remove immediately": [],
                 "disabled by source": [], "disabled by family": [],
             },
         }),

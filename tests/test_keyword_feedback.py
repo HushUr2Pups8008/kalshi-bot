@@ -17,6 +17,10 @@ def test_summarize_collects_no_keyword_misses_and_candidate_phrases():
                 {
                     "type": "ANALYSIS_REJECTED",
                     "reason": "no_keywords",
+                    "rejection_category": "post_llm_neutral_empty_keywords",
+                    "method": "llm",
+                    "llm_direction": "neutral",
+                    "llm_magnitude": "none",
                     "source": "NYT > World News",
                     "ticker": "KXIRAN-1",
                     "headline": "Iran war live updates as talks collapse again",
@@ -32,8 +36,10 @@ def test_summarize_collects_no_keyword_misses_and_candidate_phrases():
                 },
                 {
                     "type": "SIGNAL_ANALYSIS_DETAIL",
-                    "method": "keyword_gate",
+                    "method": "llm",
                     "keywords": [],
+                    "llm_direction": "yes",
+                    "llm_magnitude": "small",
                     "source": "Reuters",
                     "ticker": "KXIRAN-2",
                     "headline": "Iran war talks collapse after blockade threat",
@@ -45,7 +51,14 @@ def test_summarize_collects_no_keyword_misses_and_candidate_phrases():
         stats = summarize(path, since=None, until=None)
 
         assert stats["no_keyword_misses"] == 2
-        assert stats["corroborating_keyword_gate_records"] == 1
+        assert stats["corroborating_keyword_gate_records"] == 0
+        assert stats["no_keyword_rejection_categories"]["post_llm_neutral_empty_keywords"] == 1
+        assert stats["no_keyword_rejection_categories"]["legacy_no_keywords"] == 1
+        assert stats["empty_keyword_llm_directional_rows"] == 1
+        assert stats["empty_keyword_llm_neutral_rows"] == 0
+        assert stats["top_empty_keyword_llm_directional_sources"] == [("Reuters", 1)]
+        assert stats["top_no_keyword_sources"] == [("NYT > World News", 1), ("Reuters", 1)]
+        assert stats["top_no_keyword_tickers"] == [("KXIRAN-1", 1), ("KXIRAN-2", 1)]
         phrases = {row["phrase"]: row for row in stats["phrases"]}
         assert phrases["iran war"]["count"] == 2
         assert phrases["talks collapse"]["count"] == 2
@@ -242,10 +255,59 @@ def test_print_summary_includes_expected_sections(capsys):
 
         assert "KEYWORD FEEDBACK AUDIT" in output
         assert "Available Miss Corpus" in output
+        assert "No-keyword rejection branches" in output
+        assert "Empty-keyword LLM detail rows" in output
         assert "Strongest Specific Candidates" in output
         assert "Watchlist / Ambiguous Candidates" in output
         assert "Likely Reject / Too Broad" in output
         assert "Risk Notes" in output
         assert "iran war" in output
+        assert "Top no-keyword miss sources" in output
+        assert "Reuters: 2" in output
+        assert "Top no-keyword miss tickers" in output
+        assert "KXIRAN-1: 1" in output
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_include_empty_llm_detail_corpus_keeps_directional_and_neutral_buckets_separate():
+    tmp = make_tmp_dir("keyword_feedback")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "SIGNAL_ANALYSIS_DETAIL",
+                    "method": "llm",
+                    "keywords": [],
+                    "llm_direction": "yes",
+                    "llm_magnitude": "small",
+                    "source": "AP",
+                    "ticker": "KXIRAN-1",
+                    "headline": "Iran nuclear talks resume after missile strike",
+                    "ts": "2026-04-12T10:00:00+00:00",
+                },
+                {
+                    "type": "SIGNAL_ANALYSIS_DETAIL",
+                    "method": "llm",
+                    "keywords": [],
+                    "llm_direction": "neutral",
+                    "llm_magnitude": "none",
+                    "source": "Reuters",
+                    "ticker": "KXIRAN-2",
+                    "headline": "Iran nuclear talks continue with no deal",
+                    "ts": "2026-04-12T10:01:00+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(path, since=None, until=None, include_empty_llm_detail_corpus=True)
+
+        assert stats["empty_keyword_llm_directional_rows"] == 1
+        assert stats["empty_keyword_llm_neutral_rows"] == 1
+        phrases = {row["phrase"]: row for row in stats["phrases"]}
+        assert phrases["iran nuclear"]["corpora"]["directional_empty_llm"] == 1
+        assert phrases["iran nuclear"]["corpora"]["neutral_empty_llm"] == 1
     finally:
         cleanup_tmp_dir(tmp)

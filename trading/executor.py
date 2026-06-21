@@ -18,16 +18,83 @@ from typing import Any, Callable, Optional
 
 from analysis import SignalAnalysis
 from analysis.kelly import contracts_from_dollars
-from config import cfg, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, PAPER_BLOCK_SAME_SIDE_DUPLICATE
+from config import cfg, PAPER_MIN_EDGE, PAPER_BLOCK_SAME_SIDE_DUPLICATE
 from kalshi import OrderResult
 from kalshi.rest_client import KalshiRestClient
+from polymarket.domain_key import pm_domain_key
 from trading.paper_trader import PaperTrader
+from trading.venue import Venue
 from utils.logger import get_logger, trade_log, write_trade_log_async
 
 log = get_logger("executor")
 
 # Cooldowns moved to BotConfig (cfg.live_ticker_cooldown / cfg.paper_ticker_cooldown).
 # Read from cfg at call time so .env changes take effect without code edits.
+
+
+def classify_skip_category(reason: str | None) -> str:
+    """Stable high-level bucket for executor SKIPPED reasons."""
+    text = str(reason or "").lower()
+    if not text.strip():
+        return "unknown"
+    if "cooldown" in text:
+        return "cooldown"
+    if "duplicate" in text or "same-signal" in text:
+        return "duplicate"
+    if "concentration" in text or "per-prefix cap" in text:
+        return "concentration"
+    if (
+        "illiquid" in text
+        or "near limit" in text
+        or "price unavailable" in text
+        or "not tradeable" in text
+    ):
+        return "liquidity"
+    return "other"
+
+
+def _correlated_exposure_prefix(market: Any) -> str:
+    """Return the per-prefix cap key identifying a market's correlated-exposure family.
+
+    WHY this is venue-aware: the per-prefix cap exists to stop one news event
+    from opening N concurrent bets on the SAME underlying contest. The cap key
+    must therefore name the *contest family*, not just any shared leading token.
+
+    Kalshi: the leading ``ticker.split('-', 1)[0]`` token IS the contest series
+    (e.g. ``KXUSAIRANAGREEMENT-27-26JUL`` -> ``KXUSAIRANAGREEMENT``, shared by
+    all its multi-outcome contracts). Kept BYTE-IDENTICAL — this is the default
+    branch for anything not flagged as Polymarket.
+
+    Polymarket: the leading slug token is a market-MAKER prefix (e.g. ``ewc``)
+    shared across many INDEPENDENT contests (Maine Senate, Georgia Senate, Iowa
+    Governor, ...). Splitting on ``-`` would lump ~30 unrelated contests into one
+    cap bucket and over-throttle the venue. The canonical per-contest family is
+    ``pm_domain_key``'s stem (PROFIT-VENUE-PARITY-001 open-risk #1 mandates a
+    SINGLE PM family key — we delegate, never re-derive with a fresh regex). We
+    strip the leading ``polymarket_us:`` namespace so the bare stem
+    startswith-matches the ticker via ``Portfolio.open_positions_by_prefix``:
+    ``ewc-usse-me`` matches both ``...-dem`` and ``...-rep`` of the Maine Senate
+    contest (correctly capped together) but not ``ewc-usse-ga-...`` (Georgia,
+    correctly independent). If ``pm_domain_key`` degrades to the bare venue
+    segment (empty/unrecognized slug, no ``:``), fall back to the coarse
+    ``split('-', 1)[0]`` — the conservative direction for an exposure cap.
+    """
+    ticker = getattr(market, "ticker", "") or ""
+    if getattr(market, "venue", None) == Venue.POLYMARKET_US.value:
+        try:
+            key = pm_domain_key(ticker)
+        except ValueError:
+            # Defensive: a PM-tagged market carrying a non-PM (e.g. KX*) ticker
+            # makes pm_domain_key raise. Never let that crash the cap evaluation
+            # (it runs on every trade decision); fall back to the coarse stem —
+            # conservative direction (over-group, not over-trade) for a cap.
+            return ticker.split("-", 1)[0]
+        namespace, sep, stem = key.partition(":")
+        if sep and stem:
+            return stem
+        # Bare 'polymarket_us' (no stem) -> coarse fallback, never crash the cap.
+        return ticker.split("-", 1)[0]
+    return ticker.split("-", 1)[0]
 
 
 class TradeExecutor:
@@ -143,6 +210,7 @@ class TradeExecutor:
             )
             skipped_kwargs = {
                 "reason": skip_reason,
+                "skip_category": classify_skip_category(skip_reason),
                 "ticker": analysis.market.ticker,
                 "headline": analysis.news_item.headline[:80],
                 "source": analysis.news_item.source,
@@ -153,6 +221,7 @@ class TradeExecutor:
                 "market_price": float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0,
                 "edge": analysis.edge,
                 "min_edge_threshold": effective_min_edge,
+                "venue": self._venue_value(analysis.market),
             }
             if signal_meta:
                 skipped_kwargs["signal_meta"] = signal_meta
@@ -225,13 +294,33 @@ class TradeExecutor:
         # Paper ticker cooldown (4h): prevents same ticker being spammed by a burst
         # of headlines on the same topic (e.g. 30 Iran-war articles in one poll cycle).
         if self._is_paper:
-            last    = self._last_traded.get(analysis.market.ticker, 0.0)
+            last    = self._last_traded.get(analysis.market.ticker, float("-inf"))
             elapsed = time.monotonic() - last
             if elapsed < cfg.paper_ticker_cooldown:
                 return (
                     f"paper cooldown: last trade {elapsed/3600:.1f}h ago "
                     f"(cooldown={cfg.paper_ticker_cooldown//3600}h)"
                 )
+
+        # PROFIT-ALIGN-004 (2026-05-25): per-market-prefix open-position cap.
+        # The matcher can produce multiple outcome-contract matches in the same
+        # series (e.g. KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH / -KPAX / -JCOR all
+        # share the KXTXRUNOFFENDORSE prefix). Same-signal-guard catches the
+        # exact-ticker case but not the multi-outcome case. Without this cap,
+        # one piece of news can cause N concurrent bets against the same
+        # underlying topic; if the bot's read is wrong, losses compound.
+        # cfg.max_open_positions_per_prefix (default 2) gates the Nth open.
+        if cfg.max_open_positions_per_prefix > 0:
+            prefix = _correlated_exposure_prefix(analysis.market)
+            if prefix:
+                open_in_prefix = self._paper.portfolio.open_positions_by_prefix(prefix)
+                if len(open_in_prefix) >= cfg.max_open_positions_per_prefix:
+                    open_tickers = sorted({p.ticker for p in open_in_prefix})
+                    return (
+                        f"per-prefix cap: {len(open_in_prefix)} open in {prefix} "
+                        f"(cap={cfg.max_open_positions_per_prefix}, "
+                        f"open={open_tickers})"
+                    )
 
         # Multi-position guard: block opposing trades (no hedges) and duplicate
         # signals (same side, same probability estimate, same market price).
@@ -278,11 +367,17 @@ class TradeExecutor:
             "This is a bug in _validate control flow."
         )
         paper_unit_price = max(1, min(99, int(analysis.executed_price_cents)))
-        trade_cost = (
-            PAPER_FLAT_CONTRACTS * paper_unit_price / 100.0
-            if self._is_paper
-            else analysis.capped_dollars
-        )
+        if self._is_paper:
+            # PROFIT-SIZING-001b: paper sizes by Kelly now (mirrors live, matches
+            # paper_trader). Concentration pre-check uses the actual Kelly
+            # contract cost rather than the retired flat-5 estimate.
+            trade_cost = (
+                contracts_from_dollars(analysis.capped_dollars, paper_unit_price)
+                * paper_unit_price
+                / 100.0
+            )
+        else:
+            trade_cost = analysis.capped_dollars
         if not self._paper.portfolio.is_concentration_ok(
             ticker=analysis.market.ticker,
             additional_dollars=trade_cost,
@@ -303,7 +398,7 @@ class TradeExecutor:
             if self._live_halted:
                 return "LIVE HALTED: session loss limit reached -- all trading suspended"
 
-            last    = self._last_traded.get(analysis.market.ticker, 0.0)
+            last    = self._last_traded.get(analysis.market.ticker, float("-inf"))
             elapsed = time.monotonic() - last
             if elapsed < cfg.live_ticker_cooldown:
                 return (
@@ -360,12 +455,21 @@ class TradeExecutor:
 
         ticker = candidate.market.ticker
         fresh_market = None
-        try:
-            fresh_market = await asyncio.to_thread(self._rest.get_market, ticker)
-        except Exception as exc:
-            log.warning(
-                "[BLEND_REFETCH] %s fetch failed: %s -- falling back to candidate snapshot",
-                ticker, exc,
+        candidate_venue = self._venue_value(candidate.market)
+        if candidate_venue == "kalshi":
+            try:
+                fresh_market = await asyncio.to_thread(self._rest.get_market, ticker)
+            except Exception as exc:
+                log.warning(
+                    "[BLEND_REFETCH] %s fetch failed: %s -- falling back to candidate snapshot",
+                    ticker, exc,
+                )
+        else:
+            fresh_market = candidate.market
+            log.debug(
+                "[BLEND_REFETCH] %s venue=%s using venue snapshot (no Kalshi refetch)",
+                ticker,
+                candidate_venue,
             )
 
         if fresh_market is None:
@@ -416,6 +520,18 @@ class TradeExecutor:
         analysis.signal_type = "blend"
         analysis.signal_meta = signal_meta
         return analysis
+
+    @staticmethod
+    def _venue_value(market: Any) -> str:
+        raw = getattr(market, "venue", None)
+        if raw is None:
+            return "kalshi"
+        if isinstance(raw, str):
+            return raw.strip().lower() or "kalshi"
+        value = getattr(raw, "value", None)
+        if isinstance(value, str):
+            return value.strip().lower() or "kalshi"
+        return "kalshi"
 
     @staticmethod
     def _candidate_signal_meta(candidate: Any) -> dict[str, Any]:

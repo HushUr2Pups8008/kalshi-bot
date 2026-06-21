@@ -265,3 +265,47 @@ class SourceStats:
                 t["quality"] = "Good"
             rows.append(t)
         return sorted(rows, key=lambda r: -r["signal_rate"])
+
+
+def read_lifetime_totals(db_path: Path = DB_PATH) -> dict[str, dict]:
+    """Read-only snapshot of the lifetime per-source funnel from source_stats.
+
+    Returns ``{source: {posts_seen, signals, opportunities, trades, last_signal}}``
+    covering the source's ENTIRE recorded history (not a window). ``last_signal``
+    is the ISO-UTC timestamp of the source's most recent SIGNAL (or ``None``);
+    the scorecard uses it to recency-bound the lifetime-yield veto so a source
+    that fired once and went dead is not granted permanent immunity from a
+    "remove" recommendation.
+
+    Fail-soft: returns ``{}`` when the DB file or the source_stats table is
+    absent (a fresh clone / partial fixture) or when the file is transiently
+    locked by the bot's SourceStats writer. Opens its own short-lived read
+    connection with a busy_timeout -- never writes, never holds the SourceStats
+    write connection, safe to call from a reporting process while the bot runs.
+    """
+    if not Path(db_path).exists():
+        return {}
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("PRAGMA busy_timeout=2000")
+        try:
+            # fetchall() is inside the try so a 'database is locked' raised during
+            # the fetch (not just the execute) also fails soft to {}.
+            rows = conn.execute(
+                "SELECT source, posts_seen, signals, opportunities, trades, last_signal "
+                "FROM source_stats"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        return {
+            row[0]: {
+                "posts_seen": row[1] or 0,
+                "signals": row[2] or 0,
+                "opportunities": row[3] or 0,
+                "trades": row[4] or 0,
+                "last_signal": row[5],
+            }
+            for row in rows
+        }
+    finally:
+        conn.close()

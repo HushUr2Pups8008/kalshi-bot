@@ -12,16 +12,16 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+from utils.output_paths import DB_STATE_DIR, OUTPUT_ROOT
+
 load_dotenv(Path(__file__).parent / ".env")
 
 # ── Directories ───────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
-# KALSHI_LOG_ROOT lets tests redirect all log output to a temp directory without
-# touching the runtime default.  Set this env var BEFORE config is imported.
-# At runtime (no override) this resolves to BASE_DIR / "logs" as before.
-_log_root_env = os.environ.get("KALSHI_LOG_ROOT", "")
-LOGS_DIR = Path(_log_root_env) if _log_root_env else BASE_DIR / "logs"
-DATA_DIR = BASE_DIR / "data"
+# KALSHI_OUTPUT_ROOT is the canonical output root. KALSHI_LOG_ROOT remains a
+# compatibility alias handled in utils.output_paths.
+LOGS_DIR = OUTPUT_ROOT
+DATA_DIR = DB_STATE_DIR
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -68,6 +68,15 @@ def _resolve_keyword_override_mode() -> str:
         if legacy_norm in {"1", "true", "yes", "on"}:
             return "any_hit"
     return "all_required"
+
+
+def _resolve_market_source_hints_mode() -> str:
+    """Resolve default-off MarketSourceHints diagnostics mode from env."""
+    return os.getenv("MARKET_SOURCE_HINTS_MODE", "off").strip().lower() or "off"
+
+
+def _parse_bool_env(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _parse_string_tuple(value: str | None, *, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -143,6 +152,21 @@ RSS_FEEDS = [
     # Still disabled via DISABLED_NEWS_SOURCES (NPR, Foreign Policy, Defense One).
     # BBC / France 24 / Deutsche Welle were re-enabled in B3 (2026-04-23) after
     # URL probe confirmed fresh content.
+    #
+    # ─── B3.1 high-yield publisher-desk additions (2026-05-30, URLs live-probed) ───
+    # Track B / PROFIT-EDGE-004: all 13 OPPORTUNITY-generating series are US-political/
+    # geopolitical, but NYT and the Guardian were configured World-desk-only and The
+    # Hill (the canonical Congress / endorsement / cabinet beat) was absent. These add
+    # the missing US-politics desks of the top opportunity publishers (NYT is the #1
+    # OPPORTUNITY source; Guardian desks are the largest single source). Each also gets
+    # a 1800s EARLY_MAX_NEWS_AGE_BY_SOURCE override below (publisher RSS lags past the
+    # 300s default). WaPo deferred: its generic "Politics"/"National" feed titles would
+    # collide with the Politico source label -- needs a per-feed source-name override.
+    "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml",  # feed.title = "NYT > U.S. > Politics"
+    "https://rss.nytimes.com/services/xml/rss/nyt/US.xml",        # feed.title = "NYT > U.S. News"
+    "https://thehill.com/news/feed/",                             # feed.title = "Just In News" (The Hill)
+    "https://thehill.com/homenews/senate/feed/",                  # feed.title = "Senate News" (The Hill)
+    "https://www.theguardian.com/us-news/rss",                    # feed.title = "US news | The Guardian"
 ]
 RSS_POLL_INTERVAL_SECONDS = 60
 
@@ -155,8 +179,20 @@ MAX_NEWS_AGE_SECONDS: int = int(os.getenv("MAX_NEWS_AGE_SECONDS", "300"))  # 5 m
 # path. This is an optimization only; _process_candidate() still enforces the
 # authoritative stale-news guard with MAX_NEWS_AGE_SECONDS.
 EARLY_MAX_NEWS_AGE_SECONDS: int = int(
-    os.getenv("EARLY_MAX_NEWS_AGE_SECONDS", "300")
-)  # 5 min default
+    os.getenv("EARLY_MAX_NEWS_AGE_SECONDS", "1800")
+)  # 30 min default — PROFIT-STALE-002 (2026-05-24): raised from 300s to
+   # match the per-source-override value (1800s) for all curated publishers.
+   # The 7-day funnel showed 681 items at 5-15m age killed because their
+   # source string had no explicit override and fell to the old 300s default.
+   # The existing per-source entries below remain as documentation of intent
+   # but no longer need to be exhaustive — new publishers (Washington Post,
+   # Bloomberg, The Hill, South China Morning Post, NYT direct via Google
+   # News, BBC short form, France 24 short form, CNBC, Times of India)
+   # benefit automatically. Lower-trust aggregator sources (MSN, Forbes,
+   # Reddit) also receive the longer window; LLM-side filtering and the
+   # downstream source_class / source_multiplier guards continue to suppress
+   # spurious signals. Cost analysis: LLM is local (Ollama qwen3), so the
+   # extra throughput is wallclock, not $$.
 
 # Curated per-source overrides for the early freshness pre-filter.
 # Exact source strings are preferred for predictability; main.py also does a
@@ -190,6 +226,12 @@ EARLY_MAX_NEWS_AGE_BY_SOURCE: dict[str, int] = {
     "BBC News": 1800,
     "France 24 - International breaking news, top stories and headlines": 1800,
     "World | Deutsche Welle": 1800,
+    # ─── B3.1 high-yield publisher desks (2026-05-30; titles live-probed) ───
+    "NYT > U.S. > Politics": 1800,
+    "NYT > U.S. News": 1800,
+    "Just In News": 1800,        # The Hill -- "Just In" news desk
+    "Senate News": 1800,         # The Hill -- Senate desk
+    "US news | The Guardian": 1800,
 }
 
 # Per-source queue priority overrides. Lower number = processed first.
@@ -558,6 +600,72 @@ REDDIT_TOPIC_KEYWORDS: dict[str, frozenset] = {
 
 # Max subreddits per poll cycle (core always included; topic subs fill remaining slots)
 REDDIT_MAX_SUBREDDITS: int = 20
+
+# ── News-edge series (option A, 2026-05-30) ──────────────────────────────────
+# Series with demonstrated news-edge: all 158 of the bot's lifetime trading
+# opportunities clustered on these event-driven political/geopolitical series
+# (and every one already carries a categorical prior in
+# analysis/regime_classifier._SERIES_PRIORS). feeds/search_news_monitor
+# prioritizes active markets on these series for targeted news retrieval so they
+# are never crowded out of the SEARCH_MAX_QUERIES budget by high-open-interest
+# macro / "mention" markets the bot has no news-edge on (CPI/GDP/yield threshold
+# markets resolve on a number, not news). Membership is by series-ticker prefix.
+#
+# ⚠️ COLD-START SEED ONLY — this list rots (it is tied to the current political
+# moment: KXTRUMP*, KXMOCTRUMP25, etc.). It is NOT the source of truth. The
+# source of truth is the self-maintaining set in tasks/stats/edge_series.py
+# (option A-2): `active_edge_series()` derives the live edge set from a rolling
+# 45-day window of OPPORTUNITY history (`data/news_edge_series.json`, refreshed
+# by scripts/match_feedback_aggregator.py), auto-promoting producing series and
+# auto-aging-out dead ones — mirroring feeds/subreddit_discovery's
+# candidate + ZERO_SIGNAL_POSTS suppression. This static set is used ONLY when
+# no artifact exists yet (a fresh DB); once the aggregator has run, dead series
+# here are never resurrected. So when the administration changes or Kalshi
+# retires a series, the live set self-corrects — unlike the obsolete
+# KALSHI_GEOPOLITICAL_SERIES allowlist (see CLAUDE.md) which had no such loop.
+# Blast radius is low: this only affects retrieval *priority*, not the trade
+# gate, so even a wrong entry degrades throughput silently rather than causing
+# bad trades. Operator-`pinned` entries in the artifact override aging.
+NEWS_EDGE_SERIES: frozenset = frozenset({
+    "KXTRUMPIRAN",          # Iran diplomacy / kinetic events (34 opps)
+    "KXTRUMPCHINA",         # China-related Trump decisions (31 opps; 5 resolved)
+    "KXTXRUNOFFENDORSE",    # Texas Senate runoff endorsements (28 opps)
+    "KXTRUMPMENTION",       # Trump mention markets (17 opps)
+    "KXMOCTRUMP25",         # Trump month-of-action calendar (11 opps)
+    "KXUSAIRANAGREEMENT",   # US-Iran nuclear deal (9 opps; 1 resolved)
+    "KXCHINAANNOUNCE",      # China-side announcements (8 opps)
+    "KXNEWDEAL",            # Trump trade-deal announcement (7 opps)
+    "KXTRUMPMENTIONB",      # Trump mention markets, B variant (7 opps)
+    "KXTRUMPENDORSE",       # Trump endorsement events (3 opps)
+    "KXFISAEXTEND",         # FISA extension legislation (3 resolved trades)
+    "KXLUTNICKOUT",         # Lutnick LNG / policy (2 opps; 1 resolved)
+    "KXNEWTARIFFS",         # New-tariffs-this-month (1 opp)
+})
+
+# Gate for the news-edge retrieval prioritization (option A). DEFAULT OFF.
+# When False, feeds/search_news_monitor ranks markets purely by
+# open_interest×uncertainty (the prior production behavior). When True, markets
+# on the active news-edge set (tasks/stats/edge_series) are ranked first within
+# the unchanged SEARCH_MAX_QUERIES budget. This is a DECISION-AFFECTING change
+# (it alters which markets get targeted news → which paper trades arise), so per
+# IC §16 it ships INERT and may only be turned on with replayed-EV evidence (or
+# an explicit operator REPLAY_GATE_OVERRIDE memo). Flip via .env + restart.
+ENABLE_NEWS_EDGE_PRIORITIZATION: bool = (
+    os.getenv("ENABLE_NEWS_EDGE_PRIORITIZATION", "false").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+
+# Shadow-only market-first retrieval diagnostics. DEFAULT OFF.
+ENABLE_MARKET_FIRST_QUERY_SHADOW: bool = _parse_bool_env(
+    "ENABLE_MARKET_FIRST_QUERY_SHADOW",
+    default="false",
+)
+
+# Shadow-only per-fresh-item assignment diagnostics. DEFAULT OFF.
+ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW: bool = _parse_bool_env(
+    "ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW",
+    default="false",
+)
 
 # ── Kalshi market filters ─────────────────────────────────────────────────────
 # Series ticker PREFIXES to reject — used as a second filter after keyword
@@ -1031,6 +1139,52 @@ class BotConfig:
     )
     kalshi_env: str = field(default_factory=lambda: os.getenv("KALSHI_ENV", "demo"))
 
+    # Polymarket US credentials and endpoints. Disabled until explicitly enabled.
+    polymarket_us_enabled: bool = field(
+        default_factory=lambda: _parse_bool_env("POLYMARKET_US_ENABLED", "false")
+    )
+    polymarket_us_key_id: str = field(
+        default_factory=lambda: os.getenv("POLYMARKET_US_KEY_ID", "").strip()
+    )
+    polymarket_us_secret: str = field(
+        default_factory=lambda: os.getenv("POLYMARKET_US_SECRET", "").strip()
+    )
+    polymarket_us_public_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "POLYMARKET_US_PUBLIC_BASE_URL", "https://gateway.polymarket.us"
+        ).rstrip("/")
+    )
+    polymarket_us_api_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "POLYMARKET_US_API_BASE_URL", "https://api.polymarket.us"
+        ).rstrip("/")
+    )
+    polymarket_us_live_trading_enabled: bool = field(
+        default_factory=lambda: _parse_bool_env(
+            "POLYMARKET_US_LIVE_TRADING_ENABLED", "false"
+        )
+    )
+    polymarket_us_public_requests_per_second: int = field(
+        default_factory=lambda: int(
+            os.getenv("POLYMARKET_US_PUBLIC_REQUESTS_PER_SECOND", "20")
+        )
+    )
+    polymarket_us_order_requests_per_second: int = field(
+        default_factory=lambda: int(
+            os.getenv("POLYMARKET_US_ORDER_REQUESTS_PER_SECOND", "100")
+        )
+    )
+    polymarket_us_bbo_requests_per_minute: int = field(
+        default_factory=lambda: int(
+            os.getenv("POLYMARKET_US_BBO_REQUESTS_PER_MINUTE", "12")
+        )
+    )
+    polymarket_us_position_valuation_requests_per_minute: float = field(
+        default_factory=lambda: float(
+            os.getenv("POLYMARKET_US_POSITION_VALUATION_REQUESTS_PER_MINUTE", "0.5")
+        )
+    )
+
     # Live trading params
     bankroll: float = field(default_factory=lambda: float(os.getenv("BANKROLL", "500")))
     kelly_fraction: float = field(
@@ -1049,8 +1203,93 @@ class BotConfig:
     max_bet_hard_cap: float = field(
         default_factory=lambda: float(os.getenv("MAX_BET_HARD_CAP", "200.0"))
     )
+    # PROFIT-SIZING-001 (2026-06-11): min-bet floor removed (default 0.0) per
+    # operator decision — the bot trades freely on Kelly down to the natural
+    # 1-contract floor (contracts_from_dollars). This removes the rejection in
+    # kelly_bet (kelly_dollars < min_bet -> 0) and the floor on dynamic_max_bet's
+    # cap. CAVEAT (load-bearing): fees are NOT modelled anywhere in the EV/Kelly
+    # path, so min_bet_dollars was the implicit fee-floor. With it at 0, a tiny
+    # positive-edge LIVE trade can be net-negative after Kalshi fees — positive-
+    # EV gating still holds at the edge level (min_edge), but NOT net-of-fees.
+    # Follow-up: add a fee-aware EV gate before relying on live profitability.
     min_bet_dollars: float = field(
-        default_factory=lambda: float(os.getenv("MIN_BET_DOLLARS", "2.0"))
+        default_factory=lambda: float(os.getenv("MIN_BET_DOLLARS", "0.0"))
+    )
+
+    # PROFIT-ALIGN-001/003 (2026-05-25): trade-audit driven safeguards.
+    # See docs/profit_path_debt_log.md PROFIT-ALIGN-001 for the full design.
+    #
+    # Floor-clamp Kelly multiplier: when _parse_llm_response clamps the
+    # estimated probability at 0.05 / 0.95 (i.e. LLM wanted more extreme
+    # but the function floor caught it), the bot's true certainty about the
+    # exact prob is fuzzy. Multiply the Kelly stake by this factor to
+    # reduce exposure on clamped trades. 0.5 = halve. Set to 1.0 to disable.
+    floor_clamp_kelly_multiplier: float = field(
+        default_factory=lambda: float(os.getenv("FLOOR_CLAMP_KELLY_MULTIPLIER", "0.5"))
+    )
+    # Per-market-prefix open-position cap (PROFIT-ALIGN-004). The matcher
+    # can correctly bridge multiple outcome contracts in the same series
+    # (e.g. KXTXRUNOFFENDORSE-DJT-BOTH / -KPAX / -JCOR). Without a cap,
+    # one piece of news can cause N concurrent bets against the same
+    # underlying topic — losses compound if the bot's read is wrong.
+    # Default 2 simultaneous open positions per prefix.
+    max_open_positions_per_prefix: int = field(
+        default_factory=lambda: int(os.getenv("MAX_OPEN_POSITIONS_PER_PREFIX", "2"))
+    )
+
+    # PROFIT-ALIGN-011 (2026-05-25): magnitude→shift table moved from
+    # hardcoded constants in analysis/signal_analyzer.py to cfg. Defaults
+    # preserve historical behavior. Operator can recalibrate once
+    # PROFIT-ALIGN-002 CALIBRATION_OBSERVATION evidence accumulates (≥30
+    # resolved trades, then bucket by magnitude and measure realized vs
+    # predicted shift). Env overrides: MAGNITUDE_SHIFT_{SMALL,MODERATE,LARGE}.
+    magnitude_shift_small: float = field(
+        default_factory=lambda: float(os.getenv("MAGNITUDE_SHIFT_SMALL", "0.08"))
+    )
+    magnitude_shift_moderate: float = field(
+        default_factory=lambda: float(os.getenv("MAGNITUDE_SHIFT_MODERATE", "0.15"))
+    )
+    magnitude_shift_large: float = field(
+        default_factory=lambda: float(os.getenv("MAGNITUDE_SHIFT_LARGE", "0.25"))
+    )
+
+    # PROFIT-ALIGN-007 (2026-05-25): position-drift observability threshold.
+    # When a held position's current_price drifts by more than this fraction
+    # from entry_price, emit a POSITION_DRIFT event (already-wired logger
+    # method `log_position_drift`). Pure observability — does NOT auto-exit.
+    # Real exit logic is deferred until calibration evidence informs the
+    # drift-vs-resolution trade-off. Set to 1.0 to disable emission.
+    position_drift_alert_threshold: float = field(
+        default_factory=lambda: float(os.getenv("POSITION_DRIFT_ALERT_THRESHOLD", "0.15"))
+    )
+
+    # PROFIT-ALIGN-010 (2026-05-25): LLM content-hash dedup cache for the
+    # runtime signal-analyzer. Distinct from the replay-CI llm_cache.sqlite
+    # (deterministic-replay only). When the same (headline_text, market_title,
+    # market_yes_price_bucket) combo is analyzed within this TTL, return the
+    # cached result instead of issuing a new LLM call. Wallclock saving;
+    # local Ollama wallclock is the only cost since model is on-host. Set to
+    # 0 to disable (forces per-call LLM evaluation).
+    llm_dedup_cache_ttl_seconds: int = field(
+        default_factory=lambda: int(os.getenv("LLM_DEDUP_CACHE_TTL_SECONDS", "900"))
+    )
+
+    # PROFIT-ALIGN-007 (3-lane simplification): when True, lanes with no
+    # contributing evidence (e.g. accumulation lane with zero dossier
+    # updates, structural lane with no series_prior data) emit a
+    # LANE_SKIPPED event instead of computing equal-weight defaults.
+    # Default False — opt-in until operator validates no behavior change
+    # on real BDs.
+    enable_lane_skip_when_no_data: bool = field(
+        default_factory=lambda: _parse_bool_env("ENABLE_LANE_SKIP_WHEN_NO_DATA", "false")
+    )
+
+    # PROFIT-ALIGN-009 (derived series priors): opt-in flag for
+    # auto-deriving a regime weight prior from market metadata (close_time
+    # window + ticker-prefix heuristics) when no explicit _SERIES_PRIORS
+    # entry exists. Default False — falls back to _time_prior as today.
+    enable_derived_series_priors: bool = field(
+        default_factory=lambda: _parse_bool_env("ENABLE_DERIVED_SERIES_PRIORS", "false")
     )
 
     # Time discount parameters -- passed through to kelly_bet() to penalise bets
@@ -1069,6 +1308,18 @@ class BotConfig:
     paper_ticker_cooldown: int = field(
         default_factory=lambda: int(os.getenv("PAPER_TICKER_COOLDOWN", "14400"))
     )  # 4h
+
+    # PROFIT-EXEC-002 series-correlation guard window. When BlendTask is
+    # about to enqueue a candidate, it checks whether another candidate
+    # from the same Kalshi series prefix enqueued within this window;
+    # if so, the new candidate is suppressed with reason
+    # `series_correlation_in_window`. Default 1h; any value `<= 0`
+    # disables the guard entirely (operator escape hatch). Negative
+    # env values are clamped to 0 so `-300` cannot silently bypass the
+    # guard via the `window > 0` short-circuit at tasks/blend_task.py.
+    series_correlation_window_seconds: int = field(
+        default_factory=lambda: max(0, int(os.getenv("SERIES_CORRELATION_WINDOW_SECONDS", "3600")))
+    )
 
     # Go-live gate thresholds -- evaluated by --go-live before allowing confirmation.
     # Set these to 0/1.0 to disable any individual gate.
@@ -1120,6 +1371,17 @@ class BotConfig:
     )
     reddit_user_agent: Optional[str] = field(
         default_factory=lambda: os.getenv("REDDIT_USER_AGENT")
+    )
+
+    # Reddit ingestion master switch. Default OFF: Reddit denied the bot's OAuth
+    # app (2026-05-29, "no community benefit"), so anonymous .json polling is
+    # IP-blocked (~2,600 HTTP-403/wk; circuit permanently open) and Reddit yields
+    # 0 signals / 0 opportunities / 0 trades lifetime (Track B B0 evidence,
+    # PROFIT-EDGE-004). Leaving it scheduled just burns poll cycles and floods the
+    # log with 403 warnings. Set REDDIT_ENABLED=true to re-enable cleanly if an
+    # approved app ever exists.
+    reddit_enabled: bool = field(
+        default_factory=lambda: _parse_bool_env("REDDIT_ENABLED", "false")
     )
 
     @property
@@ -1182,6 +1444,12 @@ class BotConfig:
             )
         )
     )
+    market_source_hints_mode: str = field(
+        default_factory=lambda: _resolve_market_source_hints_mode()
+    )
+    market_source_hints_emit_records: bool = field(
+        default_factory=lambda: _parse_bool_env("MARKET_SOURCE_HINTS_EMIT_RECORDS", "false")
+    )
     enable_startup_observability_probe: bool = field(
         default_factory=lambda: os.getenv("ENABLE_STARTUP_OBSERVABILITY_PROBE", "true").strip().lower() in {"1", "true", "yes", "on"}
     )
@@ -1208,6 +1476,19 @@ class BotConfig:
     # Set at runtime via set_paper_mode() — do not mutate directly.
     is_paper_trading: bool = True
 
+    def polymarket_us_startup_status(self) -> str:
+        """Operator-facing Polymarket status without credential material."""
+        enabled = str(self.polymarket_us_enabled).lower()
+        live_trading = str(self.polymarket_us_live_trading_enabled).lower()
+        if not self.polymarket_us_enabled:
+            return "Polymarket US: enabled=false"
+        return (
+            "Polymarket US: "
+            f"enabled={enabled} "
+            "paper_execution=blend "
+            f"live_trading={live_trading}"
+        )
+
     def __post_init__(self) -> None:
         """Validate critical config at startup -- fail fast, not hours later."""
         errors: list[str] = []
@@ -1228,10 +1509,34 @@ class BotConfig:
                 "PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_MIN_SIGNAL must be non-negative, "
                 f"got {self.pre_llm_match_gate_keyword_override_min_signal}"
             )
+        if self.market_source_hints_mode not in {"off", "shadow", "advisory"}:
+            errors.append(
+                "MARKET_SOURCE_HINTS_MODE must be one of off|shadow|advisory, "
+                f"got '{self.market_source_hints_mode}'"
+            )
         if self.kalshi_env not in ("demo", "prod"):
             errors.append(
                 "KALSHI_ENV must be 'demo' or 'prod', got '%s'" % self.kalshi_env
             )
+        if self.polymarket_us_public_requests_per_second <= 0:
+            errors.append("POLYMARKET_US_PUBLIC_REQUESTS_PER_SECOND must be positive")
+        if self.polymarket_us_order_requests_per_second <= 0:
+            errors.append("POLYMARKET_US_ORDER_REQUESTS_PER_SECOND must be positive")
+        if self.polymarket_us_bbo_requests_per_minute <= 0:
+            errors.append("POLYMARKET_US_BBO_REQUESTS_PER_MINUTE must be positive")
+        if self.polymarket_us_position_valuation_requests_per_minute <= 0:
+            errors.append(
+                "POLYMARKET_US_POSITION_VALUATION_REQUESTS_PER_MINUTE must be positive"
+            )
+        if self.polymarket_us_enabled:
+            if not self.polymarket_us_key_id:
+                errors.append(
+                    "POLYMARKET_US_KEY_ID is required when POLYMARKET_US_ENABLED=true"
+                )
+            if not self.polymarket_us_secret:
+                errors.append(
+                    "POLYMARKET_US_SECRET is required when POLYMARKET_US_ENABLED=true"
+                )
         if self.bankroll <= 0:
             errors.append("BANKROLL must be positive, got %.2f" % self.bankroll)
         if not (0 < self.kelly_fraction <= 1.0):

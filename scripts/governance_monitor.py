@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 from collections import Counter, defaultdict
 from datetime import UTC, date, datetime
@@ -16,8 +15,15 @@ from pathlib import Path
 from typing import Any
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_LOG = Path(os.environ.get("KALSHI_HOME", _REPO_ROOT)) / "logs/governance/decisions.jsonl"
-_DEFAULT_OVERRIDES = Path(os.environ.get("KALSHI_HOME", _REPO_ROOT)) / "data/runtime_overrides.yaml"
+# PROFIT-GOV-003: drop `KALSHI_HOME` as the implicit log-file root. The
+# operator's shell exports `KALSHI_HOME=…/kalshi_bot` (underscore) while
+# the active repo lives at `…/kalshi-bot` (hyphen), so the env override
+# silently pointed the monitor at a non-existent path. The script lives
+# inside the repo it monitors; `_REPO_ROOT` is unambiguous and survives
+# `cd` from any working directory. Operators wanting a foreign file pass
+# `--logfile` explicitly.
+_DEFAULT_LOG = _REPO_ROOT / "logs/governance/decisions.jsonl"
+_DEFAULT_OVERRIDES = _REPO_ROOT / "data/runtime_overrides.yaml"
 
 
 def _record_type(r: dict[str, Any]) -> str:
@@ -123,6 +129,10 @@ def analyze(
                 deep_cycles.add(r.get("cycle_id") or f"{d}:{days[d]['cycles_started']}")
         elif typ == "GOVERNANCE_CYCLE_END":
             days[d]["cycles_ended"] += 1
+            # PROFIT-GOV-003: `batch_aborted` rides as a boolean on the
+            # cycle-end record, not as its own event type.
+            if r.get("batch_aborted"):
+                days[d]["batch_aborted"] += 1
         elif typ == "GOVERNANCE_DECISION":
             days[d]["decisions"] += 1
             decisions.append(r)
@@ -133,8 +143,17 @@ def analyze(
             targets[target] += 1
             tuples[(target, reasoning)] += 1
             grams.update(_fivegrams(reasoning))
-        elif typ in {"PARSE_ERROR", "VALIDATION_ERROR", "BATCH_ABORTED", "KILL_SWITCH"}:
-            key = typ.lower()
+        # PROFIT-GOV-003: actual emitted event types are prefixed with
+        # `GOVERNANCE_DECISION_` / `GOVERNANCE_`; the previous bare-name
+        # set never matched anything in the live JSONL, so the per-day
+        # counters silently stayed at zero. `batch_aborted` rides as a
+        # boolean field on `GOVERNANCE_CYCLE_END`, not a separate event.
+        elif typ in {
+            "GOVERNANCE_DECISION_PARSE_ERROR",
+            "GOVERNANCE_DECISION_VALIDATION_ERROR",
+            "GOVERNANCE_KILL_SWITCH",
+        }:
+            key = typ.removeprefix("GOVERNANCE_DECISION_").removeprefix("GOVERNANCE_").lower()
             days[d][key] += 1
 
     for d in list(days):

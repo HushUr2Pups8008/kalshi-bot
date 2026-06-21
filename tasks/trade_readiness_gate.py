@@ -7,6 +7,8 @@ structural priors, size trades, or submit anything to execution.
 
 from __future__ import annotations
 
+import os  # noqa: F401  (used by G2_MIN_SOURCE_CLASSES env override)
+
 from dataclasses import dataclass
 from numbers import Real
 from typing import Any, Mapping
@@ -23,8 +25,14 @@ from typing import Any, Mapping
 # Why 0.05: G1 = 0.35 was set on the same day as G4 = 0.40 with the same
 # unreachable assumptions. The blender's `_effective_confidences()`
 # attenuates each lane's confidence by `lane_conf × (rw_lane × rc + (1-rc)/3)`
-# and `blended_confidence` is the *mean* of those effective confidences. For
-# fast-lane-only LLM signal at conf=0.85 on the new categorical priors:
+# and `blended_confidence` was, at the time, the *mean* of those effective
+# confidences (divided by lane COUNT). PROFIT-EDGE-014 (2026-06-12, operator
+# option b) changed blended_confidence to the interp-weight-weighted MEAN of
+# lane confidences — a confident fast lane is no longer diluted by the lane
+# count when low-confidence lanes are present; expect higher
+# scaled_confidence for the same inputs than the historical examples below
+# (kept for threshold-history context). For fast-lane-only LLM signal at
+# conf=0.85 on the new categorical priors (pre-EDGE-014 math):
 #
 #   Sports prior (rc=0.528):           scaled_conf ≈ 0.27
 #   KXTRUMPIRAN prior (rc=0.27):       scaled_conf ≈ 0.10
@@ -68,7 +76,13 @@ from typing import Any, Mapping
 # See PROFIT-EDGE-003 in docs/profit_path_debt_log.md for the full diagnosis.
 G1_CONFIDENCE_THRESHOLD = 0.05
 G1_FAILSAFE_CONFIDENCE_THRESHOLD = 0.10
-G2_MIN_SOURCE_CLASSES = 2
+# PROFIT-SOURCE-001 (2026-06-11, operator decision): allow single-source trades.
+# Default lowered 2 -> 1 so a single evidence source class clears G2; every trade
+# still records its source-class count (signal_meta.evidence_source_class_count)
+# so single- vs multi-source performance can be compared. Env-overridable to
+# dial back to 2 instantly if single-source trades underperform. Fast-lane
+# candidates were already G2-exempt.
+G2_MIN_SOURCE_CLASSES = int(os.getenv("G2_MIN_SOURCE_CLASSES", "1"))
 G3_DISAGREEMENT_THRESHOLD = 0.20
 G3_FAILSAFE_DISAGREEMENT_THRESHOLD = 0.15
 G3_OVERRIDE_BAND_START = 0.15
@@ -134,6 +148,13 @@ class ReadinessDecision:
     regime_confidence: float
     fail_safe_active: bool
     applied_conditions: tuple[str, ...]
+    # PROFIT-SOURCE-001: distinct evidence source-class count for this candidate
+    # (non-fast-lane). None for fast-lane (G2-exempt). Carried into signal_meta
+    # so single- vs multi-source trade performance can be tracked.
+    source_class_count: int | None = None
+    recency_score: float | None = None
+    recency_threshold: float | None = None
+    recency_distance: float | None = None
 
 
 def evaluate_readiness(blend_result: Any, regime_confidence: float) -> ReadinessDecision:
@@ -186,10 +207,15 @@ def evaluate_readiness(blend_result: Any, regime_confidence: float) -> Readiness
     if validated_regime_confidence < G4_REGIME_CONFIDENCE_THRESHOLD:
         failure_reasons.append("G4_regime_confidence")
 
+    source_class_count: int | None = None
+    recency_score: float | None = None
+    recency_threshold: float | None = None
+    recency_distance: float | None = None
     if not is_fast_lane:
         applied_conditions.extend(["G2", "G5", "G6"])
         source_classes = _require_sequence(blend_result, "evidence_source_classes")
-        if len(set(source_classes)) < G2_MIN_SOURCE_CLASSES:
+        source_class_count = len(set(source_classes))
+        if source_class_count < G2_MIN_SOURCE_CLASSES:
             failure_reasons.append("G2_evidence_source_class_diversity")
 
         drift_suspect = _require_bool(blend_result, "drift_suspect")
@@ -198,6 +224,8 @@ def evaluate_readiness(blend_result: Any, regime_confidence: float) -> Readiness
             failure_reasons.append("G5_dossier_drift_suspect")
 
         recency_score = _require_probability_field(blend_result, "recency_score")
+        recency_threshold = G6_RECENCY_THRESHOLD
+        recency_distance = recency_score - G6_RECENCY_THRESHOLD
         if recency_score < G6_RECENCY_THRESHOLD:
             failure_reasons.append("G6_recency_score")
 
@@ -212,6 +240,12 @@ def evaluate_readiness(blend_result: Any, regime_confidence: float) -> Readiness
         regime_confidence=validated_regime_confidence,
         fail_safe_active=fail_safe_active,
         applied_conditions=tuple(applied_conditions),
+        source_class_count=source_class_count,
+        recency_score=round(recency_score, 4) if recency_score is not None else None,
+        recency_threshold=recency_threshold,
+        recency_distance=(
+            round(recency_distance, 4) if recency_distance is not None else None
+        ),
     )
 
 

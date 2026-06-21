@@ -21,6 +21,9 @@ Pre-Signal Rejection Reasons
   1  stale_news
   1  no_keywords
 
+Pre-Signal Rejection Branches
+  (none)
+
 Stale-News Age Buckets
   1  15-30m
 
@@ -29,6 +32,9 @@ Stale-News Sources (top 5)
 
 Stale-News Tickers (top 5)
   1  KX2
+
+Executor Skip Categories
+  1  unknown
 
 Executor Skip Reasons
   1  cooldown

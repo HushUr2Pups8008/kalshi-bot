@@ -14,8 +14,8 @@ from pathlib import Path
 DEFAULT_LABELS = (
     "com.jake.kalshi-bot",
     "com.jake.kalshi-bothealth",
-    "com.jake.kalshi-daily-review",
     "com.jake.kalshi-soak-check",
+    "com.jake.kalshi-match-feedback-aggregator",
     "com.kalshi.db-backup",
     "com.kalshi.governance.fast",
     "com.kalshi.governance.deep",

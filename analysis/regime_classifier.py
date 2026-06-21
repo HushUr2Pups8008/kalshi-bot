@@ -86,6 +86,32 @@ _SERIES_PRIORS: dict[str, tuple[float, float, float]] = {
     "KXVOTESAVEAMERICA": (0.05, 0.60, 0.35),  # Save America vote events (rc≈0.24)
     "KXEFFTARIFF":   (0.05, 0.60, 0.35),  # Effective tariff schedule (rc≈0.24)
     "KXMOCTRUMP25":  (0.10, 0.65, 0.25),  # Trump month-of-action calendar windows (rc≈0.22)
+    # PROFIT-PRIORS-001 (2026-05-24): the three series below were initially
+    # given interpretation-dominant priors in PR #35 because the LLM's
+    # reasoning task involves interpretation. That conflated "what the LLM
+    # does" with "which blender lane receives the signal." In production
+    # the bot only has fast-lane (news LLM) data on these markets — the
+    # interpretation and structural lanes have no dossier / structural-
+    # prior infrastructure wired for these series yet. Heavy interp/
+    # structural weights diluted high-confidence LLM signals (fast_lane_
+    # confidence=0.85) down to blended_confidence≈0.12, which failed G1
+    # even on real 90/10 edge cases (see 2026-05-24 BD on KXUSAIRAN-
+    # AGREEMENT-27-26JUN where the bot picked side='no' correctly with
+    # signed_diff=-0.79 but G1 blocked on bc×rc=0.027 < 0.05). Re-shaped
+    # to fast-dominant matching the event-driven political cluster below
+    # (KXTRUMPACT, KXTRUMPENDORSE, etc.) where data lives in the same
+    # lane. rc unchanged at ≈0.22 — no G4 movement, no G1 threshold
+    # change, only lane weighting.
+    "KXTXRUNOFFENDORSE": (0.65, 0.25, 0.10),  # Texas Senate runoff endorsement events (rc≈0.22)
+    "KXUSAIRANAGREEMENT": (0.65, 0.25, 0.10),  # US-Iran nuclear deal news-driven via LLM (rc≈0.22)
+    "KXNEWTARIFFS":  (0.65, 0.25, 0.10),  # "New tariffs this month?" news-driven via LLM (rc≈0.22)
+    # PROFIT-PRIORS-003 (2026-05-24): surfaced by the v0.30.10 miss-pattern
+    # audit. Two news-driven event series were producing BDs (historical) but
+    # had no explicit `_SERIES_PRIORS` entry. The PR #41 `_time_prior` default
+    # already gives them (0.65, 0.25, 0.10), but explicit entries here pin
+    # the behavior in tests + make the operator-visible cluster complete.
+    "KXCHINAANNOUNCE": (0.65, 0.25, 0.10),  # China-side announcement events (rc≈0.22)
+    "KXNEWDEAL":     (0.65, 0.25, 0.10),  # "When will Trump announce a new trade deal?" (rc≈0.22)
     # Macroeconomic data releases — known calendar, structural prior dominates,
     # interpretation handles the surprise-vs-consensus read-through. Same
     # shape as the existing KXCBDECISION prior (rc≈0.28).
@@ -184,19 +210,109 @@ def _series_prior(market: KalshiMarket) -> Optional[tuple[float, float, float]]:
     return None
 
 
+def _derive_series_prior_from_metadata(
+    market: KalshiMarket,
+) -> Optional[tuple[float, float, float]]:
+    """PROFIT-ALIGN-009 (2026-05-25): heuristic auto-derivation of a regime
+    prior from market metadata when no `_SERIES_PRIORS` entry exists.
+
+    Opt-in via `cfg.enable_derived_series_priors`. Default OFF — falls back
+    to `_time_prior` (post-PR-#41 fast-dominant). Operator can enable
+    after validating against historical BDs that the derivation produces
+    sensible weights.
+
+    Heuristic rules (cheapest first):
+
+      1. Ticker contains "POLL" / "APR" / "POTUS" / sport prefixes →
+         polling/sport pattern → structural-dominant (slow-moving) /
+         fast-dominant (live event) per the existing _SERIES_PRIORS
+         cluster averages.
+      2. Ticker contains "CPI" / "GDP" / "PMI" / "RATE" → macro data →
+         structural-dominant (calendar).
+      3. Ticker contains "TRUMP" / "BIDEN" / a known political figure →
+         event-driven fast-dominant.
+      4. Ticker contains "EARTHQUAKE" / "HURRICANE" / "WEATHER" →
+         weather/disaster → structural-dominant (base rate).
+      5. Otherwise: return None and let _time_prior handle it.
+
+    This is intentionally conservative — it covers the "obvious clusters"
+    where today's hand-curated _SERIES_PRIORS shows a clear pattern.
+    Anything novel still falls through to _time_prior with its post-fix
+    fast-dominant default.
+
+    No side effects. Pure function. Tested in tests/test_regime_classifier.py.
+    """
+    if market is None:
+        return None
+    candidate = (market.ticker or market.series_ticker or "").upper()
+    if not candidate:
+        return None
+
+    # Rule 1: polling / approval markets (slow, structural)
+    if any(tok in candidate for tok in ("POLL", "APPROVE", "POTUS", "APRPOTUS")):
+        return (0.05, 0.25, 0.70)
+
+    # Rule 2: macro data releases (calendar, structural)
+    if any(tok in candidate for tok in ("CPI", "GDP", "PMI", "RATE", "FOMC", "JOBS")):
+        return (0.05, 0.30, 0.65)
+
+    # Rule 3: political event markets (fast)
+    if any(tok in candidate for tok in (
+        "TRUMP", "BIDEN", "VANCE", "RUBIO", "HARRIS", "ENDORSE", "PARDON",
+        "ELECTION", "VOTE", "SENATE", "HOUSE", "CONGRESS",
+    )):
+        return (0.65, 0.25, 0.10)
+
+    # Rule 4: weather / disaster (base-rate dominated)
+    if any(tok in candidate for tok in ("WEATHER", "TEMP", "RAIN", "STORM", "QUAKE")):
+        return (0.10, 0.25, 0.65)
+
+    # Rule 5: crypto (fast, interpretation-heavy)
+    if any(tok in candidate for tok in ("BTC", "ETH", "CRYPTO", "DOGE", "XRP", "SOL")):
+        return (0.65, 0.28, 0.07)
+
+    return None
+
+
 def _time_prior(days: float) -> tuple[float, float, float]:
-    """Return (fast, interpretation, structural) based on days to close."""
-    if days <= 0.25:    # ≤ 6 hours
+    """Return (fast, interpretation, structural) for a market with no
+    `_SERIES_PRIORS` entry — i.e. a series the bot has not been
+    explicitly calibrated for.
+
+    PROFIT-PRIORS-002 (2026-05-24): the pre-fix `_time_prior` returned
+    interpretation/structural-dominant weights for medium- and long-
+    dated markets on the theory that "longer time-to-close means
+    structural priors should matter more." That reasoning is sound in
+    principle but the bot's production data infrastructure only feeds
+    the FAST lane (news LLM) for uninstrumented series. The
+    interpretation lane (dossier accumulator) and structural lane
+    (external base-rate service) have not been wired for series that
+    aren't in `_SERIES_PRIORS`. As a result, the pre-fix prior shape
+    silently diluted high-confidence LLM signals into near-zero
+    blended_confidence on every new Kalshi listing — operator would
+    have to manually inspect each new series to fix this.
+
+    Post-fix: short-window buckets (≤3d) preserve the existing time-
+    decay reasoning since fast lane was already dominant there. The
+    3-7d, 7-14d, and >14d buckets are re-shaped to fast-dominant
+    `(0.65, 0.25, 0.10)` matching the event-driven cluster in
+    `_SERIES_PRIORS`. Result: new Kalshi listings automatically receive
+    a prior that lets the LLM signal reach the blender without
+    dilution. No manual per-series work needed.
+
+    Explicit `_SERIES_PRIORS` entries continue to override this
+    default — operators can still pin specific shapes for series with
+    actual structural/interpretation infrastructure (CPI, central
+    bank, polling, sports).
+    """
+    if days <= 0.25:    # ≤ 6 hours — fast already dominant
         return (0.85, 0.10, 0.05)
-    if days <= 1.0:     # 6 h – 1 day
+    if days <= 1.0:     # 6 h – 1 day — fast already dominant
         return (0.70, 0.22, 0.08)
-    if days <= 3.0:     # 1 – 3 days
-        return (0.45, 0.40, 0.15)
-    if days <= 7.0:     # 3 – 7 days
-        return (0.20, 0.50, 0.30)
-    if days <= 14.0:    # 7 – 14 days
-        return (0.10, 0.45, 0.45)
-    return (0.10, 0.25, 0.65)  # > 14 days
+    # ≥1 day: fast-lane-dominant default for uninstrumented series.
+    # rc≈0.22 clears G4 (0.20); fast weight 0.65 lets LLM confidence
+    # propagate to blended_confidence without dilution.
+    return (0.65, 0.25, 0.10)
 
 
 def _apply_title_nudge(
@@ -244,19 +360,32 @@ def compute_regime_weights(market: KalshiMarket) -> dict[str, float]:
     """Return regime weight vector {fast, interpretation, structural} summing to 1.0.
 
     Classification order:
-      1. Series-ticker prefix match  → categorical prior
-      2. Time to close               → continuous fallback
-      3. Market title keyword nudge  → minor directional adjustment
+      1. Series-ticker prefix match              → categorical prior
+      2. (Opt-in PROFIT-ALIGN-009) derived       → metadata-heuristic prior
+      3. Time to close                           → continuous fallback
+      4. Market title keyword nudge              → minor directional adjustment
     """
-    # Step 1: series-ticker prior
+    # Step 1: series-ticker prior (highest precedence — hand-curated)
     raw = _series_prior(market)
 
-    # Step 2: time-based fallback
+    # Step 2 (PROFIT-ALIGN-009 2026-05-25): opt-in metadata-derived prior
+    # for series not in _SERIES_PRIORS. Default OFF — falls through to
+    # _time_prior as today. Operator validates against historical BDs
+    # before enabling via ENABLE_DERIVED_SERIES_PRIORS=true.
+    if raw is None:
+        try:
+            from config import cfg as _cfg
+            if getattr(_cfg, "enable_derived_series_priors", False):
+                raw = _derive_series_prior_from_metadata(market)
+        except Exception:
+            pass
+
+    # Step 3: time-based fallback
     if raw is None:
         days = _days_to_close(market.close_time)
         raw = _time_prior(days) if days is not None else (0.33, 0.34, 0.33)
 
-    # Step 3: title keyword nudge (applied to both series and time priors)
+    # Step 4: title keyword nudge (applied to both series and time priors)
     title = f"{market.title} {market.subtitle}"
     raw = _apply_title_nudge(raw, title)
 
