@@ -27,8 +27,9 @@ request-vs-response status contract that the P-7 author misread.
   adds G7 defensive failures for open-exposure drawdown, zero-liquidity
   markets, and adverse entry-side price momentum. `tasks/blend_task.py`
   now forwards normalized market liquidity, price momentum, and intended side
-  into readiness evaluation so these checks can block new entries before
-  execution.
+  into readiness evaluation; `main.py` now injects mark-to-market open-book
+  drawdown from the active paper DB so these checks can block new entries
+  before execution.
 - **Open-position mark diagnostics.** `scripts/paper_performance_drilldown.py`
   now reports open cost, Kalshi bid-marked value, Kalshi unrealized P&L, and
   unknown-mark cost; `scripts/daily_review.py` renders those values in the

@@ -795,6 +795,9 @@ class TradingBot:
         self._blend_task = BlendTask(
             trading_queue=self._trading_queue,
             calibration=self._calibration_task,
+            open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_pct(
+                self.paper
+            ),
         )
         self._accumulation_task = AccumulationTask()
         self._structural_task = StructuralTask()
@@ -2770,6 +2773,32 @@ async def async_main() -> None:
         await bot.run()
     finally:
         runtime_guard.release()
+
+
+def _paper_open_exposure_drawdown_pct(paper: PaperTrader) -> float:
+    """Return conservative MTM drawdown for pre-entry readiness gating."""
+    if cfg.bankroll <= 0:
+        return 1.0
+
+    from scripts.mark_open_positions import compute_open_position_marks
+
+    try:
+        marks = compute_open_position_marks(paper.db_path)
+        notional = paper.get_notional_bankroll()
+        marked_value = None if marks is None else marks.get("marked_value", 0.0)
+        marked_value = float(marked_value)
+    except Exception as exc:
+        log.warning(
+            "Open exposure drawdown unavailable; readiness will fail closed: %s",
+            exc,
+        )
+        return 1.0
+
+    if not math.isfinite(notional) or not math.isfinite(marked_value):
+        return 1.0
+
+    mtm_equity = notional + marked_value
+    return max(0.0, (cfg.bankroll - mtm_equity) / cfg.bankroll)
 
 
 def _check_go_live_gates(paper: PaperTrader) -> list[str]:

@@ -369,6 +369,10 @@ class PaperTrader:
             type(self)._runtime_owner_pid = os.getpid()
         self._initialized = True
 
+    @property
+    def db_path(self) -> Path:
+        return self._db_path
+
     def _ensure_p0_cohort_sentinel(self) -> None:
         """Idempotent insert of bot_state.p0_price_fix_deployed_ts (P-9 / LD-7).
 

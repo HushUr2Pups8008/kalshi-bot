@@ -145,6 +145,7 @@ class BlendTaskResult:
 
 
 StructuralStabilityResolver = Callable[[str], bool | Awaitable[bool]]
+OpenExposureDrawdownProvider = Callable[[], float | None | Awaitable[float | None]]
 
 
 class BlendTask:
@@ -162,6 +163,7 @@ class BlendTask:
             ReadinessDecision,
         ] = evaluate_readiness,
         structural_stability_resolver: StructuralStabilityResolver | None = None,
+        open_exposure_drawdown_provider: OpenExposureDrawdownProvider | None = None,
         is_paper_mode: bool | None = None,
         now: Callable[[], datetime] | None = None,
         calibration: CalibrationLike | None = None,
@@ -172,6 +174,7 @@ class BlendTask:
         self._blender = blender
         self._readiness_evaluator = readiness_evaluator
         self._structural_stability_resolver = structural_stability_resolver
+        self._open_exposure_drawdown_provider = open_exposure_drawdown_provider
         self._calibration = calibration
         self._is_paper_mode = (
             cfg.is_paper_trading if is_paper_mode is None else is_paper_mode
@@ -220,6 +223,7 @@ class BlendTask:
             analysis=fast_lane_result,
             default_min_edge=default_min_edge,
             now=self._now(),
+            open_exposure_drawdown_pct=await self._open_exposure_drawdown_pct(),
         )
         try:
             readiness = self._readiness_evaluator(readiness_input, regime_confidence)
@@ -390,6 +394,24 @@ class BlendTask:
         if self._calibration is None:
             return 1.0
         return self._calibration.get_scaling_factor(lane)
+
+    async def _open_exposure_drawdown_pct(self) -> float | None:
+        provider = self._open_exposure_drawdown_provider
+        if provider is None:
+            return None
+        try:
+            value = provider()
+            if inspect.isawaitable(value):
+                value = await value
+            if value is None:
+                return None
+            value = float(value)
+            if not math.isfinite(value):
+                return 1.0
+            return max(0.0, value)
+        except Exception as exc:
+            log.warning("open exposure drawdown unavailable; failing readiness closed: %s", exc)
+            return 1.0
 
     # PROFIT-BLENDER-001 fallback heuristics. Tight thresholds by design:
     # a lane is flagged "fallback" only when p is very near 0.5 AND
@@ -636,6 +658,7 @@ def _readiness_input(
     analysis: SignalAnalysis,
     default_min_edge: float,
     now: datetime,
+    open_exposure_drawdown_pct: float | None = None,
 ) -> dict[str, Any]:
     source_lane = "accumulation" if (dossier is not None and dossier.current_estimate is not None) else "fast"
     readiness_records = _readiness_records(recent_records, trigger_record)
@@ -657,6 +680,7 @@ def _readiness_input(
         ),
         "market_price_momentum_cents": _market_price_momentum_cents(market),
         "intended_side": getattr(analysis, "side", None),
+        "open_exposure_drawdown_pct": open_exposure_drawdown_pct,
     }
 
 
