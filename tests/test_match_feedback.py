@@ -1,6 +1,7 @@
 """Tests for analysis/match_feedback.py (PROFIT-MATCH-DYNAMIC commit 3/5)."""
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -9,11 +10,13 @@ from analysis.match_feedback import (
     DOWNWEIGHT_FLOOR,
     L2_NEUTRAL_FP_MARGINAL_MAX_SCORE,
     MIN_TOTAL_FOR_DOWNWEIGHT,
+    MatcherWeightsUnverified,
     TokenStats,
     aggregate_window,
     get_token_weight,
     ingest_review_events,
     is_market_defining_token,
+    load_verified_weights,
     load_weights,
     market_prefix_for,
     summarize_weight_status,
@@ -55,6 +58,25 @@ def test_market_prefix_for_prefers_series_ticker_then_ticker_prefix():
         ticker = "KXNEWDEAL-JUN01"
 
     assert market_prefix_for(LegacyMarket()) == "KXNEWDEAL"
+
+
+def test_market_prefix_for_never_collapses_polymarket_election_families_to_coarse_bucket():
+    class Market:
+        series_ticker = "polymarket_us"
+
+        def __init__(self, ticker: str):
+            self.ticker = ticker
+
+    assert (
+        market_prefix_for(Market("ewc-usgub-ks-2026-11-03-dem"))
+        == "polymarket_us:ewc-usgub-ks"
+    )
+    assert (
+        market_prefix_for(Market("enwc-ussep-mi-2026-11-03-rep"))
+        == "polymarket_us:enwc-ussep-mi"
+    )
+    assert market_prefix_for(Market("ewc-usgub-ks-2026-11-03-dem")) != "polymarket_us:ewc"
+    assert market_prefix_for(Market("enwc-ussep-mi-2026-11-03-rep")) != "polymarket_us:enwc"
 
 
 def test_ingest_review_events_skips_legacy_bare_polymarket_prefix(tmp_path):
@@ -274,6 +296,72 @@ class TestWeightsFileRoundTrip:
                         "pinned": False, "updated_utc": "now"}}
         write_weights(data, weights_path=p)
         assert load_weights(p) == data
+
+    def test_verified_load_rejects_malformed_file(self, tmp_path: Path):
+        p = tmp_path / "weights.json"
+        p.write_text("{not json", encoding="utf-8")
+
+        with pytest.raises(MatcherWeightsUnverified, match="malformed"):
+            load_verified_weights(p, repo_root=tmp_path)
+
+    def test_verified_load_rejects_git_dirty_weights(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        p = repo / "weights.json"
+        write_weights(
+            {"P:t": {"weight": 0.3, "fp_rate": 0.7, "total": 10}},
+            weights_path=p,
+        )
+        subprocess.run(["git", "add", "weights.json"], cwd=repo, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-m",
+                "seed weights",
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        write_weights(
+            {"P:t": {"weight": 0.1, "fp_rate": 0.9, "total": 100}},
+            weights_path=p,
+        )
+
+        with pytest.raises(MatcherWeightsUnverified, match="dirty"):
+            load_verified_weights(p, repo_root=repo)
+
+    def test_verified_load_accepts_clean_committed_weights(self, tmp_path: Path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        p = repo / "weights.json"
+        data = {"P:t": {"weight": 0.3, "fp_rate": 0.7, "total": 10}}
+        write_weights(data, weights_path=p)
+        subprocess.run(["git", "add", "weights.json"], cwd=repo, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-m",
+                "seed weights",
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+
+        assert load_verified_weights(p, repo_root=repo) == data
 
 
 class TestGetTokenWeight:

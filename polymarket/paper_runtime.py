@@ -54,6 +54,22 @@ _STOPWORDS = frozenset(
     }
 )
 _ALLOWED_CATEGORIES = frozenset({"politics"})
+_DISCOVERY_TOPIC_TOKENS = frozenset({
+    "diplomacy",
+    "election",
+    "elections",
+    "geopolitics",
+    "government",
+    "international",
+    "iran",
+    "israel",
+    "military",
+    "politics",
+    "president",
+    "trump",
+    "war",
+    "world",
+})
 
 
 class _PublicMarketClient(Protocol):
@@ -495,13 +511,42 @@ def match_polymarket_markets(
 
 
 def _is_suppressed_market(market: PolymarketMarket) -> bool:
-    return market.category.strip().lower() not in _ALLOWED_CATEGORIES
+    category = market.category.strip().lower()
+    if category in _ALLOWED_CATEGORIES:
+        return False
+    has_resolution_source = bool(market.resolution_source.strip())
+    has_liquidity = market.volume_dollars > 0.0 or market.open_interest_dollars > 0.0
+    context_text = " ".join(
+        part
+        for part in (
+            category,
+            market.event_title,
+            market.series_title,
+            *market.tags,
+        )
+        if part
+    ).lower()
+    topic_relevant = bool(_meaningful_tokens(context_text) & _DISCOVERY_TOPIC_TOKENS)
+    return not (has_resolution_source and has_liquidity and topic_relevant)
 
 
 def _market_match_text(market: PolymarketMarket) -> str:
     return " ".join(
         part
-        for part in (market.title, market.question, market.subtitle)
+        for part in (
+            market.title,
+            market.question,
+            market.subtitle,
+            market.description,
+            market.category,
+            market.resolution_source,
+            market.event_title,
+            market.event_slug,
+            market.series_title,
+            market.series_slug,
+            *market.tags,
+            *market.public_comments,
+        )
         if part
     )
 

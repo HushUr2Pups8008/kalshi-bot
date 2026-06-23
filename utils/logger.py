@@ -587,6 +587,11 @@ class TradeLogger:
         venue: str | None = None,
         keywords: list[str] | None = None,
         source_class: str | None = None,
+        retrieval_mode: str | None = None,
+        source_hint_domain: str | None = None,
+        source_hint_query: str | None = None,
+        evidence_id: str | None = None,
+        settlement_source_match: bool | None = None,
     ) -> None:
         record = {
             "type": "OPPORTUNITY",
@@ -618,6 +623,16 @@ class TradeLogger:
             record["keyword_count"] = len(keywords)
         if source_class is not None:
             record["source_class"] = source_class
+        if retrieval_mode:
+            record["retrieval_mode"] = retrieval_mode
+        if source_hint_domain:
+            record["source_hint_domain"] = source_hint_domain
+        if source_hint_query:
+            record["source_hint_query"] = source_hint_query
+        if evidence_id:
+            record["evidence_id"] = evidence_id
+        if settlement_source_match is not None:
+            record["settlement_source_match"] = bool(settlement_source_match)
         self._write(record)
 
     def log_paper_trade(
@@ -835,6 +850,15 @@ class TradeLogger:
         keywords: list[str] | None = None,
         age_seconds: float | None = None,
         threshold_seconds: int | None = None,
+        retrieval_mode: str | None = None,
+        source_hint_domain: str | None = None,
+        source_hint_query: str | None = None,
+        source_class: str | None = None,
+        rules_primary: str | None = None,
+        rules_secondary: str | None = None,
+        settlement_source_names: list[str] | None = None,
+        settlement_source_urls: list[str] | None = None,
+        contract_terms_url: str | None = None,
     ) -> None:
         record = {
             "type": "ANALYSIS_REJECTED",
@@ -863,6 +887,24 @@ class TradeLogger:
             record["age_seconds"] = round(age_seconds, 2)
         if threshold_seconds is not None:
             record["threshold_seconds"] = int(threshold_seconds)
+        if retrieval_mode:
+            record["retrieval_mode"] = retrieval_mode
+        if source_hint_domain:
+            record["source_hint_domain"] = source_hint_domain
+        if source_hint_query:
+            record["source_hint_query"] = source_hint_query
+        if source_class:
+            record["source_class"] = source_class
+        if rules_primary:
+            record["rules_primary"] = rules_primary
+        if rules_secondary:
+            record["rules_secondary"] = rules_secondary
+        if settlement_source_names:
+            record["settlement_source_names"] = list(settlement_source_names)
+        if settlement_source_urls:
+            record["settlement_source_urls"] = list(settlement_source_urls)
+        if contract_terms_url:
+            record["contract_terms_url"] = contract_terms_url
         self._write(record)
 
     def log_early_stale_drop(
@@ -1262,8 +1304,14 @@ class TradeLogger:
         matched_tokens: list[str],
         heuristic_flags: list[str],
         reason: str,
+        raw_score: float | None = None,
+        adjusted_score: float | None = None,
+        threshold: float | None = None,
+        token_weight_multiplier: float | None = None,
+        venue: str | None = None,
+        market_prefix: str | None = None,
     ) -> None:
-        self._write({
+        record = {
             "type": "MATCH_SUPPRESSED",
             "source": source,
             "headline": headline,
@@ -1273,7 +1321,20 @@ class TradeLogger:
             "matched_tokens": matched_tokens,
             "heuristic_flags": heuristic_flags,
             "reason": reason,
-        })
+        }
+        if raw_score is not None:
+            record["raw_score"] = round(raw_score, 4)
+        if adjusted_score is not None:
+            record["adjusted_score"] = round(adjusted_score, 4)
+        if threshold is not None:
+            record["threshold"] = round(threshold, 4)
+        if token_weight_multiplier is not None:
+            record["token_weight_multiplier"] = round(token_weight_multiplier, 4)
+        if venue:
+            record["venue"] = venue
+        if market_prefix:
+            record["market_prefix"] = market_prefix
+        self._write(record)
 
     def log_match_suppression_candidate(
         self,

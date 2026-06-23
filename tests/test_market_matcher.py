@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import config as _cfg_module
+from analysis.match_feedback import MatcherWeightsUnverified
 from analysis.market_matcher import (
     MarketMatcher,
     _combined_token_downweight,
@@ -19,6 +20,7 @@ from analysis.market_matcher import (
     _similarity,
 )
 from kalshi import KalshiMarket
+from kalshi.series_metadata import SettlementSource
 
 pytestmark = pytest.mark.usefixtures("isolated_match_feedback_weights")
 
@@ -177,6 +179,22 @@ def matcher(monkeypatch):
 
 class TestFindCandidates:
     @pytest.mark.asyncio
+    async def test_unverified_matcher_weights_fail_closed(self, matcher, monkeypatch):
+        markets = [_make_market("KXUKR-1", "Will Russia invade Ukraine in 2026?")]
+        matcher._cache.get_markets = AsyncMock(return_value=markets)
+
+        def reject_weights():
+            raise MatcherWeightsUnverified("matcher weights dirty")
+
+        monkeypatch.setattr("analysis.match_feedback.load_verified_weights", reject_weights)
+
+        results = await matcher.find_candidates(
+            _make_news("Russia launches new attack on Ukraine border")
+        )
+
+        assert results == []
+
+    @pytest.mark.asyncio
     async def test_clear_geopolitical_headline_matches_correct_market(self, matcher):
         markets = [
             _make_market("KXUKR-1", "Will Russia invade Ukraine in 2026?"),
@@ -189,6 +207,32 @@ class TestFindCandidates:
 
         assert results
         assert results[0][0].ticker == "KXUKR-1"
+
+    @pytest.mark.asyncio
+    async def test_settlement_source_context_lifts_match_score(self, matcher):
+        with_context = _make_market(
+            "KXIRAN-CTX",
+            "Will Iran attack U.S. forces in 2026?",
+        )
+        with_context.settlement_sources = (
+            SettlementSource(
+                label="Official Agency",
+                url="https://agency.example/results",
+                domain="agency.example",
+            ),
+        )
+        without_context = _make_market(
+            "KXIRAN-PLAIN",
+            "Will Iran attack U.S. forces in 2026?",
+        )
+        matcher._cache.get_markets = AsyncMock(return_value=[without_context, with_context])
+
+        news = _make_news("Official Agency says Iran attack report is under review")
+        results = await matcher.find_candidates(news, max_results=2)
+
+        scores = {market.ticker: score for market, score, _meta in results}
+        assert scores["KXIRAN-CTX"] > scores["KXIRAN-PLAIN"]
+        assert results[0][0].ticker == "KXIRAN-CTX"
 
     @pytest.mark.asyncio
     async def test_non_geopolitical_market_is_filtered_even_with_token_overlap(self, matcher):
@@ -362,7 +406,7 @@ class TestFindCandidates:
                 "_seed_status": "provisional",
             },
         }
-        monkeypatch.setattr("analysis.match_feedback.load_weights", lambda: weights)
+        monkeypatch.setattr("analysis.match_feedback.load_verified_weights", lambda: weights)
 
         from analysis import market_matcher as mm
 
@@ -816,6 +860,11 @@ class TestLowQualityMatchSuppression:
         assert results == [], "ticker-only single-entity match must be suppressed by B'"
         assert len(suppressed_calls) == 1, "MATCH_SUPPRESSED must be logged when no non-ticker support exists"
         assert suppressed_calls[0]["ticker"] == "KXTRUMP-26JUN"
+        assert suppressed_calls[0]["raw_score"] == suppressed_calls[0]["adjusted_score"]
+        assert suppressed_calls[0]["threshold"] > 0
+        assert suppressed_calls[0]["token_weight_multiplier"] == 1.0
+        assert suppressed_calls[0]["venue"] == "kalshi"
+        assert suppressed_calls[0]["market_prefix"] == "KXTRUMP"
 
     @pytest.mark.asyncio
     async def test_multi_token_overlap_not_suppressed_by_path_b(self, matcher):

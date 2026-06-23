@@ -3,6 +3,8 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
+from kalshi.series_metadata import SettlementSource
+
 
 @dataclass
 class KalshiMarket:
@@ -22,6 +24,8 @@ class KalshiMarket:
     market_metadata:  dict[str, str] = field(default_factory=dict)
     rules_primary:    str = ""
     rules_secondary:  str = ""
+    settlement_sources: tuple[SettlementSource, ...] = field(default_factory=tuple)
+    contract_terms_url: str = ""
     settlement_timer_seconds: Optional[int] = None
     early_close_condition: str = ""
     expected_expiration_time: str = ""

@@ -17,6 +17,48 @@ Funnel
     Paper trades               : 1
     Live orders                : 1
 
+Match Attribution
+  Match diagnostics            : 0
+  Signal analysis detail rows  : 0
+  Match -> analysis detail gap : 0
+  Match suppressions           : 0
+  Match weight applications    : 0
+
+Pre-LLM quality gate
+  (none)
+
+Match Diagnostic Sources (top 5)
+  (none)
+
+Match Diagnostic Tickers (top 5)
+  (none)
+
+Match Suppression Reasons
+  (none)
+
+Match Suppression Tokens (top 5)
+  (none)
+
+Match Suppression Column Coverage
+  raw_score               : 0/0
+  adjusted_score          : 0/0
+  threshold               : 0/0
+  token_weight_multiplier : 0/0
+  venue                   : 0/0
+  market_prefix           : 0/0
+
+Match Suppression Venues (top 5)
+  (none)
+
+Match Suppression Examples
+  (none)
+
+Match Weight Tokens (top 5)
+  (none)
+
+Match Weight Prefixes (top 5)
+  (none)
+
 Pre-Signal Rejection Reasons
   1  stale_news
   1  no_keywords
@@ -47,6 +89,36 @@ Path Contribution (decision-stage records)
 Execution Path Contribution
   1  news
   1  price_fade
+
+Opportunity Attribution: Sources
+  1  Reuters
+
+Opportunity Attribution: Source Classes
+  1  unknown
+
+Opportunity Attribution: Retrieval Modes
+  1  unknown
+
+Opportunity Attribution: Evidence IDs
+  1  unknown
+
+Opportunity Attribution: Settlement-Source Match
+  1  unknown
+
+Skip Attribution: Sources
+  1  Reuters
+
+Skip Attribution: Source Classes
+  1  unknown
+
+Skip Attribution: Retrieval Modes
+  1  unknown
+
+Skip Attribution: Evidence IDs
+  1  unknown
+
+Skip Attribution: Settlement-Source Match
+  1  unknown
 
 Observed Event Types
   2  SIGNAL

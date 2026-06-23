@@ -76,6 +76,60 @@ def test_counterfactual_review_preserves_illiquidity_skip_upstream_chain(tmp_pat
     assert row["opportunity_ts"] == "2026-06-20T02:00:00+00:00"
     assert row["blend_venue"] == "kalshi"
     assert row["counterfactual_bucket"] == "retain_liquidity_gate"
+    assert row["paper_micro_lane_candidate"] is False
+    assert row["paper_micro_lane_contracts"] == 0
+
+
+def test_counterfactual_review_marks_kxvisitiran_1c_micro_lane_with_source_confidence(tmp_path):
+    from scripts.since_restart_counterfactual_review import build_counterfactual_report, format_text_report
+
+    path = tmp_path / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "OPPORTUNITY",
+                "ts": "2026-06-20T02:00:00Z",
+                "ticker": "KXVISITIRAN-26JUL01-JVAN",
+                "source": "AP",
+                "source_class": "wire",
+                "retrieval_mode": "source_hint",
+                "settlement_source_match": True,
+            },
+            {
+                "type": "GATE_SUMMARY",
+                "ts": "2026-06-20T02:00:01Z",
+                "ticker": "KXVISITIRAN-26JUL01-JVAN",
+                "gate_chain": ["G1: PASS"],
+            },
+            {
+                "type": "BLEND_DECISION",
+                "ts": "2026-06-20T02:00:02Z",
+                "ticker": "KXVISITIRAN-26JUL01-JVAN",
+                "venue": "kalshi",
+            },
+            {
+                "type": "SKIPPED",
+                "ts": "2026-06-20T02:00:03Z",
+                "ticker": "KXVISITIRAN-26JUL01-JVAN",
+                "source": "AP",
+                "reason": "price 1.0c is near limit (too illiquid)",
+                "market_price": 1.0,
+            },
+        ],
+    )
+
+    report = build_counterfactual_report(path, since="2026-06-20T00:00:00Z")
+
+    assert report["evidence_buckets"] == {"paper_micro_1c_candidate": 1}
+    row = report["targets"][0]
+    assert row["counterfactual_bucket"] == "paper_micro_1c_candidate"
+    assert row["paper_micro_lane_candidate"] is True
+    assert row["paper_micro_lane_contracts"] == 1
+    assert row["paper_micro_lane_max_loss_dollars"] == 0.01
+    assert row["paper_micro_lane_reason"] == "kxvisitiran_1c_high_rules_source_confidence"
+    text = format_text_report(report)
+    assert "paper_micro_lane_candidate=True contracts=1" in text
 
 
 def test_counterfactual_review_filters_window_test_rows_and_limits(tmp_path):

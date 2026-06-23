@@ -21,6 +21,14 @@ class PolymarketMarket:
     question: str = ""
     subtitle: str = ""
     category: str = ""
+    resolution_source: str = ""
+    description: str = ""
+    event_title: str = ""
+    event_slug: str = ""
+    series_title: str = ""
+    series_slug: str = ""
+    tags: tuple[str, ...] = ()
+    public_comments: tuple[str, ...] = ()
 
     @property
     def tradeable_id(self) -> str:

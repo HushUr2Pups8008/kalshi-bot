@@ -6,11 +6,13 @@ from pathlib import Path
 from scripts.daily_review import (
     _build_tier_by_source,
     _format_fresh_pass_conversion_lines,
+    _format_match_attribution_lines,
     _summarize_fresh_pass_assignment_shadow,
     _format_tier_change_lines,
     _load_previous_tier_state,
     _save_current_tier_state,
     build_daily_review,
+    write_report,
 )
 from scripts.throughput_operator_metrics import ThroughputOperatorSummary
 
@@ -30,6 +32,55 @@ def test_format_fresh_pass_conversion_lines_surfaces_funnel_pinch():
         "    lifecycle gaps                 : fresh_to_match=146, match_to_analysis=39, analysis_to_opportunity=1, opportunity_to_trade=0",
         "    pinch                          : fresh_to_match (146 fresh passes had no match diagnostic)",
     ]
+
+
+def test_write_report_overwrites_previous_snapshot_atomically(tmp_path):
+    report_path = tmp_path / "daily_review.txt"
+    report_path.write_text("PIPELINE REVIEW\nold snapshot\n", encoding="utf-8")
+
+    write_report(report_path, ["PIPELINE REVIEW", "new snapshot"])
+
+    assert report_path.read_text(encoding="utf-8") == (
+        "PIPELINE REVIEW\n"
+        "new snapshot\n"
+        "\n"
+        f"Daily review report saved to: {report_path}\n"
+    )
+
+
+def test_format_match_attribution_lines_surfaces_suppression_drilldowns():
+    lines = _format_match_attribution_lines(
+        {
+            "event_counts": {"MATCH_SUPPRESSED": 3},
+            "match_diagnostics_total": 10,
+            "signal_analysis_detail_total": 2,
+            "match_to_signal_detail_gap": 8,
+            "match_diagnostic_pre_llm_gate": Counter(
+                {"would_fail": 9, "would_pass": 1}
+            ),
+            "match_suppressed_reasons": Counter({"minimal_overlap": 3}),
+            "match_suppressed_tokens": Counter({"iran": 2, "israel": 1}),
+            "match_weight_applied_total": 5,
+            "match_weight_tokens": Counter({"iran": 4}),
+            "match_weight_prefixes": Counter({"KXIRANCRUDE": 4}),
+            "match_weight_score_delta_total": -0.125,
+        },
+        top=2,
+    )
+
+    rendered = "\n".join(lines)
+
+    assert "Match diagnostics                : 10" in rendered
+    assert "Signal analysis detail rows      : 2" in rendered
+    assert "Match -> analysis detail gap     : 8" in rendered
+    assert "Match suppressions               : 3" in rendered
+    assert "Match weight applications        : 5 (score_delta=-0.1250)" in rendered
+    assert "Drilldown: pre-LLM quality gate" in rendered
+    assert "  9  would_fail" in rendered
+    assert "Drilldown: match suppression reasons" in rendered
+    assert "  3  minimal_overlap" in rendered
+    assert "Drilldown: match weight prefixes" in rendered
+    assert "  4  KXIRANCRUDE" in rendered
 
 
 def test_summarize_fresh_pass_assignment_shadow_counts_assignment_outcomes(tmp_path):
@@ -137,6 +188,40 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
             },
             "analysis_rejected_reasons": {"stale_news": 2, "no_keywords": 1},
             "analysis_rejected_categories": {"post_llm_neutral_empty_keywords": 1},
+            "match_diagnostics_total": 8,
+            "signal_analysis_detail_total": 6,
+            "match_to_signal_detail_gap": 2,
+            "match_diagnostic_pre_llm_gate": Counter(
+                {"would_fail": 7, "would_pass": 1}
+            ),
+            "match_diagnostic_sources": Counter({"Reuters": 5, "AP": 3}),
+            "match_diagnostic_tickers": Counter({"KXIRAN": 5, "KXTRUMP": 3}),
+            "match_suppressed_reasons": Counter({"minimal_overlap": 1}),
+            "match_suppressed_tokens": Counter({"iran": 1}),
+            "match_suppressed_column_coverage": Counter(
+                {
+                    "raw_score": 1,
+                    "adjusted_score": 1,
+                    "threshold": 1,
+                    "token_weight_multiplier": 1,
+                    "venue": 1,
+                    "market_prefix": 1,
+                }
+            ),
+            "match_suppressed_venues": Counter({"kalshi": 1}),
+            "match_weight_applied_total": 4,
+            "match_weight_tokens": Counter({"iran": 3, "trump": 1}),
+            "match_weight_prefixes": Counter({"KXIRANCRUDE": 3, "KXTRUMP": 1}),
+            "match_weight_score_delta_total": -0.25,
+            "opportunity_sources": Counter({"France 24": 2, "Reuters": 1}),
+            "opportunity_source_classes": Counter({"news": 2, "regional": 1}),
+            "opportunity_retrieval_modes": Counter({"source_hint": 2, "unknown": 1}),
+            "opportunity_settlement_source_matches": Counter({"True": 2, "unknown": 1}),
+            "skip_sources": Counter({"France 24": 1}),
+            "skip_source_classes": Counter({"regional": 1}),
+            "skip_retrieval_modes": Counter({"rss": 1}),
+            "skip_evidence_ids": Counter({"ev-skip-1": 1}),
+            "skip_settlement_source_matches": Counter({"unknown": 1}),
         },
     )
     monkeypatch.setattr(
@@ -295,6 +380,13 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
             "open_resolution_buckets": [
                 {"bucket": "0-3d", "venue": "polymarket", "trades": 1, "exposure": 12.5}
             ],
+            "open_mark_summary": {
+                "open_cost_dollars": 12.5,
+                "marked_kalshi_cost_dollars": 0.5,
+                "marked_kalshi_bid_value_dollars": 0.25,
+                "marked_kalshi_unrealized_pnl_dollars": -0.25,
+                "unknown_mark_cost_dollars": 12.0,
+            },
         },
     )
     monkeypatch.setattr(
@@ -309,6 +401,46 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
             "grouped_phrases": {},
             "top_no_keyword_sources": [("Reuters", 2), ("AP", 1)],
             "top_no_keyword_tickers": [("KXIRAN", 2), ("KXTRUMP", 1)],
+        },
+    )
+    monkeypatch.setattr(
+        "scripts.daily_review.counterfactual_llm_eval.build_eval_report",
+        lambda *args, **kwargs: {
+            "model_eval_status": "skipped_no_context_ready_cases",
+            "target_counts": {
+                "neutral_none_no_keywords": 3,
+                "context_ready": 1,
+                "missing_contract_context": 2,
+                "evaluated_context_ready": 1,
+                "skipped_missing_contract_context": 2,
+            },
+            "model_summary": {
+                "qwen2.5:7b": {
+                    "evaluated": 1,
+                    "paper_candidate_positive": 0,
+                    "errors": 0,
+                },
+                "qwen3:14b": {
+                    "evaluated": 1,
+                    "paper_candidate_positive": 1,
+                    "errors": 0,
+                },
+            },
+            "cases": [
+                {
+                    "ts": "2026-04-11T12:00:00+00:00",
+                    "ticker": "KXIRAN",
+                    "eval_status": "context_ready",
+                    "model_results": {
+                        "qwen3:14b": {
+                            "direction": "yes",
+                            "magnitude": "moderate",
+                            "confidence": 0.8,
+                            "paper_candidate_positive": True,
+                        }
+                    },
+                }
+            ],
         },
     )
     monkeypatch.setattr(
@@ -362,6 +494,7 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     rendered = "\n".join(lines)
 
     assert "PIPELINE REVIEW" in rendered
+    assert "Software version                 : v" in rendered
     assert "SINCE-RESTART MONEY PATH" in rendered
     assert "Candidates                       : 1" in rendered
     assert "Terminal outcomes                : SKIPPED=1" in rendered
@@ -389,6 +522,27 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Fresh-pass conversion" in rendered
     assert "9 fresh -> 6 signal rows -> 1 LLM attempts -> 3 opportunities -> 2 paper trades" in rendered
     assert "lifecycle gaps                 : fresh_to_match=1, match_to_analysis=2, analysis_to_opportunity=3, opportunity_to_trade=1" in rendered
+    assert "Match diagnostics                : 8" in rendered
+    assert "Signal analysis detail rows      : 6" in rendered
+    assert "Match -> analysis detail gap     : 2" in rendered
+    assert "Match suppressions               : 1" in rendered
+    assert "Match weight applications        : 4 (score_delta=-0.2500)" in rendered
+    assert "Match suppression metadata       : raw_score=1/1" in rendered
+    assert "venue=1/1" in rendered
+    assert "Drilldown: pre-LLM quality gate" in rendered
+    assert "  7  would_fail" in rendered
+    assert "Drilldown: match suppression reasons" in rendered
+    assert "  1  minimal_overlap" in rendered
+    assert "Drilldown: match suppression venues" in rendered
+    assert "  1  kalshi" in rendered
+    assert "Drilldown: match weight prefixes" in rendered
+    assert "  3  KXIRANCRUDE" in rendered
+    assert "Drilldown: opportunity sources" in rendered
+    assert "  2  France 24" in rendered
+    assert "Drilldown: opportunity settlement-source match" in rendered
+    assert "  2  True" in rendered
+    assert "Drilldown: skip evidence IDs" in rendered
+    assert "  1  ev-skip-1" in rendered
     assert "Fresh assignment shadow         : 4 assigned, 5 unassigned, 0 malformed" in rendered
     assert "Drilldown: unassigned fresh-pass sources" in rendered
     assert "LLM rows                         : 1" in rendered
@@ -404,6 +558,9 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "No-keyword analysis exits       : 3" in rendered
     assert "post_llm_neutral_empty_keywords: 3" in rendered
     assert "Empty-keyword LLM detail rows   : directional=1 neutral=2" in rendered
+    assert "Counterfactual LLM eval          : skipped_no_context_ready_cases" in rendered
+    assert "neutral_none_no_keywords=3 context_ready=1 missing_contract_context=2" in rendered
+    assert "qwen3:14b: evaluated=1 paper_candidate_positive=1 errors=0" in rendered
     assert "Pre-LLM would-block useful rows : 1" in rendered
     assert "Drilldown: top no-keyword analysis-exit sources" in rendered
     assert "Reuters: 2" in rendered
@@ -411,8 +568,54 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "KXIRAN: 2" in rendered
     assert "Paper trades                     : 2" in rendered
     assert "Skipped liquidity/near-limit     : 1" in rendered
+    assert "Open cost                        : +$12.50" in rendered
+    assert "Marked Kalshi bid value          : +$0.25" in rendered
+    assert "Marked Kalshi unrealized P&L     : $-0.25" in rendered
+    assert "Unknown mark cost                : +$12.00" in rendered
     assert "Drilldown: open exposure by resolution horizon" in rendered
     assert "0-3d venue=polymarket trades=1 exposure=$12.50" in rendered
+
+
+def test_counterfactual_eval_report_hydrates_when_env_enabled(monkeypatch):
+    from scripts.daily_review import _build_counterfactual_llm_eval_report
+
+    captured: dict[str, object] = {}
+
+    def fake_build_eval_report(*args, **kwargs):
+        captured["market_detail_provider"] = kwargs.get("market_detail_provider")
+        provider = kwargs.get("market_detail_provider")
+        hydrated = provider("KXTEST") if provider else None
+        return {
+            "model_eval_status": "not_run_offline_eval_set_only",
+            "target_counts": {
+                "neutral_none_no_keywords": 1,
+                "context_ready": 1 if hydrated else 0,
+                "missing_contract_context": 0 if hydrated else 1,
+                "hydrated_contract_context": 1 if hydrated else 0,
+            },
+            "cases": [],
+        }
+
+    class FakeClient:
+        def get_market(self, ticker):
+            return {"rules_primary": f"{ticker} resolves from official details"}
+
+    monkeypatch.setenv("DAILY_REVIEW_COUNTERFACTUAL_HYDRATE_KALSHI_MARKETS", "true")
+    monkeypatch.setattr(
+        "scripts.daily_review.counterfactual_llm_eval.build_eval_report",
+        fake_build_eval_report,
+    )
+    monkeypatch.setattr("scripts.daily_review.KalshiRestClient", FakeClient)
+
+    report = _build_counterfactual_llm_eval_report(
+        Path("logs/trades/live/trades.jsonl"),
+        datetime(2026, 6, 21, tzinfo=timezone.utc),
+        None,
+        exclude_test=True,
+    )
+
+    assert captured["market_detail_provider"] is not None
+    assert report["target_counts"]["hydrated_contract_context"] == 1
 
 
 # ---------------------------------------------------------------------------

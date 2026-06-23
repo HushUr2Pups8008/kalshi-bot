@@ -217,6 +217,7 @@ class BlendTask:
             recent_records=recent_records,
             trigger_record=_trigger_evidence_record(fast_lane_result),
             market=market,
+            analysis=fast_lane_result,
             default_min_edge=default_min_edge,
             now=self._now(),
         )
@@ -632,6 +633,7 @@ def _readiness_input(
     recent_records: list[EvidenceRecord],
     trigger_record: EvidenceRecord | None = None,
     market: KalshiMarket,
+    analysis: SignalAnalysis,
     default_min_edge: float,
     now: datetime,
 ) -> dict[str, Any]:
@@ -648,6 +650,13 @@ def _readiness_input(
         "drift_suspect": dossier.drift_suspect if dossier is not None else False,
         "in_recovery": dossier.in_recovery if dossier is not None else False,
         "recency_score": _recency_score(market, readiness_records, now),
+        "time_to_close_seconds": _time_to_close_seconds(market, now),
+        "settlement_source_relevant": _settlement_source_relevant(analysis),
+        "market_liquidity_dollars": _optional_float(
+            getattr(market, "liquidity_dollars", None)
+        ),
+        "market_price_momentum_cents": _market_price_momentum_cents(market),
+        "intended_side": getattr(analysis, "side", None),
     }
 
 
@@ -731,6 +740,49 @@ def _recency_score(
     dominant_regime = _dominant_regime(_regime_weights(market))
     half_life_days = half_life_for_regime(dominant_regime)
     return recency_score(pairs, now, half_life_days)
+
+
+def _time_to_close_seconds(market: KalshiMarket, now: datetime) -> float | None:
+    close_time = getattr(market, "close_time", None)
+    if not isinstance(close_time, str) or not close_time.strip():
+        return None
+    text = close_time.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        close_dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if close_dt.tzinfo is None:
+        close_dt = close_dt.replace(tzinfo=UTC)
+    now_dt = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    return max(0.0, (close_dt.astimezone(UTC) - now_dt.astimezone(UTC)).total_seconds())
+
+
+def _settlement_source_relevant(analysis: SignalAnalysis) -> bool | None:
+    meta = analysis.signal_meta
+    if not isinstance(meta, dict) or "settlement_source_match" not in meta:
+        return None
+    value = meta["settlement_source_match"]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _market_price_momentum_cents(market: KalshiMarket) -> float | None:
+    last_price = getattr(market, "last_price_cents", None)
+    previous_price = getattr(market, "previous_price_cents", None)
+    if last_price is None or previous_price is None:
+        return None
+    return float(last_price) - float(previous_price)
 
 
 def _trade_candidate(

@@ -62,6 +62,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from types import ModuleType, SimpleNamespace
 from typing import Awaitable, Callable  # noqa: F401 — referenced in string annotations
+from urllib.parse import urlparse
 
 from analysis import SignalAnalysis
 from analysis.evidence_scorer import source_quality
@@ -628,6 +629,85 @@ def _source_class_for_evidence(source: str) -> str:
     return "other"
 
 
+def _news_retrieval_meta(news: NewsItem) -> dict[str, str]:
+    meta: dict[str, str] = {}
+    for key in ("retrieval_mode", "source_hint_query", "source_hint_domain"):
+        value = getattr(news, key, None)
+        if isinstance(value, str) and value.strip():
+            meta[key] = value.strip()
+    return meta
+
+
+def _source_domain(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    text = value.strip()
+    parsed = urlparse(text if "://" in text else f"https://{text}")
+    domain = (parsed.netloc or parsed.path.split("/", 1)[0]).lower()
+    return domain[4:] if domain.startswith("www.") else domain
+
+
+def _settlement_source_match(news: NewsItem, market: object) -> bool | None:
+    settlement_sources = tuple(getattr(market, "settlement_sources", ()) or ())
+    if not settlement_sources:
+        return None
+
+    evidence_parts = [
+        getattr(news, "source", None),
+        getattr(news, "url", None),
+        getattr(news, "source_hint_domain", None),
+        getattr(news, "source_hint_query", None),
+    ]
+    evidence_text = " ".join(
+        str(part).strip().lower()
+        for part in evidence_parts
+        if isinstance(part, str) and part.strip()
+    )
+    if not evidence_text:
+        return False
+
+    for source in settlement_sources:
+        candidates = [
+            getattr(source, "label", None),
+            getattr(source, "domain", None),
+            _source_domain(getattr(source, "url", None)),
+        ]
+        for candidate in candidates:
+            if not isinstance(candidate, str) or not candidate.strip():
+                continue
+            token = candidate.strip().lower()
+            if token.startswith("www."):
+                token = token[4:]
+            if token and token in evidence_text:
+                return True
+    return False
+
+
+def _counterfactual_llm_eval_context(news: NewsItem, market: object) -> dict[str, object]:
+    context: dict[str, object] = {
+        **_news_retrieval_meta(news),
+        "source_class": _source_class_for_evidence(news.source),
+    }
+    for key in ("rules_primary", "rules_secondary", "contract_terms_url"):
+        value = getattr(market, key, None)
+        if isinstance(value, str) and value.strip():
+            context[key] = value.strip()
+    source_names: list[str] = []
+    source_urls: list[str] = []
+    for source in getattr(market, "settlement_sources", ()) or ():
+        label = getattr(source, "label", None)
+        url = getattr(source, "url", None)
+        if isinstance(label, str) and label.strip():
+            source_names.append(label.strip())
+        if isinstance(url, str) and url.strip():
+            source_urls.append(url.strip())
+    if source_names:
+        context["settlement_source_names"] = source_names
+    if source_urls:
+        context["settlement_source_urls"] = source_urls
+    return context
+
+
 def _signal_to_evidence(analysis: SignalAnalysis) -> Evidence:
     """Convert a fast-lane SignalAnalysis into an Evidence record for accumulation."""
     content = f"{analysis.news_item.headline}|{analysis.market.ticker}"
@@ -1124,9 +1204,15 @@ class TradingBot:
         # MARGINAL (low score) -- a neutral on a clearly-correct (high-score)
         # match is "right market, no edge from this headline", not a wrong
         # match. Without this the score-gate sees no score and stays a no-op.
+        news_meta = _news_retrieval_meta(news)
+        settlement_source_match = _settlement_source_match(news, market)
         if isinstance(match_meta, dict):
             match_meta.setdefault("match_score", round(float(match_score), 4))
             match_meta.setdefault("source_class", _source_class_for_evidence(news.source))
+            for key, value in news_meta.items():
+                match_meta.setdefault(key, value)
+            if settlement_source_match is not None:
+                match_meta.setdefault("settlement_source_match", settlement_source_match)
 
         estimated_prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
             await estimate_probability(news, market, keyword_stats=self.keyword_stats, match_meta=match_meta)
@@ -1139,6 +1225,7 @@ class TradingBot:
         llm_emitted_signal = llm_mag is not None and llm_mag != "none"
         if not keywords and not llm_emitted_signal:
             saw_llm_result = llm_dir is not None or llm_mag is not None or llm_conf is not None
+            eval_context = _counterfactual_llm_eval_context(news, market) if saw_llm_result else {}
             await write_trade_log_async(
                 trade_log.log_analysis_rejected,
                 reason="no_keywords",
@@ -1161,6 +1248,7 @@ class TradingBot:
                 source=news.source,
                 headline=news.headline,
                 match_score=match_score,
+                **eval_context,
             )
             log.debug(
                 "[ANALYSIS] no_signal ticker=%s source=%s match_score=%.3f",
@@ -1310,6 +1398,10 @@ class TradingBot:
             venue=opportunity_venue or "kalshi",
             keywords=keywords,
             source_class=_source_class_for_evidence(news.source),
+            retrieval_mode=news_meta.get("retrieval_mode"),
+            source_hint_domain=news_meta.get("source_hint_domain"),
+            source_hint_query=news_meta.get("source_hint_query"),
+            settlement_source_match=settlement_source_match,
         )
         self.source_stats.increment_opportunities(news.source)
 
@@ -1327,6 +1419,10 @@ class TradingBot:
                 market.ticker,
                 capped_dollars,
             )
+
+        signal_meta = dict(news_meta)
+        if settlement_source_match is not None:
+            signal_meta["settlement_source_match"] = settlement_source_match
 
         analysis = SignalAnalysis(
             news_item=news,
@@ -1347,6 +1443,7 @@ class TradingBot:
             llm_direction=llm_dir,
             llm_magnitude=llm_mag,
             llm_confidence=llm_conf,
+            signal_meta=signal_meta or None,
         )
 
         log.debug(

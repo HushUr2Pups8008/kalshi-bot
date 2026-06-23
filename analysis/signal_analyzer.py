@@ -744,6 +744,64 @@ Respond with ONLY a JSON object:
 }"""
 
 
+def _compact_contract_text(value: Any, *, limit: int = 280) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _settlement_source_summary(source: Any) -> str:
+    if isinstance(source, dict):
+        label = str(
+            source.get("label")
+            or source.get("name")
+            or source.get("source")
+            or source.get("title")
+            or ""
+        ).strip()
+        domain = str(source.get("domain") or "").strip()
+        url = str(source.get("url") or source.get("source_url") or "").strip()
+    else:
+        label = str(getattr(source, "label", source) or "").strip()
+        domain = str(getattr(source, "domain", "") or "").strip()
+        url = str(getattr(source, "url", "") or "").strip()
+    parts = [part for part in (label, f"({domain})" if domain else "", url) if part]
+    return _compact_contract_text(" ".join(parts), limit=180)
+
+
+def _market_contract_context_lines(market) -> list[str]:
+    lines: list[str] = []
+    rules_primary = _compact_contract_text(getattr(market, "rules_primary", ""))
+    rules_secondary = _compact_contract_text(getattr(market, "rules_secondary", ""))
+    if rules_primary:
+        lines.append(f"CONTRACT RULES PRIMARY: {rules_primary}")
+    if rules_secondary:
+        lines.append(f"CONTRACT RULES SECONDARY: {rules_secondary}")
+
+    source_lines = []
+    for source in getattr(market, "settlement_sources", ()) or ():
+        summary = _settlement_source_summary(source)
+        if summary:
+            source_lines.append(summary)
+    resolution_source = _compact_contract_text(getattr(market, "resolution_source", ""), limit=180)
+    if resolution_source:
+        source_lines.append(resolution_source)
+    if source_lines:
+        lines.append("SETTLEMENT SOURCES: " + "; ".join(source_lines[:3]))
+
+    terms_url = _compact_contract_text(
+        getattr(market, "contract_terms_url", "")
+        or getattr(market, "market_terms_url", ""),
+        limit=180,
+    )
+    if terms_url:
+        lines.append(f"MARKET TERMS URL: {terms_url}")
+    return lines
+
+
 def _build_user_msg(news, market) -> str:
     # v0.29.48 (P0-GATE / P0.4 experiment): `CURRENT YES PRICE` removed from
     # the LLM prompt to test the price-in-prompt anchoring hypothesis. See
@@ -753,9 +811,16 @@ def _build_user_msg(news, market) -> str:
     # longer pending. Original line preserved here for reference if anchoring
     # behavior needs to be restored.
     resolution = market.subtitle if market.subtitle else market.title
+    contract_context = _market_contract_context_lines(market)
+    contract_context_text = (
+        "\n".join(contract_context) + "\n"
+        if contract_context
+        else ""
+    )
     return (
         f"MARKET TITLE: {market.title}\n"
         f"RESOLUTION CRITERIA: {resolution}\n"
+        f"{contract_context_text}"
         f"MARKET CLOSES: {market.close_time}\n\n"
         f"NEWS HEADLINE: {news.headline}\n"
         f"SOURCE: {news.source}\n"

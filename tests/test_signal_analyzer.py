@@ -32,6 +32,7 @@ from analysis.signal_analyzer import (
     estimate_probability,
     keyword_estimate,
 )
+from kalshi.series_metadata import SettlementSource
 
 
 def _detail_to_kwargs(detail_mock):
@@ -1677,6 +1678,31 @@ class TestOllamaBuildPayload:
         user_content = payload["messages"][1]["content"]
         assert market.title in user_content
         assert news.headline in user_content
+
+    def test_payload_user_msg_contains_contract_context(self, monkeypatch):
+        monkeypatch.setattr(signal_analyzer.cfg, "ollama_model", "qwen2.5:7b")
+        market = self._market()
+        market.rules_primary = "Resolves YES only after the official agency publishes final certified results."
+        market.rules_secondary = "Temporary projections do not count."
+        market.settlement_sources = (
+            SettlementSource(
+                label="Official Agency",
+                url="https://agency.example/results",
+                domain="agency.example",
+            ),
+        )
+        market.contract_terms_url = "https://kalshi.com/markets/KXTEST/terms"
+
+        payload = _ollama_build_payload(self._news(), market)
+        user_content = payload["messages"][1]["content"]
+
+        assert "CONTRACT RULES PRIMARY:" in user_content
+        assert "official agency publishes final certified results" in user_content
+        assert "CONTRACT RULES SECONDARY:" in user_content
+        assert "Temporary projections do not count." in user_content
+        assert "SETTLEMENT SOURCES:" in user_content
+        assert "Official Agency (agency.example)" in user_content
+        assert "MARKET TERMS URL: https://kalshi.com/markets/KXTEST/terms" in user_content
 
 
 class TestBuildLlmMetaKwargs:

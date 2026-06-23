@@ -26,6 +26,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts import decision_funnel_summary
+from scripts import counterfactual_llm_eval
 from scripts import freshness_diagnostics
 from scripts import keyword_feedback
 from scripts import match_quality_diagnostics
@@ -55,6 +56,7 @@ from utils.output_paths import (
 from utils.diagnostic_reporting_helpers import format_counter
 from utils.diagnostics_script_helpers import is_test_record_source_only
 from utils.trade_log_reader import iter_trade_records
+from kalshi.rest_client import KalshiRestClient
 
 
 REPORTS_DIR = DAILY_REPORTS_DIR
@@ -68,6 +70,7 @@ SOURCE_TIER_STATE_PATH = DERIVED_STATE_DIR / "source_tier_state.json"
 # Pass --path logs/trades to include archive data for historical analysis.
 DEFAULT_TRADES_LOG_PATH = RAW_TRADES_LIVE_DIR / "trades.jsonl"
 DEFAULT_PAPER_DB_PATH = PAPER_TRADES_DB
+VERSION_FILE = REPO_ROOT / "VERSION"
 RECENT_MATCH_EXAMPLES = 5
 RECENT_EDGE_AUDIT = 5
 
@@ -265,6 +268,107 @@ def _format_fresh_pass_conversion_lines(
     return lines
 
 
+def _format_match_attribution_lines(
+    funnel_stats: dict[str, Any],
+    *,
+    top: int,
+) -> list[str]:
+    event_counts = funnel_stats.get("event_counts", {})
+    match_diagnostics = int(
+        funnel_stats.get("match_diagnostics_total", 0)
+        or event_counts.get("MATCH_DIAGNOSTIC", 0)
+        or 0
+    )
+    signal_detail_rows = int(
+        funnel_stats.get("signal_analysis_detail_total", 0)
+        or event_counts.get("SIGNAL_ANALYSIS_DETAIL", 0)
+        or 0
+    )
+    match_detail_gap = int(
+        funnel_stats.get(
+            "match_to_signal_detail_gap",
+            max(0, match_diagnostics - signal_detail_rows),
+        )
+        or 0
+    )
+    suppressions = int(
+        event_counts.get("MATCH_SUPPRESSED", 0)
+        or sum(Counter(funnel_stats.get("match_suppressed_reasons", {})).values())
+        or 0
+    )
+    weight_applications = int(
+        funnel_stats.get("match_weight_applied_total", 0)
+        or event_counts.get("MATCH_WEIGHT_APPLIED", 0)
+        or 0
+    )
+    weight_score_delta = float(
+        funnel_stats.get("match_weight_score_delta_total", 0.0) or 0.0
+    )
+    suppression_coverage = Counter(
+        funnel_stats.get("match_suppressed_column_coverage", {})
+    )
+    drilldowns = [
+        ("Drilldown: pre-LLM quality gate", Counter(funnel_stats.get("match_diagnostic_pre_llm_gate", {})), None),
+        ("Drilldown: match diagnostic sources", Counter(funnel_stats.get("match_diagnostic_sources", {})), top),
+        ("Drilldown: match diagnostic tickers", Counter(funnel_stats.get("match_diagnostic_tickers", {})), top),
+        ("Drilldown: match suppression reasons", Counter(funnel_stats.get("match_suppressed_reasons", {})), top),
+        ("Drilldown: match suppression tokens", Counter(funnel_stats.get("match_suppressed_tokens", {})), top),
+        ("Drilldown: match suppression venues", Counter(funnel_stats.get("match_suppressed_venues", {})), top),
+        ("Drilldown: match weight tokens", Counter(funnel_stats.get("match_weight_tokens", {})), top),
+        ("Drilldown: match weight prefixes", Counter(funnel_stats.get("match_weight_prefixes", {})), top),
+        ("Drilldown: opportunity sources", Counter(funnel_stats.get("opportunity_sources", {})), top),
+        ("Drilldown: opportunity source classes", Counter(funnel_stats.get("opportunity_source_classes", {})), top),
+        ("Drilldown: opportunity retrieval modes", Counter(funnel_stats.get("opportunity_retrieval_modes", {})), top),
+        ("Drilldown: opportunity settlement-source match", Counter(funnel_stats.get("opportunity_settlement_source_matches", {})), top),
+        ("Drilldown: skip sources", Counter(funnel_stats.get("skip_sources", {})), top),
+        ("Drilldown: skip source classes", Counter(funnel_stats.get("skip_source_classes", {})), top),
+        ("Drilldown: skip retrieval modes", Counter(funnel_stats.get("skip_retrieval_modes", {})), top),
+        ("Drilldown: skip evidence IDs", Counter(funnel_stats.get("skip_evidence_ids", {})), top),
+        ("Drilldown: skip settlement-source match", Counter(funnel_stats.get("skip_settlement_source_matches", {})), top),
+    ]
+
+    if not any(
+        [
+            match_diagnostics,
+            signal_detail_rows,
+            match_detail_gap,
+            suppressions,
+            weight_applications,
+            *[bool(counter) for _label, counter, _limit in drilldowns],
+        ]
+    ):
+        return []
+
+    lines = [
+        f"  Match diagnostics                : {match_diagnostics}",
+        f"  Signal analysis detail rows      : {signal_detail_rows}",
+        f"  Match -> analysis detail gap     : {match_detail_gap}",
+        f"  Match suppressions               : {suppressions}",
+        "  Match weight applications        : "
+        f"{weight_applications} (score_delta={weight_score_delta:.4f})",
+    ]
+    if suppressions:
+        coverage_parts = [
+            f"{column}={suppression_coverage.get(column, 0)}/{suppressions}"
+            for column in (
+                "raw_score",
+                "adjusted_score",
+                "threshold",
+                "token_weight_multiplier",
+                "venue",
+                "market_prefix",
+            )
+        ]
+        lines.append("  Match suppression metadata       : " + ", ".join(coverage_parts))
+    for label, counter, limit in drilldowns:
+        if not counter:
+            continue
+        lines.append(f"  {label}")
+        effective_limit = max(top, len(counter)) if limit is None else limit
+        lines.extend(format_counter(counter, top=effective_limit))
+    return lines
+
+
 def _latest_restart_timestamp_from_health_reports(
     health_dir: Path = HEALTH_REPORTS_DIR,
 ) -> str | None:
@@ -329,6 +433,88 @@ def _format_since_restart_money_path_lines(report: dict[str, Any]) -> list[str]:
                 f"venue={row.get('terminal_venue') or row.get('blend_venue') or 'unknown'} "
                 f"reason={row.get('terminal_reason') or 'none'}"
             )
+    return lines
+
+
+def _counterfactual_eval_ollama_models_from_env() -> list[str]:
+    raw = os.getenv("DAILY_REVIEW_COUNTERFACTUAL_EVAL_OLLAMA_MODELS", "")
+    return [model.strip() for model in raw.split(",") if model.strip()]
+
+
+def _software_version() -> str:
+    try:
+        version = VERSION_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "unknown"
+    return f"v{version}" if version else "unknown"
+
+
+def _counterfactual_eval_hydrate_markets_enabled() -> bool:
+    return os.getenv(
+        "DAILY_REVIEW_COUNTERFACTUAL_HYDRATE_KALSHI_MARKETS", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _build_counterfactual_llm_eval_report(
+    trades_path: Path,
+    since: datetime | None,
+    until: datetime | None,
+    *,
+    exclude_test: bool,
+) -> dict[str, Any]:
+    market_detail_provider = None
+    if _counterfactual_eval_hydrate_markets_enabled():
+        market_detail_provider = KalshiRestClient().get_market
+    report = counterfactual_llm_eval.build_eval_report(
+        trades_path,
+        since=since or (datetime.now(timezone.utc) - timedelta(days=1)),
+        until=until,
+        exclude_test=exclude_test,
+        market_detail_provider=market_detail_provider,
+    )
+    models = _counterfactual_eval_ollama_models_from_env()
+    if not models:
+        return report
+    evaluators = {
+        model: counterfactual_llm_eval.make_ollama_evaluator(
+            model,
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+            timeout_seconds=float(os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "60")),
+        )
+        for model in models
+    }
+    return counterfactual_llm_eval.run_model_eval(report, evaluators)
+
+
+def _format_counterfactual_llm_eval_lines(report: dict[str, Any]) -> list[str]:
+    status = report.get("model_eval_status", "unknown")
+    counts = report.get("target_counts", {}) or {}
+    lines = [
+        f"  Counterfactual LLM eval          : {status}",
+        (
+            "    "
+            f"neutral_none_no_keywords={counts.get('neutral_none_no_keywords', 0)} "
+            f"context_ready={counts.get('context_ready', 0)} "
+            f"missing_contract_context={counts.get('missing_contract_context', 0)}"
+        ),
+    ]
+    if "evaluated_context_ready" in counts or "skipped_missing_contract_context" in counts:
+        lines.append(
+            "    "
+            f"evaluated_context_ready={counts.get('evaluated_context_ready', 0)} "
+            f"skipped_missing_contract_context={counts.get('skipped_missing_contract_context', 0)}"
+        )
+    model_summary = report.get("model_summary") or {}
+    if model_summary:
+        lines.append("    Model comparison summary:")
+        for model_name, summary in sorted(model_summary.items()):
+            lines.append(
+                f"      {model_name}: evaluated={summary.get('evaluated', 0)} "
+                f"paper_candidate_positive={summary.get('paper_candidate_positive', 0)} "
+                f"errors={summary.get('errors', 0)}"
+            )
+    if report.get("error"):
+        lines.append(f"    error={report['error']}")
     return lines
 
 
@@ -449,8 +635,27 @@ def write_report_line(report_path: Path, text: str = "") -> None:
         encoding = sys.stdout.encoding or "utf-8"
         sys.stdout.buffer.write((text + "\n").encode(encoding, errors="replace"))
         sys.stdout.buffer.flush()
-    with report_path.open("a", encoding="utf-8") as handle:
-        handle.write(text + "\n")
+
+
+def write_report(report_path: Path, lines: list[str]) -> None:
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    output_lines = [
+        *lines,
+        "",
+        f"Daily review report saved to: {report_path}",
+    ]
+    tmp = report_path.with_suffix(report_path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        for line in output_lines:
+            handle.write(line + "\n")
+    os.replace(tmp, report_path)
+    for line in output_lines:
+        try:
+            print(line)
+        except UnicodeEncodeError:
+            encoding = sys.stdout.encoding or "utf-8"
+            sys.stdout.buffer.write((line + "\n").encode(encoding, errors="replace"))
+            sys.stdout.buffer.flush()
 
 
 def _top_source_rows(freshness_stats: dict[str, Any], *, limit: int) -> list[dict[str, Any]]:
@@ -676,6 +881,20 @@ def build_daily_review(
         keyword_stats = keyword_feedback.summarize(
             trades_path, since, until, exclude_test=exclude_test,
         )
+    with stage_timer("counterfactual LLM eval", enabled=show_profile):
+        try:
+            counterfactual_eval_stats = _build_counterfactual_llm_eval_report(
+                trades_path,
+                since,
+                until,
+                exclude_test=exclude_test,
+            )
+        except Exception as exc:  # reporting-only; never break daily review
+            counterfactual_eval_stats = {
+                "model_eval_status": "error",
+                "target_counts": {},
+                "error": f"{type(exc).__name__}: {exc}",
+            }
     with stage_timer("source scorecard", enabled=show_profile):
         scorecard_stats = source_scorecard.summarize(
             trades_path,
@@ -702,7 +921,7 @@ def build_daily_review(
                 since_restart_report = {"error": f"{type(exc).__name__}: {exc}"}
 
     if show_profile:
-        _eprint(f"[total] 10 stages completed in {time.perf_counter() - _t0:.1f}s")
+        _eprint(f"[total] 11 stages completed in {time.perf_counter() - _t0:.1f}s")
 
     event_counts = funnel_stats.get("event_counts", {})
     analysis_rejections = Counter(funnel_stats.get("analysis_rejected_reasons", {}))
@@ -741,6 +960,7 @@ def build_daily_review(
 
     lines: list[str] = []
     lines.append("PIPELINE REVIEW")
+    lines.append(f"Software version                 : {_software_version()}")
     lines.append(f"Trades log: {trades_path}")
     lines.append(f"Paper DB : {paper_db_path}")
     if since or until:
@@ -807,6 +1027,7 @@ def build_daily_review(
             paper_trades=paper_trades,
         )
     )
+    lines.extend(_format_match_attribution_lines(funnel_stats, top=top))
     if assignment_shadow_stats.get("rows", 0) > 0:
         lines.append(
             "  Fresh assignment shadow         : "
@@ -1010,6 +1231,7 @@ def build_daily_review(
         f"neutral={keyword_stats.get('empty_keyword_llm_neutral_rows', 0)}"
     )
     lines.append(f"  Unique candidate phrases         : {unique_phrases}")
+    lines.extend(_format_counterfactual_llm_eval_lines(counterfactual_eval_stats))
     no_keyword_categories = keyword_stats.get("no_keyword_rejection_categories") or Counter()
     if no_keyword_categories:
         lines.append("  Drilldown: no-keyword rejection branches")
@@ -1069,6 +1291,22 @@ def build_daily_review(
         lines.append(f"    Open: {paper_stats['open_trades']}")
         lines.append(f"    Win rate: {paper_performance_drilldown.fmt_pct(paper_stats.get('win_rate'))}")
         lines.append(f"    Total P&L: {fmt_money(paper_stats.get('total_pnl'))}")
+        open_mark = paper_stats.get("open_mark_summary") or {}
+        if open_mark:
+            lines.append(
+                f"    Open cost                        : {fmt_money(open_mark.get('open_cost_dollars'))}"
+            )
+            lines.append(
+                "    Marked Kalshi bid value          : "
+                f"{fmt_money(open_mark.get('marked_kalshi_bid_value_dollars'))}"
+            )
+            lines.append(
+                "    Marked Kalshi unrealized P&L     : "
+                f"{fmt_money(open_mark.get('marked_kalshi_unrealized_pnl_dollars'))}"
+            )
+            lines.append(
+                f"    Unknown mark cost                : {fmt_money(open_mark.get('unknown_mark_cost_dollars'))}"
+            )
         venue_rows = paper_stats.get("venues") or []
         if len(venue_rows) > 1 or any(
             str(row.get("name") or "") != "kalshi" for row in venue_rows
@@ -1361,10 +1599,7 @@ def main() -> int:
         tier_state_path=SOURCE_TIER_STATE_PATH,
     )
 
-    for line in lines:
-        write_report_line(report_path, line)
-    write_report_line(report_path)
-    write_report_line(report_path, f"Daily review report saved to: {report_path}")
+    write_report(report_path, lines)
     return 0
 
 

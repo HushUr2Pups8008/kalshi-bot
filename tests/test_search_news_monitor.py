@@ -11,16 +11,19 @@ out of the query budget starves the only markets the bot actually trades.
 
 from types import SimpleNamespace
 
-from feeds.search_news_monitor import _markets_to_queries, SEARCH_MAX_QUERIES
+from feeds import NewsItem
+from feeds.search_news_monitor import _markets_to_queries, _tag_source_hint_item, SEARCH_MAX_QUERIES
+from kalshi.series_metadata import SettlementSource
 
 
-def _mkt(series, title, oi, price=50):
+def _mkt(series, title, oi, price=50, *, settlement_sources=()):
     return SimpleNamespace(
         title=title,
         open_interest=oi,
         yes_price=price,
         series_ticker=series,
         ticker=f"{series}-26JUN05-X",
+        settlement_sources=tuple(settlement_sources),
     )
 
 
@@ -136,3 +139,57 @@ def test_zero_liquidity_markets_still_rank_by_uncertainty():
     queries = _markets_to_queries([decided, contested])
 
     assert queries[0] == "candidate tossup competitive house"
+
+
+def test_source_hint_query_lane_default_off_excludes_site_scoped_queries():
+    market = _mkt(
+        "KXTRUMPIRAN",
+        "Will Trump visit Iran?",
+        oi=1000,
+        settlement_sources=(
+            SettlementSource(label="Associated Press", url="https://apnews.com/"),
+        ),
+    )
+
+    queries = _markets_to_queries(
+        [market],
+        market_source_hint_query_mode="off",
+        market_source_hint_query_cap=2,
+    )
+
+    assert queries == ["trump visit iran"]
+
+
+def test_source_hint_query_lane_production_adds_capped_site_scoped_queries():
+    market = _mkt(
+        "KXTRUMPIRAN",
+        "Will Trump visit Iran?",
+        oi=1000,
+        settlement_sources=(
+            SettlementSource(label="Associated Press", url="https://apnews.com/"),
+            SettlementSource(label="Reuters", url="https://reuters.com/"),
+        ),
+    )
+
+    queries = _markets_to_queries(
+        [market],
+        market_source_hint_query_mode="production",
+        market_source_hint_query_cap=1,
+    )
+
+    assert queries == ["trump visit iran", "site:apnews.com trump visit iran"]
+
+
+def test_source_hint_query_results_are_tagged_before_callback():
+    item = NewsItem(headline="Trump visits Iran", url="https://apnews.com/story", source="AP")
+
+    tagged = _tag_source_hint_item(
+        item,
+        "site:apnews.com trump visit iran",
+        "production",
+    )
+
+    assert tagged is item
+    assert tagged.retrieval_mode == "source_hint"
+    assert tagged.source_hint_query == "site:apnews.com trump visit iran"
+    assert tagged.source_hint_domain == "apnews.com"
