@@ -223,3 +223,7 @@ def isolated_match_feedback_weights(monkeypatch):
         "analysis.match_feedback.load_weights",
         lambda *args, **kwargs: {},
     )
+    monkeypatch.setattr(
+        "analysis.match_feedback.load_verified_weights",
+        lambda *args, **kwargs: {},
+    )

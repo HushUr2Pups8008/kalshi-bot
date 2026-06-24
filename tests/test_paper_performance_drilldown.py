@@ -24,6 +24,8 @@ OPTIONAL_COLUMNS = [
     ("signal_type", "TEXT"),
     ("series_ticker", "TEXT"),
     ("venue", "TEXT"),
+    ("side", "TEXT"),
+    ("contracts", "INTEGER"),
     ("cost_dollars", "REAL"),
     ("market_snapshot", "TEXT"),
 ]
@@ -486,6 +488,51 @@ def test_open_resolution_buckets_use_market_snapshot_close_time(local_db_case):
     assert rows[(">30d", "polymarket")]["exposure"] == pytest.approx(7.5)
     assert rows[("unknown", "kalshi")]["trades"] == 1
     assert rows[("unknown", "kalshi")]["exposure"] == pytest.approx(3.0)
+
+
+def test_open_mark_summary_marks_kalshi_bid_and_tracks_unknowns(local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(
+        keeper,
+        rows=[
+            {
+                "trade_id": "marked",
+                "ts": "2026-06-19T00:00:00+00:00",
+                "ticker": "KXMARKED",
+                "signal_source": "Reuters",
+                "resolved": 0,
+                "pnl_dollars": None,
+                "venue": "kalshi",
+                "side": "yes",
+                "contracts": 5,
+                "cost_dollars": 0.50,
+                "market_snapshot": json.dumps({"yes_bid": 5}),
+            },
+            {
+                "trade_id": "unknown",
+                "ts": "2026-06-19T01:00:00+00:00",
+                "ticker": "PMUNKNOWN",
+                "signal_source": "AP",
+                "resolved": 0,
+                "pnl_dollars": None,
+                "venue": "polymarket",
+                "side": "yes",
+                "contracts": 5,
+                "cost_dollars": 2.00,
+                "market_snapshot": "{}",
+            },
+        ],
+    )
+
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path, now=datetime(2026, 6, 19, tzinfo=timezone.utc))
+
+    mark = stats["open_mark_summary"]
+    assert mark["open_cost_dollars"] == pytest.approx(2.50)
+    assert mark["marked_kalshi_cost_dollars"] == pytest.approx(0.50)
+    assert mark["marked_kalshi_bid_value_dollars"] == pytest.approx(0.25)
+    assert mark["marked_kalshi_unrealized_pnl_dollars"] == pytest.approx(-0.25)
+    assert mark["unknown_mark_cost_dollars"] == pytest.approx(2.00)
 
 
 def test_print_summary_missing_db(capsys):

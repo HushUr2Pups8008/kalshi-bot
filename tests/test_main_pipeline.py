@@ -20,6 +20,7 @@ from feeds.search_news_monitor import run_search_news_monitor
 from feeds.gdelt_monitor import run_gdelt_monitor
 from feeds import NewsItem
 from kalshi import KalshiMarket
+from kalshi.series_metadata import SettlementSource
 from kalshi.source_hints import MarketSourceHintDiagnostics, MarketSourceTargetPlan
 from main import TradingBot, _signal_to_evidence, _source_class_for_evidence
 from polymarket.settlement_reconciler import SettlementReconcileResult
@@ -264,6 +265,9 @@ async def test_market_source_hint_runtime_failure_does_not_block_candidate(monke
     monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
     bot = _make_bot_stub()
     news = _make_news()
+    news.retrieval_mode = "source_hint"
+    news.source_hint_query = "site:reuters.com test event headline"
+    news.source_hint_domain = "reuters.com"
     market = _make_market()
 
     with patch("main.build_market_source_hint_diagnostics", side_effect=RuntimeError("diagnostic boom")), \
@@ -289,7 +293,13 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
 
     bot = _make_bot_stub()
     news = _make_news()
+    news.retrieval_mode = "source_hint"
+    news.source_hint_query = "site:reuters.com test event headline"
+    news.source_hint_domain = "reuters.com"
     market = _make_market()
+    market.settlement_sources = (
+        SettlementSource(label="Reuters", url="https://reuters.com"),
+    )
     match_meta = {
         "pre_llm_quality_pass": False,
         "pre_llm_semantic_overlap_count": 1,
@@ -316,6 +326,12 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     # feedback loop's score-gate is a no-op without this).
     assert match_meta["match_score"] == pytest.approx(0.42)
     assert match_meta["source_class"] == "news"
+    assert match_meta["settlement_source_match"] is True
+    opportunity_kwargs = opportunity_mock.call_args.kwargs
+    assert opportunity_kwargs["retrieval_mode"] == "source_hint"
+    assert opportunity_kwargs["source_hint_query"] == "site:reuters.com test event headline"
+    assert opportunity_kwargs["source_hint_domain"] == "reuters.com"
+    assert opportunity_kwargs["settlement_source_match"] is True
     analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
     evidence = bot._evidence_queue.get_nowait()
     assert analysis.signal_meta["trigger_evidence_id"] == evidence.evidence_id
@@ -325,6 +341,10 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     assert analysis.signal_meta["trigger_evidence_ingested_ts"] == evidence.ingested_ts
     assert analysis.signal_meta["trigger_evidence_content_hash"] == evidence.content_hash
     assert analysis.signal_meta["trigger_evidence_original_weight"] > 0.0
+    assert analysis.signal_meta["retrieval_mode"] == "source_hint"
+    assert analysis.signal_meta["source_hint_query"] == "site:reuters.com test event headline"
+    assert analysis.signal_meta["source_hint_domain"] == "reuters.com"
+    assert analysis.signal_meta["settlement_source_match"] is True
     assert analysis.news_item is news
     assert analysis.market.ticker == "KXTEST-25DEC31"
     assert analysis.estimated_probability == pytest.approx(0.65)
@@ -368,10 +388,14 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
         method="llm",
         llm_direction="yes",
         llm_magnitude="moderate",
-        venue="kalshi",
-        keywords=["missile strike"],
-        source_class="news",
-    )
+            venue="kalshi",
+            keywords=["missile strike"],
+            source_class="news",
+            retrieval_mode="source_hint",
+            source_hint_domain="reuters.com",
+            source_hint_query="site:reuters.com test event headline",
+            settlement_source_match=True,
+        )
 
 
 @pytest.mark.asyncio
@@ -425,7 +449,16 @@ async def test_process_candidate_proceeds_when_llm_emits_signal_despite_no_keywo
     monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
     bot = _make_bot_stub()
     news = _make_news()
+    news.retrieval_mode = "source_hint"
+    news.source_hint_query = "site:reuters.com test event headline"
+    news.source_hint_domain = "reuters.com"
     market = _make_market()
+    market.rules_primary = "Market resolves Yes if the test event happens."
+    market.rules_secondary = "Related announcements do not count."
+    market.settlement_sources = (
+        SettlementSource(label="Reuters", url="https://reuters.com"),
+    )
+    market.contract_terms_url = "https://kalshi.com/markets/KXTEST"
 
     # Mirrors event #3 from the 2026-04-26 investigation: KXTRUMPIRAN-26MAY01,
     # "Trump dispatching Witkoff..." headline; LLM produced small/yes/+0.068.
@@ -455,7 +488,16 @@ async def test_process_candidate_still_rejects_when_neither_signal_source_speaks
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     bot = _make_bot_stub()
     news = _make_news()
+    news.retrieval_mode = "source_hint"
+    news.source_hint_query = "site:reuters.com test event headline"
+    news.source_hint_domain = "reuters.com"
     market = _make_market()
+    market.rules_primary = "Market resolves Yes if the test event happens."
+    market.rules_secondary = "Related announcements do not count."
+    market.settlement_sources = (
+        SettlementSource(label="Reuters", url="https://reuters.com"),
+    )
+    market.contract_terms_url = "https://kalshi.com/markets/KXTEST"
 
     with patch("main.estimate_probability", new=AsyncMock(return_value=(
         market.yes_prob, 0.0, [], "no signal", "neutral", "none", 0.95
@@ -476,6 +518,15 @@ async def test_process_candidate_still_rejects_when_neither_signal_source_speaks
         source=news.source,
         headline=news.headline,
         match_score=0.20,
+        retrieval_mode="source_hint",
+        source_hint_domain="reuters.com",
+        source_hint_query="site:reuters.com test event headline",
+        source_class="news",
+        rules_primary="Market resolves Yes if the test event happens.",
+        rules_secondary="Related announcements do not count.",
+        settlement_source_names=["Reuters"],
+        settlement_source_urls=["https://reuters.com"],
+        contract_terms_url="https://kalshi.com/markets/KXTEST",
     )
 
 

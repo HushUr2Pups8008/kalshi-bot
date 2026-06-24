@@ -94,6 +94,18 @@ def test_markets_to_queries_keeps_shadow_queries_default_off_and_budgeted():
     assert len(shadow_queries) <= SEARCH_MAX_QUERIES
 
 
+def test_markets_to_queries_uses_market_object_settlement_sources_when_enabled():
+    market = _market()
+    market.settlement_sources = (
+        SettlementSource("The Associated Press", domain="apnews.com"),
+    )
+
+    queries = _markets_to_queries([market], market_first_query_shadow=True)
+
+    assert "site:apnews.com trump visit iran" in queries
+    assert len(queries) <= SEARCH_MAX_QUERIES
+
+
 class _Matcher:
     def __init__(self, candidates):
         self._candidates = candidates

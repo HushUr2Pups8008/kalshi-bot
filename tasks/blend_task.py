@@ -145,6 +145,7 @@ class BlendTaskResult:
 
 
 StructuralStabilityResolver = Callable[[str], bool | Awaitable[bool]]
+OpenExposureDrawdownProvider = Callable[[], float | None | Awaitable[float | None]]
 
 
 class BlendTask:
@@ -162,6 +163,7 @@ class BlendTask:
             ReadinessDecision,
         ] = evaluate_readiness,
         structural_stability_resolver: StructuralStabilityResolver | None = None,
+        open_exposure_drawdown_provider: OpenExposureDrawdownProvider | None = None,
         is_paper_mode: bool | None = None,
         now: Callable[[], datetime] | None = None,
         calibration: CalibrationLike | None = None,
@@ -172,6 +174,7 @@ class BlendTask:
         self._blender = blender
         self._readiness_evaluator = readiness_evaluator
         self._structural_stability_resolver = structural_stability_resolver
+        self._open_exposure_drawdown_provider = open_exposure_drawdown_provider
         self._calibration = calibration
         self._is_paper_mode = (
             cfg.is_paper_trading if is_paper_mode is None else is_paper_mode
@@ -217,8 +220,10 @@ class BlendTask:
             recent_records=recent_records,
             trigger_record=_trigger_evidence_record(fast_lane_result),
             market=market,
+            analysis=fast_lane_result,
             default_min_edge=default_min_edge,
             now=self._now(),
+            open_exposure_drawdown_pct=await self._open_exposure_drawdown_pct(),
         )
         try:
             readiness = self._readiness_evaluator(readiness_input, regime_confidence)
@@ -389,6 +394,24 @@ class BlendTask:
         if self._calibration is None:
             return 1.0
         return self._calibration.get_scaling_factor(lane)
+
+    async def _open_exposure_drawdown_pct(self) -> float | None:
+        provider = self._open_exposure_drawdown_provider
+        if provider is None:
+            return None
+        try:
+            value = provider()
+            if inspect.isawaitable(value):
+                value = await value
+            if value is None:
+                return None
+            value = float(value)
+            if not math.isfinite(value):
+                return 1.0
+            return max(0.0, value)
+        except Exception as exc:
+            log.warning("open exposure drawdown unavailable; failing readiness closed: %s", exc)
+            return 1.0
 
     # PROFIT-BLENDER-001 fallback heuristics. Tight thresholds by design:
     # a lane is flagged "fallback" only when p is very near 0.5 AND
@@ -632,8 +655,10 @@ def _readiness_input(
     recent_records: list[EvidenceRecord],
     trigger_record: EvidenceRecord | None = None,
     market: KalshiMarket,
+    analysis: SignalAnalysis,
     default_min_edge: float,
     now: datetime,
+    open_exposure_drawdown_pct: float | None = None,
 ) -> dict[str, Any]:
     source_lane = "accumulation" if (dossier is not None and dossier.current_estimate is not None) else "fast"
     readiness_records = _readiness_records(recent_records, trigger_record)
@@ -648,6 +673,14 @@ def _readiness_input(
         "drift_suspect": dossier.drift_suspect if dossier is not None else False,
         "in_recovery": dossier.in_recovery if dossier is not None else False,
         "recency_score": _recency_score(market, readiness_records, now),
+        "time_to_close_seconds": _time_to_close_seconds(market, now),
+        "settlement_source_relevant": _settlement_source_relevant(analysis),
+        "market_liquidity_dollars": _optional_float(
+            getattr(market, "liquidity_dollars", None)
+        ),
+        "market_price_momentum_cents": _market_price_momentum_cents(market),
+        "intended_side": getattr(analysis, "side", None),
+        "open_exposure_drawdown_pct": open_exposure_drawdown_pct,
     }
 
 
@@ -731,6 +764,49 @@ def _recency_score(
     dominant_regime = _dominant_regime(_regime_weights(market))
     half_life_days = half_life_for_regime(dominant_regime)
     return recency_score(pairs, now, half_life_days)
+
+
+def _time_to_close_seconds(market: KalshiMarket, now: datetime) -> float | None:
+    close_time = getattr(market, "close_time", None)
+    if not isinstance(close_time, str) or not close_time.strip():
+        return None
+    text = close_time.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        close_dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if close_dt.tzinfo is None:
+        close_dt = close_dt.replace(tzinfo=UTC)
+    now_dt = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    return max(0.0, (close_dt.astimezone(UTC) - now_dt.astimezone(UTC)).total_seconds())
+
+
+def _settlement_source_relevant(analysis: SignalAnalysis) -> bool | None:
+    meta = analysis.signal_meta
+    if not isinstance(meta, dict) or "settlement_source_match" not in meta:
+        return None
+    value = meta["settlement_source_match"]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _market_price_momentum_cents(market: KalshiMarket) -> float | None:
+    last_price = getattr(market, "last_price_cents", None)
+    previous_price = getattr(market, "previous_price_cents", None)
+    if last_price is None or previous_price is None:
+        return None
+    return float(last_price) - float(previous_price)
 
 
 def _trade_candidate(

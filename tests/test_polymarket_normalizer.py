@@ -11,6 +11,14 @@ def test_normalizes_binary_market_payload():
         "question": "Example resolution question?",
         "subtitle": "Example subtitle",
         "category": "politics",
+        "description": "Detailed market description for traders.",
+        "eventTitle": "Example Event",
+        "eventSlug": "example-event",
+        "seriesTitle": "Example Series",
+        "seriesSlug": "example-series",
+        "tags": [{"label": "US Politics"}, {"name": "Iran"}],
+        "comments": [{"body": "Public comment context"}, {"text": "Resolution nuance"}],
+        "resolutionSource": "https://example.com/resolution-rules",
         "status": "open",
         "outcomes": [
             {"name": "Yes", "bestAsk": {"value": "0.42", "currency": "USD"}},
@@ -29,6 +37,14 @@ def test_normalizes_binary_market_payload():
     assert market.question == "Example resolution question?"
     assert market.subtitle == "Example subtitle"
     assert market.category == "politics"
+    assert market.description == "Detailed market description for traders."
+    assert market.event_title == "Example Event"
+    assert market.event_slug == "example-event"
+    assert market.series_title == "Example Series"
+    assert market.series_slug == "example-series"
+    assert market.tags == ("US Politics", "Iran")
+    assert market.public_comments == ("Public comment context", "Resolution nuance")
+    assert market.resolution_source == "https://example.com/resolution-rules"
     assert market.status == "open"
     assert market.yes_ask_cents == 42
     assert market.no_ask_cents == 59

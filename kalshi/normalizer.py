@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import ExchangeState, KalshiMarket
+from .series_metadata import SettlementSource, _source_from_raw
 
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,17 @@ def _extract_market_metadata(payload: dict) -> dict[str, str]:
         if any(term in key_lower for term in _MARKET_METADATA_KEY_TERMS):
             metadata[key] = value
     return metadata
+
+
+def _settlement_sources_from_payload(payload: dict) -> tuple[SettlementSource, ...]:
+    raw_sources = payload.get("settlement_sources") or payload.get("settlement_source_urls") or ()
+    if not isinstance(raw_sources, (list, tuple)):
+        raw_sources = (raw_sources,)
+    return tuple(
+        source
+        for raw_source in raw_sources
+        if (source := _source_from_raw(raw_source)) is not None
+    )
 
 
 def _to_cents(dollar_value: Any) -> int:
@@ -355,6 +367,8 @@ def _build_market(
         market_metadata=_extract_market_metadata(payload),
         rules_primary=str(payload.get("rules_primary") or ""),
         rules_secondary=str(payload.get("rules_secondary") or ""),
+        settlement_sources=_settlement_sources_from_payload(payload),
+        contract_terms_url=str(payload.get("contract_terms_url") or ""),
         settlement_timer_seconds=_optional_int(payload, "settlement_timer_seconds"),
         early_close_condition=str(payload.get("early_close_condition") or ""),
         expected_expiration_time=str(payload.get("expected_expiration_time") or ""),

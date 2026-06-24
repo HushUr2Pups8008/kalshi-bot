@@ -34,12 +34,18 @@ and never overwrites them.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 from polymarket.domain_key import pm_domain_key
+
+
+class MatcherWeightsUnverified(RuntimeError):
+    """Raised when matcher token weights are present but unsafe to use."""
 
 # Tunables. Operator may bump via runtime overrides in a follow-up.
 MIN_TOTAL_FOR_DOWNWEIGHT: int = 10
@@ -320,6 +326,59 @@ def load_weights(
         return data
     except (json.JSONDecodeError, OSError):
         return {}
+
+
+def load_verified_weights(
+    weights_path: Path = _WEIGHTS_PATH_DEFAULT,
+    *,
+    repo_root: Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Load weights only when the runtime file is parseable and git-clean.
+
+    Missing weights are a cold-start state and return ``{}``. A present but
+    malformed, untracked, staged, or unstaged-dirty weights file can directly
+    change candidate admission, so it is treated as unverified unless the
+    operator explicitly sets ``MATCHER_WEIGHTS_ALLOW_DIRTY=true``.
+    """
+    if not weights_path.exists():
+        return {}
+    try:
+        data = json.loads(weights_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise MatcherWeightsUnverified(f"matcher weights malformed: {weights_path}") from exc
+    if not isinstance(data, dict):
+        raise MatcherWeightsUnverified(f"matcher weights malformed: {weights_path}")
+
+    if os.getenv("MATCHER_WEIGHTS_ALLOW_DIRTY", "").strip().lower() == "true":
+        return data
+
+    root = repo_root or weights_path.resolve().parents[1]
+    rel_path = str(weights_path.resolve().relative_to(root.resolve()))
+    tracked = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--error-unmatch", rel_path],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if tracked.returncode != 0:
+        raise MatcherWeightsUnverified(f"matcher weights untracked: {weights_path}")
+
+    unstaged = subprocess.run(
+        ["git", "-C", str(root), "diff", "--quiet", "--", rel_path],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    staged = subprocess.run(
+        ["git", "-C", str(root), "diff", "--cached", "--quiet", "--", rel_path],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if unstaged.returncode != 0 or staged.returncode != 0:
+        raise MatcherWeightsUnverified(f"matcher weights dirty: {weights_path}")
+
+    return data
 
 
 def write_weights(

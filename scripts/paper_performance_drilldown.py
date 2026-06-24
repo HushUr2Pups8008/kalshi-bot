@@ -165,6 +165,16 @@ def close_time_from_snapshot(raw_snapshot: Any) -> datetime | None:
     return parse_ts(_find_close_time(snapshot))
 
 
+def snapshot_from_raw(raw_snapshot: Any) -> dict[str, Any] | None:
+    if not isinstance(raw_snapshot, str) or not raw_snapshot.strip():
+        return None
+    try:
+        snapshot = json.loads(raw_snapshot)
+    except json.JSONDecodeError:
+        return None
+    return snapshot if isinstance(snapshot, dict) else None
+
+
 def resolution_bucket(close_time: datetime | None, now: datetime) -> str:
     if close_time is None:
         return "unknown"
@@ -212,6 +222,50 @@ def open_resolution_bucket_rows(
         grouped.values(),
         key=lambda row: (_BUCKET_ORDER.get(row["bucket"], 99), row["venue"]),
     )
+
+
+def _snapshot_bid_dollars(snapshot: dict[str, Any], side: str) -> float | None:
+    if side == "no":
+        candidates = ("no_bid_dollars", "no_bid", "no_bid_cents")
+    else:
+        candidates = ("yes_bid_dollars", "yes_bid", "yes_bid_cents")
+    for key in candidates:
+        value = safe_float(snapshot.get(key))
+        if value is None:
+            continue
+        if key.endswith("_dollars"):
+            return value
+        return value / 100.0
+    return None
+
+
+def open_mark_summary(open_trades: list[dict[str, Any]]) -> dict[str, float]:
+    summary = {
+        "open_cost_dollars": 0.0,
+        "marked_kalshi_cost_dollars": 0.0,
+        "marked_kalshi_bid_value_dollars": 0.0,
+        "marked_kalshi_unrealized_pnl_dollars": 0.0,
+        "unknown_mark_cost_dollars": 0.0,
+    }
+    for trade in open_trades:
+        cost = safe_float(trade.get("cost_dollars")) or 0.0
+        summary["open_cost_dollars"] += cost
+        venue = str(trade.get("venue") or "kalshi").strip().lower() or "kalshi"
+        snapshot = snapshot_from_raw(trade.get("market_snapshot"))
+        side = str(trade.get("side") or "yes").strip().lower()
+        contracts = safe_float(trade.get("contracts")) or 0.0
+        bid = _snapshot_bid_dollars(snapshot or {}, side)
+        if venue == "kalshi" and bid is not None:
+            bid_value = contracts * bid
+            summary["marked_kalshi_cost_dollars"] += cost
+            summary["marked_kalshi_bid_value_dollars"] += bid_value
+        else:
+            summary["unknown_mark_cost_dollars"] += cost
+    summary["marked_kalshi_unrealized_pnl_dollars"] = (
+        summary["marked_kalshi_bid_value_dollars"]
+        - summary["marked_kalshi_cost_dollars"]
+    )
+    return summary
 
 
 def load_trades(path: Path) -> tuple[list[dict[str, Any]], set[str]]:
@@ -306,6 +360,13 @@ def summarize(path: Path, exclude_test: bool = False, *, now: datetime | None = 
         "holding_period_avg_hours": None,
         "holding_period_median_hours": None,
         "open_resolution_buckets": [],
+        "open_mark_summary": {
+            "open_cost_dollars": 0.0,
+            "marked_kalshi_cost_dollars": 0.0,
+            "marked_kalshi_bid_value_dollars": 0.0,
+            "marked_kalshi_unrealized_pnl_dollars": 0.0,
+            "unknown_mark_cost_dollars": 0.0,
+        },
     }
 
     if not trades:
@@ -336,6 +397,7 @@ def summarize(path: Path, exclude_test: bool = False, *, now: datetime | None = 
     stats["sources"] = group_trade_rows(trades, "signal_source", "(unknown)")
     stats["venues"] = group_trade_rows(trades, "venue", "kalshi")
     stats["open_resolution_buckets"] = open_resolution_bucket_rows(open_trades, columns, now)
+    stats["open_mark_summary"] = open_mark_summary(open_trades)
 
     signal_type_key = "signal_type" if "signal_type" in columns else ""
     if signal_type_key:

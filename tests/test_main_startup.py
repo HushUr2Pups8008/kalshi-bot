@@ -16,10 +16,12 @@ from main import (
     _is_cli_only_command,
     _log_bankroll_summary,
     _log_polymarket_account_summary,
+    _paper_open_exposure_drawdown_pct,
     _startup_probe_matched_tokens,
     _validate_startup_observability_probe_record,
     async_main,
 )
+from config import cfg
 
 
 def _tmp_root() -> Path:
@@ -58,6 +60,36 @@ def test_supported_python_guard_exits_with_actionable_message_for_older_versions
     output = stderr.getvalue()
     assert "Python 3.11+ is required. Detected: 3.9.6" in output
     assert "python3.11 -m venv .venv" in output
+
+
+def test_paper_open_exposure_drawdown_uses_mark_to_market_equity(monkeypatch):
+    monkeypatch.setattr(cfg, "bankroll", 100.0)
+    paper = SimpleNamespace(
+        db_path=Path("paper.db"),
+        get_notional_bankroll=lambda: 70.0,
+    )
+
+    with patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        return_value={"marked_value": 9.0},
+    ) as compute_marks:
+        drawdown = _paper_open_exposure_drawdown_pct(paper)
+
+    compute_marks.assert_called_once_with(Path("paper.db"))
+    assert drawdown == pytest.approx(0.21)
+
+
+def test_paper_open_exposure_drawdown_fails_closed_when_marks_unavailable(monkeypatch):
+    monkeypatch.setattr(cfg, "bankroll", 100.0)
+    paper = SimpleNamespace(
+        db_path=Path("paper.db"),
+        get_notional_bankroll=lambda: 70.0,
+    )
+
+    with patch("scripts.mark_open_positions.compute_open_position_marks", return_value=None):
+        drawdown = _paper_open_exposure_drawdown_pct(paper)
+
+    assert drawdown == pytest.approx(1.0)
 
 
 def test_runtime_instance_guard_blocks_second_long_running_instance():

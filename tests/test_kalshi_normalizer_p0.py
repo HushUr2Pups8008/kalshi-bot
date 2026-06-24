@@ -144,6 +144,34 @@ def test_p0_rest_001_list_payload_dollars_parses_cents_consistent():
     assert parsed_count > 0, "No markets in list fixture exercised parser"
 
 
+def test_market_normalizer_preserves_settlement_sources_on_market_object():
+    market = normalize_market_list_entry(
+        {
+            "ticker": "KXSETTLE-26DEC31",
+            "title": "Will the sample event happen?",
+            "status": "active",
+            "close_time": "2026-12-31T23:59:59Z",
+            "yes_bid_dollars": "0.41",
+            "yes_ask_dollars": "0.43",
+            "no_bid_dollars": "0.57",
+            "no_ask_dollars": "0.59",
+            "settlement_sources": [
+                {
+                    "name": "Official Agency",
+                    "url": "https://agency.example/results",
+                }
+            ],
+            "contract_terms_url": "https://kalshi.com/markets/KXSETTLE/terms",
+        }
+    )
+
+    assert len(market.settlement_sources) == 1
+    assert market.settlement_sources[0].label == "Official Agency"
+    assert market.settlement_sources[0].url == "https://agency.example/results"
+    assert market.settlement_sources[0].domain == "agency.example"
+    assert market.contract_terms_url == "https://kalshi.com/markets/KXSETTLE/terms"
+
+
 # ---------------------------------------------------------------------------
 # P0-REST-002 — legacy cents-int payload (no *_dollars)
 # ---------------------------------------------------------------------------

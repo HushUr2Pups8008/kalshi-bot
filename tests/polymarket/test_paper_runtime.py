@@ -11,6 +11,7 @@ from feeds import NewsItem
 from polymarket.models import PolymarketMarket
 from polymarket.paper_runtime import (
     PolymarketPaperRuntime,
+    _market_match_text,
     match_polymarket_markets,
     polymarket_paper_runtime_disabled_reason,
 )
@@ -45,6 +46,28 @@ def _market(**overrides) -> PolymarketMarket:
     }
     values.update(overrides)
     return PolymarketMarket(**values)
+
+
+def test_market_match_text_includes_polymarket_public_context_fields():
+    market = _market(
+        title="Will an agreement be signed?",
+        question="Will a ceasefire agreement be signed?",
+        description="Market resolves according to the official mediator statement.",
+        event_title="Middle East diplomacy",
+        series_title="International relations",
+        tags=("diplomacy", "iran"),
+        public_comments=("Mediator statement is the key source.",),
+        resolution_source="https://example.com/resolution",
+    )
+
+    text = _market_match_text(market)
+
+    assert "official mediator statement" in text
+    assert "Middle East diplomacy" in text
+    assert "International relations" in text
+    assert "diplomacy" in text
+    assert "Mediator statement is the key source." in text
+    assert "https://example.com/resolution" in text
 
 
 class _FakeClient:
@@ -95,8 +118,33 @@ async def test_cached_candidate_markets_excludes_suppressed_polymarket_categorie
     sports = _market(market_id="will-nba-finals-game-seven-happen", category="sports")
     culture = _market(market_id="will-tommy-lee-jones-attend", category="culture")
     macro = _market(market_id="will-fed-cut-rates", category="macro")
+    world_with_resolution_source = _market(
+        market_id="will-iran-ceasefire-be-signed",
+        category="world",
+        event_title="Middle East diplomacy",
+        tags=("geopolitics", "iran"),
+        resolution_source="https://reuters.com/world/",
+        volume_dollars=500.0,
+        open_interest_dollars=250.0,
+    )
+    world_without_resolution_source = _market(
+        market_id="will-rumor-trend-online",
+        category="world",
+        event_title="Middle East diplomacy",
+        tags=("geopolitics",),
+        resolution_source="",
+        volume_dollars=500.0,
+        open_interest_dollars=250.0,
+    )
     runtime = PolymarketPaperRuntime(
-        client=_FakeClient([sports, culture, macro, politics]),
+        client=_FakeClient([
+            sports,
+            culture,
+            macro,
+            politics,
+            world_with_resolution_source,
+            world_without_resolution_source,
+        ]),
         route_analysis=AsyncMock(),
         keyword_stats=None,
         market_limit=10,
@@ -105,7 +153,7 @@ async def test_cached_candidate_markets_excludes_suppressed_polymarket_categorie
 
     await runtime.warm_cache()
 
-    assert runtime.cached_candidate_markets() == [politics]
+    assert runtime.cached_candidate_markets() == [politics, world_with_resolution_source]
 
 
 @pytest.mark.asyncio

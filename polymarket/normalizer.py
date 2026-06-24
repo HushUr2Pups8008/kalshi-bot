@@ -40,6 +40,39 @@ def _parse_json_list(value: Any) -> list[Any]:
     return []
 
 
+def _text_tuple(value: Any, *keys: str) -> tuple[str, ...]:
+    items = _parse_json_list(value)
+    result: list[str] = []
+    for item in items:
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            text = next(
+                (
+                    str(item.get(key) or "").strip()
+                    for key in keys
+                    if str(item.get(key) or "").strip()
+                ),
+                "",
+            )
+        else:
+            text = ""
+        if text and text not in result:
+            result.append(text)
+    return tuple(result)
+
+
+def _nested_text(payload: dict[str, Any], parent: str, *keys: str) -> str:
+    nested = payload.get(parent)
+    if not isinstance(nested, dict):
+        return ""
+    for key in keys:
+        value = str(nested.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _outcome_dicts(payload: dict[str, Any]) -> list[dict[str, Any]]:
     outcomes = _parse_json_list(payload.get("outcomes"))
     if not outcomes:
@@ -100,4 +133,16 @@ def normalize_polymarket_market(payload: dict[str, Any]) -> PolymarketMarket:
         question=str(payload.get("question") or "").strip(),
         subtitle=str(payload.get("subtitle") or "").strip(),
         category=str(payload.get("category") or "").strip().lower(),
+        resolution_source=str(
+            payload.get("resolutionSource")
+            or payload.get("resolution_source")
+            or ""
+        ).strip(),
+        description=str(payload.get("description") or "").strip(),
+        event_title=str(payload.get("eventTitle") or _nested_text(payload, "event", "title", "name") or "").strip(),
+        event_slug=str(payload.get("eventSlug") or _nested_text(payload, "event", "slug", "id") or "").strip(),
+        series_title=str(payload.get("seriesTitle") or _nested_text(payload, "series", "title", "name") or "").strip(),
+        series_slug=str(payload.get("seriesSlug") or _nested_text(payload, "series", "slug", "id") or "").strip(),
+        tags=_text_tuple(payload.get("tags"), "label", "name", "slug"),
+        public_comments=_text_tuple(payload.get("comments"), "body", "text", "comment"),
     )

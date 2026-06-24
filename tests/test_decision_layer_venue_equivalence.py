@@ -1,7 +1,7 @@
 """Decision-layer venue-equivalence pins (PROFIT-VENUE-PARITY V25 + V13).
 
 The venue-parity audit's central finding: the DECISION core — blend(), kelly_bet(),
-evaluate_readiness() (G1-G6) — is venue-blind by construction; every Kalshi and
+evaluate_readiness() (G1-G7) — is venue-blind by construction; every Kalshi and
 Polymarket candidate converges on these exact functions. All real venue
 divergences live in the feedback/learning + recording layers, NOT here. These
 tests are the regression net that protects that invariant: a future refactor that
@@ -55,7 +55,7 @@ def _decision_key(d):
 
 def test_readiness_verdict_identical_across_venue_labels():
     """Same numeric blend result, different venue/series label -> identical
-    readiness verdict. Proves no venue leakage into G1-G6 (would fail if any
+    readiness verdict. Proves no venue leakage into G1-G7 (would fail if any
     gate started reading the venue/series field)."""
     rc = 0.30
     kalshi = evaluate_readiness(_readiness_input("kalshi"), rc)
@@ -72,7 +72,7 @@ def test_fast_lane_exempt_from_g2_g5_g6_for_both_venues():
     NO evidence_source_classes/drift/recency must not raise."""
     for venue in ("kalshi", "polymarket_us"):
         d = evaluate_readiness(_readiness_input(venue, blended_confidence=0.9), 0.30)
-        assert d.applied_conditions == ("G1", "G3", "G4")
+        assert d.applied_conditions == ("G1", "G3", "G4", "G7")
         for g in ("G2", "G5", "G6"):
             assert g not in d.applied_conditions
         assert d.source_class_count is None

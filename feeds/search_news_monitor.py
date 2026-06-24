@@ -28,6 +28,8 @@ from config import (
     ENABLE_MARKET_FIRST_QUERY_SHADOW,
     ENABLE_NEWS_EDGE_PRIORITIZATION,
     MARKET_SERIES_BLOCKLIST_PREFIXES,
+    MARKET_SOURCE_HINTS_QUERY_CAP,
+    MARKET_SOURCE_HINTS_QUERY_MODE,
     NEWS_EDGE_SERIES,
 )
 from feeds import NewsItem
@@ -181,6 +183,8 @@ def _markets_to_queries(
     *,
     series_metadata_by_ticker: "dict[str, KalshiSeriesMetadata] | None" = None,
     market_first_query_shadow: bool = False,
+    market_source_hint_query_mode: str = "off",
+    market_source_hint_query_cap: int | None = None,
 ) -> list[str]:
     """
     Convert active market titles to deduplicated search queries.
@@ -238,6 +242,16 @@ def _markets_to_queries(
 
     seen_sets: set[frozenset] = set()
     queries: list[str] = []
+    source_hint_mode = (market_source_hint_query_mode or "off").strip().lower()
+    if market_first_query_shadow and source_hint_mode == "off":
+        source_hint_mode = "shadow"
+    source_hint_enabled = source_hint_mode in {"shadow", "production"}
+    source_hint_cap = (
+        SEARCH_MAX_QUERIES
+        if market_source_hint_query_cap is None
+        else max(0, int(market_source_hint_query_cap))
+    )
+    source_hint_queries = 0
 
     for market in sorted_markets:
         if len(queries) >= SEARCH_MAX_QUERIES:
@@ -261,7 +275,11 @@ def _markets_to_queries(
             continue
         seen_sets.add(token_set)
         queries.append(" ".join(tokens))
-        if market_first_query_shadow and len(queries) < SEARCH_MAX_QUERIES:
+        if (
+            source_hint_enabled
+            and source_hint_queries < source_hint_cap
+            and len(queries) < SEARCH_MAX_QUERIES
+        ):
             series_key = (
                 (getattr(market, "series_ticker", None) or getattr(market, "ticker", "") or "")
                 .split("-")[0]
@@ -271,15 +289,31 @@ def _markets_to_queries(
             context = build_market_contract_context(market, series_metadata)
             for shadow_query in build_market_first_queries(
                 context,
-                max_queries=SEARCH_MAX_QUERIES - len(queries),
+                max_queries=min(
+                    SEARCH_MAX_QUERIES - len(queries),
+                    source_hint_cap - source_hint_queries,
+                ),
             ):
                 if shadow_query in queries:
                     continue
                 queries.append(shadow_query)
+                source_hint_queries += 1
                 if len(queries) >= SEARCH_MAX_QUERIES:
                     break
 
     return queries
+
+
+def _tag_source_hint_item(item: NewsItem, query: str, mode: str) -> NewsItem:
+    if mode.strip().lower() not in {"shadow", "production"}:
+        return item
+    if not query.startswith("site:"):
+        return item
+    domain = query.split(maxsplit=1)[0].removeprefix("site:")
+    item.retrieval_mode = "source_hint"
+    item.source_hint_query = query
+    item.source_hint_domain = domain
+    return item
 
 
 async def run_search_news_monitor(
@@ -324,15 +358,19 @@ async def run_search_news_monitor(
     while True:
         try:
             markets = get_markets()
+            source_hint_query_mode = (MARKET_SOURCE_HINTS_QUERY_MODE or "off").strip().lower()
+            source_hint_query_enabled = source_hint_query_mode in {"shadow", "production"}
             series_metadata = (
                 get_series_metadata()
-                if ENABLE_MARKET_FIRST_QUERY_SHADOW and get_series_metadata is not None
+                if source_hint_query_enabled and get_series_metadata is not None
                 else None
             )
             queries = _markets_to_queries(
                 markets,
                 series_metadata_by_ticker=series_metadata,
                 market_first_query_shadow=ENABLE_MARKET_FIRST_QUERY_SHADOW,
+                market_source_hint_query_mode=source_hint_query_mode,
+                market_source_hint_query_cap=MARKET_SOURCE_HINTS_QUERY_CAP,
             )
 
             if not queries:
@@ -373,7 +411,7 @@ async def run_search_news_monitor(
                     if _q_count >= _c:
                         return
                     _q_count += 1
-                    await _cb(item)
+                    await _cb(_tag_source_hint_item(item, q, source_hint_query_mode))
 
                 await asyncio.gather(
                     *[

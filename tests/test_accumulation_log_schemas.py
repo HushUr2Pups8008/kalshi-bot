@@ -114,6 +114,38 @@ def test_log_dossier_update_emits_contract_schema_exactly(tmp_path: Path):
     assert record["in_recovery"] is False
 
 
+def test_log_match_suppressed_emits_score_and_venue_metadata(tmp_path: Path):
+    logger = TradeLogger(path=tmp_path / "trades.jsonl")
+    with patch.object(logger, "_write") as write_mock:
+        logger.log_match_suppressed(
+            source="Reuters",
+            headline="Trump says talks changed",
+            ticker="KXTRUMPUAP-26MAY-JUL01",
+            market_title="Will Trump discuss UAPs?",
+            match_score=0.06714,
+            matched_tokens=["trump"],
+            heuristic_flags=["near_threshold_score"],
+            reason="near_threshold_score",
+            raw_score=0.08214,
+            adjusted_score=0.06714,
+            threshold=0.06,
+            token_weight_multiplier=0.81734,
+            venue="kalshi",
+            market_prefix="KXTRUMPUAP",
+        )
+
+    write_mock.assert_called_once()
+    record = write_mock.call_args.args[0]
+    assert record["type"] == "MATCH_SUPPRESSED"
+    assert record["match_score"] == pytest.approx(0.0671)
+    assert record["raw_score"] == pytest.approx(0.0821)
+    assert record["adjusted_score"] == pytest.approx(0.0671)
+    assert record["threshold"] == pytest.approx(0.06)
+    assert record["token_weight_multiplier"] == pytest.approx(0.8173)
+    assert record["venue"] == "kalshi"
+    assert record["market_prefix"] == "KXTRUMPUAP"
+
+
 def test_log_evidence_ingestion_missing_required_field_fails_clearly(tmp_path: Path):
     logger = TradeLogger(path=tmp_path / "trades.jsonl")
     kwargs = _valid_evidence_ingestion_kwargs()

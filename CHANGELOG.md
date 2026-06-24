@@ -19,6 +19,81 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.21] - 2026-06-23
+
+### Added
+
+- **Capital-protection readiness gate.** `tasks/trade_readiness_gate.py`
+  adds G7 defensive failures for open-exposure drawdown, zero-liquidity
+  markets, and adverse entry-side price momentum. `tasks/blend_task.py`
+  now forwards normalized market liquidity, price momentum, and intended side
+  into readiness evaluation; `main.py` now injects mark-to-market open-book
+  drawdown from the active paper DB so these checks can block new entries
+  before execution.
+- **Open-position mark diagnostics.** `scripts/paper_performance_drilldown.py`
+  now reports open cost, Kalshi bid-marked value, Kalshi unrealized P&L, and
+  unknown-mark cost; `scripts/daily_review.py` renders those values in the
+  execution section so open risk is visible beside realized P&L.
+- **Matcher-weight verification gate.** `analysis.match_feedback` adds a
+  verified loader that rejects malformed, untracked, staged, or unstaged-dirty
+  matcher token weights. `analysis.market_matcher` fails closed when weights
+  are unverified rather than admitting candidates from unstable runtime state.
+
+### Fixed
+
+- New-entry flow now defaults to capital protection when the market is
+  illiquid, price momentum is moving against the intended side, or the local
+  matcher-weight file is unsafe.
+
+### Verification
+
+- `.venv/bin/pytest tests/test_trade_readiness_gate.py tests/test_blend_task.py::test_readiness_input_carries_capital_defense_market_fields tests/test_paper_performance_drilldown.py::test_open_mark_summary_marks_kalshi_bid_and_tracks_unknowns tests/test_daily_review.py::test_build_daily_review_formats_pipeline_stages tests/test_match_feedback.py::TestWeightsFileRoundTrip tests/test_market_matcher.py::TestFindCandidates::test_unverified_matcher_weights_fail_closed tests/test_market_matcher.py::TestFindCandidates::test_clear_geopolitical_headline_matches_correct_market -q`
+
+## [0.33.20] - 2026-06-21
+
+### Added
+
+- **Last-10-PR reporting carry-through audit.** Added
+  `docs/governance/last_10_pr_reporting_audit_20260621.md`, mapping PRs
+  #156-#147 to the daily-report metrics that now make their behavior visible
+  or explicitly marking harness-only work as not requiring a trading metric.
+- **Daily-report software version traceability.** `scripts/daily_review.py`
+  now prints `Software version : vX.Y.Z` from the repo-root `VERSION` file near
+  the top of every report, so operator metrics can be tied to the exact
+  software revision/reporting contract that produced them.
+- **Counterfactual false-negative model replay.** `scripts/counterfactual_llm_eval.py`
+  can hydrate historical `neutral|none + no_keywords` rows from read-only
+  Kalshi market details, then compare context-ready rows across local Ollama
+  models. Daily review can enable the same hydration via
+  `DAILY_REVIEW_COUNTERFACTUAL_HYDRATE_KALSHI_MARKETS=true`.
+
+### Changed
+
+- Daily reporting now surfaces the prior settlement/routing/parity work more
+  directly: source-hint and settlement-source attribution, match-weight
+  prefixes, Polymarket settlement feedback, open exposure horizon, no-keyword
+  counterfactual eval counts, and the since-restart money path are all visible
+  in the generated operator report.
+
+### Fixed
+
+- Daily review report writes now replace the prior snapshot atomically instead
+  of appending repeated full snapshots into one daily artifact.
+- `OPPORTUNITY` records now carry the same source-hint and settlement-source
+  attribution metadata used by downstream signal analysis, so future operator
+  reports can distinguish real `unknown` values from missing propagation.
+
+### Verification
+
+- Replayed `logs/trades/live/trades.jsonl` for 2026-06-21 with Kalshi-detail
+  hydration: 19/19 `neutral|none + no_keywords` rows became context-ready and
+  were evaluated by both local models (`qwen2.5:7b`: 1 paper-candidate-positive,
+  `qwen3:14b`: 0; both 0 errors).
+- `scripts/decision_funnel_summary.py --path logs/trades/live/trades.jsonl --since 2026-06-21`
+  confirms the daily/reporting attribution surfaces are populated.
+- Full verification passed locally: `ruff` on touched files plus pytest
+  (`2788 passed, 4 skipped, 1 deselected, 71 xfailed`).
+
 ## [0.33.19] - 2026-06-17
 
 ### Fixed

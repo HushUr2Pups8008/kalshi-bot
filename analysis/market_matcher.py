@@ -33,6 +33,46 @@ from utils.logger import get_logger, trade_log, write_trade_log_async
 
 log = get_logger("market_matcher")
 
+
+def _diagnostic_venue_for_market(market: KalshiMarket, market_prefix: str) -> str:
+    raw_venue = getattr(market, "venue", None)
+    if hasattr(raw_venue, "value"):
+        raw_venue = raw_venue.value
+    if raw_venue is not None:
+        normalized = str(raw_venue).strip().lower()
+        if normalized:
+            return normalized
+    if market_prefix.startswith("polymarket_") or market_prefix.startswith("polymarket:"):
+        return "polymarket"
+    return "kalshi"
+
+
+def _contract_context_tokens(market: Any) -> set[str]:
+    chunks: list[str] = []
+    for attr in ("rules_primary", "rules_secondary", "resolution_source", "contract_terms_url"):
+        value = getattr(market, attr, "")
+        if value:
+            chunks.append(str(value))
+    for source in getattr(market, "settlement_sources", ()) or ():
+        if isinstance(source, dict):
+            values = (
+                source.get("label"),
+                source.get("name"),
+                source.get("source"),
+                source.get("title"),
+                source.get("domain"),
+                source.get("url"),
+            )
+        else:
+            values = (
+                getattr(source, "label", ""),
+                getattr(source, "domain", ""),
+                getattr(source, "url", ""),
+            )
+        chunks.extend(str(value) for value in values if value)
+    return _tokenize(" ".join(chunks))
+
+
 # Live thresholds (tighter — only trade high-confidence matches)
 LIVE_MIN_MATCH_SCORE = 0.06
 LIVE_MAX_CANDIDATES  = 5
@@ -983,10 +1023,18 @@ class MarketMatcher:
         # downweights once per find_candidates call. Re-read on every call to
         # pick up aggregator updates without a process restart. JSON parse is
         # microsecond-scale; weights file is small (one row per token×prefix
-        # that has crossed MIN_TOTAL_FOR_DOWNWEIGHT). Returns {} if file
-        # absent (cold-start / first-time install).
-        from analysis.match_feedback import load_weights as _load_match_weights
-        _token_weights = _load_match_weights()
+        # that has crossed MIN_TOTAL_FOR_DOWNWEIGHT). Missing file returns {}
+        # for cold-start, but present dirty/malformed runtime weights fail
+        # closed because they directly change candidate admission.
+        from analysis.match_feedback import (
+            MatcherWeightsUnverified,
+            load_verified_weights as _load_match_weights,
+        )
+        try:
+            _token_weights = _load_match_weights()
+        except MatcherWeightsUnverified as exc:
+            log.error("Matcher token weights unverified; failing closed: %s", exc)
+            return []
 
         news_tokens = _tokenize(f"{news.headline} {news.body}")
         markets = (
@@ -1003,7 +1051,11 @@ class MarketMatcher:
         scored: list[tuple[KalshiMarket, float, dict[str, Any]]] = []
         for market in markets:
             market_title_tokens = _tokenize(market.title)
-            market_tokens = market_title_tokens | _tokenize(market.subtitle)
+            market_tokens = (
+                market_title_tokens
+                | _tokenize(market.subtitle)
+                | _contract_context_tokens(market)
+            )
             # Require the market itself to contain at least one geopolitical token.
             # This prevents sports/financial markets from ever matching geo news.
             if not (market_tokens & _GEOPOLITICAL_BOOST):
@@ -1041,20 +1093,22 @@ class MarketMatcher:
                 market_title_meaningful=meaningful_mt,
             )
             score *= _weak_match_penalty_multiplier(set(structure_flags))
+            ticker_prefix = (market.ticker or "").split("-", 1)[0]
+            pre_weight_score = score
+            token_weight_multiplier = 1.0
 
             # PROFIT-MATCH-DYNAMIC: apply per-(token, market_prefix)
             # downweight from the learning loop. Combine all overlap-token
             # weights so one generic bridge token does not dominate a stronger
             # multi-token match that also contains full-weight support.
             if overlap and _token_weights:
-                ticker_prefix = (market.ticker or "").split("-", 1)[0]
-                pre_weight_score = score
                 weight_details = _token_downweight_details(
                     overlap,
                     ticker_prefix,
                     _token_weights,
                 )
-                score *= weight_details["final_multiplier"]
+                token_weight_multiplier = weight_details["final_multiplier"]
+                score *= token_weight_multiplier
                 await write_trade_log_async(
                     trade_log.log_match_weight_applied,
                     source=news.source,
@@ -1197,6 +1251,12 @@ class MarketMatcher:
                         matched_tokens=sorted(overlap),
                         heuristic_flags=heuristic_flags,
                         reason=reason,
+                        raw_score=pre_weight_score,
+                        adjusted_score=score,
+                        threshold=min_score,
+                        token_weight_multiplier=token_weight_multiplier,
+                        venue=_diagnostic_venue_for_market(market, ticker_prefix),
+                        market_prefix=ticker_prefix,
                     )
                 except Exception as exc:
                     log.warning(

@@ -465,3 +465,213 @@ def test_print_summary_handles_absent_analysis_rejected_events_gracefully(capsys
     assert "Pre-signal rejections         : 0" in output
     assert "No-signal exits               : not directly observable in trades.jsonl" in output
     assert "Pre-Signal Rejection Reasons" in output
+
+
+def test_summarize_attributes_match_diagnostic_loss(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "MATCH_DIAGNOSTIC",
+                "ticker": "KXTRUMPUAP-26MAY-JUL01",
+                "source": "Just In News",
+                "match_score": 0.0671,
+                "would_fail_pre_llm_gate": True,
+                "ts": "2026-04-11T00:00:00+00:00",
+            },
+            {
+                "type": "MATCH_DIAGNOSTIC",
+                "ticker": "KXVISITIRAN-26JUL01-JVAN",
+                "source": "France 24",
+                "match_score": 0.0973,
+                "would_fail_pre_llm_gate": False,
+                "ts": "2026-04-11T00:01:00+00:00",
+            },
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ticker": "KXVISITIRAN-26JUL01-JVAN",
+                "source": "France 24",
+                "ts": "2026-04-11T00:02:00+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+
+    assert stats["match_diagnostics_total"] == 2
+    assert stats["signal_analysis_detail_total"] == 1
+    assert stats["match_to_signal_detail_gap"] == 1
+    assert stats["match_diagnostic_pre_llm_gate"]["would_fail"] == 1
+    assert stats["match_diagnostic_pre_llm_gate"]["would_pass"] == 1
+    assert stats["match_diagnostic_sources"]["Just In News"] == 1
+    assert stats["match_diagnostic_tickers"]["KXTRUMPUAP-26MAY-JUL01"] == 1
+
+
+def test_summarize_attributes_match_suppression_and_token_weights(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "MATCH_SUPPRESSED",
+                "ticker": "KXTRUMPUAP-26MAY-JUL01",
+                "source": "Just In News",
+                "reason": "low_token_overlap+near_threshold_score",
+                "match_score": 0.0671,
+                "raw_score": 0.0821,
+                "adjusted_score": 0.0671,
+                "threshold": 0.06,
+                "token_weight_multiplier": 0.8173,
+                "venue": "kalshi",
+                "market_prefix": "KXTRUMPUAP",
+                "matched_tokens": ["trump"],
+                "ts": "2026-04-11T00:00:00+00:00",
+            },
+            {
+                "type": "MATCH_WEIGHT_APPLIED",
+                "ticker": "KXZELENSKYYOUT-26JUL01",
+                "source": "The Kyiv Independent",
+                "market_prefix": "KXZELENSKYYOUT",
+                "pre_weight_score": 0.0666,
+                "post_weight_score": 0.0174,
+                "final_multiplier": 0.2606,
+                "token_weights": {"ukraine": {"weight": 0.2606, "status": "automatic"}},
+                "tokens": ["ukraine"],
+                "ts": "2026-04-11T00:01:00+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+
+    assert stats["match_suppressed_reasons"]["low_token_overlap"] == 1
+    assert stats["match_suppressed_reasons"]["near_threshold_score"] == 1
+    assert stats["match_suppressed_sources"]["Just In News"] == 1
+    assert stats["match_suppressed_tokens"]["trump"] == 1
+    assert stats["match_suppressed_column_coverage"]["raw_score"] == 1
+    assert stats["match_suppressed_column_coverage"]["adjusted_score"] == 1
+    assert stats["match_suppressed_column_coverage"]["threshold"] == 1
+    assert stats["match_suppressed_column_coverage"]["token_weight_multiplier"] == 1
+    assert stats["match_suppressed_column_coverage"]["venue"] == 1
+    assert stats["match_suppressed_column_coverage"]["market_prefix"] == 1
+    assert stats["match_suppressed_venues"]["kalshi"] == 1
+    assert stats["match_suppressed_examples"][0]["raw_score"] == pytest.approx(0.0821)
+    assert stats["match_suppressed_examples"][0]["adjusted_score"] == pytest.approx(0.0671)
+    assert stats["match_suppressed_examples"][0]["threshold"] == pytest.approx(0.06)
+    assert stats["match_suppressed_examples"][0]["token_weight_multiplier"] == pytest.approx(0.8173)
+    assert stats["match_weight_applied_total"] == 1
+    assert stats["match_weight_tokens"]["ukraine"] == 1
+    assert stats["match_weight_prefixes"]["KXZELENSKYYOUT"] == 1
+    assert stats["match_weight_score_delta_total"] == pytest.approx(-0.0492)
+
+
+def test_summarize_attributes_opportunities_and_skips(local_tmp_dir, capsys):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "OPPORTUNITY",
+                "ticker": "KXVISITIRAN-26JUL01-JVAN",
+                "source": "France 24",
+                "source_class": "news",
+                "retrieval_mode": "source_hint",
+                "evidence_id": "ev-op-1",
+                "settlement_source_match": True,
+                "ts": "2026-04-11T00:00:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "ticker": "KXVISITIRAN-26JUL01-JVAN",
+                "source": "France 24",
+                "reason": "price 1.0c is near limit",
+                "signal_meta": {
+                    "trigger_evidence_id": "ev-skip-1",
+                    "trigger_evidence_source_class": "regional",
+                    "source_lane": "rss",
+                },
+                "ts": "2026-04-11T00:01:00+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+
+    assert stats["opportunity_sources"]["France 24"] == 1
+    assert stats["opportunity_source_classes"]["news"] == 1
+    assert stats["opportunity_retrieval_modes"]["source_hint"] == 1
+    assert stats["opportunity_evidence_ids"]["ev-op-1"] == 1
+    assert stats["opportunity_settlement_source_matches"]["True"] == 1
+    assert stats["skip_sources"]["France 24"] == 1
+    assert stats["skip_source_classes"]["regional"] == 1
+    assert stats["skip_retrieval_modes"]["rss"] == 1
+    assert stats["skip_evidence_ids"]["ev-skip-1"] == 1
+    assert stats["skip_settlement_source_matches"]["unknown"] == 1
+
+    print_summary(stats, top=5, since=None, until=None)
+    output = capsys.readouterr().out
+    assert "Opportunity Attribution: Sources" in output
+    assert "Opportunity Attribution: Settlement-Source Match" in output
+    assert "Skip Attribution: Evidence IDs" in output
+    assert "ev-skip-1" in output
+
+
+def test_print_summary_includes_match_attribution_sections(capsys, local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "MATCH_DIAGNOSTIC",
+                "ticker": "KXTRUMPUAP-26MAY-JUL01",
+                "source": "Just In News",
+                "would_fail_pre_llm_gate": True,
+                "ts": "2026-04-11T00:00:00+00:00",
+            },
+            {
+                "type": "MATCH_SUPPRESSED",
+                "ticker": "KXTRUMPUAP-26MAY-JUL01",
+                "source": "Just In News",
+                "reason": "low_token_overlap+near_threshold_score",
+                "raw_score": 0.0821,
+                "adjusted_score": 0.0671,
+                "threshold": 0.06,
+                "token_weight_multiplier": 0.8173,
+                "venue": "kalshi",
+                "market_prefix": "KXTRUMPUAP",
+                "matched_tokens": ["trump"],
+                "ts": "2026-04-11T00:01:00+00:00",
+            },
+            {
+                "type": "MATCH_WEIGHT_APPLIED",
+                "ticker": "KXZELENSKYYOUT-26JUL01",
+                "source": "The Kyiv Independent",
+                "market_prefix": "KXZELENSKYYOUT",
+                "pre_weight_score": 0.0666,
+                "post_weight_score": 0.0174,
+                "final_multiplier": 0.2606,
+                "token_weights": {"ukraine": {"weight": 0.2606, "status": "automatic"}},
+                "tokens": ["ukraine"],
+                "ts": "2026-04-11T00:02:00+00:00",
+            },
+        ],
+    )
+    stats = summarize(path, since=None, until=None)
+
+    print_summary(stats, top=5, since=None, until=None)
+    output = capsys.readouterr().out
+
+    assert "Match Attribution" in output
+    assert "Match diagnostics            : 1" in output
+    assert "Match -> analysis detail gap : 1" in output
+    assert "Pre-LLM quality gate" in output
+    assert "Match Suppression Reasons" in output
+    assert "low_token_overlap" in output
+    assert "Match Suppression Column Coverage" in output
+    assert "raw_score               : 1/1" in output
+    assert "Match Suppression Venues" in output
+    assert "kalshi" in output
+    assert "raw=0.0821 adjusted=0.0671 threshold=0.06 multiplier=0.8173" in output
+    assert "Match Weight Tokens" in output
+    assert "ukraine" in output

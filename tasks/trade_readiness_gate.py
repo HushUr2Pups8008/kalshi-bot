@@ -130,6 +130,16 @@ G3_OVERRIDE_MULTIPLIER = 1.5
 G4_REGIME_CONFIDENCE_THRESHOLD = 0.20
 
 G6_RECENCY_THRESHOLD = 0.30
+G6_RECENCY_MIN_THRESHOLD = 0.20
+G6_RECENCY_MAX_THRESHOLD = 0.45
+G6_NEAR_CLOSE_SECONDS = 86_400
+G6_SOON_CLOSE_SECONDS = 3 * 86_400
+G6_LONG_HORIZON_SECONDS = 14 * 86_400
+G6_DURABLE_SOURCE_CLASSES = {"official", "official_government", "wire"}
+G6_WEAK_SOURCE_CLASSES = {"other", "social", "unknown"}
+
+G7_MAX_OPEN_EXPOSURE_DRAWDOWN_PCT = 0.20
+G7_MIN_MARKET_LIQUIDITY_DOLLARS = 0.01
 
 FAST_SOURCE_LANE = "fast"
 
@@ -191,7 +201,7 @@ def evaluate_readiness(blend_result: Any, regime_confidence: float) -> Readiness
 
     scaled_confidence = blended_confidence * validated_regime_confidence
     failure_reasons: list[str] = []
-    applied_conditions = ["G1", "G3", "G4"]
+    applied_conditions = ["G1", "G3", "G4", "G7"]
 
     if scaled_confidence < g1_threshold:
         failure_reasons.append("G1_blended_confidence")
@@ -206,6 +216,8 @@ def evaluate_readiness(blend_result: Any, regime_confidence: float) -> Readiness
 
     if validated_regime_confidence < G4_REGIME_CONFIDENCE_THRESHOLD:
         failure_reasons.append("G4_regime_confidence")
+
+    failure_reasons.extend(_g7_capital_protection_failures(blend_result))
 
     source_class_count: int | None = None
     recency_score: float | None = None
@@ -224,9 +236,9 @@ def evaluate_readiness(blend_result: Any, regime_confidence: float) -> Readiness
             failure_reasons.append("G5_dossier_drift_suspect")
 
         recency_score = _require_probability_field(blend_result, "recency_score")
-        recency_threshold = G6_RECENCY_THRESHOLD
-        recency_distance = recency_score - G6_RECENCY_THRESHOLD
-        if recency_score < G6_RECENCY_THRESHOLD:
+        recency_threshold = _g6_recency_threshold(blend_result, source_classes)
+        recency_distance = recency_score - recency_threshold
+        if recency_score < recency_threshold:
             failure_reasons.append("G6_recency_score")
 
     return ReadinessDecision(
@@ -260,6 +272,73 @@ def _readiness_edge_override(
     return None
 
 
+def _g6_recency_threshold(blend_result: Any, source_classes: tuple[str, ...]) -> float:
+    normalized = {source_class.strip().lower() for source_class in source_classes}
+    threshold = G6_RECENCY_THRESHOLD
+
+    if normalized & G6_WEAK_SOURCE_CLASSES:
+        threshold += 0.05
+    elif normalized and normalized <= G6_DURABLE_SOURCE_CLASSES:
+        threshold -= 0.04
+    elif normalized & G6_DURABLE_SOURCE_CLASSES:
+        threshold -= 0.02
+
+    time_to_close_seconds = _optional_non_negative_field(blend_result, "time_to_close_seconds")
+    if time_to_close_seconds is not None:
+        if time_to_close_seconds <= G6_NEAR_CLOSE_SECONDS:
+            threshold += 0.08
+        elif time_to_close_seconds <= G6_SOON_CLOSE_SECONDS:
+            threshold += 0.04
+        elif time_to_close_seconds >= G6_LONG_HORIZON_SECONDS:
+            threshold -= 0.03
+
+    if _optional_bool_field(blend_result, "settlement_source_relevant") is True:
+        threshold -= 0.04
+
+    return round(
+        min(G6_RECENCY_MAX_THRESHOLD, max(G6_RECENCY_MIN_THRESHOLD, threshold)),
+        4,
+    )
+
+
+def _g7_capital_protection_failures(blend_result: Any) -> list[str]:
+    failures: list[str] = []
+
+    drawdown_pct = _optional_non_negative_field(
+        blend_result,
+        "open_exposure_drawdown_pct",
+    )
+    if (
+        drawdown_pct is not None
+        and drawdown_pct > G7_MAX_OPEN_EXPOSURE_DRAWDOWN_PCT
+    ):
+        failures.append("G7_open_exposure_drawdown")
+
+    liquidity_dollars = _optional_non_negative_field(
+        blend_result,
+        "market_liquidity_dollars",
+    )
+    if (
+        liquidity_dollars is not None
+        and liquidity_dollars < G7_MIN_MARKET_LIQUIDITY_DOLLARS
+    ):
+        failures.append("G7_zero_liquidity")
+
+    price_momentum_cents = _optional_real_field(
+        blend_result,
+        "market_price_momentum_cents",
+    )
+    if price_momentum_cents is not None:
+        intended_side = _optional_text_field(blend_result, "intended_side")
+        if (
+            (intended_side == "yes" and price_momentum_cents < 0.0)
+            or (intended_side == "no" and price_momentum_cents > 0.0)
+        ):
+            failures.append("G7_adverse_price_momentum")
+
+    return failures
+
+
 def _field(blend_result: Any, name: str) -> Any:
     if isinstance(blend_result, Mapping):
         if name in blend_result:
@@ -269,6 +348,12 @@ def _field(blend_result: Any, name: str) -> Any:
     raise ReadinessInputError(f"blend_result missing required field: {name}")
 
 
+def _optional_field(blend_result: Any, name: str) -> Any:
+    if isinstance(blend_result, Mapping):
+        return blend_result.get(name)
+    return getattr(blend_result, name, None)
+
+
 def _require_text(blend_result: Any, name: str) -> str:
     value = _field(blend_result, name)
     if not isinstance(value, str) or not value.strip():
@@ -276,8 +361,29 @@ def _require_text(blend_result: Any, name: str) -> str:
     return value.strip()
 
 
+def _optional_text_field(blend_result: Any, name: str) -> str | None:
+    value = _optional_field(blend_result, name)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ReadinessInputError(f"{name} must be a non-empty string")
+    normalized = value.strip().lower()
+    if name == "intended_side" and normalized not in {"yes", "no"}:
+        raise ReadinessInputError(f"{name} must be yes or no")
+    return normalized
+
+
 def _require_bool(blend_result: Any, name: str) -> bool:
     value = _field(blend_result, name)
+    if not isinstance(value, bool):
+        raise ReadinessInputError(f"{name} must be a bool")
+    return value
+
+
+def _optional_bool_field(blend_result: Any, name: str) -> bool | None:
+    value = _optional_field(blend_result, name)
+    if value is None:
+        return None
     if not isinstance(value, bool):
         raise ReadinessInputError(f"{name} must be a bool")
     return value
@@ -309,6 +415,23 @@ def _require_non_negative_field(blend_result: Any, name: str) -> float:
     if numeric < 0.0:
         raise ReadinessInputError(f"{name} must be non-negative")
     return numeric
+
+
+def _optional_non_negative_field(blend_result: Any, name: str) -> float | None:
+    value = _optional_field(blend_result, name)
+    if value is None:
+        return None
+    numeric = _require_real(name, value)
+    if numeric < 0.0:
+        raise ReadinessInputError(f"{name} must be non-negative")
+    return numeric
+
+
+def _optional_real_field(blend_result: Any, name: str) -> float | None:
+    value = _optional_field(blend_result, name)
+    if value is None:
+        return None
+    return _require_real(name, value)
 
 
 def _require_real(name: str, value: Any) -> float:

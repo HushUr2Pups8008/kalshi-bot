@@ -660,6 +660,17 @@ ENABLE_MARKET_FIRST_QUERY_SHADOW: bool = _parse_bool_env(
     "ENABLE_MARKET_FIRST_QUERY_SHADOW",
     default="false",
 )
+_MARKET_SOURCE_HINTS_QUERY_MODE_ENV = os.getenv("MARKET_SOURCE_HINTS_QUERY_MODE")
+MARKET_SOURCE_HINTS_QUERY_MODE: str = (
+    _MARKET_SOURCE_HINTS_QUERY_MODE_ENV.strip().lower()
+    if _MARKET_SOURCE_HINTS_QUERY_MODE_ENV is not None
+    else (
+        "production"
+        if _resolve_market_source_hints_mode() == "production"
+        else ("shadow" if ENABLE_MARKET_FIRST_QUERY_SHADOW else "off")
+    )
+)
+MARKET_SOURCE_HINTS_QUERY_CAP: int = int(os.getenv("MARKET_SOURCE_HINTS_QUERY_CAP", "2"))
 
 # Shadow-only per-fresh-item assignment diagnostics. DEFAULT OFF.
 ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW: bool = _parse_bool_env(
@@ -1509,9 +1520,9 @@ class BotConfig:
                 "PRE_LLM_MATCH_GATE_KEYWORD_OVERRIDE_MIN_SIGNAL must be non-negative, "
                 f"got {self.pre_llm_match_gate_keyword_override_min_signal}"
             )
-        if self.market_source_hints_mode not in {"off", "shadow", "advisory"}:
+        if self.market_source_hints_mode not in {"off", "shadow", "advisory", "production"}:
             errors.append(
-                "MARKET_SOURCE_HINTS_MODE must be one of off|shadow|advisory, "
+                "MARKET_SOURCE_HINTS_MODE must be one of off|shadow|advisory|production, "
                 f"got '{self.market_source_hints_mode}'"
             )
         if self.kalshi_env not in ("demo", "prod"):

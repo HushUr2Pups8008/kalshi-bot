@@ -18,7 +18,7 @@ def _dossier_candidate(**overrides):
         "blended_confidence": 0.80,
         "disagreement_score": 0.10,
         "default_min_edge": 0.04,
-        "evidence_source_classes": ["news", "official"],
+        "evidence_source_classes": ["news", "regional"],
         "drift_suspect": False,
         "in_recovery": False,
         "recency_score": 0.80,
@@ -46,7 +46,50 @@ def test_passing_dossier_candidate_satisfies_all_conditions():
     assert decision.trade_blocked_reason is None
     assert decision.readiness_gate_min_edge_override is None
     assert decision.scaled_confidence == pytest.approx(0.64)
-    assert decision.applied_conditions == ("G1", "G3", "G4", "G2", "G5", "G6")
+    assert decision.applied_conditions == ("G1", "G3", "G4", "G7", "G2", "G5", "G6")
+
+
+def test_capital_drawdown_blocks_otherwise_passing_candidate():
+    decision = evaluate_readiness(
+        _dossier_candidate(open_exposure_drawdown_pct=0.201),
+        regime_confidence=0.80,
+    )
+
+    assert decision.passed is False
+    assert decision.failure_reasons == ("G7_open_exposure_drawdown",)
+    assert decision.trade_blocked_reason == "G7_open_exposure_drawdown"
+    assert "G7" in decision.applied_conditions
+
+
+def test_zero_liquidity_blocks_otherwise_passing_candidate():
+    decision = evaluate_readiness(
+        _dossier_candidate(market_liquidity_dollars=0.0),
+        regime_confidence=0.80,
+    )
+
+    assert decision.passed is False
+    assert decision.failure_reasons == ("G7_zero_liquidity",)
+    assert decision.trade_blocked_reason == "G7_zero_liquidity"
+
+
+@pytest.mark.parametrize(
+    ("side", "momentum"),
+    [
+        ("yes", -1.0),
+        ("no", 1.0),
+    ],
+)
+def test_adverse_price_momentum_blocks_news_chase_entries(side, momentum):
+    decision = evaluate_readiness(
+        _dossier_candidate(
+            intended_side=side,
+            market_price_momentum_cents=momentum,
+        ),
+        regime_confidence=0.80,
+    )
+
+    assert decision.passed is False
+    assert decision.failure_reasons == ("G7_adverse_price_momentum",)
 
 
 def test_g1_scaled_confidence_is_enforced():
@@ -236,6 +279,39 @@ def test_passing_dossier_records_g6_recency_margin():
     assert decision.recency_distance == pytest.approx(0.80 - G6_RECENCY_THRESHOLD)
 
 
+def test_g6_recency_threshold_relaxes_for_relevant_official_long_horizon_evidence():
+    decision = evaluate_readiness(
+        _dossier_candidate(
+            evidence_source_classes=["official", "wire"],
+            recency_score=0.205,
+            time_to_close_seconds=21 * 86_400,
+            settlement_source_relevant=True,
+        ),
+        regime_confidence=0.80,
+    )
+
+    assert decision.passed is True
+    assert decision.recency_threshold == pytest.approx(0.20)
+    assert decision.recency_distance == pytest.approx(0.005)
+
+
+def test_g6_recency_threshold_tightens_for_near_close_other_source_evidence():
+    decision = evaluate_readiness(
+        _dossier_candidate(
+            evidence_source_classes=["news", "other"],
+            recency_score=0.33,
+            time_to_close_seconds=6 * 60 * 60,
+            settlement_source_relevant=False,
+        ),
+        regime_confidence=0.80,
+    )
+
+    assert decision.passed is False
+    assert decision.failure_reasons == ("G6_recency_score",)
+    assert decision.recency_threshold == pytest.approx(0.43)
+    assert decision.recency_distance == pytest.approx(-0.10)
+
+
 def test_fast_lane_has_no_g6_recency_telemetry():
     decision = evaluate_readiness(_fast_candidate(), regime_confidence=0.80)
 
@@ -257,7 +333,7 @@ def test_fast_lane_exempts_dossier_only_conditions():
     )
 
     assert decision.passed is True
-    assert decision.applied_conditions == ("G1", "G3", "G4")
+    assert decision.applied_conditions == ("G1", "G3", "G4", "G7")
 
 
 def test_fast_lane_does_not_exempt_common_conditions():

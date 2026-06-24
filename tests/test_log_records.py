@@ -211,6 +211,85 @@ def test_logger_full_payload_snapshot():
         _cleanup(tmp)
 
 
+def test_analysis_rejected_record_carries_counterfactual_eval_context():
+    tmp = make_tmp_dir("analysis_rejected_eval_context")
+    try:
+        log_file = tmp / "trades.jsonl"
+        TradeLogger(log_file).log_analysis_rejected(
+            reason="no_keywords",
+            rejection_category="post_llm_neutral_empty_keywords",
+            signal_branch="empty_keywords_neutral_llm",
+            method="llm",
+            llm_direction="neutral",
+            llm_magnitude="none",
+            llm_confidence=0.82,
+            keywords=[],
+            ticker="KXVISITIRAN-26JUL01-JVAN",
+            source="Reuters",
+            headline="Talks continue before possible visit",
+            match_score=0.42,
+            retrieval_mode="source_hint",
+            source_hint_domain="reuters.com",
+            source_hint_query="site:reuters.com trump visit iran",
+            source_class="news",
+            rules_primary="Market resolves Yes if Trump visits Iran by July 1.",
+            rules_secondary="Visits by other officials do not count.",
+            settlement_source_names=["Reuters", "Associated Press"],
+            settlement_source_urls=["https://reuters.com", "https://apnews.com"],
+            contract_terms_url="https://kalshi.com/markets/KXVISITIRAN",
+        )
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+
+        assert record["retrieval_mode"] == "source_hint"
+        assert record["source_hint_domain"] == "reuters.com"
+        assert record["source_class"] == "news"
+        assert record["rules_primary"].startswith("Market resolves Yes")
+        assert record["settlement_source_names"] == ["Reuters", "Associated Press"]
+        assert record["contract_terms_url"].endswith("KXVISITIRAN")
+    finally:
+        _cleanup(tmp)
+
+
+def test_opportunity_record_carries_source_hint_and_settlement_attribution():
+    tmp = make_tmp_dir("opportunity_eval_context")
+    try:
+        log_file = tmp / "trades.jsonl"
+        TradeLogger(log_file).log_opportunity(
+            ticker="KXVISITIRAN-26JUL01-JVAN",
+            market_title="Will JD Vance visit Iran before Jul 1, 2026?",
+            entry_price_cents=1.0,
+            estimated_probability=0.06,
+            edge=0.05,
+            kelly_fraction=0.01,
+            kelly_dollars=1.0,
+            capped_dollars=1.0,
+            side="yes",
+            reasoning="source-hint test",
+            source="Reuters",
+            headline="Vance visit reported",
+            method="llm",
+            llm_direction="yes",
+            llm_magnitude="moderate",
+            venue="kalshi",
+            keywords=["vance", "iran"],
+            source_class="news",
+            retrieval_mode="source_hint",
+            source_hint_domain="reuters.com",
+            source_hint_query="site:reuters.com vance iran",
+            evidence_id="ev-op-1",
+            settlement_source_match=True,
+        )
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+
+        assert record["retrieval_mode"] == "source_hint"
+        assert record["source_hint_domain"] == "reuters.com"
+        assert record["source_hint_query"] == "site:reuters.com vance iran"
+        assert record["evidence_id"] == "ev-op-1"
+        assert record["settlement_source_match"] is True
+    finally:
+        _cleanup(tmp)
+
+
 def test_logger_rounds_optional_floats_to_four_decimals():
     detail = SignalAnalysisDetail(
         ticker="KXTEST-25DEC31",

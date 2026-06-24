@@ -309,6 +309,21 @@ def test_market_source_hint_diagnostics_shadow_and_advisory_are_shadow_only_with
         assert diagnostics.log_records == []
 
 
+def test_market_source_hint_diagnostics_production_builds_non_shadow_target_plan_without_fake_hits():
+    market = _market_with_source_metadata()
+
+    diagnostics = build_market_source_hint_diagnostics(market, mode="production", emit_records=True)
+
+    assert diagnostics.mode == "production"
+    assert diagnostics.shadow_only is False
+    assert diagnostics.plan.shadow_only is False
+    assert [target.source.canonical_name for target in diagnostics.plan.targets] == [
+        "Associated Press",
+        "Reuters",
+    ]
+    assert diagnostics.log_records == []
+
+
 def test_market_source_hints_config_defaults_and_rejects_invalid_mode(monkeypatch):
     from config import BotConfig
 
@@ -327,6 +342,11 @@ def test_market_source_hints_config_defaults_and_rejects_invalid_mode(monkeypatc
 
     assert advisory_config.market_source_hints_mode == "advisory"
     assert advisory_config.market_source_hints_emit_records is True
+
+    monkeypatch.setenv("MARKET_SOURCE_HINTS_MODE", "production")
+    production_config = BotConfig()
+
+    assert production_config.market_source_hints_mode == "production"
 
     monkeypatch.setenv("MARKET_SOURCE_HINTS_MODE", "readiness_candidate")
     with pytest.raises(SystemExit):

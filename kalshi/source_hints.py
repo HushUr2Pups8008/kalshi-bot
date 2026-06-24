@@ -377,13 +377,28 @@ def build_market_contract_context(
             metadata_settlement.append(str(value))
         else:
             metadata_rules.append(str(value))
+    settlement_sources = []
+    seen_sources: set[tuple[str, str, str]] = set()
+    for source in (
+        *(getattr(market, "settlement_sources", ()) or ()),
+        *((series_metadata.settlement_sources if series_metadata else ()) or ()),
+    ):
+        key = (
+            getattr(source, "label", ""),
+            getattr(source, "url", ""),
+            getattr(source, "domain", ""),
+        )
+        if key in seen_sources:
+            continue
+        seen_sources.add(key)
+        settlement_sources.append(source)
     return MarketContractContext(
         ticker=str(getattr(market, "ticker", "")),
         title=str(getattr(market, "title", "")),
         rules_text="\n".join(part for part in (*explicit_rules, *metadata_rules) if part),
         settlement_text="\n".join(metadata_settlement),
         topic_terms=_market_topic_terms(str(getattr(market, "title", "")), series_metadata),
-        settlement_sources=series_metadata.settlement_sources if series_metadata else (),
+        settlement_sources=tuple(settlement_sources),
     )
 
 
@@ -457,6 +472,7 @@ def build_market_source_target_plan(
     *,
     feed_url_builders: Mapping[str, Callable[[str], str]] | None = None,
     local_mastheads: Mapping[str, str] | None = None,
+    shadow_only: bool = True,
 ) -> MarketSourceTargetPlan:
     """Build shadow-only source-scoped query/feed targets from market metadata.
 
@@ -488,7 +504,7 @@ def build_market_source_target_plan(
         targets.append(SourceTarget(source=hint, search_queries=queries, feed_urls=feed_urls))
     return MarketSourceTargetPlan(
         ticker=hints.ticker,
-        shadow_only=True,
+        shadow_only=shadow_only,
         targets=tuple(targets),
         rejected_labels=hints.rejected_labels,
     )
@@ -513,9 +529,9 @@ def build_market_source_hint_diagnostics(
     because this helper does not perform observations.
     """
     normalized_mode = mode.strip().lower()
-    if normalized_mode not in {"off", "shadow", "advisory"}:
+    if normalized_mode not in {"off", "shadow", "advisory", "production"}:
         raise ValueError(
-            "mode must be one of off|shadow|advisory, "
+            "mode must be one of off|shadow|advisory|production, "
             f"got '{mode}'"
         )
 
@@ -539,12 +555,13 @@ def build_market_source_hint_diagnostics(
         market,
         feed_url_builders=feed_url_builders,
         local_mastheads=local_mastheads,
+        shadow_only=(normalized_mode != "production"),
     )
     counters = SourceTargetCounters(plan)
     return MarketSourceHintDiagnostics(
         ticker=plan.ticker,
         mode=normalized_mode,
-        shadow_only=True,
+        shadow_only=plan.shadow_only,
         plan=plan,
         counters=counters.snapshot(),
         log_records=counters.log_records() if emit_records else [],
@@ -592,7 +609,7 @@ class SourceTargetCounters:
                 domain=source_hint.domain,
                 hit=hit,
                 freshness_age_seconds=age_seconds,
-                shadow_only=True,
+                shadow_only=self._plan.shadow_only,
             )
         )
 

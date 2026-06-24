@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 
@@ -14,6 +15,7 @@ from tasks.blend_task import (
     _regime_confidence,
     process_fast_lane_result,
 )
+from tasks.trade_readiness_gate import evaluate_readiness
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
 
 
@@ -82,6 +84,10 @@ def _market(
     ticker: str = "KXBLEND-1",
     *,
     regime_weights: dict[str, float] | None = None,
+    close_time: str = "2026-05-01T00:00:00Z",
+    liquidity_dollars: Decimal | None = None,
+    last_price_cents: int | None = None,
+    previous_price_cents: int | None = None,
 ) -> KalshiMarket:
     return KalshiMarket(
         ticker=ticker,
@@ -91,7 +97,7 @@ def _market(
         yes_price=50,
         volume=100,
         open_interest=50,
-        close_time="2026-05-01T00:00:00Z",
+        close_time=close_time,
         status="active",
         regime_weights=regime_weights
         or {"fast": 1.0, "interpretation": 0.0, "structural": 0.0},
@@ -104,6 +110,9 @@ def _market(
         price_available=True,
         price_source="rest_list",
         price_method="dollars_fixed_point",
+        liquidity_dollars=liquidity_dollars,
+        last_price_cents=last_price_cents,
+        previous_price_cents=previous_price_cents,
     )
 
 
@@ -112,6 +121,7 @@ def _analysis(
     market: KalshiMarket | None = None,
     probability: float = 0.72,
     confidence: float = 0.90,
+    signal_meta: dict | None = None,
 ) -> SignalAnalysis:
     market = market or _market()
     return SignalAnalysis(
@@ -127,6 +137,7 @@ def _analysis(
         reasoning="fast lane test signal",
         confidence=confidence,
         match_score=0.8,
+        signal_meta=signal_meta,
     )
 
 
@@ -238,8 +249,8 @@ async def test_ready_candidate_reads_lanes_logs_and_enqueues():
             "evidence_ids_contributing": ["ev-1", "ev-2"],
             "venue": "kalshi",
             "recency_score": pytest.approx(1.0),
-            "recency_threshold": pytest.approx(0.30),
-            "recency_distance": pytest.approx(0.70),
+            "recency_threshold": pytest.approx(0.28),
+            "recency_distance": pytest.approx(0.72),
         }
     ]
     assert {call[0] for call in store.calls} == {
@@ -263,10 +274,88 @@ async def test_missing_slow_lane_context_uses_fast_lane_exemptions():
     result = await task.process_fast_lane_result(_analysis())
 
     assert result.ready is True
-    assert result.readiness_decision.applied_conditions == ("G1", "G3", "G4")
+    assert result.readiness_decision.applied_conditions == ("G1", "G3", "G4", "G7")
     assert logger.records[0]["accumulation_p"] is None
     assert logger.records[0]["structural_p"] is None
     assert logger.records[0]["evidence_ids_contributing"] == []
+
+
+@pytest.mark.asyncio
+async def test_readiness_input_carries_capital_defense_market_fields():
+    captured: dict = {}
+
+    def capture_and_evaluate(payload, regime_confidence):  # noqa: ANN001
+        captured.update(payload)
+        return evaluate_readiness(payload, regime_confidence)
+
+    market = _market(
+        liquidity_dollars=Decimal("0"),
+        last_price_cents=49,
+        previous_price_cents=50,
+    )
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        readiness_evaluator=capture_and_evaluate,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(_analysis(market=market))
+
+    assert captured["market_liquidity_dollars"] == pytest.approx(0.0)
+    assert captured["market_price_momentum_cents"] == pytest.approx(-1.0)
+    assert captured["intended_side"] == "yes"
+    assert result.trade_blocked_reason == "G7_zero_liquidity"
+
+
+@pytest.mark.asyncio
+async def test_readiness_input_carries_open_exposure_drawdown_from_provider():
+    captured: dict = {}
+
+    def capture_and_evaluate(payload, regime_confidence):  # noqa: ANN001
+        captured.update(payload)
+        return evaluate_readiness(payload, regime_confidence)
+
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        readiness_evaluator=capture_and_evaluate,
+        open_exposure_drawdown_provider=lambda: 0.21,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(_analysis())
+
+    assert captured["open_exposure_drawdown_pct"] == pytest.approx(0.21)
+    assert result.trade_blocked_reason == "G7_open_exposure_drawdown"
+
+
+@pytest.mark.asyncio
+async def test_open_exposure_drawdown_provider_error_fails_closed():
+    captured: dict = {}
+
+    def broken_provider() -> float:
+        raise RuntimeError("marking unavailable")
+
+    def capture_and_evaluate(payload, regime_confidence):  # noqa: ANN001
+        captured.update(payload)
+        return evaluate_readiness(payload, regime_confidence)
+
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        readiness_evaluator=capture_and_evaluate,
+        open_exposure_drawdown_provider=broken_provider,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(_analysis())
+
+    assert result.trade_blocked_reason == "G7_open_exposure_drawdown"
+    assert captured["open_exposure_drawdown_pct"] == pytest.approx(1.0)
 
 
 @pytest.mark.asyncio
@@ -383,7 +472,7 @@ async def test_trigger_evidence_counts_for_g6_before_dossier_catches_up():
         structural_prior=_structural_prior(),
         evidence=[
             _evidence("ev-old-news", source_class="news", ingested_ts=stale_ts),
-            _evidence("ev-old-official", source_class="official", ingested_ts=stale_ts),
+            _evidence("ev-old-regional", source_class="regional", ingested_ts=stale_ts),
         ],
     )
     task = BlendTask(
@@ -422,7 +511,7 @@ async def test_stale_accumulation_without_trigger_still_fails_g6():
         structural_prior=_structural_prior(),
         evidence=[
             _evidence("ev-old-news", source_class="news", ingested_ts=stale_ts),
-            _evidence("ev-old-official", source_class="official", ingested_ts=stale_ts),
+            _evidence("ev-old-regional", source_class="regional", ingested_ts=stale_ts),
         ],
     )
     task = BlendTask(
@@ -457,6 +546,40 @@ async def test_stale_accumulation_without_trigger_still_fails_g6():
     assert logger.skipped_records[0]["recency_distance"] == pytest.approx(
         result.readiness_decision.recency_distance
     )
+
+
+@pytest.mark.asyncio
+async def test_relevant_official_long_horizon_evidence_relaxes_g6_recency_threshold():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    now = datetime(2026, 4, 20, 12, tzinfo=UTC)
+    stale_ts = datetime(2026, 4, 18, 12, tzinfo=UTC).isoformat()
+    market = _market(close_time="2026-05-20T12:00:00Z")
+    store = FakeStore(
+        dossier=_dossier(),
+        structural_prior=_structural_prior(),
+        evidence=[
+            _evidence("ev-old-official", source_class="official", ingested_ts=stale_ts),
+            _evidence("ev-old-wire", source_class="wire", ingested_ts=stale_ts),
+        ],
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=store,
+        logger=logger,
+        is_paper_mode=True,
+        now=lambda: now,
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(market=market, signal_meta={"settlement_source_match": True})
+    )
+
+    assert result.ready is True
+    assert result.readiness_decision.recency_threshold == pytest.approx(0.20)
+    assert result.readiness_decision.recency_distance > 0
+    assert logger.gate_summary_records[0]["recency_threshold"] == pytest.approx(0.20)
+    assert logger.records[0]["recency_threshold"] == pytest.approx(0.20)
 
 
 @pytest.mark.asyncio
@@ -709,7 +832,7 @@ async def test_dossier_with_no_estimate_uses_fast_lane_exemptions():
 
     result = await task.process_fast_lane_result(_analysis())
 
-    assert result.readiness_decision.applied_conditions == ("G1", "G3", "G4")
+    assert result.readiness_decision.applied_conditions == ("G1", "G3", "G4", "G7")
 
 
 # ---------------------------------------------------------------------------
