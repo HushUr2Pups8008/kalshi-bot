@@ -119,6 +119,29 @@ json_field() {
     fi
     JSON_INPUT="$json" JSON_KEY="$key" "$py" -c 'import json, os; d=json.loads(os.environ["JSON_INPUT"]); v=d.get(os.environ["JSON_KEY"]); print("" if v is None else v)' 2>/dev/null
 }
+matcher_weights_status() {
+    local py
+    py="$(python_bin)"
+    if [[ -z "$py" ]]; then
+        printf 'matcher_weights=unavailable reason=python_unavailable\n'
+        return 0
+    fi
+    (
+        cd "$REPO_ROOT" || exit 0
+        "$py" -c 'from analysis.match_feedback import matcher_weights_status
+status = matcher_weights_status()
+state = status.get("status") or "unknown"
+reason = status.get("reason") or ""
+count = status.get("count", 0)
+if state == "unverified":
+    print(f"matcher_weights=unverified count={count} reason={reason}")
+elif state == "clean":
+    print(f"matcher_weights=clean count={count}")
+else:
+    print(f"matcher_weights={state} count={count} reason={reason}")' 2>/dev/null \
+        || printf 'matcher_weights=unavailable reason=status_helper_failed\n'
+    )
+}
 runtime_started_utc() {
     local py
     py="$(python_bin)"
@@ -340,6 +363,7 @@ P0_SENTINEL_TS=""
 P0_POST_SENTINEL_ROWS=""
 P0_RUNTIME_HOURS=""
 POST_FIX_NEW_STATUS="post_fix_new=not_checked"
+MATCHER_WEIGHTS_STATUS="$(matcher_weights_status)"
 POST_FIX_NEW_READINESS=""
 POST_FIX_NEW_REASON=""
 POST_FIX_NEW_CHECK_STATE="not_checked"
@@ -372,6 +396,7 @@ if [[ -n "$RUNTIME_STARTED" ]]; then
 else
     printf 'bot_runtime.started_utc=unknown\n' >>"$REPORT"
 fi
+printf '%s\n' "$MATCHER_WEIGHTS_STATUS" >>"$REPORT"
 
 if [[ -f "$READINESS_SCRIPT" && -f "$PAPER_DB" ]]; then
     READINESS_PY="$(python_bin)"
@@ -596,6 +621,8 @@ section "Verdict"
         VERDICT="**RED** — bot not running"
     elif (( APPLIED > 0 || KS > 0 || VE > 0 || BATCH_ABORTED > 0 )); then
         VERDICT="**RED** — governance shadow-mode invariant violated (applied=$APPLIED, KILL_SWITCH=$KS, VALIDATION_ERROR=$VE, batch_aborted=$BATCH_ABORTED)"
+    elif [[ "$MATCHER_WEIGHTS_STATUS" == matcher_weights=unverified* ]]; then
+        VERDICT="**YELLOW** — matcher weights unverified; matcher fail-closed"
     elif [[ -f "$PAPER_DB" && -z "$P0_SENTINEL_TS" ]]; then
         VERDICT="**YELLOW** — P0 sentinel missing"
     elif [[ "$POST_FIX_NEW_READINESS" == "NOT_READY" ]]; then
@@ -615,7 +642,7 @@ section "Verdict"
 } >>"$REPORT"
 
 # Notify operator (best-effort, won't fail the script if osascript missing)
-NOTIFY_BODY="bothealth: ${VERDICT//\*/}; ${KALSHI_DRIFT_STATUS}; ${P0_COHORT_STATUS}; ${POST_FIX_NEW_STATUS}; daily_review=${DAILY_REVIEW_STATUS}"
+NOTIFY_BODY="bothealth: ${VERDICT//\*/}; ${KALSHI_DRIFT_STATUS}; ${P0_COHORT_STATUS}; ${POST_FIX_NEW_STATUS}; ${MATCHER_WEIGHTS_STATUS}; daily_review=${DAILY_REVIEW_STATUS}"
 NOTIFY_BODY_ESCAPED="$(osascript_escape "$NOTIFY_BODY")"
 osascript -e "display notification \"$NOTIFY_BODY_ESCAPED\" with title \"kalshi-bot\"" 2>/dev/null || true
 

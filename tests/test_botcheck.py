@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.botcheck import (
+    BotSession,
     ProcessInfo,
     _bot_pids,
     _caffeinate_pids,
@@ -20,6 +21,7 @@ from scripts.botcheck import (
     parse_sessions,
     print_bot_section,
     print_caffeinate_section,
+    print_last_boot,
     print_signal_flow_section,
     session_duration,
     summarize_signal_flow,
@@ -395,6 +397,28 @@ def test_caffeinate_section_shown_when_bot_and_caffeinate_both_present(capsys):
     assert "Caffeinate PID: 74107" in out
     assert "not related" not in out
     assert "not running" not in out
+
+
+def test_last_boot_section_distinguishes_log_marker_from_process_start(capsys):
+    proc = _bot_proc(pid=74105)
+    session = BotSession(
+        boot_ts=datetime(2026, 6, 26, 0, 0, 41, tzinfo=timezone.utc),
+        version="0.33.21",
+        pid=None,
+    )
+
+    print_last_boot(
+        Path("logs/app/bot.log"),
+        [session],
+        datetime(2026, 6, 26, 13, 0, tzinfo=timezone.utc),
+        current_proc=proc,
+        now_epoch=1_800_000_000,
+    )
+
+    out = capsys.readouterr().out
+    assert "Last bot log boot marker" in out
+    assert "Process started UTC" in out
+    assert "Use process start for since-restart P&L" in out
 
 
 # ---------------------------------------------------------------------------

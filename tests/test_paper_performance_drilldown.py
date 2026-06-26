@@ -27,6 +27,9 @@ OPTIONAL_COLUMNS = [
     ("side", "TEXT"),
     ("contracts", "INTEGER"),
     ("cost_dollars", "REAL"),
+    ("estimated_prob", "REAL"),
+    ("entry_price_cents", "REAL"),
+    ("llm_confidence", "REAL"),
     ("market_snapshot", "TEXT"),
 ]
 
@@ -215,6 +218,68 @@ def test_average_win_and_average_loss(local_db_case):
 
     assert stats["avg_win"] == pytest.approx(3.0)
     assert stats["avg_loss"] == pytest.approx(-3.0)
+
+
+def test_high_confidence_full_loss_rows_are_flagged(local_db_case):
+    path, keeper, connect = local_db_case
+    _make_db(
+        keeper,
+        rows=[
+            {
+                "trade_id": "bad",
+                "ts": "2026-06-16T13:18:29+00:00",
+                "ticker": "enwc-ushrp-ny07-2026-06-23-dem-claval",
+                "signal_source": "qns.com",
+                "resolved": 1,
+                "resolved_ts": "2026-06-24T18:53:04+00:00",
+                "pnl_dollars": -4.15,
+                "cost_dollars": 4.15,
+                "estimated_prob": 0.898,
+                "entry_price_cents": 83,
+                "llm_confidence": 0.85,
+                "venue": "polymarket_us",
+            },
+            {
+                "trade_id": "small",
+                "ts": "2026-06-16T14:00:00+00:00",
+                "ticker": "KXSMALL",
+                "signal_source": "Reuters",
+                "resolved": 1,
+                "resolved_ts": "2026-06-17T14:00:00+00:00",
+                "pnl_dollars": -0.10,
+                "cost_dollars": 1.00,
+                "estimated_prob": 0.90,
+                "entry_price_cents": 10,
+                "llm_confidence": 0.90,
+                "venue": "kalshi",
+            },
+            {
+                "trade_id": "no-side-low-confidence",
+                "ts": "2026-06-16T15:00:00+00:00",
+                "ticker": "KXNO",
+                "signal_source": "Reuters",
+                "resolved": 1,
+                "resolved_ts": "2026-06-17T15:00:00+00:00",
+                "pnl_dollars": -0.98,
+                "cost_dollars": 0.98,
+                "estimated_prob": 0.95,
+                "entry_price_cents": 2,
+                "llm_confidence": 0.90,
+                "side": "no",
+                "venue": "kalshi",
+            },
+        ],
+    )
+
+    with patch("scripts.paper_performance_drilldown.sqlite3.connect", side_effect=connect):
+        stats = summarize(path)
+
+    rows = stats["high_confidence_full_losses"]
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "enwc-ushrp-ny07-2026-06-23-dem-claval"
+    assert rows[0]["pnl_dollars"] == pytest.approx(-4.15)
+    assert rows[0]["estimated_prob"] == pytest.approx(0.898)
+    assert rows[0]["llm_confidence"] == pytest.approx(0.85)
 
 
 def test_source_breakdown(local_db_case):

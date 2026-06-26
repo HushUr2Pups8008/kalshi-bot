@@ -19,6 +19,41 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.22] - 2026-06-26
+
+### Added
+
+- **Matcher fail-closed operator alerting.** `analysis.match_feedback` now
+  exposes the same matcher-weight verification state used by admission.
+  `trading.paper_trader`, `scripts/daily_review.py`, and `scripts/bothealth.sh`
+  surface dirty/unverified matcher weights explicitly so zero
+  `MATCH_DIAGNOSTIC` windows are not misread as benign quiet periods. Bothealth
+  reports a YELLOW verdict for unverified weights unless a stronger RED
+  condition already applies.
+- **Restart-boundary loss visibility.** `scripts/botcheck.py` now separates
+  latest log boot markers from process start. `scripts/since_restart_money_path.py`
+  and `scripts/daily_review.py` now report resolution-only rows between process
+  start and the latest log boot, including total P&L, so losses in that gap do
+  not disappear behind candidate-only reporting.
+- **High-confidence full-loss drilldown.** `scripts/paper_performance_drilldown.py`
+  detects resolved full-loss trades entered with high chosen-side probability
+  and renders them in the daily execution section. NO-side trades use
+  `1 - estimated_prob`, avoiding false high-confidence alerts from raw YES
+  probability.
+
+### Fixed
+
+- Reporting now defaults to capital protection when evidence is ambiguous:
+  matcher silence caused by dirty runtime weights is visible as a fail-closed
+  condition, and realized losses in restart/log gaps remain part of the
+  operator P&L picture.
+
+### Verification
+
+- `.venv/bin/pytest tests/test_paper_performance_drilldown.py tests/test_daily_review.py tests/test_botcheck.py tests/test_match_feedback.py tests/test_paper_trader.py tests/test_bothealth_verdict.py tests/test_since_restart_money_path.py -q`
+- `.venv/bin/ruff check analysis/match_feedback.py trading/paper_trader.py scripts/paper_performance_drilldown.py scripts/daily_review.py scripts/botcheck.py scripts/since_restart_money_path.py tests/test_match_feedback.py tests/test_paper_trader.py tests/test_paper_performance_drilldown.py tests/test_daily_review.py tests/test_botcheck.py tests/test_since_restart_money_path.py tests/test_bothealth_verdict.py`
+- `bash -n scripts/bothealth.sh tests/shell/test_bothealth_verdict.sh`
+
 ## [0.33.21] - 2026-06-23
 
 ### Added

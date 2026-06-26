@@ -268,6 +268,58 @@ def open_mark_summary(open_trades: list[dict[str, Any]]) -> dict[str, float]:
     return summary
 
 
+def chosen_side_probability(trade: dict[str, Any]) -> float | None:
+    """Return the probability attached to the executed side."""
+    estimated_prob = safe_float(trade.get("estimated_prob"))
+    if estimated_prob is None:
+        return None
+    side = str(trade.get("side") or "yes").strip().lower()
+    if side == "no":
+        return 1.0 - estimated_prob
+    return estimated_prob
+
+
+def high_confidence_full_loss_rows(
+    resolved_trades: list[dict[str, Any]],
+    *,
+    min_probability: float = 0.80,
+    min_llm_confidence: float = 0.80,
+) -> list[dict[str, Any]]:
+    """Find full-loss resolved trades entered with high chosen-side conviction."""
+    rows: list[dict[str, Any]] = []
+    for trade in resolved_trades:
+        pnl = safe_float(trade.get("pnl_dollars"))
+        cost = safe_float(trade.get("cost_dollars"))
+        if pnl is None or cost is None or cost <= 0:
+            continue
+        if pnl > -cost + 0.005:
+            continue
+        probability = chosen_side_probability(trade)
+        if probability is None or probability < min_probability:
+            continue
+        llm_confidence = safe_float(trade.get("llm_confidence"))
+        if llm_confidence is not None and llm_confidence < min_llm_confidence:
+            continue
+        rows.append(
+            {
+                "trade_id": trade.get("trade_id"),
+                "ts": trade.get("ts"),
+                "resolved_ts": trade.get("resolved_ts"),
+                "ticker": trade.get("ticker"),
+                "venue": trade.get("venue") or "kalshi",
+                "side": trade.get("side") or "yes",
+                "signal_source": trade.get("signal_source"),
+                "pnl_dollars": pnl,
+                "cost_dollars": cost,
+                "chosen_side_probability": probability,
+                "estimated_prob": safe_float(trade.get("estimated_prob")),
+                "entry_price_cents": safe_float(trade.get("entry_price_cents")),
+                "llm_confidence": llm_confidence,
+            }
+        )
+    return sorted(rows, key=lambda row: (row["pnl_dollars"], str(row.get("ticker") or "")))
+
+
 def load_trades(path: Path) -> tuple[list[dict[str, Any]], set[str]]:
     if not path.exists():
         return [], set()
@@ -360,6 +412,7 @@ def summarize(path: Path, exclude_test: bool = False, *, now: datetime | None = 
         "holding_period_avg_hours": None,
         "holding_period_median_hours": None,
         "open_resolution_buckets": [],
+        "high_confidence_full_losses": [],
         "open_mark_summary": {
             "open_cost_dollars": 0.0,
             "marked_kalshi_cost_dollars": 0.0,
@@ -381,6 +434,7 @@ def summarize(path: Path, exclude_test: bool = False, *, now: datetime | None = 
 
     stats["resolved_trades"] = len(resolved)
     stats["open_trades"] = len(open_trades)
+    stats["high_confidence_full_losses"] = high_confidence_full_loss_rows(resolved)
     stats["win_rate"] = (len(wins) / len(resolved)) if resolved else None
     if pnl_values:
         stats["total_pnl"] = sum(pnl_values)
@@ -473,6 +527,26 @@ def print_summary(stats: dict[str, Any], top: int) -> None:
         print(f"  Median hold              : {fmt_duration_hours(stats['holding_period_median_hours'])}")
     else:
         print("  Holding period summary not reliably derivable from current rows.")
+
+    print()
+    print("High-Confidence Full Losses")
+    high_confidence_rows = stats.get("high_confidence_full_losses") or []
+    if high_confidence_rows:
+        for row in high_confidence_rows[:top]:
+            print(
+                "  "
+                f"{row.get('ticker') or 'n/a'} "
+                f"venue={row.get('venue') or 'kalshi'} "
+                f"side={row.get('side') or 'yes'} "
+                f"pnl={fmt_money(row.get('pnl_dollars'))} "
+                f"cost={fmt_money(row.get('cost_dollars'))} "
+                f"p={fmt_pct(row.get('chosen_side_probability'))} "
+                f"entry={row.get('entry_price_cents') or 'n/a'}c "
+                f"llm_conf={fmt_pct(row.get('llm_confidence'))} "
+                f"source={row.get('signal_source') or 'n/a'}"
+            )
+    else:
+        print("  (none)")
 
     print()
     print("Open Exposure by Resolution Horizon")

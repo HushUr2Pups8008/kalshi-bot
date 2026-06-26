@@ -97,6 +97,28 @@ assert_contains "$report_body" "PARSE_ERROR_24H (must=0): 0"
 assert_contains "$report_body" "PARSE_ERROR_lifetime : 1"
 assert_not_contains "$report_body" "PARSE_ERROR          : 1"
 
+fixture="$TMP_ROOT/matcher-weights-unverified"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/analysis"
+printf '' >"$fixture/analysis/__init__.py"
+cat >"$fixture/analysis/match_feedback.py" <<'EOF'
+def matcher_weights_status():
+    return {
+        "status": "unverified",
+        "reason": "matcher weights dirty: data/matcher_token_weights.json",
+        "path": "data/matcher_token_weights.json",
+        "count": 0,
+    }
+EOF
+out="$(run_bothealth "$fixture")"
+assert_contains "$out" "Verdict: **YELLOW** — matcher weights unverified; matcher fail-closed"
+report="$(find "$fixture/logs/reports/health" -name 'bothealth_*.md' -print -quit)"
+report_body="$(cat "$report")"
+assert_contains "$report_body" "matcher_weights=unverified count=0 reason=matcher weights dirty: data/matcher_token_weights.json"
+toast="$(cat "$fixture/osascript.args")"
+assert_contains "$toast" "matcher_weights=unverified"
+
 fixture="$TMP_ROOT/daily-review"
 make_fixture "$fixture"
 make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
