@@ -841,6 +841,7 @@ class TradingBot:
         "research_timeout",
         "research_provider_error",
         "research_adjudicator_error",
+        "new_market",
     }
 
     def _research_prewarm_market_provider(self) -> list[object]:
@@ -2255,6 +2256,8 @@ class TradingBot:
                         m.ticker, m.title[:60],
                     )
                     asyncio.create_task(self._trigger_targeted_search(m.ticker))
+                    if bool(getattr(cfg, "enable_research_prewarm_task", False)):
+                        self._schedule_targeted_research_prewarm(m, "new_market")
             self._known_market_tickers = new_tickers
 
     async def _market_refresh_task(self) -> None:

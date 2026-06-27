@@ -221,6 +221,55 @@ def test_schedule_targeted_research_prewarm_dedupes_with_cooldown(monkeypatch):
     assert bot._last_targeted_research_prewarm[market.ticker] == 100.0
 
 
+@pytest.mark.asyncio
+async def test_refresh_market_cache_prewarms_new_markets_when_enabled(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "enable_research_prewarm_task", True, raising=False)
+    bot = _make_bot_stub()
+    old_market = _make_market()
+    new_market = replace(_make_market(), ticker="KXNEW-25DEC31")
+    bot._known_market_tickers = {old_market.ticker}
+    bot.matcher.refresh_cache = AsyncMock()
+    bot.matcher._cache.get_markets = AsyncMock(return_value=[old_market, new_market])
+    bot._schedule_targeted_research_prewarm = MagicMock(return_value=True)
+    bot._trigger_targeted_search = AsyncMock()
+
+    def _capture_task(coro):
+        coro.close()
+        return MagicMock()
+
+    with patch("main.asyncio.create_task", side_effect=_capture_task), \
+         patch("main.write_trade_log_async", new=AsyncMock()):
+        await bot._refresh_market_cache_once()
+
+    bot._schedule_targeted_research_prewarm.assert_called_once_with(
+        new_market,
+        "new_market",
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_market_cache_does_not_prewarm_new_markets_when_disabled(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "enable_research_prewarm_task", False, raising=False)
+    bot = _make_bot_stub()
+    old_market = _make_market()
+    new_market = replace(_make_market(), ticker="KXNEW-25DEC31")
+    bot._known_market_tickers = {old_market.ticker}
+    bot.matcher.refresh_cache = AsyncMock()
+    bot.matcher._cache.get_markets = AsyncMock(return_value=[old_market, new_market])
+    bot._schedule_targeted_research_prewarm = MagicMock(return_value=True)
+    bot._trigger_targeted_search = AsyncMock()
+
+    def _capture_task(coro):
+        coro.close()
+        return MagicMock()
+
+    with patch("main.asyncio.create_task", side_effect=_capture_task), \
+         patch("main.write_trade_log_async", new=AsyncMock()):
+        await bot._refresh_market_cache_once()
+
+    bot._schedule_targeted_research_prewarm.assert_not_called()
+
+
 def _analysis_for_evidence(news: NewsItem | None = None) -> SignalAnalysis:
     news = news or _make_news()
     market = _make_market()
