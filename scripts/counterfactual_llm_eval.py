@@ -411,6 +411,52 @@ def _positive_model_results(report: dict[str, Any]) -> list[tuple[dict[str, Any]
     return positives
 
 
+def _positive_case_key(case: dict[str, Any], fallback_index: int) -> tuple[str, str]:
+    capture_id = case.get("llm_capture_row_id")
+    if capture_id:
+        return ("llm_capture_row_id", str(capture_id))
+    fallback_parts = [
+        str(case.get("ticker") or case.get("market_ticker") or ""),
+        str(case.get("ts") or case.get("decision_ts") or ""),
+        str(case.get("headline") or case.get("trigger_headline") or ""),
+    ]
+    fallback = "|".join(part for part in fallback_parts if part)
+    if fallback:
+        return ("case", fallback)
+    return ("index", str(fallback_index))
+
+
+def _result_replay_rank(case: dict[str, Any], result: dict[str, Any]) -> tuple[int, float]:
+    direction = str(result.get("direction") or "").strip().lower()
+    probability = _side_probability(result, direction)
+    has_replay_fields = (
+        probability is not None
+        and _executable_side_price_cents(case) is not None
+        and _decision_side_quote_cents(case, direction) is not None
+    )
+    return (
+        1 if has_replay_fields else 0,
+        probability if probability is not None else -1.0,
+    )
+
+
+def _unique_positive_case_results(
+    report: dict[str, Any],
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    selected: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
+    order: list[tuple[str, str]] = []
+    for index, (case, result) in enumerate(_positive_model_results(report)):
+        key = _positive_case_key(case, index)
+        current = selected.get(key)
+        if current is None:
+            selected[key] = (case, result)
+            order.append(key)
+            continue
+        if _result_replay_rank(case, result) > _result_replay_rank(*current):
+            selected[key] = (case, result)
+    return [selected[key] for key in order]
+
+
 def _p95_seconds(milliseconds: list[float]) -> float | None:
     if not milliseconds:
         return None
@@ -486,7 +532,7 @@ def _shadow_field_completeness(report: dict[str, Any]) -> dict[str, int]:
         "replay_ready_cases": 0,
         "freshness_ready_cases": 0,
     }
-    for case, result in _positive_model_results(report):
+    for case, result in _unique_positive_case_results(report):
         counts["positive_cases"] += 1
         direction = str(result.get("direction") or "").strip().lower()
         has_capture = bool(case.get("llm_capture_row_id"))
@@ -526,7 +572,7 @@ def _latency_slippage_replay(report: dict[str, Any]) -> dict[str, Any]:
     edges: list[float] = []
     slippages: list[float] = []
     skipped_missing_prices = 0
-    for case, result in _positive_model_results(report):
+    for case, result in _unique_positive_case_results(report):
         latency = _float_or_none(case.get("llm_total_stage_ms")) or _float_or_none(
             case.get("llm_latency_ms")
         )
@@ -568,7 +614,7 @@ def _resolved_counterfactual_pnl(
         return {"status": "missing"}
     keys = [
         str(case.get("llm_capture_row_id"))
-        for case, _result in _positive_model_results(report)
+        for case, _result in _unique_positive_case_results(report)
         if case.get("llm_capture_row_id")
     ]
     if not keys:

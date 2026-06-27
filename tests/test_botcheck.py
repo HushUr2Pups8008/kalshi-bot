@@ -329,7 +329,7 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
                     "ev-1",
                     "KXTEST-26JUN-T1",
                     "run-1",
-                    "web",
+                    "resolution_source",
                     "source",
                     "https://example.com/1",
                     "Fresh evidence",
@@ -340,6 +340,22 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
                     "2026-05-10T22:30:00+00:00",
                     "2026-05-10T22:40:00+00:00",
                     "2026-05-10T22:40:00+00:00",
+                ),
+                (
+                    "ev-1b",
+                    "KXTEST-26JUN-T1",
+                    "run-1",
+                    "web",
+                    "source",
+                    "https://example.com/1b",
+                    "Fresh corroboration",
+                    "snippet",
+                    "metric",
+                    "yes",
+                    0.7,
+                    "2026-05-10T22:35:00+00:00",
+                    "2026-05-10T22:41:00+00:00",
+                    "2026-05-10T22:41:00+00:00",
                 ),
                 (
                     "ev-2",
@@ -365,12 +381,122 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
 
     assert stats.exists is True
     assert stats.dossiers == 2
-    assert stats.evidence_rows == 2
+    assert stats.evidence_rows == 3
     assert stats.latest_researched_ts == datetime(2026, 5, 10, 22, 50, tzinfo=timezone.utc)
-    assert stats.latest_evidence_ts == datetime(2026, 5, 10, 22, 40, tzinfo=timezone.utc)
+    assert stats.latest_evidence_ts == datetime(2026, 5, 10, 22, 41, tzinfo=timezone.utc)
     assert stats.verdict_counts == {"continue_researching": 1, "trade_candidate": 1}
     assert stats.vetted_trade_candidate_dossiers == 1
-    assert stats.fresh_evidence_rows_24h == 1
+    assert stats.live_cache_eligible_dossiers == 1
+    assert stats.fresh_evidence_rows_24h == 2
+
+
+def test_summarize_research_dossiers_excludes_stale_live_cache_ready_count(tmp_path):
+    db_path = tmp_path / "data" / "evidence_store.db"
+    db_path.parent.mkdir()
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_research_run_id TEXT,
+                last_researched_ts TEXT NOT NULL,
+                last_verdict_status TEXT NOT NULL,
+                last_skip_reason TEXT,
+                last_force_side TEXT,
+                last_estimated_probability REAL,
+                last_confidence REAL,
+                created_ts TEXT,
+                updated_ts TEXT
+            );
+            CREATE TABLE research_evidence (
+                evidence_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                research_run_id TEXT NOT NULL,
+                source_class TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                title TEXT NOT NULL,
+                snippet TEXT NOT NULL,
+                claim_type TEXT NOT NULL,
+                supports_direction TEXT NOT NULL,
+                supports_confidence REAL NOT NULL,
+                published_at TEXT,
+                retrieved_at TEXT,
+                inserted_at TEXT
+            );
+            INSERT INTO research_dossiers (
+                market_ticker,
+                last_research_run_id,
+                last_researched_ts,
+                last_verdict_status,
+                last_force_side,
+                last_estimated_probability,
+                last_confidence
+            ) VALUES (
+                'KXSTALE',
+                'run-stale',
+                '2026-05-10T12:00:00+00:00',
+                'trade_candidate',
+                'yes',
+                0.64,
+                0.72
+            );
+            INSERT INTO research_evidence (
+                evidence_id,
+                market_ticker,
+                research_run_id,
+                source_class,
+                source_name,
+                source_url,
+                title,
+                snippet,
+                claim_type,
+                supports_direction,
+                supports_confidence,
+                published_at,
+                retrieved_at,
+                inserted_at
+            ) VALUES
+            (
+                'old-1',
+                'KXSTALE',
+                'run-stale',
+                'resolution_source',
+                'source',
+                'https://example.com/old-1',
+                'Old official',
+                'snippet',
+                'metric',
+                'yes',
+                0.8,
+                '2026-05-10T12:00:00+00:00',
+                '2026-05-10T12:00:00+00:00',
+                '2026-05-10T12:00:00+00:00'
+            ),
+            (
+                'old-2',
+                'KXSTALE',
+                'run-stale',
+                'web',
+                'source',
+                'https://example.com/old-2',
+                'Old corroboration',
+                'snippet',
+                'metric',
+                'yes',
+                0.7,
+                '2026-05-10T12:01:00+00:00',
+                '2026-05-10T12:01:00+00:00',
+                '2026-05-10T12:01:00+00:00'
+            );
+            """
+        )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+
+    stats = summarize_research_dossiers(tmp_path, now=now)
+
+    assert stats.vetted_trade_candidate_dossiers == 1
+    assert stats.live_cache_eligible_dossiers == 0
 
 
 def test_print_research_gate_section_surfaces_dossier_cache(capsys, tmp_path, monkeypatch):
@@ -386,6 +512,7 @@ def test_print_research_gate_section_surfaces_dossier_cache(capsys, tmp_path, mo
         latest_evidence_ts=datetime(2026, 5, 10, 22, 45, tzinfo=timezone.utc),
         verdict_counts={"continue_researching": 1, "trade_candidate": 1},
         vetted_trade_candidate_dossiers=1,
+        live_cache_eligible_dossiers=1,
         fresh_evidence_rows_24h=2,
     )
 
@@ -401,7 +528,7 @@ def test_print_research_gate_section_surfaces_dossier_cache(capsys, tmp_path, mo
     assert "dossiers   : 2 latest=2026-05-10T22:50:00+00:00 age=10m 00s" in out
     assert "evidence   : 3 latest=2026-05-10T22:45:00+00:00 age=15m 00s fresh_24h=2" in out
     assert "verdicts   : continue_researching=1, trade_candidate=1" in out
-    assert "vetted     : trade_candidate_cache=1" in out
+    assert "vetted     : historical_trade_candidate=1 live_cache_eligible=1" in out
 
 
 def test_print_research_gate_section_surfaces_missing_dossier_db(capsys, tmp_path):

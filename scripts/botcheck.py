@@ -53,6 +53,8 @@ SIGNAL_FLOW_EVENTS = (
     "PAPER_TRADE",
     "LIVE_ORDER",
 )
+RESEARCH_DOSSIER_MAX_AGE_SECONDS = 6 * 60 * 60
+RESEARCH_REQUIRED_SOURCE_CLASSES = {"resolution_source", "official_primary"}
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,7 @@ class ResearchDossierStats:
     latest_evidence_ts: datetime | None = None
     verdict_counts: Counter[str] = field(default_factory=Counter)
     vetted_trade_candidate_dossiers: int = 0
+    live_cache_eligible_dossiers: int = 0
     fresh_evidence_rows_24h: int = 0
     error: str | None = None
 
@@ -331,17 +334,51 @@ def summarize_research_dossiers(
                     """
                 ).fetchone()["count"]
             )
+            live_cache_eligible_tickers: set[str] = set()
             fresh_since = now - timedelta(hours=24)
+            live_cache_since = now - timedelta(seconds=RESEARCH_DOSSIER_MAX_AGE_SECONDS)
             fresh_evidence_rows_24h = 0
+            evidence_by_ticker: dict[str, list[tuple[str, datetime]]] = {}
             for row in conn.execute(
                 """
-                SELECT COALESCE(retrieved_at, inserted_at) AS ts
+                SELECT
+                    market_ticker,
+                    source_class,
+                    COALESCE(retrieved_at, inserted_at) AS ts
                 FROM research_evidence
                 """
             ):
                 evidence_ts = _parse_research_ts(row["ts"])
                 if evidence_ts is not None and evidence_ts >= fresh_since:
                     fresh_evidence_rows_24h += 1
+                if evidence_ts is not None and evidence_ts >= live_cache_since:
+                    ticker = str(row["market_ticker"] or "").strip()
+                    if ticker:
+                        evidence_by_ticker.setdefault(ticker, []).append(
+                            (str(row["source_class"] or "").strip(), evidence_ts)
+                        )
+            vetted_tickers = {
+                str(row["market_ticker"] or "").strip()
+                for row in conn.execute(
+                    """
+                    SELECT market_ticker
+                    FROM research_dossiers
+                    WHERE last_verdict_status = 'trade_candidate'
+                      AND last_force_side IN ('yes', 'no')
+                      AND last_estimated_probability IS NOT NULL
+                      AND last_confidence IS NOT NULL
+                    """
+                )
+            }
+            for ticker in vetted_tickers:
+                ticker_evidence = evidence_by_ticker.get(ticker, [])
+                if len(ticker_evidence) < 2:
+                    continue
+                if any(
+                    source_class in RESEARCH_REQUIRED_SOURCE_CLASSES
+                    for source_class, _ts in ticker_evidence
+                ):
+                    live_cache_eligible_tickers.add(ticker)
     except sqlite3.Error as exc:
         return ResearchDossierStats(
             db_path=db_path,
@@ -358,6 +395,7 @@ def summarize_research_dossiers(
         latest_evidence_ts=_parse_research_ts(latest_evidence_raw),
         verdict_counts=verdict_counts,
         vetted_trade_candidate_dossiers=vetted_trade_candidate_dossiers,
+        live_cache_eligible_dossiers=len(live_cache_eligible_tickers),
         fresh_evidence_rows_24h=fresh_evidence_rows_24h,
     )
 
@@ -589,7 +627,9 @@ def print_research_gate_section(
                 print("verdicts   : none")
             print(
                 "vetted     : "
-                f"trade_candidate_cache={dossier_stats.vetted_trade_candidate_dossiers}"
+                "historical_trade_candidate="
+                f"{dossier_stats.vetted_trade_candidate_dossiers} "
+                f"live_cache_eligible={dossier_stats.live_cache_eligible_dossiers}"
             )
     print()
 

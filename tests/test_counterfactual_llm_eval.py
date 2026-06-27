@@ -452,6 +452,52 @@ def test_counterfactual_replay_metrics_do_not_treat_price_level_as_slippage():
     }
 
 
+def test_counterfactual_replay_metrics_count_unique_positive_cases():
+    from scripts.counterfactual_llm_eval import add_shadow_replay_metrics
+
+    report = {
+        "cases": [
+            {
+                "ticker": "KXONE",
+                "ts": "2026-06-21T01:00:00Z",
+                "headline": "same market signal",
+                "llm_capture_row_id": "signal::KXONE::id-1",
+                "llm_total_stage_ms": 1000,
+                "yes_ask_cents": 40,
+                "executable_price_cents": 41,
+                "research_min_retrieved_at": "2026-06-21T01:00:00Z",
+                "model_results": {
+                    "qwen": {
+                        "direction": "yes",
+                        "estimated_probability_yes": 0.65,
+                        "paper_candidate_positive": True,
+                    },
+                    "llama": {
+                        "direction": "yes",
+                        "estimated_probability_yes": 0.66,
+                        "paper_candidate_positive": True,
+                    },
+                },
+            },
+        ]
+    }
+
+    enriched = add_shadow_replay_metrics(report)
+
+    assert enriched["latency_slippage_replay"]["replayed_cases"] == 1
+    assert enriched["shadow_field_completeness"] == {
+        "positive_cases": 1,
+        "llm_capture_row_id": 1,
+        "estimated_probability_yes": 1,
+        "latency": 1,
+        "executable_price": 1,
+        "decision_quote": 1,
+        "freshness_timestamp": 1,
+        "replay_ready_cases": 1,
+        "freshness_ready_cases": 1,
+    }
+
+
 def test_counterfactual_replay_metrics_fail_closed_without_authoritative_fields():
     from scripts.counterfactual_llm_eval import add_shadow_replay_metrics
 

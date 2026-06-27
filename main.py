@@ -1232,9 +1232,7 @@ class TradingBot:
             saw_llm_result = llm_dir is not None or llm_mag is not None or llm_conf is not None
             eval_context = _counterfactual_llm_eval_context(news, market) if saw_llm_result else {}
             research_mode = str(getattr(cfg, "real_web_research_mode", "off") or "off").lower()
-            should_research = research_mode == "production" or (
-                research_mode == "shadow" and saw_llm_result
-            )
+            should_research = research_mode in {"production", "shadow"}
             if should_research:
                 def _ask_prob(*names: str) -> float | None:
                     for name in names:

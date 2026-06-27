@@ -542,6 +542,45 @@ async def test_process_candidate_researches_when_llm_metadata_missing_in_product
 
 
 @pytest.mark.asyncio
+async def test_process_candidate_researches_when_llm_metadata_missing_in_shadow(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "shadow", raising=False)
+    bot = _make_bot_stub()
+    news = _make_news()
+    market = _make_market()
+    verdict = ResearchVerdict(
+        status=ResearchStatus.CONTINUE_RESEARCHING,
+        attempted=True,
+        queries=[
+            ResearchQuery(
+                query="site:opec.org Iran crude oil production June 2026",
+                query_intent="resolution_source",
+                source_class="resolution_source",
+            )
+        ],
+        evidence=[],
+        summary="Shadow research captured the information gap.",
+        skip_reason="missing_resolution_source",
+    )
+
+    with patch("main.estimate_probability", new=AsyncMock(return_value=(
+        market.yes_prob, 0.1, [], "LLM metadata unavailable.", None, None, None
+    ))), patch("main.run_research_gate", new=AsyncMock(return_value=verdict)) as research_mock, \
+         patch("utils.logger.trade_log.log_analysis_rejected") as reject_mock:
+        await bot._process_candidate(news, market, 0.20)
+
+    research_mock.assert_awaited_once()
+    assert research_mock.await_args.kwargs["cache_only"] is False
+    bot.executor.execute.assert_not_called()
+    reject_kwargs = reject_mock.call_args.kwargs
+    assert reject_kwargs["reason"] == "no_keywords"
+    assert reject_kwargs["rejection_category"] == "no_signal_empty_keywords"
+    assert reject_kwargs["research_attempted"] is True
+    assert reject_kwargs["research_status"] == "continue_researching"
+    assert reject_kwargs["research_skip_reason"] == "missing_resolution_source"
+
+
+@pytest.mark.asyncio
 async def test_process_candidate_logs_research_provider_error(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)

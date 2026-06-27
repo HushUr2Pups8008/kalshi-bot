@@ -27,6 +27,20 @@ from tasks.research_prewarm_task import ResearchPrewarmResult, ResearchPrewarmTa
 from utils.trade_log_reader import iter_trade_records
 
 
+DEFAULT_TARGET_REASONS = [
+    "no_keywords",
+    "research_incomplete",
+    "research_operational_error",
+]
+DEFAULT_TARGET_RESEARCH_SKIP_REASONS = [
+    "cached_dossier_insufficient",
+    "cached_dossier_unvetted",
+    "research_timeout",
+    "research_provider_error",
+    "research_adjudicator_error",
+]
+
+
 def build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -64,10 +78,19 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--target-reason",
         action="append",
-        default=["no_keywords", "research_incomplete"],
+        default=list(DEFAULT_TARGET_REASONS),
         help=(
             "ANALYSIS_REJECTED reason to target from logs. Repeatable. "
-            "Defaults to no_keywords and research_incomplete."
+            "Defaults to retryable information-deficiency reasons."
+        ),
+    )
+    parser.add_argument(
+        "--target-research-skip-reason",
+        action="append",
+        default=list(DEFAULT_TARGET_RESEARCH_SKIP_REASONS),
+        help=(
+            "ANALYSIS_REJECTED research_skip_reason to target from logs. "
+            "Repeatable. Defaults to retryable cache/research failures."
         ),
     )
     parser.add_argument(
@@ -131,6 +154,7 @@ def _load_markets(args: argparse.Namespace, client: Any) -> list[Any]:
             target_from_log,
             since=_parse_optional_ts(getattr(args, "target_since", None)),
             reasons=getattr(args, "target_reason", None),
+            research_skip_reasons=getattr(args, "target_research_skip_reason", None),
             rejection_categories=getattr(args, "target_rejection_category", None),
         ):
             market = client.get_market(ticker)
@@ -171,6 +195,7 @@ def _target_tickers_from_trade_log(
     since: datetime | None,
     reasons: list[str] | None,
     rejection_categories: list[str] | None,
+    research_skip_reasons: list[str] | None = None,
 ) -> list[str]:
     reason_set = {
         str(reason).strip()
@@ -182,6 +207,11 @@ def _target_tickers_from_trade_log(
         for category in (rejection_categories or [])
         if str(category).strip()
     }
+    research_skip_reason_set = {
+        str(reason).strip()
+        for reason in (research_skip_reasons or [])
+        if str(reason).strip()
+    }
     last_index_by_ticker: dict[str, int] = {}
     for index, record in enumerate(
         iter_trade_records(
@@ -191,7 +221,13 @@ def _target_tickers_from_trade_log(
         )
     ):
         reason = str(record.get("reason") or "").strip()
-        if reason_set and reason not in reason_set:
+        research_skip_reason = str(record.get("research_skip_reason") or "").strip()
+        matches_reason = not reason_set or reason in reason_set
+        matches_research_skip = (
+            bool(research_skip_reason_set)
+            and research_skip_reason in research_skip_reason_set
+        )
+        if not (matches_reason or matches_research_skip):
             continue
         category = str(record.get("rejection_category") or "").strip()
         if category_set and category not in category_set:
