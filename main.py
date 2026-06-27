@@ -838,6 +838,12 @@ class TradingBot:
     _RETRYABLE_RESEARCH_PREWARM_REASONS = {
         "cached_dossier_insufficient",
         "cached_dossier_unvetted",
+        "direction_reason_conflict",
+        "no_research_hits",
+        "missing_resolution_source",
+        "insufficient_corroboration",
+        "missing_estimated_probability",
+        "probability_direction_conflict",
         "research_timeout",
         "research_provider_error",
         "research_adjudicator_error",
@@ -926,6 +932,7 @@ class TradingBot:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self._last_targeted_research_prewarm.pop(ticker, None)
                 log.warning(
                     "[RESEARCH_PREWARM] targeted ticker=%s failed: %s",
                     ticker,
@@ -1451,6 +1458,11 @@ class TradingBot:
                         **eval_context,
                     )
                     return
+                elif research_verdict.status == ResearchStatus.CONTINUE_RESEARCHING:
+                    self._schedule_targeted_research_prewarm(
+                        market,
+                        research_verdict.skip_reason,
+                    )
 
         if not keywords and not llm_emitted_signal:
             saw_llm_result = llm_dir is not None or llm_mag is not None or llm_conf is not None

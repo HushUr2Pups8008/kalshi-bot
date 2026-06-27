@@ -221,6 +221,73 @@ def test_schedule_targeted_research_prewarm_dedupes_with_cooldown(monkeypatch):
     assert bot._last_targeted_research_prewarm[market.ticker] == 100.0
 
 
+@pytest.mark.parametrize(
+    "skip_reason",
+    [
+        "direction_reason_conflict",
+        "no_research_hits",
+        "missing_resolution_source",
+        "insufficient_corroboration",
+        "missing_estimated_probability",
+        "probability_direction_conflict",
+    ],
+)
+def test_schedule_targeted_research_prewarm_accepts_information_gap_reasons(
+    monkeypatch,
+    skip_reason,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
+    bot = _make_bot_stub()
+    bot._targeted_research_prewarm_tasks = set()
+    bot._last_targeted_research_prewarm = {}
+    market = _make_market()
+
+    def _capture_task(coro, *, name):
+        coro.close()
+        task = MagicMock()
+        task.get_name.return_value = name
+        task.add_done_callback = MagicMock()
+        return task
+
+    with patch("main.asyncio.create_task", side_effect=_capture_task) as create_task_mock:
+        assert bot._schedule_targeted_research_prewarm(market, skip_reason) is True
+
+    create_task_mock.assert_called_once()
+
+
+def test_schedule_targeted_research_prewarm_clears_cooldown_after_failure(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_target_cooldown_seconds", 600.0, raising=False)
+    bot = _make_bot_stub()
+    bot._targeted_research_prewarm_tasks = set()
+    bot._last_targeted_research_prewarm = {}
+    market = _make_market()
+    callbacks = []
+
+    def _capture_task(coro, *, name):
+        coro.close()
+        task = MagicMock()
+        task.get_name.return_value = name
+        task.result.side_effect = RuntimeError("provider failed")
+        task.add_done_callback.side_effect = lambda cb: callbacks.append((task, cb))
+        return task
+
+    with patch("main.time.monotonic", side_effect=[100.0, 101.0]), \
+         patch("main.asyncio.create_task", side_effect=_capture_task) as create_task_mock:
+        assert bot._schedule_targeted_research_prewarm(
+            market,
+            "cached_dossier_insufficient",
+        ) is True
+        task, callback = callbacks.pop()
+        callback(task)
+        assert bot._schedule_targeted_research_prewarm(
+            market,
+            "cached_dossier_insufficient",
+        ) is True
+
+    assert create_task_mock.call_count == 2
+
+
 @pytest.mark.asyncio
 async def test_refresh_market_cache_prewarms_new_markets_when_enabled(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "enable_research_prewarm_task", True, raising=False)
@@ -749,6 +816,7 @@ async def test_process_candidate_researches_when_llm_metadata_missing_in_shadow(
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "shadow", raising=False)
     bot = _make_bot_stub()
+    bot._schedule_targeted_research_prewarm = MagicMock()
     news = _make_news()
     market = _make_market()
     verdict = ResearchVerdict(
@@ -781,6 +849,10 @@ async def test_process_candidate_researches_when_llm_metadata_missing_in_shadow(
     assert reject_kwargs["research_attempted"] is True
     assert reject_kwargs["research_status"] == "continue_researching"
     assert reject_kwargs["research_skip_reason"] == "missing_resolution_source"
+    bot._schedule_targeted_research_prewarm.assert_called_once_with(
+        market,
+        "missing_resolution_source",
+    )
 
 
 @pytest.mark.asyncio
