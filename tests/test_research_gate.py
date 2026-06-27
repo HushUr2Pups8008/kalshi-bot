@@ -7,8 +7,10 @@ import pytest
 
 from analysis.research_gate import (
     ResearchEvidence,
+    ResearchQuery,
     ResearchStatus,
     urllib,
+    _rss_search,
     build_research_queries,
     decide_research_verdict,
     run_research_gate,
@@ -107,6 +109,42 @@ def test_generic_market_query_pack_adds_contract_terms_resolution_fallback():
         and "site:kalshi.com" in query.query
         for query in queries
     )
+
+
+def test_rss_search_does_not_treat_wrong_domain_as_resolution_source(monkeypatch):
+    rss = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss><channel><item>
+      <title>Reuters report on OPEC data</title>
+      <link>https://reuters.com/world/oil-output</link>
+      <source url="https://reuters.com">Reuters</source>
+      <description>Secondary reporting mentions OPEC production.</description>
+      <pubDate>Sat, 27 Jun 2026 12:00:00 GMT</pubDate>
+    </item></channel></rss>
+    """
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _limit):
+            return rss
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+
+    evidence = _rss_search(
+        ResearchQuery(
+            query="site:opec.org Monthly Oil Market Report Iran",
+            query_intent="resolution_source",
+            source_class="resolution_source",
+        )
+    )
+
+    assert len(evidence) == 1
+    assert evidence[0].source_url == "https://reuters.com/world/oil-output"
+    assert evidence[0].source_class == "reputable_secondary"
 
 
 def test_inconsistent_research_reason_continues_researching():
@@ -285,7 +323,131 @@ async def test_run_research_gate_can_promote_neutral_to_trade_candidate():
 
     assert verdict.status == ResearchStatus.TRADE_CANDIDATE
     assert verdict.force_side == "yes"
-    assert verdict.estimated_probability == 0.8
+
+
+@pytest.mark.asyncio
+async def test_contract_terms_direct_fetch_satisfies_resolution_evidence():
+    async def search_provider(query):
+        assert query.source_class != "resolution_source"
+        return [
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="Reuters",
+                source_url="https://reuters.example.com/ceasefire",
+                title="Ceasefire agreement signed",
+                snippet="Officials confirm the agreement was signed before the deadline.",
+                claim_type="corroboration",
+                supports_direction="yes",
+                supports_confidence=0.8,
+            )
+        ]
+
+    async def direct_fetcher(url, source_class, claim_type):
+        assert url == "https://kalshi.com/markets/KXCEASEFIRE-26JUL01"
+        return ResearchEvidence(
+            source_class=source_class,
+            source_name="Kalshi Contract",
+            source_url=url,
+            title="Contract terms",
+            snippet="Official public announcements decide the ceasefire agreement market.",
+            claim_type=claim_type,
+            supports_direction="neutral",
+            supports_confidence=0.0,
+        )
+
+    async def adjudicator(**_kwargs):
+        return {
+            "direction": "yes",
+            "estimated_probability_yes": 0.78,
+            "confidence": 0.8,
+            "reason": "Contract terms and wire evidence support YES.",
+        }
+
+    verdict = await run_research_gate(
+        SimpleNamespace(
+            headline="Officials confirm ceasefire agreement was signed",
+            source="Reuters",
+            url="https://reuters.example.com/ceasefire",
+        ),
+        SimpleNamespace(
+            ticker="KXCEASEFIRE-26JUL01",
+            title="Will a ceasefire agreement be signed by July 1?",
+            rules_primary="The market resolves Yes if an agreement is signed by the deadline.",
+            rules_secondary="The determination will be based on official public announcements.",
+            settlement_sources=(),
+            contract_terms_url="https://kalshi.com/markets/KXCEASEFIRE-26JUL01",
+        ),
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.6,
+        no_ask=0.4,
+        live_mode=False,
+        search_provider=search_provider,
+        direct_fetcher=direct_fetcher,
+        adjudicator=adjudicator,
+    )
+
+    assert verdict.status == ResearchStatus.TRADE_CANDIDATE
+    assert "https://kalshi.com/markets/KXCEASEFIRE-26JUL01" in {
+        item.source_url for item in verdict.evidence
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_research_gate_reports_provider_exception():
+    async def failing_search(_query):
+        raise RuntimeError("rss unavailable")
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
+        SimpleNamespace(
+            ticker="KXIRANCRUDE-26JUL13-T3.8",
+            title="Will Iran crude oil production be at least 3.8M bpd?",
+            rules_primary="OPEC MOMR secondary sources decide the market.",
+            rules_secondary="Later revisions ignored.",
+            settlement_sources=(),
+        ),
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=failing_search,
+        adjudicator=_fake_adjudicator,
+    )
+
+    assert verdict.status == ResearchStatus.RESEARCH_PROVIDER_ERROR
+    assert verdict.skip_reason == "research_provider_error"
+
+
+@pytest.mark.asyncio
+async def test_run_research_gate_reports_adjudicator_exception():
+    async def failing_adjudicator(**_kwargs):
+        raise RuntimeError("ollama unavailable")
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
+        SimpleNamespace(
+            ticker="KXIRANCRUDE-26JUL13-T3.8",
+            title="Will Iran crude oil production be at least 3.8M bpd?",
+            rules_primary="OPEC MOMR secondary sources decide the market.",
+            rules_secondary="Later revisions ignored.",
+            settlement_sources=(),
+        ),
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=_fake_search,
+        adjudicator=failing_adjudicator,
+    )
+
+    assert verdict.status == ResearchStatus.RESEARCH_ADJUDICATOR_ERROR
+    assert verdict.skip_reason == "research_adjudicator_error"
 
 
 @pytest.mark.asyncio

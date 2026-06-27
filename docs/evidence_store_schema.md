@@ -193,6 +193,21 @@ The real web-research gate also writes per-market research dossiers into
 without relearning a ticker from scratch, while preserving the run, query, and
 source evidence needed for replay and capital-protection audits.
 
+Runtime activation is controlled by environment variables, not by this schema:
+
+| Variable | Default | Use |
+|---|---:|---|
+| `REAL_WEB_RESEARCH_MODE` | `off` | `off`, `shadow`, or `production`. `shadow` records research evidence without promotion; `production` may promote neutral/no-keyword candidates when the gate finds settlement-aligned edge. |
+| `REAL_WEB_RESEARCH_MAX_QUERIES` | `6` | Query cap per candidate. Keep bounded to protect cycle latency. |
+| `REAL_WEB_RESEARCH_TIMEOUT_SECONDS` | `12.0` | Wall-clock cap for search/adjudication before the candidate remains rejected as `research_incomplete`. |
+
+Post-deploy proof must check all three conditions before treating the gate as
+live: `botcheck` shows the restarted version, runtime config has
+`REAL_WEB_RESEARCH_MODE` set to `shadow` or `production`, and recent
+`ANALYSIS_REJECTED` rows include `research_*` fields for no-keyword candidates.
+If any condition is missing, the bot may still skip missing-information setups
+exactly as before.
+
 ### `research_dossiers`
 
 Mutable latest-state row per market ticker.

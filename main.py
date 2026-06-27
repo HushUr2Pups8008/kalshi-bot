@@ -1245,6 +1245,10 @@ class TradingBot:
                         return value / 100.0 if value > 1.0 else value
                     return None
 
+                dossier_store = getattr(self, "_research_dossier_store", None)
+                if dossier_store is None:
+                    dossier_store = default_research_dossier_store()
+
                 research_verdict = await run_research_gate(
                     news,
                     market,
@@ -1258,11 +1262,7 @@ class TradingBot:
                     research_timeout_seconds=float(
                         getattr(cfg, "real_web_research_timeout_seconds", 12.0)
                     ),
-                    dossier_store=getattr(
-                        self,
-                        "_research_dossier_store",
-                        default_research_dossier_store(),
-                    ),
+                    dossier_store=dossier_store,
                 )
                 eval_context.update(research_verdict.log_fields())
                 if (
@@ -1280,25 +1280,26 @@ class TradingBot:
                     llm_conf = research_verdict.confidence or llm_conf
                 elif research_mode == "production":
                     status = research_verdict.status
-                    reason = (
-                        "research_incomplete"
-                        if status == ResearchStatus.CONTINUE_RESEARCHING
-                        else "researched_no_edge"
-                    )
-                    category = (
-                        "research_continue"
-                        if status == ResearchStatus.CONTINUE_RESEARCHING
-                        else status.value
-                    )
+                    if status == ResearchStatus.CONTINUE_RESEARCHING:
+                        reason = "research_incomplete"
+                        category = "research_continue"
+                        signal_branch = "empty_keywords_research_continue"
+                    elif status in {
+                        ResearchStatus.RESEARCH_PROVIDER_ERROR,
+                        ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
+                    }:
+                        reason = "research_operational_error"
+                        category = status.value
+                        signal_branch = "empty_keywords_research_error"
+                    else:
+                        reason = "researched_no_edge"
+                        category = status.value
+                        signal_branch = "empty_keywords_researched_terminal"
                     await write_trade_log_async(
                         trade_log.log_analysis_rejected,
                         reason=reason,
                         rejection_category=category,
-                        signal_branch=(
-                            "empty_keywords_research_continue"
-                            if status == ResearchStatus.CONTINUE_RESEARCHING
-                            else "empty_keywords_researched_terminal"
-                        ),
+                        signal_branch=signal_branch,
                         method="llm" if saw_llm_result else None,
                         llm_direction=llm_dir,
                         llm_magnitude=llm_mag,

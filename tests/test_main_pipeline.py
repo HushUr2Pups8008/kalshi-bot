@@ -442,6 +442,7 @@ async def test_process_candidate_researches_before_terminal_no_keywords(monkeypa
     monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
     monkeypatch.setattr(_cfg_module.cfg, "real_web_research_timeout_seconds", 0.25, raising=False)
     bot = _make_bot_stub()
+    bot._research_dossier_store = object()
     news = _make_news()
     market = _make_market()
     verdict = ResearchVerdict(
@@ -462,11 +463,13 @@ async def test_process_candidate_researches_before_terminal_no_keywords(monkeypa
     with patch("main.estimate_probability", new=AsyncMock(return_value=(
         market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", "neutral", "none", 0.85
     ))), patch("main.run_research_gate", new=AsyncMock(return_value=verdict)) as research_mock, \
+         patch("main.default_research_dossier_store", side_effect=AssertionError("unexpected default store")), \
          patch("utils.logger.trade_log.log_analysis_rejected") as reject_mock:
         await bot._process_candidate(news, market, 0.20)
 
     research_mock.assert_awaited_once()
     assert "dossier_store" in research_mock.await_args.kwargs
+    assert research_mock.await_args.kwargs["dossier_store"] is bot._research_dossier_store
     assert research_mock.await_args.kwargs["research_timeout_seconds"] == 0.25
     bot.executor.execute.assert_not_called()
     reject_kwargs = reject_mock.call_args.kwargs
@@ -519,6 +522,35 @@ async def test_process_candidate_researches_when_llm_metadata_missing_in_product
     assert reject_kwargs["method"] is None
     assert reject_kwargs["llm_direction"] is None
     assert reject_kwargs["research_status"] == "continue_researching"
+
+
+@pytest.mark.asyncio
+async def test_process_candidate_logs_research_provider_error(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
+    bot = _make_bot_stub()
+    news = _make_news()
+    market = _make_market()
+    verdict = ResearchVerdict(
+        status=ResearchStatus.RESEARCH_PROVIDER_ERROR,
+        attempted=True,
+        summary="Research provider failed before the source frontier could be trusted.",
+        skip_reason="research_provider_error",
+    )
+
+    with patch("main.estimate_probability", new=AsyncMock(return_value=(
+        market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", "neutral", "none", 0.85
+    ))), patch("main.run_research_gate", new=AsyncMock(return_value=verdict)), \
+         patch("utils.logger.trade_log.log_analysis_rejected") as reject_mock:
+        await bot._process_candidate(news, market, 0.20)
+
+    bot.executor.execute.assert_not_called()
+    reject_kwargs = reject_mock.call_args.kwargs
+    assert reject_kwargs["reason"] == "research_operational_error"
+    assert reject_kwargs["rejection_category"] == "research_provider_error"
+    assert reject_kwargs["signal_branch"] == "empty_keywords_research_error"
+    assert reject_kwargs["research_status"] == "research_provider_error"
+    assert reject_kwargs["research_skip_reason"] == "research_provider_error"
 
 
 @pytest.mark.asyncio
