@@ -68,6 +68,33 @@ def _latency_slippage_metrics(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _field_completeness_metrics(report: dict[str, Any]) -> dict[str, Any]:
+    raw = report.get("shadow_field_completeness")
+    if not isinstance(raw, dict):
+        return {"status": "missing"}
+    positive_cases = _safe_int(raw.get("positive_cases"))
+    replay_ready = _safe_int(raw.get("replay_ready_cases"))
+    freshness_ready = _safe_int(raw.get("freshness_ready_cases"))
+    return {
+        "status": (
+            "pass"
+            if positive_cases >= 10
+            and replay_ready >= 10
+            and freshness_ready >= 10
+            else "fail"
+        ),
+        "positive_cases": positive_cases,
+        "llm_capture_row_id": _safe_int(raw.get("llm_capture_row_id")),
+        "estimated_probability_yes": _safe_int(raw.get("estimated_probability_yes")),
+        "latency": _safe_int(raw.get("latency")),
+        "executable_price": _safe_int(raw.get("executable_price")),
+        "decision_quote": _safe_int(raw.get("decision_quote")),
+        "freshness_timestamp": _safe_int(raw.get("freshness_timestamp")),
+        "replay_ready_cases": replay_ready,
+        "freshness_ready_cases": freshness_ready,
+    }
+
+
 def _positive_cases(report: dict[str, Any]) -> list[dict[str, Any]]:
     positives: list[dict[str, Any]] = []
     for case in report.get("cases") or []:
@@ -127,6 +154,7 @@ def assess_report(report: dict[str, Any]) -> dict[str, Any]:
     error_total = sum(row["errors"] for row in models.values())
     resolved_pnl = _resolved_pnl_metrics(report)
     latency_slippage = _latency_slippage_metrics(report)
+    field_completeness = _field_completeness_metrics(report)
 
     risk_flags: list[str] = []
     if resolved_pnl["status"] == "missing":
@@ -137,6 +165,10 @@ def assess_report(report: dict[str, Any]) -> dict[str, Any]:
         risk_flags.append("missing_latency_slippage_replay")
     elif latency_slippage["status"] != "pass":
         risk_flags.append("latency_slippage_replay_not_safe")
+    if field_completeness["status"] == "missing":
+        risk_flags.append("missing_shadow_field_completeness")
+    elif field_completeness["status"] != "pass":
+        risk_flags.append("shadow_field_completeness_insufficient")
     live_trade_ready = False
     if evaluated_cases <= 0:
         verdict = "NO_EVALUATED_CASES"
@@ -178,6 +210,7 @@ def assess_report(report: dict[str, Any]) -> dict[str, Any]:
         "top_positive_cases": positive_cases[:20],
         "resolved_counterfactual_pnl": resolved_pnl,
         "latency_slippage_replay": latency_slippage,
+        "shadow_field_completeness": field_completeness,
         "risk_flags": risk_flags,
     }
 
@@ -195,6 +228,8 @@ def format_text(assessment: dict[str, Any]) -> str:
         + json.dumps(assessment["resolved_counterfactual_pnl"], sort_keys=True),
         "Latency/slippage replay: "
         + json.dumps(assessment["latency_slippage_replay"], sort_keys=True),
+        "Shadow field completeness: "
+        + json.dumps(assessment["shadow_field_completeness"], sort_keys=True),
         "Models:",
     ]
     for model_name, row in assessment["models"].items():
