@@ -9,6 +9,8 @@ the ~/.zshrc shell helpers:
 """
 
 import sqlite3
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -234,6 +236,126 @@ def test_print_research_gate_section_warns_when_disabled(capsys, tmp_path, monke
     assert "mode       : off (default)" in out
     assert "status     : disabled; no-keyword candidates use legacy terminal skip" in out
     assert "research_rows: 0 latest=n/a age=n/a" in out
+
+
+def test_print_research_gate_section_surfaces_prewarm_backlog(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("REAL_WEB_RESEARCH_MODE", raising=False)
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-05-10T22:00:00+00:00",
+                "ticker": "KX-MISS",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 0,
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-05-10T22:05:00+00:00",
+                "ticker": "KX-HASKEYWORDS",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 2,
+            },
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": "2026-05-10T22:10:00+00:00",
+                "ticker": "KX-USEFUL",
+                "keywords": [],
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+                "pre_llm_would_block_and_useful": True,
+            },
+        ],
+    )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(trades, now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "prewarm_backlog: 2 targetable from logs" in out
+    assert "sample=KX-USEFUL,KX-MISS" in out
+
+
+def test_botcheck_cli_surfaces_prewarm_backlog_when_executed_as_script(tmp_path):
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-05-10T22:00:00+00:00",
+                "ticker": "KX-MISS",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 0,
+            },
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path("scripts/botcheck.py")),
+            "--home",
+            str(tmp_path),
+            "--trades-log",
+            str(trades),
+            "--signal-window-hours",
+            "100000",
+            "--log",
+            str(tmp_path / "missing.log"),
+            "--python",
+            str(tmp_path / ".venv/bin/python"),
+            "--main",
+            str(tmp_path / "main.py"),
+            "--label",
+            "com.example.missing",
+        ],
+        cwd=Path(__file__).resolve().parent.parent,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "prewarm_backlog: 1 targetable from logs sample=KX-MISS" in result.stdout
+
+
+def test_summarize_research_prewarm_backlog_does_not_import_runtime_script(
+    tmp_path,
+    monkeypatch,
+):
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-05-10T22:00:00+00:00",
+                "ticker": "KX-MISS",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 0,
+            },
+        ],
+    )
+
+    def _fail_import(name, *args, **kwargs):
+        if name == "scripts.research_prewarm":
+            raise AssertionError("botcheck must not import operational prewarm script")
+        return original_import(name, *args, **kwargs)
+
+    original_import = __import__
+    monkeypatch.setattr("builtins.__import__", _fail_import)
+
+    assert botcheck.summarize_research_prewarm_backlog(
+        trades,
+        since=datetime(2026, 5, 10, 21, 0, tzinfo=timezone.utc),
+    ) == ["KX-MISS"]
 
 
 def test_print_research_gate_section_warns_when_prewarm_disabled_in_active_mode(

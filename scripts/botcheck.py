@@ -542,6 +542,120 @@ def _format_ts_age(ts: datetime | None, *, now: datetime) -> tuple[str, str]:
     return ts.isoformat(), human_duration((now - ts).total_seconds())
 
 
+def summarize_research_prewarm_backlog(path: Path, *, since: datetime) -> list[str]:
+    return _target_tickers_from_trade_log(
+        path,
+        since=since,
+        reasons=[
+            "no_keywords",
+            "research_incomplete",
+            "research_operational_error",
+        ],
+        research_skip_reasons=[
+            "cached_dossier_insufficient",
+            "cached_dossier_unvetted",
+            "research_timeout",
+            "research_provider_error",
+            "research_adjudicator_error",
+        ],
+    )
+
+
+def _target_tickers_from_trade_log(
+    path: Path,
+    *,
+    since: datetime,
+    reasons: list[str],
+    research_skip_reasons: list[str],
+) -> list[str]:
+    reason_set = {reason.strip() for reason in reasons if reason.strip()}
+    research_skip_reason_set = {
+        reason.strip() for reason in research_skip_reasons if reason.strip()
+    }
+    last_index_by_ticker: dict[str, int] = {}
+    lines_total = [0]
+    lines_malformed = [0]
+    for index, record in enumerate(
+        _iter_trade_records(
+            path,
+            lines_total=lines_total,
+            lines_malformed=lines_malformed,
+        )
+    ):
+        event_type = str(record.get("type") or "").strip()
+        if event_type not in {
+            "ANALYSIS_REJECTED",
+            "MATCH_LLM_REVIEW",
+            "SIGNAL_ANALYSIS_DETAIL",
+        }:
+            continue
+        ts = _parse_trade_ts(record.get("ts"))
+        if ts is not None and ts < since:
+            continue
+        if not _record_targets_research_prewarm(
+            record,
+            reason_set=reason_set,
+            research_skip_reason_set=research_skip_reason_set,
+        ):
+            continue
+        ticker = str(record.get("ticker") or record.get("market_ticker") or "").strip()
+        if ticker:
+            last_index_by_ticker[ticker] = index
+    return [
+        ticker
+        for ticker, _index in sorted(
+            last_index_by_ticker.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+    ]
+
+
+def _record_targets_research_prewarm(
+    record: dict[str, Any],
+    *,
+    reason_set: set[str],
+    research_skip_reason_set: set[str],
+) -> bool:
+    event_type = str(record.get("type") or "").strip()
+    if event_type == "ANALYSIS_REJECTED":
+        reason = str(record.get("reason") or "").strip()
+        research_skip_reason = str(record.get("research_skip_reason") or "").strip()
+        return (
+            (not reason_set or reason in reason_set)
+            or (
+                bool(research_skip_reason_set)
+                and research_skip_reason in research_skip_reason_set
+            )
+        )
+    if event_type == "MATCH_LLM_REVIEW":
+        return (
+            str(record.get("verdict") or "").strip() == "false_positive_neutral"
+            and _keyword_count(record) == 0
+        )
+    if event_type == "SIGNAL_ANALYSIS_DETAIL":
+        return (
+            _keyword_count(record) == 0
+            and bool(record.get("pre_llm_would_block_and_useful")) is True
+            and str(record.get("pre_llm_gate_reason") or "").strip()
+            == "insufficient_semantic_overlap"
+        )
+    return False
+
+
+def _keyword_count(record: dict[str, Any]) -> int | None:
+    raw_count = record.get("keyword_count")
+    if raw_count is not None:
+        try:
+            return int(raw_count)
+        except (TypeError, ValueError):
+            return None
+    keywords = record.get("keywords")
+    if isinstance(keywords, list):
+        return len(keywords)
+    return None
+
+
 def print_research_gate_section(
     repo_root: Path,
     stats: SignalFlowStats,
@@ -629,6 +743,12 @@ def print_research_gate_section(
         print(f"statuses   : {rendered}")
     else:
         print("statuses   : none")
+    prewarm_backlog = summarize_research_prewarm_backlog(stats.path, since=stats.since)
+    sample = ",".join(prewarm_backlog[:5]) if prewarm_backlog else "none"
+    print(
+        "prewarm_backlog: "
+        f"{len(prewarm_backlog)} targetable from logs sample={sample}"
+    )
     if dossier_stats is not None:
         dossier_path = _relative_display_path(dossier_stats.db_path, repo_root)
         if not dossier_stats.exists:
