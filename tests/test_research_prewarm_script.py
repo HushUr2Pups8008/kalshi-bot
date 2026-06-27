@@ -202,6 +202,152 @@ async def test_run_once_targets_retryable_research_skip_reasons(tmp_path):
     assert summary["markets"] == 2
 
 
+@pytest.mark.asyncio
+async def test_run_once_targets_empty_keyword_neutral_review_rows(tmp_path):
+    trade_log = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trade_log,
+        [
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-06-27T10:00:00Z",
+                "ticker": "KX-MISS",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 0,
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-06-27T11:00:00Z",
+                "ticker": "KX-HASKEYWORDS",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 2,
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-06-27T12:00:00Z",
+                "ticker": "KX-RELEVANT",
+                "verdict": "relevant",
+                "keyword_count": 0,
+            },
+        ],
+    )
+    client = FakeClient()
+    task = FakeTask()
+    args = Namespace(
+        ticker=[],
+        target_from_log=trade_log,
+        target_since="2026-06-27T09:00:00Z",
+        target_reason=["no_keywords", "research_incomplete"],
+        target_research_skip_reason=[],
+        target_rejection_category=[],
+        max_markets=5,
+        max_pages=99,
+    )
+
+    summary = await research_prewarm.run_once(args, client=client, task=task)
+
+    assert client.open_page_calls == []
+    assert client.market_calls == ["KX-MISS"]
+    assert [market.ticker for market in task.markets] == ["KX-MISS"]
+    assert summary["markets"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_once_targets_empty_keyword_review_rows_with_category_filter(tmp_path):
+    trade_log = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trade_log,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-06-27T09:00:00Z",
+                "ticker": "KX-REJECT",
+                "reason": "no_keywords",
+                "rejection_category": "other_category",
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-06-27T10:00:00Z",
+                "ticker": "KX-MISS",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 0,
+            },
+        ],
+    )
+    client = FakeClient()
+    task = FakeTask()
+    args = Namespace(
+        ticker=[],
+        target_from_log=trade_log,
+        target_since="2026-06-27T08:00:00Z",
+        target_reason=["no_keywords"],
+        target_research_skip_reason=[],
+        target_rejection_category=["no_signal_empty_keywords"],
+        max_markets=5,
+        max_pages=99,
+    )
+
+    summary = await research_prewarm.run_once(args, client=client, task=task)
+
+    assert client.open_page_calls == []
+    assert client.market_calls == ["KX-MISS"]
+    assert [market.ticker for market in task.markets] == ["KX-MISS"]
+    assert summary["markets"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_once_targets_useful_pre_llm_blocked_empty_keyword_rows(tmp_path):
+    trade_log = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trade_log,
+        [
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": "2026-06-27T10:00:00Z",
+                "ticker": "KX-USEFUL",
+                "keywords": [],
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+                "pre_llm_would_block_and_useful": True,
+            },
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": "2026-06-27T11:00:00Z",
+                "ticker": "KX-NOTUSEFUL",
+                "keywords": [],
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+                "pre_llm_would_block_and_useful": False,
+            },
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": "2026-06-27T12:00:00Z",
+                "ticker": "KX-HASKEYWORDS",
+                "keywords": ["midterms"],
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+                "pre_llm_would_block_and_useful": True,
+            },
+        ],
+    )
+    client = FakeClient()
+    task = FakeTask()
+    args = Namespace(
+        ticker=[],
+        target_from_log=trade_log,
+        target_since="2026-06-27T09:00:00Z",
+        target_reason=["no_keywords", "research_incomplete"],
+        target_research_skip_reason=[],
+        target_rejection_category=[],
+        max_markets=5,
+        max_pages=99,
+    )
+
+    summary = await research_prewarm.run_once(args, client=client, task=task)
+
+    assert client.open_page_calls == []
+    assert client.market_calls == ["KX-USEFUL"]
+    assert [market.ticker for market in task.markets] == ["KX-USEFUL"]
+    assert summary["markets"] == 1
+
+
 def test_build_argparser_defaults_to_single_run():
     args = research_prewarm.build_argparser().parse_args([])
 

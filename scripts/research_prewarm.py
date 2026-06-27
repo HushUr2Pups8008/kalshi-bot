@@ -66,7 +66,7 @@ def build_argparser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            "Read recent ANALYSIS_REJECTED rows from a trade-log file/root and "
+            "Read recent information-gap rows from a trade-log file/root and "
             "prewarm those tickers before falling back to open-market scan."
         ),
     )
@@ -217,20 +217,22 @@ def _target_tickers_from_trade_log(
         iter_trade_records(
             Path(path),
             since=since,
-            event_types={"ANALYSIS_REJECTED"},
+            event_types={
+                "ANALYSIS_REJECTED",
+                "MATCH_LLM_REVIEW",
+                "SIGNAL_ANALYSIS_DETAIL",
+            },
         )
     ):
-        reason = str(record.get("reason") or "").strip()
-        research_skip_reason = str(record.get("research_skip_reason") or "").strip()
-        matches_reason = not reason_set or reason in reason_set
-        matches_research_skip = (
-            bool(research_skip_reason_set)
-            and research_skip_reason in research_skip_reason_set
-        )
-        if not (matches_reason or matches_research_skip):
+        if not _record_targets_research_prewarm(
+            record,
+            reason_set=reason_set,
+            research_skip_reason_set=research_skip_reason_set,
+        ):
             continue
         category = str(record.get("rejection_category") or "").strip()
-        if category_set and category not in category_set:
+        event_type = str(record.get("type") or "").strip()
+        if event_type == "ANALYSIS_REJECTED" and category_set and category not in category_set:
             continue
         ticker = str(record.get("ticker") or record.get("market_ticker") or "").strip()
         if ticker:
@@ -243,6 +245,50 @@ def _target_tickers_from_trade_log(
             reverse=True,
         )
     ]
+
+
+def _record_targets_research_prewarm(
+    record: dict[str, Any],
+    *,
+    reason_set: set[str],
+    research_skip_reason_set: set[str],
+) -> bool:
+    event_type = str(record.get("type") or "").strip()
+    if event_type == "ANALYSIS_REJECTED":
+        reason = str(record.get("reason") or "").strip()
+        research_skip_reason = str(record.get("research_skip_reason") or "").strip()
+        matches_reason = not reason_set or reason in reason_set
+        matches_research_skip = (
+            bool(research_skip_reason_set)
+            and research_skip_reason in research_skip_reason_set
+        )
+        return matches_reason or matches_research_skip
+    if event_type == "MATCH_LLM_REVIEW":
+        return (
+            str(record.get("verdict") or "").strip() == "false_positive_neutral"
+            and _keyword_count(record) == 0
+        )
+    if event_type == "SIGNAL_ANALYSIS_DETAIL":
+        return (
+            _keyword_count(record) == 0
+            and bool(record.get("pre_llm_would_block_and_useful")) is True
+            and str(record.get("pre_llm_gate_reason") or "").strip()
+            == "insufficient_semantic_overlap"
+        )
+    return False
+
+
+def _keyword_count(record: dict[str, Any]) -> int | None:
+    raw_count = record.get("keyword_count")
+    if raw_count is not None:
+        try:
+            return int(raw_count)
+        except (TypeError, ValueError):
+            return None
+    keywords = record.get("keywords")
+    if isinstance(keywords, list):
+        return len(keywords)
+    return None
 
 
 def summarize_results(results: Iterable[ResearchPrewarmResult]) -> dict[str, Any]:
