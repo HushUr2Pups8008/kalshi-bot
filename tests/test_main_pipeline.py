@@ -75,6 +75,8 @@ def _make_bot_stub():
     bot._market_cache_ready_at = None
     bot._market_cache_ready_after_secs = None
     bot._market_cache_empty_discovery_passes = 0
+    bot._targeted_research_prewarm_tasks = set()
+    bot._last_targeted_research_prewarm = {}
     # Multi-lane stubs: _process_candidate now routes through blend_task.
     bot._evidence_queue = asyncio.Queue(maxsize=2000)
     bot._trading_queue = asyncio.Queue(maxsize=500)
@@ -187,6 +189,36 @@ def test_create_research_prewarm_runtime_task_enabled(monkeypatch):
         "KXSECOND-25DEC31",
     ]
     bot.rest.get_all_open_markets.assert_called_once_with(max_pages=3)
+
+
+def test_schedule_targeted_research_prewarm_dedupes_with_cooldown(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_target_cooldown_seconds", 600.0, raising=False)
+    bot = _make_bot_stub()
+    bot._targeted_research_prewarm_tasks = set()
+    bot._last_targeted_research_prewarm = {}
+    market = _make_market()
+
+    def _capture_task(coro, *, name):
+        coro.close()
+        task = MagicMock()
+        task.get_name.return_value = name
+        task.add_done_callback = MagicMock()
+        return task
+
+    with patch("main.time.monotonic", side_effect=[100.0, 200.0]), \
+         patch("main.asyncio.create_task", side_effect=_capture_task) as create_task_mock:
+        assert bot._schedule_targeted_research_prewarm(
+            market,
+            "cached_dossier_insufficient",
+        ) is True
+        assert bot._schedule_targeted_research_prewarm(
+            market,
+            "cached_dossier_insufficient",
+        ) is False
+
+    assert create_task_mock.call_count == 1
+    assert bot._last_targeted_research_prewarm[market.ticker] == 100.0
 
 
 def _analysis_for_evidence(news: NewsItem | None = None) -> SignalAnalysis:
@@ -606,6 +638,61 @@ async def test_process_candidate_researches_when_llm_metadata_missing_in_product
     assert reject_kwargs["method"] is None
     assert reject_kwargs["llm_direction"] is None
     assert reject_kwargs["research_status"] == "continue_researching"
+
+
+@pytest.mark.asyncio
+async def test_process_candidate_queues_targeted_rewarm_on_retryable_cache_miss(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
+    bot = _make_bot_stub()
+    bot._schedule_targeted_research_prewarm = MagicMock()
+    news = _make_news()
+    market = _make_market()
+    verdict = ResearchVerdict(
+        status=ResearchStatus.CONTINUE_RESEARCHING,
+        attempted=False,
+        evidence=[],
+        summary="Cache-only research mode has no sufficient dossier evidence.",
+        skip_reason="cached_dossier_insufficient",
+    )
+
+    with patch("main.estimate_probability", new=AsyncMock(return_value=(
+        market.yes_prob, 0.1, [], "LLM metadata unavailable.", None, None, None
+    ))), patch("main.run_research_gate", new=AsyncMock(return_value=verdict)), \
+         patch("utils.logger.trade_log.log_analysis_rejected"):
+        await bot._process_candidate(news, market, 0.20)
+
+    bot.executor.execute.assert_not_called()
+    bot._schedule_targeted_research_prewarm.assert_called_once_with(
+        market,
+        "cached_dossier_insufficient",
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_candidate_does_not_rewarm_capital_protection_reject(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
+    bot = _make_bot_stub()
+    bot._schedule_targeted_research_prewarm = MagicMock()
+    news = _make_news()
+    market = _make_market()
+    verdict = ResearchVerdict(
+        status=ResearchStatus.RESEARCHED_SKIP_NO_EDGE,
+        attempted=True,
+        evidence=[],
+        summary="No trade after costs.",
+        skip_reason="no_trade_capital_protection",
+    )
+
+    with patch("main.estimate_probability", new=AsyncMock(return_value=(
+        market.yes_prob, 0.1, [], "LLM metadata unavailable.", None, None, None
+    ))), patch("main.run_research_gate", new=AsyncMock(return_value=verdict)), \
+         patch("utils.logger.trade_log.log_analysis_rejected"):
+        await bot._process_candidate(news, market, 0.20)
+
+    bot.executor.execute.assert_not_called()
+    bot._schedule_targeted_research_prewarm.assert_not_called()
 
 
 @pytest.mark.asyncio

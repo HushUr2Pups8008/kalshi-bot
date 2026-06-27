@@ -832,6 +832,16 @@ class TradingBot:
         self._market_cache_ready_at: datetime | None = None
         self._market_cache_ready_after_secs: float | None = None
         self._market_cache_empty_discovery_passes = 0
+        self._targeted_research_prewarm_tasks: set[asyncio.Task] = set()
+        self._last_targeted_research_prewarm: dict[str, float] = {}
+
+    _RETRYABLE_RESEARCH_PREWARM_REASONS = {
+        "cached_dossier_insufficient",
+        "cached_dossier_unvetted",
+        "research_timeout",
+        "research_provider_error",
+        "research_adjudicator_error",
+    }
 
     def _research_prewarm_market_provider(self) -> list[object]:
         try:
@@ -862,6 +872,67 @@ class TradingBot:
             ),
             name="research_prewarm",
         )
+
+    async def _run_targeted_research_prewarm(self, market, skip_reason: str) -> None:
+        prewarm = ResearchPrewarmTask(
+            max_queries=int(getattr(cfg, "real_web_research_max_queries", 6)),
+            research_timeout_seconds=float(
+                getattr(cfg, "real_web_research_timeout_seconds", 12.0)
+            ),
+        )
+        result = await prewarm.process_market(market)
+        log.info(
+            "[RESEARCH_PREWARM] targeted ticker=%s source_skip_reason=%s "
+            "status=%s attempted=%s evidence=%d queries=%d",
+            result.market_ticker,
+            skip_reason,
+            result.status,
+            result.attempted,
+            result.evidence_count,
+            result.query_count,
+        )
+
+    def _schedule_targeted_research_prewarm(self, market, skip_reason: str | None) -> bool:
+        reason = str(skip_reason or "").strip()
+        if reason not in self._RETRYABLE_RESEARCH_PREWARM_REASONS:
+            return False
+        research_mode = str(getattr(cfg, "real_web_research_mode", "off") or "off").lower()
+        if research_mode not in {"production", "shadow"}:
+            return False
+        ticker = str(getattr(market, "ticker", "") or "").strip()
+        if not ticker:
+            return False
+        if not hasattr(self, "_targeted_research_prewarm_tasks"):
+            self._targeted_research_prewarm_tasks = set()
+        if not hasattr(self, "_last_targeted_research_prewarm"):
+            self._last_targeted_research_prewarm = {}
+        now_monotonic = time.monotonic()
+        cooldown = float(getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0))
+        last_started = self._last_targeted_research_prewarm.get(ticker)
+        if last_started is not None and now_monotonic - last_started < cooldown:
+            return False
+        self._last_targeted_research_prewarm[ticker] = now_monotonic
+        task = asyncio.create_task(
+            self._run_targeted_research_prewarm(market, reason),
+            name=f"research_prewarm_target:{ticker}",
+        )
+        self._targeted_research_prewarm_tasks.add(task)
+
+        def _discard(done: asyncio.Task) -> None:
+            self._targeted_research_prewarm_tasks.discard(done)
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning(
+                    "[RESEARCH_PREWARM] targeted ticker=%s failed: %s",
+                    ticker,
+                    exc,
+                )
+
+        task.add_done_callback(_discard)
+        return True
 
     # ── News pipeline ─────────────────────────────────────────────────────────
 
@@ -1343,6 +1414,10 @@ class TradingBot:
                         reason = "research_incomplete"
                         category = "research_continue"
                         signal_branch = "empty_keywords_research_continue"
+                        self._schedule_targeted_research_prewarm(
+                            market,
+                            research_verdict.skip_reason,
+                        )
                     elif status in {
                         ResearchStatus.RESEARCH_PROVIDER_ERROR,
                         ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
@@ -1350,6 +1425,10 @@ class TradingBot:
                         reason = "research_operational_error"
                         category = status.value
                         signal_branch = "empty_keywords_research_error"
+                        self._schedule_targeted_research_prewarm(
+                            market,
+                            research_verdict.skip_reason,
+                        )
                     else:
                         reason = "researched_no_edge"
                         category = status.value
