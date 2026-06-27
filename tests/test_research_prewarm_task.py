@@ -6,7 +6,7 @@ import sqlite3
 
 import pytest
 
-from analysis.research_gate import ResearchEvidence, ResearchStatus
+from analysis.research_gate import ResearchEvidence, ResearchStatus, ResearchVerdict
 from tasks.research_dossier import ResearchDossierStore
 from tasks.research_prewarm_task import (
     ResearchPrewarmError,
@@ -130,6 +130,39 @@ async def test_prewarm_skips_closed_markets_without_research_call(tmp_path):
 
     assert result.status == "skipped_closed"
     assert result.attempted is False
+
+
+@pytest.mark.asyncio
+async def test_prewarm_processes_active_kalshi_response_markets(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    calls = []
+
+    async def research_gate(news, market, **kwargs):
+        calls.append((news, market, kwargs))
+        return ResearchVerdict(
+            status=ResearchStatus.CONTINUE_RESEARCHING,
+            attempted=True,
+            evidence=[
+                ResearchEvidence(
+                    source_class="reputable_secondary",
+                    source_name="Wire",
+                    source_url="https://wire.example.com/context",
+                    title="Wire context",
+                    snippet="More context is needed.",
+                    claim_type="corroboration",
+                )
+            ],
+            skip_reason="insufficient_corroboration",
+        )
+
+    task = ResearchPrewarmTask(store=store, research_gate=research_gate)
+
+    result = await task.process_market(_market(status="active"))
+
+    assert result.status == ResearchStatus.CONTINUE_RESEARCHING.value
+    assert result.attempted is True
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio

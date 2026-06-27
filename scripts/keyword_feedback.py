@@ -9,6 +9,9 @@ Notes:
   - Candidate phrases are heuristic only and are not auto-promoted.
   - The primary miss corpus is ANALYSIS_REJECTED(reason=no_keywords), split by
     rejection_category when the emitter provides it.
+  - MATCH_LLM_REVIEW(verdict=false_positive_neutral, keyword_count=0) rows are
+    mined as current neutral-match miss evidence; these are often the first
+    place missing context shows up before an ANALYSIS_REJECTED row exists.
   - SIGNAL_ANALYSIS_DETAIL(method=llm, keywords=[]) rows are counted separately
     as directional-empty or neutral-empty LLM context. They are mined only when
     --include-empty-llm-detail-corpus is passed.
@@ -22,10 +25,14 @@ Notes:
 from __future__ import annotations
 
 import argparse
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils.diagnostics_script_helpers import (
     add_exclude_test_arg,
@@ -257,6 +264,19 @@ def _llm_empty_keyword_corpus(record: dict[str, Any]) -> str | None:
     return None
 
 
+def _keyword_count(record: dict[str, Any]) -> int | None:
+    raw_count = record.get("keyword_count")
+    if raw_count is not None:
+        try:
+            return int(raw_count)
+        except (TypeError, ValueError):
+            return None
+    keywords = record.get("keywords")
+    if isinstance(keywords, list):
+        return len(keywords)
+    return None
+
+
 def summarize(
     path: Path,
     since: datetime | None,
@@ -272,9 +292,13 @@ def summarize(
         "records_kept": 0,
         "no_keyword_misses": 0,
         "corroborating_keyword_gate_records": 0,
+        "false_positive_neutral_reviews": 0,
+        "false_positive_neutral_empty_keyword_reviews": 0,
         "no_keyword_rejection_categories": Counter(),
         "empty_keyword_llm_directional_rows": 0,
         "empty_keyword_llm_neutral_rows": 0,
+        "top_false_positive_neutral_sources": [],
+        "top_false_positive_neutral_tickers": [],
         "top_empty_keyword_llm_directional_sources": [],
         "top_empty_keyword_llm_neutral_sources": [],
         "phrases": [],
@@ -294,6 +318,8 @@ def summarize(
     )
     source_counts: Counter[str] = Counter()
     ticker_counts: Counter[str] = Counter()
+    false_positive_neutral_sources: Counter[str] = Counter()
+    false_positive_neutral_tickers: Counter[str] = Counter()
     directional_empty_sources: Counter[str] = Counter()
     neutral_empty_sources: Counter[str] = Counter()
 
@@ -341,6 +367,22 @@ def summarize(
                         neutral_empty_sources[source] += 1
                 if corpus and include_empty_llm_detail_corpus:
                     add_phrase_hits(record, corpus=corpus)
+
+        if (
+            event_type == "MATCH_LLM_REVIEW"
+            and str(record.get("verdict") or "").strip() == "false_positive_neutral"
+        ):
+            stats["false_positive_neutral_reviews"] += 1
+            if _keyword_count(record) != 0:
+                continue
+            stats["false_positive_neutral_empty_keyword_reviews"] += 1
+            source = str(record.get("source") or "").strip()
+            ticker = str(record.get("ticker") or "").strip()
+            if source:
+                false_positive_neutral_sources[source] += 1
+            if ticker:
+                false_positive_neutral_tickers[ticker] += 1
+            add_phrase_hits(record, corpus="false_positive_neutral_review")
 
         if event_type != "ANALYSIS_REJECTED" or record.get("reason") != "no_keywords":
             continue
@@ -394,6 +436,12 @@ def summarize(
     stats["unique_candidate_phrases"] = len(phrase_rows)
     stats["top_no_keyword_sources"] = source_counts.most_common()
     stats["top_no_keyword_tickers"] = ticker_counts.most_common()
+    stats["top_false_positive_neutral_sources"] = (
+        false_positive_neutral_sources.most_common()
+    )
+    stats["top_false_positive_neutral_tickers"] = (
+        false_positive_neutral_tickers.most_common()
+    )
     stats["top_empty_keyword_llm_directional_sources"] = directional_empty_sources.most_common()
     stats["top_empty_keyword_llm_neutral_sources"] = neutral_empty_sources.most_common()
     grouped: dict[str, list[dict[str, Any]]] = {
@@ -435,6 +483,10 @@ def print_summary(stats: dict[str, Any], top: int, min_count: int, max_examples:
     print()
     print("Available Miss Corpus")
     print("  Primary corpus: ANALYSIS_REJECTED(reason=no_keywords)")
+    print(
+        "  Neutral review corpus: "
+        "MATCH_LLM_REVIEW(verdict=false_positive_neutral, keyword_count=0)"
+    )
     print("  Corroborating context: SIGNAL_ANALYSIS_DETAIL(method=keyword_gate, keywords=[])")
     print("  LLM-empty context: SIGNAL_ANALYSIS_DETAIL(method=llm, keywords=[])")
     print("  Reliable fields: headline, source, ticker, ts, reason, match_score")
@@ -442,6 +494,11 @@ def print_summary(stats: dict[str, Any], top: int, min_count: int, max_examples:
     print()
     print("Summary")
     print(f"  No-keyword misses considered     : {stats['no_keyword_misses']}")
+    print(f"  False-positive neutral reviews   : {stats['false_positive_neutral_reviews']}")
+    print(
+        "  Empty-keyword false-neutral reviews: "
+        f"{stats['false_positive_neutral_empty_keyword_reviews']}"
+    )
     print(f"  Corroborating keyword-gate rows  : {stats['corroborating_keyword_gate_records']}")
     print(
         "  Empty-keyword LLM detail rows    : "

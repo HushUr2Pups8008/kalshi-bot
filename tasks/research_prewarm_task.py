@@ -69,7 +69,8 @@ class ResearchPrewarmTask:
         ticker = str(getattr(market, "ticker", "") or "")
         if not ticker:
             raise ResearchPrewarmError("market ticker is required")
-        if str(getattr(market, "status", "open") or "open").lower() != "open":
+        market_status = str(getattr(market, "status", "open") or "open").lower()
+        if market_status not in {"open", "active"}:
             return ResearchPrewarmResult(
                 market_ticker=ticker,
                 status="skipped_closed",
