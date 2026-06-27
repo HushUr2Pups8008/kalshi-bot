@@ -724,6 +724,31 @@ def test_print_research_gate_section_surfaces_missing_dossier_db(capsys, tmp_pat
     assert "dossier_db : missing data/evidence_store.db" in out
 
 
+def test_print_research_gate_section_surfaces_uninitialized_research_tables(
+    capsys,
+    tmp_path,
+):
+    db_path = tmp_path / "data" / "evidence_store.db"
+    db_path.parent.mkdir()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE dossiers (id TEXT PRIMARY KEY)")
+        conn.execute("CREATE TABLE evidence (id TEXT PRIMARY KEY)")
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+    dossier_stats = summarize_research_dossiers(tmp_path, now=now)
+
+    botcheck.print_research_gate_section(
+        tmp_path,
+        stats,
+        now=now,
+        dossier_stats=dossier_stats,
+    )
+
+    out = capsys.readouterr().out
+    assert "dossier_db : not_initialized data/evidence_store.db" in out
+    assert "research tables missing until first prewarm/research write" in out
+
+
 def test_session_duration_is_honest_for_unpaired_inactive_session():
     session = parse_sessions([
         "2026-04-20 01:00:00,000 UTC INFO     main                 [BOOT] version=0.30.0 pid=111 ctx=runtime cwd=/repo",

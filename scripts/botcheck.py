@@ -288,7 +288,7 @@ def summarize_research_dossiers(
                 return ResearchDossierStats(
                     db_path=db_path,
                     exists=True,
-                    error=f"missing tables: {', '.join(missing_tables)}",
+                    error="not_initialized",
                 )
 
             dossiers = int(
@@ -753,6 +753,11 @@ def print_research_gate_section(
         dossier_path = _relative_display_path(dossier_stats.db_path, repo_root)
         if not dossier_stats.exists:
             print(f"dossier_db : missing {dossier_path}")
+        elif dossier_stats.error == "not_initialized":
+            print(
+                f"dossier_db : not_initialized {dossier_path}: "
+                "research tables missing until first prewarm/research write"
+            )
         elif dossier_stats.error is not None:
             print(f"dossier_db : error {dossier_path}: {dossier_stats.error}")
         else:
