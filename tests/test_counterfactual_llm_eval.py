@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from types import SimpleNamespace
 
 from kalshi.series_metadata import SettlementSource
@@ -37,6 +38,14 @@ def test_counterfactual_llm_eval_extracts_neutral_none_no_keyword_context_ready_
                 "research_urls": ["https://reuters.com/world/test"],
                 "research_summary": "Missing official confirmation.",
                 "research_skip_reason": "missing_resolution_source",
+                "llm_capture_row_id": "signal::KXVISITIRAN-26JUL01-JVAN::id-1",
+                "evidence_id": "ev-1",
+                "series_ticker": "KXVISITIRAN",
+                "venue": "kalshi",
+                "llm_latency_ms": 1500,
+                "llm_total_stage_ms": 2200,
+                "yes_ask_cents": 42,
+                "no_ask_cents": 61,
             },
             {
                 "type": "ANALYSIS_REJECTED",
@@ -67,6 +76,14 @@ def test_counterfactual_llm_eval_extracts_neutral_none_no_keyword_context_ready_
     assert case["prompt_context"]["research_queries"] == ["site:reuters.com Trump visits Iran"]
     assert case["prompt_context"]["research_urls"] == ["https://reuters.com/world/test"]
     assert case["retrieval_mode"] == "source_hint"
+    assert case["llm_capture_row_id"] == "signal::KXVISITIRAN-26JUL01-JVAN::id-1"
+    assert case["evidence_id"] == "ev-1"
+    assert case["series_ticker"] == "KXVISITIRAN"
+    assert case["venue"] == "kalshi"
+    assert case["llm_latency_ms"] == 1500
+    assert case["llm_total_stage_ms"] == 2200
+    assert case["yes_ask_cents"] == 42
+    assert case["no_ask_cents"] == 61
 
 
 def test_counterfactual_llm_eval_marks_historical_rows_missing_contract_context(tmp_path):
@@ -246,7 +263,12 @@ def test_counterfactual_model_eval_compares_context_ready_cases_only(tmp_path):
 
     def stronger(case):
         calls.append(("stronger-local", case["ticker"]))
-        return {"direction": "yes", "magnitude": "moderate", "confidence": 0.81}
+        return {
+            "direction": "yes",
+            "magnitude": "moderate",
+            "confidence": 0.81,
+            "estimated_probability_yes": 0.72,
+        }
 
     report = build_eval_report(path, since="2026-06-21T00:00:00Z")
     evaluated = run_model_eval(
@@ -268,6 +290,7 @@ def test_counterfactual_model_eval_compares_context_ready_cases_only(tmp_path):
     assert ready_case["model_results"]["qwen2.5:7b"]["paper_candidate_positive"] is False
     assert ready_case["model_results"]["stronger-local"]["paper_candidate_positive"] is True
     assert ready_case["model_results"]["stronger-local"]["direction"] == "yes"
+    assert ready_case["model_results"]["stronger-local"]["estimated_probability_yes"] == 0.72
 
 
 def test_counterfactual_model_eval_skips_without_context_ready_cases(tmp_path):
@@ -302,3 +325,107 @@ def test_counterfactual_model_eval_skips_without_context_ready_cases(tmp_path):
     assert evaluated["model_eval_status"] == "skipped_no_context_ready_cases"
     assert evaluated["target_counts"]["evaluated_context_ready"] == 0
     assert calls == []
+
+
+def test_counterfactual_replay_metrics_join_resolved_pnl_and_slippage(tmp_path):
+    from scripts.counterfactual_llm_eval import add_shadow_replay_metrics
+
+    db_path = tmp_path / "paper_trades.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE paper_trades (
+                llm_capture_row_id TEXT,
+                resolved INTEGER,
+                pnl_dollars REAL,
+                cost_dollars REAL
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO paper_trades VALUES (?, ?, ?, ?)",
+            [
+                ("signal::KXONE::id-1", 1, 7.5, 50.0),
+                ("signal::KXTWO::id-2", 1, 2.5, 50.0),
+                ("signal::KXTHREE::id-3", 0, None, 50.0),
+            ],
+        )
+
+    report = {
+        "cases": [
+            {
+                "ticker": "KXONE",
+                "llm_capture_row_id": "signal::KXONE::id-1",
+                "llm_total_stage_ms": 1000,
+                "yes_ask_cents": 40,
+                "model_results": {
+                    "qwen": {
+                        "direction": "yes",
+                        "estimated_probability_yes": 0.65,
+                        "paper_candidate_positive": True,
+                    }
+                },
+            },
+            {
+                "ticker": "KXTWO",
+                "llm_capture_row_id": "signal::KXTWO::id-2",
+                "llm_total_stage_ms": 3000,
+                "no_ask_cents": 35,
+                "model_results": {
+                    "qwen": {
+                        "direction": "no",
+                        "estimated_probability_yes": 0.30,
+                        "paper_candidate_positive": True,
+                    }
+                },
+            },
+            {
+                "ticker": "KXNEG",
+                "llm_capture_row_id": "signal::KXNEG::id-9",
+                "model_results": {
+                    "qwen": {
+                        "direction": "yes",
+                        "estimated_probability_yes": 0.55,
+                        "paper_candidate_positive": False,
+                    }
+                },
+            },
+        ]
+    }
+
+    enriched = add_shadow_replay_metrics(report, paper_trades_db=db_path)
+
+    assert enriched["resolved_counterfactual_pnl"] == {
+        "resolved_trades": 2,
+        "net_pnl": 10.0,
+        "deployed_capital": 100.0,
+        "roi_on_deployed": 0.1,
+        "join_key": "llm_capture_row_id",
+    }
+    assert enriched["latency_slippage_replay"]["replayed_cases"] == 2
+    assert enriched["latency_slippage_replay"]["avg_net_edge_after_slippage"] == 0.3
+    assert enriched["latency_slippage_replay"]["max_slippage_cents"] == 40.0
+    assert enriched["latency_slippage_replay"]["p95_latency_seconds"] >= 1.0
+
+
+def test_counterfactual_replay_metrics_fail_closed_without_authoritative_fields():
+    from scripts.counterfactual_llm_eval import add_shadow_replay_metrics
+
+    report = {
+        "cases": [
+            {
+                "ticker": "KXONE",
+                "model_results": {
+                    "qwen": {
+                        "direction": "yes",
+                        "paper_candidate_positive": True,
+                    }
+                },
+            }
+        ]
+    }
+
+    enriched = add_shadow_replay_metrics(report)
+
+    assert enriched["resolved_counterfactual_pnl"]["status"] == "missing"
+    assert enriched["latency_slippage_replay"]["status"] == "missing"
