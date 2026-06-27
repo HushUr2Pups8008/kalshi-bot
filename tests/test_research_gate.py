@@ -86,7 +86,7 @@ def test_crude_oil_query_pack_uses_contract_reporting_window():
     assert "June 2026" not in rendered
 
 
-def test_generic_market_query_pack_adds_contract_terms_resolution_fallback():
+def test_generic_market_query_pack_adds_contract_terms_context_fallback():
     news = SimpleNamespace(
         headline="Officials say ceasefire agreement could be signed this week",
         source="Reuters",
@@ -104,8 +104,8 @@ def test_generic_market_query_pack_adds_contract_terms_resolution_fallback():
     queries = build_research_queries(news, market)
 
     assert any(
-        query.source_class == "resolution_source"
-        and query.query_intent == "resolution_source"
+        query.source_class == "rules_source"
+        and query.query_intent == "contract_terms"
         and "site:kalshi.com" in query.query
         for query in queries
     )
@@ -326,7 +326,7 @@ async def test_run_research_gate_can_promote_neutral_to_trade_candidate():
 
 
 @pytest.mark.asyncio
-async def test_contract_terms_direct_fetch_satisfies_resolution_evidence():
+async def test_contract_terms_direct_fetch_alone_does_not_satisfy_resolution_evidence():
     async def search_provider(query):
         assert query.source_class != "resolution_source"
         return [
@@ -388,7 +388,8 @@ async def test_contract_terms_direct_fetch_satisfies_resolution_evidence():
         adjudicator=adjudicator,
     )
 
-    assert verdict.status == ResearchStatus.TRADE_CANDIDATE
+    assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
+    assert verdict.skip_reason == "missing_resolution_source"
     assert "https://kalshi.com/markets/KXCEASEFIRE-26JUL01" in {
         item.source_url for item in verdict.evidence
     }
@@ -420,6 +421,65 @@ async def test_run_research_gate_reports_provider_exception():
 
     assert verdict.status == ResearchStatus.RESEARCH_PROVIDER_ERROR
     assert verdict.skip_reason == "research_provider_error"
+
+
+@pytest.mark.asyncio
+async def test_noncritical_provider_error_does_not_block_sufficient_evidence():
+    async def search_provider(query):
+        if query.query_intent == "corroboration":
+            return [
+                ResearchEvidence(
+                    source_class="reputable_secondary",
+                    source_name="Reuters",
+                    source_url="https://reuters.example.com/opec-corroboration",
+                    title="Reuters confirms OPEC table",
+                    snippet="OPEC table supports the reported production figure.",
+                    claim_type="corroboration",
+                    supports_direction="yes",
+                    supports_confidence=0.8,
+                )
+            ]
+        raise RuntimeError("one non-critical query failed")
+
+    async def direct_fetcher(url, source_class, claim_type):
+        return ResearchEvidence(
+            source_class=source_class,
+            source_name="OPEC",
+            source_url=url,
+            title="OPEC monthly report",
+            snippet="Official table reports Iran crude production above threshold.",
+            claim_type=claim_type,
+            supports_direction="yes",
+            supports_confidence=0.9,
+        )
+
+    verdict = await run_research_gate(
+        SimpleNamespace(
+            headline="Reuters confirms OPEC table supports Iran crude production",
+            source="Reuters",
+        ),
+        SimpleNamespace(
+            ticker="KXIRANCRUDE-26JUL13-T3.8",
+            title="Will Iran crude oil production be at least 3.8M bpd?",
+            rules_primary="OPEC MOMR secondary sources decide the market.",
+            rules_secondary="Later revisions ignored.",
+            settlement_sources=(
+                SimpleNamespace(label="OPEC", url="https://opec.org/momr"),
+            ),
+        ),
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=search_provider,
+        direct_fetcher=direct_fetcher,
+        adjudicator=_fake_adjudicator,
+    )
+
+    assert verdict.status == ResearchStatus.TRADE_CANDIDATE
+    assert verdict.force_side == "yes"
 
 
 @pytest.mark.asyncio
@@ -484,7 +544,51 @@ async def test_run_research_gate_times_out_hung_search_provider():
 
 
 @pytest.mark.asyncio
-async def test_generic_market_contract_terms_fallback_can_promote_candidate():
+async def test_run_research_gate_enforces_end_to_end_timeout_budget():
+    async def slow_direct_fetcher(url, source_class, claim_type):
+        await asyncio.sleep(0.04)
+        return ResearchEvidence(
+            source_class=source_class,
+            source_name=url,
+            source_url=url,
+            title="Slow source",
+            snippet="Slow source",
+            claim_type=claim_type,
+        )
+
+    started = asyncio.get_running_loop().time()
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="Slow research target", source="Reuters"),
+        SimpleNamespace(
+            ticker="KXSLOW-26JUL13",
+            title="Will slow source resolve?",
+            rules_primary="Two official sources decide this market.",
+            rules_secondary="Later revisions ignored.",
+            settlement_sources=(
+                SimpleNamespace(label="Source A", url="https://source-a.example.com"),
+                SimpleNamespace(label="Source B", url="https://source-b.example.com"),
+            ),
+        ),
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=_fake_search,
+        direct_fetcher=slow_direct_fetcher,
+        adjudicator=_fake_adjudicator,
+        research_timeout_seconds=0.05,
+    )
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
+    assert verdict.skip_reason == "research_timeout"
+    assert elapsed < 0.10
+
+
+@pytest.mark.asyncio
+async def test_generic_market_contract_terms_fallback_remains_non_promotable():
     async def search_provider(query):
         if query.source_class == "resolution_source":
             return [
@@ -544,5 +648,5 @@ async def test_generic_market_contract_terms_fallback_can_promote_candidate():
         adjudicator=adjudicator,
     )
 
-    assert verdict.status == ResearchStatus.TRADE_CANDIDATE
-    assert verdict.force_side == "yes"
+    assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
+    assert verdict.skip_reason == "missing_resolution_source"

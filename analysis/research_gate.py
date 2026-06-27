@@ -165,6 +165,13 @@ def _classify_evidence_source(query: ResearchQuery, source_name: str, source_url
     return "other"
 
 
+def _is_settlement_evidence(item: ResearchEvidence) -> bool:
+    return (
+        item.source_class in {"resolution_source", "official_primary"}
+        and item.claim_type not in {"contract_terms", "rules_context"}
+    )
+
+
 def _market_text(market: Any) -> str:
     return " ".join(
         _clean(getattr(market, key, ""))
@@ -238,8 +245,8 @@ def build_research_queries(news: Any, market: Any) -> list[ResearchQuery]:
             queries.append(
                 ResearchQuery(
                     query=f"site:{terms_domain} {title or ticker}",
-                    query_intent="resolution_source",
-                    source_class="resolution_source",
+                    query_intent="contract_terms",
+                    source_class="rules_source",
                 )
             )
         else:
@@ -249,9 +256,9 @@ def build_research_queries(news: Any, market: Any) -> list[ResearchQuery]:
                     ResearchQuery(
                         query=rules_fragment,
                         query_intent="official_resolution_context",
-                    source_class="official_primary",
+                        source_class="official_primary",
+                    )
                 )
-            )
     if headline:
         corroboration_fragment = _query_fragment(
             headline,
@@ -387,11 +394,7 @@ def decide_research_verdict(
             skip_reason="no_research_hits",
         )
 
-    settlement_hits = [
-        item
-        for item in evidence
-        if item.source_class in {"resolution_source", "official_primary"}
-    ]
+    settlement_hits = [item for item in evidence if _is_settlement_evidence(item)]
     if not settlement_hits:
         return ResearchVerdict(
             status=ResearchStatus.CONTINUE_RESEARCHING,
@@ -586,7 +589,7 @@ def _direct_source_targets(market: Any) -> list[tuple[str, str, str]]:
     targets: list[tuple[str, str, str]] = []
     terms_url = _clean(getattr(market, "contract_terms_url", ""))
     if terms_url:
-        targets.append((terms_url, "resolution_source", "contract_terms"))
+        targets.append((terms_url, "rules_source", "contract_terms"))
     for source in getattr(market, "settlement_sources", ()) or ():
         url = _clean(getattr(source, "url", ""))
         if url:
@@ -700,6 +703,22 @@ async def run_research_gate(
     queries = build_research_queries(news, market)[:max_queries]
     ticker = _clean(getattr(market, "ticker", ""))
     contract_fingerprint = _contract_fingerprint(market)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.001, float(research_timeout_seconds))
+
+    def remaining_budget() -> float:
+        return max(0.0, deadline - loop.time())
+
+    def timeout_verdict(evidence: list[ResearchEvidence], summary: str) -> ResearchVerdict:
+        return ResearchVerdict(
+            status=ResearchStatus.CONTINUE_RESEARCHING,
+            attempted=True,
+            queries=queries,
+            evidence=evidence,
+            summary=summary,
+            skip_reason="research_timeout",
+        )
+
     cached_evidence: list[ResearchEvidence] = []
     if dossier_store is not None and ticker:
         try:
@@ -708,22 +727,31 @@ async def run_research_gate(
             cached_evidence = []
     fresh_evidence: list[ResearchEvidence] = []
     estimated_probability_yes: float | None = None
+    provider_errors: list[Exception] = []
     usable_cached_evidence = _usable_cached_evidence(cached_evidence, contract_fingerprint)
     if _has_sufficient_dossier_evidence(usable_cached_evidence, contract_fingerprint):
         evidence = usable_cached_evidence
     else:
         evidence = list(usable_cached_evidence)
         existing = {item.source_url for item in evidence if item.source_url}
-        provider_errors: list[Exception] = []
         fetcher = direct_fetcher or default_direct_fetcher
         for url, source_class, claim_type in _direct_source_targets(market):
+            remaining = remaining_budget()
+            if remaining <= 0:
+                return timeout_verdict(
+                    evidence,
+                    "Research timed out before direct-source fetch completed.",
+                )
             try:
                 item = await asyncio.wait_for(
                     fetcher(url, source_class, claim_type),
-                    timeout=research_timeout_seconds,
+                    timeout=remaining,
                 )
             except TimeoutError:
-                continue
+                return timeout_verdict(
+                    evidence,
+                    "Research direct-source fetch timed out before enough evidence was retrieved.",
+                )
             except Exception:
                 continue
             if item is None:
@@ -753,22 +781,24 @@ async def run_research_gate(
             )
         ]
         provider = search_provider or default_search_provider
+        remaining = remaining_budget()
+        if remaining <= 0:
+            return timeout_verdict(
+                evidence,
+                "Research timed out before search providers completed.",
+            )
         try:
             evidence_nested = await asyncio.wait_for(
                 asyncio.gather(
                     *(provider(query) for query in provider_queries),
                     return_exceptions=True,
                 ),
-                timeout=research_timeout_seconds,
+                timeout=remaining,
             )
         except TimeoutError:
-            return ResearchVerdict(
-                status=ResearchStatus.CONTINUE_RESEARCHING,
-                attempted=True,
-                queries=queries,
-                evidence=evidence,
-                summary="Research search providers timed out before enough evidence was retrieved.",
-                skip_reason="research_timeout",
+            return timeout_verdict(
+                evidence,
+                "Research search providers timed out before enough evidence was retrieved.",
             )
         for result in evidence_nested:
             if isinstance(result, Exception):
@@ -784,17 +814,14 @@ async def run_research_gate(
                 item = replace(item, contract_fingerprint=contract_fingerprint)
                 evidence.append(item)
                 fresh_evidence.append(item)
-        if provider_errors:
-            return ResearchVerdict(
-                status=ResearchStatus.RESEARCH_PROVIDER_ERROR,
-                attempted=True,
-                queries=queries,
-                evidence=evidence,
-                summary="Research provider failed before the source frontier could be trusted.",
-                skip_reason="research_provider_error",
-            )
     if evidence:
         adjudicate = adjudicator or default_ollama_adjudicator
+        remaining = remaining_budget()
+        if remaining <= 0:
+            return timeout_verdict(
+                evidence,
+                "Research timed out before adjudication completed.",
+            )
         try:
             adjudication = await asyncio.wait_for(
                 adjudicate(
@@ -803,16 +830,12 @@ async def run_research_gate(
                     news=news,
                     market=market,
                 ),
-                timeout=research_timeout_seconds,
+                timeout=remaining,
             )
         except TimeoutError:
-            return ResearchVerdict(
-                status=ResearchStatus.CONTINUE_RESEARCHING,
-                attempted=True,
-                queries=queries,
-                evidence=evidence,
-                summary="Research adjudication timed out before producing a verdict.",
-                skip_reason="research_timeout",
+            return timeout_verdict(
+                evidence,
+                "Research adjudication timed out before producing a verdict.",
             )
         except Exception:
             return ResearchVerdict(
@@ -853,6 +876,15 @@ async def run_research_gate(
         live_mode=live_mode,
         queries=queries,
     )
+    if provider_errors and verdict.status != ResearchStatus.TRADE_CANDIDATE:
+        verdict = ResearchVerdict(
+            status=ResearchStatus.RESEARCH_PROVIDER_ERROR,
+            attempted=True,
+            queries=queries,
+            evidence=evidence,
+            summary="Research provider failed before the source frontier could be trusted.",
+            skip_reason="research_provider_error",
+        )
     if dossier_store is not None and ticker:
         run_id = "rr-" + hashlib.sha256(
             f"{ticker}|{getattr(news, 'headline', '')}|{len(evidence)}|{verdict.status.value}".encode(
@@ -909,9 +941,7 @@ def _has_sufficient_dossier_evidence(
         for item in evidence
     ):
         return False
-    has_resolution = any(
-        item.source_class in {"resolution_source", "official_primary"} for item in evidence
-    )
+    has_resolution = any(_is_settlement_evidence(item) for item in evidence)
     urls = {item.source_url for item in evidence if item.source_url}
     return has_resolution and len(urls) >= 2
 

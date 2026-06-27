@@ -1271,6 +1271,22 @@ class TradingBot:
                     and research_verdict.force_side in {"yes", "no"}
                     and research_verdict.estimated_probability is not None
                 ):
+                    age_after_research = (
+                        datetime.now(timezone.utc) - news.published
+                    ).total_seconds()
+                    if age_after_research > threshold_secs:
+                        await write_trade_log_async(
+                            trade_log.log_analysis_rejected,
+                            reason="stale_news_after_research",
+                            ticker=market.ticker,
+                            source=news.source,
+                            headline=news.headline,
+                            match_score=match_score,
+                            age_seconds=age_after_research,
+                            threshold_seconds=threshold_secs,
+                            **eval_context,
+                        )
+                        return
                     estimated_prob = research_verdict.estimated_probability
                     confidence = research_verdict.confidence or llm_conf or confidence
                     keywords = ["research_evidence"]

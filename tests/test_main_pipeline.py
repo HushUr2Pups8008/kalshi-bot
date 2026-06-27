@@ -554,6 +554,51 @@ async def test_process_candidate_logs_research_provider_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_process_candidate_rechecks_staleness_after_research(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
+    bot = _make_bot_stub()
+    news = _make_news()
+    base_now = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc)
+    news.published = base_now - timedelta(seconds=60)
+    market = _make_market()
+    verdict = ResearchVerdict(
+        status=ResearchStatus.TRADE_CANDIDATE,
+        attempted=True,
+        summary="Research evidence supports YES.",
+        force_side="yes",
+        estimated_probability=0.8,
+        confidence=0.8,
+    )
+
+    class FakeDateTime(datetime):
+        calls = 0
+
+        @classmethod
+        def now(cls, tz=None):
+            cls.calls += 1
+            value = (
+                base_now
+                if cls.calls == 1
+                else base_now + timedelta(seconds=2000)
+            )
+            return value if tz is None else value.astimezone(tz)
+
+    with patch("main.datetime", FakeDateTime), \
+         patch("main.estimate_probability", new=AsyncMock(return_value=(
+             market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", "neutral", "none", 0.85
+         ))), patch("main.run_research_gate", new=AsyncMock(return_value=verdict)), \
+         patch("utils.logger.trade_log.log_analysis_rejected") as reject_mock:
+        await bot._process_candidate(news, market, 0.20)
+
+    bot.executor.execute.assert_not_called()
+    reject_kwargs = reject_mock.call_args.kwargs
+    assert reject_kwargs["reason"] == "stale_news_after_research"
+    assert reject_kwargs["research_status"] == "trade_candidate"
+    assert reject_kwargs["age_seconds"] == pytest.approx(2060.0, abs=1.0)
+
+
+@pytest.mark.asyncio
 async def test_process_candidate_proceeds_when_llm_emits_signal_despite_no_keywords(monkeypatch):
     """PROFIT-EDGE-001 regression: empty `keywords` list with an LLM-emitted
     signal (llm_mag != "none") should NOT be rejected as no_keywords.

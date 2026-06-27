@@ -11,6 +11,7 @@ the ~/.zshrc shell helpers:
 from datetime import datetime, timezone
 from pathlib import Path
 
+import scripts.botcheck as botcheck
 from scripts.botcheck import (
     ProcessInfo,
     _bot_pids,
@@ -119,6 +120,12 @@ def test_summarize_signal_flow_counts_recent_structured_events(tmp_path):
             {"type": "OPPORTUNITY", "ts": "2026-05-10T22:00:00+00:00"},
             {"type": "BLEND_DECISION", "ts": "2026-05-10T22:05:00+00:00"},
             {"type": "BLEND_DECISION", "ts": "2026-05-10T22:15:00+00:00"},
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-05-10T22:25:00+00:00",
+                "research_attempted": True,
+                "research_status": "continue_researching",
+            },
             {"type": "SKIPPED", "ts": "2026-05-10T22:20:00+00:00"},
             {"type": "PAPER_TRADE", "ts": "2026-05-09T22:00:00+00:00"},
             {"type": "UNRELATED", "ts": "2026-05-10T22:30:00+00:00"},
@@ -132,12 +139,15 @@ def test_summarize_signal_flow_counts_recent_structured_events(tmp_path):
         window_hours=24,
     )
 
-    assert stats.records_kept == 4
-    assert stats.lines_total == 7
+    assert stats.records_kept == 5
+    assert stats.lines_total == 8
     assert stats.lines_malformed == 1
     assert stats.counts["OPPORTUNITY"] == 1
     assert stats.counts["BLEND_DECISION"] == 2
     assert stats.counts["SKIPPED"] == 1
+    assert stats.research_records == 1
+    assert stats.research_status_counts["continue_researching"] == 1
+    assert stats.latest_research_ts == datetime(2026, 5, 10, 22, 25, tzinfo=timezone.utc)
     assert "PAPER_TRADE" not in stats.counts
     assert stats.latest_ts_by_type["BLEND_DECISION"] == datetime(
         2026, 5, 10, 22, 15, tzinfo=timezone.utc
@@ -163,6 +173,65 @@ def test_print_signal_flow_section_surfaces_pipeline_counts(capsys, tmp_path):
     assert "OPPORTUNITY      :     1" in out
     assert "BLEND_DECISION   :     1" in out
     assert "latest=2026-05-10T22:30:00+00:00 age=30m 00s" in out
+
+
+def test_print_research_gate_section_surfaces_mode_and_research_rows(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("REAL_WEB_RESEARCH_MODE", raising=False)
+    monkeypatch.delenv("REAL_WEB_RESEARCH_MAX_QUERIES", raising=False)
+    monkeypatch.delenv("REAL_WEB_RESEARCH_TIMEOUT_SECONDS", raising=False)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "REAL_WEB_RESEARCH_MODE=shadow",
+                "REAL_WEB_RESEARCH_MAX_QUERIES=4",
+                "REAL_WEB_RESEARCH_TIMEOUT_SECONDS=8.5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-05-10T22:30:00+00:00",
+                "research_attempted": True,
+                "research_status": "research_provider_error",
+            }
+        ],
+    )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(trades, now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "Real web research gate" in out
+    assert "mode       : shadow (.env)" in out
+    assert "max_queries: 4 (.env)" in out
+    assert "timeout_s  : 8.5 (.env)" in out
+    assert "research_rows: 1 latest=2026-05-10T22:30:00+00:00 age=30m 00s" in out
+    assert "statuses   : research_provider_error=1" in out
+
+
+def test_print_research_gate_section_warns_when_disabled(capsys, tmp_path, monkeypatch):
+    monkeypatch.delenv("REAL_WEB_RESEARCH_MODE", raising=False)
+    monkeypatch.delenv("REAL_WEB_RESEARCH_MAX_QUERIES", raising=False)
+    monkeypatch.delenv("REAL_WEB_RESEARCH_TIMEOUT_SECONDS", raising=False)
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "mode       : off (default)" in out
+    assert "status     : disabled; no-keyword candidates use legacy terminal skip" in out
+    assert "research_rows: 0 latest=n/a age=n/a" in out
 
 
 def test_session_duration_is_honest_for_unpaired_inactive_session():

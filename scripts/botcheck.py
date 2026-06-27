@@ -83,6 +83,9 @@ class SignalFlowStats:
     lines_malformed: int
     counts: Counter[str]
     latest_ts_by_type: dict[str, datetime]
+    research_records: int
+    research_status_counts: Counter[str]
+    latest_research_ts: datetime | None
 
 
 def human_duration(seconds: int | float | None) -> str:
@@ -181,6 +184,9 @@ def summarize_signal_flow(
     lines_malformed = [0]
     counts: Counter[str] = Counter()
     latest_ts_by_type: dict[str, datetime] = {}
+    research_status_counts: Counter[str] = Counter()
+    latest_research_ts: datetime | None = None
+    research_records = 0
     records_kept = 0
 
     for record in _iter_trade_records(
@@ -196,6 +202,16 @@ def summarize_signal_flow(
             continue
         records_kept += 1
         counts[event_type] += 1
+        if record.get("research_attempted") is True or any(
+            str(key).startswith("research_") for key in record
+        ):
+            research_records += 1
+            status = str(record.get("research_status") or "unknown").strip() or "unknown"
+            research_status_counts[status] += 1
+            if ts is not None and (
+                latest_research_ts is None or ts > latest_research_ts
+            ):
+                latest_research_ts = ts
         if ts is not None and (
             event_type not in latest_ts_by_type or ts > latest_ts_by_type[event_type]
         ):
@@ -209,6 +225,9 @@ def summarize_signal_flow(
         lines_malformed=lines_malformed[0],
         counts=counts,
         latest_ts_by_type=latest_ts_by_type,
+        research_records=research_records,
+        research_status_counts=research_status_counts,
+        latest_research_ts=latest_research_ts,
     )
 
 
@@ -306,6 +325,86 @@ def read_sessions(log_path: Path) -> list[BotSession]:
         return parse_sessions(log_path.read_text(encoding="utf-8", errors="replace").splitlines())
     except OSError:
         return []
+
+
+def _read_env_file_value(path: Path, key: str) -> str | None:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    pattern = re.compile(rf"^\s*(?:export\s+)?{re.escape(key)}\s*=\s*(?P<value>.*)\s*$")
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = pattern.match(line)
+        if not match:
+            continue
+        value = match.group("value").strip()
+        if value and value[0] in {'"', "'"} and value[-1:] == value[0]:
+            value = value[1:-1]
+        return value
+    return None
+
+
+def _research_env_value(repo_root: Path, key: str, default: str) -> tuple[str, str]:
+    if key in os.environ:
+        return os.environ[key], "process-env"
+    env_value = _read_env_file_value(repo_root / ".env", key)
+    if env_value is not None:
+        return env_value, ".env"
+    return default, "default"
+
+
+def print_research_gate_section(repo_root: Path, stats: SignalFlowStats, *, now: datetime) -> None:
+    mode, mode_source = _research_env_value(repo_root, "REAL_WEB_RESEARCH_MODE", "off")
+    max_queries, max_queries_source = _research_env_value(
+        repo_root,
+        "REAL_WEB_RESEARCH_MAX_QUERIES",
+        "6",
+    )
+    timeout, timeout_source = _research_env_value(
+        repo_root,
+        "REAL_WEB_RESEARCH_TIMEOUT_SECONDS",
+        "12.0",
+    )
+    mode = mode.strip().lower() or "off"
+    print("=== Real web research gate ===")
+    print(f"mode       : {mode} ({mode_source})")
+    print(f"max_queries: {max_queries} ({max_queries_source})")
+    print(f"timeout_s  : {timeout} ({timeout_source})")
+    if mode == "off":
+        print("status     : disabled; no-keyword candidates use legacy terminal skip")
+    elif mode == "shadow":
+        print("status     : shadow; evidence collected without promotion")
+    elif mode == "production":
+        print("status     : production; eligible researched candidates may promote")
+    else:
+        print("status     : INVALID; config validation should reject this at startup")
+
+    latest_age = (
+        human_duration((now - stats.latest_research_ts).total_seconds())
+        if stats.latest_research_ts is not None
+        else "n/a"
+    )
+    latest_text = (
+        stats.latest_research_ts.isoformat()
+        if stats.latest_research_ts is not None
+        else "n/a"
+    )
+    print(
+        "research_rows: "
+        f"{stats.research_records} latest={latest_text} age={latest_age}"
+    )
+    if stats.research_status_counts:
+        rendered = ", ".join(
+            f"{status}={count}"
+            for status, count in sorted(stats.research_status_counts.items())
+        )
+        print(f"statuses   : {rendered}")
+    else:
+        print("statuses   : none")
+    print()
 
 
 def run_command(args: list[str]) -> str:
@@ -840,6 +939,7 @@ def main() -> int:
     print_caffeinate_section(caffeinates, now_epoch=now_epoch)
     print_last_boot(args.log, sessions, now)
     print_signal_flow_section(signal_flow, now=now)
+    print_research_gate_section(default_home, signal_flow, now=now)
     print_kalshi_drift_section(now=now)
     print_history(sessions=sessions, current_proc=current_proc, now=now)
     return 0
