@@ -358,6 +358,8 @@ def test_counterfactual_replay_metrics_join_resolved_pnl_and_slippage(tmp_path):
                 "llm_capture_row_id": "signal::KXONE::id-1",
                 "llm_total_stage_ms": 1000,
                 "yes_ask_cents": 40,
+                "executable_price_cents": 41.5,
+                "research_min_retrieved_at": "2026-06-21T01:00:00Z",
                 "model_results": {
                     "qwen": {
                         "direction": "yes",
@@ -371,6 +373,8 @@ def test_counterfactual_replay_metrics_join_resolved_pnl_and_slippage(tmp_path):
                 "llm_capture_row_id": "signal::KXTWO::id-2",
                 "llm_total_stage_ms": 3000,
                 "no_ask_cents": 35,
+                "entry_price_cents": 36,
+                "research_min_retrieved_at": "2026-06-21T01:01:00Z",
                 "model_results": {
                     "qwen": {
                         "direction": "no",
@@ -403,9 +407,49 @@ def test_counterfactual_replay_metrics_join_resolved_pnl_and_slippage(tmp_path):
         "join_key": "llm_capture_row_id",
     }
     assert enriched["latency_slippage_replay"]["replayed_cases"] == 2
-    assert enriched["latency_slippage_replay"]["avg_net_edge_after_slippage"] == 0.3
-    assert enriched["latency_slippage_replay"]["max_slippage_cents"] == 40.0
+    assert enriched["latency_slippage_replay"]["avg_net_edge_after_slippage"] == 0.2875
+    assert enriched["latency_slippage_replay"]["max_slippage_cents"] == 1.5
     assert enriched["latency_slippage_replay"]["p95_latency_seconds"] >= 1.0
+    assert enriched["shadow_field_completeness"] == {
+        "positive_cases": 2,
+        "llm_capture_row_id": 2,
+        "estimated_probability_yes": 2,
+        "latency": 2,
+        "executable_price": 2,
+        "decision_quote": 2,
+        "freshness_timestamp": 2,
+        "replay_ready_cases": 2,
+        "freshness_ready_cases": 2,
+    }
+
+
+def test_counterfactual_replay_metrics_do_not_treat_price_level_as_slippage():
+    from scripts.counterfactual_llm_eval import add_shadow_replay_metrics
+
+    report = {
+        "cases": [
+            {
+                "ticker": "KXONE",
+                "llm_capture_row_id": "signal::KXONE::id-1",
+                "llm_total_stage_ms": 1000,
+                "yes_ask_cents": 40,
+                "model_results": {
+                    "qwen": {
+                        "direction": "yes",
+                        "estimated_probability_yes": 0.65,
+                        "paper_candidate_positive": True,
+                    }
+                },
+            },
+        ]
+    }
+
+    enriched = add_shadow_replay_metrics(report)
+
+    assert enriched["latency_slippage_replay"] == {
+        "status": "missing",
+        "reason": "missing_executable_or_decision_price",
+    }
 
 
 def test_counterfactual_replay_metrics_fail_closed_without_authoritative_fields():
@@ -429,3 +473,14 @@ def test_counterfactual_replay_metrics_fail_closed_without_authoritative_fields(
 
     assert enriched["resolved_counterfactual_pnl"]["status"] == "missing"
     assert enriched["latency_slippage_replay"]["status"] == "missing"
+    assert enriched["shadow_field_completeness"] == {
+        "positive_cases": 1,
+        "llm_capture_row_id": 0,
+        "estimated_probability_yes": 0,
+        "latency": 0,
+        "executable_price": 0,
+        "decision_quote": 0,
+        "freshness_timestamp": 0,
+        "replay_ready_cases": 0,
+        "freshness_ready_cases": 0,
+    }

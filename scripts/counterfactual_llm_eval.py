@@ -177,6 +177,15 @@ def _case_optional_fields(record: dict[str, Any]) -> dict[str, Any]:
         "price_source",
         "price_method",
         "decision_ts",
+        "research_started_ts",
+        "research_completed_ts",
+        "research_duration_ms",
+        "research_min_published_at",
+        "research_max_published_at",
+        "research_min_retrieved_at",
+        "research_max_retrieved_at",
+        "research_evidence_min_age_seconds",
+        "research_evidence_max_age_seconds",
     )
     return {
         key: record[key]
@@ -408,11 +417,15 @@ def _p95_seconds(milliseconds: list[float]) -> float | None:
     return round(statistics.quantiles(sorted(milliseconds), n=20)[18] / 1000.0, 4)
 
 
-def _side_price_cents(case: dict[str, Any], direction: str) -> float | None:
+def _executable_side_price_cents(case: dict[str, Any]) -> float | None:
     if "executable_price_cents" in case:
         return _float_or_none(case.get("executable_price_cents"))
     if "entry_price_cents" in case:
         return _float_or_none(case.get("entry_price_cents"))
+    return None
+
+
+def _decision_side_quote_cents(case: dict[str, Any], direction: str) -> float | None:
     direction = direction.lower()
     if direction == "yes":
         for key in ("yes_ask_cents", "market_yes_price"):
@@ -438,10 +451,79 @@ def _side_probability(result: dict[str, Any], direction: str) -> float | None:
     return None
 
 
+def _has_latency(case: dict[str, Any]) -> bool:
+    return (
+        _float_or_none(case.get("llm_total_stage_ms")) is not None
+        or _float_or_none(case.get("llm_latency_ms")) is not None
+    )
+
+
+def _has_freshness_timestamp(case: dict[str, Any]) -> bool:
+    return any(
+        case.get(key) is not None
+        for key in (
+            "research_min_published_at",
+            "research_max_published_at",
+            "research_min_retrieved_at",
+            "research_max_retrieved_at",
+            "research_evidence_min_age_seconds",
+            "research_evidence_max_age_seconds",
+        )
+    )
+
+
+def _shadow_field_completeness(report: dict[str, Any]) -> dict[str, int]:
+    counts = {
+        "positive_cases": 0,
+        "llm_capture_row_id": 0,
+        "estimated_probability_yes": 0,
+        "latency": 0,
+        "executable_price": 0,
+        "decision_quote": 0,
+        "freshness_timestamp": 0,
+        "replay_ready_cases": 0,
+        "freshness_ready_cases": 0,
+    }
+    for case, result in _positive_model_results(report):
+        counts["positive_cases"] += 1
+        direction = str(result.get("direction") or "").strip().lower()
+        has_capture = bool(case.get("llm_capture_row_id"))
+        has_probability = _side_probability(result, direction) is not None
+        has_latency = _has_latency(case)
+        has_executable_price = _executable_side_price_cents(case) is not None
+        has_decision_quote = _decision_side_quote_cents(case, direction) is not None
+        has_freshness = _has_freshness_timestamp(case)
+
+        if has_capture:
+            counts["llm_capture_row_id"] += 1
+        if has_probability:
+            counts["estimated_probability_yes"] += 1
+        if has_latency:
+            counts["latency"] += 1
+        if has_executable_price:
+            counts["executable_price"] += 1
+        if has_decision_quote:
+            counts["decision_quote"] += 1
+        if has_freshness:
+            counts["freshness_timestamp"] += 1
+        if (
+            has_capture
+            and has_probability
+            and has_latency
+            and has_executable_price
+            and has_decision_quote
+        ):
+            counts["replay_ready_cases"] += 1
+        if has_freshness:
+            counts["freshness_ready_cases"] += 1
+    return counts
+
+
 def _latency_slippage_replay(report: dict[str, Any]) -> dict[str, Any]:
     latencies_ms: list[float] = []
     edges: list[float] = []
-    prices: list[float] = []
+    slippages: list[float] = []
+    skipped_missing_prices = 0
     for case, result in _positive_model_results(report):
         latency = _float_or_none(case.get("llm_total_stage_ms")) or _float_or_none(
             case.get("llm_latency_ms")
@@ -449,12 +531,21 @@ def _latency_slippage_replay(report: dict[str, Any]) -> dict[str, Any]:
         if latency is not None:
             latencies_ms.append(latency)
         direction = str(result.get("direction") or "").strip().lower()
-        price_cents = _side_price_cents(case, direction)
+        executable_cents = _executable_side_price_cents(case)
+        decision_quote_cents = _decision_side_quote_cents(case, direction)
         probability = _side_probability(result, direction)
-        if price_cents is None or probability is None:
+        if executable_cents is None or decision_quote_cents is None:
+            skipped_missing_prices += 1
             continue
-        prices.append(price_cents)
-        edges.append(probability - (price_cents / 100.0))
+        if probability is None:
+            continue
+        slippages.append(max(0.0, executable_cents - decision_quote_cents))
+        edges.append(probability - (executable_cents / 100.0))
+    if skipped_missing_prices and not edges:
+        return {
+            "status": "missing",
+            "reason": "missing_executable_or_decision_price",
+        }
     if not edges or not latencies_ms:
         return {"status": "missing"}
     return {
@@ -462,7 +553,8 @@ def _latency_slippage_replay(report: dict[str, Any]) -> dict[str, Any]:
         "replayed_cases": len(edges),
         "p95_latency_seconds": _p95_seconds(latencies_ms),
         "avg_net_edge_after_slippage": round(sum(edges) / len(edges), 6),
-        "max_slippage_cents": round(max(prices), 4),
+        "avg_slippage_cents": round(sum(slippages) / len(slippages), 4),
+        "max_slippage_cents": round(max(slippages), 4),
     }
 
 
@@ -519,6 +611,7 @@ def add_shadow_replay_metrics(
         paper_trades_db,
     )
     enriched["latency_slippage_replay"] = _latency_slippage_replay(enriched)
+    enriched["shadow_field_completeness"] = _shadow_field_completeness(enriched)
     return enriched
 
 
