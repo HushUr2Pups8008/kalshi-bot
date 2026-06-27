@@ -13,6 +13,7 @@ import asyncio
 import json
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -23,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
 from kalshi.rest_client import KalshiRestClient
 from tasks.research_dossier import ResearchDossierStore
 from tasks.research_prewarm_task import ResearchPrewarmResult, ResearchPrewarmTask
+from utils.trade_log_reader import iter_trade_records
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -44,6 +46,35 @@ def build_argparser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="Maximum Kalshi open-market pages to fetch when --ticker is omitted.",
+    )
+    parser.add_argument(
+        "--target-from-log",
+        type=Path,
+        default=None,
+        help=(
+            "Read recent ANALYSIS_REJECTED rows from a trade-log file/root and "
+            "prewarm those tickers before falling back to open-market scan."
+        ),
+    )
+    parser.add_argument(
+        "--target-since",
+        default=None,
+        help="UTC ISO lower bound for --target-from-log records.",
+    )
+    parser.add_argument(
+        "--target-reason",
+        action="append",
+        default=["no_keywords", "research_incomplete"],
+        help=(
+            "ANALYSIS_REJECTED reason to target from logs. Repeatable. "
+            "Defaults to no_keywords and research_incomplete."
+        ),
+    )
+    parser.add_argument(
+        "--target-rejection-category",
+        action="append",
+        default=[],
+        help="Optional rejection_category filter for --target-from-log. Repeatable.",
     )
     parser.add_argument(
         "--db-path",
@@ -94,6 +125,22 @@ def _load_markets(args: argparse.Namespace, client: Any) -> list[Any]:
                 break
         return markets
 
+    target_from_log = getattr(args, "target_from_log", None)
+    if target_from_log:
+        for ticker in _target_tickers_from_trade_log(
+            target_from_log,
+            since=_parse_optional_ts(getattr(args, "target_since", None)),
+            reasons=getattr(args, "target_reason", None),
+            rejection_categories=getattr(args, "target_rejection_category", None),
+        ):
+            market = client.get_market(ticker)
+            if market is not None:
+                markets.append(market)
+            if len(markets) >= args.max_markets:
+                break
+        if markets:
+            return markets
+
     open_markets = client.get_all_open_markets(max_pages=args.max_pages)
     for market in open_markets:
         if market is None:
@@ -102,6 +149,64 @@ def _load_markets(args: argparse.Namespace, client: Any) -> list[Any]:
         if len(markets) >= args.max_markets:
             break
     return markets
+
+
+def _parse_optional_ts(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _target_tickers_from_trade_log(
+    path: Path,
+    *,
+    since: datetime | None,
+    reasons: list[str] | None,
+    rejection_categories: list[str] | None,
+) -> list[str]:
+    reason_set = {
+        str(reason).strip()
+        for reason in (reasons or [])
+        if str(reason).strip()
+    }
+    category_set = {
+        str(category).strip()
+        for category in (rejection_categories or [])
+        if str(category).strip()
+    }
+    last_index_by_ticker: dict[str, int] = {}
+    for index, record in enumerate(
+        iter_trade_records(
+            Path(path),
+            since=since,
+            event_types={"ANALYSIS_REJECTED"},
+        )
+    ):
+        reason = str(record.get("reason") or "").strip()
+        if reason_set and reason not in reason_set:
+            continue
+        category = str(record.get("rejection_category") or "").strip()
+        if category_set and category not in category_set:
+            continue
+        ticker = str(record.get("ticker") or record.get("market_ticker") or "").strip()
+        if ticker:
+            last_index_by_ticker[ticker] = index
+    return [
+        ticker
+        for ticker, _index in sorted(
+            last_index_by_ticker.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+    ]
 
 
 def summarize_results(results: Iterable[ResearchPrewarmResult]) -> dict[str, Any]:

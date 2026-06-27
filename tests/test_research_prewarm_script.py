@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import research_prewarm
+from tests._helpers import write_jsonl
 from tasks.research_prewarm_task import ResearchPrewarmResult
 
 
@@ -89,6 +90,58 @@ async def test_run_once_limits_open_market_scan_before_research():
     assert summary["markets"] == 2
 
 
+@pytest.mark.asyncio
+async def test_run_once_targets_recent_no_keyword_trade_log_tickers(tmp_path):
+    trade_log = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trade_log,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-06-27T10:00:00Z",
+                "ticker": "KX-OLD",
+                "reason": "no_keywords",
+            },
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-06-27T11:00:00Z",
+                "ticker": "KX-SKIP",
+                "reason": "stale_news",
+            },
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-06-27T12:00:00Z",
+                "ticker": "KX-NEW",
+                "reason": "research_incomplete",
+            },
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-06-27T13:00:00Z",
+                "ticker": "KX-OLD",
+                "reason": "no_keywords",
+            },
+        ],
+    )
+    client = FakeClient()
+    task = FakeTask()
+    args = Namespace(
+        ticker=[],
+        target_from_log=trade_log,
+        target_since="2026-06-27T09:00:00Z",
+        target_reason=["no_keywords", "research_incomplete"],
+        target_rejection_category=[],
+        max_markets=2,
+        max_pages=99,
+    )
+
+    summary = await research_prewarm.run_once(args, client=client, task=task)
+
+    assert client.open_page_calls == []
+    assert client.market_calls == ["KX-OLD", "KX-NEW"]
+    assert [market.ticker for market in task.markets] == ["KX-OLD", "KX-NEW"]
+    assert summary["markets"] == 2
+
+
 def test_build_argparser_defaults_to_single_run():
     args = research_prewarm.build_argparser().parse_args([])
 
@@ -96,3 +149,4 @@ def test_build_argparser_defaults_to_single_run():
     assert args.max_markets == 50
     assert args.max_pages == 10
     assert args.max_queries == 6
+    assert args.target_reason == ["no_keywords", "research_incomplete"]
