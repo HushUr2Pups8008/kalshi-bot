@@ -525,6 +525,10 @@ def _research_env_value(repo_root: Path, key: str, default: str) -> tuple[str, s
     return default, "default"
 
 
+def _env_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _relative_display_path(path: Path, root: Path) -> str:
     try:
         return str(path.relative_to(root))
@@ -556,11 +560,44 @@ def print_research_gate_section(
         "REAL_WEB_RESEARCH_TIMEOUT_SECONDS",
         "12.0",
     )
+    prewarm_enabled, prewarm_source = _research_env_value(
+        repo_root,
+        "ENABLE_RESEARCH_PREWARM_TASK",
+        "false",
+    )
+    prewarm_interval, _prewarm_interval_source = _research_env_value(
+        repo_root,
+        "RESEARCH_PREWARM_INTERVAL_SECONDS",
+        "900",
+    )
+    prewarm_max_markets, _prewarm_max_markets_source = _research_env_value(
+        repo_root,
+        "RESEARCH_PREWARM_MAX_MARKETS",
+        "25",
+    )
+    prewarm_max_pages, _prewarm_max_pages_source = _research_env_value(
+        repo_root,
+        "RESEARCH_PREWARM_MAX_PAGES",
+        "5",
+    )
     mode = mode.strip().lower() or "off"
     print("=== Real web research gate ===")
     print(f"mode       : {mode} ({mode_source})")
     print(f"max_queries: {max_queries} ({max_queries_source})")
     print(f"timeout_s  : {timeout} ({timeout_source})")
+    if _env_bool(prewarm_enabled):
+        print(
+            "prewarm   : "
+            f"on ({prewarm_source}) interval={prewarm_interval}s "
+            f"max_markets={prewarm_max_markets} max_pages={prewarm_max_pages}"
+        )
+    elif mode in {"shadow", "production"}:
+        print(
+            "prewarm   : "
+            f"off ({prewarm_source}) RISK: cache misses can remain terminal"
+        )
+    else:
+        print(f"prewarm   : off ({prewarm_source})")
     if mode == "off":
         print("status     : disabled; no-keyword candidates use legacy terminal skip")
     elif mode == "shadow":

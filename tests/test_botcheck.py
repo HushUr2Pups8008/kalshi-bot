@@ -236,6 +236,61 @@ def test_print_research_gate_section_warns_when_disabled(capsys, tmp_path, monke
     assert "research_rows: 0 latest=n/a age=n/a" in out
 
 
+def test_print_research_gate_section_warns_when_prewarm_disabled_in_active_mode(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("ENABLE_RESEARCH_PREWARM_TASK", raising=False)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "REAL_WEB_RESEARCH_MODE=production",
+                "ENABLE_RESEARCH_PREWARM_TASK=false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "mode       : production (.env)" in out
+    assert "prewarm   : off (.env) RISK: cache misses can remain terminal" in out
+
+
+def test_print_research_gate_section_surfaces_enabled_prewarm_config(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("ENABLE_RESEARCH_PREWARM_TASK", raising=False)
+    monkeypatch.delenv("RESEARCH_PREWARM_INTERVAL_SECONDS", raising=False)
+    monkeypatch.delenv("RESEARCH_PREWARM_MAX_MARKETS", raising=False)
+    monkeypatch.delenv("RESEARCH_PREWARM_MAX_PAGES", raising=False)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "REAL_WEB_RESEARCH_MODE=shadow",
+                "ENABLE_RESEARCH_PREWARM_TASK=true",
+                "RESEARCH_PREWARM_INTERVAL_SECONDS=300",
+                "RESEARCH_PREWARM_MAX_MARKETS=12",
+                "RESEARCH_PREWARM_MAX_PAGES=4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "prewarm   : on (.env) interval=300s max_markets=12 max_pages=4" in out
+
+
 def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
     db_path = tmp_path / "data" / "evidence_store.db"
     db_path.parent.mkdir()
