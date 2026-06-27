@@ -699,6 +699,7 @@ async def run_research_gate(
     dossier_store: DossierStore | None = None,
     max_queries: int = 6,
     research_timeout_seconds: float = 12.0,
+    cache_only: bool = False,
 ) -> ResearchVerdict:
     queries = build_research_queries(news, market)[:max_queries]
     ticker = _clean(getattr(market, "ticker", ""))
@@ -720,15 +721,67 @@ async def run_research_gate(
         )
 
     cached_evidence: list[ResearchEvidence] = []
+    cached_dossier: Any | None = None
     if dossier_store is not None and ticker:
         try:
             cached_evidence = await dossier_store.get_recent_evidence(ticker)
         except Exception:
             cached_evidence = []
+        if hasattr(dossier_store, "get_dossier_snapshot"):
+            try:
+                cached_dossier = await dossier_store.get_dossier_snapshot(ticker)
+            except Exception:
+                cached_dossier = None
     fresh_evidence: list[ResearchEvidence] = []
     estimated_probability_yes: float | None = None
     provider_errors: list[Exception] = []
     usable_cached_evidence = _usable_cached_evidence(cached_evidence, contract_fingerprint)
+    if cache_only:
+        if not _has_sufficient_dossier_evidence(usable_cached_evidence, contract_fingerprint):
+            return ResearchVerdict(
+                status=ResearchStatus.CONTINUE_RESEARCHING,
+                attempted=False,
+                queries=queries,
+                evidence=usable_cached_evidence,
+                summary=(
+                    "Cache-only research mode has no sufficient fresh "
+                    "contract-matching dossier evidence; no live research attempted."
+                ),
+                skip_reason="cached_dossier_insufficient",
+            )
+        if (
+            cached_dossier is None
+            or getattr(cached_dossier, "last_verdict_status", None)
+            != ResearchStatus.TRADE_CANDIDATE.value
+            or getattr(cached_dossier, "last_force_side", None) not in {"yes", "no"}
+            or getattr(cached_dossier, "last_estimated_probability", None) is None
+            or getattr(cached_dossier, "last_confidence", None) is None
+        ):
+            return ResearchVerdict(
+                status=ResearchStatus.CONTINUE_RESEARCHING,
+                attempted=False,
+                queries=queries,
+                evidence=usable_cached_evidence,
+                summary=(
+                    "Cache-only research mode found evidence but no vetted "
+                    "directional dossier verdict; no live research attempted."
+                ),
+                skip_reason="cached_dossier_unvetted",
+            )
+        return decide_research_verdict(
+            evidence=usable_cached_evidence,
+            model_direction=getattr(cached_dossier, "last_force_side"),
+            model_confidence=getattr(cached_dossier, "last_confidence"),
+            model_reason="Cached research dossier verdict.",
+            estimated_probability_yes=getattr(
+                cached_dossier,
+                "last_estimated_probability",
+            ),
+            yes_ask=yes_ask,
+            no_ask=no_ask,
+            live_mode=live_mode,
+            queries=queries,
+        )
     if _has_sufficient_dossier_evidence(usable_cached_evidence, contract_fingerprint):
         evidence = usable_cached_evidence
     else:

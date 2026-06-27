@@ -1263,6 +1263,7 @@ class TradingBot:
                         getattr(cfg, "real_web_research_timeout_seconds", 12.0)
                     ),
                     dossier_store=dossier_store,
+                    cache_only=research_mode == "production",
                 )
                 eval_context.update(research_verdict.log_fields())
                 if (

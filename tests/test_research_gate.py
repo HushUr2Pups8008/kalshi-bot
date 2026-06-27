@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -9,12 +10,14 @@ from analysis.research_gate import (
     ResearchEvidence,
     ResearchQuery,
     ResearchStatus,
+    _contract_fingerprint,
     urllib,
     _rss_search,
     build_research_queries,
     decide_research_verdict,
     run_research_gate,
 )
+from tasks.research_dossier import ResearchDossierStore
 
 
 @pytest.fixture(autouse=True)
@@ -291,6 +294,130 @@ async def _fake_adjudicator(*, evidence, queries, news, market):
         "estimated_probability_yes": 0.8,
         "reason": "Resolution-source and wire evidence support higher production.",
     }
+
+
+@pytest.mark.asyncio
+async def test_cache_only_research_gate_promotes_from_vetted_cached_dossier(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    market = SimpleNamespace(
+        ticker="KXIRANCRUDE-26JUL13-T3.8",
+        title="Will Iran crude oil production be at least 3.8M bpd?",
+        rules_primary="OPEC MOMR secondary sources decide the market.",
+        rules_secondary="Later revisions ignored.",
+        settlement_sources=(),
+    )
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="resolution_source",
+            source_name="OPEC",
+            source_url="https://opec.org/momr",
+            title="MOMR table",
+            snippet="Iran crude production secondary sources table.",
+            claim_type="resolution",
+            supports_direction="yes",
+            supports_confidence=0.9,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=_contract_fingerprint(market),
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Reuters",
+            source_url="https://reuters.com/iran-production",
+            title="Iran production rises",
+            snippet="Analysts expect Iran crude production to exceed the threshold.",
+            claim_type="corroboration",
+            supports_direction="yes",
+            supports_confidence=0.8,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=_contract_fingerprint(market),
+        ),
+    ]
+    await store.record_research_run(
+        market.ticker,
+        "rr-vetted-cache",
+        trigger_headline="scheduled prewarm",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Cached vetted research supports yes.",
+        verdict_status=ResearchStatus.TRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.8,
+        confidence=0.8,
+        evidence=evidence,
+    )
+
+    async def fail_search(_query):
+        raise AssertionError("cache-only production path must not search")
+
+    async def fail_direct_fetcher(*_args):
+        raise AssertionError("cache-only production path must not fetch")
+
+    async def fail_adjudicator(**_kwargs):
+        raise AssertionError("cache-only production path must not call LLM")
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
+        market,
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=True,
+        search_provider=fail_search,
+        direct_fetcher=fail_direct_fetcher,
+        adjudicator=fail_adjudicator,
+        dossier_store=store,
+        cache_only=True,
+    )
+
+    assert verdict.status == ResearchStatus.TRADE_CANDIDATE
+    assert verdict.force_side == "yes"
+    assert verdict.estimated_probability == pytest.approx(0.8)
+    assert len(verdict.evidence) == 2
+
+
+@pytest.mark.asyncio
+async def test_cache_only_research_gate_fails_closed_without_sufficient_cache(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+
+    async def fail_search(_query):
+        raise AssertionError("cache-only production path must not search")
+
+    async def fail_direct_fetcher(*_args):
+        raise AssertionError("cache-only production path must not fetch")
+
+    async def fail_adjudicator(**_kwargs):
+        raise AssertionError("cache-only production path must not call LLM")
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
+        SimpleNamespace(
+            ticker="KXIRANCRUDE-26JUL13-T3.8",
+            title="Will Iran crude oil production be at least 3.8M bpd?",
+            rules_primary="OPEC MOMR secondary sources decide the market.",
+            rules_secondary="Later revisions ignored.",
+            settlement_sources=(),
+        ),
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=True,
+        search_provider=fail_search,
+        direct_fetcher=fail_direct_fetcher,
+        adjudicator=fail_adjudicator,
+        dossier_store=store,
+        cache_only=True,
+    )
+
+    assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
+    assert verdict.attempted is False
+    assert verdict.skip_reason == "cached_dossier_insufficient"
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
@@ -19,6 +20,18 @@ from config import DATA_DIR
 _T = TypeVar("_T")
 
 DEFAULT_RESEARCH_DOSSIER_DB_PATH = DATA_DIR / "evidence_store.db"
+
+
+@dataclass(frozen=True)
+class ResearchDossierSnapshot:
+    market_ticker: str
+    last_research_run_id: str | None
+    last_researched_ts: str
+    last_verdict_status: str
+    last_skip_reason: str | None
+    last_force_side: str | None
+    last_estimated_probability: float | None
+    last_confidence: float | None
 
 
 class ResearchDossierStore:
@@ -83,6 +96,9 @@ class ResearchDossierStore:
         limit: int = 50,
     ) -> list[ResearchEvidence]:
         return await asyncio.to_thread(self._get_recent_evidence_sync, market_ticker, limit)
+
+    async def get_dossier_snapshot(self, market_ticker: str) -> ResearchDossierSnapshot | None:
+        return await asyncio.to_thread(self._get_dossier_snapshot_sync, market_ticker)
 
     async def _run_market_write(self, market_ticker: str, operation: Callable[[], _T]) -> _T:
         lock = self._locks.setdefault(market_ticker, asyncio.Lock())
@@ -400,6 +416,37 @@ class ResearchDossierStore:
                 (market_ticker, int(limit)),
             ).fetchall()
         return [_evidence_from_row(row) for row in rows]
+
+    def _get_dossier_snapshot_sync(self, market_ticker: str) -> ResearchDossierSnapshot | None:
+        self._initialize_sync()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM research_dossiers
+                WHERE market_ticker = ?
+                """,
+                (market_ticker,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ResearchDossierSnapshot(
+            market_ticker=row["market_ticker"],
+            last_research_run_id=row["last_research_run_id"],
+            last_researched_ts=row["last_researched_ts"],
+            last_verdict_status=row["last_verdict_status"],
+            last_skip_reason=row["last_skip_reason"],
+            last_force_side=row["last_force_side"],
+            last_estimated_probability=(
+                float(row["last_estimated_probability"])
+                if row["last_estimated_probability"] is not None
+                else None
+            ),
+            last_confidence=(
+                float(row["last_confidence"])
+                if row["last_confidence"] is not None
+                else None
+            ),
+        )
 
 
 def _evidence_id(market_ticker: str, evidence: ResearchEvidence) -> str:
