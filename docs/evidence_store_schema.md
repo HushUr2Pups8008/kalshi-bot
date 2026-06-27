@@ -186,6 +186,90 @@ execution/accounting tables and has no foreign keys into `paper_trades.db`.
 `paper_trades.db` remains the paper/live execution outcome store; this database
 is solely for accumulation-lane belief state and replay.
 
+## Research Dossier Tables
+
+The real web-research gate also writes per-market research dossiers into
+`data/evidence_store.db`. These tables support neutral/no-keyword promotion
+without relearning a ticker from scratch, while preserving the run, query, and
+source evidence needed for replay and capital-protection audits.
+
+### `research_dossiers`
+
+Mutable latest-state row per market ticker.
+
+| Column | Type | Null | Notes |
+|---|---:|---:|---|
+| `market_ticker` | `TEXT` | no | Primary key. |
+| `last_research_run_id` | `TEXT` | yes | Latest `research_runs.research_run_id`. |
+| `last_researched_ts` | `TEXT` | yes | UTC ISO timestamp for latest run. |
+| `last_verdict_status` | `TEXT` | yes | Latest research gate verdict. |
+| `last_skip_reason` | `TEXT` | yes | Latest skip reason when not promoted. |
+| `last_force_side` | `TEXT` | yes | Promoted side, if any. |
+| `last_estimated_probability` | `REAL` | yes | Latest estimated YES probability. |
+| `last_confidence` | `REAL` | yes | Latest adjudicator confidence. |
+| `created_ts` | `TEXT` | no | UTC ISO creation timestamp. |
+| `updated_ts` | `TEXT` | no | UTC ISO update timestamp. |
+
+### `research_runs`
+
+Append-style research gate invocation history.
+
+| Column | Type | Null | Notes |
+|---|---:|---:|---|
+| `research_run_id` | `TEXT` | no | Primary key. |
+| `market_ticker` | `TEXT` | no | Foreign key to `research_dossiers`. |
+| `trigger_headline` | `TEXT` | no | News headline or trigger text. |
+| `trigger_source` | `TEXT` | no | Trigger source label. |
+| `attempted` | `INTEGER` | no | Boolean `0/1`. |
+| `summary` | `TEXT` | no | Gate summary. |
+| `verdict_status` | `TEXT` | no | Gate verdict status. |
+| `skip_reason` | `TEXT` | yes | Skip reason when applicable. |
+| `force_side` | `TEXT` | yes | Promoted side when applicable. |
+| `estimated_probability` | `REAL` | yes | Estimated YES probability. |
+| `confidence` | `REAL` | yes | Adjudicator confidence. |
+| `created_ts` | `TEXT` | no | UTC ISO creation timestamp. |
+
+### `research_run_queries`
+
+Ordered query pack issued for each research run.
+
+| Column | Type | Null | Notes |
+|---|---:|---:|---|
+| `research_run_id` | `TEXT` | no | Foreign key to `research_runs`. |
+| `query_index` | `INTEGER` | no | Query order within run. |
+| `query` | `TEXT` | no | Search query text. |
+| `query_intent` | `TEXT` | no | Resolution, corroboration, or contradiction intent. |
+| `source_class` | `TEXT` | no | Target source class. |
+
+### `research_evidence`
+
+Research snippets and source metadata returned by web search/adjudication.
+Freshness-sensitive consumers must use `retrieved_at` or `inserted_at` before
+treating cached evidence as sufficient for a current trade decision.
+
+| Column | Type | Null | Notes |
+|---|---:|---:|---|
+| `evidence_id` | `TEXT` | no | Deterministic evidence identity. |
+| `market_ticker` | `TEXT` | no | Foreign key to `research_dossiers`. |
+| `research_run_id` | `TEXT` | no | Foreign key to `research_runs`. |
+| `source_class` | `TEXT` | no | Resolution, official, wire, or other source class. |
+| `source_name` | `TEXT` | no | Publisher/source name. |
+| `source_url` | `TEXT` | no | Source URL. |
+| `title` | `TEXT` | no | Source title. |
+| `snippet` | `TEXT` | no | Normalized snippet. |
+| `claim_type` | `TEXT` | no | Resolution, baseline, corroboration, contradiction, etc. |
+| `supports_direction` | `TEXT` | no | `yes`, `no`, or `neutral`. |
+| `supports_confidence` | `REAL` | no | Evidence-side confidence. |
+| `published_at` | `TEXT` | yes | Source publication timestamp if available. |
+| `retrieved_at` | `TEXT` | yes | UTC ISO fetch timestamp if available. |
+| `metric_name` | `TEXT` | yes | Extracted metric name. |
+| `metric_value` | `REAL` | yes | Extracted metric value. |
+| `metric_unit` | `TEXT` | yes | Extracted metric unit. |
+| `extraction_confidence` | `REAL` | yes | Extraction confidence. |
+| `contract_fingerprint` | `TEXT` | yes | Current market title/rules/settlement fingerprint; cache reuse requires a match. |
+| `raw_payload_json` | `TEXT` | no | Serialized evidence payload. |
+| `inserted_at` | `TEXT` | no | UTC ISO insertion timestamp. |
+
 ## Assumptions
 
 - Dossier identity is per `market_ticker`, matching the contract's traceability

@@ -79,16 +79,28 @@ def _prompt_context(record: dict[str, Any]) -> dict[str, Any]:
         "source_hint_domain",
         "source_hint_query",
         "source_class",
+        "research_status",
+        "research_summary",
+        "research_skip_reason",
+        "research_model_direction",
     ):
         value = record.get(key)
         if isinstance(value, str) and value.strip():
             context[key] = value.strip()
+    if isinstance(record.get("research_attempted"), bool):
+        context["research_attempted"] = record["research_attempted"]
     names = _list_field(record, "settlement_source_names")
     urls = _list_field(record, "settlement_source_urls")
+    research_queries = _list_field(record, "research_queries")
+    research_urls = _list_field(record, "research_urls")
     if names:
         context["settlement_source_names"] = names
     if urls:
         context["settlement_source_urls"] = urls
+    if research_queries:
+        context["research_queries"] = research_queries
+    if research_urls:
+        context["research_urls"] = research_urls
     return context
 
 
@@ -202,6 +214,10 @@ def _build_eval_prompt(case: dict[str, Any]) -> str:
         ("retrieval_mode", "RETRIEVAL MODE"),
         ("source_hint_domain", "SOURCE HINT DOMAIN"),
         ("source_hint_query", "SOURCE HINT QUERY"),
+        ("research_status", "RESEARCH STATUS"),
+        ("research_summary", "RESEARCH SUMMARY"),
+        ("research_skip_reason", "RESEARCH SKIP REASON"),
+        ("research_model_direction", "RESEARCH MODEL DIRECTION"),
     ):
         value = context.get(key)
         if value:
@@ -212,6 +228,12 @@ def _build_eval_prompt(case: dict[str, Any]) -> str:
     urls = context.get("settlement_source_urls")
     if isinstance(urls, list) and urls:
         lines.append("SETTLEMENT SOURCE URLS: " + ", ".join(str(url) for url in urls))
+    research_queries = context.get("research_queries")
+    if isinstance(research_queries, list) and research_queries:
+        lines.append("RESEARCH QUERIES: " + " | ".join(str(query) for query in research_queries))
+    research_urls = context.get("research_urls")
+    if isinstance(research_urls, list) and research_urls:
+        lines.append("RESEARCH URLS: " + " | ".join(str(url) for url in research_urls))
     return "\n".join(lines)
 
 def _parse_model_json(text: str) -> dict[str, Any]:
