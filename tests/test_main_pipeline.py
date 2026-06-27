@@ -122,6 +122,73 @@ def _make_news():
     )
 
 
+def test_create_research_prewarm_runtime_task_disabled(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "enable_research_prewarm_task", False, raising=False)
+    bot = _make_bot_stub()
+
+    with patch("main.asyncio.create_task") as create_task_mock:
+        task = bot._create_research_prewarm_runtime_task()
+
+    assert task is None
+    create_task_mock.assert_not_called()
+
+
+def test_create_research_prewarm_runtime_task_enabled(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "enable_research_prewarm_task", True, raising=False)
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_interval_seconds", 900.0, raising=False)
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 2, raising=False)
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_pages", 3, raising=False)
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_max_queries", 4, raising=False)
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_timeout_seconds", 8.5, raising=False)
+    bot = _make_bot_stub()
+    markets = [
+        _make_market(),
+        replace(_make_market(), ticker="KXSECOND-25DEC31"),
+        replace(_make_market(), ticker="KXTHIRD-25DEC31"),
+    ]
+    bot.rest.get_all_open_markets.return_value = markets
+    instances = []
+
+    class FakeResearchPrewarmTask:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.provider = None
+            self.interval_seconds = None
+            instances.append(self)
+
+        def run_periodic(self, provider, *, interval_seconds):
+            self.provider = provider
+            self.interval_seconds = interval_seconds
+
+            async def _noop():
+                return None
+
+            return _noop()
+
+    def _capture_task(coro, *, name):
+        coro.close()
+        task = MagicMock()
+        task.get_name.return_value = name
+        return task
+
+    with patch("main.ResearchPrewarmTask", FakeResearchPrewarmTask), \
+         patch("main.asyncio.create_task", side_effect=_capture_task) as create_task_mock:
+        task = bot._create_research_prewarm_runtime_task()
+
+    create_task_mock.assert_called_once()
+    assert task.get_name() == "research_prewarm"
+    assert len(instances) == 1
+    instance = instances[0]
+    assert instance.kwargs["max_queries"] == 4
+    assert instance.kwargs["research_timeout_seconds"] == 8.5
+    assert instance.interval_seconds == 900.0
+    assert [market.ticker for market in instance.provider()] == [
+        "KXTEST-25DEC31",
+        "KXSECOND-25DEC31",
+    ]
+    bot.rest.get_all_open_markets.assert_called_once_with(max_pages=3)
+
+
 def _analysis_for_evidence(news: NewsItem | None = None) -> SignalAnalysis:
     news = news or _make_news()
     market = _make_market()

@@ -70,6 +70,7 @@ from analysis.kelly import kelly_bet
 from analysis.research_gate import ResearchStatus, run_research_gate
 from tasks.stats.keyword_stats import KeywordStats
 from tasks.research_dossier import default_store as default_research_dossier_store
+from tasks.research_prewarm_task import ResearchPrewarmTask
 from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
 from polymarket.settlement_reconciler import (
@@ -831,6 +832,36 @@ class TradingBot:
         self._market_cache_ready_at: datetime | None = None
         self._market_cache_ready_after_secs: float | None = None
         self._market_cache_empty_discovery_passes = 0
+
+    def _research_prewarm_market_provider(self) -> list[object]:
+        try:
+            markets = self.rest.get_all_open_markets(
+                max_pages=int(getattr(cfg, "research_prewarm_max_pages", 5))
+            )
+        except Exception as exc:
+            log.warning("[RESEARCH_PREWARM] open-market scan failed: %s", exc)
+            return []
+        max_markets = int(getattr(cfg, "research_prewarm_max_markets", 25))
+        return list(markets or [])[:max_markets]
+
+    def _create_research_prewarm_runtime_task(self) -> asyncio.Task | None:
+        if not bool(getattr(cfg, "enable_research_prewarm_task", False)):
+            return None
+        prewarm = ResearchPrewarmTask(
+            max_queries=int(getattr(cfg, "real_web_research_max_queries", 6)),
+            research_timeout_seconds=float(
+                getattr(cfg, "real_web_research_timeout_seconds", 12.0)
+            ),
+        )
+        return asyncio.create_task(
+            prewarm.run_periodic(
+                self._research_prewarm_market_provider,
+                interval_seconds=float(
+                    getattr(cfg, "research_prewarm_interval_seconds", 900.0)
+                ),
+            ),
+            name="research_prewarm",
+        )
 
     # ── News pipeline ─────────────────────────────────────────────────────────
 
@@ -2822,6 +2853,9 @@ class TradingBot:
                 name="fade_tweets",
             )] if FADE_TWEET_FEED_URLS else []),
         ]
+        research_prewarm_task = self._create_research_prewarm_runtime_task()
+        if research_prewarm_task is not None:
+            tasks.append(research_prewarm_task)
 
         try:
             await asyncio.gather(*tasks)
