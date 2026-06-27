@@ -11,12 +11,14 @@ from analysis.research_gate import (
     ResearchQuery,
     ResearchStatus,
     _contract_fingerprint,
+    _direct_source_targets,
     urllib,
     _rss_search,
     build_research_queries,
     decide_research_verdict,
     run_research_gate,
 )
+from kalshi.series_metadata import SettlementSource
 from tasks.research_dossier import ResearchDossierStore
 
 
@@ -112,6 +114,23 @@ def test_generic_market_query_pack_adds_contract_terms_context_fallback():
         and "site:kalshi.com" in query.query
         for query in queries
     )
+    assert any(
+        query.source_class == "official_primary"
+        and query.query_intent == "official_resolution_context"
+        and "agreement is signed" in query.query
+        for query in queries
+    )
+
+
+def test_direct_source_targets_use_domain_only_settlement_sources():
+    market = SimpleNamespace(
+        contract_terms_url="",
+        settlement_sources=(SettlementSource(label="AP", domain="apnews.com"),),
+    )
+
+    assert _direct_source_targets(market) == [
+        ("https://apnews.com", "resolution_source", "settlement_source")
+    ]
 
 
 def test_rss_search_does_not_treat_wrong_domain_as_resolution_source(monkeypatch):
@@ -179,6 +198,35 @@ def test_inconsistent_research_reason_continues_researching():
 
     assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
     assert verdict.skip_reason == "direction_reason_conflict"
+    assert verdict.force_side is None
+
+
+def test_single_resolution_source_requires_independent_corroboration():
+    verdict = decide_research_verdict(
+        evidence=[
+            ResearchEvidence(
+                source_class="resolution_source",
+                source_name="Official source",
+                source_url="https://official.example.com/result",
+                title="Official result",
+                snippet="Official data supports YES.",
+                claim_type="resolution",
+                supports_direction="yes",
+                supports_confidence=0.95,
+            )
+        ],
+        queries=[],
+        model_direction="yes",
+        model_confidence=0.9,
+        model_reason="Official source supports the YES side.",
+        estimated_probability_yes=0.72,
+        yes_ask=0.5,
+        no_ask=0.5,
+        live_mode=False,
+    )
+
+    assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
+    assert verdict.skip_reason == "insufficient_corroboration"
     assert verdict.force_side is None
 
 

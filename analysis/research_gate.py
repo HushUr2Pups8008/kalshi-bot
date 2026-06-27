@@ -273,16 +273,15 @@ def build_research_queries(news: Any, market: Any) -> list[ResearchQuery]:
                     source_class="rules_source",
                 )
             )
-        else:
-            rules_fragment = _query_fragment(title or ticker, rules, "official resolution source")
-            if rules_fragment:
-                queries.append(
-                    ResearchQuery(
-                        query=rules_fragment,
-                        query_intent="official_resolution_context",
-                        source_class="official_primary",
-                    )
+        rules_fragment = _query_fragment(title or ticker, rules, "official resolution source")
+        if rules_fragment:
+            queries.append(
+                ResearchQuery(
+                    query=rules_fragment,
+                    query_intent="official_resolution_context",
+                    source_class="official_primary",
                 )
+            )
     if headline:
         corroboration_fragment = _query_fragment(
             headline,
@@ -616,6 +615,10 @@ def _direct_source_targets(market: Any) -> list[tuple[str, str, str]]:
         targets.append((terms_url, "rules_source", "contract_terms"))
     for source in getattr(market, "settlement_sources", ()) or ():
         url = _clean(getattr(source, "url", ""))
+        if not url:
+            domain = _domain_from_url(_clean(getattr(source, "domain", "")))
+            if domain:
+                url = f"https://{domain}"
         if url:
             targets.append((url, "resolution_source", "settlement_source"))
     seen: set[str] = set()
