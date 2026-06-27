@@ -672,6 +672,14 @@ MARKET_SOURCE_HINTS_QUERY_MODE: str = (
 )
 MARKET_SOURCE_HINTS_QUERY_CAP: int = int(os.getenv("MARKET_SOURCE_HINTS_QUERY_CAP", "2"))
 
+# Real web-research gate before terminal neutral/no-keyword skips.
+# DEFAULT OFF: production-effect network research must be enabled explicitly.
+REAL_WEB_RESEARCH_MODE: str = os.getenv("REAL_WEB_RESEARCH_MODE", "off").strip().lower()
+REAL_WEB_RESEARCH_MAX_QUERIES: int = int(os.getenv("REAL_WEB_RESEARCH_MAX_QUERIES", "6"))
+REAL_WEB_RESEARCH_TIMEOUT_SECONDS: float = float(
+    os.getenv("REAL_WEB_RESEARCH_TIMEOUT_SECONDS", "12.0")
+)
+
 # Shadow-only per-fresh-item assignment diagnostics. DEFAULT OFF.
 ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW: bool = _parse_bool_env(
     "ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW",
@@ -1461,6 +1469,13 @@ class BotConfig:
     market_source_hints_emit_records: bool = field(
         default_factory=lambda: _parse_bool_env("MARKET_SOURCE_HINTS_EMIT_RECORDS", "false")
     )
+    real_web_research_mode: str = field(default_factory=lambda: REAL_WEB_RESEARCH_MODE)
+    real_web_research_max_queries: int = field(
+        default_factory=lambda: REAL_WEB_RESEARCH_MAX_QUERIES
+    )
+    real_web_research_timeout_seconds: float = field(
+        default_factory=lambda: REAL_WEB_RESEARCH_TIMEOUT_SECONDS
+    )
     enable_startup_observability_probe: bool = field(
         default_factory=lambda: os.getenv("ENABLE_STARTUP_OBSERVABILITY_PROBE", "true").strip().lower() in {"1", "true", "yes", "on"}
     )
@@ -1525,6 +1540,15 @@ class BotConfig:
                 "MARKET_SOURCE_HINTS_MODE must be one of off|shadow|advisory|production, "
                 f"got '{self.market_source_hints_mode}'"
             )
+        if self.real_web_research_mode not in {"off", "shadow", "production"}:
+            errors.append(
+                "REAL_WEB_RESEARCH_MODE must be one of off|shadow|production, "
+                f"got '{self.real_web_research_mode}'"
+            )
+        if self.real_web_research_max_queries <= 0:
+            errors.append("REAL_WEB_RESEARCH_MAX_QUERIES must be positive")
+        if self.real_web_research_timeout_seconds <= 0:
+            errors.append("REAL_WEB_RESEARCH_TIMEOUT_SECONDS must be positive")
         if self.kalshi_env not in ("demo", "prod"):
             errors.append(
                 "KALSHI_ENV must be 'demo' or 'prod', got '%s'" % self.kalshi_env

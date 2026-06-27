@@ -859,6 +859,17 @@ class TradeLogger:
         settlement_source_names: list[str] | None = None,
         settlement_source_urls: list[str] | None = None,
         contract_terms_url: str | None = None,
+        research_attempted: bool | None = None,
+        research_status: str | None = None,
+        research_queries: list[str] | None = None,
+        research_sources_consulted: list[str] | None = None,
+        research_hit_count: int | None = None,
+        research_settlement_source_hits: int | None = None,
+        research_urls: list[str] | None = None,
+        research_summary: str | None = None,
+        research_model_direction: str | None = None,
+        research_model_confidence: float | None = None,
+        research_skip_reason: str | None = None,
     ) -> None:
         record = {
             "type": "ANALYSIS_REJECTED",
@@ -905,6 +916,28 @@ class TradeLogger:
             record["settlement_source_urls"] = list(settlement_source_urls)
         if contract_terms_url:
             record["contract_terms_url"] = contract_terms_url
+        if research_attempted is not None:
+            record["research_attempted"] = bool(research_attempted)
+        if research_status:
+            record["research_status"] = research_status
+        if research_queries:
+            record["research_queries"] = list(research_queries)
+        if research_sources_consulted:
+            record["research_sources_consulted"] = list(research_sources_consulted)
+        if research_hit_count is not None:
+            record["research_hit_count"] = int(research_hit_count)
+        if research_settlement_source_hits is not None:
+            record["research_settlement_source_hits"] = int(research_settlement_source_hits)
+        if research_urls:
+            record["research_urls"] = list(research_urls)
+        if research_summary:
+            record["research_summary"] = research_summary
+        if research_model_direction:
+            record["research_model_direction"] = research_model_direction
+        if research_model_confidence is not None:
+            record["research_model_confidence"] = round(float(research_model_confidence), 4)
+        if research_skip_reason:
+            record["research_skip_reason"] = research_skip_reason
         self._write(record)
 
     def log_early_stale_drop(

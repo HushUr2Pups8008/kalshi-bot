@@ -31,6 +31,12 @@ def test_counterfactual_llm_eval_extracts_neutral_none_no_keyword_context_ready_
                 "contract_terms_url": "https://kalshi.com/markets/KXVISITIRAN",
                 "retrieval_mode": "source_hint",
                 "source_hint_domain": "reuters.com",
+                "research_attempted": True,
+                "research_status": "continue_researching",
+                "research_queries": ["site:reuters.com Trump visits Iran"],
+                "research_urls": ["https://reuters.com/world/test"],
+                "research_summary": "Missing official confirmation.",
+                "research_skip_reason": "missing_resolution_source",
             },
             {
                 "type": "ANALYSIS_REJECTED",
@@ -57,6 +63,9 @@ def test_counterfactual_llm_eval_extracts_neutral_none_no_keyword_context_ready_
     assert case["eval_status"] == "context_ready"
     assert case["prompt_context"]["rules_primary"].startswith("Market resolves Yes")
     assert case["prompt_context"]["settlement_source_names"] == ["Reuters", "Associated Press"]
+    assert case["prompt_context"]["research_status"] == "continue_researching"
+    assert case["prompt_context"]["research_queries"] == ["site:reuters.com Trump visits Iran"]
+    assert case["prompt_context"]["research_urls"] == ["https://reuters.com/world/test"]
     assert case["retrieval_mode"] == "source_hint"
 
 

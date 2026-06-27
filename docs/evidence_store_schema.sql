@@ -143,3 +143,73 @@ BEFORE DELETE ON dossier_update_evidence
 BEGIN
     SELECT RAISE(ABORT, 'dossier update evidence links are append-only');
 END;
+
+CREATE TABLE IF NOT EXISTS research_dossiers (
+    market_ticker TEXT PRIMARY KEY,
+    last_research_run_id TEXT,
+    last_researched_ts TEXT,
+    last_verdict_status TEXT,
+    last_skip_reason TEXT,
+    last_force_side TEXT,
+    last_estimated_probability REAL,
+    last_confidence REAL,
+    created_ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS research_runs (
+    research_run_id TEXT PRIMARY KEY,
+    market_ticker TEXT NOT NULL,
+    trigger_headline TEXT NOT NULL,
+    trigger_source TEXT NOT NULL,
+    attempted INTEGER NOT NULL,
+    summary TEXT NOT NULL,
+    verdict_status TEXT NOT NULL,
+    skip_reason TEXT,
+    force_side TEXT,
+    estimated_probability REAL,
+    confidence REAL,
+    created_ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    FOREIGN KEY (market_ticker) REFERENCES research_dossiers(market_ticker)
+);
+
+CREATE TABLE IF NOT EXISTS research_run_queries (
+    research_run_id TEXT NOT NULL,
+    query_index INTEGER NOT NULL,
+    query TEXT NOT NULL,
+    query_intent TEXT NOT NULL,
+    source_class TEXT NOT NULL,
+    PRIMARY KEY (research_run_id, query_index),
+    FOREIGN KEY (research_run_id) REFERENCES research_runs(research_run_id)
+);
+
+CREATE TABLE IF NOT EXISTS research_evidence (
+    evidence_id TEXT PRIMARY KEY,
+    market_ticker TEXT NOT NULL,
+    research_run_id TEXT NOT NULL,
+    source_class TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    title TEXT NOT NULL,
+    snippet TEXT NOT NULL,
+    claim_type TEXT NOT NULL,
+    supports_direction TEXT NOT NULL,
+    supports_confidence REAL NOT NULL,
+    published_at TEXT,
+    retrieved_at TEXT,
+    metric_name TEXT,
+    metric_value REAL,
+    metric_unit TEXT,
+    extraction_confidence REAL,
+    contract_fingerprint TEXT,
+    raw_payload_json TEXT NOT NULL,
+    inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    FOREIGN KEY (market_ticker) REFERENCES research_dossiers(market_ticker),
+    FOREIGN KEY (research_run_id) REFERENCES research_runs(research_run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_evidence_market_inserted
+ON research_evidence(market_ticker, inserted_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_research_runs_market_created
+ON research_runs(market_ticker, created_ts DESC);

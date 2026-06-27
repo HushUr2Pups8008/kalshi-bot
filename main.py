@@ -67,7 +67,9 @@ from urllib.parse import urlparse
 from analysis import SignalAnalysis
 from analysis.evidence_scorer import source_quality
 from analysis.kelly import kelly_bet
+from analysis.research_gate import ResearchStatus, run_research_gate
 from tasks.stats.keyword_stats import KeywordStats
+from tasks.research_dossier import default_store as default_research_dossier_store
 from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
 from polymarket.settlement_reconciler import (
@@ -1229,6 +1231,91 @@ class TradingBot:
         if not keywords and not llm_emitted_signal:
             saw_llm_result = llm_dir is not None or llm_mag is not None or llm_conf is not None
             eval_context = _counterfactual_llm_eval_context(news, market) if saw_llm_result else {}
+            research_mode = str(getattr(cfg, "real_web_research_mode", "off") or "off").lower()
+            should_research = research_mode == "production" or (
+                research_mode == "shadow" and saw_llm_result
+            )
+            if should_research:
+                def _ask_prob(*names: str) -> float | None:
+                    for name in names:
+                        raw = getattr(market, name, None)
+                        if raw is None:
+                            continue
+                        value = float(raw)
+                        return value / 100.0 if value > 1.0 else value
+                    return None
+
+                research_verdict = await run_research_gate(
+                    news,
+                    market,
+                    model_direction=llm_dir,
+                    model_confidence=llm_conf,
+                    model_reason=reasoning,
+                    yes_ask=_ask_prob("yes_ask_cents", "yes_ask", "yes_price"),
+                    no_ask=_ask_prob("no_ask_cents", "no_ask", "no_price"),
+                    live_mode=not cfg.is_paper_trading,
+                    max_queries=int(getattr(cfg, "real_web_research_max_queries", 6)),
+                    research_timeout_seconds=float(
+                        getattr(cfg, "real_web_research_timeout_seconds", 12.0)
+                    ),
+                    dossier_store=getattr(
+                        self,
+                        "_research_dossier_store",
+                        default_research_dossier_store(),
+                    ),
+                )
+                eval_context.update(research_verdict.log_fields())
+                if (
+                    research_mode == "production"
+                    and research_verdict.status == ResearchStatus.TRADE_CANDIDATE
+                    and research_verdict.force_side in {"yes", "no"}
+                    and research_verdict.estimated_probability is not None
+                ):
+                    estimated_prob = research_verdict.estimated_probability
+                    confidence = research_verdict.confidence or llm_conf or confidence
+                    keywords = ["research_evidence"]
+                    reasoning = research_verdict.summary
+                    llm_dir = research_verdict.force_side
+                    llm_mag = "moderate"
+                    llm_conf = research_verdict.confidence or llm_conf
+                elif research_mode == "production":
+                    status = research_verdict.status
+                    reason = (
+                        "research_incomplete"
+                        if status == ResearchStatus.CONTINUE_RESEARCHING
+                        else "researched_no_edge"
+                    )
+                    category = (
+                        "research_continue"
+                        if status == ResearchStatus.CONTINUE_RESEARCHING
+                        else status.value
+                    )
+                    await write_trade_log_async(
+                        trade_log.log_analysis_rejected,
+                        reason=reason,
+                        rejection_category=category,
+                        signal_branch=(
+                            "empty_keywords_research_continue"
+                            if status == ResearchStatus.CONTINUE_RESEARCHING
+                            else "empty_keywords_researched_terminal"
+                        ),
+                        method="llm" if saw_llm_result else None,
+                        llm_direction=llm_dir,
+                        llm_magnitude=llm_mag,
+                        llm_confidence=llm_conf,
+                        keywords=keywords,
+                        ticker=market.ticker,
+                        source=news.source,
+                        headline=news.headline,
+                        match_score=match_score,
+                        **eval_context,
+                    )
+                    return
+
+        if not keywords and not llm_emitted_signal:
+            saw_llm_result = llm_dir is not None or llm_mag is not None or llm_conf is not None
+            if not eval_context:
+                eval_context = _counterfactual_llm_eval_context(news, market) if saw_llm_result else {}
             await write_trade_log_async(
                 trade_log.log_analysis_rejected,
                 reason="no_keywords",

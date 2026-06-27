@@ -15,6 +15,11 @@ import pytest
 import config as _cfg_module
 import main as main_module
 from analysis import SignalAnalysis
+from analysis.research_gate import (
+    ResearchQuery,
+    ResearchStatus,
+    ResearchVerdict,
+)
 from feeds.subreddit_selector import filter_disabled_subreddits, select_subreddits
 from feeds.search_news_monitor import run_search_news_monitor
 from feeds.gdelt_monitor import run_gdelt_monitor
@@ -429,6 +434,91 @@ async def test_process_candidate_returns_early_when_no_keywords(monkeypatch):
         headline=news.headline,
         match_score=0.20,
     )
+
+
+@pytest.mark.asyncio
+async def test_process_candidate_researches_before_terminal_no_keywords(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_timeout_seconds", 0.25, raising=False)
+    bot = _make_bot_stub()
+    news = _make_news()
+    market = _make_market()
+    verdict = ResearchVerdict(
+        status=ResearchStatus.CONTINUE_RESEARCHING,
+        attempted=True,
+        queries=[
+            ResearchQuery(
+                query="site:opec.org Iran crude oil production June 2026",
+                query_intent="resolution_source",
+                source_class="resolution_source",
+            )
+        ],
+        evidence=[],
+        summary="Missing OPEC production baseline; keep researching.",
+        skip_reason="missing_resolution_source",
+    )
+
+    with patch("main.estimate_probability", new=AsyncMock(return_value=(
+        market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", "neutral", "none", 0.85
+    ))), patch("main.run_research_gate", new=AsyncMock(return_value=verdict)) as research_mock, \
+         patch("utils.logger.trade_log.log_analysis_rejected") as reject_mock:
+        await bot._process_candidate(news, market, 0.20)
+
+    research_mock.assert_awaited_once()
+    assert "dossier_store" in research_mock.await_args.kwargs
+    assert research_mock.await_args.kwargs["research_timeout_seconds"] == 0.25
+    bot.executor.execute.assert_not_called()
+    reject_kwargs = reject_mock.call_args.kwargs
+    assert reject_kwargs["reason"] == "research_incomplete"
+    assert reject_kwargs["rejection_category"] == "research_continue"
+    assert reject_kwargs["signal_branch"] == "empty_keywords_research_continue"
+    assert reject_kwargs["research_attempted"] is True
+    assert reject_kwargs["research_status"] == "continue_researching"
+    assert reject_kwargs["research_queries"] == [
+        "site:opec.org Iran crude oil production June 2026"
+    ]
+    assert reject_kwargs["research_hit_count"] == 0
+    assert reject_kwargs["research_skip_reason"] == "missing_resolution_source"
+
+
+@pytest.mark.asyncio
+async def test_process_candidate_researches_when_llm_metadata_missing_in_production(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
+    bot = _make_bot_stub()
+    news = _make_news()
+    market = _make_market()
+    verdict = ResearchVerdict(
+        status=ResearchStatus.CONTINUE_RESEARCHING,
+        attempted=True,
+        queries=[
+            ResearchQuery(
+                query="site:opec.org Iran crude oil production June 2026",
+                query_intent="resolution_source",
+                source_class="resolution_source",
+            )
+        ],
+        evidence=[],
+        summary="LLM unavailable; keep researching before skip.",
+        skip_reason="missing_resolution_source",
+    )
+
+    with patch("main.estimate_probability", new=AsyncMock(return_value=(
+        market.yes_prob, 0.1, [], "LLM metadata unavailable.", None, None, None
+    ))), patch("main.run_research_gate", new=AsyncMock(return_value=verdict)) as research_mock, \
+         patch("utils.logger.trade_log.log_analysis_rejected") as reject_mock:
+        await bot._process_candidate(news, market, 0.20)
+
+    research_mock.assert_awaited_once()
+    bot.executor.execute.assert_not_called()
+    reject_kwargs = reject_mock.call_args.kwargs
+    assert reject_kwargs["reason"] == "research_incomplete"
+    assert reject_kwargs["rejection_category"] == "research_continue"
+    assert reject_kwargs["signal_branch"] == "empty_keywords_research_continue"
+    assert reject_kwargs["method"] is None
+    assert reject_kwargs["llm_direction"] is None
+    assert reject_kwargs["research_status"] == "continue_researching"
 
 
 @pytest.mark.asyncio
