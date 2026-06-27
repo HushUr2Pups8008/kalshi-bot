@@ -869,7 +869,15 @@ class TradeLogger:
         research_summary: str | None = None,
         research_model_direction: str | None = None,
         research_model_confidence: float | None = None,
+        research_model_probability_yes: float | None = None,
         research_skip_reason: str | None = None,
+        research_started_ts: str | None = None,
+        research_completed_ts: str | None = None,
+        research_duration_ms: float | None = None,
+        research_min_published_at: str | None = None,
+        research_max_published_at: str | None = None,
+        research_min_retrieved_at: str | None = None,
+        research_max_retrieved_at: str | None = None,
     ) -> None:
         record = {
             "type": "ANALYSIS_REJECTED",
@@ -936,8 +944,27 @@ class TradeLogger:
             record["research_model_direction"] = research_model_direction
         if research_model_confidence is not None:
             record["research_model_confidence"] = round(float(research_model_confidence), 4)
+        if research_model_probability_yes is not None:
+            record["research_model_probability_yes"] = round(
+                float(research_model_probability_yes),
+                4,
+            )
         if research_skip_reason:
             record["research_skip_reason"] = research_skip_reason
+        if research_started_ts:
+            record["research_started_ts"] = research_started_ts
+        if research_completed_ts:
+            record["research_completed_ts"] = research_completed_ts
+        if research_duration_ms is not None:
+            record["research_duration_ms"] = round(float(research_duration_ms), 2)
+        if research_min_published_at:
+            record["research_min_published_at"] = research_min_published_at
+        if research_max_published_at:
+            record["research_max_published_at"] = research_max_published_at
+        if research_min_retrieved_at:
+            record["research_min_retrieved_at"] = research_min_retrieved_at
+        if research_max_retrieved_at:
+            record["research_max_retrieved_at"] = research_max_retrieved_at
         self._write(record)
 
     def log_early_stale_drop(

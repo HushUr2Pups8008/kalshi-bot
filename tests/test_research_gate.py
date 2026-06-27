@@ -259,6 +259,53 @@ def test_direction_confidence_without_probability_continues_researching():
     assert verdict.skip_reason == "missing_estimated_probability"
 
 
+def test_research_verdict_log_fields_include_probability_and_freshness_span():
+    verdict = decide_research_verdict(
+        evidence=[
+            ResearchEvidence(
+                source_class="resolution_source",
+                source_name="OPEC",
+                source_url="https://opec.example.com/current",
+                title="Current report",
+                snippet="Official data supports YES.",
+                claim_type="resolution",
+                supports_direction="yes",
+                supports_confidence=0.9,
+                published_at="2026-06-27T10:00:00Z",
+                retrieved_at="2026-06-27T10:05:00Z",
+            ),
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="Reuters",
+                source_url="https://reuters.example.com/current",
+                title="Wire report",
+                snippet="Wire report supports YES.",
+                claim_type="corroboration",
+                supports_direction="yes",
+                supports_confidence=0.8,
+                published_at="2026-06-27T11:00:00Z",
+                retrieved_at="2026-06-27T11:03:00Z",
+            ),
+        ],
+        queries=[],
+        model_direction="yes",
+        model_confidence=0.8,
+        model_reason="Fresh settlement-backed evidence supports yes.",
+        estimated_probability_yes=0.72,
+        yes_ask=0.6,
+        no_ask=0.4,
+        live_mode=False,
+    )
+
+    fields = verdict.log_fields()
+
+    assert fields["research_model_probability_yes"] == 0.72
+    assert fields["research_min_published_at"] == "2026-06-27T10:00:00+00:00"
+    assert fields["research_max_published_at"] == "2026-06-27T11:00:00+00:00"
+    assert fields["research_min_retrieved_at"] == "2026-06-27T10:05:00+00:00"
+    assert fields["research_max_retrieved_at"] == "2026-06-27T11:03:00+00:00"
+
+
 async def _fake_search(query):
     if query.query_intent == "resolution_source":
         return [

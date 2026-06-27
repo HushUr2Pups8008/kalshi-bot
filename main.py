@@ -1249,6 +1249,8 @@ class TradingBot:
                 if dossier_store is None:
                     dossier_store = default_research_dossier_store()
 
+                research_started = datetime.now(timezone.utc)
+                research_started_monotonic = time.monotonic()
                 research_verdict = await run_research_gate(
                     news,
                     market,
@@ -1265,7 +1267,18 @@ class TradingBot:
                     dossier_store=dossier_store,
                     cache_only=research_mode == "production",
                 )
+                research_completed = datetime.now(timezone.utc)
                 eval_context.update(research_verdict.log_fields())
+                eval_context.update(
+                    {
+                        "research_started_ts": research_started.isoformat(),
+                        "research_completed_ts": research_completed.isoformat(),
+                        "research_duration_ms": round(
+                            (time.monotonic() - research_started_monotonic) * 1000.0,
+                            2,
+                        ),
+                    }
+                )
                 if (
                     research_mode == "production"
                     and research_verdict.status == ResearchStatus.TRADE_CANDIDATE

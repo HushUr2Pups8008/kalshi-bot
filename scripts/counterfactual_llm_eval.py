@@ -85,6 +85,7 @@ def _prompt_context(record: dict[str, Any]) -> dict[str, Any]:
         "research_summary",
         "research_skip_reason",
         "research_model_direction",
+        "research_model_probability_yes",
     ):
         value = record.get(key)
         if isinstance(value, str) and value.strip():
@@ -177,6 +178,7 @@ def _case_optional_fields(record: dict[str, Any]) -> dict[str, Any]:
         "price_source",
         "price_method",
         "decision_ts",
+        "research_model_probability_yes",
         "research_started_ts",
         "research_completed_ts",
         "research_duration_ms",

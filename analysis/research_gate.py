@@ -78,7 +78,7 @@ class ResearchVerdict:
             for item in self.evidence
             if item.source_class in {"resolution_source", "official_primary"}
         ]
-        return {
+        fields: dict[str, object] = {
             "research_attempted": self.attempted,
             "research_status": self.status.value,
             "research_queries": [query.query for query in self.queries],
@@ -93,12 +93,36 @@ class ResearchVerdict:
             "research_model_confidence": self.confidence,
             "research_skip_reason": self.skip_reason,
         }
+        if self.estimated_probability is not None:
+            fields["research_model_probability_yes"] = round(
+                float(self.estimated_probability),
+                4,
+            )
+        fields.update(_research_evidence_time_fields(self.evidence))
+        return fields
 
 
 SearchProvider = Callable[[ResearchQuery], Awaitable[list[ResearchEvidence]]]
 DirectFetcher = Callable[[str, str, str], Awaitable[ResearchEvidence | None]]
 ResearchAdjudicator = Callable[..., Awaitable[dict[str, Any] | None]]
 DossierStore = Any
+
+
+def _research_evidence_time_fields(evidence: list[ResearchEvidence]) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for attr, min_key, max_key in (
+        ("published_at", "research_min_published_at", "research_max_published_at"),
+        ("retrieved_at", "research_min_retrieved_at", "research_max_retrieved_at"),
+    ):
+        timestamps = [
+            parsed
+            for item in evidence
+            if (parsed := _parse_timestamp(getattr(item, attr, None))) is not None
+        ]
+        if timestamps:
+            fields[min_key] = min(timestamps).isoformat()
+            fields[max_key] = max(timestamps).isoformat()
+    return fields
 
 
 def _clean(value: Any) -> str:

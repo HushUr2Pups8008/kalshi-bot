@@ -16,6 +16,7 @@ import config as _cfg_module
 import main as main_module
 from analysis import SignalAnalysis
 from analysis.research_gate import (
+    ResearchEvidence,
     ResearchQuery,
     ResearchStatus,
     ResearchVerdict,
@@ -455,7 +456,18 @@ async def test_process_candidate_researches_before_terminal_no_keywords(monkeypa
                 source_class="resolution_source",
             )
         ],
-        evidence=[],
+        evidence=[
+            ResearchEvidence(
+                source_class="resolution_source",
+                source_name="OPEC",
+                source_url="https://opec.example.com/momr",
+                title="OPEC report",
+                snippet="Official report.",
+                claim_type="resolution",
+                published_at="2026-06-27T10:00:00Z",
+                retrieved_at="2026-06-27T10:01:00Z",
+            )
+        ],
         summary="Missing OPEC production baseline; keep researching.",
         skip_reason="missing_resolution_source",
     )
@@ -481,8 +493,13 @@ async def test_process_candidate_researches_before_terminal_no_keywords(monkeypa
     assert reject_kwargs["research_queries"] == [
         "site:opec.org Iran crude oil production June 2026"
     ]
-    assert reject_kwargs["research_hit_count"] == 0
+    assert reject_kwargs["research_hit_count"] == 1
     assert reject_kwargs["research_skip_reason"] == "missing_resolution_source"
+    assert reject_kwargs["research_started_ts"]
+    assert reject_kwargs["research_completed_ts"]
+    assert reject_kwargs["research_duration_ms"] >= 0.0
+    assert reject_kwargs["research_min_published_at"] == "2026-06-27T10:00:00+00:00"
+    assert reject_kwargs["research_min_retrieved_at"] == "2026-06-27T10:01:00+00:00"
 
 
 @pytest.mark.asyncio
