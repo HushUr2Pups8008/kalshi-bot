@@ -1394,8 +1394,14 @@ class TradingBot:
         # learns keyword-config gaps from these events. Pre-fix, all 5 LLM-
         # validated real-market events in a 9-day window were killed here.
         llm_emitted_signal = llm_mag is not None and llm_mag != "none"
-        if not keywords and not llm_emitted_signal:
-            saw_llm_result = llm_dir is not None or llm_mag is not None or llm_conf is not None
+        saw_llm_result = llm_dir is not None or llm_mag is not None or llm_conf is not None
+        sparse_neutral_keywords = (
+            bool(keywords)
+            and len(keywords) <= 1
+            and not llm_emitted_signal
+            and saw_llm_result
+        )
+        if (not keywords and not llm_emitted_signal) or sparse_neutral_keywords:
             eval_context = _counterfactual_llm_eval_context(news, market) if saw_llm_result else {}
             research_mode = str(getattr(cfg, "real_web_research_mode", "off") or "off").lower()
             should_research = research_mode in {"production", "shadow"}
@@ -1477,7 +1483,11 @@ class TradingBot:
                     if status == ResearchStatus.CONTINUE_RESEARCHING:
                         reason = "research_incomplete"
                         category = "research_continue"
-                        signal_branch = "empty_keywords_research_continue"
+                        signal_branch = (
+                            "sparse_keywords_research_continue"
+                            if sparse_neutral_keywords
+                            else "empty_keywords_research_continue"
+                        )
                         self._schedule_targeted_research_prewarm(
                             market,
                             research_verdict.skip_reason,
@@ -1488,7 +1498,11 @@ class TradingBot:
                     }:
                         reason = "research_operational_error"
                         category = status.value
-                        signal_branch = "empty_keywords_research_error"
+                        signal_branch = (
+                            "sparse_keywords_research_error"
+                            if sparse_neutral_keywords
+                            else "empty_keywords_research_error"
+                        )
                         self._schedule_targeted_research_prewarm(
                             market,
                             research_verdict.skip_reason,
@@ -1496,7 +1510,11 @@ class TradingBot:
                     else:
                         reason = "researched_no_edge"
                         category = status.value
-                        signal_branch = "empty_keywords_researched_terminal"
+                        signal_branch = (
+                            "sparse_keywords_researched_terminal"
+                            if sparse_neutral_keywords
+                            else "empty_keywords_researched_terminal"
+                        )
                         if (
                             research_verdict.skip_reason
                             in self._RETRYABLE_RESEARCH_PREWARM_REASONS
@@ -1523,6 +1541,14 @@ class TradingBot:
                     )
                     return
                 elif research_verdict.status == ResearchStatus.CONTINUE_RESEARCHING:
+                    self._schedule_targeted_research_prewarm(
+                        market,
+                        research_verdict.skip_reason,
+                    )
+                elif (
+                    research_verdict.skip_reason
+                    in self._RETRYABLE_RESEARCH_PREWARM_REASONS
+                ):
                     self._schedule_targeted_research_prewarm(
                         market,
                         research_verdict.skip_reason,

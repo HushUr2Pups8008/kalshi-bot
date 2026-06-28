@@ -1223,6 +1223,47 @@ async def test_process_candidate_researches_when_llm_metadata_missing_in_shadow(
 
 
 @pytest.mark.asyncio
+async def test_process_candidate_shadow_rewarms_retryable_researched_skip(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "shadow", raising=False)
+    bot = _make_bot_stub()
+    bot._schedule_targeted_research_prewarm = MagicMock()
+    news = _make_news()
+    market = _make_market()
+    verdict = ResearchVerdict(
+        status=ResearchStatus.RESEARCHED_SKIP_AMBIGUOUS,
+        attempted=True,
+        evidence=[],
+        summary="Shadow research found evidence but no decisive direction.",
+        skip_reason="ambiguous_direction",
+    )
+
+    with patch("main.estimate_probability", new=AsyncMock(return_value=(
+        market.yes_prob,
+        0.1,
+        [],
+        "LLM metadata unavailable.",
+        None,
+        None,
+        None,
+    ))), patch("main.run_research_gate", new=AsyncMock(return_value=verdict)), \
+         patch("utils.logger.trade_log.log_analysis_rejected") as reject_mock:
+        await bot._process_candidate(news, market, 0.20)
+
+    bot.executor.execute.assert_not_called()
+    bot._schedule_targeted_research_prewarm.assert_called_once_with(
+        market,
+        "ambiguous_direction",
+    )
+    reject_kwargs = reject_mock.call_args.kwargs
+    assert reject_kwargs["reason"] == "no_keywords"
+    assert reject_kwargs["research_status"] == "researched_skip_ambiguous"
+    assert reject_kwargs["research_skip_reason"] == "ambiguous_direction"
+
+
+@pytest.mark.asyncio
 async def test_process_candidate_logs_research_provider_error(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
@@ -1249,6 +1290,48 @@ async def test_process_candidate_logs_research_provider_error(monkeypatch):
     assert reject_kwargs["signal_branch"] == "empty_keywords_research_error"
     assert reject_kwargs["research_status"] == "research_provider_error"
     assert reject_kwargs["research_skip_reason"] == "research_provider_error"
+
+
+@pytest.mark.asyncio
+async def test_process_candidate_researches_sparse_neutral_keywords_in_production(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
+    bot = _make_bot_stub()
+    news = _make_news()
+    market = _make_market()
+    verdict = ResearchVerdict(
+        status=ResearchStatus.CONTINUE_RESEARCHING,
+        attempted=True,
+        summary="Sparse keyword plus neutral LLM needs research before terminal skip.",
+        skip_reason="missing_resolution_source",
+    )
+
+    with patch("main.estimate_probability", new=AsyncMock(return_value=(
+        market.yes_prob,
+        0.1,
+        ["senate"],
+        "LLM found a weak match but no directional signal.",
+        "neutral",
+        "none",
+        0.72,
+    ))), patch("main.run_research_gate", new=AsyncMock(return_value=verdict)) as research_mock, \
+         patch("utils.logger.trade_log.log_analysis_rejected") as reject_mock:
+        await bot._process_candidate(news, market, 0.20)
+
+    research_mock.assert_awaited_once()
+    assert research_mock.await_args.kwargs["model_direction"] == "neutral"
+    bot.executor.execute.assert_not_called()
+    bot.source_stats.increment_signals.assert_not_called()
+    reject_kwargs = reject_mock.call_args.kwargs
+    assert reject_kwargs["reason"] == "research_incomplete"
+    assert reject_kwargs["rejection_category"] == "research_continue"
+    assert reject_kwargs["signal_branch"] == "sparse_keywords_research_continue"
+    assert reject_kwargs["method"] == "llm"
+    assert reject_kwargs["keywords"] == ["senate"]
+    assert reject_kwargs["research_status"] == "continue_researching"
+    assert reject_kwargs["research_skip_reason"] == "missing_resolution_source"
 
 
 @pytest.mark.asyncio
