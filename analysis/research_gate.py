@@ -544,6 +544,17 @@ def decide_research_verdict(
     )
 
 
+def _should_update_dossier_snapshot(verdict: ResearchVerdict) -> bool:
+    if not verdict.evidence:
+        return False
+    if verdict.skip_reason == "research_timeout":
+        return False
+    return verdict.status not in {
+        ResearchStatus.RESEARCH_PROVIDER_ERROR,
+        ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
+    }
+
+
 def _rss_search(query: ResearchQuery, *, timeout: float = 5.0, limit: int = 3) -> list[ResearchEvidence]:
     params = urllib.parse.urlencode({"q": query.query, "hl": "en-US", "gl": "US", "ceid": "US:en"})
     url = f"https://news.google.com/rss/search?{params}"
@@ -790,6 +801,57 @@ async def run_research_gate(
     provider_errors: list[Exception] = []
     direct_fetch_failures: list[str] = []
     usable_cached_evidence = _usable_cached_evidence(cached_evidence, contract_fingerprint)
+
+    async def finalize_verdict(verdict: ResearchVerdict) -> ResearchVerdict:
+        if direct_fetch_failures:
+            verdict = replace(
+                verdict,
+                research_direct_fetch_failures=tuple(direct_fetch_failures),
+            )
+        if dossier_store is not None and ticker:
+            run_id = f"rr-{uuid.uuid4().hex}"
+            verdict = replace(
+                verdict,
+                research_run_id=run_id,
+                research_contract_fingerprint=contract_fingerprint,
+            )
+            try:
+                if hasattr(dossier_store, "record_research_run"):
+                    await dossier_store.record_research_run(
+                        ticker,
+                        run_id,
+                        trigger_headline=_clean(getattr(news, "headline", "")),
+                        trigger_source=_clean(getattr(news, "source", "")),
+                        attempted=verdict.attempted,
+                        summary=verdict.summary,
+                        verdict_status=verdict.status.value,
+                        skip_reason=verdict.skip_reason,
+                        force_side=verdict.force_side,
+                        estimated_probability=verdict.estimated_probability,
+                        confidence=verdict.confidence,
+                        contract_fingerprint=contract_fingerprint,
+                        queries=queries,
+                        evidence=verdict.evidence,
+                        # Keep fail-closed attempts in the audit log without
+                        # demoting the last cache-eligible dossier snapshot.
+                        update_dossier_snapshot=_should_update_dossier_snapshot(
+                            verdict
+                        ),
+                        update_dossier_run_id=True,
+                    )
+                    verdict = replace(verdict, research_persisted=True)
+                else:
+                    for item in fresh_evidence:
+                        await dossier_store.add_evidence(ticker, run_id, item)
+                    verdict = replace(verdict, research_persisted=True)
+            except Exception as exc:
+                verdict = replace(
+                    verdict,
+                    research_persisted=False,
+                    research_persistence_error=str(exc),
+                )
+        return verdict
+
     if cache_only:
         if not _has_sufficient_dossier_evidence(usable_cached_evidence, contract_fingerprint):
             return ResearchVerdict(
@@ -845,9 +907,11 @@ async def run_research_gate(
         for url, source_class, claim_type in _direct_source_targets(market):
             remaining = remaining_budget()
             if remaining <= 0:
-                return timeout_verdict(
-                    evidence,
-                    "Research timed out before direct-source fetch completed.",
+                return await finalize_verdict(
+                    timeout_verdict(
+                        evidence,
+                        "Research timed out before direct-source fetch completed.",
+                    )
                 )
             try:
                 item = await asyncio.wait_for(
@@ -855,9 +919,11 @@ async def run_research_gate(
                     timeout=remaining,
                 )
             except TimeoutError:
-                return timeout_verdict(
-                    evidence,
-                    "Research direct-source fetch timed out before enough evidence was retrieved.",
+                return await finalize_verdict(
+                    timeout_verdict(
+                        evidence,
+                        "Research direct-source fetch timed out before enough evidence was retrieved.",
+                    )
                 )
             except Exception as exc:
                 direct_fetch_failures.append(f"{source_class}:{url}:{exc}")
@@ -891,9 +957,11 @@ async def run_research_gate(
         provider = search_provider or default_search_provider
         remaining = remaining_budget()
         if remaining <= 0:
-            return timeout_verdict(
-                evidence,
-                "Research timed out before search providers completed.",
+            return await finalize_verdict(
+                timeout_verdict(
+                    evidence,
+                    "Research timed out before search providers completed.",
+                )
             )
         try:
             evidence_nested = await asyncio.wait_for(
@@ -904,9 +972,11 @@ async def run_research_gate(
                 timeout=remaining,
             )
         except TimeoutError:
-            return timeout_verdict(
-                evidence,
-                "Research search providers timed out before enough evidence was retrieved.",
+            return await finalize_verdict(
+                timeout_verdict(
+                    evidence,
+                    "Research search providers timed out before enough evidence was retrieved.",
+                )
             )
         for result in evidence_nested:
             if isinstance(result, Exception):
@@ -926,9 +996,11 @@ async def run_research_gate(
         adjudicate = adjudicator or default_ollama_adjudicator
         remaining = remaining_budget()
         if remaining <= 0:
-            return timeout_verdict(
-                evidence,
-                "Research timed out before adjudication completed.",
+            return await finalize_verdict(
+                timeout_verdict(
+                    evidence,
+                    "Research timed out before adjudication completed.",
+                )
             )
         try:
             adjudication = await asyncio.wait_for(
@@ -941,18 +1013,22 @@ async def run_research_gate(
                 timeout=remaining,
             )
         except TimeoutError:
-            return timeout_verdict(
-                evidence,
-                "Research adjudication timed out before producing a verdict.",
+            return await finalize_verdict(
+                timeout_verdict(
+                    evidence,
+                    "Research adjudication timed out before producing a verdict.",
+                )
             )
         except Exception:
-            return ResearchVerdict(
-                status=ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
-                attempted=True,
-                queries=queries,
-                evidence=evidence,
-                summary="Research adjudicator failed before producing a verdict.",
-                skip_reason="research_adjudicator_error",
+            return await finalize_verdict(
+                ResearchVerdict(
+                    status=ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
+                    attempted=True,
+                    queries=queries,
+                    evidence=evidence,
+                    summary="Research adjudicator failed before producing a verdict.",
+                    skip_reason="research_adjudicator_error",
+                )
             )
         if isinstance(adjudication, dict):
             model_direction = str(adjudication.get("direction") or model_direction or "neutral").lower()
@@ -965,13 +1041,15 @@ async def run_research_gate(
             )
             model_reason = str(adjudication.get("reason") or model_reason or "")
         else:
-            return ResearchVerdict(
-                status=ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
-                attempted=True,
-                queries=queries,
-                evidence=evidence,
-                summary="Research adjudicator returned no parseable verdict.",
-                skip_reason="research_adjudicator_error",
+            return await finalize_verdict(
+                ResearchVerdict(
+                    status=ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
+                    attempted=True,
+                    queries=queries,
+                    evidence=evidence,
+                    summary="Research adjudicator returned no parseable verdict.",
+                    skip_reason="research_adjudicator_error",
+                )
             )
     verdict = decide_research_verdict(
         evidence=evidence,
@@ -993,48 +1071,7 @@ async def run_research_gate(
             summary="Research provider failed before the source frontier could be trusted.",
             skip_reason="research_provider_error",
         )
-    if direct_fetch_failures:
-        verdict = replace(
-            verdict,
-            research_direct_fetch_failures=tuple(direct_fetch_failures),
-        )
-    if dossier_store is not None and ticker:
-        run_id = f"rr-{uuid.uuid4().hex}"
-        verdict = replace(
-            verdict,
-            research_run_id=run_id,
-            research_contract_fingerprint=contract_fingerprint,
-        )
-        try:
-            if hasattr(dossier_store, "record_research_run"):
-                await dossier_store.record_research_run(
-                    ticker,
-                    run_id,
-                    trigger_headline=_clean(getattr(news, "headline", "")),
-                    trigger_source=_clean(getattr(news, "source", "")),
-                    attempted=True,
-                    summary=verdict.summary,
-                    verdict_status=verdict.status.value,
-                    skip_reason=verdict.skip_reason,
-                    force_side=verdict.force_side,
-                    estimated_probability=verdict.estimated_probability,
-                    confidence=verdict.confidence,
-                    contract_fingerprint=contract_fingerprint,
-                    queries=queries,
-                    evidence=fresh_evidence,
-                )
-                verdict = replace(verdict, research_persisted=True)
-            else:
-                for item in fresh_evidence:
-                    await dossier_store.add_evidence(ticker, run_id, item)
-                verdict = replace(verdict, research_persisted=True)
-        except Exception as exc:
-            verdict = replace(
-                verdict,
-                research_persisted=False,
-                research_persistence_error=str(exc),
-            )
-    return verdict
+    return await finalize_verdict(verdict)
 
 
 _DOSSIER_MAX_AGE_SECONDS = 6 * 60 * 60

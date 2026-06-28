@@ -71,6 +71,8 @@ class ResearchDossierStore:
         contract_fingerprint: str | None = None,
         queries: list[object] | None = None,
         evidence: list[ResearchEvidence] | None = None,
+        update_dossier_snapshot: bool = True,
+        update_dossier_run_id: bool = True,
     ) -> None:
         await self._run_market_write(
             market_ticker,
@@ -89,6 +91,8 @@ class ResearchDossierStore:
                 contract_fingerprint=contract_fingerprint,
                 queries=queries or [],
                 evidence=evidence or [],
+                update_dossier_snapshot=update_dossier_snapshot,
+                update_dossier_run_id=update_dossier_run_id,
             ),
         )
 
@@ -249,6 +253,8 @@ class ResearchDossierStore:
         contract_fingerprint: str | None,
         queries: list[object],
         evidence: list[ResearchEvidence],
+        update_dossier_snapshot: bool = True,
+        update_dossier_run_id: bool = True,
     ) -> None:
         self._initialize_sync()
         with self._connect() as conn:
@@ -269,6 +275,8 @@ class ResearchDossierStore:
                 contract_fingerprint=contract_fingerprint
                 or _run_contract_fingerprint(evidence),
                 conn=conn,
+                update_dossier_snapshot=update_dossier_snapshot,
+                update_dossier_run_id=update_dossier_run_id,
             )
             for index, query in enumerate(queries):
                 conn.execute(
@@ -305,43 +313,94 @@ class ResearchDossierStore:
         confidence: float | None = None,
         contract_fingerprint: str | None = None,
         conn: sqlite3.Connection | None = None,
+        update_dossier_snapshot: bool = True,
+        update_dossier_run_id: bool = True,
     ) -> None:
         close_conn = conn is None
         conn = conn or self._connect()
         try:
             conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute(
-                """
-                INSERT INTO research_dossiers (
-                    market_ticker, last_research_run_id, last_contract_fingerprint,
-                    last_researched_ts,
-                    last_verdict_status, last_skip_reason, last_force_side,
-                    last_estimated_probability, last_confidence
-                ) VALUES (
-                    ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?, ?, ?, ?
+            if update_dossier_snapshot and update_dossier_run_id:
+                conn.execute(
+                    """
+                    INSERT INTO research_dossiers (
+                        market_ticker, last_research_run_id, last_contract_fingerprint,
+                        last_researched_ts,
+                        last_verdict_status, last_skip_reason, last_force_side,
+                        last_estimated_probability, last_confidence
+                    ) VALUES (
+                        ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?, ?, ?, ?
+                    )
+                    ON CONFLICT(market_ticker) DO UPDATE SET
+                        last_research_run_id=excluded.last_research_run_id,
+                        last_contract_fingerprint=excluded.last_contract_fingerprint,
+                        last_researched_ts=excluded.last_researched_ts,
+                        last_verdict_status=excluded.last_verdict_status,
+                        last_skip_reason=excluded.last_skip_reason,
+                        last_force_side=excluded.last_force_side,
+                        last_estimated_probability=excluded.last_estimated_probability,
+                        last_confidence=excluded.last_confidence,
+                        updated_ts=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                    """,
+                    (
+                        market_ticker,
+                        research_run_id,
+                        contract_fingerprint,
+                        verdict_status,
+                        skip_reason,
+                        force_side,
+                        estimated_probability,
+                        confidence,
+                    ),
                 )
-                ON CONFLICT(market_ticker) DO UPDATE SET
-                    last_research_run_id=excluded.last_research_run_id,
-                    last_contract_fingerprint=excluded.last_contract_fingerprint,
-                    last_researched_ts=excluded.last_researched_ts,
-                    last_verdict_status=excluded.last_verdict_status,
-                    last_skip_reason=excluded.last_skip_reason,
-                    last_force_side=excluded.last_force_side,
-                    last_estimated_probability=excluded.last_estimated_probability,
-                    last_confidence=excluded.last_confidence,
-                    updated_ts=strftime('%Y-%m-%dT%H:%M:%fZ','now')
-                """,
-                (
-                    market_ticker,
-                    research_run_id,
-                    contract_fingerprint,
-                    verdict_status,
-                    skip_reason,
-                    force_side,
-                    estimated_probability,
-                    confidence,
-                ),
-            )
+            else:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO research_dossiers (
+                        market_ticker, last_research_run_id, last_contract_fingerprint,
+                        last_researched_ts,
+                        last_verdict_status, last_skip_reason, last_force_side,
+                        last_estimated_probability, last_confidence
+                    ) VALUES (
+                        ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        market_ticker,
+                        research_run_id,
+                        contract_fingerprint,
+                        verdict_status,
+                        skip_reason,
+                        force_side,
+                        estimated_probability,
+                        confidence,
+                    ),
+                )
+                if update_dossier_snapshot:
+                    conn.execute(
+                        """
+                        UPDATE research_dossiers
+                        SET
+                            last_contract_fingerprint=?,
+                            last_researched_ts=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                            last_verdict_status=?,
+                            last_skip_reason=?,
+                            last_force_side=?,
+                            last_estimated_probability=?,
+                            last_confidence=?,
+                            updated_ts=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                        WHERE market_ticker=?
+                        """,
+                        (
+                            contract_fingerprint,
+                            verdict_status,
+                            skip_reason,
+                            force_side,
+                            estimated_probability,
+                            confidence,
+                            market_ticker,
+                        ),
+                    )
             conn.execute(
                 """
                 INSERT OR IGNORE INTO research_runs (
@@ -378,7 +437,7 @@ class ResearchDossierStore:
         *,
         conn: sqlite3.Connection | None = None,
     ) -> None:
-        evidence_id = _evidence_id(market_ticker, evidence)
+        evidence_id = _evidence_id(market_ticker, research_run_id, evidence)
         raw_payload = json.dumps(evidence.__dict__, sort_keys=True)
         close_conn = conn is None
         conn = conn or self._connect()
@@ -480,10 +539,11 @@ def _run_contract_fingerprint(evidence: list[ResearchEvidence]) -> str | None:
     return next(iter(fingerprints))
 
 
-def _evidence_id(market_ticker: str, evidence: ResearchEvidence) -> str:
+def _evidence_id(market_ticker: str, research_run_id: str, evidence: ResearchEvidence) -> str:
     key = "|".join(
         (
             market_ticker,
+            research_run_id,
             evidence.source_class,
             evidence.source_name,
             evidence.source_url,
