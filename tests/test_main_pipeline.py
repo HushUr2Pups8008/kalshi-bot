@@ -35,6 +35,17 @@ from tests._helpers import write_jsonl
 from trading.portfolio import Position
 
 
+@pytest.fixture(autouse=True)
+def _default_research_off(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "off", raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "enable_research_prewarm_task",
+        False,
+        raising=False,
+    )
+
+
 def _make_bot_stub():
     bot = TradingBot.__new__(TradingBot)
     bot.ws = MagicMock()
@@ -453,6 +464,134 @@ def test_research_prewarm_market_provider_prioritizes_retryable_research_skip(
 
     assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
         missing_source_market.ticker,
+    ]
+
+
+def test_research_prewarm_market_provider_fetches_backlog_missing_from_open_page(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    first_market = replace(_make_market(), ticker="KXFIRST-25DEC31")
+    missing_source_market = replace(_make_market(), ticker="KXSOURCE-25DEC31")
+    bot.rest.get_all_open_markets.return_value = [first_market]
+    bot.rest.get_market.return_value = missing_source_market
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ticker": missing_source_market.ticker,
+                "reason": "researched_no_edge",
+                "research_skip_reason": "missing_resolution_source",
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        missing_source_market.ticker,
+    ]
+    bot.rest.get_market.assert_called_once_with(missing_source_market.ticker)
+
+
+def test_research_prewarm_market_provider_does_not_fallback_when_backlog_unfetchable(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    first_market = replace(_make_market(), ticker="KXFIRST-25DEC31")
+    bot.rest.get_all_open_markets.return_value = [first_market]
+    bot.rest.get_market.return_value = None
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ticker": "KXSTALE-25DEC31",
+                "reason": "researched_no_edge",
+                "research_skip_reason": "missing_resolution_source",
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        first_market.ticker,
+    ]
+    bot.rest.get_market.assert_called_once_with("KXSTALE-25DEC31")
+
+
+def test_research_prewarm_market_provider_caps_direct_backlog_fetch_attempts(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 2, raising=False)
+    bot = _make_bot_stub()
+    first_market = replace(_make_market(), ticker="KXFIRST-25DEC31")
+    second_market = replace(_make_market(), ticker="KXSECOND-25DEC31")
+    bot.rest.get_all_open_markets.return_value = [first_market, second_market]
+    bot.rest.get_market.return_value = None
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ticker": f"KXSTALE-{index}",
+                "reason": "researched_no_edge",
+                "research_skip_reason": "missing_resolution_source",
+            }
+            for index in range(5)
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        first_market.ticker,
+        second_market.ticker,
+    ]
+    assert bot.rest.get_market.call_count == 2
+
+
+def test_research_prewarm_market_provider_ignores_closed_direct_fetch(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    first_market = replace(_make_market(), ticker="KXFIRST-25DEC31")
+    closed_market = replace(
+        _make_market(),
+        ticker="KXCLOSED-25DEC31",
+        status="closed",
+    )
+    bot.rest.get_all_open_markets.return_value = [first_market]
+    bot.rest.get_market.return_value = closed_market
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ticker": closed_market.ticker,
+                "reason": "researched_no_edge",
+                "research_skip_reason": "missing_resolution_source",
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        first_market.ticker,
     ]
 
 

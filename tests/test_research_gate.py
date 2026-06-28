@@ -516,6 +516,45 @@ async def test_cache_only_research_gate_fails_closed_without_sufficient_cache(tm
 
 
 @pytest.mark.asyncio
+async def test_run_research_gate_persists_contract_fingerprint_without_evidence(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    market = SimpleNamespace(
+        ticker="KXIRANCRUDE-26JUL13-T3.8",
+        title="Will Iran crude oil production be at least 3.8M bpd?",
+        rules_primary="OPEC MOMR secondary sources decide the market.",
+        rules_secondary="Later revisions ignored.",
+        settlement_sources=(),
+    )
+    expected_fingerprint = _contract_fingerprint(market)
+
+    async def no_hits(_query):
+        return []
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
+        market,
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=no_hits,
+        dossier_store=store,
+    )
+
+    snapshot = await store.get_dossier_snapshot(market.ticker)
+    fields = verdict.log_fields()
+
+    assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
+    assert verdict.skip_reason == "no_research_hits"
+    assert snapshot is not None
+    assert snapshot.last_contract_fingerprint == expected_fingerprint
+    assert fields["research_contract_fingerprint"] == expected_fingerprint
+
+
+@pytest.mark.asyncio
 async def test_run_research_gate_can_promote_neutral_to_trade_candidate():
     news = SimpleNamespace(
         headline="Iran crude output rises sharply",

@@ -68,6 +68,7 @@ class ResearchDossierStore:
         force_side: str | None = None,
         estimated_probability: float | None = None,
         confidence: float | None = None,
+        contract_fingerprint: str | None = None,
         queries: list[object] | None = None,
         evidence: list[ResearchEvidence] | None = None,
     ) -> None:
@@ -85,6 +86,7 @@ class ResearchDossierStore:
                 force_side=force_side,
                 estimated_probability=estimated_probability,
                 confidence=confidence,
+                contract_fingerprint=contract_fingerprint,
                 queries=queries or [],
                 evidence=evidence or [],
             ),
@@ -244,6 +246,7 @@ class ResearchDossierStore:
         force_side: str | None,
         estimated_probability: float | None,
         confidence: float | None,
+        contract_fingerprint: str | None,
         queries: list[object],
         evidence: list[ResearchEvidence],
     ) -> None:
@@ -263,7 +266,8 @@ class ResearchDossierStore:
                 force_side=force_side,
                 estimated_probability=estimated_probability,
                 confidence=confidence,
-                contract_fingerprint=_run_contract_fingerprint(evidence),
+                contract_fingerprint=contract_fingerprint
+                or _run_contract_fingerprint(evidence),
                 conn=conn,
             )
             for index, query in enumerate(queries):

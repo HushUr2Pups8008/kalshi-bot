@@ -906,14 +906,49 @@ class TradingBot:
             for index, ticker in enumerate(_recent_runtime_research_prewarm_tickers())
         }
         if target_order:
-            market_list = sorted(
-                enumerate(market_list),
-                key=lambda item: (
-                    target_order.get(str(getattr(item[1], "ticker", "") or ""), len(target_order)),
-                    item[0],
-                ),
-            )
-            return [market for _index, market in market_list[:max_markets]]
+            selected_by_ticker = {
+                str(getattr(market, "ticker", "") or ""): market
+                for market in market_list
+                if str(getattr(market, "ticker", "") or "") in target_order
+            }
+            selected_tickers: set[str] = set()
+            selected: list[object] = []
+            direct_fetch_attempts = 0
+
+            def is_open_market(market: object) -> bool:
+                status = str(getattr(market, "status", "open") or "open").lower()
+                return status in {"open", "active"}
+
+            for ticker in target_order:
+                market = selected_by_ticker.get(ticker)
+                if (
+                    market is None
+                    and hasattr(self.rest, "get_market")
+                    and direct_fetch_attempts < max_markets
+                ):
+                    direct_fetch_attempts += 1
+                    try:
+                        market = self.rest.get_market(ticker)
+                    except Exception as exc:
+                        log.warning(
+                            "[RESEARCH_PREWARM] targeted market fetch failed ticker=%s: %s",
+                            ticker,
+                            exc,
+                        )
+                        market = None
+                if market is not None and is_open_market(market):
+                    selected.append(market)
+                    selected_tickers.add(str(getattr(market, "ticker", "") or ""))
+                if len(selected) >= max_markets:
+                    break
+            for market in market_list:
+                if len(selected) >= max_markets:
+                    break
+                ticker = str(getattr(market, "ticker", "") or "")
+                if ticker in selected_tickers or not is_open_market(market):
+                    continue
+                selected.append(market)
+            return selected
         return market_list[:max_markets]
 
     def _create_research_prewarm_runtime_task(self) -> asyncio.Task | None:
@@ -924,6 +959,7 @@ class TradingBot:
             research_timeout_seconds=float(
                 getattr(cfg, "real_web_research_timeout_seconds", 12.0)
             ),
+            max_concurrency=int(getattr(cfg, "research_prewarm_concurrency", 3)),
         )
         return asyncio.create_task(
             prewarm.run_periodic(
@@ -941,6 +977,7 @@ class TradingBot:
             research_timeout_seconds=float(
                 getattr(cfg, "real_web_research_timeout_seconds", 12.0)
             ),
+            max_concurrency=int(getattr(cfg, "research_prewarm_concurrency", 3)),
         )
         result = await prewarm.process_market(market)
         await prewarm.emit_result(result)

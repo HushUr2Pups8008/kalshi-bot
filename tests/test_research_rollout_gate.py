@@ -6,11 +6,30 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from scripts.research_rollout_gate import evaluate_research_rollout
 from tests._helpers import write_jsonl
 
 
 NOW = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+RESEARCH_ENV_KEYS = (
+    "REAL_WEB_RESEARCH_MODE",
+    "ENABLE_RESEARCH_PREWARM_TASK",
+    "REAL_WEB_RESEARCH_MAX_QUERIES",
+    "REAL_WEB_RESEARCH_TIMEOUT_SECONDS",
+    "RESEARCH_PREWARM_INTERVAL_SECONDS",
+    "RESEARCH_PREWARM_MAX_MARKETS",
+    "RESEARCH_PREWARM_MAX_PAGES",
+    "RESEARCH_PREWARM_CONCURRENCY",
+    "RESEARCH_PREWARM_TARGET_COOLDOWN_SECONDS",
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_research_env(monkeypatch):
+    for key in RESEARCH_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
 
 
 def _write_research_db(
