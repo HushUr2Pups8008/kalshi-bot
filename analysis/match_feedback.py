@@ -37,6 +37,7 @@ import json
 import os
 import sqlite3
 import subprocess
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -332,25 +333,26 @@ def load_verified_weights(
     weights_path: Path = _WEIGHTS_PATH_DEFAULT,
     *,
     repo_root: Path | None = None,
+    feedback_db_path: Path | None = None,
+    window_days: int = 14,
 ) -> dict[str, dict[str, Any]]:
-    """Load weights only when the runtime file is parseable and git-clean.
+    """Load weights only when the runtime cache is verified.
 
     Missing weights are a cold-start state and return ``{}``. A present but
-    malformed, untracked, staged, or unstaged-dirty weights file can directly
-    change candidate admission, so it is treated as unverified unless the
-    operator explicitly sets ``MATCHER_WEIGHTS_ALLOW_DIRTY=true``.
+    malformed, untracked, or staged weights file can directly change candidate
+    admission, so it is treated as unverified unless the operator explicitly
+    sets ``MATCHER_WEIGHTS_ALLOW_DIRTY=true``.
+
+    An unstaged dirty file is expected during live operation because the
+    feedback aggregator rewrites ``data/matcher_token_weights.json`` as a
+    runtime cache. In that state, do not trust the dirty JSON bytes. Recompute
+    the verified map from the committed seed plus the feedback counter DB.
     """
     if not weights_path.exists():
         return {}
-    try:
-        data = json.loads(weights_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        raise MatcherWeightsUnverified(f"matcher weights malformed: {weights_path}") from exc
-    if not isinstance(data, dict):
-        raise MatcherWeightsUnverified(f"matcher weights malformed: {weights_path}")
+    data = _read_weights_json(weights_path)
 
-    if os.getenv("MATCHER_WEIGHTS_ALLOW_DIRTY", "").strip().lower() == "true":
-        return data
+    allow_dirty = os.getenv("MATCHER_WEIGHTS_ALLOW_DIRTY", "").strip().lower() == "true"
 
     root = repo_root or weights_path.resolve().parents[1]
     rel_path = str(weights_path.resolve().relative_to(root.resolve()))
@@ -362,6 +364,9 @@ def load_verified_weights(
     )
     if tracked.returncode != 0:
         raise MatcherWeightsUnverified(f"matcher weights untracked: {weights_path}")
+
+    if allow_dirty:
+        return data
 
     unstaged = subprocess.run(
         ["git", "-C", str(root), "diff", "--quiet", "--", rel_path],
@@ -375,10 +380,59 @@ def load_verified_weights(
         text=True,
         check=False,
     )
-    if unstaged.returncode != 0 or staged.returncode != 0:
-        raise MatcherWeightsUnverified(f"matcher weights dirty: {weights_path}")
+    if staged.returncode != 0:
+        raise MatcherWeightsUnverified(f"matcher weights staged: {weights_path}")
+    if unstaged.returncode != 0:
+        return _recompute_verified_runtime_weights(
+            root=root,
+            rel_path=rel_path,
+            feedback_db_path=feedback_db_path,
+            window_days=window_days,
+        )
 
     return data
+
+
+def _read_weights_json(weights_path: Path) -> dict[str, dict[str, Any]]:
+    try:
+        data = json.loads(weights_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise MatcherWeightsUnverified(f"matcher weights malformed: {weights_path}") from exc
+    if not isinstance(data, dict):
+        raise MatcherWeightsUnverified(f"matcher weights malformed: {weights_path}")
+    return data
+
+
+def _recompute_verified_runtime_weights(
+    *,
+    root: Path,
+    rel_path: str,
+    feedback_db_path: Path | None,
+    window_days: int,
+) -> dict[str, dict[str, Any]]:
+    seed_raw = subprocess.run(
+        ["git", "-C", str(root), "show", f":{rel_path}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if seed_raw.returncode != 0:
+        raise MatcherWeightsUnverified(f"matcher weights seed unavailable: {rel_path}")
+    try:
+        seed = json.loads(seed_raw.stdout)
+    except json.JSONDecodeError as exc:
+        raise MatcherWeightsUnverified(f"matcher weights seed malformed: {rel_path}") from exc
+    if not isinstance(seed, dict):
+        raise MatcherWeightsUnverified(f"matcher weights seed malformed: {rel_path}")
+
+    db_path = feedback_db_path or root / _DB_PATH_DEFAULT
+    if not db_path.exists():
+        return seed
+    try:
+        stats = aggregate_window(window_days=window_days, db_path=db_path)
+    except sqlite3.Error as exc:
+        raise MatcherWeightsUnverified(f"matcher weights feedback DB unreadable: {db_path}") from exc
+    return update_weights_from_stats(stats, weights=deepcopy(seed))
 
 
 def write_weights(

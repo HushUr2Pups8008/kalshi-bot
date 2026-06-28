@@ -305,13 +305,13 @@ class TestWeightsFileRoundTrip:
         with pytest.raises(MatcherWeightsUnverified, match="malformed"):
             load_verified_weights(p, repo_root=tmp_path)
 
-    def test_verified_load_rejects_git_dirty_weights(self, tmp_path: Path):
+    def test_verified_load_recomputes_git_dirty_runtime_cache(self, tmp_path: Path):
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
         p = repo / "weights.json"
         write_weights(
-            {"P:t": {"weight": 0.3, "fp_rate": 0.7, "total": 10}},
+            {"P:seed": {"weight": 0.3, "fp_rate": 0.7, "total": 10}},
             weights_path=p,
         )
         subprocess.run(["git", "add", "weights.json"], cwd=repo, check=True)
@@ -330,13 +330,72 @@ class TestWeightsFileRoundTrip:
             check=True,
             capture_output=True,
         )
+        db_path = repo / "match_token_fp_counters.db"
+        ingest_review_events(
+            [
+                {
+                    "type": "MATCH_LLM_REVIEW",
+                    "ts": "2026-06-28T00:00:00Z",
+                    "verdict": "false_positive_neutral",
+                    "match_score": 0.01,
+                    "market_prefix": "P",
+                    "matched_tokens": ["t"],
+                }
+                for _ in range(10)
+            ],
+            db_path=db_path,
+        )
         write_weights(
-            {"P:t": {"weight": 0.1, "fp_rate": 0.9, "total": 100}},
+            {"P:stale": {"weight": 0.1, "fp_rate": 1.0, "total": 100}},
             weights_path=p,
         )
 
-        with pytest.raises(MatcherWeightsUnverified, match="dirty"):
-            load_verified_weights(p, repo_root=repo)
+        loaded = load_verified_weights(p, repo_root=repo, feedback_db_path=db_path)
+
+        assert loaded["P:seed"]["weight"] == 0.3
+        assert loaded["P:t"]["weight"] == 0.1
+        assert loaded["P:t"]["fp_rate"] == 1.0
+        assert loaded["P:t"]["total"] == 10
+        assert "P:stale" not in loaded
+
+    def test_verified_load_dirty_runtime_cache_uses_seed_when_feedback_db_missing(
+        self,
+        tmp_path: Path,
+    ):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        p = repo / "weights.json"
+        seed = {"P:seed": {"weight": 0.3, "fp_rate": 0.7, "total": 10}}
+        write_weights(seed, weights_path=p)
+        subprocess.run(["git", "add", "weights.json"], cwd=repo, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-m",
+                "seed weights",
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        write_weights(
+            {"P:stale": {"weight": 0.1, "fp_rate": 1.0, "total": 100}},
+            weights_path=p,
+        )
+
+        loaded = load_verified_weights(
+            p,
+            repo_root=repo,
+            feedback_db_path=repo / "missing.db",
+        )
+
+        assert loaded == seed
 
     def test_verified_load_accepts_clean_committed_weights(self, tmp_path: Path):
         repo = tmp_path / "repo"
