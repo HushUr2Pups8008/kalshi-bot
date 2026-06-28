@@ -1045,9 +1045,20 @@ def print_caffeinate_section(
     print()
 
 
-def print_last_boot(log_path: Path, sessions: list[BotSession], now: datetime) -> None:
-    print("=== Last bot boot seen in logs ===")
+def print_last_boot(
+    log_path: Path,
+    sessions: list[BotSession],
+    now: datetime,
+    *,
+    current_proc: ProcessInfo | None = None,
+    now_epoch: float | None = None,
+) -> None:
+    print("=== Last bot log boot marker ===")
     print(f"Log file   : {log_path}")
+    if current_proc is not None and now_epoch is not None:
+        process_started = process_start_utc(current_proc, now_epoch)
+        print(f"Process started UTC: {process_started.isoformat()}")
+        print("Boundary note: Use process start for since-restart P&L when it predates the latest log boot marker.")
     if not sessions:
         print("Result     : no boot markers found ([BOOT] or sigil banner)")
         print()
@@ -1337,7 +1348,7 @@ def main() -> int:
     print_launchd(args.label, launchd_output, wrapper_pid)
     current_proc = print_bot_section(bots, now_epoch=now_epoch, now=now)
     print_caffeinate_section(caffeinates, now_epoch=now_epoch)
-    print_last_boot(args.log, sessions, now)
+    print_last_boot(args.log, sessions, now, current_proc=current_proc, now_epoch=now_epoch)
     print_signal_flow_section(signal_flow, now=now)
     print_research_gate_section(
         default_home,

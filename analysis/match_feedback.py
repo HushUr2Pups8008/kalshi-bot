@@ -48,6 +48,29 @@ from polymarket.domain_key import pm_domain_key
 class MatcherWeightsUnverified(RuntimeError):
     """Raised when matcher token weights are present but unsafe to use."""
 
+
+def matcher_weights_status(
+    weights_path: Path = Path("data/matcher_token_weights.json"),
+    *,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    """Return read-only runtime verification state for matcher weights."""
+    try:
+        weights = load_verified_weights(weights_path, repo_root=repo_root)
+    except MatcherWeightsUnverified as exc:
+        return {
+            "status": "unverified",
+            "reason": str(exc),
+            "path": str(weights_path),
+            "count": 0,
+        }
+    return {
+        "status": "clean",
+        "reason": None,
+        "path": str(weights_path),
+        "count": len(weights),
+    }
+
 # Tunables. Operator may bump via runtime overrides in a follow-up.
 MIN_TOTAL_FOR_DOWNWEIGHT: int = 10
 """Minimum (TP + FP) observations on a (token, prefix) pair before its

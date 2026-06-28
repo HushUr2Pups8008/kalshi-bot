@@ -388,6 +388,38 @@ def _latest_restart_timestamp_from_health_reports(
     return None
 
 
+def _latest_log_boot_timestamp(log_path: Path = REPO_ROOT / "logs" / "app" / "bot.log") -> str | None:
+    try:
+        from scripts.botcheck import read_sessions
+
+        sessions = read_sessions(log_path)
+    except Exception:
+        return None
+    if not sessions:
+        return None
+    return sessions[-1].boot_ts.isoformat()
+
+
+def _matcher_weight_runtime_status() -> dict[str, Any]:
+    """Mirror matcher admission verification for operator-facing reports."""
+    from analysis.match_feedback import matcher_weights_status
+
+    status = matcher_weights_status(REPO_ROOT / "data" / "matcher_token_weights.json")
+    if status.get("status") == "unverified":
+        return {
+            "status": "fail_closed",
+            "reason": status.get("reason") or "matcher weights unverified",
+            "path": status.get("path"),
+            "count": status.get("count", 0),
+        }
+    return {
+        "status": "clean",
+        "reason": None,
+        "path": status.get("path"),
+        "count": status.get("count", 0),
+    }
+
+
 def _format_since_restart_money_path_lines(report: dict[str, Any]) -> list[str]:
     summary = report.get("summary", {})
     no_keywords = report.get("no_keywords", {})
@@ -397,12 +429,29 @@ def _format_since_restart_money_path_lines(report: dict[str, Any]) -> list[str]:
     ) or "none"
     lines = [
         "SINCE-RESTART MONEY PATH  [source: scripts/since_restart_money_path.py]",
+        "  Boundary source                  : health bot_runtime.started_utc (process start)",
         f"  Window                           : {report.get('window', {}).get('since')} -> {report.get('window', {}).get('until') or 'open'}",
         f"  Candidates                       : {summary.get('candidates', 0)}",
         f"  Terminal outcomes                : {terminal_text}",
         f"  Measurement gaps                 : {summary.get('measurement_gaps', 0)}",
         f"  No-keyword exits                 : {no_keywords.get('count', 0)}",
     ]
+    boundaries = report.get("boundaries") or {}
+    if boundaries.get("process_start_utc") or boundaries.get("log_boot_utc"):
+        lines.append(
+            "  Process-start boundary           : "
+            f"{boundaries.get('process_start_utc') or 'unknown'}"
+        )
+        lines.append(
+            "  Latest log-boot boundary         : "
+            f"{boundaries.get('log_boot_utc') or 'unknown'}"
+        )
+    gap = report.get("legacy_resolutions_between_process_start_and_log_boot") or {}
+    if gap.get("count", 0):
+        lines.append(
+            "  Legacy resolutions before boot   : "
+            f"{gap.get('count', 0)} pnl={fmt_money(gap.get('pnl_total'))}"
+        )
     pm_feedback = report.get("polymarket_settlement_feedback", {}) or {}
     if pm_feedback:
         lines.append(
@@ -516,6 +565,20 @@ def _format_counterfactual_llm_eval_lines(report: dict[str, Any]) -> list[str]:
     if report.get("error"):
         lines.append(f"    error={report['error']}")
     return lines
+
+
+def _fmt_probability(value: Any) -> str:
+    try:
+        return f"{float(value) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _fmt_unsigned_money(value: Any) -> str:
+    try:
+        return f"${float(value):.2f}"
+    except (TypeError, ValueError):
+        return "n/a"
 
 
 def _collect_kalshi_drift_state() -> tuple[dict[str, Any], str | None]:
@@ -873,6 +936,8 @@ def build_daily_review(
         paper_stats = paper_performance_drilldown.summarize(
             paper_db_path, exclude_test=exclude_test
         )
+    with stage_timer("matcher weight status", enabled=show_profile):
+        matcher_weight_status = _matcher_weight_runtime_status()
     with stage_timer("match suppression audit", enabled=show_profile):
         suppression_stats = match_suppression_audit.summarize(
             trades_path, since, until, exclude_test=exclude_test,
@@ -910,12 +975,15 @@ def build_daily_review(
         )
     with stage_timer("since-restart money path", enabled=show_profile):
         restart_ts = _latest_restart_timestamp_from_health_reports()
+        log_boot_ts = _latest_log_boot_timestamp()
         since_restart_report = None
         if restart_ts:
             try:
                 since_restart_report = since_restart_money_path.build_money_path_report(
                     trades_path,
                     since=restart_ts,
+                    process_start=restart_ts,
+                    log_boot=log_boot_ts,
                 )
             except Exception as exc:  # reporting-only; never break daily review
                 since_restart_report = {"error": f"{type(exc).__name__}: {exc}"}
@@ -1124,6 +1192,10 @@ def build_daily_review(
         for label, count in match_flags.most_common(top):
             lines.append(f"    {label}: {count}")
     pre_llm_by_source = match_stats.get("pre_llm_would_block_by_source", Counter())
+    matcher_status_label = str(matcher_weight_status.get("status") or "unknown").upper()
+    lines.append(f"  Matcher weights runtime status   : {matcher_status_label}")
+    if matcher_weight_status.get("reason"):
+        lines.append(f"    {matcher_weight_status['reason']}")
     if pre_llm_by_source:
         lines.append("  Drilldown: pre-LLM would-block by source (top)")
         for label, count in pre_llm_by_source.most_common(top):
@@ -1332,6 +1404,21 @@ def build_daily_review(
                     f"trades={row.get('trades', 0)} "
                     f"exposure={paper_performance_drilldown.fmt_bucket_exposure(row.get('exposure'))}"
                 )
+        full_loss_rows = paper_stats.get("high_confidence_full_losses") or []
+        lines.append(f"  High-confidence full-loss rows   : {len(full_loss_rows)}")
+        for row in full_loss_rows[:top]:
+            chosen_probability = row.get("chosen_side_probability", row.get("estimated_prob"))
+            lines.append(
+                "    "
+                f"{row.get('ticker') or 'n/a'} "
+                f"venue={row.get('venue') or 'kalshi'} "
+                f"pnl={fmt_money(row.get('pnl_dollars'))} "
+                f"cost={_fmt_unsigned_money(row.get('cost_dollars'))} "
+                f"p={_fmt_probability(chosen_probability)} "
+                f"entry={row.get('entry_price_cents') if row.get('entry_price_cents') is not None else 'n/a'}c "
+                f"llm_conf={_fmt_probability(row.get('llm_confidence'))} "
+                f"source={row.get('signal_source') or 'n/a'}"
+            )
     lines.append("")
 
     llm_value = edge_stats.get("llm_value_add", {})

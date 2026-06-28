@@ -467,11 +467,45 @@ def _summarize_polymarket_settlement_feedback(
     }
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _summarize_legacy_resolution_gap(
+    path: Path,
+    *,
+    process_start: datetime | None,
+    log_boot: datetime | None,
+) -> dict[str, Any]:
+    if process_start is None or log_boot is None or process_start >= log_boot:
+        return {"count": 0, "pnl_total": 0.0, "tickers": []}
+    events = _windowed_events(path, process_start, log_boot)
+    rows = [event for event in events if event["type"] == "PAPER_RESOLUTION"]
+    pnl_total = 0.0
+    tickers: list[str] = []
+    for event in rows:
+        pnl = _safe_float(event["raw"].get("pnl_dollars"))
+        if pnl is not None:
+            pnl_total += pnl
+        if event["ticker"]:
+            tickers.append(event["ticker"])
+    return {
+        "count": len(rows),
+        "pnl_total": pnl_total,
+        "tickers": tickers[:10],
+    }
+
+
 def build_money_path_report(
     jsonl_path: str | Path,
     *,
     since: str | datetime,
     until: str | datetime | None = None,
+    process_start: str | datetime | None = None,
+    log_boot: str | datetime | None = None,
     app_log_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a read-only restart-window money-path report."""
@@ -482,8 +516,14 @@ def build_money_path_report(
         raise ValueError("since must be an ISO timestamp")
     if until is not None and until_dt is None:
         raise ValueError("until must be an ISO timestamp")
+    process_start_dt = (
+        parse_timestamp(process_start) if isinstance(process_start, str) else process_start
+    )
+    log_boot_dt = parse_timestamp(log_boot) if isinstance(log_boot, str) else log_boot
     since_dt = since_dt.astimezone(timezone.utc)
     until_dt = until_dt.astimezone(timezone.utc) if until_dt else None
+    process_start_dt = process_start_dt.astimezone(timezone.utc) if process_start_dt else None
+    log_boot_dt = log_boot_dt.astimezone(timezone.utc) if log_boot_dt else None
 
     path = Path(jsonl_path)
     events = _windowed_events(path, since_dt, until_dt)
@@ -499,12 +539,21 @@ def build_money_path_report(
     app_path = Path(app_log_path) if app_log_path is not None else None
     return {
         "window": {"since": _iso(since_dt), "until": _iso(until_dt)},
+        "boundaries": {
+            "process_start_utc": _iso(process_start_dt),
+            "log_boot_utc": _iso(log_boot_dt),
+        },
         "summary": {
             "candidates": len(candidates),
             "terminal_counts": dict(sorted(terminal_counts.items())),
             "measurement_gaps": sum(1 for row in candidates if row["measurement_gap"]),
         },
         "candidates": candidates,
+        "legacy_resolutions_between_process_start_and_log_boot": _summarize_legacy_resolution_gap(
+            path,
+            process_start=process_start_dt,
+            log_boot=log_boot_dt,
+        ),
         "no_keywords": _summarize_no_keywords(events),
         "polymarket_settlement_feedback": _summarize_polymarket_settlement_feedback(
             events
@@ -519,6 +568,16 @@ def format_text_report(report: dict[str, Any]) -> str:
         f"Window: {report['window']['since']} -> {report['window']['until'] or 'open'}",
         f"Candidates: {report['summary']['candidates']}",
     ]
+    boundaries = report.get("boundaries") or {}
+    if boundaries.get("process_start_utc") or boundaries.get("log_boot_utc"):
+        lines.append(f"Process-start boundary: {boundaries.get('process_start_utc') or 'unknown'}")
+        lines.append(f"Latest log-boot boundary: {boundaries.get('log_boot_utc') or 'unknown'}")
+    gap = report.get("legacy_resolutions_between_process_start_and_log_boot") or {}
+    if gap.get("count", 0):
+        lines.append(
+            "Legacy resolutions before latest boot: "
+            f"{gap.get('count', 0)}, pnl={gap.get('pnl_total')}"
+        )
     terminal_counts = report["summary"]["terminal_counts"]
     terminal_text = ", ".join(f"{key}={value}" for key, value in terminal_counts.items())
     lines.append(f"Terminal: {terminal_text or 'none'}")
