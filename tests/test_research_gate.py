@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -472,6 +473,287 @@ async def test_cache_only_research_gate_promotes_from_vetted_cached_dossier(tmp_
     assert verdict.force_side == "yes"
     assert verdict.estimated_probability == pytest.approx(0.8)
     assert len(verdict.evidence) == 2
+    snapshot = await store.get_dossier_snapshot(market.ticker)
+    assert snapshot is not None
+    assert snapshot.last_research_run_id == "rr-vetted-cache"
+    assert verdict.research_run_id is None
+
+
+@pytest.mark.asyncio
+async def test_researched_no_edge_invalidates_stale_cached_candidate(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    market = SimpleNamespace(
+        ticker="KXIRANCRUDE-26JUL13-T3.8",
+        title="Will Iran crude oil production be at least 3.8M bpd?",
+        rules_primary="OPEC MOMR secondary sources decide the market.",
+        rules_secondary="Later revisions ignored.",
+        settlement_sources=(),
+    )
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="resolution_source",
+            source_name="OPEC",
+            source_url="https://opec.org/momr",
+            title="MOMR table",
+            snippet="Iran crude production secondary sources table.",
+            claim_type="resolution",
+            supports_direction="yes",
+            supports_confidence=0.9,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=_contract_fingerprint(market),
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Reuters",
+            source_url="https://reuters.com/iran-production",
+            title="Iran production rises",
+            snippet="Analysts expect Iran crude production to exceed the threshold.",
+            claim_type="corroboration",
+            supports_direction="yes",
+            supports_confidence=0.8,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=_contract_fingerprint(market),
+        ),
+    ]
+    await store.record_research_run(
+        market.ticker,
+        "rr-vetted-cache",
+        trigger_headline="scheduled prewarm",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Cached vetted research supports yes.",
+        verdict_status=ResearchStatus.TRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.8,
+        confidence=0.8,
+        evidence=evidence,
+    )
+
+    async def fail_search(_query):
+        raise AssertionError("sufficient cached evidence should avoid fresh search")
+
+    async def no_edge_adjudicator(*, evidence, queries, news, market):
+        return {
+            "direction": "yes",
+            "confidence": 0.8,
+            "estimated_probability_yes": 0.53,
+            "reason": "Evidence still supports YES but edge no longer clears costs.",
+        }
+
+    no_edge = await run_research_gate(
+        SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
+        market,
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=fail_search,
+        adjudicator=no_edge_adjudicator,
+        dossier_store=store,
+    )
+
+    assert no_edge.status == ResearchStatus.RESEARCHED_SKIP_NO_EDGE
+    snapshot = await store.get_dossier_snapshot(market.ticker)
+    assert snapshot is not None
+    assert snapshot.last_research_run_id == no_edge.research_run_id
+    assert snapshot.last_verdict_status == ResearchStatus.RESEARCHED_SKIP_NO_EDGE.value
+
+    cache_only = await run_research_gate(
+        SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
+        market,
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=True,
+        search_provider=fail_search,
+        adjudicator=no_edge_adjudicator,
+        dossier_store=store,
+        cache_only=True,
+    )
+
+    assert cache_only.status == ResearchStatus.CONTINUE_RESEARCHING
+    assert cache_only.skip_reason == "cached_dossier_unvetted"
+
+
+@pytest.mark.asyncio
+async def test_cached_evidence_candidate_records_matching_full_proof_run(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    market = SimpleNamespace(
+        ticker="KXIRANCRUDE-26JUL13-T3.8",
+        title="Will Iran crude oil production be at least 3.8M bpd?",
+        rules_primary="OPEC MOMR secondary sources decide the market.",
+        rules_secondary="Later revisions ignored.",
+        settlement_sources=(),
+    )
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="resolution_source",
+            source_name="OPEC",
+            source_url="https://opec.org/momr",
+            title="MOMR table",
+            snippet="Iran crude production secondary sources table.",
+            claim_type="resolution",
+            supports_direction="yes",
+            supports_confidence=0.9,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=_contract_fingerprint(market),
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Reuters",
+            source_url="https://reuters.com/iran-production",
+            title="Iran production rises",
+            snippet="Analysts expect Iran crude production to exceed the threshold.",
+            claim_type="corroboration",
+            supports_direction="yes",
+            supports_confidence=0.8,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=_contract_fingerprint(market),
+        ),
+    ]
+    await store.record_research_run(
+        market.ticker,
+        "rr-vetted-cache",
+        trigger_headline="scheduled prewarm",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Cached vetted research supports yes.",
+        verdict_status=ResearchStatus.TRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.8,
+        confidence=0.8,
+        evidence=evidence,
+    )
+
+    async def fail_search(_query):
+        raise AssertionError("sufficient cached evidence should avoid fresh search")
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
+        market,
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=fail_search,
+        adjudicator=_fake_adjudicator,
+        dossier_store=store,
+    )
+
+    assert verdict.status == ResearchStatus.TRADE_CANDIDATE
+    snapshot = await store.get_dossier_snapshot(market.ticker)
+    assert snapshot is not None
+    assert snapshot.last_research_run_id == verdict.research_run_id
+    with sqlite3.connect(db_path) as conn:
+        proof_rows = conn.execute(
+            """
+            SELECT source_class
+            FROM research_evidence
+            WHERE research_run_id = ?
+            ORDER BY source_class
+            """,
+            (snapshot.last_research_run_id,),
+        ).fetchall()
+
+    assert proof_rows == [("reputable_secondary",), ("resolution_source",)]
+
+
+@pytest.mark.asyncio
+async def test_mixed_cached_and_fresh_candidate_records_full_proof_run(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    market = SimpleNamespace(
+        ticker="KXIRANCRUDE-26JUL13-T3.8",
+        title="Will Iran crude oil production be at least 3.8M bpd?",
+        rules_primary="OPEC MOMR secondary sources decide the market.",
+        rules_secondary="Later revisions ignored.",
+        settlement_sources=(),
+    )
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    await store.record_research_run(
+        market.ticker,
+        "rr-resolution-only",
+        trigger_headline="scheduled prewarm",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Cached resolution source only.",
+        verdict_status=ResearchStatus.CONTINUE_RESEARCHING.value,
+        skip_reason="insufficient_corroboration",
+        contract_fingerprint=_contract_fingerprint(market),
+        evidence=[
+            ResearchEvidence(
+                source_class="resolution_source",
+                source_name="OPEC",
+                source_url="https://opec.org/momr",
+                title="MOMR table",
+                snippet="Iran crude production secondary sources table.",
+                claim_type="resolution",
+                supports_direction="yes",
+                supports_confidence=0.9,
+                retrieved_at=retrieved_at,
+                contract_fingerprint=_contract_fingerprint(market),
+            )
+        ],
+    )
+
+    async def one_fresh_secondary(_query):
+        return [
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="Reuters",
+                source_url="https://reuters.com/iran-production",
+                title="Iran production rises",
+                snippet="Analysts expect Iran crude production to exceed the threshold.",
+                claim_type="corroboration",
+                supports_direction="yes",
+                supports_confidence=0.8,
+                retrieved_at=retrieved_at,
+                contract_fingerprint=_contract_fingerprint(market),
+            )
+        ]
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
+        market,
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=one_fresh_secondary,
+        adjudicator=_fake_adjudicator,
+        dossier_store=store,
+    )
+
+    assert verdict.status == ResearchStatus.TRADE_CANDIDATE
+    snapshot = await store.get_dossier_snapshot(market.ticker)
+    assert snapshot is not None
+    assert snapshot.last_research_run_id == verdict.research_run_id
+    with sqlite3.connect(db_path) as conn:
+        proof_rows = conn.execute(
+            """
+            SELECT source_class
+            FROM research_evidence
+            WHERE research_run_id = ?
+            ORDER BY source_class
+            """,
+            (snapshot.last_research_run_id,),
+        ).fetchall()
+
+    assert proof_rows == [("reputable_secondary",), ("resolution_source",)]
 
 
 @pytest.mark.asyncio
@@ -513,6 +795,8 @@ async def test_cache_only_research_gate_fails_closed_without_sufficient_cache(tm
     assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
     assert verdict.attempted is False
     assert verdict.skip_reason == "cached_dossier_insufficient"
+    snapshot = await store.get_dossier_snapshot("KXIRANCRUDE-26JUL13-T3.8")
+    assert snapshot is None
 
 
 @pytest.mark.asyncio
@@ -949,7 +1233,17 @@ async def test_run_research_gate_reports_adjudicator_exception():
 
 
 @pytest.mark.asyncio
-async def test_run_research_gate_times_out_hung_search_provider():
+async def test_run_research_gate_times_out_hung_search_provider(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    market = SimpleNamespace(
+        ticker="KXIRANCRUDE-26JUL13-T3.8",
+        title="Will Iran crude oil production be at least 3.8M bpd?",
+        rules_primary="OPEC MOMR secondary sources decide the market.",
+        rules_secondary="Later revisions ignored.",
+        settlement_sources=(),
+    )
+
     async def hung_search(_query):
         await asyncio.sleep(60)
         return []
@@ -957,13 +1251,7 @@ async def test_run_research_gate_times_out_hung_search_provider():
     verdict = await asyncio.wait_for(
         run_research_gate(
             SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
-            SimpleNamespace(
-                ticker="KXIRANCRUDE-26JUL13-T3.8",
-                title="Will Iran crude oil production be at least 3.8M bpd?",
-                rules_primary="OPEC MOMR secondary sources decide the market.",
-                rules_secondary="Later revisions ignored.",
-                settlement_sources=(),
-            ),
+            market,
             model_direction="neutral",
             model_confidence=0.5,
             model_reason="No keywords.",
@@ -972,6 +1260,7 @@ async def test_run_research_gate_times_out_hung_search_provider():
             live_mode=False,
             search_provider=hung_search,
             adjudicator=_fake_adjudicator,
+            dossier_store=store,
             research_timeout_seconds=0.05,
         ),
         timeout=1.0,
@@ -979,6 +1268,71 @@ async def test_run_research_gate_times_out_hung_search_provider():
 
     assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
     assert verdict.skip_reason == "research_timeout"
+    assert verdict.research_run_id
+    assert verdict.research_persisted is True
+    fields = verdict.log_fields()
+    assert fields["research_contract_fingerprint"] == _contract_fingerprint(market)
+    snapshot = await store.get_dossier_snapshot(market.ticker)
+    assert snapshot is not None
+    assert snapshot.last_contract_fingerprint == _contract_fingerprint(market)
+
+
+@pytest.mark.asyncio
+async def test_run_research_gate_timeout_preserves_vetted_dossier_snapshot(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    market = SimpleNamespace(
+        ticker="KXIRANCRUDE-26JUL13-T3.8",
+        title="Will Iran crude oil production be at least 3.8M bpd?",
+        rules_primary="OPEC MOMR secondary sources decide the market.",
+        rules_secondary="Later revisions ignored.",
+        settlement_sources=(),
+    )
+    await store.record_research_run(
+        market.ticker,
+        "rr-vetted-timeout",
+        trigger_headline="scheduled prewarm",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Cached vetted research supports yes.",
+        verdict_status=ResearchStatus.TRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.8,
+        confidence=0.8,
+        contract_fingerprint=_contract_fingerprint(market),
+    )
+
+    async def hung_search(_query):
+        await asyncio.sleep(60)
+        return []
+
+    verdict = await asyncio.wait_for(
+        run_research_gate(
+            SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
+            market,
+            model_direction="neutral",
+            model_confidence=0.5,
+            model_reason="No keywords.",
+            yes_ask=0.51,
+            no_ask=0.51,
+            live_mode=False,
+            search_provider=hung_search,
+            adjudicator=_fake_adjudicator,
+            dossier_store=store,
+            research_timeout_seconds=0.05,
+        ),
+        timeout=1.0,
+    )
+
+    assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
+    assert verdict.skip_reason == "research_timeout"
+    assert verdict.research_run_id
+    assert verdict.research_run_id != "rr-vetted-timeout"
+    snapshot = await store.get_dossier_snapshot(market.ticker)
+    assert snapshot is not None
+    assert snapshot.last_research_run_id == "rr-vetted-timeout"
+    assert snapshot.last_verdict_status == ResearchStatus.TRADE_CANDIDATE.value
+    assert snapshot.last_force_side == "yes"
 
 
 @pytest.mark.asyncio

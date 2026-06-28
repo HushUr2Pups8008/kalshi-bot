@@ -108,6 +108,164 @@ async def test_research_dossier_records_run_queries_and_latest_verdict(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_research_dossier_can_record_attempt_without_overwriting_snapshot(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    await store.record_research_run(
+        "KXIRANCRUDE-26JUL13-T3.8",
+        "run-vetted",
+        trigger_headline="Iran output update",
+        trigger_source="Reuters",
+        attempted=True,
+        summary="Research supports yes.",
+        verdict_status=ResearchStatus.TRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.8,
+        confidence=0.8,
+        contract_fingerprint="contract-v1",
+    )
+
+    await store.record_research_run(
+        "KXIRANCRUDE-26JUL13-T3.8",
+        "run-timeout",
+        trigger_headline="Iran output update",
+        trigger_source="Reuters",
+        attempted=True,
+        summary="Research timed out.",
+        verdict_status=ResearchStatus.CONTINUE_RESEARCHING.value,
+        skip_reason="research_timeout",
+        contract_fingerprint="contract-v1",
+        update_dossier_snapshot=False,
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        dossier = conn.execute(
+            """
+            SELECT last_research_run_id, last_verdict_status, last_force_side
+            FROM research_dossiers
+            """
+        ).fetchone()
+        timeout_run = conn.execute(
+            """
+            SELECT verdict_status, skip_reason
+            FROM research_runs
+            WHERE research_run_id = 'run-timeout'
+            """
+        ).fetchone()
+
+    assert dossier == ("run-vetted", ResearchStatus.TRADE_CANDIDATE.value, "yes")
+    assert timeout_run == (ResearchStatus.CONTINUE_RESEARCHING.value, "research_timeout")
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_can_update_snapshot_without_replacing_proof_run(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    await store.record_research_run(
+        "KXIRANCRUDE-26JUL13-T3.8",
+        "run-vetted",
+        trigger_headline="Iran output update",
+        trigger_source="Reuters",
+        attempted=True,
+        summary="Research supports yes.",
+        verdict_status=ResearchStatus.TRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.8,
+        confidence=0.8,
+        contract_fingerprint="contract-v1",
+    )
+
+    await store.record_research_run(
+        "KXIRANCRUDE-26JUL13-T3.8",
+        "run-no-edge",
+        trigger_headline="Iran output update",
+        trigger_source="Reuters",
+        attempted=True,
+        summary="Research completed with no edge.",
+        verdict_status=ResearchStatus.RESEARCHED_SKIP_NO_EDGE.value,
+        skip_reason="negative_net_edge_after_costs",
+        contract_fingerprint="contract-v1",
+        update_dossier_snapshot=True,
+        update_dossier_run_id=False,
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        dossier = conn.execute(
+            """
+            SELECT last_research_run_id, last_verdict_status, last_skip_reason
+            FROM research_dossiers
+            """
+        ).fetchone()
+        no_edge_run = conn.execute(
+            """
+            SELECT verdict_status, skip_reason
+            FROM research_runs
+            WHERE research_run_id = 'run-no-edge'
+            """
+        ).fetchone()
+
+    assert dossier == (
+        "run-vetted",
+        ResearchStatus.RESEARCHED_SKIP_NO_EDGE.value,
+        "negative_net_edge_after_costs",
+    )
+    assert no_edge_run == (
+        ResearchStatus.RESEARCHED_SKIP_NO_EDGE.value,
+        "negative_net_edge_after_costs",
+    )
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_can_associate_same_evidence_with_multiple_runs(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    evidence = ResearchEvidence(
+        source_class="resolution_source",
+        source_name="OPEC",
+        source_url="https://opec.org/momr",
+        title="MOMR table",
+        snippet="Iran crude production secondary sources table.",
+        claim_type="resolution",
+        supports_direction="yes",
+        supports_confidence=0.9,
+        contract_fingerprint="contract-v1",
+    )
+
+    for run_id in ("run-1", "run-2"):
+        await store.record_research_run(
+            "KXIRANCRUDE-26JUL13-T3.8",
+            run_id,
+            trigger_headline="Iran output update",
+            trigger_source="Reuters",
+            attempted=True,
+            summary="Research supports yes.",
+            verdict_status=ResearchStatus.TRADE_CANDIDATE.value,
+            force_side="yes",
+            estimated_probability=0.8,
+            confidence=0.8,
+            contract_fingerprint="contract-v1",
+            evidence=[evidence],
+        )
+
+    with sqlite3.connect(db_path) as conn:
+        counts = conn.execute(
+            """
+            SELECT research_run_id, COUNT(*)
+            FROM research_evidence
+            GROUP BY research_run_id
+            ORDER BY research_run_id
+            """
+        ).fetchall()
+
+    assert counts == [("run-1", 1), ("run-2", 1)]
+
+
+@pytest.mark.asyncio
 async def test_research_dossier_records_run_contract_fingerprint_without_evidence(tmp_path):
     db_path = tmp_path / "research_dossier.db"
     store = ResearchDossierStore(db_path)
