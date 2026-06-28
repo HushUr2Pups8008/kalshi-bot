@@ -12,6 +12,12 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+OPTIONAL_DEFAULTED_PROFILE_VALUES = {
+    "RESEARCH_PREWARM_SOURCEABLE_SERIES_FALLBACK": (
+        "KXGDP,KXCPI,KXFED,KXNASDAQ100,KXBTC,KXETH,KXHIGHNY,KXMLB,KXNBA"
+    ),
+}
+
 
 @dataclass(frozen=True)
 class ResearchActivationAssessment:
@@ -60,6 +66,8 @@ def evaluate_activation_profile(
     for key, expected in profile_values.items():
         actual = env_values.get(key)
         if actual is None:
+            if OPTIONAL_DEFAULTED_PROFILE_VALUES.get(key) == expected:
+                continue
             missing.append(key)
         elif actual != expected:
             mismatched.append((key, expected, actual))

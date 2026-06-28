@@ -322,6 +322,12 @@ def test_research_prewarm_market_provider_returns_unsourceable_for_skip_telemetr
     monkeypatch,
 ):
     monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 2, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        (),
+        raising=False,
+    )
     bot = _make_bot_stub()
     unsourceable_markets = [
         replace(
@@ -339,6 +345,94 @@ def test_research_prewarm_market_provider_returns_unsourceable_for_skip_telemetr
     assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
         "KXUNSOURCEABLE-0",
         "KXUNSOURCEABLE-1",
+    ]
+
+
+def test_research_prewarm_market_provider_uses_sourceable_series_fallback(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 2, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        ("KXGDP", "KXCPI"),
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    bot.rest.get_all_open_markets.return_value = [
+        replace(
+            _make_market(),
+            ticker="KXMVESPORTSMULTIGAMEEXTENDED-S2026",
+            rules_primary="",
+            rules_secondary="",
+            contract_terms_url="",
+            settlement_sources=(),
+        )
+    ]
+    gdp_market = replace(
+        _make_market(),
+        ticker="KXGDP-26JUL30-T4.0",
+        series_ticker="KXGDP",
+    )
+    cpi_market = replace(
+        _make_market(),
+        ticker="KXCPI-26JUL-T0.3",
+        series_ticker="KXCPI",
+    )
+    bot.rest.get_markets.side_effect = [
+        ([gdp_market], None),
+        ([cpi_market], None),
+    ]
+
+    selected = bot._research_prewarm_market_provider()
+
+    assert [market.ticker for market in selected] == [
+        "KXGDP-26JUL30-T4.0",
+        "KXCPI-26JUL-T0.3",
+    ]
+    bot.rest.get_markets.assert_any_call(series_ticker="KXGDP", limit=2)
+    bot.rest.get_markets.assert_any_call(series_ticker="KXCPI", limit=2)
+
+
+def test_recent_runtime_research_prewarm_tickers_excludes_probe_and_non_kalshi(
+    monkeypatch, tmp_path
+):
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    now = datetime.now(timezone.utc)
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": now.isoformat(),
+                "ticker": "KXSTARTUP-PROBE",
+                "venue": "kalshi",
+                "is_synthetic_probe": True,
+                "is_startup_probe": True,
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": now.isoformat(),
+                "ticker": "ewc-usse-me-2026-11-03-dem",
+                "venue": "polymarket_us",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 1,
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": now.isoformat(),
+                "ticker": "KXREAL-25DEC31",
+                "venue": "kalshi",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 1,
+            },
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert main_module._recent_runtime_research_prewarm_tickers(now=now) == [
+        "KXREAL-25DEC31"
     ]
 
 
