@@ -86,3 +86,27 @@ def record_targets_research_prewarm(
             == "insufficient_semantic_overlap"
         )
     return False
+
+
+def record_targets_kalshi_research_prewarm(
+    record: dict[str, Any],
+    *,
+    reason_set: set[str] | frozenset[str] | tuple[str, ...] | None = (
+        DEFAULT_TARGET_REASONS
+    ),
+    research_skip_reason_set: set[str] | frozenset[str] | tuple[str, ...] | None = (
+        DEFAULT_TARGET_RESEARCH_SKIP_REASONS
+    ),
+) -> bool:
+    """Return whether a trade-log row is actionable for Kalshi prewarm repair."""
+
+    if not record_targets_research_prewarm(
+        record,
+        reason_set=reason_set,
+        research_skip_reason_set=research_skip_reason_set,
+    ):
+        return False
+    if record.get("is_synthetic_probe") is True or record.get("is_startup_probe") is True:
+        return False
+    venue = str(record.get("venue") or "kalshi").strip().lower()
+    return not venue or venue == "kalshi"

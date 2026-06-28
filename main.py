@@ -122,7 +122,7 @@ from utils.runtime_overrides import (
 )
 from utils.research_prewarm_targets import (
     RESEARCH_PREWARM_EVENT_TYPES,
-    record_targets_research_prewarm,
+    record_targets_kalshi_research_prewarm,
 )
 from utils.trade_log_reader import iter_trade_records
 from tasks.runtime_overrides_task import run_runtime_overrides_poll
@@ -152,7 +152,7 @@ def _recent_runtime_research_prewarm_tickers(*, now: datetime | None = None) -> 
             event_types=RESEARCH_PREWARM_EVENT_TYPES,
         )
         for index, record in enumerate(records):
-            if not record_targets_research_prewarm(record):
+            if not record_targets_kalshi_research_prewarm(record):
                 continue
             ticker = str(record.get("ticker") or record.get("market_ticker") or "").strip()
             if ticker:
@@ -951,6 +951,44 @@ class TradingBot:
             self._enrich_research_prewarm_market_source_path(market)
             return market_has_research_source_path(market)
 
+        def sourceable_series_fallback(selected_tickers: set[str] | None = None) -> list[object]:
+            if not hasattr(self.rest, "get_markets"):
+                return []
+            selected_tickers = selected_tickers or set()
+            selected: list[object] = []
+            for raw_series in getattr(
+                cfg, "research_prewarm_sourceable_series_fallback", ()
+            ) or ():
+                if len(selected) >= max_markets:
+                    break
+                series_ticker = str(raw_series or "").strip()
+                if not series_ticker:
+                    continue
+                try:
+                    page, _cursor = self.rest.get_markets(
+                        series_ticker=series_ticker,
+                        limit=max_markets,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "[RESEARCH_PREWARM] sourceable fallback fetch failed "
+                        "series=%s: %s",
+                        series_ticker,
+                        exc,
+                    )
+                    continue
+                for market in page or ():
+                    if len(selected) >= max_markets:
+                        break
+                    ticker = str(getattr(market, "ticker", "") or "")
+                    if not ticker or ticker in selected_tickers:
+                        continue
+                    if not is_sourceable_open_market(market):
+                        continue
+                    selected.append(market)
+                    selected_tickers.add(ticker)
+            return selected
+
         if target_order:
             selected_by_ticker = {
                 str(getattr(market, "ticker", "") or ""): market
@@ -992,6 +1030,9 @@ class TradingBot:
                 selected.append(market)
             if selected:
                 return selected
+            fallback = sourceable_series_fallback(selected_tickers)
+            if fallback:
+                return fallback
             return [market for market in market_list if is_open_market(market)][:max_markets]
         sourceable = [
             market
@@ -1003,6 +1044,9 @@ class TradingBot:
         ][:max_markets]
         if sourceable:
             return sourceable
+        fallback = sourceable_series_fallback()
+        if fallback:
+            return fallback
         return [market for market in market_list if is_open_market(market)][:max_markets]
 
     def _create_research_prewarm_runtime_task(self) -> asyncio.Task | None:

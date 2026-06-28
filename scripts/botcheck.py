@@ -37,7 +37,7 @@ if str(REPO_ROOT_FOR_IMPORTS) not in sys.path:
 from utils.research_prewarm_targets import (
     DEFAULT_TARGET_REASONS,
     DEFAULT_TARGET_RESEARCH_SKIP_REASONS,
-    record_targets_research_prewarm,
+    record_targets_kalshi_research_prewarm,
 )
 from scripts.research_activation_status import evaluate_activation_profile
 
@@ -645,7 +645,7 @@ def _record_targets_research_prewarm(
     reason_set: set[str],
     research_skip_reason_set: set[str],
 ) -> bool:
-    return record_targets_research_prewarm(
+    return record_targets_kalshi_research_prewarm(
         record,
         reason_set=reason_set,
         research_skip_reason_set=research_skip_reason_set,

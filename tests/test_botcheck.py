@@ -400,6 +400,45 @@ def test_summarize_research_prewarm_backlog_does_not_import_runtime_script(
     ) == ["KX-MISS"]
 
 
+def test_summarize_research_prewarm_backlog_excludes_non_kalshi_targets(tmp_path):
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": "2026-05-10T22:00:00+00:00",
+                "ticker": "KXSTARTUP-PROBE",
+                "venue": "kalshi",
+                "is_synthetic_probe": True,
+                "is_startup_probe": True,
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-05-10T22:01:00+00:00",
+                "ticker": "ewc-usse-me-2026-11-03-dem",
+                "venue": "polymarket_us",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 0,
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-05-10T22:02:00+00:00",
+                "ticker": "KX-MISS",
+                "venue": "kalshi",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 0,
+            },
+        ],
+    )
+
+    assert botcheck.summarize_research_prewarm_backlog(
+        trades,
+        since=datetime(2026, 5, 10, 21, 0, tzinfo=timezone.utc),
+    ) == ["KX-MISS"]
+
+
 def test_print_research_gate_section_warns_when_prewarm_disabled_in_active_mode(
     capsys,
     tmp_path,

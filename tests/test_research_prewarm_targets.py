@@ -4,6 +4,7 @@ from utils.research_prewarm_targets import (
     DEFAULT_TARGET_REASONS,
     DEFAULT_TARGET_RESEARCH_SKIP_REASONS,
     keyword_count,
+    record_targets_kalshi_research_prewarm,
     record_targets_research_prewarm,
 )
 
@@ -59,6 +60,37 @@ def test_semantic_overlap_targets_regardless_of_keyword_count():
             "type": "SIGNAL_ANALYSIS_DETAIL",
             "pre_llm_gate_reason": "insufficient_semantic_overlap",
             "keywords": ["midterms", "senate"],
+        },
+    )
+
+
+def test_kalshi_prewarm_targets_exclude_probe_and_non_kalshi_records():
+    assert not record_targets_kalshi_research_prewarm(
+        {
+            "type": "SIGNAL_ANALYSIS_DETAIL",
+            "ticker": "KXSTARTUP-PROBE",
+            "venue": "kalshi",
+            "is_synthetic_probe": True,
+            "is_startup_probe": True,
+            "pre_llm_gate_reason": "insufficient_semantic_overlap",
+        },
+    )
+    assert not record_targets_kalshi_research_prewarm(
+        {
+            "type": "MATCH_LLM_REVIEW",
+            "ticker": "ewc-usse-me-2026-11-03-dem",
+            "venue": "polymarket_us",
+            "verdict": "false_positive_neutral",
+            "keyword_count": 0,
+        },
+    )
+    assert record_targets_kalshi_research_prewarm(
+        {
+            "type": "MATCH_LLM_REVIEW",
+            "ticker": "KX-MISS",
+            "venue": "kalshi",
+            "verdict": "false_positive_neutral",
+            "keyword_count": 0,
         },
     )
 

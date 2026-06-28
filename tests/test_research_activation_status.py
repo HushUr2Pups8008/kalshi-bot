@@ -52,6 +52,37 @@ def test_activation_status_fails_when_research_settings_missing(tmp_path):
     ]
 
 
+def test_activation_status_allows_missing_defaulted_sourceable_fallback(tmp_path):
+    profile = tmp_path / "profile.env"
+    env_path = tmp_path / ".env"
+    profile.write_text(
+        "\n".join(
+            [
+                "REAL_WEB_RESEARCH_MODE=shadow",
+                "ENABLE_RESEARCH_PREWARM_TASK=true",
+                "RESEARCH_PREWARM_SOURCEABLE_SERIES_FALLBACK=KXGDP,KXCPI,KXFED,KXNASDAQ100,KXBTC,KXETH,KXHIGHNY,KXMLB,KXNBA",
+                "LIVE_TRADING_ENABLED=false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env_path.write_text(
+        "\n".join(
+            [
+                "REAL_WEB_RESEARCH_MODE=shadow",
+                "ENABLE_RESEARCH_PREWARM_TASK=true",
+                "LIVE_TRADING_ENABLED=false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assessment = evaluate_activation_profile(Path.cwd(), profile, env_path=env_path)
+
+    assert assessment.ok
+    assert "RESEARCH_PREWARM_SOURCEABLE_SERIES_FALLBACK" not in assessment.missing
+
+
 def test_activation_status_fails_when_env_differs_from_profile(tmp_path):
     profile = tmp_path / "profile.env"
     env_path = tmp_path / ".env"

@@ -689,6 +689,20 @@ RESEARCH_PREWARM_INTERVAL_SECONDS: float = float(
 RESEARCH_PREWARM_MAX_MARKETS: int = int(os.getenv("RESEARCH_PREWARM_MAX_MARKETS", "25"))
 RESEARCH_PREWARM_MAX_PAGES: int = int(os.getenv("RESEARCH_PREWARM_MAX_PAGES", "5"))
 RESEARCH_PREWARM_CONCURRENCY: int = int(os.getenv("RESEARCH_PREWARM_CONCURRENCY", "3"))
+RESEARCH_PREWARM_SOURCEABLE_SERIES_FALLBACK: tuple[str, ...] = _parse_string_tuple(
+    os.getenv("RESEARCH_PREWARM_SOURCEABLE_SERIES_FALLBACK"),
+    default=(
+        "KXGDP",
+        "KXCPI",
+        "KXFED",
+        "KXNASDAQ100",
+        "KXBTC",
+        "KXETH",
+        "KXHIGHNY",
+        "KXMLB",
+        "KXNBA",
+    ),
+)
 RESEARCH_PREWARM_TARGET_COOLDOWN_SECONDS: float = float(
     os.getenv("RESEARCH_PREWARM_TARGET_COOLDOWN_SECONDS", "1800")
 )
@@ -1503,6 +1517,9 @@ class BotConfig:
     )
     research_prewarm_concurrency: int = field(
         default_factory=lambda: RESEARCH_PREWARM_CONCURRENCY
+    )
+    research_prewarm_sourceable_series_fallback: tuple[str, ...] = field(
+        default_factory=lambda: RESEARCH_PREWARM_SOURCEABLE_SERIES_FALLBACK
     )
     research_prewarm_target_cooldown_seconds: float = field(
         default_factory=lambda: RESEARCH_PREWARM_TARGET_COOLDOWN_SECONDS
