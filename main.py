@@ -199,8 +199,7 @@ def _trade_log_record_targets_runtime_research_prewarm(record: dict[str, Any]) -
         )
     if event_type == "SIGNAL_ANALYSIS_DETAIL":
         return (
-            _trade_log_keyword_count_targets_runtime_research_prewarm(record)
-            and str(record.get("pre_llm_gate_reason") or "").strip()
+            str(record.get("pre_llm_gate_reason") or "").strip()
             == "insufficient_semantic_overlap"
         )
     return False

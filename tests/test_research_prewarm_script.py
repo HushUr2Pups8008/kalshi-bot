@@ -379,13 +379,19 @@ async def test_run_once_targets_useful_pre_llm_blocked_empty_keyword_rows(tmp_pa
     summary = await research_prewarm.run_once(args, client=client, task=task)
 
     assert client.open_page_calls == []
-    assert client.market_calls == ["KX-THIN", "KX-NOTUSEFUL", "KX-USEFUL"]
-    assert [market.ticker for market in task.markets] == [
+    assert client.market_calls == [
+        "KX-HASKEYWORDS",
         "KX-THIN",
         "KX-NOTUSEFUL",
         "KX-USEFUL",
     ]
-    assert summary["markets"] == 3
+    assert [market.ticker for market in task.markets] == [
+        "KX-HASKEYWORDS",
+        "KX-THIN",
+        "KX-NOTUSEFUL",
+        "KX-USEFUL",
+    ]
+    assert summary["markets"] == 4
 
 
 def test_build_argparser_defaults_to_single_run():

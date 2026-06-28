@@ -315,8 +315,11 @@ def test_print_research_gate_section_surfaces_prewarm_backlog(
     botcheck.print_research_gate_section(tmp_path, stats, now=now)
 
     out = capsys.readouterr().out
-    assert "prewarm_backlog: 5 targetable from logs" in out
-    assert "sample=KX-SOURCE,KX-SEMANTIC,KX-USEFUL,KX-THIN,KX-MISS" in out
+    assert "prewarm_backlog: 6 targetable from logs" in out
+    assert (
+        "sample=KX-SEMANTIC-KEYWORDS,KX-SOURCE,KX-SEMANTIC,KX-USEFUL,KX-THIN"
+        in out
+    )
 
 
 def test_botcheck_cli_surfaces_prewarm_backlog_when_executed_as_script(tmp_path):

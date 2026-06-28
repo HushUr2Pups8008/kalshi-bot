@@ -646,8 +646,7 @@ def _record_targets_research_prewarm(
         )
     if event_type == "SIGNAL_ANALYSIS_DETAIL":
         return (
-            _keyword_count_targets_research_prewarm(record)
-            and str(record.get("pre_llm_gate_reason") or "").strip()
+            str(record.get("pre_llm_gate_reason") or "").strip()
             == "insufficient_semantic_overlap"
         )
     return False

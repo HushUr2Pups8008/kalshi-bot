@@ -310,6 +310,36 @@ def test_research_prewarm_market_provider_prioritizes_thin_semantic_overlap(
     ]
 
 
+def test_research_prewarm_market_provider_prioritizes_semantic_overlap_with_keywords(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    generic_market = replace(_make_market(), ticker="KXGENERIC-25DEC31")
+    blocked_market = replace(_make_market(), ticker="KXBLOCKED-25DEC31")
+    bot.rest.get_all_open_markets.return_value = [generic_market, blocked_market]
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "market_ticker": blocked_market.ticker,
+                "keywords": ["midterms", "senate"],
+                "pre_llm_would_block_and_useful": False,
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        blocked_market.ticker,
+    ]
+
+
 def test_research_prewarm_market_provider_ignores_false_neutral_with_keywords(
     monkeypatch, tmp_path
 ):
