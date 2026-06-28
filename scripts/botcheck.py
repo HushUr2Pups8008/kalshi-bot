@@ -22,12 +22,23 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+REPO_ROOT_FOR_IMPORTS = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT_FOR_IMPORTS) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT_FOR_IMPORTS))
+
+from utils.research_prewarm_targets import (
+    DEFAULT_TARGET_REASONS,
+    DEFAULT_TARGET_RESEARCH_SKIP_REASONS,
+    record_targets_research_prewarm,
+)
 
 
 LOG_TS_RE = re.compile(
@@ -542,33 +553,12 @@ def _format_ts_age(ts: datetime | None, *, now: datetime) -> tuple[str, str]:
     return ts.isoformat(), human_duration((now - ts).total_seconds())
 
 
-_RESEARCH_PREWARM_MAX_REPAIR_KEYWORD_COUNT = 1
-
-
 def summarize_research_prewarm_backlog(path: Path, *, since: datetime) -> list[str]:
     return _target_tickers_from_trade_log(
         path,
         since=since,
-        reasons=[
-            "no_keywords",
-            "research_incomplete",
-            "research_operational_error",
-        ],
-        research_skip_reasons=[
-            "ambiguous_direction",
-            "cached_dossier_insufficient",
-            "cached_dossier_unvetted",
-            "direction_reason_conflict",
-            "insufficient_corroboration",
-            "missing_estimated_probability",
-            "missing_resolution_source",
-            "new_market",
-            "no_research_hits",
-            "probability_direction_conflict",
-            "research_timeout",
-            "research_provider_error",
-            "research_adjudicator_error",
-        ],
+        reasons=DEFAULT_TARGET_REASONS,
+        research_skip_reasons=DEFAULT_TARGET_RESEARCH_SKIP_REASONS,
     )
 
 
@@ -628,48 +618,10 @@ def _record_targets_research_prewarm(
     reason_set: set[str],
     research_skip_reason_set: set[str],
 ) -> bool:
-    event_type = str(record.get("type") or "").strip()
-    if event_type == "ANALYSIS_REJECTED":
-        reason = str(record.get("reason") or "").strip()
-        research_skip_reason = str(record.get("research_skip_reason") or "").strip()
-        return (
-            (not reason_set or reason in reason_set)
-            or (
-                bool(research_skip_reason_set)
-                and research_skip_reason in research_skip_reason_set
-            )
-        )
-    if event_type == "MATCH_LLM_REVIEW":
-        return (
-            str(record.get("verdict") or "").strip() == "false_positive_neutral"
-            and _keyword_count_targets_research_prewarm(record)
-        )
-    if event_type == "SIGNAL_ANALYSIS_DETAIL":
-        return (
-            str(record.get("pre_llm_gate_reason") or "").strip()
-            == "insufficient_semantic_overlap"
-        )
-    return False
-
-
-def _keyword_count(record: dict[str, Any]) -> int | None:
-    raw_count = record.get("keyword_count")
-    if raw_count is not None:
-        try:
-            return int(raw_count)
-        except (TypeError, ValueError):
-            return None
-    keywords = record.get("keywords")
-    if isinstance(keywords, list):
-        return len(keywords)
-    return None
-
-
-def _keyword_count_targets_research_prewarm(record: dict[str, Any]) -> bool:
-    keyword_count = _keyword_count(record)
-    return (
-        keyword_count is not None
-        and keyword_count <= _RESEARCH_PREWARM_MAX_REPAIR_KEYWORD_COUNT
+    return record_targets_research_prewarm(
+        record,
+        reason_set=reason_set,
+        research_skip_reason_set=research_skip_reason_set,
     )
 
 

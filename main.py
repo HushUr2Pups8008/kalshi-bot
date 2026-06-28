@@ -116,6 +116,10 @@ from utils.runtime_overrides import (
     is_source_disabled,
     set_global_reader,
 )
+from utils.research_prewarm_targets import (
+    RESEARCH_PREWARM_EVENT_TYPES,
+    record_targets_research_prewarm,
+)
 from utils.trade_log_reader import iter_trade_records
 from tasks.runtime_overrides_task import run_runtime_overrides_poll
 
@@ -132,79 +136,6 @@ NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS = max(
     float(os.getenv("NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS", "20")),
 )
 
-_RUNTIME_RESEARCH_PREWARM_TARGET_REASONS = {
-    "no_keywords",
-    "research_incomplete",
-    "research_operational_error",
-}
-_RUNTIME_RESEARCH_PREWARM_TARGET_RESEARCH_SKIP_REASONS = {
-    "ambiguous_direction",
-    "cached_dossier_insufficient",
-    "cached_dossier_unvetted",
-    "direction_reason_conflict",
-    "insufficient_corroboration",
-    "missing_estimated_probability",
-    "missing_resolution_source",
-    "new_market",
-    "no_research_hits",
-    "probability_direction_conflict",
-    "research_timeout",
-    "research_provider_error",
-    "research_adjudicator_error",
-}
-_RUNTIME_RESEARCH_PREWARM_MAX_REPAIR_KEYWORD_COUNT = 1
-_RUNTIME_RESEARCH_PREWARM_EVENT_TYPES = {
-    "ANALYSIS_REJECTED",
-    "MATCH_LLM_REVIEW",
-    "SIGNAL_ANALYSIS_DETAIL",
-}
-
-
-def _trade_log_keyword_count(record: dict[str, Any]) -> int | None:
-    raw_count = record.get("keyword_count")
-    if raw_count is not None:
-        try:
-            return int(raw_count)
-        except (TypeError, ValueError):
-            return None
-    keywords = record.get("keywords")
-    if isinstance(keywords, list):
-        return len(keywords)
-    return None
-
-
-def _trade_log_keyword_count_targets_runtime_research_prewarm(
-    record: dict[str, Any],
-) -> bool:
-    keyword_count = _trade_log_keyword_count(record)
-    return (
-        keyword_count is not None
-        and keyword_count <= _RUNTIME_RESEARCH_PREWARM_MAX_REPAIR_KEYWORD_COUNT
-    )
-
-
-def _trade_log_record_targets_runtime_research_prewarm(record: dict[str, Any]) -> bool:
-    event_type = str(record.get("type") or "").strip()
-    if event_type == "ANALYSIS_REJECTED":
-        reason = str(record.get("reason") or "").strip()
-        research_skip_reason = str(record.get("research_skip_reason") or "").strip()
-        return (
-            reason in _RUNTIME_RESEARCH_PREWARM_TARGET_REASONS
-            or research_skip_reason in _RUNTIME_RESEARCH_PREWARM_TARGET_RESEARCH_SKIP_REASONS
-        )
-    if event_type == "MATCH_LLM_REVIEW":
-        return (
-            str(record.get("verdict") or "").strip() == "false_positive_neutral"
-            and _trade_log_keyword_count_targets_runtime_research_prewarm(record)
-        )
-    if event_type == "SIGNAL_ANALYSIS_DETAIL":
-        return (
-            str(record.get("pre_llm_gate_reason") or "").strip()
-            == "insufficient_semantic_overlap"
-        )
-    return False
-
-
 def _recent_runtime_research_prewarm_tickers(*, now: datetime | None = None) -> list[str]:
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     since = now_utc - timedelta(hours=24)
@@ -214,10 +145,10 @@ def _recent_runtime_research_prewarm_tickers(*, now: datetime | None = None) -> 
         records = iter_trade_records(
             trade_log_root,
             since=since,
-            event_types=_RUNTIME_RESEARCH_PREWARM_EVENT_TYPES,
+            event_types=RESEARCH_PREWARM_EVENT_TYPES,
         )
         for index, record in enumerate(records):
-            if not _trade_log_record_targets_runtime_research_prewarm(record):
+            if not record_targets_research_prewarm(record):
                 continue
             ticker = str(record.get("ticker") or record.get("market_ticker") or "").strip()
             if ticker:
