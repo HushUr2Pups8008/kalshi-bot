@@ -91,6 +91,7 @@ def _make_bot_stub():
     bot._market_cache_empty_discovery_passes = 0
     bot._targeted_research_prewarm_tasks = set()
     bot._last_targeted_research_prewarm = {}
+    bot._last_periodic_research_prewarm = {}
     # Multi-lane stubs: _process_candidate now routes through blend_task.
     bot._evidence_queue = asyncio.Queue(maxsize=2000)
     bot._trading_queue = asyncio.Queue(maxsize=500)
@@ -392,6 +393,96 @@ def test_research_prewarm_market_provider_uses_sourceable_series_fallback(
     ]
     bot.rest.get_markets.assert_any_call(series_ticker="KXGDP", limit=2)
     bot.rest.get_markets.assert_any_call(series_ticker="KXCPI", limit=2)
+
+
+def test_research_prewarm_market_provider_cools_down_periodic_fallback_targets(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 2, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_target_cooldown_seconds",
+        1800.0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        ("KXGDP",),
+        raising=False,
+    )
+    now = 10_000.0
+    monkeypatch.setattr(main_module.time, "monotonic", lambda: now)
+    bot = _make_bot_stub()
+    bot.rest.get_all_open_markets.return_value = [
+        replace(
+            _make_market(),
+            ticker="KXMVESPORTSMULTIGAMEEXTENDED-S2026",
+            rules_primary="",
+            rules_secondary="",
+            contract_terms_url="",
+            settlement_sources=(),
+        )
+    ]
+    fallback_markets = [
+        replace(_make_market(), ticker="KXGDP-26JUL30-T4.0", series_ticker="KXGDP"),
+        replace(_make_market(), ticker="KXGDP-26JUL30-T4.5", series_ticker="KXGDP"),
+        replace(_make_market(), ticker="KXGDP-26JUL30-T5.0", series_ticker="KXGDP"),
+    ]
+    bot.rest.get_markets.return_value = (fallback_markets, None)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        "KXGDP-26JUL30-T4.0",
+        "KXGDP-26JUL30-T4.5",
+    ]
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        "KXGDP-26JUL30-T5.0",
+    ]
+
+
+def test_research_prewarm_market_provider_does_not_cool_down_unresearchable_skip_telemetry(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_target_cooldown_seconds",
+        1800.0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        (),
+        raising=False,
+    )
+    now = 10_000.0
+    monkeypatch.setattr(main_module.time, "monotonic", lambda: now)
+    bot = _make_bot_stub()
+    ticker = "KXNEWLYSOURCEABLE-25DEC31"
+    unresearchable = replace(
+        _make_market(),
+        ticker=ticker,
+        rules_primary="",
+        rules_secondary="",
+        contract_terms_url="",
+        settlement_sources=(),
+    )
+    sourceable = replace(
+        unresearchable,
+        rules_primary="Official source now available.",
+    )
+    bot.rest.get_all_open_markets.return_value = [unresearchable]
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        ticker
+    ]
+
+    bot.rest.get_all_open_markets.return_value = [sourceable]
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        ticker
+    ]
 
 
 def test_recent_runtime_research_prewarm_tickers_excludes_probe_and_non_kalshi(

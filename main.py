@@ -878,6 +878,7 @@ class TradingBot:
         self._market_cache_empty_discovery_passes = 0
         self._targeted_research_prewarm_tasks: set[asyncio.Task] = set()
         self._last_targeted_research_prewarm: dict[str, float] = {}
+        self._last_periodic_research_prewarm: dict[str, float] = {}
 
     _RETRYABLE_RESEARCH_PREWARM_REASONS = {
         "ambiguous_direction",
@@ -940,6 +941,32 @@ class TradingBot:
             ticker: index
             for index, ticker in enumerate(_recent_runtime_research_prewarm_tickers())
         }
+        now_monotonic = time.monotonic()
+        cooldown = float(
+            getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0)
+        )
+        if not hasattr(self, "_last_periodic_research_prewarm"):
+            self._last_periodic_research_prewarm = {}
+
+        def market_ticker(market: object) -> str:
+            return str(getattr(market, "ticker", "") or "").strip()
+
+        def ticker_available(ticker: str) -> bool:
+            if not ticker:
+                return False
+            if cooldown <= 0:
+                return True
+            last_started = self._last_periodic_research_prewarm.get(ticker)
+            return last_started is None or now_monotonic - last_started >= cooldown
+
+        def mark_selected(selected: list[object]) -> list[object]:
+            for market in selected:
+                if not market_has_research_source_path(market):
+                    continue
+                ticker = market_ticker(market)
+                if ticker:
+                    self._last_periodic_research_prewarm[ticker] = now_monotonic
+            return selected
 
         def is_open_market(market: object) -> bool:
             status = str(getattr(market, "status", "open") or "open").lower()
@@ -980,8 +1007,12 @@ class TradingBot:
                 for market in page or ():
                     if len(selected) >= max_markets:
                         break
-                    ticker = str(getattr(market, "ticker", "") or "")
-                    if not ticker or ticker in selected_tickers:
+                    ticker = market_ticker(market)
+                    if (
+                        not ticker
+                        or ticker in selected_tickers
+                        or not ticker_available(ticker)
+                    ):
                         continue
                     if not is_sourceable_open_market(market):
                         continue
@@ -991,15 +1022,17 @@ class TradingBot:
 
         if target_order:
             selected_by_ticker = {
-                str(getattr(market, "ticker", "") or ""): market
+                market_ticker(market): market
                 for market in market_list
-                if str(getattr(market, "ticker", "") or "") in target_order
+                if market_ticker(market) in target_order
             }
             selected_tickers: set[str] = set()
             selected: list[object] = []
             direct_fetch_attempts = 0
 
             for ticker in target_order:
+                if not ticker_available(ticker):
+                    continue
                 market = selected_by_ticker.get(ticker)
                 if (
                     market is None
@@ -1018,35 +1051,42 @@ class TradingBot:
                         market = None
                 if market is not None and is_sourceable_open_market(market):
                     selected.append(market)
-                    selected_tickers.add(str(getattr(market, "ticker", "") or ""))
+                    selected_tickers.add(market_ticker(market))
                 if len(selected) >= max_markets:
                     break
             for market in market_list:
                 if len(selected) >= max_markets:
                     break
-                ticker = str(getattr(market, "ticker", "") or "")
-                if ticker in selected_tickers or not is_sourceable_open_market(market):
+                ticker = market_ticker(market)
+                if (
+                    ticker in selected_tickers
+                    or not ticker_available(ticker)
+                    or not is_sourceable_open_market(market)
+                ):
                     continue
                 selected.append(market)
             if selected:
-                return selected
+                return mark_selected(selected)
             fallback = sourceable_series_fallback(selected_tickers)
             if fallback:
-                return fallback
-            return [market for market in market_list if is_open_market(market)][:max_markets]
+                return mark_selected(fallback)
+            return [market for market in market_list if is_open_market(market)][
+                :max_markets
+            ]
         sourceable = [
             market
             for market in market_list
             if is_open_market(market)
+            and ticker_available(market_ticker(market))
             and market_has_research_source_path(
                 self._enrich_research_prewarm_market_source_path(market)
             )
         ][:max_markets]
         if sourceable:
-            return sourceable
+            return mark_selected(sourceable)
         fallback = sourceable_series_fallback()
         if fallback:
-            return fallback
+            return mark_selected(fallback)
         return [market for market in market_list if is_open_market(market)][:max_markets]
 
     def _create_research_prewarm_runtime_task(self) -> asyncio.Task | None:
