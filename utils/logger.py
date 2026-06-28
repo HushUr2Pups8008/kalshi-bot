@@ -577,6 +577,7 @@ class TradeLogger:
         skip_reason: str | None = None,
         error: str | None = None,
         research_run_id: str | None = None,
+        research_contract_fingerprint: str | None = None,
         research_persisted: bool | None = None,
         research_persistence_error: str | None = None,
         research_direct_fetch_failures: list[str] | None = None,
@@ -597,6 +598,8 @@ class TradeLogger:
             record["research_error"] = error
         if research_run_id:
             record["research_run_id"] = research_run_id
+        if research_contract_fingerprint:
+            record["research_contract_fingerprint"] = research_contract_fingerprint
         if research_persisted is not None:
             record["research_persisted"] = bool(research_persisted)
         if research_persistence_error:
@@ -924,6 +927,7 @@ class TradeLogger:
         research_min_retrieved_at: str | None = None,
         research_max_retrieved_at: str | None = None,
         research_run_id: str | None = None,
+        research_contract_fingerprint: str | None = None,
         research_persisted: bool | None = None,
         research_persistence_error: str | None = None,
         research_direct_fetch_failures: list[str] | None = None,
@@ -1017,6 +1021,8 @@ class TradeLogger:
             record["research_max_retrieved_at"] = research_max_retrieved_at
         if research_run_id:
             record["research_run_id"] = research_run_id
+        if research_contract_fingerprint:
+            record["research_contract_fingerprint"] = research_contract_fingerprint
         if research_persisted is not None:
             record["research_persisted"] = bool(research_persisted)
         if research_persistence_error:

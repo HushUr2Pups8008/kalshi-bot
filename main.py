@@ -943,6 +943,7 @@ class TradingBot:
             ),
         )
         result = await prewarm.process_market(market)
+        await prewarm.emit_result(result)
         log.info(
             "[RESEARCH_PREWARM] targeted ticker=%s source_skip_reason=%s "
             "status=%s attempted=%s evidence=%d queries=%d",

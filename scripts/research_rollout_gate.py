@@ -70,10 +70,14 @@ def _dossier_state(dossier_stats: botcheck.ResearchDossierStats) -> str:
     return "present"
 
 
-def _successful_research_proofs(path: Path, *, since: datetime) -> set[tuple[str, str]]:
+def _successful_research_proofs(
+    path: Path,
+    *,
+    since: datetime,
+) -> set[tuple[str, str, str]]:
     lines_total = [0]
     lines_malformed = [0]
-    proofs: set[tuple[str, str]] = set()
+    proofs: set[tuple[str, str, str]] = set()
     for record in botcheck._iter_trade_records(  # noqa: SLF001 - read-only helper.
         path,
         lines_total=lines_total,
@@ -87,12 +91,17 @@ def _successful_research_proofs(path: Path, *, since: datetime) -> set[tuple[str
             continue
         ticker = str(record.get("ticker") or record.get("market_ticker") or "").strip()
         run_id = str(record.get("research_run_id") or "").strip()
-        if ticker and run_id:
-            proofs.add((ticker, run_id))
+        fingerprint = str(record.get("research_contract_fingerprint") or "").strip()
+        if ticker and run_id and fingerprint:
+            proofs.add((ticker, run_id, fingerprint))
     return proofs
 
 
-def _live_cache_eligible_proofs(repo_root: Path, *, now: datetime) -> set[tuple[str, str]]:
+def _live_cache_eligible_proofs(
+    repo_root: Path,
+    *,
+    now: datetime,
+) -> set[tuple[str, str, str]]:
     db_path = botcheck._research_dossier_db_path(repo_root)  # noqa: SLF001
     if not db_path.exists():
         return set()
@@ -105,15 +114,29 @@ def _live_cache_eligible_proofs(repo_root: Path, *, now: datetime) -> set[tuple[
                 for table_name in ("research_dossiers", "research_evidence")
             ):
                 return set()
+            evidence_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(research_evidence)").fetchall()
+            }
+            dossier_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(research_dossiers)").fetchall()
+            }
             live_cache_since = now - timedelta(
                 seconds=botcheck.RESEARCH_DOSSIER_MAX_AGE_SECONDS,
             )
-            evidence_by_proof: dict[tuple[str, str], list[str]] = {}
+            evidence_by_proof: dict[tuple[str, str, str], list[str]] = {}
+            fingerprint_select = (
+                "contract_fingerprint"
+                if "contract_fingerprint" in evidence_columns
+                else "NULL AS contract_fingerprint"
+            )
             for row in conn.execute(
-                """
+                f"""
                 SELECT
                     market_ticker,
                     research_run_id,
+                    {fingerprint_select},
                     source_class,
                     COALESCE(retrieved_at, inserted_at) AS ts
                 FROM research_evidence
@@ -124,19 +147,29 @@ def _live_cache_eligible_proofs(repo_root: Path, *, now: datetime) -> set[tuple[
                     continue
                 ticker = str(row["market_ticker"] or "").strip()
                 run_id = str(row["research_run_id"] or "").strip()
-                if ticker and run_id:
-                    evidence_by_proof.setdefault((ticker, run_id), []).append(
+                fingerprint = str(row["contract_fingerprint"] or "").strip()
+                if ticker and run_id and fingerprint:
+                    evidence_by_proof.setdefault((ticker, run_id, fingerprint), []).append(
                         str(row["source_class"] or "").strip()
                     )
+            dossier_fingerprint_select = (
+                "last_contract_fingerprint"
+                if "last_contract_fingerprint" in dossier_columns
+                else "NULL AS last_contract_fingerprint"
+            )
 
             vetted_proofs = {
                 (
                     str(row["market_ticker"] or "").strip(),
                     str(row["last_research_run_id"] or "").strip(),
+                    str(row["last_contract_fingerprint"] or "").strip(),
                 )
                 for row in conn.execute(
-                    """
-                    SELECT market_ticker, last_research_run_id
+                    f"""
+                    SELECT
+                        market_ticker,
+                        last_research_run_id,
+                        {dossier_fingerprint_select}
                     FROM research_dossiers
                     WHERE last_verdict_status = 'trade_candidate'
                       AND last_force_side IN ('yes', 'no')
@@ -153,6 +186,7 @@ def _live_cache_eligible_proofs(repo_root: Path, *, now: datetime) -> set[tuple[
         for proof in vetted_proofs
         if proof[0]
         and proof[1]
+        and proof[2]
         and len(evidence_by_proof.get(proof, [])) >= 2
         and any(
             source_class in botcheck.RESEARCH_REQUIRED_SOURCE_CLASSES
@@ -203,7 +237,9 @@ def evaluate_research_rollout(
     )
     live_cache_eligible_proofs = _live_cache_eligible_proofs(repo_root, now=now)
     matched_research_proofs = successful_research_proofs & live_cache_eligible_proofs
-    proven_researched_tickers = {ticker for ticker, _run_id in matched_research_proofs}
+    proven_researched_tickers = {
+        ticker for ticker, _run_id, _fingerprint in matched_research_proofs
+    }
     unresolved_prewarm_backlog = [
         ticker for ticker in prewarm_backlog if ticker not in proven_researched_tickers
     ]

@@ -8,6 +8,7 @@ import asyncio
 from collections import defaultdict, deque
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -580,6 +581,46 @@ def test_schedule_targeted_research_prewarm_clears_cooldown_after_failure(monkey
         ) is True
 
     assert create_task_mock.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_targeted_research_prewarm_emits_structured_result(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_max_queries", 4, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "real_web_research_timeout_seconds",
+        8.5,
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    market = _make_market()
+    emitted = []
+    result = SimpleNamespace(
+        market_ticker=market.ticker,
+        status=ResearchStatus.TRADE_CANDIDATE.value,
+        attempted=True,
+        evidence_count=2,
+        query_count=3,
+    )
+
+    class FakeResearchPrewarmTask:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def process_market(self, received_market):
+            assert received_market is market
+            return result
+
+        async def emit_result(self, received_result):
+            emitted.append(received_result)
+
+    with patch("main.ResearchPrewarmTask", FakeResearchPrewarmTask):
+        await bot._run_targeted_research_prewarm(
+            market,
+            "cached_dossier_insufficient",
+        )
+
+    assert emitted == [result]
 
 
 @pytest.mark.asyncio

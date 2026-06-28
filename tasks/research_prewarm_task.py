@@ -43,6 +43,7 @@ class ResearchPrewarmResult:
     skip_reason: str | None = None
     error: str | None = None
     research_run_id: str | None = None
+    research_contract_fingerprint: str | None = None
     research_persisted: bool | None = None
     research_persistence_error: str | None = None
     research_direct_fetch_failures: tuple[str, ...] = ()
@@ -109,6 +110,11 @@ class ResearchPrewarmTask:
                 evidence_count=len(getattr(verdict, "evidence", ()) or ()),
                 skip_reason=getattr(verdict, "skip_reason", None),
                 research_run_id=getattr(verdict, "research_run_id", None),
+                research_contract_fingerprint=getattr(
+                    verdict,
+                    "log_fields",
+                    lambda: {},
+                )().get("research_contract_fingerprint"),
                 research_persisted=getattr(verdict, "research_persisted", None),
                 research_persistence_error=getattr(
                     verdict,
@@ -121,6 +127,9 @@ class ResearchPrewarmTask:
             )
         except Exception as exc:
             raise ResearchPrewarmError(f"failed research prewarm for {ticker}") from exc
+
+    async def emit_result(self, result: ResearchPrewarmResult) -> None:
+        await self.result_sink(result)
 
     async def run_once(self, markets: Iterable[Any]) -> list[ResearchPrewarmResult]:
         market_list = list(markets)
@@ -140,10 +149,10 @@ class ResearchPrewarmTask:
                     repr(cause) if cause is not None else "<none>",
                     exc_info=cause if cause is not None else result,
                 )
-                await self.result_sink(_failure_result_for_market(market, result))
+                await self.emit_result(_failure_result_for_market(market, result))
             else:
                 ok.append(result)
-                await self.result_sink(result)
+                await self.emit_result(result)
         if failed:
             _log.warning(
                 "[RESEARCH_PREWARM] %d/%d markets failed this cycle",
@@ -240,6 +249,7 @@ async def _write_research_prewarm_result(result: ResearchPrewarmResult) -> None:
         skip_reason=result.skip_reason,
         error=result.error,
         research_run_id=result.research_run_id,
+        research_contract_fingerprint=result.research_contract_fingerprint,
         research_persisted=result.research_persisted,
         research_persistence_error=result.research_persistence_error,
         research_direct_fetch_failures=list(result.research_direct_fetch_failures),

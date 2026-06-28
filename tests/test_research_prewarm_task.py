@@ -132,6 +132,9 @@ async def test_prewarm_run_once_emits_structured_result_events(tmp_path):
             evidence=[object()],
             skip_reason="no_research_hits",
             research_run_id="rr-test-good",
+            log_fields=lambda: {
+                "research_contract_fingerprint": "contract-test-good",
+            },
             research_persisted=True,
             research_persistence_error=None,
             research_direct_fetch_failures=("resolution_source:https://bad.example:boom",),
@@ -162,6 +165,7 @@ async def test_prewarm_run_once_emits_structured_result_events(tmp_path):
     assert emitted[1].query_count == 2
     assert emitted[1].evidence_count == 1
     assert emitted[1].research_run_id == "rr-test-good"
+    assert emitted[1].research_contract_fingerprint == "contract-test-good"
     assert emitted[1].research_persisted is True
     assert len(emitted[1].research_direct_fetch_failures) == 1
 

@@ -15,6 +15,7 @@ import os
 import re
 import urllib.parse
 import urllib.request
+import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -77,6 +78,9 @@ class ResearchVerdict:
 
     def log_fields(self) -> dict[str, object]:
         urls = [item.source_url for item in self.evidence if item.source_url]
+        contract_fingerprints = {
+            item.contract_fingerprint for item in self.evidence if item.contract_fingerprint
+        }
         settlement_hits = [
             item.source_url
             for item in self.evidence
@@ -99,6 +103,10 @@ class ResearchVerdict:
         }
         if self.research_run_id:
             fields["research_run_id"] = self.research_run_id
+        if len(contract_fingerprints) == 1:
+            fields["research_contract_fingerprint"] = next(
+                iter(contract_fingerprints)
+            )
         if self.research_persisted is not None:
             fields["research_persisted"] = self.research_persisted
         if self.research_persistence_error:
@@ -990,11 +998,7 @@ async def run_research_gate(
             research_direct_fetch_failures=tuple(direct_fetch_failures),
         )
     if dossier_store is not None and ticker:
-        run_id = "rr-" + hashlib.sha256(
-            f"{ticker}|{getattr(news, 'headline', '')}|{len(evidence)}|{verdict.status.value}".encode(
-                "utf-8"
-            )
-        ).hexdigest()[:24]
+        run_id = f"rr-{uuid.uuid4().hex}"
         verdict = replace(verdict, research_run_id=run_id)
         try:
             if hasattr(dossier_store, "record_research_run"):

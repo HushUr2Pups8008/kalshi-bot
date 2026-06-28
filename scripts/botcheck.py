@@ -303,6 +303,14 @@ def summarize_research_dossiers(
                     exists=True,
                     error="not_initialized",
                 )
+            evidence_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(research_evidence)").fetchall()
+            }
+            dossier_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(research_dossiers)").fetchall()
+            }
 
             dossiers = int(
                 conn.execute("SELECT COUNT(*) AS count FROM research_dossiers").fetchone()[
@@ -351,12 +359,18 @@ def summarize_research_dossiers(
             fresh_since = now - timedelta(hours=24)
             live_cache_since = now - timedelta(seconds=RESEARCH_DOSSIER_MAX_AGE_SECONDS)
             fresh_evidence_rows_24h = 0
-            evidence_by_ticker: dict[str, list[tuple[str, datetime]]] = {}
+            evidence_by_contract: dict[tuple[str, str], list[tuple[str, datetime]]] = {}
+            fingerprint_select = (
+                "contract_fingerprint"
+                if "contract_fingerprint" in evidence_columns
+                else "NULL AS contract_fingerprint"
+            )
             for row in conn.execute(
-                """
+                f"""
                 SELECT
                     market_ticker,
                     source_class,
+                    {fingerprint_select},
                     COALESCE(retrieved_at, inserted_at) AS ts
                 FROM research_evidence
                 """
@@ -366,15 +380,24 @@ def summarize_research_dossiers(
                     fresh_evidence_rows_24h += 1
                 if evidence_ts is not None and evidence_ts >= live_cache_since:
                     ticker = str(row["market_ticker"] or "").strip()
-                    if ticker:
-                        evidence_by_ticker.setdefault(ticker, []).append(
+                    fingerprint = str(row["contract_fingerprint"] or "").strip()
+                    if ticker and fingerprint:
+                        evidence_by_contract.setdefault((ticker, fingerprint), []).append(
                             (str(row["source_class"] or "").strip(), evidence_ts)
                         )
-            vetted_tickers = {
-                str(row["market_ticker"] or "").strip()
+            dossier_fingerprint_select = (
+                "last_contract_fingerprint"
+                if "last_contract_fingerprint" in dossier_columns
+                else "NULL AS last_contract_fingerprint"
+            )
+            vetted_contracts = {
+                (
+                    str(row["market_ticker"] or "").strip(),
+                    str(row["last_contract_fingerprint"] or "").strip(),
+                )
                 for row in conn.execute(
-                    """
-                    SELECT market_ticker
+                    f"""
+                    SELECT market_ticker, {dossier_fingerprint_select}
                     FROM research_dossiers
                     WHERE last_verdict_status = 'trade_candidate'
                       AND last_force_side IN ('yes', 'no')
@@ -383,13 +406,15 @@ def summarize_research_dossiers(
                     """
                 )
             }
-            for ticker in vetted_tickers:
-                ticker_evidence = evidence_by_ticker.get(ticker, [])
-                if len(ticker_evidence) < 2:
+            for ticker, fingerprint in vetted_contracts:
+                if not ticker or not fingerprint:
+                    continue
+                contract_evidence = evidence_by_contract.get((ticker, fingerprint), [])
+                if len(contract_evidence) < 2:
                     continue
                 if any(
                     source_class in RESEARCH_REQUIRED_SOURCE_CLASSES
-                    for source_class, _ts in ticker_evidence
+                    for source_class, _ts in contract_evidence
                 ):
                     live_cache_eligible_tickers.add(ticker)
     except sqlite3.Error as exc:

@@ -583,6 +583,56 @@ async def test_run_research_gate_exposes_persisted_run_id(tmp_path):
     fields = verdict.log_fields()
     assert fields["research_run_id"] == verdict.research_run_id
     assert fields["research_persisted"] is True
+    assert fields["research_contract_fingerprint"] == _contract_fingerprint(market)
+
+
+@pytest.mark.asyncio
+async def test_run_research_gate_uses_unique_run_id_per_attempt(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    news = SimpleNamespace(
+        headline="Iran crude output rises sharply",
+        source="Reuters",
+        url="https://reuters.com/iran-production",
+    )
+    market = SimpleNamespace(
+        ticker="KXIRANCRUDE-26JUL13-T3.8",
+        title="Will Iran crude oil production be at least 3.8M bpd?",
+        rules_primary="OPEC MOMR secondary sources decide the market.",
+        rules_secondary="Later revisions ignored.",
+        settlement_sources=(),
+    )
+
+    first = await run_research_gate(
+        news,
+        market,
+        model_direction="neutral",
+        model_confidence=0.85,
+        model_reason="No relevant keywords found.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=_fake_search,
+        adjudicator=_fake_adjudicator,
+        dossier_store=store,
+    )
+    second = await run_research_gate(
+        news,
+        market,
+        model_direction="neutral",
+        model_confidence=0.85,
+        model_reason="No relevant keywords found.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=_fake_search,
+        adjudicator=_fake_adjudicator,
+        dossier_store=store,
+    )
+
+    assert first.research_run_id
+    assert second.research_run_id
+    assert first.research_run_id != second.research_run_id
 
 
 @pytest.mark.asyncio

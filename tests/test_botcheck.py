@@ -521,6 +521,7 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
             CREATE TABLE research_dossiers (
                 market_ticker TEXT PRIMARY KEY,
                 last_research_run_id TEXT,
+                last_contract_fingerprint TEXT,
                 last_researched_ts TEXT NOT NULL,
                 last_verdict_status TEXT NOT NULL,
                 last_skip_reason TEXT,
@@ -534,6 +535,7 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
                 evidence_id TEXT PRIMARY KEY,
                 market_ticker TEXT NOT NULL,
                 research_run_id TEXT NOT NULL,
+                contract_fingerprint TEXT,
                 source_class TEXT NOT NULL,
                 source_name TEXT NOT NULL,
                 source_url TEXT NOT NULL,
@@ -553,17 +555,19 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
             INSERT INTO research_dossiers (
                 market_ticker,
                 last_research_run_id,
+                last_contract_fingerprint,
                 last_researched_ts,
                 last_verdict_status,
                 last_force_side,
                 last_estimated_probability,
                 last_confidence
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     "KXTEST-26JUN-T1",
                     "run-1",
+                    "contract-v1",
                     "2026-05-10T22:50:00+00:00",
                     "trade_candidate",
                     "yes",
@@ -573,6 +577,7 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
                 (
                     "KXTEST-26JUN-T2",
                     "run-2",
+                    "contract-v2",
                     "2026-05-10T21:00:00+00:00",
                     "continue_researching",
                     None,
@@ -587,6 +592,7 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
                 evidence_id,
                 market_ticker,
                 research_run_id,
+                contract_fingerprint,
                 source_class,
                 source_name,
                 source_url,
@@ -598,13 +604,14 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
                 published_at,
                 retrieved_at,
                 inserted_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     "ev-1",
                     "KXTEST-26JUN-T1",
                     "run-1",
+                    "contract-v1",
                     "resolution_source",
                     "source",
                     "https://example.com/1",
@@ -621,6 +628,7 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
                     "ev-1b",
                     "KXTEST-26JUN-T1",
                     "run-1",
+                    "contract-v1",
                     "web",
                     "source",
                     "https://example.com/1b",
@@ -637,6 +645,7 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
                     "ev-2",
                     "KXTEST-26JUN-T2",
                     "run-2",
+                    "contract-v2",
                     "web",
                     "source",
                     "https://example.com/2",
@@ -675,6 +684,7 @@ def test_summarize_research_dossiers_excludes_stale_live_cache_ready_count(tmp_p
             CREATE TABLE research_dossiers (
                 market_ticker TEXT PRIMARY KEY,
                 last_research_run_id TEXT,
+                last_contract_fingerprint TEXT,
                 last_researched_ts TEXT NOT NULL,
                 last_verdict_status TEXT NOT NULL,
                 last_skip_reason TEXT,
@@ -688,6 +698,7 @@ def test_summarize_research_dossiers_excludes_stale_live_cache_ready_count(tmp_p
                 evidence_id TEXT PRIMARY KEY,
                 market_ticker TEXT NOT NULL,
                 research_run_id TEXT NOT NULL,
+                contract_fingerprint TEXT,
                 source_class TEXT NOT NULL,
                 source_name TEXT NOT NULL,
                 source_url TEXT NOT NULL,
@@ -703,6 +714,7 @@ def test_summarize_research_dossiers_excludes_stale_live_cache_ready_count(tmp_p
             INSERT INTO research_dossiers (
                 market_ticker,
                 last_research_run_id,
+                last_contract_fingerprint,
                 last_researched_ts,
                 last_verdict_status,
                 last_force_side,
@@ -711,6 +723,7 @@ def test_summarize_research_dossiers_excludes_stale_live_cache_ready_count(tmp_p
             ) VALUES (
                 'KXSTALE',
                 'run-stale',
+                'contract-stale',
                 '2026-05-10T12:00:00+00:00',
                 'trade_candidate',
                 'yes',
@@ -721,6 +734,7 @@ def test_summarize_research_dossiers_excludes_stale_live_cache_ready_count(tmp_p
                 evidence_id,
                 market_ticker,
                 research_run_id,
+                contract_fingerprint,
                 source_class,
                 source_name,
                 source_url,
@@ -737,6 +751,7 @@ def test_summarize_research_dossiers_excludes_stale_live_cache_ready_count(tmp_p
                 'old-1',
                 'KXSTALE',
                 'run-stale',
+                'contract-stale',
                 'resolution_source',
                 'source',
                 'https://example.com/old-1',
@@ -753,6 +768,7 @@ def test_summarize_research_dossiers_excludes_stale_live_cache_ready_count(tmp_p
                 'old-2',
                 'KXSTALE',
                 'run-stale',
+                'contract-stale',
                 'web',
                 'source',
                 'https://example.com/old-2',

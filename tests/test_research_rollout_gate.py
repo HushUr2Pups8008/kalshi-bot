@@ -18,6 +18,7 @@ def _write_research_db(
     *,
     ticker: str = "KX-READY",
     run_id: str = "run-1",
+    contract_fingerprint: str = "contract-v1",
     source_classes: tuple[str, str] = ("resolution_source", "corroborating_source"),
 ) -> None:
     db_path = repo_root / "data" / "evidence_store.db"
@@ -28,6 +29,7 @@ def _write_research_db(
             CREATE TABLE research_dossiers (
                 market_ticker TEXT PRIMARY KEY,
                 last_research_run_id TEXT,
+                last_contract_fingerprint TEXT,
                 last_researched_ts TEXT NOT NULL,
                 last_verdict_status TEXT NOT NULL,
                 last_skip_reason TEXT,
@@ -41,6 +43,7 @@ def _write_research_db(
                 id INTEGER PRIMARY KEY,
                 market_ticker TEXT NOT NULL,
                 research_run_id TEXT NOT NULL,
+                contract_fingerprint TEXT NOT NULL,
                 source_class TEXT NOT NULL,
                 url TEXT,
                 title TEXT,
@@ -48,6 +51,7 @@ def _write_research_db(
                 inserted_at TEXT NOT NULL
             );
             INSERT INTO research_dossiers VALUES (
+                '%s',
                 '%s',
                 '%s',
                 '2026-05-10T22:45:00+00:00',
@@ -62,6 +66,7 @@ def _write_research_db(
             INSERT INTO research_evidence (
                 market_ticker,
                 research_run_id,
+                contract_fingerprint,
                 source_class,
                 url,
                 title,
@@ -69,6 +74,7 @@ def _write_research_db(
                 inserted_at
             ) VALUES
             (
+                '%s',
                 '%s',
                 '%s',
                 '%s',
@@ -81,6 +87,7 @@ def _write_research_db(
                 '%s',
                 '%s',
                 '%s',
+                '%s',
                 'https://example.test/corroboration',
                 'Corroboration',
                 '2026-05-10T22:47:00+00:00',
@@ -90,11 +97,14 @@ def _write_research_db(
             % (
                 ticker,
                 run_id,
+                contract_fingerprint,
                 ticker,
                 run_id,
+                contract_fingerprint,
                 source_classes[0],
                 ticker,
                 run_id,
+                contract_fingerprint,
                 source_classes[1],
             )
         )
@@ -150,6 +160,7 @@ def test_rollout_gate_passes_only_with_active_mode_recent_research_and_expected_
                 "research_attempted": True,
                 "research_status": "trade_candidate",
                 "research_run_id": "run-1",
+                "research_contract_fingerprint": "contract-v1",
             },
         ],
     )
@@ -193,6 +204,7 @@ def test_rollout_gate_accepts_prewarm_result_research_proof(tmp_path):
                 "research_attempted": True,
                 "research_status": "trade_candidate",
                 "research_run_id": "run-1",
+                "research_contract_fingerprint": "contract-v1",
             },
         ],
     )
@@ -210,6 +222,48 @@ def test_rollout_gate_accepts_prewarm_result_research_proof(tmp_path):
     assert assessment.failures == []
     assert assessment.research_rows == 1
     assert assessment.matched_research_proofs == 1
+
+
+def test_rollout_gate_rejects_mismatched_contract_fingerprint(tmp_path):
+    (tmp_path / ".env").write_text(
+        "REAL_WEB_RESEARCH_MODE=shadow\nENABLE_RESEARCH_PREWARM_TASK=true\n",
+        encoding="utf-8",
+    )
+    bot_log = tmp_path / "logs" / "app" / "bot.log"
+    bot_log.parent.mkdir(parents=True, exist_ok=True)
+    bot_log.write_text(
+        "2026-05-10 22:00:00,000 UTC INFO [BOOT] version=0.99.0 pid=123\n",
+        encoding="utf-8",
+    )
+    trades = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-05-10T22:50:00+00:00",
+                "ticker": "KX-READY",
+                "reason": "no_keywords",
+                "research_attempted": True,
+                "research_status": "trade_candidate",
+                "research_run_id": "run-1",
+                "research_contract_fingerprint": "contract-v1",
+            },
+        ],
+    )
+    _write_research_db(tmp_path, contract_fingerprint="contract-v2")
+
+    assessment = evaluate_research_rollout(
+        tmp_path,
+        trades,
+        bot_log=bot_log,
+        expected_version="0.99.0",
+        now=NOW,
+    )
+
+    assert not assessment.ok
+    assert assessment.matched_research_proofs == 0
+    assert any("no successful recent research rows with matching" in item for item in assessment.failures)
 
 
 def test_rollout_gate_rejects_fresh_evidence_without_live_cache_eligible_dossier(
@@ -237,6 +291,7 @@ def test_rollout_gate_rejects_fresh_evidence_without_live_cache_eligible_dossier
                 "research_attempted": True,
                 "research_status": "trade_candidate",
                 "research_run_id": "run-1",
+                "research_contract_fingerprint": "contract-v1",
             },
         ],
     )
@@ -280,6 +335,7 @@ def test_rollout_gate_rejects_operational_error_research_rows(tmp_path):
                 "research_attempted": True,
                 "research_status": "research_operational_error",
                 "research_run_id": "run-1",
+                "research_contract_fingerprint": "contract-v1",
             },
         ],
     )
@@ -314,6 +370,7 @@ def test_rollout_gate_requires_explicit_restart_version_proof(tmp_path):
                 "research_attempted": True,
                 "research_status": "trade_candidate",
                 "research_run_id": "run-1",
+                "research_contract_fingerprint": "contract-v1",
             },
         ],
     )
@@ -355,6 +412,7 @@ def test_rollout_gate_does_not_fail_prewarm_off_for_already_researched_backlog(
                 "research_attempted": True,
                 "research_status": "trade_candidate",
                 "research_run_id": "run-1",
+                "research_contract_fingerprint": "contract-v1",
             },
         ],
     )
@@ -402,6 +460,7 @@ def test_rollout_gate_requires_same_ticker_live_cache_evidence_for_backlog(
                 "research_attempted": True,
                 "research_status": "trade_candidate",
                 "research_run_id": "run-1",
+                "research_contract_fingerprint": "contract-v1",
             },
         ],
     )
@@ -442,6 +501,7 @@ def test_rollout_gate_requires_same_research_run_for_log_and_dossier(tmp_path):
                 "research_attempted": True,
                 "research_status": "trade_candidate",
                 "research_run_id": "run-2",
+                "research_contract_fingerprint": "contract-v1",
             },
         ],
     )

@@ -90,7 +90,10 @@ async def test_research_dossier_records_run_queries_and_latest_verdict(tmp_path)
 
     with sqlite3.connect(db_path) as conn:
         dossier = conn.execute(
-            "SELECT last_verdict_status, last_force_side FROM research_dossiers"
+            """
+            SELECT last_verdict_status, last_force_side, last_contract_fingerprint
+            FROM research_dossiers
+            """
         ).fetchone()
         run = conn.execute("SELECT summary FROM research_runs").fetchone()
         stored_query = conn.execute("SELECT query FROM research_run_queries").fetchone()
@@ -98,7 +101,7 @@ async def test_research_dossier_records_run_queries_and_latest_verdict(tmp_path)
             "SELECT source_name, contract_fingerprint FROM research_evidence"
         ).fetchone()
 
-    assert dossier == ("trade_candidate", "yes")
+    assert dossier == ("trade_candidate", "yes", "contract-v1")
     assert run == ("Research supports yes.",)
     assert stored_query == ("site:opec.org Iran crude production",)
     assert stored_evidence == ("OPEC", "contract-v1")
