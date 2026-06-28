@@ -1,6 +1,7 @@
 """Tests for analysis/match_feedback.py (PROFIT-MATCH-DYNAMIC commit 3/5)."""
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -454,12 +455,27 @@ class TestSeedWeightsFile:
 
     SEED_PATH = Path("data/matcher_token_weights.json")
 
+    def _load_committed_seed_weights(self) -> dict[str, dict]:
+        """Read the Git-index seed so live runtime writes do not break tests."""
+        result = subprocess.run(
+            ["git", "show", f":{self.SEED_PATH.as_posix()}"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            assert isinstance(data, dict)
+            return data
+        return load_weights(self.SEED_PATH)
+
     def test_seed_file_exists_and_loads(self):
         assert self.SEED_PATH.exists(), (
             "data/matcher_token_weights.json must be checked in as the seed "
             "for the matcher feedback loop. Commit 5/5 of PROFIT-MATCH-DYNAMIC."
         )
-        weights = load_weights(self.SEED_PATH)
+        weights = self._load_committed_seed_weights()
         assert weights, "seed file loaded as empty — check JSON syntax"
 
     def test_seed_provisional_entries_include_audit_findings(self):
@@ -467,7 +483,7 @@ class TestSeedWeightsFile:
         (token, market_prefix) findings. Keep them as provisional cold-start
         weights, but do not pin them: 11 audited events are not enough evidence
         for a permanent override that the aggregator cannot recover from."""
-        weights = load_weights(self.SEED_PATH)
+        weights = self._load_committed_seed_weights()
         required = {
             "KXCABLEAVE:trump": 0.10,
             "KXCABLEAVE:any": 0.10,
@@ -489,7 +505,7 @@ class TestSeedWeightsFile:
 
     def test_seed_aggregator_run_can_recover_provisional_weight(self, tmp_path):
         """New evidence must be allowed to lift a provisional audit seed."""
-        seed = load_weights(self.SEED_PATH)
+        seed = self._load_committed_seed_weights()
         # Aggregator-simulating call: pretend many recent matches show
         # KXCABLEAVE:trump as legitimate. Since the seed is no longer pinned,
         # recovery should lift it to full weight.

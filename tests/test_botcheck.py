@@ -403,7 +403,18 @@ def test_print_research_gate_section_warns_when_prewarm_disabled_in_active_mode(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.delenv("ENABLE_RESEARCH_PREWARM_TASK", raising=False)
+    for key in (
+        "REAL_WEB_RESEARCH_MODE",
+        "ENABLE_RESEARCH_PREWARM_TASK",
+        "REAL_WEB_RESEARCH_MAX_QUERIES",
+        "REAL_WEB_RESEARCH_TIMEOUT_SECONDS",
+        "RESEARCH_PREWARM_INTERVAL_SECONDS",
+        "RESEARCH_PREWARM_MAX_MARKETS",
+        "RESEARCH_PREWARM_MAX_PAGES",
+        "RESEARCH_PREWARM_CONCURRENCY",
+        "RESEARCH_PREWARM_TARGET_COOLDOWN_SECONDS",
+    ):
+        monkeypatch.delenv(key, raising=False)
     (tmp_path / ".env").write_text(
         "\n".join(
             [

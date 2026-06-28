@@ -75,6 +75,7 @@ class ResearchVerdict:
     research_persisted: bool | None = None
     research_persistence_error: str | None = None
     research_direct_fetch_failures: tuple[str, ...] = ()
+    research_contract_fingerprint: str | None = None
 
     def log_fields(self) -> dict[str, object]:
         urls = [item.source_url for item in self.evidence if item.source_url]
@@ -103,10 +104,10 @@ class ResearchVerdict:
         }
         if self.research_run_id:
             fields["research_run_id"] = self.research_run_id
-        if len(contract_fingerprints) == 1:
-            fields["research_contract_fingerprint"] = next(
-                iter(contract_fingerprints)
-            )
+        if self.research_contract_fingerprint:
+            fields["research_contract_fingerprint"] = self.research_contract_fingerprint
+        elif len(contract_fingerprints) == 1:
+            fields["research_contract_fingerprint"] = next(iter(contract_fingerprints))
         if self.research_persisted is not None:
             fields["research_persisted"] = self.research_persisted
         if self.research_persistence_error:
@@ -999,7 +1000,11 @@ async def run_research_gate(
         )
     if dossier_store is not None and ticker:
         run_id = f"rr-{uuid.uuid4().hex}"
-        verdict = replace(verdict, research_run_id=run_id)
+        verdict = replace(
+            verdict,
+            research_run_id=run_id,
+            research_contract_fingerprint=contract_fingerprint,
+        )
         try:
             if hasattr(dossier_store, "record_research_run"):
                 await dossier_store.record_research_run(
@@ -1014,6 +1019,7 @@ async def run_research_gate(
                     force_side=verdict.force_side,
                     estimated_probability=verdict.estimated_probability,
                     confidence=verdict.confidence,
+                    contract_fingerprint=contract_fingerprint,
                     queries=queries,
                     evidence=fresh_evidence,
                 )

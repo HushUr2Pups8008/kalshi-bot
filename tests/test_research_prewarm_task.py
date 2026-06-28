@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 import sqlite3
@@ -11,6 +12,7 @@ from tasks.research_dossier import ResearchDossierStore
 from tasks.research_prewarm_task import (
     ResearchPrewarmError,
     ResearchPrewarmTask,
+    _prewarm_news,
 )
 
 
@@ -26,6 +28,13 @@ def _market(ticker: str = "KXRESEARCH-26DEC31", *, status: str = "open"):
         yes_ask_cents=60,
         no_ask_cents=40,
     )
+
+
+def test_prewarm_news_does_not_fabricate_trigger_headline():
+    news = _prewarm_news(_market())
+
+    assert news.headline == ""
+    assert news.source == "research_prewarm"
 
 
 @pytest.mark.asyncio
@@ -114,6 +123,51 @@ async def test_prewarm_run_once_market_failure_does_not_abort_cycle(tmp_path):
 
     assert [result.market_ticker for result in results] == ["KXRESEARCH-GOOD"]
     assert results[0].status == ResearchStatus.CONTINUE_RESEARCHING.value
+
+
+@pytest.mark.asyncio
+async def test_prewarm_run_once_limits_market_concurrency(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    started: list[str] = []
+    release = asyncio.Event()
+    active = 0
+    max_active = 0
+
+    async def research_gate(_news, market, **_kwargs):
+        nonlocal active, max_active
+        started.append(market.ticker)
+        active += 1
+        max_active = max(max_active, active)
+        await release.wait()
+        active -= 1
+        return SimpleNamespace(
+            status=ResearchStatus.CONTINUE_RESEARCHING,
+            attempted=True,
+            queries=[],
+            evidence=[],
+            skip_reason="no_research_hits",
+        )
+
+    task = ResearchPrewarmTask(
+        store=store,
+        research_gate=research_gate,
+        max_concurrency=2,
+    )
+    run_task = asyncio.create_task(
+        task.run_once([_market(f"KXRESEARCH-{i}") for i in range(5)])
+    )
+    while len(started) < 2:
+        await asyncio.sleep(0)
+
+    assert len(started) == 2
+    assert set(started) <= {f"KXRESEARCH-{i}" for i in range(5)}
+    assert max_active == 2
+    release.set()
+    results = await run_task
+
+    assert len(results) == 5
+    assert max_active == 2
 
 
 @pytest.mark.asyncio

@@ -62,6 +62,7 @@ class ResearchPrewarmTask:
         adjudicator: ResearchAdjudicator | None = None,
         max_queries: int = 6,
         research_timeout_seconds: float = 12.0,
+        max_concurrency: int = 3,
         result_sink: ResearchPrewarmResultSink | None = None,
     ) -> None:
         self.store = store or default_store()
@@ -71,6 +72,7 @@ class ResearchPrewarmTask:
         self.adjudicator = adjudicator
         self.max_queries = int(max_queries)
         self.research_timeout_seconds = float(research_timeout_seconds)
+        self.max_concurrency = max(1, int(max_concurrency))
         self.result_sink = result_sink or _write_research_prewarm_result
 
     async def process_market(self, market: Any) -> ResearchPrewarmResult:
@@ -133,8 +135,14 @@ class ResearchPrewarmTask:
 
     async def run_once(self, markets: Iterable[Any]) -> list[ResearchPrewarmResult]:
         market_list = list(markets)
+        semaphore = asyncio.Semaphore(self.max_concurrency)
+
+        async def process_with_limit(market: Any) -> ResearchPrewarmResult:
+            async with semaphore:
+                return await self.process_market(market)
+
         raw = await asyncio.gather(
-            *(self.process_market(market) for market in market_list),
+            *(process_with_limit(market) for market in market_list),
             return_exceptions=True,
         )
         ok: list[ResearchPrewarmResult] = []
@@ -191,9 +199,8 @@ class ResearchPrewarmTask:
 
 
 def _prewarm_news(market: Any) -> SimpleNamespace:
-    title = " ".join(str(getattr(market, "title", "") or "").split())
     return SimpleNamespace(
-        headline=f"Scheduled research prewarm: {title or getattr(market, 'ticker', '')}",
+        headline="",
         source="research_prewarm",
         url="",
     )

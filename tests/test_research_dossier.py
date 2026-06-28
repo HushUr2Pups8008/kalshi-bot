@@ -108,6 +108,32 @@ async def test_research_dossier_records_run_queries_and_latest_verdict(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_research_dossier_records_run_contract_fingerprint_without_evidence(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    await store.record_research_run(
+        "KXIRANCRUDE-26JUL13-T3.8",
+        "run-no-evidence",
+        trigger_headline="Iran output update",
+        trigger_source="Reuters",
+        attempted=True,
+        summary="No research hits.",
+        verdict_status=ResearchStatus.CONTINUE_RESEARCHING.value,
+        skip_reason="no_research_hits",
+        contract_fingerprint="contract-v1",
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        dossier = conn.execute(
+            "SELECT last_contract_fingerprint FROM research_dossiers"
+        ).fetchone()
+
+    assert dossier == ("contract-v1",)
+
+
+@pytest.mark.asyncio
 async def test_research_gate_reuses_dossier_before_fresh_search(tmp_path):
     store = ResearchDossierStore(tmp_path / "research_dossier.db")
     await store.initialize()
