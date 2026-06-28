@@ -117,6 +117,56 @@ async def test_prewarm_run_once_market_failure_does_not_abort_cycle(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_prewarm_run_once_emits_structured_result_events(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    emitted = []
+
+    async def research_gate(_news, market, **_kwargs):
+        if market.ticker == "KXRESEARCH-BAD":
+            raise RuntimeError("research failed")
+        return SimpleNamespace(
+            status=ResearchStatus.CONTINUE_RESEARCHING,
+            attempted=True,
+            queries=[object(), object()],
+            evidence=[object()],
+            skip_reason="no_research_hits",
+            research_run_id="rr-test-good",
+            research_persisted=True,
+            research_persistence_error=None,
+            research_direct_fetch_failures=("resolution_source:https://bad.example:boom",),
+        )
+
+    async def result_sink(result):
+        emitted.append(result)
+
+    task = ResearchPrewarmTask(
+        store=store,
+        research_gate=research_gate,
+        result_sink=result_sink,
+    )
+
+    results = await task.run_once(
+        [
+            _market("KXRESEARCH-BAD"),
+            _market("KXRESEARCH-GOOD"),
+        ]
+    )
+
+    assert [result.market_ticker for result in results] == ["KXRESEARCH-GOOD"]
+    assert [(result.market_ticker, result.status) for result in emitted] == [
+        ("KXRESEARCH-BAD", "error"),
+        ("KXRESEARCH-GOOD", ResearchStatus.CONTINUE_RESEARCHING.value),
+    ]
+    assert emitted[0].error == "failed research prewarm for KXRESEARCH-BAD"
+    assert emitted[1].query_count == 2
+    assert emitted[1].evidence_count == 1
+    assert emitted[1].research_run_id == "rr-test-good"
+    assert emitted[1].research_persisted is True
+    assert len(emitted[1].research_direct_fetch_failures) == 1
+
+
+@pytest.mark.asyncio
 async def test_prewarm_skips_closed_markets_without_research_call(tmp_path):
     store = ResearchDossierStore(tmp_path / "research_dossier.db")
     await store.initialize()

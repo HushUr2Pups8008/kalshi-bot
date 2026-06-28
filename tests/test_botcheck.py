@@ -455,6 +455,33 @@ def test_print_research_gate_section_surfaces_activation_profile_gaps(
     assert "missing    : LIVE_TRADING_ENABLED=false" not in out
 
 
+def test_signal_flow_counts_research_prewarm_result_rows(tmp_path):
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "RESEARCH_PREWARM_RESULT",
+                "ts": "2026-05-10T22:30:00+00:00",
+                "ticker": "KX-READY",
+                "research_attempted": True,
+                "research_status": "continue_researching",
+                "research_prewarm": True,
+            }
+        ],
+    )
+
+    stats = summarize_signal_flow(
+        trades,
+        now=datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc),
+        window_hours=24,
+    )
+
+    assert stats.counts["RESEARCH_PREWARM_RESULT"] == 1
+    assert stats.research_records == 1
+    assert stats.research_status_counts["continue_researching"] == 1
+
+
 def test_print_research_gate_section_surfaces_enabled_prewarm_config(
     capsys,
     tmp_path,

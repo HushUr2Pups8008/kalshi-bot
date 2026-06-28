@@ -170,6 +170,48 @@ def test_rollout_gate_passes_only_with_active_mode_recent_research_and_expected_
     assert assessment.fresh_evidence_rows_24h == 2
 
 
+def test_rollout_gate_accepts_prewarm_result_research_proof(tmp_path):
+    (tmp_path / ".env").write_text(
+        "REAL_WEB_RESEARCH_MODE=shadow\nENABLE_RESEARCH_PREWARM_TASK=true\n",
+        encoding="utf-8",
+    )
+    bot_log = tmp_path / "logs" / "app" / "bot.log"
+    bot_log.parent.mkdir(parents=True, exist_ok=True)
+    bot_log.write_text(
+        "2026-05-10 22:00:00,000 UTC INFO [BOOT] version=0.99.0 pid=123\n",
+        encoding="utf-8",
+    )
+    trades = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "RESEARCH_PREWARM_RESULT",
+                "ts": "2026-05-10T22:50:00+00:00",
+                "ticker": "KX-READY",
+                "research_prewarm": True,
+                "research_attempted": True,
+                "research_status": "trade_candidate",
+                "research_run_id": "run-1",
+            },
+        ],
+    )
+    _write_research_db(tmp_path)
+
+    assessment = evaluate_research_rollout(
+        tmp_path,
+        trades,
+        bot_log=bot_log,
+        expected_version="0.99.0",
+        now=NOW,
+    )
+
+    assert assessment.ok
+    assert assessment.failures == []
+    assert assessment.research_rows == 1
+    assert assessment.matched_research_proofs == 1
+
+
 def test_rollout_gate_rejects_fresh_evidence_without_live_cache_eligible_dossier(
     tmp_path,
 ):

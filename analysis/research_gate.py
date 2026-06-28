@@ -70,6 +70,10 @@ class ResearchVerdict:
     force_side: str | None = None
     estimated_probability: float | None = None
     confidence: float | None = None
+    research_run_id: str | None = None
+    research_persisted: bool | None = None
+    research_persistence_error: str | None = None
+    research_direct_fetch_failures: tuple[str, ...] = ()
 
     def log_fields(self) -> dict[str, object]:
         urls = [item.source_url for item in self.evidence if item.source_url]
@@ -93,6 +97,19 @@ class ResearchVerdict:
             "research_model_confidence": self.confidence,
             "research_skip_reason": self.skip_reason,
         }
+        if self.research_run_id:
+            fields["research_run_id"] = self.research_run_id
+        if self.research_persisted is not None:
+            fields["research_persisted"] = self.research_persisted
+        if self.research_persistence_error:
+            fields["research_persistence_error"] = self.research_persistence_error
+        if self.research_direct_fetch_failures:
+            fields["research_direct_fetch_failures"] = list(
+                self.research_direct_fetch_failures
+            )
+            fields["research_direct_fetch_failure_count"] = len(
+                self.research_direct_fetch_failures
+            )
         if self.estimated_probability is not None:
             fields["research_model_probability_yes"] = round(
                 float(self.estimated_probability),
@@ -762,6 +779,7 @@ async def run_research_gate(
     fresh_evidence: list[ResearchEvidence] = []
     estimated_probability_yes: float | None = None
     provider_errors: list[Exception] = []
+    direct_fetch_failures: list[str] = []
     usable_cached_evidence = _usable_cached_evidence(cached_evidence, contract_fingerprint)
     if cache_only:
         if not _has_sufficient_dossier_evidence(usable_cached_evidence, contract_fingerprint):
@@ -832,7 +850,8 @@ async def run_research_gate(
                     evidence,
                     "Research direct-source fetch timed out before enough evidence was retrieved.",
                 )
-            except Exception:
+            except Exception as exc:
+                direct_fetch_failures.append(f"{source_class}:{url}:{exc}")
                 continue
             if item is None:
                 continue
@@ -965,12 +984,18 @@ async def run_research_gate(
             summary="Research provider failed before the source frontier could be trusted.",
             skip_reason="research_provider_error",
         )
+    if direct_fetch_failures:
+        verdict = replace(
+            verdict,
+            research_direct_fetch_failures=tuple(direct_fetch_failures),
+        )
     if dossier_store is not None and ticker:
         run_id = "rr-" + hashlib.sha256(
             f"{ticker}|{getattr(news, 'headline', '')}|{len(evidence)}|{verdict.status.value}".encode(
                 "utf-8"
             )
         ).hexdigest()[:24]
+        verdict = replace(verdict, research_run_id=run_id)
         try:
             if hasattr(dossier_store, "record_research_run"):
                 await dossier_store.record_research_run(
@@ -988,11 +1013,17 @@ async def run_research_gate(
                     queries=queries,
                     evidence=fresh_evidence,
                 )
+                verdict = replace(verdict, research_persisted=True)
             else:
                 for item in fresh_evidence:
                     await dossier_store.add_evidence(ticker, run_id, item)
-        except Exception:
-            pass
+                verdict = replace(verdict, research_persisted=True)
+        except Exception as exc:
+            verdict = replace(
+                verdict,
+                research_persisted=False,
+                research_persistence_error=str(exc),
+            )
     return verdict
 
 

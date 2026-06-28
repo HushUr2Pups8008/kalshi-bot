@@ -21,11 +21,12 @@ from analysis.research_gate import (
     run_research_gate,
 )
 from tasks.research_dossier import ResearchDossierStore, default_store
-from utils.logger import get_logger
+from utils.logger import get_logger, trade_log, write_trade_log_async
 
 _log = get_logger("research_prewarm_task")
 
 ResearchGateRunner = Callable[..., Awaitable[Any]]
+ResearchPrewarmResultSink = Callable[["ResearchPrewarmResult"], Awaitable[None]]
 
 
 class ResearchPrewarmError(Exception):
@@ -41,6 +42,10 @@ class ResearchPrewarmResult:
     evidence_count: int = 0
     skip_reason: str | None = None
     error: str | None = None
+    research_run_id: str | None = None
+    research_persisted: bool | None = None
+    research_persistence_error: str | None = None
+    research_direct_fetch_failures: tuple[str, ...] = ()
 
 
 class ResearchPrewarmTask:
@@ -56,6 +61,7 @@ class ResearchPrewarmTask:
         adjudicator: ResearchAdjudicator | None = None,
         max_queries: int = 6,
         research_timeout_seconds: float = 12.0,
+        result_sink: ResearchPrewarmResultSink | None = None,
     ) -> None:
         self.store = store or default_store()
         self.research_gate = research_gate
@@ -64,6 +70,7 @@ class ResearchPrewarmTask:
         self.adjudicator = adjudicator
         self.max_queries = int(max_queries)
         self.research_timeout_seconds = float(research_timeout_seconds)
+        self.result_sink = result_sink or _write_research_prewarm_result
 
     async def process_market(self, market: Any) -> ResearchPrewarmResult:
         ticker = str(getattr(market, "ticker", "") or "")
@@ -101,18 +108,29 @@ class ResearchPrewarmTask:
                 query_count=len(getattr(verdict, "queries", ()) or ()),
                 evidence_count=len(getattr(verdict, "evidence", ()) or ()),
                 skip_reason=getattr(verdict, "skip_reason", None),
+                research_run_id=getattr(verdict, "research_run_id", None),
+                research_persisted=getattr(verdict, "research_persisted", None),
+                research_persistence_error=getattr(
+                    verdict,
+                    "research_persistence_error",
+                    None,
+                ),
+                research_direct_fetch_failures=tuple(
+                    getattr(verdict, "research_direct_fetch_failures", ()) or ()
+                ),
             )
         except Exception as exc:
             raise ResearchPrewarmError(f"failed research prewarm for {ticker}") from exc
 
     async def run_once(self, markets: Iterable[Any]) -> list[ResearchPrewarmResult]:
+        market_list = list(markets)
         raw = await asyncio.gather(
-            *(self.process_market(market) for market in markets),
+            *(self.process_market(market) for market in market_list),
             return_exceptions=True,
         )
         ok: list[ResearchPrewarmResult] = []
         failed = 0
-        for result in raw:
+        for market, result in zip(market_list, raw, strict=True):
             if isinstance(result, BaseException):
                 failed += 1
                 cause = getattr(result, "__cause__", None)
@@ -122,8 +140,10 @@ class ResearchPrewarmTask:
                     repr(cause) if cause is not None else "<none>",
                     exc_info=cause if cause is not None else result,
                 )
+                await self.result_sink(_failure_result_for_market(market, result))
             else:
                 ok.append(result)
+                await self.result_sink(result)
         if failed:
             _log.warning(
                 "[RESEARCH_PREWARM] %d/%d markets failed this cycle",
@@ -195,6 +215,36 @@ def _ask_probability(market: Any, cents_attr: str, legacy_attr: str) -> float | 
 def _status_value(status: Any) -> str:
     value = getattr(status, "value", status)
     return str(value or "")
+
+
+def _failure_result_for_market(
+    market: Any,
+    result: BaseException,
+) -> ResearchPrewarmResult:
+    return ResearchPrewarmResult(
+        market_ticker=str(getattr(market, "ticker", "") or ""),
+        status="error",
+        attempted=True,
+        error=str(result),
+    )
+
+
+async def _write_research_prewarm_result(result: ResearchPrewarmResult) -> None:
+    await write_trade_log_async(
+        trade_log.log_research_prewarm_result,
+        ticker=result.market_ticker,
+        status=result.status,
+        attempted=result.attempted,
+        query_count=result.query_count,
+        evidence_count=result.evidence_count,
+        skip_reason=result.skip_reason,
+        error=result.error,
+        research_run_id=result.research_run_id,
+        research_persisted=result.research_persisted,
+        research_persistence_error=result.research_persistence_error,
+        research_direct_fetch_failures=list(result.research_direct_fetch_failures),
+        research_direct_fetch_failure_count=len(result.research_direct_fetch_failures),
+    )
 
 
 async def run_once(

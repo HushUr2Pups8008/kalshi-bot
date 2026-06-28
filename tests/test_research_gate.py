@@ -548,6 +548,133 @@ async def test_run_research_gate_can_promote_neutral_to_trade_candidate():
 
 
 @pytest.mark.asyncio
+async def test_run_research_gate_exposes_persisted_run_id(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    market = SimpleNamespace(
+        ticker="KXIRANCRUDE-26JUL13-T3.8",
+        title="Will Iran crude oil production be at least 3.8M bpd?",
+        rules_primary="OPEC MOMR secondary sources decide the market.",
+        rules_secondary="Later revisions ignored.",
+        settlement_sources=(),
+    )
+
+    verdict = await run_research_gate(
+        SimpleNamespace(
+            headline="Iran crude output rises sharply",
+            source="Reuters",
+            url="https://reuters.com/iran-production",
+        ),
+        market,
+        model_direction="neutral",
+        model_confidence=0.85,
+        model_reason="No relevant keywords found.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=_fake_search,
+        adjudicator=_fake_adjudicator,
+        dossier_store=store,
+    )
+
+    assert verdict.status == ResearchStatus.TRADE_CANDIDATE
+    assert verdict.research_run_id
+    assert verdict.research_persisted is True
+    fields = verdict.log_fields()
+    assert fields["research_run_id"] == verdict.research_run_id
+    assert fields["research_persisted"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_research_gate_surfaces_persistence_failure():
+    class FailingStore:
+        async def get_recent_evidence(self, _ticker):
+            return []
+
+        async def record_research_run(self, *_args, **_kwargs):
+            raise RuntimeError("sqlite locked")
+
+    verdict = await run_research_gate(
+        SimpleNamespace(
+            headline="Iran crude output rises sharply",
+            source="Reuters",
+            url="https://reuters.com/iran-production",
+        ),
+        SimpleNamespace(
+            ticker="KXIRANCRUDE-26JUL13-T3.8",
+            title="Will Iran crude oil production be at least 3.8M bpd?",
+            rules_primary="OPEC MOMR secondary sources decide the market.",
+            rules_secondary="Later revisions ignored.",
+            settlement_sources=(),
+        ),
+        model_direction="neutral",
+        model_confidence=0.85,
+        model_reason="No relevant keywords found.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=_fake_search,
+        adjudicator=_fake_adjudicator,
+        dossier_store=FailingStore(),
+    )
+
+    assert verdict.status == ResearchStatus.TRADE_CANDIDATE
+    assert verdict.research_run_id
+    assert verdict.research_persisted is False
+    assert verdict.research_persistence_error == "sqlite locked"
+    assert verdict.log_fields()["research_persisted"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_research_gate_surfaces_direct_fetch_failure():
+    async def direct_fetcher(_url, _source_class, _claim_type):
+        raise RuntimeError("official source unavailable")
+
+    async def search_provider(query):
+        assert query.source_class != "resolution_source"
+        return [
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="Reuters",
+                source_url="https://reuters.example.com/ceasefire",
+                title="Ceasefire agreement signed",
+                snippet="Officials confirm the agreement was signed before the deadline.",
+                claim_type="corroboration",
+            )
+        ]
+
+    verdict = await run_research_gate(
+        SimpleNamespace(
+            headline="Officials confirm ceasefire agreement was signed",
+            source="Reuters",
+            url="https://reuters.example.com/ceasefire",
+        ),
+        SimpleNamespace(
+            ticker="KXCEASEFIRE-26JUL01",
+            title="Will a ceasefire agreement be signed by July 1?",
+            rules_primary="The market resolves Yes if an agreement is signed by the deadline.",
+            rules_secondary="The determination will be based on official public announcements.",
+            settlement_sources=(),
+            contract_terms_url="https://kalshi.com/markets/KXCEASEFIRE-26JUL01",
+        ),
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.6,
+        no_ask=0.4,
+        live_mode=False,
+        search_provider=search_provider,
+        direct_fetcher=direct_fetcher,
+        adjudicator=_fake_adjudicator,
+    )
+
+    assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
+    assert verdict.skip_reason == "missing_resolution_source"
+    assert len(verdict.research_direct_fetch_failures) == 1
+    assert verdict.log_fields()["research_direct_fetch_failure_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_contract_terms_direct_fetch_alone_does_not_satisfy_resolution_evidence():
     async def search_provider(query):
         assert query.source_class != "resolution_source"
