@@ -1549,6 +1549,14 @@ class TradingBot:
                         reason = "researched_no_edge"
                         category = status.value
                         signal_branch = "empty_keywords_researched_terminal"
+                        if (
+                            research_verdict.skip_reason
+                            in self._RETRYABLE_RESEARCH_PREWARM_REASONS
+                        ):
+                            self._schedule_targeted_research_prewarm(
+                                market,
+                                research_verdict.skip_reason,
+                            )
                     await write_trade_log_async(
                         trade_log.log_analysis_rejected,
                         reason=reason,

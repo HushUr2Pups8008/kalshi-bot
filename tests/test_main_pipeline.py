@@ -959,6 +959,38 @@ async def test_process_candidate_does_not_rewarm_capital_protection_reject(monke
 
 
 @pytest.mark.asyncio
+async def test_process_candidate_queues_targeted_rewarm_on_ambiguous_research_gap(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
+    bot = _make_bot_stub()
+    bot._schedule_targeted_research_prewarm = MagicMock()
+    news = _make_news()
+    market = _make_market()
+    verdict = ResearchVerdict(
+        status=ResearchStatus.RESEARCHED_SKIP_AMBIGUOUS,
+        attempted=True,
+        evidence=[],
+        summary="Research has evidence but no directional probability.",
+        skip_reason="ambiguous_direction",
+    )
+
+    with patch("main.estimate_probability", new=AsyncMock(return_value=(
+        market.yes_prob, 0.1, [], "LLM metadata unavailable.", None, None, None
+    ))), patch("main.run_research_gate", new=AsyncMock(return_value=verdict)), \
+         patch("utils.logger.trade_log.log_analysis_rejected") as reject_mock:
+        await bot._process_candidate(news, market, 0.20)
+
+    bot.executor.execute.assert_not_called()
+    bot._schedule_targeted_research_prewarm.assert_called_once_with(
+        market,
+        "ambiguous_direction",
+    )
+    reject_kwargs = reject_mock.call_args.kwargs
+    assert reject_kwargs["reason"] == "researched_no_edge"
+    assert reject_kwargs["research_skip_reason"] == "ambiguous_direction"
+
+
+@pytest.mark.asyncio
 async def test_process_candidate_researches_when_llm_metadata_missing_in_shadow(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "shadow", raising=False)
