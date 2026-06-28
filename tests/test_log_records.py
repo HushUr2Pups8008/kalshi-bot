@@ -250,6 +250,41 @@ def test_analysis_rejected_record_carries_counterfactual_eval_context():
         _cleanup(tmp)
 
 
+def test_analysis_rejected_record_carries_research_replay_fields():
+    tmp = make_tmp_dir("analysis_rejected_research_replay_fields")
+    try:
+        log_file = tmp / "trades.jsonl"
+        TradeLogger(log_file).log_analysis_rejected(
+            reason="research_incomplete",
+            rejection_category="research_continue",
+            signal_branch="empty_keywords_research_continue",
+            ticker="KXIRANCRUDE-26JUL13-T3.8",
+            source="Reuters",
+            headline="Iran crude output rises",
+            match_score=0.42,
+            research_attempted=True,
+            research_status="continue_researching",
+            research_model_probability_yes=0.72,
+            research_started_ts="2026-06-27T10:00:00+00:00",
+            research_completed_ts="2026-06-27T10:00:02+00:00",
+            research_duration_ms=2000.4,
+            research_min_published_at="2026-06-27T09:45:00+00:00",
+            research_max_published_at="2026-06-27T09:55:00+00:00",
+            research_min_retrieved_at="2026-06-27T10:00:01+00:00",
+            research_max_retrieved_at="2026-06-27T10:00:02+00:00",
+        )
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+
+        assert record["research_model_probability_yes"] == 0.72
+        assert record["research_duration_ms"] == 2000.4
+        assert record["research_started_ts"] == "2026-06-27T10:00:00+00:00"
+        assert record["research_completed_ts"] == "2026-06-27T10:00:02+00:00"
+        assert record["research_min_published_at"] == "2026-06-27T09:45:00+00:00"
+        assert record["research_max_retrieved_at"] == "2026-06-27T10:00:02+00:00"
+    finally:
+        _cleanup(tmp)
+
+
 def test_opportunity_record_carries_source_hint_and_settlement_attribution():
     tmp = make_tmp_dir("opportunity_eval_context")
     try:

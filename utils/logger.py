@@ -566,6 +566,54 @@ class TradeLogger:
             "keywords_matched": keywords_matched,
         })
 
+    def log_research_prewarm_result(
+        self,
+        *,
+        ticker: str,
+        status: str,
+        attempted: bool,
+        query_count: int = 0,
+        evidence_count: int = 0,
+        skip_reason: str | None = None,
+        error: str | None = None,
+        research_run_id: str | None = None,
+        research_contract_fingerprint: str | None = None,
+        research_persisted: bool | None = None,
+        research_persistence_error: str | None = None,
+        research_direct_fetch_failures: list[str] | None = None,
+        research_direct_fetch_failure_count: int | None = None,
+    ) -> None:
+        record: dict[str, Any] = {
+            "type": "RESEARCH_PREWARM_RESULT",
+            "ticker": ticker,
+            "research_prewarm": True,
+            "research_attempted": bool(attempted),
+            "research_status": status,
+            "research_queries_count": int(query_count),
+            "research_hit_count": int(evidence_count),
+        }
+        if skip_reason:
+            record["research_skip_reason"] = skip_reason
+        if error:
+            record["research_error"] = error
+        if research_run_id:
+            record["research_run_id"] = research_run_id
+        if research_contract_fingerprint:
+            record["research_contract_fingerprint"] = research_contract_fingerprint
+        if research_persisted is not None:
+            record["research_persisted"] = bool(research_persisted)
+        if research_persistence_error:
+            record["research_persistence_error"] = research_persistence_error
+        if research_direct_fetch_failures:
+            record["research_direct_fetch_failures"] = list(
+                research_direct_fetch_failures
+            )
+        if research_direct_fetch_failure_count is not None:
+            record["research_direct_fetch_failure_count"] = int(
+                research_direct_fetch_failure_count
+            )
+        self._write(record)
+
     def log_opportunity(
         self,
         *,
@@ -869,7 +917,21 @@ class TradeLogger:
         research_summary: str | None = None,
         research_model_direction: str | None = None,
         research_model_confidence: float | None = None,
+        research_model_probability_yes: float | None = None,
         research_skip_reason: str | None = None,
+        research_started_ts: str | None = None,
+        research_completed_ts: str | None = None,
+        research_duration_ms: float | None = None,
+        research_min_published_at: str | None = None,
+        research_max_published_at: str | None = None,
+        research_min_retrieved_at: str | None = None,
+        research_max_retrieved_at: str | None = None,
+        research_run_id: str | None = None,
+        research_contract_fingerprint: str | None = None,
+        research_persisted: bool | None = None,
+        research_persistence_error: str | None = None,
+        research_direct_fetch_failures: list[str] | None = None,
+        research_direct_fetch_failure_count: int | None = None,
     ) -> None:
         record = {
             "type": "ANALYSIS_REJECTED",
@@ -936,8 +998,43 @@ class TradeLogger:
             record["research_model_direction"] = research_model_direction
         if research_model_confidence is not None:
             record["research_model_confidence"] = round(float(research_model_confidence), 4)
+        if research_model_probability_yes is not None:
+            record["research_model_probability_yes"] = round(
+                float(research_model_probability_yes),
+                4,
+            )
         if research_skip_reason:
             record["research_skip_reason"] = research_skip_reason
+        if research_started_ts:
+            record["research_started_ts"] = research_started_ts
+        if research_completed_ts:
+            record["research_completed_ts"] = research_completed_ts
+        if research_duration_ms is not None:
+            record["research_duration_ms"] = round(float(research_duration_ms), 2)
+        if research_min_published_at:
+            record["research_min_published_at"] = research_min_published_at
+        if research_max_published_at:
+            record["research_max_published_at"] = research_max_published_at
+        if research_min_retrieved_at:
+            record["research_min_retrieved_at"] = research_min_retrieved_at
+        if research_max_retrieved_at:
+            record["research_max_retrieved_at"] = research_max_retrieved_at
+        if research_run_id:
+            record["research_run_id"] = research_run_id
+        if research_contract_fingerprint:
+            record["research_contract_fingerprint"] = research_contract_fingerprint
+        if research_persisted is not None:
+            record["research_persisted"] = bool(research_persisted)
+        if research_persistence_error:
+            record["research_persistence_error"] = research_persistence_error
+        if research_direct_fetch_failures:
+            record["research_direct_fetch_failures"] = list(
+                research_direct_fetch_failures
+            )
+        if research_direct_fetch_failure_count is not None:
+            record["research_direct_fetch_failure_count"] = int(
+                research_direct_fetch_failure_count
+            )
         self._write(record)
 
     def log_early_stale_drop(

@@ -679,6 +679,18 @@ REAL_WEB_RESEARCH_MAX_QUERIES: int = int(os.getenv("REAL_WEB_RESEARCH_MAX_QUERIE
 REAL_WEB_RESEARCH_TIMEOUT_SECONDS: float = float(
     os.getenv("REAL_WEB_RESEARCH_TIMEOUT_SECONDS", "12.0")
 )
+ENABLE_RESEARCH_PREWARM_TASK: bool = _parse_bool_env(
+    "ENABLE_RESEARCH_PREWARM_TASK",
+    default="false",
+)
+RESEARCH_PREWARM_INTERVAL_SECONDS: float = float(
+    os.getenv("RESEARCH_PREWARM_INTERVAL_SECONDS", "900")
+)
+RESEARCH_PREWARM_MAX_MARKETS: int = int(os.getenv("RESEARCH_PREWARM_MAX_MARKETS", "25"))
+RESEARCH_PREWARM_MAX_PAGES: int = int(os.getenv("RESEARCH_PREWARM_MAX_PAGES", "5"))
+RESEARCH_PREWARM_TARGET_COOLDOWN_SECONDS: float = float(
+    os.getenv("RESEARCH_PREWARM_TARGET_COOLDOWN_SECONDS", "1800")
+)
 
 # Shadow-only per-fresh-item assignment diagnostics. DEFAULT OFF.
 ENABLE_FRESH_PASS_ASSIGNMENT_SHADOW: bool = _parse_bool_env(
@@ -1476,6 +1488,21 @@ class BotConfig:
     real_web_research_timeout_seconds: float = field(
         default_factory=lambda: REAL_WEB_RESEARCH_TIMEOUT_SECONDS
     )
+    enable_research_prewarm_task: bool = field(
+        default_factory=lambda: ENABLE_RESEARCH_PREWARM_TASK
+    )
+    research_prewarm_interval_seconds: float = field(
+        default_factory=lambda: RESEARCH_PREWARM_INTERVAL_SECONDS
+    )
+    research_prewarm_max_markets: int = field(
+        default_factory=lambda: RESEARCH_PREWARM_MAX_MARKETS
+    )
+    research_prewarm_max_pages: int = field(
+        default_factory=lambda: RESEARCH_PREWARM_MAX_PAGES
+    )
+    research_prewarm_target_cooldown_seconds: float = field(
+        default_factory=lambda: RESEARCH_PREWARM_TARGET_COOLDOWN_SECONDS
+    )
     enable_startup_observability_probe: bool = field(
         default_factory=lambda: os.getenv("ENABLE_STARTUP_OBSERVABILITY_PROBE", "true").strip().lower() in {"1", "true", "yes", "on"}
     )
@@ -1549,6 +1576,14 @@ class BotConfig:
             errors.append("REAL_WEB_RESEARCH_MAX_QUERIES must be positive")
         if self.real_web_research_timeout_seconds <= 0:
             errors.append("REAL_WEB_RESEARCH_TIMEOUT_SECONDS must be positive")
+        if self.research_prewarm_interval_seconds <= 0:
+            errors.append("RESEARCH_PREWARM_INTERVAL_SECONDS must be positive")
+        if self.research_prewarm_max_markets <= 0:
+            errors.append("RESEARCH_PREWARM_MAX_MARKETS must be positive")
+        if self.research_prewarm_max_pages <= 0:
+            errors.append("RESEARCH_PREWARM_MAX_PAGES must be positive")
+        if self.research_prewarm_target_cooldown_seconds <= 0:
+            errors.append("RESEARCH_PREWARM_TARGET_COOLDOWN_SECONDS must be positive")
         if self.kalshi_env not in ("demo", "prod"):
             errors.append(
                 "KALSHI_ENV must be 'demo' or 'prod', got '%s'" % self.kalshi_env

@@ -6,6 +6,8 @@ import argparse
 import copy
 import json
 import os
+import sqlite3
+import statistics
 import sys
 import urllib.error
 import urllib.request
@@ -83,6 +85,7 @@ def _prompt_context(record: dict[str, Any]) -> dict[str, Any]:
         "research_summary",
         "research_skip_reason",
         "research_model_direction",
+        "research_model_probability_yes",
     ):
         value = record.get(key)
         if isinstance(value, str) and value.strip():
@@ -153,6 +156,46 @@ def _float_or_none(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
 
+
+def _case_optional_fields(record: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "llm_capture_row_id",
+        "evidence_id",
+        "market_ticker",
+        "series_ticker",
+        "venue",
+        "llm_latency_ms",
+        "llm_total_stage_ms",
+        "llm_queue_wait_ms",
+        "llm_http_round_trip_ms",
+        "yes_bid_cents",
+        "yes_ask_cents",
+        "no_bid_cents",
+        "no_ask_cents",
+        "executable_price_cents",
+        "entry_price_cents",
+        "market_yes_price",
+        "price_source",
+        "price_method",
+        "decision_ts",
+        "research_model_probability_yes",
+        "research_started_ts",
+        "research_completed_ts",
+        "research_duration_ms",
+        "research_min_published_at",
+        "research_max_published_at",
+        "research_min_retrieved_at",
+        "research_max_retrieved_at",
+        "research_evidence_min_age_seconds",
+        "research_evidence_max_age_seconds",
+    )
+    return {
+        key: record[key]
+        for key in keys
+        if key in record and record.get(key) is not None
+    }
+
+
 def _paper_candidate_positive(verdict: dict[str, Any], min_confidence: float) -> bool:
     direction = str(verdict.get("direction") or "").strip().lower()
     magnitude = str(verdict.get("magnitude") or "").strip().lower()
@@ -176,6 +219,10 @@ def _normalize_model_result(
         "magnitude": str(result.get("magnitude") or "").strip().lower(),
         "confidence": _float_or_none(result.get("confidence")),
     }
+    if "estimated_probability_yes" in result:
+        verdict["estimated_probability_yes"] = _float_or_none(
+            result.get("estimated_probability_yes")
+        )
     if "raw_response" in result:
         verdict["raw_response"] = result["raw_response"]
     if "reason" in result:
@@ -192,9 +239,10 @@ def _build_eval_prompt(case: dict[str, Any]) -> str:
         context = {}
     lines = [
         "Evaluate whether this rejected paper-trade candidate is a false negative.",
-        "Return JSON only with keys: direction, magnitude, confidence, reason.",
+        "Return JSON only with keys: direction, magnitude, estimated_probability_yes, confidence, reason.",
         "direction must be yes, no, or neutral.",
         "magnitude must be none, weak, moderate, or strong.",
+        "estimated_probability_yes is the probability the market resolves YES, not confidence.",
         "",
         f"MARKET TICKER: {case.get('ticker') or ''}",
         f"NEWS HEADLINE: {case.get('headline') or ''}",
@@ -349,6 +397,272 @@ def run_model_eval(
     return evaluated_report
 
 
+def _positive_model_results(report: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    positives: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for case in report.get("cases") or []:
+        if not isinstance(case, dict):
+            continue
+        model_results = case.get("model_results")
+        if not isinstance(model_results, dict):
+            continue
+        for result in model_results.values():
+            if isinstance(result, dict) and result.get("paper_candidate_positive"):
+                positives.append((case, result))
+    return positives
+
+
+def _positive_case_key(case: dict[str, Any], fallback_index: int) -> tuple[str, str]:
+    capture_id = case.get("llm_capture_row_id")
+    if capture_id:
+        return ("llm_capture_row_id", str(capture_id))
+    fallback_parts = [
+        str(case.get("ticker") or case.get("market_ticker") or ""),
+        str(case.get("ts") or case.get("decision_ts") or ""),
+        str(case.get("headline") or case.get("trigger_headline") or ""),
+    ]
+    fallback = "|".join(part for part in fallback_parts if part)
+    if fallback:
+        return ("case", fallback)
+    return ("index", str(fallback_index))
+
+
+def _result_replay_rank(case: dict[str, Any], result: dict[str, Any]) -> tuple[int, float]:
+    direction = str(result.get("direction") or "").strip().lower()
+    probability = _side_probability(result, direction)
+    has_replay_fields = (
+        probability is not None
+        and _executable_side_price_cents(case) is not None
+        and _decision_side_quote_cents(case, direction) is not None
+    )
+    return (
+        1 if has_replay_fields else 0,
+        probability if probability is not None else -1.0,
+    )
+
+
+def _unique_positive_case_results(
+    report: dict[str, Any],
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    selected: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
+    order: list[tuple[str, str]] = []
+    for index, (case, result) in enumerate(_positive_model_results(report)):
+        key = _positive_case_key(case, index)
+        current = selected.get(key)
+        if current is None:
+            selected[key] = (case, result)
+            order.append(key)
+            continue
+        if _result_replay_rank(case, result) > _result_replay_rank(*current):
+            selected[key] = (case, result)
+    return [selected[key] for key in order]
+
+
+def _p95_seconds(milliseconds: list[float]) -> float | None:
+    if not milliseconds:
+        return None
+    if len(milliseconds) == 1:
+        return round(milliseconds[0] / 1000.0, 4)
+    return round(statistics.quantiles(sorted(milliseconds), n=20)[18] / 1000.0, 4)
+
+
+def _executable_side_price_cents(case: dict[str, Any]) -> float | None:
+    if "executable_price_cents" in case:
+        return _float_or_none(case.get("executable_price_cents"))
+    if "entry_price_cents" in case:
+        return _float_or_none(case.get("entry_price_cents"))
+    return None
+
+
+def _decision_side_quote_cents(case: dict[str, Any], direction: str) -> float | None:
+    direction = direction.lower()
+    if direction == "yes":
+        for key in ("yes_ask_cents", "market_yes_price"):
+            price = _float_or_none(case.get(key))
+            if price is not None:
+                return price
+    if direction == "no":
+        price = _float_or_none(case.get("no_ask_cents"))
+        if price is not None:
+            return price
+    return None
+
+
+def _side_probability(result: dict[str, Any], direction: str) -> float | None:
+    p_yes = _float_or_none(result.get("estimated_probability_yes"))
+    if p_yes is None:
+        return None
+    p_yes = max(0.0, min(1.0, p_yes))
+    if direction == "yes":
+        return p_yes
+    if direction == "no":
+        return 1.0 - p_yes
+    return None
+
+
+def _has_latency(case: dict[str, Any]) -> bool:
+    return (
+        _float_or_none(case.get("llm_total_stage_ms")) is not None
+        or _float_or_none(case.get("llm_latency_ms")) is not None
+    )
+
+
+def _has_freshness_timestamp(case: dict[str, Any]) -> bool:
+    return any(
+        case.get(key) is not None
+        for key in (
+            "research_min_published_at",
+            "research_max_published_at",
+            "research_min_retrieved_at",
+            "research_max_retrieved_at",
+            "research_evidence_min_age_seconds",
+            "research_evidence_max_age_seconds",
+        )
+    )
+
+
+def _shadow_field_completeness(report: dict[str, Any]) -> dict[str, int]:
+    counts = {
+        "positive_cases": 0,
+        "llm_capture_row_id": 0,
+        "estimated_probability_yes": 0,
+        "latency": 0,
+        "executable_price": 0,
+        "decision_quote": 0,
+        "freshness_timestamp": 0,
+        "replay_ready_cases": 0,
+        "freshness_ready_cases": 0,
+    }
+    for case, result in _unique_positive_case_results(report):
+        counts["positive_cases"] += 1
+        direction = str(result.get("direction") or "").strip().lower()
+        has_capture = bool(case.get("llm_capture_row_id"))
+        has_probability = _side_probability(result, direction) is not None
+        has_latency = _has_latency(case)
+        has_executable_price = _executable_side_price_cents(case) is not None
+        has_decision_quote = _decision_side_quote_cents(case, direction) is not None
+        has_freshness = _has_freshness_timestamp(case)
+
+        if has_capture:
+            counts["llm_capture_row_id"] += 1
+        if has_probability:
+            counts["estimated_probability_yes"] += 1
+        if has_latency:
+            counts["latency"] += 1
+        if has_executable_price:
+            counts["executable_price"] += 1
+        if has_decision_quote:
+            counts["decision_quote"] += 1
+        if has_freshness:
+            counts["freshness_timestamp"] += 1
+        if (
+            has_capture
+            and has_probability
+            and has_latency
+            and has_executable_price
+            and has_decision_quote
+        ):
+            counts["replay_ready_cases"] += 1
+        if has_freshness:
+            counts["freshness_ready_cases"] += 1
+    return counts
+
+
+def _latency_slippage_replay(report: dict[str, Any]) -> dict[str, Any]:
+    latencies_ms: list[float] = []
+    edges: list[float] = []
+    slippages: list[float] = []
+    skipped_missing_prices = 0
+    for case, result in _unique_positive_case_results(report):
+        latency = _float_or_none(case.get("llm_total_stage_ms")) or _float_or_none(
+            case.get("llm_latency_ms")
+        )
+        if latency is not None:
+            latencies_ms.append(latency)
+        direction = str(result.get("direction") or "").strip().lower()
+        executable_cents = _executable_side_price_cents(case)
+        decision_quote_cents = _decision_side_quote_cents(case, direction)
+        probability = _side_probability(result, direction)
+        if executable_cents is None or decision_quote_cents is None:
+            skipped_missing_prices += 1
+            continue
+        if probability is None:
+            continue
+        slippages.append(max(0.0, executable_cents - decision_quote_cents))
+        edges.append(probability - (executable_cents / 100.0))
+    if skipped_missing_prices and not edges:
+        return {
+            "status": "missing",
+            "reason": "missing_executable_or_decision_price",
+        }
+    if not edges or not latencies_ms:
+        return {"status": "missing"}
+    return {
+        "status": "computed",
+        "replayed_cases": len(edges),
+        "p95_latency_seconds": _p95_seconds(latencies_ms),
+        "avg_net_edge_after_slippage": round(sum(edges) / len(edges), 6),
+        "avg_slippage_cents": round(sum(slippages) / len(slippages), 4),
+        "max_slippage_cents": round(max(slippages), 4),
+    }
+
+
+def _resolved_counterfactual_pnl(
+    report: dict[str, Any],
+    paper_trades_db: str | Path | None,
+) -> dict[str, Any]:
+    if paper_trades_db is None:
+        return {"status": "missing"}
+    keys = [
+        str(case.get("llm_capture_row_id"))
+        for case, _result in _unique_positive_case_results(report)
+        if case.get("llm_capture_row_id")
+    ]
+    if not keys:
+        return {"status": "missing", "join_key": "llm_capture_row_id"}
+    placeholders = ",".join("?" for _ in keys)
+    try:
+        with sqlite3.connect(paper_trades_db) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT pnl_dollars, cost_dollars
+                FROM paper_trades
+                WHERE resolved = 1
+                  AND llm_capture_row_id IN ({placeholders})
+                  AND pnl_dollars IS NOT NULL
+                  AND cost_dollars IS NOT NULL
+                """,
+                keys,
+            ).fetchall()
+    except sqlite3.Error:
+        return {"status": "missing", "join_key": "llm_capture_row_id"}
+    if not rows:
+        return {"status": "missing", "join_key": "llm_capture_row_id"}
+    net_pnl = sum(float(row[0]) for row in rows)
+    deployed = sum(float(row[1]) for row in rows)
+    return {
+        "resolved_trades": len(rows),
+        "net_pnl": round(net_pnl, 6),
+        "deployed_capital": round(deployed, 6),
+        "roi_on_deployed": round(net_pnl / deployed, 6) if deployed > 0 else 0.0,
+        "join_key": "llm_capture_row_id",
+    }
+
+
+def add_shadow_replay_metrics(
+    report: dict[str, Any],
+    *,
+    paper_trades_db: str | Path | None = None,
+) -> dict[str, Any]:
+    enriched = copy.deepcopy(report)
+    enriched["resolved_counterfactual_pnl"] = _resolved_counterfactual_pnl(
+        enriched,
+        paper_trades_db,
+    )
+    enriched["latency_slippage_replay"] = _latency_slippage_replay(enriched)
+    enriched["shadow_field_completeness"] = _shadow_field_completeness(enriched)
+    return enriched
+
+
 def build_eval_report(
     path: str | Path,
     *,
@@ -395,20 +709,20 @@ def build_eval_report(
         counts["context_ready" if ready else "missing_contract_context"] += 1
         if hydrated and ready:
             counts["hydrated_contract_context"] += 1
-        cases.append(
-            {
-                "ts": _iso(ts),
-                "ticker": record.get("ticker"),
-                "source": record.get("source"),
-                "headline": record.get("headline"),
-                "llm_direction": record.get("llm_direction"),
-                "llm_magnitude": record.get("llm_magnitude"),
-                "llm_confidence": record.get("llm_confidence"),
-                "retrieval_mode": context.get("retrieval_mode"),
-                "eval_status": "context_ready" if ready else "missing_contract_context",
-                "prompt_context": context,
-            }
-        )
+        case = {
+            "ts": _iso(ts),
+            "ticker": record.get("ticker"),
+            "source": record.get("source"),
+            "headline": record.get("headline"),
+            "llm_direction": record.get("llm_direction"),
+            "llm_magnitude": record.get("llm_magnitude"),
+            "llm_confidence": record.get("llm_confidence"),
+            "retrieval_mode": context.get("retrieval_mode"),
+            "eval_status": "context_ready" if ready else "missing_contract_context",
+            "prompt_context": context,
+        }
+        case.update(_case_optional_fields(record))
+        cases.append(case)
         if limit is not None and len(cases) >= limit:
             break
 
@@ -493,6 +807,14 @@ def _argparser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fetch read-only Kalshi market details to enrich historical rows.",
     )
+    parser.add_argument(
+        "--paper-trades-db",
+        type=Path,
+        help=(
+            "Optional paper_trades.db path; when provided, attach resolved "
+            "counterfactual P&L and latency/slippage replay metrics."
+        ),
+    )
     add_exclude_test_arg(parser, help_text="Exclude synthetic/test records")
     return parser
 
@@ -527,6 +849,11 @@ def main(argv: list[str] | None = None) -> int:
             report,
             evaluators,
             min_confidence=args.eval_min_confidence,
+        )
+    if args.paper_trades_db:
+        report = add_shadow_replay_metrics(
+            report,
+            paper_trades_db=args.paper_trades_db,
         )
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))

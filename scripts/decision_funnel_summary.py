@@ -157,6 +157,19 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
+def _keyword_count(record: dict[str, Any]) -> int | None:
+    raw_count = record.get("keyword_count")
+    if raw_count is not None:
+        try:
+            return int(raw_count)
+        except (TypeError, ValueError):
+            return None
+    keywords = record.get("keywords")
+    if isinstance(keywords, list):
+        return len(keywords)
+    return None
+
+
 def summarize(path: Path, since: datetime | None, until: datetime | None, exclude_test: bool = False, *, progress_tracker=None) -> dict[str, Any]:
     stats: dict[str, Any] = {
         "path": path,
@@ -179,6 +192,12 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
         "match_diagnostic_pre_llm_gate": Counter(),
         "match_diagnostic_sources": Counter(),
         "match_diagnostic_tickers": Counter(),
+        "match_llm_reviews_total": 0,
+        "match_llm_review_verdicts": Counter(),
+        "false_positive_neutral_empty_keyword_sources": Counter(),
+        "false_positive_neutral_empty_keyword_tickers": Counter(),
+        "false_positive_neutral_empty_keyword_prefixes": Counter(),
+        "false_positive_neutral_empty_keyword_reviews": 0,
         "match_suppressed_reasons": Counter(),
         "match_suppressed_sources": Counter(),
         "match_suppressed_tickers": Counter(),
@@ -230,6 +249,22 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             stats["match_diagnostic_tickers"][_text(record.get("ticker"))] += 1
         elif event_type == "SIGNAL_ANALYSIS_DETAIL":
             stats["signal_analysis_detail_total"] += 1
+        elif event_type == "MATCH_LLM_REVIEW":
+            stats["match_llm_reviews_total"] += 1
+            verdict = _text(record.get("verdict"))
+            stats["match_llm_review_verdicts"][verdict] += 1
+            if verdict == "false_positive_neutral":
+                if _keyword_count(record) == 0:
+                    stats["false_positive_neutral_empty_keyword_reviews"] += 1
+                    stats["false_positive_neutral_empty_keyword_sources"][
+                        _text(record.get("source"))
+                    ] += 1
+                    stats["false_positive_neutral_empty_keyword_tickers"][
+                        _text(record.get("ticker"))
+                    ] += 1
+                    stats["false_positive_neutral_empty_keyword_prefixes"][
+                        _text(record.get("market_prefix"))
+                    ] += 1
         elif event_type == "MATCH_SUPPRESSED":
             for reason in _reason_parts(record.get("reason")):
                 stats["match_suppressed_reasons"][reason] += 1
@@ -409,12 +444,46 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
     print()
     print("Match Attribution")
     print(f"  Match diagnostics            : {stats['match_diagnostics_total']}")
+    print(f"  Match LLM reviews            : {stats['match_llm_reviews_total']}")
     print(f"  Signal analysis detail rows  : {stats['signal_analysis_detail_total']}")
     print(f"  Match -> analysis detail gap : {stats['match_to_signal_detail_gap']}")
     print(f"  Match suppressions           : {stats['event_counts'].get('MATCH_SUPPRESSED', 0)}")
     print(f"  Match weight applications    : {stats['match_weight_applied_total']}")
     if stats["match_weight_applied_total"]:
         print(f"  Weight score delta total     : {stats['match_weight_score_delta_total']:.4f}")
+
+    print()
+    print("Match LLM Review Verdicts")
+    for line in format_counter(stats["match_llm_review_verdicts"], top=top):
+        print(line)
+    print(
+        "  False-positive neutral empty-keyword reviews: "
+        f"{stats['false_positive_neutral_empty_keyword_reviews']}"
+    )
+
+    print()
+    print(f"Empty-Keyword False-Neutral Sources (top {top})")
+    for line in format_counter(
+        stats["false_positive_neutral_empty_keyword_sources"],
+        top=top,
+    ):
+        print(line)
+
+    print()
+    print(f"Empty-Keyword False-Neutral Tickers (top {top})")
+    for line in format_counter(
+        stats["false_positive_neutral_empty_keyword_tickers"],
+        top=top,
+    ):
+        print(line)
+
+    print()
+    print(f"Empty-Keyword False-Neutral Market Prefixes (top {top})")
+    for line in format_counter(
+        stats["false_positive_neutral_empty_keyword_prefixes"],
+        top=top,
+    ):
+        print(line)
 
     print()
     print("Pre-LLM quality gate")

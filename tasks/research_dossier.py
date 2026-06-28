@@ -10,6 +10,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
@@ -19,6 +20,19 @@ from config import DATA_DIR
 _T = TypeVar("_T")
 
 DEFAULT_RESEARCH_DOSSIER_DB_PATH = DATA_DIR / "evidence_store.db"
+
+
+@dataclass(frozen=True)
+class ResearchDossierSnapshot:
+    market_ticker: str
+    last_research_run_id: str | None
+    last_contract_fingerprint: str | None
+    last_researched_ts: str
+    last_verdict_status: str
+    last_skip_reason: str | None
+    last_force_side: str | None
+    last_estimated_probability: float | None
+    last_confidence: float | None
 
 
 class ResearchDossierStore:
@@ -84,6 +98,9 @@ class ResearchDossierStore:
     ) -> list[ResearchEvidence]:
         return await asyncio.to_thread(self._get_recent_evidence_sync, market_ticker, limit)
 
+    async def get_dossier_snapshot(self, market_ticker: str) -> ResearchDossierSnapshot | None:
+        return await asyncio.to_thread(self._get_dossier_snapshot_sync, market_ticker)
+
     async def _run_market_write(self, market_ticker: str, operation: Callable[[], _T]) -> _T:
         lock = self._locks.setdefault(market_ticker, asyncio.Lock())
         async with lock:
@@ -102,6 +119,7 @@ class ResearchDossierStore:
                 CREATE TABLE IF NOT EXISTS research_dossiers (
                     market_ticker TEXT PRIMARY KEY,
                     last_research_run_id TEXT,
+                    last_contract_fingerprint TEXT,
                     last_researched_ts TEXT NOT NULL,
                     last_verdict_status TEXT NOT NULL,
                     last_skip_reason TEXT,
@@ -113,6 +131,14 @@ class ResearchDossierStore:
                 )
                 """
             )
+            dossier_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(research_dossiers)").fetchall()
+            }
+            if "last_contract_fingerprint" not in dossier_columns:
+                conn.execute(
+                    "ALTER TABLE research_dossiers ADD COLUMN last_contract_fingerprint TEXT"
+                )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS research_runs (
@@ -237,6 +263,7 @@ class ResearchDossierStore:
                 force_side=force_side,
                 estimated_probability=estimated_probability,
                 confidence=confidence,
+                contract_fingerprint=_run_contract_fingerprint(evidence),
                 conn=conn,
             )
             for index, query in enumerate(queries):
@@ -272,6 +299,7 @@ class ResearchDossierStore:
         force_side: str | None = None,
         estimated_probability: float | None = None,
         confidence: float | None = None,
+        contract_fingerprint: str | None = None,
         conn: sqlite3.Connection | None = None,
     ) -> None:
         close_conn = conn is None
@@ -281,14 +309,16 @@ class ResearchDossierStore:
             conn.execute(
                 """
                 INSERT INTO research_dossiers (
-                    market_ticker, last_research_run_id, last_researched_ts,
+                    market_ticker, last_research_run_id, last_contract_fingerprint,
+                    last_researched_ts,
                     last_verdict_status, last_skip_reason, last_force_side,
                     last_estimated_probability, last_confidence
                 ) VALUES (
-                    ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?, ?, ?, ?
+                    ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?, ?, ?, ?
                 )
                 ON CONFLICT(market_ticker) DO UPDATE SET
                     last_research_run_id=excluded.last_research_run_id,
+                    last_contract_fingerprint=excluded.last_contract_fingerprint,
                     last_researched_ts=excluded.last_researched_ts,
                     last_verdict_status=excluded.last_verdict_status,
                     last_skip_reason=excluded.last_skip_reason,
@@ -300,6 +330,7 @@ class ResearchDossierStore:
                 (
                     market_ticker,
                     research_run_id,
+                    contract_fingerprint,
                     verdict_status,
                     skip_reason,
                     force_side,
@@ -400,6 +431,49 @@ class ResearchDossierStore:
                 (market_ticker, int(limit)),
             ).fetchall()
         return [_evidence_from_row(row) for row in rows]
+
+    def _get_dossier_snapshot_sync(self, market_ticker: str) -> ResearchDossierSnapshot | None:
+        self._initialize_sync()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM research_dossiers
+                WHERE market_ticker = ?
+                """,
+                (market_ticker,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ResearchDossierSnapshot(
+            market_ticker=row["market_ticker"],
+            last_research_run_id=row["last_research_run_id"],
+            last_contract_fingerprint=row["last_contract_fingerprint"],
+            last_researched_ts=row["last_researched_ts"],
+            last_verdict_status=row["last_verdict_status"],
+            last_skip_reason=row["last_skip_reason"],
+            last_force_side=row["last_force_side"],
+            last_estimated_probability=(
+                float(row["last_estimated_probability"])
+                if row["last_estimated_probability"] is not None
+                else None
+            ),
+            last_confidence=(
+                float(row["last_confidence"])
+                if row["last_confidence"] is not None
+                else None
+            ),
+        )
+
+
+def _run_contract_fingerprint(evidence: list[ResearchEvidence]) -> str | None:
+    fingerprints = {
+        item.contract_fingerprint
+        for item in evidence
+        if item.contract_fingerprint
+    }
+    if len(fingerprints) != 1:
+        return None
+    return next(iter(fingerprints))
 
 
 def _evidence_id(market_ticker: str, evidence: ResearchEvidence) -> str:

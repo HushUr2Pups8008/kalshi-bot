@@ -15,6 +15,7 @@ import os
 import re
 import urllib.parse
 import urllib.request
+import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -28,6 +29,8 @@ class ResearchStatus(str, Enum):
     RESEARCHED_SKIP_NO_EDGE = "researched_skip_no_edge"
     RESEARCHED_SKIP_AMBIGUOUS = "researched_skip_ambiguous"
     HARD_CAPITAL_BLOCK = "hard_capital_block"
+    RESEARCH_PROVIDER_ERROR = "research_provider_error"
+    RESEARCH_ADJUDICATOR_ERROR = "research_adjudicator_error"
 
 
 @dataclass(frozen=True)
@@ -68,15 +71,22 @@ class ResearchVerdict:
     force_side: str | None = None
     estimated_probability: float | None = None
     confidence: float | None = None
+    research_run_id: str | None = None
+    research_persisted: bool | None = None
+    research_persistence_error: str | None = None
+    research_direct_fetch_failures: tuple[str, ...] = ()
 
     def log_fields(self) -> dict[str, object]:
         urls = [item.source_url for item in self.evidence if item.source_url]
+        contract_fingerprints = {
+            item.contract_fingerprint for item in self.evidence if item.contract_fingerprint
+        }
         settlement_hits = [
             item.source_url
             for item in self.evidence
             if item.source_class in {"resolution_source", "official_primary"}
         ]
-        return {
+        fields: dict[str, object] = {
             "research_attempted": self.attempted,
             "research_status": self.status.value,
             "research_queries": [query.query for query in self.queries],
@@ -91,11 +101,53 @@ class ResearchVerdict:
             "research_model_confidence": self.confidence,
             "research_skip_reason": self.skip_reason,
         }
+        if self.research_run_id:
+            fields["research_run_id"] = self.research_run_id
+        if len(contract_fingerprints) == 1:
+            fields["research_contract_fingerprint"] = next(
+                iter(contract_fingerprints)
+            )
+        if self.research_persisted is not None:
+            fields["research_persisted"] = self.research_persisted
+        if self.research_persistence_error:
+            fields["research_persistence_error"] = self.research_persistence_error
+        if self.research_direct_fetch_failures:
+            fields["research_direct_fetch_failures"] = list(
+                self.research_direct_fetch_failures
+            )
+            fields["research_direct_fetch_failure_count"] = len(
+                self.research_direct_fetch_failures
+            )
+        if self.estimated_probability is not None:
+            fields["research_model_probability_yes"] = round(
+                float(self.estimated_probability),
+                4,
+            )
+        fields.update(_research_evidence_time_fields(self.evidence))
+        return fields
 
 
 SearchProvider = Callable[[ResearchQuery], Awaitable[list[ResearchEvidence]]]
+DirectFetcher = Callable[[str, str, str], Awaitable[ResearchEvidence | None]]
 ResearchAdjudicator = Callable[..., Awaitable[dict[str, Any] | None]]
 DossierStore = Any
+
+
+def _research_evidence_time_fields(evidence: list[ResearchEvidence]) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for attr, min_key, max_key in (
+        ("published_at", "research_min_published_at", "research_max_published_at"),
+        ("retrieved_at", "research_min_retrieved_at", "research_max_retrieved_at"),
+    ):
+        timestamps = [
+            parsed
+            for item in evidence
+            if (parsed := _parse_timestamp(getattr(item, attr, None))) is not None
+        ]
+        if timestamps:
+            fields[min_key] = min(timestamps).isoformat()
+            fields[max_key] = max(timestamps).isoformat()
+    return fields
 
 
 def _clean(value: Any) -> str:
@@ -105,6 +157,68 @@ def _clean(value: Any) -> str:
 def _domain_from_url(value: str) -> str:
     parsed = urllib.parse.urlparse(value if "://" in value else f"https://{value}")
     return parsed.netloc.lower().removeprefix("www.")
+
+
+def _query_site_domain(query: str) -> str:
+    match = re.search(r"\bsite:([^\s]+)", query or "", re.I)
+    return _domain_from_url(match.group(1)) if match else ""
+
+
+def _source_domain(source_name: str) -> str:
+    cleaned = _clean(source_name).lower()
+    if "." in cleaned:
+        return _domain_from_url(cleaned)
+    known = {
+        "associated press": "apnews.com",
+        "ap": "apnews.com",
+        "bloomberg": "bloomberg.com",
+        "eia": "eia.gov",
+        "kalshi": "kalshi.com",
+        "opec": "opec.org",
+        "reuters": "reuters.com",
+    }
+    return known.get(cleaned, "")
+
+
+def _domains_match(actual: str, expected: str) -> bool:
+    actual = _domain_from_url(actual)
+    expected = _domain_from_url(expected)
+    return bool(actual and expected and (actual == expected or actual.endswith(f".{expected}")))
+
+
+def _classify_evidence_source(query: ResearchQuery, source_name: str, source_url: str) -> str:
+    query_site = _query_site_domain(query.query)
+    url_domain = _domain_from_url(source_url)
+    name_domain = _source_domain(source_name)
+    if query.source_class in {"resolution_source", "official_primary"} and query_site:
+        if _domains_match(url_domain, query_site) or _domains_match(name_domain, query_site):
+            return query.source_class
+    official_domains = {
+        "api.eia.gov",
+        "eia.gov",
+        "federalreserve.gov",
+        "kalshi.com",
+        "opec.org",
+        "whitehouse.gov",
+    }
+    if any(_domains_match(url_domain, domain) for domain in official_domains):
+        return "official_primary"
+    if url_domain in {"reuters.com", "apnews.com", "bloomberg.com"} or name_domain in {
+        "reuters.com",
+        "apnews.com",
+        "bloomberg.com",
+    }:
+        return "reputable_secondary"
+    if query.source_class not in {"resolution_source", "official_primary"}:
+        return query.source_class
+    return "other"
+
+
+def _is_settlement_evidence(item: ResearchEvidence) -> bool:
+    return (
+        item.source_class in {"resolution_source", "official_primary"}
+        and item.claim_type not in {"contract_terms", "rules_context"}
+    )
 
 
 def _market_text(market: Any) -> str:
@@ -180,20 +294,33 @@ def build_research_queries(news: Any, market: Any) -> list[ResearchQuery]:
             queries.append(
                 ResearchQuery(
                     query=f"site:{terms_domain} {title or ticker}",
-                    query_intent="resolution_source",
-                    source_class="resolution_source",
+                    query_intent="contract_terms",
+                    source_class="rules_source",
                 )
             )
-        else:
-            rules_fragment = _query_fragment(title or ticker, rules, "official resolution source")
-            if rules_fragment:
-                queries.append(
-                    ResearchQuery(
-                        query=rules_fragment,
-                        query_intent="official_resolution_context",
-                        source_class="official_primary",
-                    )
+        rules_fragment = _query_fragment(title or ticker, rules, "official resolution source")
+        if rules_fragment:
+            queries.append(
+                ResearchQuery(
+                    query=rules_fragment,
+                    query_intent="official_resolution_context",
+                    source_class="official_primary",
                 )
+            )
+    if headline:
+        corroboration_fragment = _query_fragment(
+            headline,
+            title or ticker,
+            "confirmation",
+        )
+        if corroboration_fragment:
+            queries.append(
+                ResearchQuery(
+                    query=corroboration_fragment,
+                    query_intent="corroboration",
+                    source_class="reputable_secondary",
+                )
+            )
 
     if re.search(r"\bopec\b|crude oil|oil production|barrels? per day|bpd", combined, re.I):
         entity = "Iran" if re.search(r"\bIran", combined, re.I) else title
@@ -315,11 +442,7 @@ def decide_research_verdict(
             skip_reason="no_research_hits",
         )
 
-    settlement_hits = [
-        item
-        for item in evidence
-        if item.source_class in {"resolution_source", "official_primary"}
-    ]
+    settlement_hits = [item for item in evidence if _is_settlement_evidence(item)]
     if not settlement_hits:
         return ResearchVerdict(
             status=ResearchStatus.CONTINUE_RESEARCHING,
@@ -437,7 +560,7 @@ def _rss_search(query: ResearchQuery, *, timeout: float = 5.0, limit: int = 3) -
         snippet = html.unescape(_clean(description))
         out.append(
             ResearchEvidence(
-                source_class=query.source_class,
+                source_class=_classify_evidence_source(query, _clean(source), link),
                 source_name=_clean(source),
                 source_url=link,
                 title=title,
@@ -453,10 +576,84 @@ def _rss_search(query: ResearchQuery, *, timeout: float = 5.0, limit: int = 3) -
 
 
 async def default_search_provider(query: ResearchQuery) -> list[ResearchEvidence]:
-    try:
-        return await asyncio.to_thread(_rss_search, query)
-    except Exception:
-        return []
+    return await asyncio.to_thread(_rss_search, query)
+
+
+def _extract_page_text(raw: bytes) -> tuple[str, str]:
+    text = raw.decode("utf-8", errors="ignore")
+    title_match = re.search(r"<title[^>]*>(.*?)</title>", text, flags=re.I | re.S)
+    title = html.unescape(_clean(title_match.group(1))) if title_match else ""
+    body = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", text, flags=re.I | re.S)
+    body = re.sub(r"<[^>]+>", " ", body)
+    snippet = html.unescape(_clean(body))[:800]
+    return title, snippet
+
+
+def _fetch_direct_source(
+    url: str,
+    source_class: str,
+    claim_type: str,
+    *,
+    timeout: float = 5.0,
+) -> ResearchEvidence | None:
+    cleaned_url = _clean(url)
+    if not cleaned_url:
+        return None
+    request = urllib.request.Request(
+        cleaned_url,
+        headers={"User-Agent": "kalshi-bot-research/1.0"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
+        raw = response.read(300_000)
+    title, snippet = _extract_page_text(raw)
+    domain = _domain_from_url(cleaned_url)
+    return ResearchEvidence(
+        source_class=source_class,
+        source_name=domain or cleaned_url,
+        source_url=cleaned_url,
+        title=title or cleaned_url,
+        snippet=snippet,
+        claim_type=claim_type,
+        supports_direction="neutral",
+        supports_confidence=0.0,
+        retrieved_at=_utc_now_iso(),
+    )
+
+
+async def default_direct_fetcher(
+    url: str,
+    source_class: str,
+    claim_type: str,
+) -> ResearchEvidence | None:
+    return await asyncio.to_thread(
+        _fetch_direct_source,
+        url,
+        source_class,
+        claim_type,
+    )
+
+
+def _direct_source_targets(market: Any) -> list[tuple[str, str, str]]:
+    targets: list[tuple[str, str, str]] = []
+    terms_url = _clean(getattr(market, "contract_terms_url", ""))
+    if terms_url:
+        targets.append((terms_url, "rules_source", "contract_terms"))
+    for source in getattr(market, "settlement_sources", ()) or ():
+        url = _clean(getattr(source, "url", ""))
+        if not url:
+            domain = _domain_from_url(_clean(getattr(source, "domain", "")))
+            if domain:
+                url = f"https://{domain}"
+        if url:
+            targets.append((url, "resolution_source", "settlement_source"))
+    seen: set[str] = set()
+    out: list[tuple[str, str, str]] = []
+    for url, source_class, claim_type in targets:
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append((url, source_class, claim_type))
+    return out
 
 
 def _research_prompt(
@@ -549,48 +746,170 @@ async def run_research_gate(
     no_ask: float | None,
     live_mode: bool,
     search_provider: SearchProvider | None = None,
+    direct_fetcher: DirectFetcher | None = None,
     adjudicator: ResearchAdjudicator | None = None,
     dossier_store: DossierStore | None = None,
     max_queries: int = 6,
     research_timeout_seconds: float = 12.0,
+    cache_only: bool = False,
 ) -> ResearchVerdict:
     queries = build_research_queries(news, market)[:max_queries]
     ticker = _clean(getattr(market, "ticker", ""))
     contract_fingerprint = _contract_fingerprint(market)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.001, float(research_timeout_seconds))
+
+    def remaining_budget() -> float:
+        return max(0.0, deadline - loop.time())
+
+    def timeout_verdict(evidence: list[ResearchEvidence], summary: str) -> ResearchVerdict:
+        return ResearchVerdict(
+            status=ResearchStatus.CONTINUE_RESEARCHING,
+            attempted=True,
+            queries=queries,
+            evidence=evidence,
+            summary=summary,
+            skip_reason="research_timeout",
+        )
+
     cached_evidence: list[ResearchEvidence] = []
+    cached_dossier: Any | None = None
     if dossier_store is not None and ticker:
         try:
             cached_evidence = await dossier_store.get_recent_evidence(ticker)
         except Exception:
             cached_evidence = []
+        if hasattr(dossier_store, "get_dossier_snapshot"):
+            try:
+                cached_dossier = await dossier_store.get_dossier_snapshot(ticker)
+            except Exception:
+                cached_dossier = None
     fresh_evidence: list[ResearchEvidence] = []
     estimated_probability_yes: float | None = None
+    provider_errors: list[Exception] = []
+    direct_fetch_failures: list[str] = []
     usable_cached_evidence = _usable_cached_evidence(cached_evidence, contract_fingerprint)
+    if cache_only:
+        if not _has_sufficient_dossier_evidence(usable_cached_evidence, contract_fingerprint):
+            return ResearchVerdict(
+                status=ResearchStatus.CONTINUE_RESEARCHING,
+                attempted=False,
+                queries=queries,
+                evidence=usable_cached_evidence,
+                summary=(
+                    "Cache-only research mode has no sufficient fresh "
+                    "contract-matching dossier evidence; no live research attempted."
+                ),
+                skip_reason="cached_dossier_insufficient",
+            )
+        if (
+            cached_dossier is None
+            or getattr(cached_dossier, "last_verdict_status", None)
+            != ResearchStatus.TRADE_CANDIDATE.value
+            or getattr(cached_dossier, "last_force_side", None) not in {"yes", "no"}
+            or getattr(cached_dossier, "last_estimated_probability", None) is None
+            or getattr(cached_dossier, "last_confidence", None) is None
+        ):
+            return ResearchVerdict(
+                status=ResearchStatus.CONTINUE_RESEARCHING,
+                attempted=False,
+                queries=queries,
+                evidence=usable_cached_evidence,
+                summary=(
+                    "Cache-only research mode found evidence but no vetted "
+                    "directional dossier verdict; no live research attempted."
+                ),
+                skip_reason="cached_dossier_unvetted",
+            )
+        return decide_research_verdict(
+            evidence=usable_cached_evidence,
+            model_direction=getattr(cached_dossier, "last_force_side"),
+            model_confidence=getattr(cached_dossier, "last_confidence"),
+            model_reason="Cached research dossier verdict.",
+            estimated_probability_yes=getattr(
+                cached_dossier,
+                "last_estimated_probability",
+            ),
+            yes_ask=yes_ask,
+            no_ask=no_ask,
+            live_mode=live_mode,
+            queries=queries,
+        )
     if _has_sufficient_dossier_evidence(usable_cached_evidence, contract_fingerprint):
         evidence = usable_cached_evidence
     else:
         evidence = list(usable_cached_evidence)
         existing = {item.source_url for item in evidence if item.source_url}
+        fetcher = direct_fetcher or default_direct_fetcher
+        for url, source_class, claim_type in _direct_source_targets(market):
+            remaining = remaining_budget()
+            if remaining <= 0:
+                return timeout_verdict(
+                    evidence,
+                    "Research timed out before direct-source fetch completed.",
+                )
+            try:
+                item = await asyncio.wait_for(
+                    fetcher(url, source_class, claim_type),
+                    timeout=remaining,
+                )
+            except TimeoutError:
+                return timeout_verdict(
+                    evidence,
+                    "Research direct-source fetch timed out before enough evidence was retrieved.",
+                )
+            except Exception as exc:
+                direct_fetch_failures.append(f"{source_class}:{url}:{exc}")
+                continue
+            if item is None:
+                continue
+            identity = item.source_url or hashlib.sha256(
+                f"{item.source_name}|{item.title}|{item.snippet}".encode("utf-8")
+            ).hexdigest()
+            if identity in existing:
+                continue
+            existing.add(identity)
+            item = replace(item, contract_fingerprint=contract_fingerprint)
+            evidence.append(item)
+            fresh_evidence.append(item)
+
+        direct_domains = {
+            _domain_from_url(item.source_url)
+            for item in evidence
+            if item.source_class in {"resolution_source", "official_primary"}
+            and item.source_url
+        }
+        provider_queries = [
+            query
+            for query in queries
+            if not (
+                query.source_class in {"resolution_source", "official_primary"}
+                and _query_site_domain(query.query) in direct_domains
+            )
+        ]
         provider = search_provider or default_search_provider
+        remaining = remaining_budget()
+        if remaining <= 0:
+            return timeout_verdict(
+                evidence,
+                "Research timed out before search providers completed.",
+            )
         try:
             evidence_nested = await asyncio.wait_for(
                 asyncio.gather(
-                    *(provider(query) for query in queries),
+                    *(provider(query) for query in provider_queries),
                     return_exceptions=True,
                 ),
-                timeout=research_timeout_seconds,
+                timeout=remaining,
             )
         except TimeoutError:
-            return ResearchVerdict(
-                status=ResearchStatus.CONTINUE_RESEARCHING,
-                attempted=True,
-                queries=queries,
-                evidence=evidence,
-                summary="Research search providers timed out before enough evidence was retrieved.",
-                skip_reason="research_timeout",
+            return timeout_verdict(
+                evidence,
+                "Research search providers timed out before enough evidence was retrieved.",
             )
         for result in evidence_nested:
             if isinstance(result, Exception):
+                provider_errors.append(result)
                 continue
             for item in result:
                 identity = item.source_url or hashlib.sha256(
@@ -604,6 +923,12 @@ async def run_research_gate(
                 fresh_evidence.append(item)
     if evidence:
         adjudicate = adjudicator or default_ollama_adjudicator
+        remaining = remaining_budget()
+        if remaining <= 0:
+            return timeout_verdict(
+                evidence,
+                "Research timed out before adjudication completed.",
+            )
         try:
             adjudication = await asyncio.wait_for(
                 adjudicate(
@@ -612,16 +937,21 @@ async def run_research_gate(
                     news=news,
                     market=market,
                 ),
-                timeout=research_timeout_seconds,
+                timeout=remaining,
             )
         except TimeoutError:
+            return timeout_verdict(
+                evidence,
+                "Research adjudication timed out before producing a verdict.",
+            )
+        except Exception:
             return ResearchVerdict(
-                status=ResearchStatus.CONTINUE_RESEARCHING,
+                status=ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
                 attempted=True,
                 queries=queries,
                 evidence=evidence,
-                summary="Research adjudication timed out before producing a verdict.",
-                skip_reason="research_timeout",
+                summary="Research adjudicator failed before producing a verdict.",
+                skip_reason="research_adjudicator_error",
             )
         if isinstance(adjudication, dict):
             model_direction = str(adjudication.get("direction") or model_direction or "neutral").lower()
@@ -633,6 +963,15 @@ async def run_research_gate(
                 adjudication.get("estimated_probability_yes")
             )
             model_reason = str(adjudication.get("reason") or model_reason or "")
+        else:
+            return ResearchVerdict(
+                status=ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
+                attempted=True,
+                queries=queries,
+                evidence=evidence,
+                summary="Research adjudicator returned no parseable verdict.",
+                skip_reason="research_adjudicator_error",
+            )
     verdict = decide_research_verdict(
         evidence=evidence,
         model_direction=model_direction,
@@ -644,12 +983,23 @@ async def run_research_gate(
         live_mode=live_mode,
         queries=queries,
     )
+    if provider_errors and verdict.status != ResearchStatus.TRADE_CANDIDATE:
+        verdict = ResearchVerdict(
+            status=ResearchStatus.RESEARCH_PROVIDER_ERROR,
+            attempted=True,
+            queries=queries,
+            evidence=evidence,
+            summary="Research provider failed before the source frontier could be trusted.",
+            skip_reason="research_provider_error",
+        )
+    if direct_fetch_failures:
+        verdict = replace(
+            verdict,
+            research_direct_fetch_failures=tuple(direct_fetch_failures),
+        )
     if dossier_store is not None and ticker:
-        run_id = "rr-" + hashlib.sha256(
-            f"{ticker}|{getattr(news, 'headline', '')}|{len(evidence)}|{verdict.status.value}".encode(
-                "utf-8"
-            )
-        ).hexdigest()[:24]
+        run_id = f"rr-{uuid.uuid4().hex}"
+        verdict = replace(verdict, research_run_id=run_id)
         try:
             if hasattr(dossier_store, "record_research_run"):
                 await dossier_store.record_research_run(
@@ -667,11 +1017,17 @@ async def run_research_gate(
                     queries=queries,
                     evidence=fresh_evidence,
                 )
+                verdict = replace(verdict, research_persisted=True)
             else:
                 for item in fresh_evidence:
                     await dossier_store.add_evidence(ticker, run_id, item)
-        except Exception:
-            pass
+                verdict = replace(verdict, research_persisted=True)
+        except Exception as exc:
+            verdict = replace(
+                verdict,
+                research_persisted=False,
+                research_persistence_error=str(exc),
+            )
     return verdict
 
 
@@ -700,9 +1056,7 @@ def _has_sufficient_dossier_evidence(
         for item in evidence
     ):
         return False
-    has_resolution = any(
-        item.source_class in {"resolution_source", "official_primary"} for item in evidence
-    )
+    has_resolution = any(_is_settlement_evidence(item) for item in evidence)
     urls = {item.source_url for item in evidence if item.source_url}
     return has_resolution and len(urls) >= 2
 

@@ -8,9 +8,13 @@ the ~/.zshrc shell helpers:
     print_caffeinate_section() → botcaff()
 """
 
+import sqlite3
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import scripts.botcheck as botcheck
 from scripts.botcheck import (
     ProcessInfo,
     _bot_pids,
@@ -22,6 +26,7 @@ from scripts.botcheck import (
     print_caffeinate_section,
     print_signal_flow_section,
     session_duration,
+    summarize_research_dossiers,
     summarize_signal_flow,
 )
 from tests._helpers import write_jsonl
@@ -119,6 +124,12 @@ def test_summarize_signal_flow_counts_recent_structured_events(tmp_path):
             {"type": "OPPORTUNITY", "ts": "2026-05-10T22:00:00+00:00"},
             {"type": "BLEND_DECISION", "ts": "2026-05-10T22:05:00+00:00"},
             {"type": "BLEND_DECISION", "ts": "2026-05-10T22:15:00+00:00"},
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-05-10T22:25:00+00:00",
+                "research_attempted": True,
+                "research_status": "continue_researching",
+            },
             {"type": "SKIPPED", "ts": "2026-05-10T22:20:00+00:00"},
             {"type": "PAPER_TRADE", "ts": "2026-05-09T22:00:00+00:00"},
             {"type": "UNRELATED", "ts": "2026-05-10T22:30:00+00:00"},
@@ -132,12 +143,15 @@ def test_summarize_signal_flow_counts_recent_structured_events(tmp_path):
         window_hours=24,
     )
 
-    assert stats.records_kept == 4
-    assert stats.lines_total == 7
+    assert stats.records_kept == 5
+    assert stats.lines_total == 8
     assert stats.lines_malformed == 1
     assert stats.counts["OPPORTUNITY"] == 1
     assert stats.counts["BLEND_DECISION"] == 2
     assert stats.counts["SKIPPED"] == 1
+    assert stats.research_records == 1
+    assert stats.research_status_counts["continue_researching"] == 1
+    assert stats.latest_research_ts == datetime(2026, 5, 10, 22, 25, tzinfo=timezone.utc)
     assert "PAPER_TRADE" not in stats.counts
     assert stats.latest_ts_by_type["BLEND_DECISION"] == datetime(
         2026, 5, 10, 22, 15, tzinfo=timezone.utc
@@ -163,6 +177,691 @@ def test_print_signal_flow_section_surfaces_pipeline_counts(capsys, tmp_path):
     assert "OPPORTUNITY      :     1" in out
     assert "BLEND_DECISION   :     1" in out
     assert "latest=2026-05-10T22:30:00+00:00 age=30m 00s" in out
+
+
+def test_print_research_gate_section_surfaces_mode_and_research_rows(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("REAL_WEB_RESEARCH_MODE", raising=False)
+    monkeypatch.delenv("REAL_WEB_RESEARCH_MAX_QUERIES", raising=False)
+    monkeypatch.delenv("REAL_WEB_RESEARCH_TIMEOUT_SECONDS", raising=False)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "REAL_WEB_RESEARCH_MODE=shadow",
+                "REAL_WEB_RESEARCH_MAX_QUERIES=4",
+                "REAL_WEB_RESEARCH_TIMEOUT_SECONDS=8.5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-05-10T22:30:00+00:00",
+                "research_attempted": True,
+                "research_status": "research_provider_error",
+            }
+        ],
+    )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(trades, now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "Real web research gate" in out
+    assert "mode       : shadow (.env)" in out
+    assert "max_queries: 4 (.env)" in out
+    assert "timeout_s  : 8.5 (.env)" in out
+    assert "research_rows: 1 latest=2026-05-10T22:30:00+00:00 age=30m 00s" in out
+    assert "statuses   : research_provider_error=1" in out
+
+
+def test_print_research_gate_section_warns_when_disabled(capsys, tmp_path, monkeypatch):
+    monkeypatch.delenv("REAL_WEB_RESEARCH_MODE", raising=False)
+    monkeypatch.delenv("REAL_WEB_RESEARCH_MAX_QUERIES", raising=False)
+    monkeypatch.delenv("REAL_WEB_RESEARCH_TIMEOUT_SECONDS", raising=False)
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "mode       : off (default)" in out
+    assert "status     : disabled; no-keyword candidates use legacy terminal skip" in out
+    assert "research_rows: 0 latest=n/a age=n/a" in out
+
+
+def test_print_research_gate_section_surfaces_prewarm_backlog(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("REAL_WEB_RESEARCH_MODE", raising=False)
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-05-10T22:00:00+00:00",
+                "ticker": "KX-MISS",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 0,
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-05-10T22:05:00+00:00",
+                "ticker": "KX-THIN",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 1,
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-05-10T22:10:00+00:00",
+                "ticker": "KX-HASKEYWORDS",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 2,
+            },
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": "2026-05-10T22:15:00+00:00",
+                "ticker": "KX-USEFUL",
+                "keywords": [],
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+                "pre_llm_would_block_and_useful": True,
+            },
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": "2026-05-10T22:20:00+00:00",
+                "ticker": "KX-SEMANTIC",
+                "keywords": ["thin"],
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+                "pre_llm_would_block_and_useful": False,
+            },
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-05-10T22:25:00+00:00",
+                "ticker": "KX-SOURCE",
+                "reason": "researched_no_edge",
+                "research_skip_reason": "missing_resolution_source",
+            },
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": "2026-05-10T22:30:00+00:00",
+                "ticker": "KX-SEMANTIC-KEYWORDS",
+                "keywords": ["thin", "midterms"],
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+                "pre_llm_would_block_and_useful": False,
+            },
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-05-10T22:35:00+00:00",
+                "ticker": "KX-CAPITAL",
+                "reason": "researched_no_edge",
+                "research_skip_reason": "no_trade_capital_protection",
+            },
+        ],
+    )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(trades, now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "prewarm_backlog: 6 targetable from logs" in out
+    assert (
+        "sample=KX-SEMANTIC-KEYWORDS,KX-SOURCE,KX-SEMANTIC,KX-USEFUL,KX-THIN"
+        in out
+    )
+
+
+def test_botcheck_cli_surfaces_prewarm_backlog_when_executed_as_script(tmp_path):
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-05-10T22:00:00+00:00",
+                "ticker": "KX-MISS",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 0,
+            },
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path("scripts/botcheck.py")),
+            "--home",
+            str(tmp_path),
+            "--trades-log",
+            str(trades),
+            "--signal-window-hours",
+            "100000",
+            "--log",
+            str(tmp_path / "missing.log"),
+            "--python",
+            str(tmp_path / ".venv/bin/python"),
+            "--main",
+            str(tmp_path / "main.py"),
+            "--label",
+            "com.example.missing",
+        ],
+        cwd=Path(__file__).resolve().parent.parent,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "prewarm_backlog: 1 targetable from logs sample=KX-MISS" in result.stdout
+
+
+def test_summarize_research_prewarm_backlog_does_not_import_runtime_script(
+    tmp_path,
+    monkeypatch,
+):
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-05-10T22:00:00+00:00",
+                "ticker": "KX-MISS",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 0,
+            },
+        ],
+    )
+
+    def _fail_import(name, *args, **kwargs):
+        if name == "scripts.research_prewarm":
+            raise AssertionError("botcheck must not import operational prewarm script")
+        return original_import(name, *args, **kwargs)
+
+    original_import = __import__
+    monkeypatch.setattr("builtins.__import__", _fail_import)
+
+    assert botcheck.summarize_research_prewarm_backlog(
+        trades,
+        since=datetime(2026, 5, 10, 21, 0, tzinfo=timezone.utc),
+    ) == ["KX-MISS"]
+
+
+def test_print_research_gate_section_warns_when_prewarm_disabled_in_active_mode(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("ENABLE_RESEARCH_PREWARM_TASK", raising=False)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "REAL_WEB_RESEARCH_MODE=production",
+                "ENABLE_RESEARCH_PREWARM_TASK=false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "mode       : production (.env)" in out
+    assert "prewarm   : off (.env) RISK: cache misses can remain terminal" in out
+
+
+def test_print_research_gate_section_surfaces_activation_profile_gaps(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("REAL_WEB_RESEARCH_MODE", raising=False)
+    monkeypatch.delenv("ENABLE_RESEARCH_PREWARM_TASK", raising=False)
+    profile = tmp_path / "docs" / "governance" / "research-shadow.env.example"
+    profile.parent.mkdir(parents=True)
+    profile.write_text(
+        "\n".join(
+            [
+                "REAL_WEB_RESEARCH_MODE=shadow",
+                "ENABLE_RESEARCH_PREWARM_TASK=true",
+                "LIVE_TRADING_ENABLED=false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text("LIVE_TRADING_ENABLED=false\n", encoding="utf-8")
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "activation : FAIL profile=docs/governance/research-shadow.env.example" in out
+    assert "missing    : REAL_WEB_RESEARCH_MODE=shadow" in out
+    assert "missing    : ENABLE_RESEARCH_PREWARM_TASK=true" in out
+    assert "missing    : LIVE_TRADING_ENABLED=false" not in out
+
+
+def test_signal_flow_counts_research_prewarm_result_rows(tmp_path):
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "RESEARCH_PREWARM_RESULT",
+                "ts": "2026-05-10T22:30:00+00:00",
+                "ticker": "KX-READY",
+                "research_attempted": True,
+                "research_status": "continue_researching",
+                "research_prewarm": True,
+            }
+        ],
+    )
+
+    stats = summarize_signal_flow(
+        trades,
+        now=datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc),
+        window_hours=24,
+    )
+
+    assert stats.counts["RESEARCH_PREWARM_RESULT"] == 1
+    assert stats.research_records == 1
+    assert stats.research_status_counts["continue_researching"] == 1
+
+
+def test_print_research_gate_section_surfaces_enabled_prewarm_config(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("ENABLE_RESEARCH_PREWARM_TASK", raising=False)
+    monkeypatch.delenv("RESEARCH_PREWARM_INTERVAL_SECONDS", raising=False)
+    monkeypatch.delenv("RESEARCH_PREWARM_MAX_MARKETS", raising=False)
+    monkeypatch.delenv("RESEARCH_PREWARM_MAX_PAGES", raising=False)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "REAL_WEB_RESEARCH_MODE=shadow",
+                "ENABLE_RESEARCH_PREWARM_TASK=true",
+                "RESEARCH_PREWARM_INTERVAL_SECONDS=300",
+                "RESEARCH_PREWARM_MAX_MARKETS=12",
+                "RESEARCH_PREWARM_MAX_PAGES=4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "prewarm   : on (.env) interval=300s max_markets=12 max_pages=4" in out
+
+
+def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
+    db_path = tmp_path / "data" / "evidence_store.db"
+    db_path.parent.mkdir()
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_research_run_id TEXT,
+                last_contract_fingerprint TEXT,
+                last_researched_ts TEXT NOT NULL,
+                last_verdict_status TEXT NOT NULL,
+                last_skip_reason TEXT,
+                last_force_side TEXT,
+                last_estimated_probability REAL,
+                last_confidence REAL,
+                created_ts TEXT,
+                updated_ts TEXT
+            );
+            CREATE TABLE research_evidence (
+                evidence_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                research_run_id TEXT NOT NULL,
+                contract_fingerprint TEXT,
+                source_class TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                title TEXT NOT NULL,
+                snippet TEXT NOT NULL,
+                claim_type TEXT NOT NULL,
+                supports_direction TEXT NOT NULL,
+                supports_confidence REAL NOT NULL,
+                published_at TEXT,
+                retrieved_at TEXT,
+                inserted_at TEXT
+            );
+            """
+        )
+        conn.executemany(
+            """
+            INSERT INTO research_dossiers (
+                market_ticker,
+                last_research_run_id,
+                last_contract_fingerprint,
+                last_researched_ts,
+                last_verdict_status,
+                last_force_side,
+                last_estimated_probability,
+                last_confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    "KXTEST-26JUN-T1",
+                    "run-1",
+                    "contract-v1",
+                    "2026-05-10T22:50:00+00:00",
+                    "trade_candidate",
+                    "yes",
+                    0.63,
+                    0.71,
+                ),
+                (
+                    "KXTEST-26JUN-T2",
+                    "run-2",
+                    "contract-v2",
+                    "2026-05-10T21:00:00+00:00",
+                    "continue_researching",
+                    None,
+                    None,
+                    None,
+                ),
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO research_evidence (
+                evidence_id,
+                market_ticker,
+                research_run_id,
+                contract_fingerprint,
+                source_class,
+                source_name,
+                source_url,
+                title,
+                snippet,
+                claim_type,
+                supports_direction,
+                supports_confidence,
+                published_at,
+                retrieved_at,
+                inserted_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    "ev-1",
+                    "KXTEST-26JUN-T1",
+                    "run-1",
+                    "contract-v1",
+                    "resolution_source",
+                    "source",
+                    "https://example.com/1",
+                    "Fresh evidence",
+                    "snippet",
+                    "metric",
+                    "yes",
+                    0.8,
+                    "2026-05-10T22:30:00+00:00",
+                    "2026-05-10T22:40:00+00:00",
+                    "2026-05-10T22:40:00+00:00",
+                ),
+                (
+                    "ev-1b",
+                    "KXTEST-26JUN-T1",
+                    "run-1",
+                    "contract-v1",
+                    "web",
+                    "source",
+                    "https://example.com/1b",
+                    "Fresh corroboration",
+                    "snippet",
+                    "metric",
+                    "yes",
+                    0.7,
+                    "2026-05-10T22:35:00+00:00",
+                    "2026-05-10T22:41:00+00:00",
+                    "2026-05-10T22:41:00+00:00",
+                ),
+                (
+                    "ev-2",
+                    "KXTEST-26JUN-T2",
+                    "run-2",
+                    "contract-v2",
+                    "web",
+                    "source",
+                    "https://example.com/2",
+                    "Old evidence",
+                    "snippet",
+                    "background",
+                    "neutral",
+                    0.4,
+                    "2026-05-08T20:00:00+00:00",
+                    "2026-05-08T20:00:00+00:00",
+                    "2026-05-08T20:00:00+00:00",
+                ),
+            ],
+        )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+
+    stats = summarize_research_dossiers(tmp_path, now=now)
+
+    assert stats.exists is True
+    assert stats.dossiers == 2
+    assert stats.evidence_rows == 3
+    assert stats.latest_researched_ts == datetime(2026, 5, 10, 22, 50, tzinfo=timezone.utc)
+    assert stats.latest_evidence_ts == datetime(2026, 5, 10, 22, 41, tzinfo=timezone.utc)
+    assert stats.verdict_counts == {"continue_researching": 1, "trade_candidate": 1}
+    assert stats.vetted_trade_candidate_dossiers == 1
+    assert stats.live_cache_eligible_dossiers == 1
+    assert stats.fresh_evidence_rows_24h == 2
+
+
+def test_summarize_research_dossiers_excludes_stale_live_cache_ready_count(tmp_path):
+    db_path = tmp_path / "data" / "evidence_store.db"
+    db_path.parent.mkdir()
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_research_run_id TEXT,
+                last_contract_fingerprint TEXT,
+                last_researched_ts TEXT NOT NULL,
+                last_verdict_status TEXT NOT NULL,
+                last_skip_reason TEXT,
+                last_force_side TEXT,
+                last_estimated_probability REAL,
+                last_confidence REAL,
+                created_ts TEXT,
+                updated_ts TEXT
+            );
+            CREATE TABLE research_evidence (
+                evidence_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                research_run_id TEXT NOT NULL,
+                contract_fingerprint TEXT,
+                source_class TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                title TEXT NOT NULL,
+                snippet TEXT NOT NULL,
+                claim_type TEXT NOT NULL,
+                supports_direction TEXT NOT NULL,
+                supports_confidence REAL NOT NULL,
+                published_at TEXT,
+                retrieved_at TEXT,
+                inserted_at TEXT
+            );
+            INSERT INTO research_dossiers (
+                market_ticker,
+                last_research_run_id,
+                last_contract_fingerprint,
+                last_researched_ts,
+                last_verdict_status,
+                last_force_side,
+                last_estimated_probability,
+                last_confidence
+            ) VALUES (
+                'KXSTALE',
+                'run-stale',
+                'contract-stale',
+                '2026-05-10T12:00:00+00:00',
+                'trade_candidate',
+                'yes',
+                0.64,
+                0.72
+            );
+            INSERT INTO research_evidence (
+                evidence_id,
+                market_ticker,
+                research_run_id,
+                contract_fingerprint,
+                source_class,
+                source_name,
+                source_url,
+                title,
+                snippet,
+                claim_type,
+                supports_direction,
+                supports_confidence,
+                published_at,
+                retrieved_at,
+                inserted_at
+            ) VALUES
+            (
+                'old-1',
+                'KXSTALE',
+                'run-stale',
+                'contract-stale',
+                'resolution_source',
+                'source',
+                'https://example.com/old-1',
+                'Old official',
+                'snippet',
+                'metric',
+                'yes',
+                0.8,
+                '2026-05-10T12:00:00+00:00',
+                '2026-05-10T12:00:00+00:00',
+                '2026-05-10T12:00:00+00:00'
+            ),
+            (
+                'old-2',
+                'KXSTALE',
+                'run-stale',
+                'contract-stale',
+                'web',
+                'source',
+                'https://example.com/old-2',
+                'Old corroboration',
+                'snippet',
+                'metric',
+                'yes',
+                0.7,
+                '2026-05-10T12:01:00+00:00',
+                '2026-05-10T12:01:00+00:00',
+                '2026-05-10T12:01:00+00:00'
+            );
+            """
+        )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+
+    stats = summarize_research_dossiers(tmp_path, now=now)
+
+    assert stats.vetted_trade_candidate_dossiers == 1
+    assert stats.live_cache_eligible_dossiers == 0
+
+
+def test_print_research_gate_section_surfaces_dossier_cache(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("REAL_WEB_RESEARCH_MODE", "production")
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+    dossier_stats = botcheck.ResearchDossierStats(
+        db_path=tmp_path / "data" / "evidence_store.db",
+        exists=True,
+        dossiers=2,
+        evidence_rows=3,
+        latest_researched_ts=datetime(2026, 5, 10, 22, 50, tzinfo=timezone.utc),
+        latest_evidence_ts=datetime(2026, 5, 10, 22, 45, tzinfo=timezone.utc),
+        verdict_counts={"continue_researching": 1, "trade_candidate": 1},
+        vetted_trade_candidate_dossiers=1,
+        live_cache_eligible_dossiers=1,
+        fresh_evidence_rows_24h=2,
+    )
+
+    botcheck.print_research_gate_section(
+        tmp_path,
+        stats,
+        now=now,
+        dossier_stats=dossier_stats,
+    )
+
+    out = capsys.readouterr().out
+    assert "dossier_db : present data/evidence_store.db" in out
+    assert "dossiers   : 2 latest=2026-05-10T22:50:00+00:00 age=10m 00s" in out
+    assert "evidence   : 3 latest=2026-05-10T22:45:00+00:00 age=15m 00s fresh_24h=2" in out
+    assert "verdicts   : continue_researching=1, trade_candidate=1" in out
+    assert "vetted     : historical_trade_candidate=1 live_cache_eligible=1" in out
+
+
+def test_print_research_gate_section_surfaces_missing_dossier_db(capsys, tmp_path):
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+    dossier_stats = summarize_research_dossiers(tmp_path, now=now)
+
+    botcheck.print_research_gate_section(
+        tmp_path,
+        stats,
+        now=now,
+        dossier_stats=dossier_stats,
+    )
+
+    out = capsys.readouterr().out
+    assert "dossier_db : missing data/evidence_store.db" in out
+
+
+def test_print_research_gate_section_surfaces_uninitialized_research_tables(
+    capsys,
+    tmp_path,
+):
+    db_path = tmp_path / "data" / "evidence_store.db"
+    db_path.parent.mkdir()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE dossiers (id TEXT PRIMARY KEY)")
+        conn.execute("CREATE TABLE evidence (id TEXT PRIMARY KEY)")
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+    dossier_stats = summarize_research_dossiers(tmp_path, now=now)
+
+    botcheck.print_research_gate_section(
+        tmp_path,
+        stats,
+        now=now,
+        dossier_stats=dossier_stats,
+    )
+
+    out = capsys.readouterr().out
+    assert "dossier_db : not_initialized data/evidence_store.db" in out
+    assert "research tables missing until first prewarm/research write" in out
 
 
 def test_session_duration_is_honest_for_unpaired_inactive_session():

@@ -19,10 +19,24 @@ Funnel
 
 Match Attribution
   Match diagnostics            : 0
+  Match LLM reviews            : 0
   Signal analysis detail rows  : 0
   Match -> analysis detail gap : 0
   Match suppressions           : 0
   Match weight applications    : 0
+
+Match LLM Review Verdicts
+  (none)
+  False-positive neutral empty-keyword reviews: 0
+
+Empty-Keyword False-Neutral Sources (top 5)
+  (none)
+
+Empty-Keyword False-Neutral Tickers (top 5)
+  (none)
+
+Empty-Keyword False-Neutral Market Prefixes (top 5)
+  (none)
 
 Pre-LLM quality gate
   (none)

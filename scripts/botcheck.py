@@ -20,13 +20,26 @@ import gzip
 import json
 import os
 import re
+import sqlite3
 import subprocess
+import sys
 import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+REPO_ROOT_FOR_IMPORTS = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT_FOR_IMPORTS) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT_FOR_IMPORTS))
+
+from utils.research_prewarm_targets import (
+    DEFAULT_TARGET_REASONS,
+    DEFAULT_TARGET_RESEARCH_SKIP_REASONS,
+    record_targets_research_prewarm,
+)
+from scripts.research_activation_status import evaluate_activation_profile
 
 
 LOG_TS_RE = re.compile(
@@ -49,9 +62,12 @@ SIGNAL_FLOW_EVENTS = (
     "OPPORTUNITY",
     "BLEND_DECISION",
     "SKIPPED",
+    "RESEARCH_PREWARM_RESULT",
     "PAPER_TRADE",
     "LIVE_ORDER",
 )
+RESEARCH_DOSSIER_MAX_AGE_SECONDS = 6 * 60 * 60
+RESEARCH_REQUIRED_SOURCE_CLASSES = {"resolution_source", "official_primary"}
 
 
 @dataclass(frozen=True)
@@ -83,6 +99,24 @@ class SignalFlowStats:
     lines_malformed: int
     counts: Counter[str]
     latest_ts_by_type: dict[str, datetime]
+    research_records: int
+    research_status_counts: Counter[str]
+    latest_research_ts: datetime | None
+
+
+@dataclass(frozen=True)
+class ResearchDossierStats:
+    db_path: Path
+    exists: bool
+    dossiers: int = 0
+    evidence_rows: int = 0
+    latest_researched_ts: datetime | None = None
+    latest_evidence_ts: datetime | None = None
+    verdict_counts: Counter[str] = field(default_factory=Counter)
+    vetted_trade_candidate_dossiers: int = 0
+    live_cache_eligible_dossiers: int = 0
+    fresh_evidence_rows_24h: int = 0
+    error: str | None = None
 
 
 def human_duration(seconds: int | float | None) -> str:
@@ -181,6 +215,9 @@ def summarize_signal_flow(
     lines_malformed = [0]
     counts: Counter[str] = Counter()
     latest_ts_by_type: dict[str, datetime] = {}
+    research_status_counts: Counter[str] = Counter()
+    latest_research_ts: datetime | None = None
+    research_records = 0
     records_kept = 0
 
     for record in _iter_trade_records(
@@ -196,6 +233,16 @@ def summarize_signal_flow(
             continue
         records_kept += 1
         counts[event_type] += 1
+        if record.get("research_attempted") is True or any(
+            str(key).startswith("research_") for key in record
+        ):
+            research_records += 1
+            status = str(record.get("research_status") or "unknown").strip() or "unknown"
+            research_status_counts[status] += 1
+            if ts is not None and (
+                latest_research_ts is None or ts > latest_research_ts
+            ):
+                latest_research_ts = ts
         if ts is not None and (
             event_type not in latest_ts_by_type or ts > latest_ts_by_type[event_type]
         ):
@@ -209,6 +256,185 @@ def summarize_signal_flow(
         lines_malformed=lines_malformed[0],
         counts=counts,
         latest_ts_by_type=latest_ts_by_type,
+        research_records=research_records,
+        research_status_counts=research_status_counts,
+        latest_research_ts=latest_research_ts,
+    )
+
+
+def _research_dossier_db_path(repo_root: Path) -> Path:
+    return repo_root / "data" / "evidence_store.db"
+
+
+def _sqlite_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _parse_research_ts(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    return _parse_trade_ts(value.replace("Z", "+00:00"))
+
+
+def summarize_research_dossiers(
+    repo_root: Path,
+    *,
+    now: datetime,
+) -> ResearchDossierStats:
+    db_path = _research_dossier_db_path(repo_root)
+    if not db_path.exists():
+        return ResearchDossierStats(db_path=db_path, exists=False)
+
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            missing_tables = [
+                table_name
+                for table_name in ("research_dossiers", "research_evidence")
+                if not _sqlite_table_exists(conn, table_name)
+            ]
+            if missing_tables:
+                return ResearchDossierStats(
+                    db_path=db_path,
+                    exists=True,
+                    error="not_initialized",
+                )
+            evidence_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(research_evidence)").fetchall()
+            }
+            dossier_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(research_dossiers)").fetchall()
+            }
+
+            dossiers = int(
+                conn.execute("SELECT COUNT(*) AS count FROM research_dossiers").fetchone()[
+                    "count"
+                ]
+            )
+            evidence_rows = int(
+                conn.execute("SELECT COUNT(*) AS count FROM research_evidence").fetchone()[
+                    "count"
+                ]
+            )
+            latest_researched_raw = conn.execute(
+                "SELECT MAX(last_researched_ts) AS ts FROM research_dossiers"
+            ).fetchone()["ts"]
+            latest_evidence_raw = conn.execute(
+                """
+                SELECT MAX(COALESCE(retrieved_at, inserted_at)) AS ts
+                FROM research_evidence
+                """
+            ).fetchone()["ts"]
+            verdict_counts = Counter(
+                {
+                    str(row["last_verdict_status"] or "unknown"): int(row["count"])
+                    for row in conn.execute(
+                        """
+                        SELECT last_verdict_status, COUNT(*) AS count
+                        FROM research_dossiers
+                        GROUP BY last_verdict_status
+                        """
+                    )
+                }
+            )
+            vetted_trade_candidate_dossiers = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM research_dossiers
+                    WHERE last_verdict_status = 'trade_candidate'
+                      AND last_force_side IN ('yes', 'no')
+                      AND last_estimated_probability IS NOT NULL
+                      AND last_confidence IS NOT NULL
+                    """
+                ).fetchone()["count"]
+            )
+            live_cache_eligible_tickers: set[str] = set()
+            fresh_since = now - timedelta(hours=24)
+            live_cache_since = now - timedelta(seconds=RESEARCH_DOSSIER_MAX_AGE_SECONDS)
+            fresh_evidence_rows_24h = 0
+            evidence_by_contract: dict[tuple[str, str], list[tuple[str, datetime]]] = {}
+            fingerprint_select = (
+                "contract_fingerprint"
+                if "contract_fingerprint" in evidence_columns
+                else "NULL AS contract_fingerprint"
+            )
+            for row in conn.execute(
+                f"""
+                SELECT
+                    market_ticker,
+                    source_class,
+                    {fingerprint_select},
+                    COALESCE(retrieved_at, inserted_at) AS ts
+                FROM research_evidence
+                """
+            ):
+                evidence_ts = _parse_research_ts(row["ts"])
+                if evidence_ts is not None and evidence_ts >= fresh_since:
+                    fresh_evidence_rows_24h += 1
+                if evidence_ts is not None and evidence_ts >= live_cache_since:
+                    ticker = str(row["market_ticker"] or "").strip()
+                    fingerprint = str(row["contract_fingerprint"] or "").strip()
+                    if ticker and fingerprint:
+                        evidence_by_contract.setdefault((ticker, fingerprint), []).append(
+                            (str(row["source_class"] or "").strip(), evidence_ts)
+                        )
+            dossier_fingerprint_select = (
+                "last_contract_fingerprint"
+                if "last_contract_fingerprint" in dossier_columns
+                else "NULL AS last_contract_fingerprint"
+            )
+            vetted_contracts = {
+                (
+                    str(row["market_ticker"] or "").strip(),
+                    str(row["last_contract_fingerprint"] or "").strip(),
+                )
+                for row in conn.execute(
+                    f"""
+                    SELECT market_ticker, {dossier_fingerprint_select}
+                    FROM research_dossiers
+                    WHERE last_verdict_status = 'trade_candidate'
+                      AND last_force_side IN ('yes', 'no')
+                      AND last_estimated_probability IS NOT NULL
+                      AND last_confidence IS NOT NULL
+                    """
+                )
+            }
+            for ticker, fingerprint in vetted_contracts:
+                if not ticker or not fingerprint:
+                    continue
+                contract_evidence = evidence_by_contract.get((ticker, fingerprint), [])
+                if len(contract_evidence) < 2:
+                    continue
+                if any(
+                    source_class in RESEARCH_REQUIRED_SOURCE_CLASSES
+                    for source_class, _ts in contract_evidence
+                ):
+                    live_cache_eligible_tickers.add(ticker)
+    except sqlite3.Error as exc:
+        return ResearchDossierStats(
+            db_path=db_path,
+            exists=True,
+            error=str(exc),
+        )
+
+    return ResearchDossierStats(
+        db_path=db_path,
+        exists=True,
+        dossiers=dossiers,
+        evidence_rows=evidence_rows,
+        latest_researched_ts=_parse_research_ts(latest_researched_raw),
+        latest_evidence_ts=_parse_research_ts(latest_evidence_raw),
+        verdict_counts=verdict_counts,
+        vetted_trade_candidate_dossiers=vetted_trade_candidate_dossiers,
+        live_cache_eligible_dossiers=len(live_cache_eligible_tickers),
+        fresh_evidence_rows_24h=fresh_evidence_rows_24h,
     )
 
 
@@ -306,6 +532,278 @@ def read_sessions(log_path: Path) -> list[BotSession]:
         return parse_sessions(log_path.read_text(encoding="utf-8", errors="replace").splitlines())
     except OSError:
         return []
+
+
+def _read_env_file_value(path: Path, key: str) -> str | None:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    pattern = re.compile(rf"^\s*(?:export\s+)?{re.escape(key)}\s*=\s*(?P<value>.*)\s*$")
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = pattern.match(line)
+        if not match:
+            continue
+        value = match.group("value").strip()
+        if value and value[0] in {'"', "'"} and value[-1:] == value[0]:
+            value = value[1:-1]
+        return value
+    return None
+
+
+def _research_env_value(repo_root: Path, key: str, default: str) -> tuple[str, str]:
+    if key in os.environ:
+        return os.environ[key], "process-env"
+    env_value = _read_env_file_value(repo_root / ".env", key)
+    if env_value is not None:
+        return env_value, ".env"
+    return default, "default"
+
+
+def _env_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _relative_display_path(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def _format_ts_age(ts: datetime | None, *, now: datetime) -> tuple[str, str]:
+    if ts is None:
+        return "n/a", "n/a"
+    return ts.isoformat(), human_duration((now - ts).total_seconds())
+
+
+def summarize_research_prewarm_backlog(path: Path, *, since: datetime) -> list[str]:
+    return _target_tickers_from_trade_log(
+        path,
+        since=since,
+        reasons=DEFAULT_TARGET_REASONS,
+        research_skip_reasons=DEFAULT_TARGET_RESEARCH_SKIP_REASONS,
+    )
+
+
+def _target_tickers_from_trade_log(
+    path: Path,
+    *,
+    since: datetime,
+    reasons: list[str],
+    research_skip_reasons: list[str],
+) -> list[str]:
+    reason_set = {reason.strip() for reason in reasons if reason.strip()}
+    research_skip_reason_set = {
+        reason.strip() for reason in research_skip_reasons if reason.strip()
+    }
+    last_index_by_ticker: dict[str, int] = {}
+    lines_total = [0]
+    lines_malformed = [0]
+    for index, record in enumerate(
+        _iter_trade_records(
+            path,
+            lines_total=lines_total,
+            lines_malformed=lines_malformed,
+        )
+    ):
+        event_type = str(record.get("type") or "").strip()
+        if event_type not in {
+            "ANALYSIS_REJECTED",
+            "MATCH_LLM_REVIEW",
+            "SIGNAL_ANALYSIS_DETAIL",
+        }:
+            continue
+        ts = _parse_trade_ts(record.get("ts"))
+        if ts is not None and ts < since:
+            continue
+        if not _record_targets_research_prewarm(
+            record,
+            reason_set=reason_set,
+            research_skip_reason_set=research_skip_reason_set,
+        ):
+            continue
+        ticker = str(record.get("ticker") or record.get("market_ticker") or "").strip()
+        if ticker:
+            last_index_by_ticker[ticker] = index
+    return [
+        ticker
+        for ticker, _index in sorted(
+            last_index_by_ticker.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+    ]
+
+
+def _record_targets_research_prewarm(
+    record: dict[str, Any],
+    *,
+    reason_set: set[str],
+    research_skip_reason_set: set[str],
+) -> bool:
+    return record_targets_research_prewarm(
+        record,
+        reason_set=reason_set,
+        research_skip_reason_set=research_skip_reason_set,
+    )
+
+
+def print_research_gate_section(
+    repo_root: Path,
+    stats: SignalFlowStats,
+    *,
+    now: datetime,
+    dossier_stats: ResearchDossierStats | None = None,
+) -> None:
+    mode, mode_source = _research_env_value(repo_root, "REAL_WEB_RESEARCH_MODE", "off")
+    max_queries, max_queries_source = _research_env_value(
+        repo_root,
+        "REAL_WEB_RESEARCH_MAX_QUERIES",
+        "6",
+    )
+    timeout, timeout_source = _research_env_value(
+        repo_root,
+        "REAL_WEB_RESEARCH_TIMEOUT_SECONDS",
+        "12.0",
+    )
+    prewarm_enabled, prewarm_source = _research_env_value(
+        repo_root,
+        "ENABLE_RESEARCH_PREWARM_TASK",
+        "false",
+    )
+    prewarm_interval, _prewarm_interval_source = _research_env_value(
+        repo_root,
+        "RESEARCH_PREWARM_INTERVAL_SECONDS",
+        "900",
+    )
+    prewarm_max_markets, _prewarm_max_markets_source = _research_env_value(
+        repo_root,
+        "RESEARCH_PREWARM_MAX_MARKETS",
+        "25",
+    )
+    prewarm_max_pages, _prewarm_max_pages_source = _research_env_value(
+        repo_root,
+        "RESEARCH_PREWARM_MAX_PAGES",
+        "5",
+    )
+    mode = mode.strip().lower() or "off"
+    print("=== Real web research gate ===")
+    print(f"mode       : {mode} ({mode_source})")
+    print(f"max_queries: {max_queries} ({max_queries_source})")
+    print(f"timeout_s  : {timeout} ({timeout_source})")
+    profile_path = Path("docs/governance/research-shadow.env.example")
+    activation = evaluate_activation_profile(repo_root, profile_path)
+    relative_profile = _relative_display_path(activation.profile_path, repo_root)
+    print(
+        "activation : "
+        f"{'PASS' if activation.ok else 'FAIL'} profile={relative_profile}"
+    )
+    for key in activation.missing:
+        expected = activation.profile_values.get(key, "")
+        print(f"missing    : {key}={expected}")
+    for key, expected, actual in activation.mismatched:
+        print(f"mismatch   : {key} expected={expected} actual={actual}")
+    for item in activation.unsafe:
+        print(f"unsafe     : {item}")
+    if _env_bool(prewarm_enabled):
+        print(
+            "prewarm   : "
+            f"on ({prewarm_source}) interval={prewarm_interval}s "
+            f"max_markets={prewarm_max_markets} max_pages={prewarm_max_pages}"
+        )
+    elif mode in {"shadow", "production"}:
+        print(
+            "prewarm   : "
+            f"off ({prewarm_source}) RISK: cache misses can remain terminal"
+        )
+    else:
+        print(f"prewarm   : off ({prewarm_source})")
+    if mode == "off":
+        print("status     : disabled; no-keyword candidates use legacy terminal skip")
+    elif mode == "shadow":
+        print("status     : shadow; evidence collected without promotion")
+    elif mode == "production":
+        print("status     : production; eligible researched candidates may promote")
+    else:
+        print("status     : INVALID; config validation should reject this at startup")
+
+    latest_age = (
+        human_duration((now - stats.latest_research_ts).total_seconds())
+        if stats.latest_research_ts is not None
+        else "n/a"
+    )
+    latest_text = (
+        stats.latest_research_ts.isoformat()
+        if stats.latest_research_ts is not None
+        else "n/a"
+    )
+    print(
+        "research_rows: "
+        f"{stats.research_records} latest={latest_text} age={latest_age}"
+    )
+    if stats.research_status_counts:
+        rendered = ", ".join(
+            f"{status}={count}"
+            for status, count in sorted(stats.research_status_counts.items())
+        )
+        print(f"statuses   : {rendered}")
+    else:
+        print("statuses   : none")
+    prewarm_backlog = summarize_research_prewarm_backlog(stats.path, since=stats.since)
+    sample = ",".join(prewarm_backlog[:5]) if prewarm_backlog else "none"
+    print(
+        "prewarm_backlog: "
+        f"{len(prewarm_backlog)} targetable from logs sample={sample}"
+    )
+    if dossier_stats is not None:
+        dossier_path = _relative_display_path(dossier_stats.db_path, repo_root)
+        if not dossier_stats.exists:
+            print(f"dossier_db : missing {dossier_path}")
+        elif dossier_stats.error == "not_initialized":
+            print(
+                f"dossier_db : not_initialized {dossier_path}: "
+                "research tables missing until first prewarm/research write"
+            )
+        elif dossier_stats.error is not None:
+            print(f"dossier_db : error {dossier_path}: {dossier_stats.error}")
+        else:
+            researched_text, researched_age = _format_ts_age(
+                dossier_stats.latest_researched_ts,
+                now=now,
+            )
+            evidence_text, evidence_age = _format_ts_age(
+                dossier_stats.latest_evidence_ts,
+                now=now,
+            )
+            print(f"dossier_db : present {dossier_path}")
+            print(
+                "dossiers   : "
+                f"{dossier_stats.dossiers} latest={researched_text} age={researched_age}"
+            )
+            print(
+                "evidence   : "
+                f"{dossier_stats.evidence_rows} latest={evidence_text} "
+                f"age={evidence_age} fresh_24h={dossier_stats.fresh_evidence_rows_24h}"
+            )
+            if dossier_stats.verdict_counts:
+                rendered_verdicts = ", ".join(
+                    f"{status}={count}"
+                    for status, count in sorted(dossier_stats.verdict_counts.items())
+                )
+                print(f"verdicts   : {rendered_verdicts}")
+            else:
+                print("verdicts   : none")
+            print(
+                "vetted     : "
+                "historical_trade_candidate="
+                f"{dossier_stats.vetted_trade_candidate_dossiers} "
+                f"live_cache_eligible={dossier_stats.live_cache_eligible_dossiers}"
+            )
+    print()
 
 
 def run_command(args: list[str]) -> str:
@@ -834,12 +1332,19 @@ def main() -> int:
         now=now,
         window_hours=args.signal_window_hours,
     )
+    research_dossiers = summarize_research_dossiers(default_home, now=now)
 
     print_launchd(args.label, launchd_output, wrapper_pid)
     current_proc = print_bot_section(bots, now_epoch=now_epoch, now=now)
     print_caffeinate_section(caffeinates, now_epoch=now_epoch)
     print_last_boot(args.log, sessions, now)
     print_signal_flow_section(signal_flow, now=now)
+    print_research_gate_section(
+        default_home,
+        signal_flow,
+        now=now,
+        dossier_stats=research_dossiers,
+    )
     print_kalshi_drift_section(now=now)
     print_history(sessions=sessions, current_proc=current_proc, now=now)
     return 0

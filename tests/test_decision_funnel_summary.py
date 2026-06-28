@@ -1,3 +1,4 @@
+from collections import Counter
 import shutil
 import uuid
 from pathlib import Path
@@ -184,6 +185,58 @@ def test_summarize_aggregates_analysis_rejected_reasons(local_tmp_dir):
     assert stats["analysis_rejected_reasons"]["no_keywords"] == 1
     assert stats["analysis_rejected_categories"]["post_llm_neutral_empty_keywords"] == 1
     assert not stats["skip_reasons"]
+
+
+def test_summarize_tracks_false_positive_neutral_match_reviews(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "verdict": "false_positive_neutral",
+                "source": "NYT > U.S. News",
+                "ticker": "PACCC-USSE-MIDTERMS-2026-11-03-REP",
+                "market_prefix": "polymarket_us:paccc-usse-midterms",
+                "keyword_count": 0,
+                "ts": "2026-04-11T00:00:00+00:00",
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "verdict": "true_positive",
+                "source": "Reuters",
+                "ticker": "KXREAL",
+                "market_prefix": "KXREAL",
+                "keyword_count": 2,
+                "ts": "2026-04-11T00:01:00+00:00",
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "verdict": "false_positive_neutral",
+                "source": "Politico",
+                "ticker": "KXKEYWORDED",
+                "market_prefix": "KXKEYWORDED",
+                "keyword_count": 2,
+                "ts": "2026-04-11T00:02:00+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+
+    assert stats["match_llm_reviews_total"] == 3
+    assert stats["match_llm_review_verdicts"]["false_positive_neutral"] == 2
+    assert stats["match_llm_review_verdicts"]["true_positive"] == 1
+    assert stats["false_positive_neutral_empty_keyword_sources"] == Counter(
+        {"NYT > U.S. News": 1}
+    )
+    assert stats["false_positive_neutral_empty_keyword_tickers"] == Counter(
+        {"PACCC-USSE-MIDTERMS-2026-11-03-REP": 1}
+    )
+    assert stats["false_positive_neutral_empty_keyword_prefixes"] == Counter(
+        {"polymarket_us:paccc-usse-midterms": 1}
+    )
+    assert stats["false_positive_neutral_empty_keyword_reviews"] == 1
 
 
 def test_summarize_tracks_stale_news_breakdowns(local_tmp_dir):

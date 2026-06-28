@@ -59,9 +59,9 @@ import signal
 import sqlite3
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import ModuleType, SimpleNamespace
-from typing import Awaitable, Callable  # noqa: F401 — referenced in string annotations
+from typing import Any, Awaitable, Callable  # noqa: F401 — referenced in string annotations
 from urllib.parse import urlparse
 
 from analysis import SignalAnalysis
@@ -70,6 +70,7 @@ from analysis.kelly import kelly_bet
 from analysis.research_gate import ResearchStatus, run_research_gate
 from tasks.stats.keyword_stats import KeywordStats
 from tasks.research_dossier import default_store as default_research_dossier_store
+from tasks.research_prewarm_task import ResearchPrewarmTask
 from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
 from polymarket.settlement_reconciler import (
@@ -102,13 +103,24 @@ from tasks.calibration_task import CalibrationTask
 from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
-from utils.logger import get_logger, emit_startup_banner, rotate_logs, write_trade_log_async
+from utils.logger import (
+    TRADE_LOG_FILE,
+    get_logger,
+    emit_startup_banner,
+    rotate_logs,
+    write_trade_log_async,
+)
 from utils.runtime_overrides import (
     RuntimeOverridesReader,
     get_threshold_override,
     is_source_disabled,
     set_global_reader,
 )
+from utils.research_prewarm_targets import (
+    RESEARCH_PREWARM_EVENT_TYPES,
+    record_targets_research_prewarm,
+)
+from utils.trade_log_reader import iter_trade_records
 from tasks.runtime_overrides_task import run_runtime_overrides_poll
 
 log = get_logger("main")
@@ -123,6 +135,35 @@ NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS = max(
     1.0,
     float(os.getenv("NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS", "20")),
 )
+
+def _recent_runtime_research_prewarm_tickers(*, now: datetime | None = None) -> list[str]:
+    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    since = now_utc - timedelta(hours=24)
+    trade_log_root = TRADE_LOG_FILE.parent.parent
+    last_index_by_ticker: dict[str, int] = {}
+    try:
+        records = iter_trade_records(
+            trade_log_root,
+            since=since,
+            event_types=RESEARCH_PREWARM_EVENT_TYPES,
+        )
+        for index, record in enumerate(records):
+            if not record_targets_research_prewarm(record):
+                continue
+            ticker = str(record.get("ticker") or record.get("market_ticker") or "").strip()
+            if ticker:
+                last_index_by_ticker[ticker] = index
+    except Exception as exc:
+        log.debug("[RESEARCH_PREWARM] trade-log target scan failed: %s", exc)
+        return []
+    return [
+        ticker
+        for ticker, _index in sorted(
+            last_index_by_ticker.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+    ]
 
 
 def _validate_startup_observability_probe_record(record: dict, required_fields: tuple[str, ...]) -> list[str]:
@@ -831,6 +872,131 @@ class TradingBot:
         self._market_cache_ready_at: datetime | None = None
         self._market_cache_ready_after_secs: float | None = None
         self._market_cache_empty_discovery_passes = 0
+        self._targeted_research_prewarm_tasks: set[asyncio.Task] = set()
+        self._last_targeted_research_prewarm: dict[str, float] = {}
+
+    _RETRYABLE_RESEARCH_PREWARM_REASONS = {
+        "ambiguous_direction",
+        "cached_dossier_insufficient",
+        "cached_dossier_unvetted",
+        "direction_reason_conflict",
+        "no_research_hits",
+        "missing_resolution_source",
+        "insufficient_corroboration",
+        "missing_estimated_probability",
+        "probability_direction_conflict",
+        "research_timeout",
+        "research_provider_error",
+        "research_adjudicator_error",
+        "new_market",
+    }
+
+    def _research_prewarm_market_provider(self) -> list[object]:
+        try:
+            markets = self.rest.get_all_open_markets(
+                max_pages=int(getattr(cfg, "research_prewarm_max_pages", 5))
+            )
+        except Exception as exc:
+            log.warning("[RESEARCH_PREWARM] open-market scan failed: %s", exc)
+            return []
+        max_markets = int(getattr(cfg, "research_prewarm_max_markets", 25))
+        market_list = list(markets or [])
+        target_order = {
+            ticker: index
+            for index, ticker in enumerate(_recent_runtime_research_prewarm_tickers())
+        }
+        if target_order:
+            market_list = sorted(
+                enumerate(market_list),
+                key=lambda item: (
+                    target_order.get(str(getattr(item[1], "ticker", "") or ""), len(target_order)),
+                    item[0],
+                ),
+            )
+            return [market for _index, market in market_list[:max_markets]]
+        return market_list[:max_markets]
+
+    def _create_research_prewarm_runtime_task(self) -> asyncio.Task | None:
+        if not bool(getattr(cfg, "enable_research_prewarm_task", False)):
+            return None
+        prewarm = ResearchPrewarmTask(
+            max_queries=int(getattr(cfg, "real_web_research_max_queries", 6)),
+            research_timeout_seconds=float(
+                getattr(cfg, "real_web_research_timeout_seconds", 12.0)
+            ),
+        )
+        return asyncio.create_task(
+            prewarm.run_periodic(
+                self._research_prewarm_market_provider,
+                interval_seconds=float(
+                    getattr(cfg, "research_prewarm_interval_seconds", 900.0)
+                ),
+            ),
+            name="research_prewarm",
+        )
+
+    async def _run_targeted_research_prewarm(self, market, skip_reason: str) -> None:
+        prewarm = ResearchPrewarmTask(
+            max_queries=int(getattr(cfg, "real_web_research_max_queries", 6)),
+            research_timeout_seconds=float(
+                getattr(cfg, "real_web_research_timeout_seconds", 12.0)
+            ),
+        )
+        result = await prewarm.process_market(market)
+        await prewarm.emit_result(result)
+        log.info(
+            "[RESEARCH_PREWARM] targeted ticker=%s source_skip_reason=%s "
+            "status=%s attempted=%s evidence=%d queries=%d",
+            result.market_ticker,
+            skip_reason,
+            result.status,
+            result.attempted,
+            result.evidence_count,
+            result.query_count,
+        )
+
+    def _schedule_targeted_research_prewarm(self, market, skip_reason: str | None) -> bool:
+        reason = str(skip_reason or "").strip()
+        if reason not in self._RETRYABLE_RESEARCH_PREWARM_REASONS:
+            return False
+        research_mode = str(getattr(cfg, "real_web_research_mode", "off") or "off").lower()
+        if research_mode not in {"production", "shadow"}:
+            return False
+        ticker = str(getattr(market, "ticker", "") or "").strip()
+        if not ticker:
+            return False
+        if not hasattr(self, "_targeted_research_prewarm_tasks"):
+            self._targeted_research_prewarm_tasks = set()
+        if not hasattr(self, "_last_targeted_research_prewarm"):
+            self._last_targeted_research_prewarm = {}
+        now_monotonic = time.monotonic()
+        cooldown = float(getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0))
+        last_started = self._last_targeted_research_prewarm.get(ticker)
+        if last_started is not None and now_monotonic - last_started < cooldown:
+            return False
+        self._last_targeted_research_prewarm[ticker] = now_monotonic
+        task = asyncio.create_task(
+            self._run_targeted_research_prewarm(market, reason),
+            name=f"research_prewarm_target:{ticker}",
+        )
+        self._targeted_research_prewarm_tasks.add(task)
+
+        def _discard(done: asyncio.Task) -> None:
+            self._targeted_research_prewarm_tasks.discard(done)
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._last_targeted_research_prewarm.pop(ticker, None)
+                log.warning(
+                    "[RESEARCH_PREWARM] targeted ticker=%s failed: %s",
+                    ticker,
+                    exc,
+                )
+
+        task.add_done_callback(_discard)
+        return True
 
     # ── News pipeline ─────────────────────────────────────────────────────────
 
@@ -1228,13 +1394,17 @@ class TradingBot:
         # learns keyword-config gaps from these events. Pre-fix, all 5 LLM-
         # validated real-market events in a 9-day window were killed here.
         llm_emitted_signal = llm_mag is not None and llm_mag != "none"
-        if not keywords and not llm_emitted_signal:
-            saw_llm_result = llm_dir is not None or llm_mag is not None or llm_conf is not None
+        saw_llm_result = llm_dir is not None or llm_mag is not None or llm_conf is not None
+        sparse_neutral_keywords = (
+            bool(keywords)
+            and len(keywords) <= 1
+            and not llm_emitted_signal
+            and saw_llm_result
+        )
+        if (not keywords and not llm_emitted_signal) or sparse_neutral_keywords:
             eval_context = _counterfactual_llm_eval_context(news, market) if saw_llm_result else {}
             research_mode = str(getattr(cfg, "real_web_research_mode", "off") or "off").lower()
-            should_research = research_mode == "production" or (
-                research_mode == "shadow" and saw_llm_result
-            )
+            should_research = research_mode in {"production", "shadow"}
             if should_research:
                 def _ask_prob(*names: str) -> float | None:
                     for name in names:
@@ -1245,6 +1415,12 @@ class TradingBot:
                         return value / 100.0 if value > 1.0 else value
                     return None
 
+                dossier_store = getattr(self, "_research_dossier_store", None)
+                if dossier_store is None:
+                    dossier_store = default_research_dossier_store()
+
+                research_started = datetime.now(timezone.utc)
+                research_started_monotonic = time.monotonic()
                 research_verdict = await run_research_gate(
                     news,
                     market,
@@ -1258,19 +1434,43 @@ class TradingBot:
                     research_timeout_seconds=float(
                         getattr(cfg, "real_web_research_timeout_seconds", 12.0)
                     ),
-                    dossier_store=getattr(
-                        self,
-                        "_research_dossier_store",
-                        default_research_dossier_store(),
-                    ),
+                    dossier_store=dossier_store,
+                    cache_only=research_mode == "production",
                 )
+                research_completed = datetime.now(timezone.utc)
                 eval_context.update(research_verdict.log_fields())
+                eval_context.update(
+                    {
+                        "research_started_ts": research_started.isoformat(),
+                        "research_completed_ts": research_completed.isoformat(),
+                        "research_duration_ms": round(
+                            (time.monotonic() - research_started_monotonic) * 1000.0,
+                            2,
+                        ),
+                    }
+                )
                 if (
                     research_mode == "production"
                     and research_verdict.status == ResearchStatus.TRADE_CANDIDATE
                     and research_verdict.force_side in {"yes", "no"}
                     and research_verdict.estimated_probability is not None
                 ):
+                    age_after_research = (
+                        datetime.now(timezone.utc) - news.published
+                    ).total_seconds()
+                    if age_after_research > threshold_secs:
+                        await write_trade_log_async(
+                            trade_log.log_analysis_rejected,
+                            reason="stale_news_after_research",
+                            ticker=market.ticker,
+                            source=news.source,
+                            headline=news.headline,
+                            match_score=match_score,
+                            age_seconds=age_after_research,
+                            threshold_seconds=threshold_secs,
+                            **eval_context,
+                        )
+                        return
                     estimated_prob = research_verdict.estimated_probability
                     confidence = research_verdict.confidence or llm_conf or confidence
                     keywords = ["research_evidence"]
@@ -1280,25 +1480,54 @@ class TradingBot:
                     llm_conf = research_verdict.confidence or llm_conf
                 elif research_mode == "production":
                     status = research_verdict.status
-                    reason = (
-                        "research_incomplete"
-                        if status == ResearchStatus.CONTINUE_RESEARCHING
-                        else "researched_no_edge"
-                    )
-                    category = (
-                        "research_continue"
-                        if status == ResearchStatus.CONTINUE_RESEARCHING
-                        else status.value
-                    )
+                    if status == ResearchStatus.CONTINUE_RESEARCHING:
+                        reason = "research_incomplete"
+                        category = "research_continue"
+                        signal_branch = (
+                            "sparse_keywords_research_continue"
+                            if sparse_neutral_keywords
+                            else "empty_keywords_research_continue"
+                        )
+                        self._schedule_targeted_research_prewarm(
+                            market,
+                            research_verdict.skip_reason,
+                        )
+                    elif status in {
+                        ResearchStatus.RESEARCH_PROVIDER_ERROR,
+                        ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
+                    }:
+                        reason = "research_operational_error"
+                        category = status.value
+                        signal_branch = (
+                            "sparse_keywords_research_error"
+                            if sparse_neutral_keywords
+                            else "empty_keywords_research_error"
+                        )
+                        self._schedule_targeted_research_prewarm(
+                            market,
+                            research_verdict.skip_reason,
+                        )
+                    else:
+                        reason = "researched_no_edge"
+                        category = status.value
+                        signal_branch = (
+                            "sparse_keywords_researched_terminal"
+                            if sparse_neutral_keywords
+                            else "empty_keywords_researched_terminal"
+                        )
+                        if (
+                            research_verdict.skip_reason
+                            in self._RETRYABLE_RESEARCH_PREWARM_REASONS
+                        ):
+                            self._schedule_targeted_research_prewarm(
+                                market,
+                                research_verdict.skip_reason,
+                            )
                     await write_trade_log_async(
                         trade_log.log_analysis_rejected,
                         reason=reason,
                         rejection_category=category,
-                        signal_branch=(
-                            "empty_keywords_research_continue"
-                            if status == ResearchStatus.CONTINUE_RESEARCHING
-                            else "empty_keywords_researched_terminal"
-                        ),
+                        signal_branch=signal_branch,
                         method="llm" if saw_llm_result else None,
                         llm_direction=llm_dir,
                         llm_magnitude=llm_mag,
@@ -1311,6 +1540,19 @@ class TradingBot:
                         **eval_context,
                     )
                     return
+                elif research_verdict.status == ResearchStatus.CONTINUE_RESEARCHING:
+                    self._schedule_targeted_research_prewarm(
+                        market,
+                        research_verdict.skip_reason,
+                    )
+                elif (
+                    research_verdict.skip_reason
+                    in self._RETRYABLE_RESEARCH_PREWARM_REASONS
+                ):
+                    self._schedule_targeted_research_prewarm(
+                        market,
+                        research_verdict.skip_reason,
+                    )
 
         if not keywords and not llm_emitted_signal:
             saw_llm_result = llm_dir is not None or llm_mag is not None or llm_conf is not None
@@ -2116,6 +2358,8 @@ class TradingBot:
                         m.ticker, m.title[:60],
                     )
                     asyncio.create_task(self._trigger_targeted_search(m.ticker))
+                    if bool(getattr(cfg, "enable_research_prewarm_task", False)):
+                        self._schedule_targeted_research_prewarm(m, "new_market")
             self._known_market_tickers = new_tickers
 
     async def _market_refresh_task(self) -> None:
@@ -2793,6 +3037,9 @@ class TradingBot:
                 name="fade_tweets",
             )] if FADE_TWEET_FEED_URLS else []),
         ]
+        research_prewarm_task = self._create_research_prewarm_runtime_task()
+        if research_prewarm_task is not None:
+            tasks.append(research_prewarm_task)
 
         try:
             await asyncio.gather(*tasks)

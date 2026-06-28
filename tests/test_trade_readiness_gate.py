@@ -279,6 +279,46 @@ def test_passing_dossier_records_g6_recency_margin():
     assert decision.recency_distance == pytest.approx(0.80 - G6_RECENCY_THRESHOLD)
 
 
+@pytest.mark.parametrize(
+    ("overrides", "expected_threshold"),
+    [
+        ({}, 0.30),
+        ({"evidence_source_classes": ["other"]}, 0.35),
+        ({"time_to_close_seconds": 6 * 60 * 60}, 0.38),
+        ({"time_to_close_seconds": 2 * 86_400}, 0.34),
+        ({"time_to_close_seconds": 21 * 86_400}, 0.27),
+        ({"settlement_source_relevant": True}, 0.26),
+    ],
+)
+def test_g6_recency_threshold_component_adjustments_are_pinned(
+    overrides,
+    expected_threshold,
+):
+    decision = evaluate_readiness(
+        _dossier_candidate(recency_score=0.99, **overrides),
+        regime_confidence=0.80,
+    )
+
+    assert decision.passed is True
+    assert decision.recency_threshold == pytest.approx(expected_threshold)
+
+
+def test_g6_replays_observed_weak_source_long_horizon_skip_shape():
+    decision = evaluate_readiness(
+        _dossier_candidate(
+            evidence_source_classes=["other"],
+            recency_score=0.0682,
+            time_to_close_seconds=129 * 86_400,
+        ),
+        regime_confidence=0.80,
+    )
+
+    assert decision.passed is False
+    assert decision.failure_reasons == ("G6_recency_score",)
+    assert decision.recency_threshold == pytest.approx(0.32)
+    assert decision.recency_distance == pytest.approx(-0.2518)
+
+
 def test_g6_recency_threshold_relaxes_for_relevant_official_long_horizon_evidence():
     decision = evaluate_readiness(
         _dossier_candidate(

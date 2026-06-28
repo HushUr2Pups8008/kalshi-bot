@@ -1,3 +1,7 @@
+from pathlib import Path
+import subprocess
+import sys
+
 from scripts.keyword_feedback import (
     parse_date_end,
     parse_date_start,
@@ -45,23 +49,48 @@ def test_summarize_collects_no_keyword_misses_and_candidate_phrases():
                     "headline": "Iran war talks collapse after blockade threat",
                     "ts": "2026-04-12T10:01:00+00:00",
                 },
+                {
+                    "type": "MATCH_LLM_REVIEW",
+                    "verdict": "false_positive_neutral",
+                    "source": "Politico",
+                    "ticker": "KXIRAN-3",
+                    "headline": "Iran talks collapse as blockade threat grows",
+                    "keyword_count": 0,
+                    "ts": "2026-04-12T10:02:00+00:00",
+                },
+                {
+                    "type": "MATCH_LLM_REVIEW",
+                    "verdict": "false_positive_neutral",
+                    "source": "Politico",
+                    "ticker": "KXIRAN-4",
+                    "headline": "Existing keyword match has no edge",
+                    "keyword_count": 2,
+                    "ts": "2026-04-12T10:03:00+00:00",
+                },
             ],
         )
 
         stats = summarize(path, since=None, until=None)
 
         assert stats["no_keyword_misses"] == 2
+        assert stats["false_positive_neutral_reviews"] == 2
+        assert stats["false_positive_neutral_empty_keyword_reviews"] == 1
         assert stats["corroborating_keyword_gate_records"] == 0
         assert stats["no_keyword_rejection_categories"]["post_llm_neutral_empty_keywords"] == 1
         assert stats["no_keyword_rejection_categories"]["legacy_no_keywords"] == 1
         assert stats["empty_keyword_llm_directional_rows"] == 1
         assert stats["empty_keyword_llm_neutral_rows"] == 0
+        assert stats["top_false_positive_neutral_sources"] == [("Politico", 1)]
+        assert stats["top_false_positive_neutral_tickers"] == [("KXIRAN-3", 1)]
         assert stats["top_empty_keyword_llm_directional_sources"] == [("Reuters", 1)]
         assert stats["top_no_keyword_sources"] == [("NYT > World News", 1), ("Reuters", 1)]
         assert stats["top_no_keyword_tickers"] == [("KXIRAN-1", 1), ("KXIRAN-2", 1)]
         phrases = {row["phrase"]: row for row in stats["phrases"]}
+        assert "existing keyword" not in phrases
+        assert phrases["iran talks"]["count"] == 1
+        assert phrases["iran talks"]["corpora"] == {"false_positive_neutral_review": 1}
         assert phrases["iran war"]["count"] == 2
-        assert phrases["talks collapse"]["count"] == 2
+        assert phrases["talks collapse"]["count"] == 3
         assert "NYT > World News" in phrases["iran war"]["sources"]
         assert phrases["talks collapse"]["category"] == "specific event phrase"
         assert phrases["talks collapse"]["review_bucket"] == "strongest specific candidates"
@@ -107,6 +136,47 @@ def test_summarize_reads_partitioned_trade_root():
         assert stats["lines_total"] == 2
         assert stats["no_keyword_misses"] == 1
         assert stats["corroborating_keyword_gate_records"] == 1
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_keyword_feedback_cli_runs_from_direct_script_execution():
+    tmp = make_tmp_dir("keyword_feedback_cli")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "MATCH_LLM_REVIEW",
+                    "verdict": "false_positive_neutral",
+                    "source": "Politico",
+                    "ticker": "KXCLI",
+                    "headline": "Senate runoff polling shifts again",
+                    "keyword_count": 0,
+                    "ts": "2026-04-12T10:00:00+00:00",
+                },
+            ],
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "scripts/keyword_feedback.py",
+                "--path",
+                str(path),
+                "--top",
+                "3",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        assert result.returncode == 0
+        assert "False-positive neutral reviews   : 1" in result.stdout
     finally:
         cleanup_tmp_dir(tmp)
 
