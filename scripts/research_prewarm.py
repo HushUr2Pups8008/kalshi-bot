@@ -33,6 +33,7 @@ DEFAULT_TARGET_REASONS = [
     "research_operational_error",
 ]
 DEFAULT_TARGET_RESEARCH_SKIP_REASONS = [
+    "ambiguous_direction",
     "cached_dossier_insufficient",
     "cached_dossier_unvetted",
     "research_timeout",

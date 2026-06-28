@@ -164,6 +164,13 @@ async def test_run_once_targets_retryable_research_skip_reasons(tmp_path):
             },
             {
                 "type": "ANALYSIS_REJECTED",
+                "ts": "2026-06-27T11:30:00Z",
+                "ticker": "KX-AMBIG",
+                "reason": "researched_no_edge",
+                "research_skip_reason": "ambiguous_direction",
+            },
+            {
+                "type": "ANALYSIS_REJECTED",
                 "ts": "2026-06-27T12:00:00Z",
                 "ticker": "KX-CAPITAL",
                 "reason": "researched_no_edge",
@@ -183,6 +190,7 @@ async def test_run_once_targets_retryable_research_skip_reasons(tmp_path):
             "research_operational_error",
         ],
         target_research_skip_reason=[
+            "ambiguous_direction",
             "cached_dossier_insufficient",
             "cached_dossier_unvetted",
             "research_timeout",
@@ -197,9 +205,13 @@ async def test_run_once_targets_retryable_research_skip_reasons(tmp_path):
     summary = await research_prewarm.run_once(args, client=client, task=task)
 
     assert client.open_page_calls == []
-    assert client.market_calls == ["KX-OPS", "KX-CACHE"]
-    assert [market.ticker for market in task.markets] == ["KX-OPS", "KX-CACHE"]
-    assert summary["markets"] == 2
+    assert client.market_calls == ["KX-AMBIG", "KX-OPS", "KX-CACHE"]
+    assert [market.ticker for market in task.markets] == [
+        "KX-AMBIG",
+        "KX-OPS",
+        "KX-CACHE",
+    ]
+    assert summary["markets"] == 3
 
 
 @pytest.mark.asyncio
@@ -361,6 +373,7 @@ def test_build_argparser_defaults_to_single_run():
         "research_operational_error",
     ]
     assert args.target_research_skip_reason == [
+        "ambiguous_direction",
         "cached_dossier_insufficient",
         "cached_dossier_unvetted",
         "research_timeout",

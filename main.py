@@ -138,6 +138,7 @@ _RUNTIME_RESEARCH_PREWARM_TARGET_REASONS = {
     "research_operational_error",
 }
 _RUNTIME_RESEARCH_PREWARM_TARGET_RESEARCH_SKIP_REASONS = {
+    "ambiguous_direction",
     "cached_dossier_insufficient",
     "cached_dossier_unvetted",
     "research_timeout",
@@ -928,6 +929,7 @@ class TradingBot:
         self._last_targeted_research_prewarm: dict[str, float] = {}
 
     _RETRYABLE_RESEARCH_PREWARM_REASONS = {
+        "ambiguous_direction",
         "cached_dossier_insufficient",
         "cached_dossier_unvetted",
         "direction_reason_conflict",
