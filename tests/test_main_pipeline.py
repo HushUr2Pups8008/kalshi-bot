@@ -68,6 +68,7 @@ def _make_bot_stub():
     bot.rest.get_exchange_status.return_value = ExchangeState(
         exchange_active=True, trading_active=True,
     )
+    bot.rest.get_series.return_value = None
     bot.matcher = MagicMock()
     bot.matcher.find_all_candidates = AsyncMock(return_value=[])
     bot.matcher._cache = MagicMock()
@@ -123,6 +124,7 @@ def _make_market():
         price_available=True,
         price_source="rest_list",
         price_method="dollars_fixed_point",
+        rules_primary="Official test rules determine the market.",
     )
 
 
@@ -230,6 +232,113 @@ def test_research_prewarm_market_provider_prioritizes_recent_empty_keyword_backl
 
     assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
         backlog_market.ticker,
+    ]
+
+
+def test_research_prewarm_market_provider_skips_unsourceable_markets(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 2, raising=False)
+    bot = _make_bot_stub()
+    unsourceable_backlog = replace(
+        _make_market(),
+        ticker="KXMVESPORTSMULTIGAMEEXTENDED-S2026",
+        rules_primary="",
+        rules_secondary="",
+        contract_terms_url="",
+        settlement_sources=(),
+    )
+    sourceable_market = replace(
+        _make_market(),
+        ticker="KXSOURCEABLE-25DEC31",
+        settlement_sources=(SettlementSource(label="Official", domain="official.example"),),
+    )
+    unsourceable_filler = replace(
+        _make_market(),
+        ticker="KXMVECROSSCATEGORY-S2026",
+        rules_primary="",
+        rules_secondary="",
+        contract_terms_url="",
+        settlement_sources=(),
+    )
+    bot.rest.get_all_open_markets.return_value = [
+        unsourceable_backlog,
+        sourceable_market,
+        unsourceable_filler,
+    ]
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ticker": unsourceable_backlog.ticker,
+                "reason": "researched_no_edge",
+                "research_skip_reason": "missing_resolution_source",
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        sourceable_market.ticker,
+    ]
+
+
+def test_research_prewarm_market_provider_enriches_series_metadata(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    raw_market = replace(
+        _make_market(),
+        ticker="KXSERIESMETA-25DEC31",
+        rules_primary="",
+        rules_secondary="",
+        contract_terms_url="",
+        settlement_sources=(),
+    )
+    bot.rest.get_all_open_markets.return_value = [raw_market]
+    bot.rest.get_series.return_value = SimpleNamespace(
+        rules_primary="Series-level rules identify the official report.",
+        rules_secondary="",
+        contract_terms_url="https://kalshi.com/markets/KXSERIESMETA-25DEC31",
+        settlement_sources=(SettlementSource(label="Official", domain="official.example"),),
+    )
+
+    selected = bot._research_prewarm_market_provider()
+
+    assert [market.ticker for market in selected] == [raw_market.ticker]
+    assert selected[0].rules_primary == "Series-level rules identify the official report."
+    assert selected[0].settlement_sources == (
+        SettlementSource(label="Official", domain="official.example"),
+    )
+    bot.rest.get_series.assert_called_once_with(raw_market.series_ticker)
+
+
+def test_research_prewarm_market_provider_returns_unsourceable_for_skip_telemetry(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 2, raising=False)
+    bot = _make_bot_stub()
+    unsourceable_markets = [
+        replace(
+            _make_market(),
+            ticker=f"KXUNSOURCEABLE-{index}",
+            rules_primary="",
+            rules_secondary="",
+            contract_terms_url="",
+            settlement_sources=(),
+        )
+        for index in range(3)
+    ]
+    bot.rest.get_all_open_markets.return_value = unsourceable_markets
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        "KXUNSOURCEABLE-0",
+        "KXUNSOURCEABLE-1",
     ]
 
 

@@ -241,6 +241,35 @@ async def test_prewarm_skips_closed_markets_without_research_call(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_prewarm_skips_unresearchable_markets_without_research_call(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+
+    async def research_gate(*_args, **_kwargs):
+        raise AssertionError("markets without a source path must not be researched")
+
+    task = ResearchPrewarmTask(store=store, research_gate=research_gate)
+
+    result = await task.process_market(
+        SimpleNamespace(
+            ticker="KXMVESPORTSMULTIGAMEEXTENDED-S2026",
+            title="yes Pittsburgh,yes Texas,yes Tampa Bay,yes Detroit",
+            rules_primary="",
+            rules_secondary="",
+            settlement_sources=(),
+            contract_terms_url="",
+            status="active",
+            yes_ask_cents=60,
+            no_ask_cents=40,
+        )
+    )
+
+    assert result.status == "skipped_unresearchable"
+    assert result.attempted is False
+    assert result.skip_reason == "missing_source_path"
+
+
+@pytest.mark.asyncio
 async def test_prewarm_processes_active_kalshi_response_markets(tmp_path):
     store = ResearchDossierStore(tmp_path / "research_dossier.db")
     await store.initialize()

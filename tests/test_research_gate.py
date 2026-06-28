@@ -123,6 +123,52 @@ def test_generic_market_query_pack_adds_contract_terms_context_fallback():
     )
 
 
+def test_query_pack_does_not_fabricate_official_context_without_source_path():
+    news = SimpleNamespace(headline="", source="research_prewarm", url="")
+    market = SimpleNamespace(
+        ticker="KXMVESPORTSMULTIGAMEEXTENDED-S2026",
+        title="yes Pittsburgh,yes Texas,yes Tampa Bay,yes Detroit",
+        rules_primary="",
+        rules_secondary="",
+        settlement_sources=(),
+        contract_terms_url="",
+    )
+
+    queries = build_research_queries(news, market)
+
+    assert not any(
+        query.source_class == "official_primary"
+        and query.query_intent == "official_resolution_context"
+        for query in queries
+    )
+
+
+def test_query_pack_uses_contract_terms_only_as_source_path_for_context():
+    news = SimpleNamespace(headline="", source="research_prewarm", url="")
+    market = SimpleNamespace(
+        ticker="KXCEASEFIRE-26JUL01",
+        title="Will a ceasefire agreement be signed by July 1?",
+        rules_primary="",
+        rules_secondary="",
+        settlement_sources=(),
+        contract_terms_url="https://kalshi.com/markets/KXCEASEFIRE-26JUL01",
+    )
+
+    queries = build_research_queries(news, market)
+
+    assert any(
+        query.source_class == "rules_source"
+        and query.query_intent == "contract_terms"
+        and "site:kalshi.com" in query.query
+        for query in queries
+    )
+    assert any(
+        query.source_class == "official_primary"
+        and query.query_intent == "official_resolution_context"
+        for query in queries
+    )
+
+
 def test_direct_source_targets_use_domain_only_settlement_sources():
     market = SimpleNamespace(
         contract_terms_url="",

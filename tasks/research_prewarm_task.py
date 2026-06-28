@@ -18,6 +18,7 @@ from analysis.research_gate import (
     SearchProvider,
     default_direct_fetcher,
     default_search_provider,
+    market_has_research_source_path,
     run_research_gate,
 )
 from tasks.research_dossier import ResearchDossierStore, default_store
@@ -85,6 +86,13 @@ class ResearchPrewarmTask:
                 market_ticker=ticker,
                 status="skipped_closed",
                 attempted=False,
+            )
+        if not market_has_research_source_path(market):
+            return ResearchPrewarmResult(
+                market_ticker=ticker,
+                status="skipped_unresearchable",
+                attempted=False,
+                skip_reason="missing_source_path",
             )
         try:
             await self.store.initialize()
