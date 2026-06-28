@@ -29,6 +29,7 @@ from tabulate import tabulate
 
 import config as config_module
 from analysis import SignalAnalysis
+from analysis.match_feedback import matcher_weights_status
 from tasks.stats.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR
 from trading.portfolio import Portfolio, Position
@@ -218,6 +219,14 @@ def _match_quality_report_section() -> list[str]:
         return ["MATCH QUALITY", "  Could not read trades.jsonl.", ""]
 
     if total == 0:
+        weights_status = matcher_weights_status()
+        if weights_status.get("status") == "unverified":
+            return [
+                "MATCH QUALITY",
+                "  MATCHER FAIL-CLOSED: token weights are unverified.",
+                f"  Reason: {weights_status.get('reason') or 'unknown'}",
+                "",
+            ]
         return ["MATCH QUALITY", "  No MATCH_DIAGNOSTIC records yet.", ""]
 
     low_pct = 100 * low / total

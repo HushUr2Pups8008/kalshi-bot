@@ -741,8 +741,37 @@ class TestMatchQualityReportSection:
         empty = tmp_path / "empty.jsonl"
         empty.write_text("", encoding="utf-8")
         monkeypatch.setattr(pt_module, "TRADE_LOG_FILE", empty)
+        monkeypatch.setattr(
+            pt_module,
+            "matcher_weights_status",
+            lambda: {"status": "clean", "reason": None, "path": "weights.json", "count": 0},
+        )
         lines = pt_module._match_quality_report_section()
         assert "No MATCH_DIAGNOSTIC records yet" in lines[1]
+
+    def test_reports_matcher_fail_closed_when_no_diagnostics_and_dirty_weights(
+        self, monkeypatch, tmp_path
+    ):
+        from trading import paper_trader as pt_module
+        empty = tmp_path / "empty.jsonl"
+        empty.write_text("", encoding="utf-8")
+        monkeypatch.setattr(pt_module, "TRADE_LOG_FILE", empty)
+        monkeypatch.setattr(
+            pt_module,
+            "matcher_weights_status",
+            lambda: {
+                "status": "unverified",
+                "reason": "matcher weights staged: data/matcher_token_weights.json",
+                "path": "data/matcher_token_weights.json",
+                "count": 0,
+            },
+        )
+
+        lines = pt_module._match_quality_report_section()
+        text = "\n".join(lines)
+
+        assert "MATCHER FAIL-CLOSED" in text
+        assert "matcher weights staged: data/matcher_token_weights.json" in text
 
     def test_counts_low_match_quality_and_flags(self, monkeypatch, tmp_path):
         import json as _json

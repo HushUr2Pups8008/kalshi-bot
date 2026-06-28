@@ -268,6 +268,49 @@ def test_same_timestamp_chain_does_not_attach_prior_file_order_event(tmp_path):
     assert report["candidates"][0]["terminal_type"] == "PAPER_TRADE"
 
 
+def test_process_start_to_log_boot_gap_reports_resolution_only_losses(tmp_path):
+    module = _load_module()
+    log_path = tmp_path / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "PAPER_RESOLUTION",
+                "ts": "2026-06-24T12:00:00Z",
+                "ticker": "PM-LOSS-1",
+                "venue": "polymarket_us",
+                "pnl_dollars": -4.15,
+            },
+            {
+                "type": "PAPER_RESOLUTION",
+                "ts": "2026-06-25T12:00:00Z",
+                "ticker": "KXLOSS2",
+                "venue": "kalshi",
+                "pnl_dollars": -1.30,
+            },
+            {
+                "type": "OPPORTUNITY",
+                "ts": "2026-06-26T01:00:00Z",
+                "ticker": "KXPOSTBOOT",
+            },
+        ],
+    )
+
+    report = module.build_money_path_report(
+        log_path,
+        since="2026-06-24T11:20:22Z",
+        process_start="2026-06-24T11:20:22Z",
+        log_boot="2026-06-26T00:00:41Z",
+    )
+
+    assert report["summary"]["candidates"] == 1
+    assert report["legacy_resolutions_between_process_start_and_log_boot"] == {
+        "count": 2,
+        "pnl_total": pytest.approx(-5.45),
+        "tickers": ["PM-LOSS-1", "KXLOSS2"],
+    }
+
+
 def test_cli_text_output_includes_candidate_and_blocker_summary(tmp_path, capsys):
     module = _load_module()
     log_path = tmp_path / "trades.jsonl"

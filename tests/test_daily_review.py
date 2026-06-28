@@ -377,6 +377,18 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
             "open_trades": 1,
             "win_rate": 1.0,
             "total_pnl": 5.0,
+            "high_confidence_full_losses": [
+                {
+                    "ticker": "PM-BAD",
+                    "venue": "polymarket_us",
+                    "pnl_dollars": -4.15,
+                    "cost_dollars": 4.15,
+                    "estimated_prob": 0.898,
+                    "entry_price_cents": 83.0,
+                    "llm_confidence": 0.85,
+                    "signal_source": "qns.com",
+                }
+            ],
             "open_resolution_buckets": [
                 {"bucket": "0-3d", "venue": "polymarket", "trades": 1, "exposure": 12.5}
             ],
@@ -387,6 +399,13 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                 "marked_kalshi_unrealized_pnl_dollars": -0.25,
                 "unknown_mark_cost_dollars": 12.0,
             },
+        },
+    )
+    monkeypatch.setattr(
+        "scripts.daily_review._matcher_weight_runtime_status",
+        lambda: {
+            "status": "fail_closed",
+            "reason": "matcher weights staged: data/matcher_token_weights.json",
         },
     )
     monkeypatch.setattr(
@@ -451,10 +470,19 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
         "scripts.daily_review.since_restart_money_path.build_money_path_report",
         lambda *args, **kwargs: {
             "window": {"since": "2026-04-11T10:00:00+00:00", "until": None},
+            "boundaries": {
+                "process_start_utc": "2026-04-11T10:00:00+00:00",
+                "log_boot_utc": "2026-04-11T12:00:00+00:00",
+            },
             "summary": {
                 "candidates": 1,
                 "terminal_counts": {"SKIPPED": 1},
                 "measurement_gaps": 0,
+            },
+            "legacy_resolutions_between_process_start_and_log_boot": {
+                "count": 2,
+                "pnl_total": -5.45,
+                "tickers": ["PM-BAD", "KXLOSS"],
             },
             "no_keywords": {"count": 3},
             "polymarket_settlement_feedback": {
@@ -496,6 +524,10 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "PIPELINE REVIEW" in rendered
     assert "Software version                 : v" in rendered
     assert "SINCE-RESTART MONEY PATH" in rendered
+    assert "Boundary source                  : health bot_runtime.started_utc (process start)" in rendered
+    assert "Process-start boundary           : 2026-04-11T10:00:00+00:00" in rendered
+    assert "Latest log-boot boundary         : 2026-04-11T12:00:00+00:00" in rendered
+    assert "Legacy resolutions before boot   : 2 pnl=$-5.45" in rendered
     assert "Candidates                       : 1" in rendered
     assert "Terminal outcomes                : SKIPPED=1" in rendered
     assert "No-keyword exits                 : 3" in rendered
@@ -511,6 +543,10 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "KX1: 1.00/day" in rendered
     assert "4. EDGE FORMATION" in rendered
     assert "5. EXECUTION" in rendered
+    assert "Matcher weights runtime status   : FAIL_CLOSED" in rendered
+    assert "matcher weights staged: data/matcher_token_weights.json" in rendered
+    assert "High-confidence full-loss rows   : 1" in rendered
+    assert "PM-BAD venue=polymarket_us pnl=$-4.15 cost=$4.15 p=89.8% entry=83.0c llm_conf=85.0% source=qns.com" in rendered
     assert "6. LLM VALUE-ADD ANALYSIS" in rendered
     assert "7. LLM VALUE-ADD SEGMENTATION" in rendered
     assert "Appendix" in rendered

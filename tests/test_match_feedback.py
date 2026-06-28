@@ -20,6 +20,7 @@ from analysis.match_feedback import (
     load_verified_weights,
     load_weights,
     market_prefix_for,
+    matcher_weights_status,
     summarize_weight_status,
     update_weights_from_stats,
     write_weights,
@@ -396,6 +397,11 @@ class TestWeightsFileRoundTrip:
         )
 
         assert loaded == seed
+
+        status = matcher_weights_status(p, repo_root=repo)
+        assert status["status"] == "clean"
+        assert status["count"] == len(seed)
+        assert status["path"] == str(p)
 
     def test_verified_load_accepts_clean_committed_weights(self, tmp_path: Path):
         repo = tmp_path / "repo"
