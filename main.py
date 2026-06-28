@@ -67,7 +67,11 @@ from urllib.parse import urlparse
 from analysis import SignalAnalysis
 from analysis.evidence_scorer import source_quality
 from analysis.kelly import kelly_bet
-from analysis.research_gate import ResearchStatus, run_research_gate
+from analysis.research_gate import (
+    ResearchStatus,
+    market_has_research_source_path,
+    run_research_gate,
+)
 from tasks.stats.keyword_stats import KeywordStats
 from tasks.research_dossier import default_store as default_research_dossier_store
 from tasks.research_prewarm_task import ResearchPrewarmTask
@@ -891,6 +895,37 @@ class TradingBot:
         "new_market",
     }
 
+    def _enrich_research_prewarm_market_source_path(self, market: object) -> object:
+        if market_has_research_source_path(market):
+            return market
+        series_ticker = str(getattr(market, "series_ticker", "") or "").strip()
+        if not series_ticker or not hasattr(self.rest, "get_series"):
+            return market
+        try:
+            metadata = self.rest.get_series(series_ticker)
+        except Exception as exc:
+            log.warning(
+                "[RESEARCH_PREWARM] series metadata fetch failed series=%s: %s",
+                series_ticker,
+                exc,
+            )
+            return market
+        if metadata is None:
+            return market
+        for attr in (
+            "rules_primary",
+            "rules_secondary",
+            "contract_terms_url",
+            "settlement_sources",
+        ):
+            current = getattr(market, attr, None)
+            if current:
+                continue
+            value = getattr(metadata, attr, None)
+            if value:
+                setattr(market, attr, value)
+        return market
+
     def _research_prewarm_market_provider(self) -> list[object]:
         try:
             markets = self.rest.get_all_open_markets(
@@ -905,6 +940,17 @@ class TradingBot:
             ticker: index
             for index, ticker in enumerate(_recent_runtime_research_prewarm_tickers())
         }
+
+        def is_open_market(market: object) -> bool:
+            status = str(getattr(market, "status", "open") or "open").lower()
+            return status in {"open", "active"}
+
+        def is_sourceable_open_market(market: object) -> bool:
+            if not is_open_market(market):
+                return False
+            self._enrich_research_prewarm_market_source_path(market)
+            return market_has_research_source_path(market)
+
         if target_order:
             selected_by_ticker = {
                 str(getattr(market, "ticker", "") or ""): market
@@ -914,10 +960,6 @@ class TradingBot:
             selected_tickers: set[str] = set()
             selected: list[object] = []
             direct_fetch_attempts = 0
-
-            def is_open_market(market: object) -> bool:
-                status = str(getattr(market, "status", "open") or "open").lower()
-                return status in {"open", "active"}
 
             for ticker in target_order:
                 market = selected_by_ticker.get(ticker)
@@ -936,7 +978,7 @@ class TradingBot:
                             exc,
                         )
                         market = None
-                if market is not None and is_open_market(market):
+                if market is not None and is_sourceable_open_market(market):
                     selected.append(market)
                     selected_tickers.add(str(getattr(market, "ticker", "") or ""))
                 if len(selected) >= max_markets:
@@ -945,11 +987,23 @@ class TradingBot:
                 if len(selected) >= max_markets:
                     break
                 ticker = str(getattr(market, "ticker", "") or "")
-                if ticker in selected_tickers or not is_open_market(market):
+                if ticker in selected_tickers or not is_sourceable_open_market(market):
                     continue
                 selected.append(market)
-            return selected
-        return market_list[:max_markets]
+            if selected:
+                return selected
+            return [market for market in market_list if is_open_market(market)][:max_markets]
+        sourceable = [
+            market
+            for market in market_list
+            if is_open_market(market)
+            and market_has_research_source_path(
+                self._enrich_research_prewarm_market_source_path(market)
+            )
+        ][:max_markets]
+        if sourceable:
+            return sourceable
+        return [market for market in market_list if is_open_market(market)][:max_markets]
 
     def _create_research_prewarm_runtime_task(self) -> asyncio.Task | None:
         if not bool(getattr(cfg, "enable_research_prewarm_task", False)):

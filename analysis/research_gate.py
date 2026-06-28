@@ -229,6 +229,23 @@ def _market_text(market: Any) -> str:
     )
 
 
+def _market_rules_text(market: Any) -> str:
+    return _clean(" ".join(
+        _clean(getattr(market, key, ""))
+        for key in ("rules_primary", "rules_secondary")
+    ))
+
+
+def market_has_research_source_path(market: Any) -> bool:
+    if tuple(getattr(market, "settlement_sources", ()) or ()):
+        return True
+    for attr in ("contract_terms_url", "rules_primary", "rules_secondary"):
+        value = getattr(market, attr, "")
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
 def _dedupe_queries(queries: Iterable[ResearchQuery]) -> list[ResearchQuery]:
     seen: set[str] = set()
     out: list[ResearchQuery] = []
@@ -270,6 +287,7 @@ def build_research_queries(news: Any, market: Any) -> list[ResearchQuery]:
     title = _clean(getattr(market, "title", ""))
     headline = _clean(getattr(news, "headline", ""))
     rules = _market_text(market)
+    rule_sources = _market_rules_text(market)
     combined = f"{title} {headline} {rules}"
     ticker = _clean(getattr(market, "ticker", ""))
 
@@ -299,8 +317,8 @@ def build_research_queries(news: Any, market: Any) -> list[ResearchQuery]:
                     source_class="rules_source",
                 )
             )
-        rules_fragment = _query_fragment(title or ticker, rules, "official resolution source")
-        if rules_fragment:
+        rules_fragment = _query_fragment(title or ticker, rule_sources, "official resolution source")
+        if rules_fragment and market_has_research_source_path(market):
             queries.append(
                 ResearchQuery(
                     query=rules_fragment,
