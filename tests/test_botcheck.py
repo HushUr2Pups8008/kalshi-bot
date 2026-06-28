@@ -423,6 +423,38 @@ def test_print_research_gate_section_warns_when_prewarm_disabled_in_active_mode(
     assert "prewarm   : off (.env) RISK: cache misses can remain terminal" in out
 
 
+def test_print_research_gate_section_surfaces_activation_profile_gaps(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("REAL_WEB_RESEARCH_MODE", raising=False)
+    monkeypatch.delenv("ENABLE_RESEARCH_PREWARM_TASK", raising=False)
+    profile = tmp_path / "docs" / "governance" / "research-shadow.env.example"
+    profile.parent.mkdir(parents=True)
+    profile.write_text(
+        "\n".join(
+            [
+                "REAL_WEB_RESEARCH_MODE=shadow",
+                "ENABLE_RESEARCH_PREWARM_TASK=true",
+                "LIVE_TRADING_ENABLED=false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text("LIVE_TRADING_ENABLED=false\n", encoding="utf-8")
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "activation : FAIL profile=docs/governance/research-shadow.env.example" in out
+    assert "missing    : REAL_WEB_RESEARCH_MODE=shadow" in out
+    assert "missing    : ENABLE_RESEARCH_PREWARM_TASK=true" in out
+    assert "missing    : LIVE_TRADING_ENABLED=false" not in out
+
+
 def test_print_research_gate_section_surfaces_enabled_prewarm_config(
     capsys,
     tmp_path,

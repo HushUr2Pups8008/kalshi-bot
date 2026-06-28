@@ -39,6 +39,7 @@ from utils.research_prewarm_targets import (
     DEFAULT_TARGET_RESEARCH_SKIP_REASONS,
     record_targets_research_prewarm,
 )
+from scripts.research_activation_status import evaluate_activation_profile
 
 
 LOG_TS_RE = re.compile(
@@ -668,6 +669,20 @@ def print_research_gate_section(
     print(f"mode       : {mode} ({mode_source})")
     print(f"max_queries: {max_queries} ({max_queries_source})")
     print(f"timeout_s  : {timeout} ({timeout_source})")
+    profile_path = Path("docs/governance/research-shadow.env.example")
+    activation = evaluate_activation_profile(repo_root, profile_path)
+    relative_profile = _relative_display_path(activation.profile_path, repo_root)
+    print(
+        "activation : "
+        f"{'PASS' if activation.ok else 'FAIL'} profile={relative_profile}"
+    )
+    for key in activation.missing:
+        expected = activation.profile_values.get(key, "")
+        print(f"missing    : {key}={expected}")
+    for key, expected, actual in activation.mismatched:
+        print(f"mismatch   : {key} expected={expected} actual={actual}")
+    for item in activation.unsafe:
+        print(f"unsafe     : {item}")
     if _env_bool(prewarm_enabled):
         print(
             "prewarm   : "
