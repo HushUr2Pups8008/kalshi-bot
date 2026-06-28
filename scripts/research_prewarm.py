@@ -36,10 +36,18 @@ DEFAULT_TARGET_RESEARCH_SKIP_REASONS = [
     "ambiguous_direction",
     "cached_dossier_insufficient",
     "cached_dossier_unvetted",
+    "direction_reason_conflict",
+    "insufficient_corroboration",
+    "missing_estimated_probability",
+    "missing_resolution_source",
+    "new_market",
+    "no_research_hits",
+    "probability_direction_conflict",
     "research_timeout",
     "research_provider_error",
     "research_adjudicator_error",
 ]
+MAX_REPAIR_KEYWORD_COUNT = 1
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -267,12 +275,11 @@ def _record_targets_research_prewarm(
     if event_type == "MATCH_LLM_REVIEW":
         return (
             str(record.get("verdict") or "").strip() == "false_positive_neutral"
-            and _keyword_count(record) == 0
+            and _keyword_count_targets_research_prewarm(record)
         )
     if event_type == "SIGNAL_ANALYSIS_DETAIL":
         return (
-            _keyword_count(record) == 0
-            and bool(record.get("pre_llm_would_block_and_useful")) is True
+            _keyword_count_targets_research_prewarm(record)
             and str(record.get("pre_llm_gate_reason") or "").strip()
             == "insufficient_semantic_overlap"
         )
@@ -290,6 +297,11 @@ def _keyword_count(record: dict[str, Any]) -> int | None:
     if isinstance(keywords, list):
         return len(keywords)
     return None
+
+
+def _keyword_count_targets_research_prewarm(record: dict[str, Any]) -> bool:
+    keyword_count = _keyword_count(record)
+    return keyword_count is not None and keyword_count <= MAX_REPAIR_KEYWORD_COUNT
 
 
 def summarize_results(results: Iterable[ResearchPrewarmResult]) -> dict[str, Any]:

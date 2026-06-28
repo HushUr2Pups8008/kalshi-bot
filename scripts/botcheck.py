@@ -542,6 +542,9 @@ def _format_ts_age(ts: datetime | None, *, now: datetime) -> tuple[str, str]:
     return ts.isoformat(), human_duration((now - ts).total_seconds())
 
 
+_RESEARCH_PREWARM_MAX_REPAIR_KEYWORD_COUNT = 1
+
+
 def summarize_research_prewarm_backlog(path: Path, *, since: datetime) -> list[str]:
     return _target_tickers_from_trade_log(
         path,
@@ -552,8 +555,16 @@ def summarize_research_prewarm_backlog(path: Path, *, since: datetime) -> list[s
             "research_operational_error",
         ],
         research_skip_reasons=[
+            "ambiguous_direction",
             "cached_dossier_insufficient",
             "cached_dossier_unvetted",
+            "direction_reason_conflict",
+            "insufficient_corroboration",
+            "missing_estimated_probability",
+            "missing_resolution_source",
+            "new_market",
+            "no_research_hits",
+            "probability_direction_conflict",
             "research_timeout",
             "research_provider_error",
             "research_adjudicator_error",
@@ -631,12 +642,11 @@ def _record_targets_research_prewarm(
     if event_type == "MATCH_LLM_REVIEW":
         return (
             str(record.get("verdict") or "").strip() == "false_positive_neutral"
-            and _keyword_count(record) == 0
+            and _keyword_count_targets_research_prewarm(record)
         )
     if event_type == "SIGNAL_ANALYSIS_DETAIL":
         return (
-            _keyword_count(record) == 0
-            and bool(record.get("pre_llm_would_block_and_useful")) is True
+            _keyword_count_targets_research_prewarm(record)
             and str(record.get("pre_llm_gate_reason") or "").strip()
             == "insufficient_semantic_overlap"
         )
@@ -654,6 +664,14 @@ def _keyword_count(record: dict[str, Any]) -> int | None:
     if isinstance(keywords, list):
         return len(keywords)
     return None
+
+
+def _keyword_count_targets_research_prewarm(record: dict[str, Any]) -> bool:
+    keyword_count = _keyword_count(record)
+    return (
+        keyword_count is not None
+        and keyword_count <= _RESEARCH_PREWARM_MAX_REPAIR_KEYWORD_COUNT
+    )
 
 
 def print_research_gate_section(

@@ -141,10 +141,18 @@ _RUNTIME_RESEARCH_PREWARM_TARGET_RESEARCH_SKIP_REASONS = {
     "ambiguous_direction",
     "cached_dossier_insufficient",
     "cached_dossier_unvetted",
+    "direction_reason_conflict",
+    "insufficient_corroboration",
+    "missing_estimated_probability",
+    "missing_resolution_source",
+    "new_market",
+    "no_research_hits",
+    "probability_direction_conflict",
     "research_timeout",
     "research_provider_error",
     "research_adjudicator_error",
 }
+_RUNTIME_RESEARCH_PREWARM_MAX_REPAIR_KEYWORD_COUNT = 1
 _RUNTIME_RESEARCH_PREWARM_EVENT_TYPES = {
     "ANALYSIS_REJECTED",
     "MATCH_LLM_REVIEW",
@@ -165,6 +173,16 @@ def _trade_log_keyword_count(record: dict[str, Any]) -> int | None:
     return None
 
 
+def _trade_log_keyword_count_targets_runtime_research_prewarm(
+    record: dict[str, Any],
+) -> bool:
+    keyword_count = _trade_log_keyword_count(record)
+    return (
+        keyword_count is not None
+        and keyword_count <= _RUNTIME_RESEARCH_PREWARM_MAX_REPAIR_KEYWORD_COUNT
+    )
+
+
 def _trade_log_record_targets_runtime_research_prewarm(record: dict[str, Any]) -> bool:
     event_type = str(record.get("type") or "").strip()
     if event_type == "ANALYSIS_REJECTED":
@@ -177,12 +195,11 @@ def _trade_log_record_targets_runtime_research_prewarm(record: dict[str, Any]) -
     if event_type == "MATCH_LLM_REVIEW":
         return (
             str(record.get("verdict") or "").strip() == "false_positive_neutral"
-            and _trade_log_keyword_count(record) == 0
+            and _trade_log_keyword_count_targets_runtime_research_prewarm(record)
         )
     if event_type == "SIGNAL_ANALYSIS_DETAIL":
         return (
-            _trade_log_keyword_count(record) == 0
-            and bool(record.get("pre_llm_would_block_and_useful")) is True
+            _trade_log_keyword_count_targets_runtime_research_prewarm(record)
             and str(record.get("pre_llm_gate_reason") or "").strip()
             == "insufficient_semantic_overlap"
         )

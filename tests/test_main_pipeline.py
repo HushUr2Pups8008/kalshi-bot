@@ -221,6 +221,35 @@ def test_research_prewarm_market_provider_prioritizes_recent_empty_keyword_backl
     ]
 
 
+def test_research_prewarm_market_provider_prioritizes_thin_keyword_backlog(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    generic_market = replace(_make_market(), ticker="KXGENERIC-25DEC31")
+    reviewed_market = replace(_make_market(), ticker="KXREVIEWED-25DEC31")
+    bot.rest.get_all_open_markets.return_value = [generic_market, reviewed_market]
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ticker": reviewed_market.ticker,
+                "verdict": "false_positive_neutral",
+                "keyword_count": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        reviewed_market.ticker,
+    ]
+
+
 def test_research_prewarm_market_provider_prioritizes_semantic_overlap_block(
     monkeypatch, tmp_path
 ):
@@ -239,7 +268,37 @@ def test_research_prewarm_market_provider_prioritizes_semantic_overlap_block(
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "market_ticker": blocked_market.ticker,
                 "keywords": [],
-                "pre_llm_would_block_and_useful": True,
+                "pre_llm_would_block_and_useful": False,
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        blocked_market.ticker,
+    ]
+
+
+def test_research_prewarm_market_provider_prioritizes_thin_semantic_overlap(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    generic_market = replace(_make_market(), ticker="KXGENERIC-25DEC31")
+    blocked_market = replace(_make_market(), ticker="KXBLOCKED-25DEC31")
+    bot.rest.get_all_open_markets.return_value = [generic_market, blocked_market]
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "market_ticker": blocked_market.ticker,
+                "keywords": ["thin"],
+                "pre_llm_would_block_and_useful": False,
                 "pre_llm_gate_reason": "insufficient_semantic_overlap",
             }
         ],
@@ -334,6 +393,64 @@ def test_research_prewarm_market_provider_prioritizes_ambiguous_research_gap(
 
     assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
         ambiguous_market.ticker,
+    ]
+
+
+def test_research_prewarm_market_provider_prioritizes_retryable_research_skip(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    first_market = replace(_make_market(), ticker="KXFIRST-25DEC31")
+    missing_source_market = replace(_make_market(), ticker="KXSOURCE-25DEC31")
+    bot.rest.get_all_open_markets.return_value = [first_market, missing_source_market]
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ticker": missing_source_market.ticker,
+                "reason": "researched_no_edge",
+                "research_skip_reason": "missing_resolution_source",
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        missing_source_market.ticker,
+    ]
+
+
+def test_research_prewarm_market_provider_ignores_capital_protection_skip(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    first_market = replace(_make_market(), ticker="KXFIRST-25DEC31")
+    capital_market = replace(_make_market(), ticker="KXCAPITAL-25DEC31")
+    bot.rest.get_all_open_markets.return_value = [first_market, capital_market]
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ticker": capital_market.ticker,
+                "reason": "researched_no_edge",
+                "research_skip_reason": "no_trade_capital_protection",
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        first_market.ticker,
     ]
 
 

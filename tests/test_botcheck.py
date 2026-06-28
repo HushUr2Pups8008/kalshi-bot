@@ -258,17 +258,54 @@ def test_print_research_gate_section_surfaces_prewarm_backlog(
             {
                 "type": "MATCH_LLM_REVIEW",
                 "ts": "2026-05-10T22:05:00+00:00",
+                "ticker": "KX-THIN",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 1,
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-05-10T22:10:00+00:00",
                 "ticker": "KX-HASKEYWORDS",
                 "verdict": "false_positive_neutral",
                 "keyword_count": 2,
             },
             {
                 "type": "SIGNAL_ANALYSIS_DETAIL",
-                "ts": "2026-05-10T22:10:00+00:00",
+                "ts": "2026-05-10T22:15:00+00:00",
                 "ticker": "KX-USEFUL",
                 "keywords": [],
                 "pre_llm_gate_reason": "insufficient_semantic_overlap",
                 "pre_llm_would_block_and_useful": True,
+            },
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": "2026-05-10T22:20:00+00:00",
+                "ticker": "KX-SEMANTIC",
+                "keywords": ["thin"],
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+                "pre_llm_would_block_and_useful": False,
+            },
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-05-10T22:25:00+00:00",
+                "ticker": "KX-SOURCE",
+                "reason": "researched_no_edge",
+                "research_skip_reason": "missing_resolution_source",
+            },
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": "2026-05-10T22:30:00+00:00",
+                "ticker": "KX-SEMANTIC-KEYWORDS",
+                "keywords": ["thin", "midterms"],
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+                "pre_llm_would_block_and_useful": False,
+            },
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-05-10T22:35:00+00:00",
+                "ticker": "KX-CAPITAL",
+                "reason": "researched_no_edge",
+                "research_skip_reason": "no_trade_capital_protection",
             },
         ],
     )
@@ -278,8 +315,8 @@ def test_print_research_gate_section_surfaces_prewarm_backlog(
     botcheck.print_research_gate_section(tmp_path, stats, now=now)
 
     out = capsys.readouterr().out
-    assert "prewarm_backlog: 2 targetable from logs" in out
-    assert "sample=KX-USEFUL,KX-MISS" in out
+    assert "prewarm_backlog: 5 targetable from logs" in out
+    assert "sample=KX-SOURCE,KX-SEMANTIC,KX-USEFUL,KX-THIN,KX-MISS" in out
 
 
 def test_botcheck_cli_surfaces_prewarm_backlog_when_executed_as_script(tmp_path):

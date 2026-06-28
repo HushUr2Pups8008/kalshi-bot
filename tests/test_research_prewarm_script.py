@@ -172,6 +172,13 @@ async def test_run_once_targets_retryable_research_skip_reasons(tmp_path):
             {
                 "type": "ANALYSIS_REJECTED",
                 "ts": "2026-06-27T12:00:00Z",
+                "ticker": "KX-SOURCE",
+                "reason": "researched_no_edge",
+                "research_skip_reason": "missing_resolution_source",
+            },
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-06-27T13:00:00Z",
                 "ticker": "KX-CAPITAL",
                 "reason": "researched_no_edge",
                 "research_skip_reason": "no_trade_capital_protection",
@@ -193,6 +200,7 @@ async def test_run_once_targets_retryable_research_skip_reasons(tmp_path):
             "ambiguous_direction",
             "cached_dossier_insufficient",
             "cached_dossier_unvetted",
+            "missing_resolution_source",
             "research_timeout",
             "research_provider_error",
             "research_adjudicator_error",
@@ -205,13 +213,14 @@ async def test_run_once_targets_retryable_research_skip_reasons(tmp_path):
     summary = await research_prewarm.run_once(args, client=client, task=task)
 
     assert client.open_page_calls == []
-    assert client.market_calls == ["KX-AMBIG", "KX-OPS", "KX-CACHE"]
+    assert client.market_calls == ["KX-SOURCE", "KX-AMBIG", "KX-OPS", "KX-CACHE"]
     assert [market.ticker for market in task.markets] == [
+        "KX-SOURCE",
         "KX-AMBIG",
         "KX-OPS",
         "KX-CACHE",
     ]
-    assert summary["markets"] == 3
+    assert summary["markets"] == 4
 
 
 @pytest.mark.asyncio
@@ -230,13 +239,20 @@ async def test_run_once_targets_empty_keyword_neutral_review_rows(tmp_path):
             {
                 "type": "MATCH_LLM_REVIEW",
                 "ts": "2026-06-27T11:00:00Z",
+                "ticker": "KX-THIN",
+                "verdict": "false_positive_neutral",
+                "keyword_count": 1,
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": "2026-06-27T12:00:00Z",
                 "ticker": "KX-HASKEYWORDS",
                 "verdict": "false_positive_neutral",
                 "keyword_count": 2,
             },
             {
                 "type": "MATCH_LLM_REVIEW",
-                "ts": "2026-06-27T12:00:00Z",
+                "ts": "2026-06-27T13:00:00Z",
                 "ticker": "KX-RELEVANT",
                 "verdict": "relevant",
                 "keyword_count": 0,
@@ -259,9 +275,9 @@ async def test_run_once_targets_empty_keyword_neutral_review_rows(tmp_path):
     summary = await research_prewarm.run_once(args, client=client, task=task)
 
     assert client.open_page_calls == []
-    assert client.market_calls == ["KX-MISS"]
-    assert [market.ticker for market in task.markets] == ["KX-MISS"]
-    assert summary["markets"] == 1
+    assert client.market_calls == ["KX-THIN", "KX-MISS"]
+    assert [market.ticker for market in task.markets] == ["KX-THIN", "KX-MISS"]
+    assert summary["markets"] == 2
 
 
 @pytest.mark.asyncio
@@ -332,8 +348,16 @@ async def test_run_once_targets_useful_pre_llm_blocked_empty_keyword_rows(tmp_pa
             {
                 "type": "SIGNAL_ANALYSIS_DETAIL",
                 "ts": "2026-06-27T12:00:00Z",
+                "ticker": "KX-THIN",
+                "keywords": ["thin"],
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+                "pre_llm_would_block_and_useful": False,
+            },
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": "2026-06-27T13:00:00Z",
                 "ticker": "KX-HASKEYWORDS",
-                "keywords": ["midterms"],
+                "keywords": ["midterms", "senate"],
                 "pre_llm_gate_reason": "insufficient_semantic_overlap",
                 "pre_llm_would_block_and_useful": True,
             },
@@ -355,9 +379,13 @@ async def test_run_once_targets_useful_pre_llm_blocked_empty_keyword_rows(tmp_pa
     summary = await research_prewarm.run_once(args, client=client, task=task)
 
     assert client.open_page_calls == []
-    assert client.market_calls == ["KX-USEFUL"]
-    assert [market.ticker for market in task.markets] == ["KX-USEFUL"]
-    assert summary["markets"] == 1
+    assert client.market_calls == ["KX-THIN", "KX-NOTUSEFUL", "KX-USEFUL"]
+    assert [market.ticker for market in task.markets] == [
+        "KX-THIN",
+        "KX-NOTUSEFUL",
+        "KX-USEFUL",
+    ]
+    assert summary["markets"] == 3
 
 
 def test_build_argparser_defaults_to_single_run():
@@ -376,6 +404,13 @@ def test_build_argparser_defaults_to_single_run():
         "ambiguous_direction",
         "cached_dossier_insufficient",
         "cached_dossier_unvetted",
+        "direction_reason_conflict",
+        "insufficient_corroboration",
+        "missing_estimated_probability",
+        "missing_resolution_source",
+        "new_market",
+        "no_research_hits",
+        "probability_direction_conflict",
         "research_timeout",
         "research_provider_error",
         "research_adjudicator_error",
