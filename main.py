@@ -59,9 +59,9 @@ import signal
 import sqlite3
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import ModuleType, SimpleNamespace
-from typing import Awaitable, Callable  # noqa: F401 — referenced in string annotations
+from typing import Any, Awaitable, Callable  # noqa: F401 — referenced in string annotations
 from urllib.parse import urlparse
 
 from analysis import SignalAnalysis
@@ -103,13 +103,20 @@ from tasks.calibration_task import CalibrationTask
 from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
-from utils.logger import get_logger, emit_startup_banner, rotate_logs, write_trade_log_async
+from utils.logger import (
+    TRADE_LOG_FILE,
+    get_logger,
+    emit_startup_banner,
+    rotate_logs,
+    write_trade_log_async,
+)
 from utils.runtime_overrides import (
     RuntimeOverridesReader,
     get_threshold_override,
     is_source_disabled,
     set_global_reader,
 )
+from utils.trade_log_reader import iter_trade_records
 from tasks.runtime_overrides_task import run_runtime_overrides_poll
 
 log = get_logger("main")
@@ -124,6 +131,91 @@ NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS = max(
     1.0,
     float(os.getenv("NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS", "20")),
 )
+
+_RUNTIME_RESEARCH_PREWARM_TARGET_REASONS = {
+    "no_keywords",
+    "research_incomplete",
+    "research_operational_error",
+}
+_RUNTIME_RESEARCH_PREWARM_TARGET_RESEARCH_SKIP_REASONS = {
+    "cached_dossier_insufficient",
+    "cached_dossier_unvetted",
+    "research_timeout",
+    "research_provider_error",
+    "research_adjudicator_error",
+}
+_RUNTIME_RESEARCH_PREWARM_EVENT_TYPES = {
+    "ANALYSIS_REJECTED",
+    "MATCH_LLM_REVIEW",
+    "SIGNAL_ANALYSIS_DETAIL",
+}
+
+
+def _trade_log_keyword_count(record: dict[str, Any]) -> int | None:
+    raw_count = record.get("keyword_count")
+    if raw_count is not None:
+        try:
+            return int(raw_count)
+        except (TypeError, ValueError):
+            return None
+    keywords = record.get("keywords")
+    if isinstance(keywords, list):
+        return len(keywords)
+    return None
+
+
+def _trade_log_record_targets_runtime_research_prewarm(record: dict[str, Any]) -> bool:
+    event_type = str(record.get("type") or "").strip()
+    if event_type == "ANALYSIS_REJECTED":
+        reason = str(record.get("reason") or "").strip()
+        research_skip_reason = str(record.get("research_skip_reason") or "").strip()
+        return (
+            reason in _RUNTIME_RESEARCH_PREWARM_TARGET_REASONS
+            or research_skip_reason in _RUNTIME_RESEARCH_PREWARM_TARGET_RESEARCH_SKIP_REASONS
+        )
+    if event_type == "MATCH_LLM_REVIEW":
+        return (
+            str(record.get("verdict") or "").strip() == "false_positive_neutral"
+            and _trade_log_keyword_count(record) == 0
+        )
+    if event_type == "SIGNAL_ANALYSIS_DETAIL":
+        return (
+            _trade_log_keyword_count(record) == 0
+            and bool(record.get("pre_llm_would_block_and_useful")) is True
+            and str(record.get("pre_llm_gate_reason") or "").strip()
+            == "insufficient_semantic_overlap"
+        )
+    return False
+
+
+def _recent_runtime_research_prewarm_tickers(*, now: datetime | None = None) -> list[str]:
+    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    since = now_utc - timedelta(hours=24)
+    trade_log_root = TRADE_LOG_FILE.parent.parent
+    last_index_by_ticker: dict[str, int] = {}
+    try:
+        records = iter_trade_records(
+            trade_log_root,
+            since=since,
+            event_types=_RUNTIME_RESEARCH_PREWARM_EVENT_TYPES,
+        )
+        for index, record in enumerate(records):
+            if not _trade_log_record_targets_runtime_research_prewarm(record):
+                continue
+            ticker = str(record.get("ticker") or record.get("market_ticker") or "").strip()
+            if ticker:
+                last_index_by_ticker[ticker] = index
+    except Exception as exc:
+        log.debug("[RESEARCH_PREWARM] trade-log target scan failed: %s", exc)
+        return []
+    return [
+        ticker
+        for ticker, _index in sorted(
+            last_index_by_ticker.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+    ]
 
 
 def _validate_startup_observability_probe_record(record: dict, required_fields: tuple[str, ...]) -> list[str]:
@@ -859,7 +951,21 @@ class TradingBot:
             log.warning("[RESEARCH_PREWARM] open-market scan failed: %s", exc)
             return []
         max_markets = int(getattr(cfg, "research_prewarm_max_markets", 25))
-        return list(markets or [])[:max_markets]
+        market_list = list(markets or [])
+        target_order = {
+            ticker: index
+            for index, ticker in enumerate(_recent_runtime_research_prewarm_tickers())
+        }
+        if target_order:
+            market_list = sorted(
+                enumerate(market_list),
+                key=lambda item: (
+                    target_order.get(str(getattr(item[1], "ticker", "") or ""), len(target_order)),
+                    item[0],
+                ),
+            )
+            return [market for _index, market in market_list[:max_markets]]
+        return market_list[:max_markets]
 
     def _create_research_prewarm_runtime_task(self) -> asyncio.Task | None:
         if not bool(getattr(cfg, "enable_research_prewarm_task", False)):

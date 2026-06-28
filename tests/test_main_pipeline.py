@@ -30,6 +30,7 @@ from kalshi.series_metadata import SettlementSource
 from kalshi.source_hints import MarketSourceHintDiagnostics, MarketSourceTargetPlan
 from main import TradingBot, _signal_to_evidence, _source_class_for_evidence
 from polymarket.settlement_reconciler import SettlementReconcileResult
+from tests._helpers import write_jsonl
 from trading.portfolio import Position
 
 
@@ -188,7 +189,123 @@ def test_create_research_prewarm_runtime_task_enabled(monkeypatch):
         "KXTEST-25DEC31",
         "KXSECOND-25DEC31",
     ]
+
+
+def test_research_prewarm_market_provider_prioritizes_recent_empty_keyword_backlog(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_pages", 3, raising=False)
+    bot = _make_bot_stub()
+    generic_market = replace(_make_market(), ticker="KXGENERIC-25DEC31")
+    backlog_market = replace(_make_market(), ticker="KXBACKLOG-25DEC31")
+    bot.rest.get_all_open_markets.return_value = [generic_market, backlog_market]
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ticker": backlog_market.ticker,
+                "verdict": "false_positive_neutral",
+                "keyword_count": 0,
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        backlog_market.ticker,
+    ]
+
+
+def test_research_prewarm_market_provider_prioritizes_semantic_overlap_block(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    generic_market = replace(_make_market(), ticker="KXGENERIC-25DEC31")
+    blocked_market = replace(_make_market(), ticker="KXBLOCKED-25DEC31")
+    bot.rest.get_all_open_markets.return_value = [generic_market, blocked_market]
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "market_ticker": blocked_market.ticker,
+                "keywords": [],
+                "pre_llm_would_block_and_useful": True,
+                "pre_llm_gate_reason": "insufficient_semantic_overlap",
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        blocked_market.ticker,
+    ]
+
+
+def test_research_prewarm_market_provider_ignores_false_neutral_with_keywords(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_pages", 3, raising=False)
+    bot = _make_bot_stub()
+    first_market = replace(_make_market(), ticker="KXFIRST-25DEC31")
+    reviewed_market = replace(_make_market(), ticker="KXREVIEWED-25DEC31")
+    bot.rest.get_all_open_markets.return_value = [first_market, reviewed_market]
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ticker": reviewed_market.ticker,
+                "verdict": "false_positive_neutral",
+                "keyword_count": 2,
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        first_market.ticker,
+    ]
     bot.rest.get_all_open_markets.assert_called_once_with(max_pages=3)
+
+
+def test_research_prewarm_market_provider_ignores_stale_backlog(monkeypatch, tmp_path):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    first_market = replace(_make_market(), ticker="KXFIRST-25DEC31")
+    stale_market = replace(_make_market(), ticker="KXSTALE-25DEC31")
+    bot.rest.get_all_open_markets.return_value = [first_market, stale_market]
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat(),
+                "ticker": stale_market.ticker,
+                "reason": "no_keywords",
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        first_market.ticker,
+    ]
 
 
 def test_schedule_targeted_research_prewarm_dedupes_with_cooldown(monkeypatch):
