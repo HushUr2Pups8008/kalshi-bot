@@ -265,7 +265,7 @@ class KalshiWebSocketClient:
             except ConnectionClosed as exc:
                 log.warning("WS connection closed: %s -- reconnecting in %ds", exc, delay)
             except Exception as exc:
-                log.error("WS error: %s -- reconnecting in %ds", exc, delay)
+                log.warning("WS error: %s -- reconnecting in %ds", exc, delay)
             finally:
                 self._ws = None
 
