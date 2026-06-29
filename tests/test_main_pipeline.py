@@ -243,6 +243,49 @@ def test_research_prewarm_market_provider_prioritizes_recent_empty_keyword_backl
     ]
 
 
+def test_research_prewarm_market_provider_skips_blocklisted_recent_backlog(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_pages", 3, raising=False)
+    bot = _make_bot_stub()
+    blocked_market = replace(
+        _make_market(),
+        ticker="KXMVESPORTSMULTIGAMEEXTENDED-S2026AC2580761AE-87A8730FA2A",
+        series_ticker="KXMVE",
+        settlement_sources=(SettlementSource(label="Official", domain="nfl.com"),),
+    )
+    profit_relevant_market = replace(
+        _make_market(),
+        ticker="KXGDP-26JUL30-T4.0",
+        series_ticker="KXGDP",
+        settlement_sources=(SettlementSource(label="Official", domain="bea.gov"),),
+    )
+    bot.rest.get_all_open_markets.return_value = [
+        blocked_market,
+        profit_relevant_market,
+    ]
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ticker": blocked_market.ticker,
+                "reason": "research_incomplete",
+                "research_skip_reason": "ambiguous_direction",
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        profit_relevant_market.ticker,
+    ]
+
+
 def test_research_prewarm_market_provider_skips_unsourceable_markets(
     monkeypatch, tmp_path
 ):
@@ -433,6 +476,41 @@ def test_research_prewarm_market_provider_uses_sourceable_series_fallback(
     ]
     bot.rest.get_markets.assert_any_call(series_ticker="KXGDP", limit=2)
     bot.rest.get_markets.assert_any_call(series_ticker="KXCPI", limit=2)
+
+
+def test_research_prewarm_market_provider_skips_blocklisted_fallback_series(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        ("KXMLB", "KXGDP"),
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    bot.rest.get_all_open_markets.return_value = [
+        replace(
+            _make_market(),
+            ticker="KXUNSOURCEABLE-25DEC31",
+            rules_primary="",
+            rules_secondary="",
+            contract_terms_url="",
+            settlement_sources=(),
+        )
+    ]
+    gdp_market = replace(
+        _make_market(),
+        ticker="KXGDP-26JUL30-T4.0",
+        series_ticker="KXGDP",
+        settlement_sources=(SettlementSource(label="Official", domain="bea.gov"),),
+    )
+    bot.rest.get_markets.return_value = ([gdp_market], None)
+
+    selected = bot._research_prewarm_market_provider()
+
+    assert [market.ticker for market in selected] == [gdp_market.ticker]
+    bot.rest.get_markets.assert_called_once_with(series_ticker="KXGDP", limit=1)
 
 
 def test_research_prewarm_market_provider_cools_down_periodic_fallback_targets(
