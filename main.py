@@ -954,6 +954,9 @@ class TradingBot:
         if tuple(getattr(market, "settlement_sources", ()) or ()):
             return market
         series_ticker = str(getattr(market, "series_ticker", "") or "").strip()
+        if not series_ticker:
+            ticker = str(getattr(market, "ticker", "") or "").strip()
+            series_ticker = ticker.split("-", 1)[0] if ticker else ""
         if not series_ticker or not hasattr(self.rest, "get_series"):
             return market
         try:
