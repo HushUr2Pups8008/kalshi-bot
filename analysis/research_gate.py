@@ -562,10 +562,38 @@ def decide_research_verdict(
     )
 
 
-def _should_update_dossier_snapshot(verdict: ResearchVerdict) -> bool:
+def _has_vetted_candidate_snapshot(
+    cached_dossier: Any | None,
+    contract_fingerprint: str,
+) -> bool:
+    return (
+        cached_dossier is not None
+        and getattr(cached_dossier, "last_verdict_status", None)
+        == ResearchStatus.TRADE_CANDIDATE.value
+        and getattr(cached_dossier, "last_force_side", None) in {"yes", "no"}
+        and getattr(cached_dossier, "last_estimated_probability", None) is not None
+        and getattr(cached_dossier, "last_confidence", None) is not None
+        and getattr(cached_dossier, "last_contract_fingerprint", None)
+        == contract_fingerprint
+    )
+
+
+def _should_update_dossier_snapshot(
+    verdict: ResearchVerdict,
+    *,
+    trigger_source: str,
+    cached_dossier: Any | None,
+    contract_fingerprint: str,
+) -> bool:
     if not verdict.evidence:
         return False
     if verdict.skip_reason == "research_timeout":
+        return False
+    if (
+        trigger_source == "research_prewarm"
+        and verdict.status != ResearchStatus.TRADE_CANDIDATE
+        and _has_vetted_candidate_snapshot(cached_dossier, contract_fingerprint)
+    ):
         return False
     return verdict.status not in {
         ResearchStatus.RESEARCH_PROVIDER_ERROR,
@@ -853,7 +881,10 @@ async def run_research_gate(
                         # Keep fail-closed attempts in the audit log without
                         # demoting the last cache-eligible dossier snapshot.
                         update_dossier_snapshot=_should_update_dossier_snapshot(
-                            verdict
+                            verdict,
+                            trigger_source=_clean(getattr(news, "source", "")),
+                            cached_dossier=cached_dossier,
+                            contract_fingerprint=contract_fingerprint,
                         ),
                         update_dossier_run_id=True,
                     )
