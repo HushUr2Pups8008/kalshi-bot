@@ -334,7 +334,7 @@ def test_research_prewarm_market_provider_enriches_rules_only_market_sources(
     raw_market = replace(
         _make_market(),
         ticker="KXFED-27MAR-T4.00",
-        series_ticker="KXFED",
+        series_ticker="",
         rules_primary="This market resolves from the Federal Reserve rate decision.",
         rules_secondary="",
         contract_terms_url="",
