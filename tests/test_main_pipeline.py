@@ -955,6 +955,48 @@ def test_schedule_targeted_research_prewarm_dedupes_with_cooldown(monkeypatch):
     assert bot._last_targeted_research_prewarm[market.ticker] == 100.0
 
 
+def test_schedule_targeted_research_prewarm_respects_periodic_cooldown(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_target_cooldown_seconds",
+        600.0,
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    market = _make_market()
+    bot._last_periodic_research_prewarm[market.ticker] = 100.0
+
+    with patch("main.time.monotonic", return_value=200.0), \
+         patch("main.asyncio.create_task") as create_task_mock:
+        assert bot._schedule_targeted_research_prewarm(
+            market,
+            "cached_dossier_insufficient",
+        ) is False
+
+    create_task_mock.assert_not_called()
+
+
+def test_research_prewarm_market_provider_respects_targeted_cooldown(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_target_cooldown_seconds",
+        600.0,
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    first_market = replace(_make_market(), ticker="KXFIRST-25DEC31")
+    targeted_market = replace(_make_market(), ticker="KXTARGETED-25DEC31")
+    bot.rest.get_all_open_markets.return_value = [targeted_market, first_market]
+    bot._last_targeted_research_prewarm[targeted_market.ticker] = 100.0
+
+    with patch("main.time.monotonic", return_value=200.0):
+        assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+            first_market.ticker,
+        ]
+
+
 @pytest.mark.parametrize(
     "skip_reason",
     [
