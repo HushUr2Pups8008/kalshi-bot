@@ -1140,7 +1140,13 @@ class TradingBot:
                     continue
                 selected.append(market)
             if selected:
-                return mark_selected(selected)
+                if len(selected) < max_markets:
+                    selected.extend(
+                        sourceable_series_fallback(selected_tickers)[
+                            : max_markets - len(selected)
+                        ]
+                    )
+                return mark_selected(selected[:max_markets])
             fallback = sourceable_series_fallback(selected_tickers)
             if fallback:
                 return mark_selected(fallback)
