@@ -243,6 +243,159 @@ def test_rollout_gate_accepts_prewarm_result_research_proof(tmp_path):
     assert assessment.matched_research_proofs == 1
 
 
+def test_rollout_gate_accepts_recent_candidate_run_after_snapshot_downgrade(tmp_path):
+    (tmp_path / ".env").write_text(
+        "REAL_WEB_RESEARCH_MODE=shadow\nENABLE_RESEARCH_PREWARM_TASK=true\n",
+        encoding="utf-8",
+    )
+    bot_log = tmp_path / "logs" / "app" / "bot.log"
+    bot_log.parent.mkdir(parents=True, exist_ok=True)
+    bot_log.write_text(
+        "2026-05-10 22:00:00,000 UTC INFO [BOOT] version=0.99.0 pid=123\n",
+        encoding="utf-8",
+    )
+    trades = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "RESEARCH_PREWARM_RESULT",
+                "ts": "2026-05-10T22:50:00+00:00",
+                "ticker": "KX-READY",
+                "research_prewarm": True,
+                "research_attempted": True,
+                "research_status": "trade_candidate",
+                "research_run_id": "run-candidate",
+                "research_contract_fingerprint": "contract-v1",
+            },
+        ],
+    )
+    db_path = tmp_path / "data" / "evidence_store.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_research_run_id TEXT,
+                last_contract_fingerprint TEXT,
+                last_researched_ts TEXT NOT NULL,
+                last_verdict_status TEXT NOT NULL,
+                last_skip_reason TEXT,
+                last_force_side TEXT,
+                last_estimated_probability REAL,
+                last_confidence REAL,
+                updated_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE research_runs (
+                research_run_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                trigger_headline TEXT NOT NULL,
+                trigger_source TEXT NOT NULL,
+                attempted INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                verdict_status TEXT NOT NULL,
+                skip_reason TEXT,
+                force_side TEXT,
+                estimated_probability REAL,
+                confidence REAL,
+                created_ts TEXT
+            );
+            CREATE TABLE research_evidence (
+                id INTEGER PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                research_run_id TEXT NOT NULL,
+                contract_fingerprint TEXT NOT NULL,
+                source_class TEXT NOT NULL,
+                url TEXT,
+                title TEXT,
+                retrieved_at TEXT,
+                inserted_at TEXT NOT NULL
+            );
+            INSERT INTO research_dossiers VALUES (
+                'KX-READY',
+                'run-ambiguous',
+                'contract-v1',
+                '2026-05-10T22:55:00+00:00',
+                'researched_skip_ambiguous',
+                'ambiguous_direction',
+                NULL,
+                NULL,
+                NULL,
+                '2026-05-10T22:55:00+00:00',
+                '2026-05-10T22:40:00+00:00'
+            );
+            INSERT INTO research_runs (
+                research_run_id,
+                market_ticker,
+                trigger_headline,
+                trigger_source,
+                attempted,
+                summary,
+                verdict_status,
+                force_side,
+                estimated_probability,
+                confidence,
+                created_ts
+            ) VALUES (
+                'run-candidate',
+                'KX-READY',
+                'scheduled prewarm',
+                'research_prewarm',
+                1,
+                'Research supports yes.',
+                'trade_candidate',
+                'yes',
+                0.63,
+                0.71,
+                '2026-05-10T22:40:00+00:00'
+            );
+            INSERT INTO research_evidence (
+                market_ticker,
+                research_run_id,
+                contract_fingerprint,
+                source_class,
+                url,
+                title,
+                retrieved_at,
+                inserted_at
+            ) VALUES
+            (
+                'KX-READY',
+                'run-candidate',
+                'contract-v1',
+                'resolution_source',
+                'https://example.test/resolution',
+                'Resolution',
+                '2026-05-10T22:46:00+00:00',
+                '2026-05-10T22:46:00+00:00'
+            ),
+            (
+                'KX-READY',
+                'run-candidate',
+                'contract-v1',
+                'corroborating_source',
+                'https://example.test/corroboration',
+                'Corroboration',
+                '2026-05-10T22:47:00+00:00',
+                '2026-05-10T22:47:00+00:00'
+            );
+            """
+        )
+
+    assessment = evaluate_research_rollout(
+        tmp_path,
+        trades,
+        bot_log=bot_log,
+        expected_version="0.99.0",
+        now=NOW,
+    )
+
+    assert assessment.ok
+    assert assessment.matched_research_proofs == 1
+
+
 def test_rollout_gate_rejects_mismatched_contract_fingerprint(tmp_path):
     (tmp_path / ".env").write_text(
         "REAL_WEB_RESEARCH_MODE=shadow\nENABLE_RESEARCH_PREWARM_TASK=true\n",

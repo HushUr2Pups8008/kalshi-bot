@@ -360,15 +360,24 @@ def summarize_research_dossiers(
             live_cache_since = now - timedelta(seconds=RESEARCH_DOSSIER_MAX_AGE_SECONDS)
             fresh_evidence_rows_24h = 0
             evidence_by_contract: dict[tuple[str, str], list[tuple[str, datetime]]] = {}
+            evidence_by_proof: dict[
+                tuple[str, str, str], list[tuple[str, datetime]]
+            ] = {}
             fingerprint_select = (
                 "contract_fingerprint"
                 if "contract_fingerprint" in evidence_columns
                 else "NULL AS contract_fingerprint"
             )
+            run_id_select = (
+                "research_run_id"
+                if "research_run_id" in evidence_columns
+                else "NULL AS research_run_id"
+            )
             for row in conn.execute(
                 f"""
                 SELECT
                     market_ticker,
+                    {run_id_select},
                     source_class,
                     {fingerprint_select},
                     COALESCE(retrieved_at, inserted_at) AS ts
@@ -385,6 +394,12 @@ def summarize_research_dossiers(
                         evidence_by_contract.setdefault((ticker, fingerprint), []).append(
                             (str(row["source_class"] or "").strip(), evidence_ts)
                         )
+                    run_id = str(row["research_run_id"] or "").strip()
+                    if ticker and run_id and fingerprint:
+                        evidence_by_proof.setdefault(
+                            (ticker, run_id, fingerprint),
+                            [],
+                        ).append((str(row["source_class"] or "").strip(), evidence_ts))
             dossier_fingerprint_select = (
                 "last_contract_fingerprint"
                 if "last_contract_fingerprint" in dossier_columns
@@ -417,6 +432,35 @@ def summarize_research_dossiers(
                     for source_class, _ts in contract_evidence
                 ):
                     live_cache_eligible_tickers.add(ticker)
+            if _sqlite_table_exists(conn, "research_runs"):
+                for row in conn.execute(
+                    """
+                    SELECT market_ticker, research_run_id
+                    FROM research_runs
+                    WHERE verdict_status = 'trade_candidate'
+                      AND force_side IN ('yes', 'no')
+                      AND estimated_probability IS NOT NULL
+                      AND confidence IS NOT NULL
+                    """
+                ):
+                    ticker = str(row["market_ticker"] or "").strip()
+                    run_id = str(row["research_run_id"] or "").strip()
+                    if not ticker or not run_id:
+                        continue
+                    for proof_ticker, proof_run_id, _fingerprint in evidence_by_proof:
+                        if proof_ticker != ticker or proof_run_id != run_id:
+                            continue
+                        proof_evidence = evidence_by_proof[
+                            (proof_ticker, proof_run_id, _fingerprint)
+                        ]
+                        if len(proof_evidence) < 2:
+                            continue
+                        if any(
+                            source_class in RESEARCH_REQUIRED_SOURCE_CLASSES
+                            for source_class, _ts in proof_evidence
+                        ):
+                            live_cache_eligible_tickers.add(ticker)
+                            break
     except sqlite3.Error as exc:
         return ResearchDossierStats(
             db_path=db_path,

@@ -178,6 +178,24 @@ def _live_cache_eligible_proofs(
                     """
                 )
             }
+            if botcheck._sqlite_table_exists(conn, "research_runs"):  # noqa: SLF001
+                for row in conn.execute(
+                    """
+                    SELECT market_ticker, research_run_id
+                    FROM research_runs
+                    WHERE verdict_status = 'trade_candidate'
+                      AND force_side IN ('yes', 'no')
+                      AND estimated_probability IS NOT NULL
+                      AND confidence IS NOT NULL
+                    """
+                ):
+                    ticker = str(row["market_ticker"] or "").strip()
+                    run_id = str(row["research_run_id"] or "").strip()
+                    if not ticker or not run_id:
+                        continue
+                    for proof_ticker, proof_run_id, fingerprint in evidence_by_proof:
+                        if proof_ticker == ticker and proof_run_id == run_id:
+                            vetted_proofs.add((ticker, run_id, fingerprint))
     except sqlite3.Error:
         return set()
 
