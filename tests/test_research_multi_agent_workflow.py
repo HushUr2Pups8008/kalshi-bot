@@ -109,6 +109,14 @@ def _write_trade_log(path, records) -> None:
     write_jsonl(path, records)
 
 
+def _write_bot_log(path, *, boot_ts: str = "2026-06-28 23:00:00,000 UTC") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"{boot_ts} INFO kalshi_bot [BOOT] version=0.33.22 pid=123\n",
+        encoding="utf-8",
+    )
+
+
 def test_research_multi_agent_workflow_passes_shadow_with_fresh_evidence(tmp_path):
     _write_profile_and_env(tmp_path)
     _write_dossier_db(tmp_path)
@@ -180,6 +188,84 @@ def test_research_multi_agent_workflow_fails_repeated_prewarm_spend(tmp_path):
         tmp_path,
         trades,
         profile_path=tmp_path / "profile.env",
+        now=NOW,
+        window_hours=1,
+        max_prewarm_duplicate_ratio=0.5,
+    )
+
+    assert not assessment.ok
+    prewarm = assessment.agent("prewarm_quality")
+    assert not prewarm.ok
+    assert "duplicate prewarm spend" in prewarm.findings[0]
+
+
+def test_research_multi_agent_workflow_ignores_repeats_before_active_boot(tmp_path):
+    _write_profile_and_env(tmp_path)
+    _write_dossier_db(tmp_path)
+    bot_log = tmp_path / "logs" / "app" / "bot.log"
+    _write_bot_log(bot_log)
+    trades = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    _write_trade_log(
+        trades,
+        [
+            {
+                "type": "RESEARCH_PREWARM_RESULT",
+                "ts": f"2026-06-28T22:4{index}:00Z",
+                "ticker": "KXOLDREPEAT-26JUL30-T4.0",
+                "research_status": "continue_researching",
+            }
+            for index in range(5)
+        ]
+        + [
+            {
+                "type": "RESEARCH_PREWARM_RESULT",
+                "ts": "2026-06-28T23:20:00Z",
+                "ticker": "KXGDP-26JUL30-T4.0",
+                "research_status": "continue_researching",
+            }
+        ],
+    )
+
+    assessment = evaluate_research_multi_agent_workflow(
+        tmp_path,
+        trades,
+        profile_path=tmp_path / "profile.env",
+        bot_log=bot_log,
+        now=NOW,
+        window_hours=1,
+    )
+
+    assert assessment.ok
+    prewarm = assessment.agent("prewarm_quality")
+    assert prewarm.ok
+    assert prewarm.metrics["prewarm_rows"] == 1
+    assert prewarm.metrics["prewarm_window_since"] == "2026-06-28T23:00:00+00:00"
+
+
+def test_research_multi_agent_workflow_fails_repeats_after_active_boot(tmp_path):
+    _write_profile_and_env(tmp_path)
+    _write_dossier_db(tmp_path)
+    bot_log = tmp_path / "logs" / "app" / "bot.log"
+    _write_bot_log(bot_log)
+    trades = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    _write_trade_log(
+        trades,
+        [
+            {
+                "type": "RESEARCH_PREWARM_RESULT",
+                "ts": f"2026-06-28T23:2{index}:00Z",
+                "ticker": "KXREPEAT-26JUL30-T4.0",
+                "research_status": "continue_researching",
+            }
+            for index in range(5)
+        ],
+    )
+
+    assessment = evaluate_research_multi_agent_workflow(
+        tmp_path,
+        trades,
+        profile_path=tmp_path / "profile.env",
+        bot_log=bot_log,
         now=NOW,
         window_hours=1,
         max_prewarm_duplicate_ratio=0.5,
