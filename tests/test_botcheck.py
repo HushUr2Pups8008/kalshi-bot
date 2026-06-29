@@ -843,6 +843,164 @@ def test_summarize_research_dossiers_excludes_stale_live_cache_ready_count(tmp_p
     assert stats.live_cache_eligible_dossiers == 0
 
 
+def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
+    tmp_path,
+):
+    db_path = tmp_path / "data" / "evidence_store.db"
+    db_path.parent.mkdir()
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_research_run_id TEXT,
+                last_contract_fingerprint TEXT,
+                last_researched_ts TEXT NOT NULL,
+                last_verdict_status TEXT NOT NULL,
+                last_skip_reason TEXT,
+                last_force_side TEXT,
+                last_estimated_probability REAL,
+                last_confidence REAL,
+                created_ts TEXT,
+                updated_ts TEXT
+            );
+            CREATE TABLE research_runs (
+                research_run_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                trigger_headline TEXT NOT NULL,
+                trigger_source TEXT NOT NULL,
+                attempted INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                verdict_status TEXT NOT NULL,
+                skip_reason TEXT,
+                force_side TEXT,
+                estimated_probability REAL,
+                confidence REAL,
+                created_ts TEXT
+            );
+            CREATE TABLE research_evidence (
+                evidence_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                research_run_id TEXT NOT NULL,
+                contract_fingerprint TEXT,
+                source_class TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                title TEXT NOT NULL,
+                snippet TEXT NOT NULL,
+                claim_type TEXT NOT NULL,
+                supports_direction TEXT NOT NULL,
+                supports_confidence REAL NOT NULL,
+                published_at TEXT,
+                retrieved_at TEXT,
+                inserted_at TEXT
+            );
+            INSERT INTO research_dossiers (
+                market_ticker,
+                last_research_run_id,
+                last_contract_fingerprint,
+                last_researched_ts,
+                last_verdict_status,
+                last_skip_reason,
+                last_force_side,
+                last_estimated_probability,
+                last_confidence
+            ) VALUES (
+                'KXREADY',
+                'run-ambiguous',
+                'contract-v1',
+                '2026-05-10T22:55:00+00:00',
+                'researched_skip_ambiguous',
+                'ambiguous_direction',
+                NULL,
+                NULL,
+                NULL
+            );
+            INSERT INTO research_runs (
+                research_run_id,
+                market_ticker,
+                trigger_headline,
+                trigger_source,
+                attempted,
+                summary,
+                verdict_status,
+                force_side,
+                estimated_probability,
+                confidence,
+                created_ts
+            ) VALUES (
+                'run-candidate',
+                'KXREADY',
+                'scheduled prewarm',
+                'research_prewarm',
+                1,
+                'Research supports yes.',
+                'trade_candidate',
+                'yes',
+                0.64,
+                0.72,
+                '2026-05-10T22:40:00+00:00'
+            );
+            INSERT INTO research_evidence (
+                evidence_id,
+                market_ticker,
+                research_run_id,
+                contract_fingerprint,
+                source_class,
+                source_name,
+                source_url,
+                title,
+                snippet,
+                claim_type,
+                supports_direction,
+                supports_confidence,
+                published_at,
+                retrieved_at,
+                inserted_at
+            ) VALUES
+            (
+                'ev-candidate-1',
+                'KXREADY',
+                'run-candidate',
+                'contract-v1',
+                'resolution_source',
+                'source',
+                'https://example.com/resolution',
+                'Fresh official',
+                'snippet',
+                'metric',
+                'yes',
+                0.8,
+                '2026-05-10T22:30:00+00:00',
+                '2026-05-10T22:40:00+00:00',
+                '2026-05-10T22:40:00+00:00'
+            ),
+            (
+                'ev-candidate-2',
+                'KXREADY',
+                'run-candidate',
+                'contract-v1',
+                'web',
+                'source',
+                'https://example.com/corroboration',
+                'Fresh corroboration',
+                'snippet',
+                'metric',
+                'yes',
+                0.7,
+                '2026-05-10T22:31:00+00:00',
+                '2026-05-10T22:41:00+00:00',
+                '2026-05-10T22:41:00+00:00'
+            );
+            """
+        )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+
+    stats = summarize_research_dossiers(tmp_path, now=now)
+
+    assert stats.live_cache_eligible_dossiers == 1
+
+
 def test_print_research_gate_section_surfaces_dossier_cache(capsys, tmp_path, monkeypatch):
     monkeypatch.setenv("REAL_WEB_RESEARCH_MODE", "production")
     now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
