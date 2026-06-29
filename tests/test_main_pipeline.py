@@ -478,6 +478,55 @@ def test_research_prewarm_market_provider_uses_sourceable_series_fallback(
     bot.rest.get_markets.assert_any_call(series_ticker="KXCPI", limit=2)
 
 
+def test_research_prewarm_market_provider_tops_up_backlog_with_fallback(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 2, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        ("KXGDP",),
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    backlog_market = replace(
+        _make_market(),
+        ticker="KXTARIFFRATEPRC-26JUL01-30",
+        series_ticker="KXTARIFFRATEPRC",
+        settlement_sources=(SettlementSource(label="Official", domain="ustr.gov"),),
+    )
+    fallback_market = replace(
+        _make_market(),
+        ticker="KXGDP-26JUL30-T4.0",
+        series_ticker="KXGDP",
+        settlement_sources=(SettlementSource(label="Official", domain="bea.gov"),),
+    )
+    bot.rest.get_all_open_markets.return_value = [backlog_market]
+    bot.rest.get_markets.return_value = ([fallback_market], None)
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ticker": backlog_market.ticker,
+                "reason": "research_incomplete",
+                "research_skip_reason": "ambiguous_direction",
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    selected = bot._research_prewarm_market_provider()
+
+    assert [market.ticker for market in selected] == [
+        backlog_market.ticker,
+        fallback_market.ticker,
+    ]
+
+
 def test_research_prewarm_market_provider_skips_blocklisted_fallback_series(
     monkeypatch,
 ):
