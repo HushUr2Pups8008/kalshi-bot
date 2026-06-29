@@ -951,7 +951,7 @@ class TradingBot:
             self._research_prewarm_cooldown_book().pop(ticker, None)
 
     def _enrich_research_prewarm_market_source_path(self, market: object) -> object:
-        if market_has_research_source_path(market):
+        if tuple(getattr(market, "settlement_sources", ()) or ()):
             return market
         series_ticker = str(getattr(market, "series_ticker", "") or "").strip()
         if not series_ticker or not hasattr(self.rest, "get_series"):

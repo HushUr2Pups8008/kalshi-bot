@@ -326,6 +326,39 @@ def test_research_prewarm_market_provider_enriches_series_metadata(
     bot.rest.get_series.assert_called_once_with(raw_market.series_ticker)
 
 
+def test_research_prewarm_market_provider_enriches_rules_only_market_sources(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    raw_market = replace(
+        _make_market(),
+        ticker="KXFED-27MAR-T4.00",
+        series_ticker="KXFED",
+        rules_primary="This market resolves from the Federal Reserve rate decision.",
+        rules_secondary="",
+        contract_terms_url="",
+        settlement_sources=(),
+    )
+    bot.rest.get_all_open_markets.return_value = [raw_market]
+    bot.rest.get_series.return_value = SimpleNamespace(
+        rules_primary="",
+        rules_secondary="",
+        contract_terms_url="",
+        settlement_sources=(
+            SettlementSource(label="Federal Reserve", domain="federalreserve.gov"),
+        ),
+    )
+
+    selected = bot._research_prewarm_market_provider()
+
+    assert [market.ticker for market in selected] == [raw_market.ticker]
+    assert selected[0].settlement_sources == (
+        SettlementSource(label="Federal Reserve", domain="federalreserve.gov"),
+    )
+    bot.rest.get_series.assert_called_once_with("KXFED")
+
+
 def test_research_prewarm_market_provider_returns_unsourceable_for_skip_telemetry(
     monkeypatch,
 ):
