@@ -628,6 +628,95 @@ async def test_researched_no_edge_invalidates_stale_cached_candidate(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_research_prewarm_ambiguous_retry_preserves_fresh_candidate_snapshot(
+    tmp_path,
+):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    market = SimpleNamespace(
+        ticker="KXIRANCRUDE-26JUL13-T3.8",
+        title="Will Iran crude oil production be at least 3.8M bpd?",
+        rules_primary="OPEC MOMR secondary sources decide the market.",
+        rules_secondary="Later revisions ignored.",
+        settlement_sources=(),
+    )
+    contract_fingerprint = _contract_fingerprint(market)
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="resolution_source",
+            source_name="OPEC",
+            source_url="https://opec.org/momr",
+            title="MOMR table",
+            snippet="Iran crude production secondary sources table.",
+            claim_type="resolution",
+            supports_direction="yes",
+            supports_confidence=0.9,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=contract_fingerprint,
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Reuters",
+            source_url="https://reuters.com/iran-production",
+            title="Iran production rises",
+            snippet="Analysts expect Iran crude production to exceed the threshold.",
+            claim_type="corroboration",
+            supports_direction="yes",
+            supports_confidence=0.8,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=contract_fingerprint,
+        ),
+    ]
+    await store.record_research_run(
+        market.ticker,
+        "rr-vetted-prewarm",
+        trigger_headline="scheduled prewarm",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Cached vetted research supports yes.",
+        verdict_status=ResearchStatus.TRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.8,
+        confidence=0.8,
+        contract_fingerprint=contract_fingerprint,
+        evidence=evidence,
+    )
+
+    async def fail_search(_query):
+        raise AssertionError("fresh candidate cache should avoid fresh search")
+
+    async def ambiguous_adjudicator(*, evidence, queries, news, market):
+        return {
+            "direction": "neutral",
+            "confidence": 0.8,
+            "estimated_probability_yes": 0.50,
+            "reason": "Prewarm retry found mixed/noisy context.",
+        }
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="scheduled prewarm", source="research_prewarm"),
+        market,
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="Scheduled prewarm.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=fail_search,
+        adjudicator=ambiguous_adjudicator,
+        dossier_store=store,
+    )
+
+    assert verdict.status == ResearchStatus.RESEARCHED_SKIP_AMBIGUOUS
+    snapshot = await store.get_dossier_snapshot(market.ticker)
+    assert snapshot is not None
+    assert snapshot.last_research_run_id == "rr-vetted-prewarm"
+    assert snapshot.last_verdict_status == ResearchStatus.TRADE_CANDIDATE.value
+    assert snapshot.last_force_side == "yes"
+
+
+@pytest.mark.asyncio
 async def test_cached_evidence_candidate_records_matching_full_proof_run(tmp_path):
     db_path = tmp_path / "research_dossier.db"
     store = ResearchDossierStore(db_path)
