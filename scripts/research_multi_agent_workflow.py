@@ -94,6 +94,19 @@ def _trade_records_in_window(
     return records
 
 
+def _latest_active_boot_since(bot_log: Path | None, *, now: datetime) -> datetime | None:
+    if bot_log is None:
+        return None
+    sessions = [
+        session.boot_ts
+        for session in botcheck.read_sessions(bot_log)
+        if session.shutdown_ts is None and session.boot_ts <= now
+    ]
+    if not sessions:
+        return None
+    return max(sessions)
+
+
 def _activation_agent(
     repo_root: Path,
     profile_path: Path,
@@ -151,6 +164,7 @@ def _prewarm_quality_agent(
     *,
     max_duplicate_ratio: float,
     target_cooldown_seconds: float,
+    prewarm_window_since: datetime,
 ) -> ResearchAgentResult:
     prewarm = [
         record
@@ -215,6 +229,7 @@ def _prewarm_quality_agent(
             "target_cooldown_seconds": target_cooldown_seconds,
             "within_cooldown_repeats": len(within_cooldown_repeats),
             "status_counts": dict(status_counts),
+            "prewarm_window_since": prewarm_window_since.isoformat(),
         },
         findings=findings,
     )
@@ -339,7 +354,11 @@ def evaluate_research_multi_agent_workflow(
         now=now,
         window_hours=window_hours,
     )
-    records = _trade_records_in_window(trades_log, since=signal_stats.since)
+    active_boot_since = _latest_active_boot_since(bot_log, now=now)
+    prewarm_window_since = max(
+        value for value in (signal_stats.since, active_boot_since) if value is not None
+    )
+    records = _trade_records_in_window(trades_log, since=prewarm_window_since)
     cooldown_raw, _cooldown_source = botcheck._research_env_value(  # noqa: SLF001
         repo_root,
         "RESEARCH_PREWARM_TARGET_COOLDOWN_SECONDS",
@@ -356,6 +375,7 @@ def evaluate_research_multi_agent_workflow(
             records,
             max_duplicate_ratio=max_prewarm_duplicate_ratio,
             target_cooldown_seconds=target_cooldown_seconds,
+            prewarm_window_since=prewarm_window_since,
         ),
         _dossier_evidence_agent(repo_root, now=now),
         _capital_safety_agent(signal_stats, allow_paper_trades=allow_paper_trades),
