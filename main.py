@@ -140,6 +140,21 @@ NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS = max(
     float(os.getenv("NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS", "20")),
 )
 
+_RESEARCH_PREWARM_BLOCKED_SERIES_PREFIXES = tuple(MARKET_SERIES_BLOCKLIST_PREFIXES) + (
+    "KXMVE",
+)
+
+
+def _research_prewarm_ticker_blocked(ticker: str) -> bool:
+    series_ticker = str(ticker or "").strip().split("-", 1)[0]
+    if not series_ticker:
+        return False
+    return any(
+        series_ticker.startswith(prefix)
+        for prefix in _RESEARCH_PREWARM_BLOCKED_SERIES_PREFIXES
+    )
+
+
 def _recent_runtime_research_prewarm_tickers(*, now: datetime | None = None) -> list[str]:
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     since = now_utc - timedelta(hours=24)
@@ -155,7 +170,7 @@ def _recent_runtime_research_prewarm_tickers(*, now: datetime | None = None) -> 
             if not record_targets_kalshi_research_prewarm(record):
                 continue
             ticker = str(record.get("ticker") or record.get("market_ticker") or "").strip()
-            if ticker:
+            if ticker and not _research_prewarm_ticker_blocked(ticker):
                 last_index_by_ticker[ticker] = index
     except Exception as exc:
         log.debug("[RESEARCH_PREWARM] trade-log target scan failed: %s", exc)
@@ -1005,6 +1020,8 @@ class TradingBot:
             return str(getattr(market, "ticker", "") or "").strip()
 
         def ticker_available(ticker: str) -> bool:
+            if _research_prewarm_ticker_blocked(ticker):
+                return False
             return self._research_prewarm_ticker_available(
                 ticker,
                 now_monotonic=now_monotonic,
@@ -1045,6 +1062,8 @@ class TradingBot:
                     break
                 series_ticker = str(raw_series or "").strip()
                 if not series_ticker:
+                    continue
+                if _research_prewarm_ticker_blocked(series_ticker):
                     continue
                 try:
                     page, _cursor = self.rest.get_markets(
