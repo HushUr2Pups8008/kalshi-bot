@@ -877,8 +877,9 @@ class TradingBot:
         self._market_cache_ready_after_secs: float | None = None
         self._market_cache_empty_discovery_passes = 0
         self._targeted_research_prewarm_tasks: set[asyncio.Task] = set()
-        self._last_targeted_research_prewarm: dict[str, float] = {}
-        self._last_periodic_research_prewarm: dict[str, float] = {}
+        self._last_research_prewarm_by_ticker: dict[str, float] = {}
+        self._last_targeted_research_prewarm = self._last_research_prewarm_by_ticker
+        self._last_periodic_research_prewarm = self._last_research_prewarm_by_ticker
 
     _RETRYABLE_RESEARCH_PREWARM_REASONS = {
         "ambiguous_direction",
@@ -895,6 +896,59 @@ class TradingBot:
         "research_adjudicator_error",
         "new_market",
     }
+
+    def _research_prewarm_cooldown_book(self) -> dict[str, float]:
+        book = getattr(self, "_last_research_prewarm_by_ticker", None)
+        if book is None:
+            book = {}
+            self._last_research_prewarm_by_ticker = book
+        for attr in (
+            "_last_targeted_research_prewarm",
+            "_last_periodic_research_prewarm",
+        ):
+            legacy = getattr(self, attr, None)
+            if legacy is not None and legacy is not book:
+                for ticker, started_at in legacy.items():
+                    previous = book.get(ticker)
+                    if previous is None or started_at > previous:
+                        book[ticker] = started_at
+            setattr(self, attr, book)
+        return book
+
+    def _research_prewarm_target_cooldown_seconds(self) -> float:
+        return float(getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0))
+
+    def _research_prewarm_ticker_available(
+        self,
+        ticker: str,
+        *,
+        now_monotonic: float,
+        cooldown_seconds: float | None = None,
+    ) -> bool:
+        if not ticker:
+            return False
+        cooldown = (
+            self._research_prewarm_target_cooldown_seconds()
+            if cooldown_seconds is None
+            else cooldown_seconds
+        )
+        if cooldown <= 0:
+            return True
+        last_started = self._research_prewarm_cooldown_book().get(ticker)
+        return last_started is None or now_monotonic - last_started >= cooldown
+
+    def _mark_research_prewarm_started(
+        self,
+        ticker: str,
+        *,
+        now_monotonic: float,
+    ) -> None:
+        if ticker:
+            self._research_prewarm_cooldown_book()[ticker] = now_monotonic
+
+    def _clear_research_prewarm_started(self, ticker: str) -> None:
+        if ticker:
+            self._research_prewarm_cooldown_book().pop(ticker, None)
 
     def _enrich_research_prewarm_market_source_path(self, market: object) -> object:
         if market_has_research_source_path(market):
@@ -942,22 +996,17 @@ class TradingBot:
             for index, ticker in enumerate(_recent_runtime_research_prewarm_tickers())
         }
         now_monotonic = time.monotonic()
-        cooldown = float(
-            getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0)
-        )
-        if not hasattr(self, "_last_periodic_research_prewarm"):
-            self._last_periodic_research_prewarm = {}
+        cooldown = self._research_prewarm_target_cooldown_seconds()
 
         def market_ticker(market: object) -> str:
             return str(getattr(market, "ticker", "") or "").strip()
 
         def ticker_available(ticker: str) -> bool:
-            if not ticker:
-                return False
-            if cooldown <= 0:
-                return True
-            last_started = self._last_periodic_research_prewarm.get(ticker)
-            return last_started is None or now_monotonic - last_started >= cooldown
+            return self._research_prewarm_ticker_available(
+                ticker,
+                now_monotonic=now_monotonic,
+                cooldown_seconds=cooldown,
+            )
 
         def mark_selected(selected: list[object]) -> list[object]:
             for market in selected:
@@ -965,7 +1014,10 @@ class TradingBot:
                     continue
                 ticker = market_ticker(market)
                 if ticker:
-                    self._last_periodic_research_prewarm[ticker] = now_monotonic
+                    self._mark_research_prewarm_started(
+                        ticker,
+                        now_monotonic=now_monotonic,
+                    )
             return selected
 
         def is_open_market(market: object) -> bool:
@@ -1145,14 +1197,15 @@ class TradingBot:
             return False
         if not hasattr(self, "_targeted_research_prewarm_tasks"):
             self._targeted_research_prewarm_tasks = set()
-        if not hasattr(self, "_last_targeted_research_prewarm"):
-            self._last_targeted_research_prewarm = {}
         now_monotonic = time.monotonic()
-        cooldown = float(getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0))
-        last_started = self._last_targeted_research_prewarm.get(ticker)
-        if last_started is not None and now_monotonic - last_started < cooldown:
+        cooldown = self._research_prewarm_target_cooldown_seconds()
+        if not self._research_prewarm_ticker_available(
+            ticker,
+            now_monotonic=now_monotonic,
+            cooldown_seconds=cooldown,
+        ):
             return False
-        self._last_targeted_research_prewarm[ticker] = now_monotonic
+        self._mark_research_prewarm_started(ticker, now_monotonic=now_monotonic)
         task = asyncio.create_task(
             self._run_targeted_research_prewarm(market, reason),
             name=f"research_prewarm_target:{ticker}",
@@ -1166,7 +1219,7 @@ class TradingBot:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self._last_targeted_research_prewarm.pop(ticker, None)
+                self._clear_research_prewarm_started(ticker)
                 log.warning(
                     "[RESEARCH_PREWARM] targeted ticker=%s failed: %s",
                     ticker,
