@@ -1098,6 +1098,9 @@ class TradingBot:
                 getattr(cfg, "real_web_research_timeout_seconds", 12.0)
             ),
             max_concurrency=int(getattr(cfg, "research_prewarm_concurrency", 3)),
+            target_cooldown_seconds=float(
+                getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0)
+            ),
         )
         return asyncio.create_task(
             prewarm.run_periodic(

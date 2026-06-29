@@ -158,6 +158,12 @@ def test_create_research_prewarm_runtime_task_enabled(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_pages", 3, raising=False)
     monkeypatch.setattr(_cfg_module.cfg, "real_web_research_max_queries", 4, raising=False)
     monkeypatch.setattr(_cfg_module.cfg, "real_web_research_timeout_seconds", 8.5, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_target_cooldown_seconds",
+        1234.0,
+        raising=False,
+    )
     bot = _make_bot_stub()
     markets = [
         _make_market(),
@@ -199,6 +205,7 @@ def test_create_research_prewarm_runtime_task_enabled(monkeypatch):
     instance = instances[0]
     assert instance.kwargs["max_queries"] == 4
     assert instance.kwargs["research_timeout_seconds"] == 8.5
+    assert instance.kwargs["target_cooldown_seconds"] == 1234.0
     assert instance.interval_seconds == 900.0
     assert [market.ticker for market in instance.provider()] == [
         "KXTEST-25DEC31",

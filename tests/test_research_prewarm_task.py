@@ -9,8 +9,10 @@ import pytest
 
 from analysis.research_gate import ResearchEvidence, ResearchStatus, ResearchVerdict
 from tasks.research_dossier import ResearchDossierStore
+from tasks import research_prewarm_task as research_prewarm_task_module
 from tasks.research_prewarm_task import (
     ResearchPrewarmError,
+    ResearchPrewarmResult,
     ResearchPrewarmTask,
     _prewarm_news,
 )
@@ -168,6 +170,52 @@ async def test_prewarm_run_once_limits_market_concurrency(tmp_path):
 
     assert len(results) == 5
     assert max_active == 2
+
+
+@pytest.mark.asyncio
+async def test_prewarm_run_once_cools_down_attempted_ticker(
+    monkeypatch,
+    tmp_path,
+):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    now = 10_000.0
+    calls: list[str] = []
+    emitted: list[ResearchPrewarmResult] = []
+
+    monkeypatch.setattr(
+        research_prewarm_task_module.time,
+        "monotonic",
+        lambda: now,
+    )
+
+    async def research_gate(_news, market, **_kwargs):
+        calls.append(market.ticker)
+        return SimpleNamespace(
+            status=ResearchStatus.CONTINUE_RESEARCHING,
+            attempted=True,
+            queries=[],
+            evidence=[],
+            skip_reason="no_research_hits",
+        )
+
+    async def result_sink(result):
+        emitted.append(result)
+
+    task = ResearchPrewarmTask(
+        store=store,
+        research_gate=research_gate,
+        result_sink=result_sink,
+        target_cooldown_seconds=1800.0,
+    )
+
+    first = await task.run_once([_market("KXRESEARCH-COOLDOWN")])
+    second = await task.run_once([_market("KXRESEARCH-COOLDOWN")])
+
+    assert [result.market_ticker for result in first] == ["KXRESEARCH-COOLDOWN"]
+    assert second == []
+    assert calls == ["KXRESEARCH-COOLDOWN"]
+    assert [result.market_ticker for result in emitted] == ["KXRESEARCH-COOLDOWN"]
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ return cycle results. It does not blend, size, gate, or execute trades.
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Iterable
@@ -64,6 +65,7 @@ class ResearchPrewarmTask:
         max_queries: int = 6,
         research_timeout_seconds: float = 12.0,
         max_concurrency: int = 3,
+        target_cooldown_seconds: float = 0.0,
         result_sink: ResearchPrewarmResultSink | None = None,
     ) -> None:
         self.store = store or default_store()
@@ -74,6 +76,8 @@ class ResearchPrewarmTask:
         self.max_queries = int(max_queries)
         self.research_timeout_seconds = float(research_timeout_seconds)
         self.max_concurrency = max(1, int(max_concurrency))
+        self.target_cooldown_seconds = max(0.0, float(target_cooldown_seconds))
+        self._last_attempted_by_ticker: dict[str, float] = {}
         self.result_sink = result_sink or _write_research_prewarm_result
 
     async def process_market(self, market: Any) -> ResearchPrewarmResult:
@@ -142,7 +146,10 @@ class ResearchPrewarmTask:
         await self.result_sink(result)
 
     async def run_once(self, markets: Iterable[Any]) -> list[ResearchPrewarmResult]:
-        market_list = list(markets)
+        now_monotonic = time.monotonic()
+        market_list = [
+            market for market in markets if self._market_available(market, now_monotonic)
+        ]
         semaphore = asyncio.Semaphore(self.max_concurrency)
 
         async def process_with_limit(market: Any) -> ResearchPrewarmResult:
@@ -169,6 +176,8 @@ class ResearchPrewarmTask:
             else:
                 ok.append(result)
                 await self.emit_result(result)
+                if result.attempted:
+                    self._last_attempted_by_ticker[result.market_ticker] = now_monotonic
         if failed:
             _log.warning(
                 "[RESEARCH_PREWARM] %d/%d markets failed this cycle",
@@ -176,6 +185,18 @@ class ResearchPrewarmTask:
                 len(raw),
             )
         return ok
+
+    def _market_available(self, market: Any, now_monotonic: float) -> bool:
+        if self.target_cooldown_seconds <= 0:
+            return True
+        ticker = str(getattr(market, "ticker", "") or "")
+        if not ticker:
+            return True
+        last_attempted = self._last_attempted_by_ticker.get(ticker)
+        return (
+            last_attempted is None
+            or now_monotonic - last_attempted >= self.target_cooldown_seconds
+        )
 
     async def run_periodic(
         self,
