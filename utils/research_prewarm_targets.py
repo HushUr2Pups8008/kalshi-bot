@@ -30,6 +30,7 @@ RESEARCH_PREWARM_EVENT_TYPES = frozenset(
     {
         "ANALYSIS_REJECTED",
         "MATCH_LLM_REVIEW",
+        "RESEARCH_PREWARM_RESULT",
         "SIGNAL_ANALYSIS_DETAIL",
     }
 )
@@ -85,6 +86,8 @@ def record_targets_research_prewarm(
             str(record.get("pre_llm_gate_reason") or "").strip()
             == "insufficient_semantic_overlap"
         )
+    if event_type == "RESEARCH_PREWARM_RESULT":
+        return str(record.get("research_status") or "").strip() == "trade_candidate"
     return False
 
 

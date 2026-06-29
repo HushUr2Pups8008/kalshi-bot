@@ -243,6 +243,41 @@ def test_research_prewarm_market_provider_prioritizes_recent_empty_keyword_backl
     ]
 
 
+def test_research_prewarm_market_provider_prioritizes_recent_trade_candidate_refresh(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_pages", 3, raising=False)
+    bot = _make_bot_stub()
+    generic_market = replace(_make_market(), ticker="KXGENERIC-25DEC31")
+    candidate_market = replace(
+        _make_market(),
+        ticker="KXCPI-26NOV-T0.4",
+        series_ticker="KXCPI",
+        settlement_sources=(SettlementSource(label="BLS", domain="bls.gov"),),
+    )
+    bot.rest.get_all_open_markets.return_value = [generic_market, candidate_market]
+
+    log_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    write_jsonl(
+        log_path,
+        [
+            {
+                "type": "RESEARCH_PREWARM_RESULT",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ticker": candidate_market.ticker,
+                "research_status": "trade_candidate",
+                "research_prewarm": True,
+            }
+        ],
+    )
+    monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        candidate_market.ticker,
+    ]
+
+
 def test_research_prewarm_market_provider_skips_blocklisted_recent_backlog(
     monkeypatch, tmp_path
 ):
