@@ -64,29 +64,101 @@ def test_normalizes_binary_market_payload():
     assert market.price_available is True
 
 
-def test_normalizes_public_gateway_string_encoded_outcomes():
-    payload = {
+def _long_book_payload() -> dict:
+    return {
         "id": "123",
-        "slug": "will-example-happen-2026",
-        "question": "Will example happen in 2026?",
+        "slug": "ewc-usse-ga-2026-11-03-rep",
+        "question": "Will the Republican win?",
         "active": True,
         "closed": False,
-        "outcomes": '["No","Yes"]',
-        "outcomePrices": '["0.58","0.43"]',
-        "volume": "1200.50",
-        "openInterest": "34.25",
-        "endDate": "2026-12-31T23:59:59Z",
+        "marketSides": [
+            {"name": "No", "long": False, "quote": {"value": "0.88"}},
+            {"name": "Yes", "long": True, "quote": {"value": "0.13"}},
+        ],
+        "outcomes": '["No", "Yes"]',
+        "outcomePrices": '["0.1300", "0.88"]',
+        "bestBidQuote": {"value": "0.1200"},
+        "bestAskQuote": {"value": "0.1300"},
+        "endDate": "2026-11-03T00:00:00Z",
     }
+
+
+def test_authoritative_long_book_ignores_reversed_positional_prices():
+    payload = _long_book_payload()
+    payload["marketSides"][0]["quote"]["value"] = "0.87"
+    payload["marketSides"][1]["quote"]["value"] = "0.14"
 
     market = normalize_polymarket_market(payload)
 
-    assert market.status == "open"
-    assert market.yes_ask_cents == 43
-    assert market.no_ask_cents == 58
-    assert market.volume_dollars == 1200.50
-    assert market.open_interest_dollars == 34.25
-    assert market.close_time == "2026-12-31T23:59:59Z"
-    assert market.is_tradeable()
+    assert market.yes_ask_cents == 13
+    assert market.no_ask_cents == 88
+    assert market.price_source == "polymarket_public"
+    assert market.price_method == "pm_long_book_v1"
+
+
+def test_market_side_quotes_are_oriented_fallback_without_top_level_book():
+    payload = _long_book_payload()
+    payload.pop("bestBidQuote")
+    payload.pop("bestAskQuote")
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.yes_ask_cents == 13
+    assert market.no_ask_cents == 88
+    assert market.price_source == "polymarket_public"
+    assert market.price_method == "pm_market_sides_quote_v1"
+
+
+def test_string_outcomes_without_authoritative_book_are_unpriced():
+    payload = _long_book_payload()
+    payload.pop("marketSides")
+    payload.pop("bestBidQuote")
+    payload.pop("bestAskQuote")
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.yes_ask_cents is None
+    assert market.no_ask_cents is None
+    assert not market.is_tradeable()
+
+
+@pytest.mark.parametrize(
+    "market_sides",
+    [[], [{"long": True}, {"long": True}], [{"long": False}, {"long": False}]],
+)
+def test_ambiguous_long_side_identity_is_unpriced(market_sides):
+    payload = _long_book_payload()
+    payload["marketSides"] = market_sides
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.yes_ask_cents is None
+    assert market.no_ask_cents is None
+
+
+@pytest.mark.parametrize("invalid_value", [float("nan"), float("inf"), -0.01, 1.01])
+@pytest.mark.parametrize("quote_key", ["bestBidQuote", "bestAskQuote"])
+def test_invalid_top_level_book_values_are_unpriced(quote_key, invalid_value):
+    payload = _long_book_payload()
+    payload[quote_key] = {"value": invalid_value}
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.yes_ask_cents is None
+    assert market.no_ask_cents is None
+
+
+@pytest.mark.parametrize("invalid_value", [float("nan"), float("inf"), -0.01, 1.01])
+def test_invalid_market_side_quote_values_are_unpriced(invalid_value):
+    payload = _long_book_payload()
+    payload.pop("bestBidQuote")
+    payload.pop("bestAskQuote")
+    payload["marketSides"][0]["quote"] = {"value": invalid_value}
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.yes_ask_cents is None
+    assert market.no_ask_cents is None
 
 
 def test_closed_public_gateway_market_is_not_tradeable():

@@ -29,6 +29,8 @@ class PolymarketMarket:
     series_slug: str = ""
     tags: tuple[str, ...] = ()
     public_comments: tuple[str, ...] = ()
+    price_source: str = ""
+    price_method: str = ""
 
     @property
     def tradeable_id(self) -> str:
