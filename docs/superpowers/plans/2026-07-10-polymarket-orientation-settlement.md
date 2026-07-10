@@ -27,7 +27,8 @@
 - Test: `tests/test_polymarket_normalizer.py`
 
 **Interfaces:**
-- Consumes: Polymarket market payloads containing `marketSides`, `bestBid`, and `bestAsk`.
+- Consumes: Polymarket market payloads containing `marketSides`, optional
+  `bestBidQuote`, and optional `bestAskQuote`.
 - Produces: `PolymarketMarket.price_source: str` and `PolymarketMarket.price_method: str`; correctly oriented `yes_ask_cents` and `no_ask_cents`.
 
 - [ ] **Step 1: Write failing orientation and validation tests**
@@ -48,8 +49,8 @@ def _long_book_payload() -> dict:
         ],
         "outcomes": '["No", "Yes"]',
         "outcomePrices": '["0.1300", "0.88"]',
-        "bestBid": "0.12",
-        "bestAsk": "0.13",
+        "bestBidQuote": {"value": "0.12", "currency": "USD"},
+        "bestAskQuote": {"value": "0.13", "currency": "USD"},
         "endDate": "2026-11-03T00:00:00Z",
     }
 
@@ -65,8 +66,12 @@ def test_authoritative_long_book_ignores_reversed_positional_prices():
 def test_string_outcomes_without_authoritative_book_are_unpriced():
     payload = _long_book_payload()
     payload.pop("marketSides")
-    payload.pop("bestBid")
-    payload.pop("bestAsk")
+    payload.pop("bestBidQuote")
+    payload.pop("bestAskQuote")
+    payload["marketSides"] = [
+        {"description": "No", "long": False},
+        {"description": "Yes", "long": True},
+    ]
     market = normalize_polymarket_market(payload)
     assert market.yes_ask_cents is None
     assert market.no_ask_cents is None
@@ -111,6 +116,8 @@ Replace positional string-outcome pricing with helpers shaped as follows:
 
 ```python
 def _probability_cents(value: Any) -> int | None:
+    if isinstance(value, dict):
+        value = value.get("value")
     try:
         probability = float(value)
     except (TypeError, ValueError):
@@ -120,16 +127,21 @@ def _probability_cents(value: Any) -> int | None:
     return int(round(probability * 100))
 
 
-def _long_book_prices(payload: dict[str, Any]) -> tuple[int, int] | None:
+def _oriented_side_prices(payload: dict[str, Any]) -> tuple[int, int, str] | None:
     sides = _parse_json_list(payload.get("marketSides"))
-    long_values = [side.get("long") for side in sides if isinstance(side, dict)]
-    if len(sides) != 2 or long_values.count(True) != 1 or long_values.count(False) != 1:
+    long_sides = [side for side in sides if isinstance(side, dict) and side.get("long") is True]
+    short_sides = [side for side in sides if isinstance(side, dict) and side.get("long") is False]
+    if len(sides) != 2 or len(long_sides) != 1 or len(short_sides) != 1:
         return None
-    yes_ask = _probability_cents(payload.get("bestAsk"))
-    yes_bid = _probability_cents(payload.get("bestBid"))
-    if yes_ask is None or yes_bid is None or yes_bid > yes_ask:
+    yes_ask = _probability_cents(payload.get("bestAskQuote"))
+    yes_bid = _probability_cents(payload.get("bestBidQuote"))
+    if yes_ask is not None and yes_bid is not None and yes_bid <= yes_ask:
+        return yes_ask, 100 - yes_bid, "pm_long_book_v1"
+    yes_quote = _probability_cents(long_sides[0].get("quote") or long_sides[0].get("price"))
+    no_quote = _probability_cents(short_sides[0].get("quote") or short_sides[0].get("price"))
+    if yes_quote is None or no_quote is None:
         return None
-    return yes_ask, 100 - yes_bid
+    return yes_quote, no_quote, "pm_named_sides_v1"
 ```
 
 Use the authoritative result first. Use explicitly named embedded outcome dictionaries only when no authoritative book is present. String arrays never create quote dictionaries.
@@ -207,7 +219,7 @@ Expected: the unversioned snapshot is currently accepted and the safe fixture ha
 At the top of `_poly_snapshot_mark_cents()` parse the JSON object and require:
 
 ```python
-safe_methods = {"pm_long_book_v1", "pm_named_outcomes_v1"}
+safe_methods = {"pm_long_book_v1", "pm_named_sides_v1", "pm_named_outcomes_v1"}
 if payload.get("price_method") not in safe_methods:
     return None
 ```

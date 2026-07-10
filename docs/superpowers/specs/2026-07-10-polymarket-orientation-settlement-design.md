@@ -36,11 +36,15 @@ thresholds, sizing, live/paper mode, or the dirty research-admission worktree.
 
 ## Authoritative Contracts
 
-Modern market payloads identify binary sides through `marketSides[].long` and
-publish the long/YES book as top-level `bestBid` and `bestAsk`.
+Modern market payloads identify binary sides through `marketSides[].long`.
+Direct numeric-ID payloads publish the long/YES book as top-level
+`bestBidQuote` and `bestAskQuote`; slug-list payloads can omit that BBO while
+retaining an explicitly oriented quote on each market side.
 
-- YES ask = top-level `bestAsk`.
-- NO ask = `1 - top-level bestBid`.
+- YES ask = top-level `bestAskQuote.value`.
+- NO ask = `1 - top-level bestBidQuote.value`.
+- When top-level BBO is unavailable, YES and NO prices come from the respective
+  `marketSides[].quote.value` selected by `long=true|false`.
 - A usable payload must contain exactly one `long=true` side and one `long=false`
   side.
 - Prices must be finite decimals in `[0, 1]`.
@@ -68,9 +72,11 @@ It first validates binary side identity. When authoritative top-level BBO fields
 are present, it derives YES and NO asks from that long book and stamps
 `price_source="polymarket_public"` and `price_method="pm_long_book_v1"`.
 
-If authoritative BBO is absent, the normalizer may use explicitly named embedded
-outcome dictionaries. That path stamps `price_method="pm_named_outcomes_v1"`.
-Positional string arrays yield an unpriced market rather than a guessed mapping.
+If top-level BBO is absent, the normalizer may use `marketSides` quotes selected
+by the explicit `long` identity and stamp `price_method="pm_named_sides_v1"`.
+Explicitly named embedded outcome dictionaries remain a final legacy-compatible
+fallback stamped `price_method="pm_named_outcomes_v1"`. Positional string arrays
+yield an unpriced market rather than a guessed mapping.
 
 Invalid price inputs are not clamped into the tradable range. They produce
 `None`, leaving `PolymarketMarket.is_tradeable()` false.
