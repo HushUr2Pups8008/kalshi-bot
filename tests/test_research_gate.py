@@ -13,18 +13,22 @@ from analysis.research_gate import (
     ResearchEvidence,
     ResearchQuery,
     ResearchStatus,
+    ResearchVerdict,
     _apply_adjudication_evidence_assessments,
     _bank_of_israel_policy_search,
     _bls_cpi_search,
     _contract_fingerprint,
     _direct_source_targets,
+    _decision_grade_verdict,
     _duckduckgo_lite_search,
     _economic_stat_pending_search,
+    _evidence_identity,
     _event_window_pending_search,
     _federal_register_search,
     _fed_policy_search,
     _gdpnow_search,
     _govinfo_impeachment_expungement_search,
+    _has_reliable_non_pending_source_path,
     _nws_daily_climate_search,
     _nws_daily_high_temp_from_text,
     _should_direct_fetch_source,
@@ -93,7 +97,7 @@ def test_query_pack_includes_decision_grade_intents():
     news = SimpleNamespace(
         headline="Officials say ceasefire agreement could be signed this week",
         source="Reuters",
-        url="https://reuters.example.com/ceasefire",
+        url="https://reuters.com/ceasefire",
     )
     market = SimpleNamespace(
         ticker="KXCEASEFIRE-26JUL01",
@@ -2047,7 +2051,7 @@ def test_cached_evidence_retrieval_timestamp_controls_freshness():
         ResearchEvidence(
             source_class="official_primary",
             source_name="Official source",
-            source_url="https://official.example.com/result",
+            source_url="https://agency.gov/result",
             title="Official result",
             snippet="Official result was retrieved too long ago.",
             claim_type="supporting",
@@ -2600,7 +2604,7 @@ def test_pending_context_cannot_make_untrusted_evidence_decision_grade():
         ),
     )
 
-    assert verdict.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE
+    assert verdict.status == ResearchStatus.NEEDS_RESEARCH
     assert verdict.skip_reason == "no_reliable_source_path"
 
 
@@ -2672,7 +2676,7 @@ def test_pending_context_rejects_spoofed_gdpnow_signal(
         ),
     )
 
-    assert verdict.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE
+    assert verdict.status == ResearchStatus.NEEDS_RESEARCH
     assert verdict.skip_reason == "no_reliable_source_path"
 
 
@@ -3801,7 +3805,7 @@ async def test_strict_research_gate_includes_required_decision_grade_query_inten
             ResearchEvidence(
                 source_class="official_primary",
                 source_name="Official source",
-                source_url=f"https://official.example.com/{query.query_intent}",
+                source_url=f"https://agency.gov/{query.query_intent}",
                 title="Official result",
                 snippet="Official source says the event resolved YES.",
                 claim_type=query.query_intent,
@@ -3864,7 +3868,7 @@ async def test_strict_research_gate_uses_adjudicator_evidence_labels_for_decisio
                 ResearchEvidence(
                     source_class="official_primary",
                     source_name="Official source",
-                    source_url="https://official.example.com/signed",
+                    source_url="https://agency.gov/signed",
                     title="Agreement notice",
                     snippet="Official notice says the agreement was signed before the deadline.",
                     claim_type=query.query_intent,
@@ -3876,7 +3880,7 @@ async def test_strict_research_gate_uses_adjudicator_evidence_labels_for_decisio
                 ResearchEvidence(
                     source_class="reputable_secondary",
                     source_name="AP",
-                    source_url="https://ap.example.com/ratification",
+                    source_url="https://apnews.com/ratification",
                     title="Ratification objection",
                     snippet="AP notes ratification could still fail.",
                     claim_type=query.query_intent,
@@ -3900,7 +3904,7 @@ async def test_strict_research_gate_uses_adjudicator_evidence_labels_for_decisio
                 ResearchEvidence(
                     source_class="reputable_secondary",
                     source_name="Reuters",
-                    source_url="https://reuters.example.com/signed",
+                    source_url="https://reuters.com/signed",
                     title="Agreement signed",
                     snippet="Reuters independently reports the agreement was signed.",
                     claim_type=query.query_intent,
@@ -3923,17 +3927,17 @@ async def test_strict_research_gate_uses_adjudicator_evidence_labels_for_decisio
             ),
             "evidence_assessments": [
                 {
-                    "source_url": "https://official.example.com/signed",
+                    "source_url": "https://agency.gov/signed",
                     "supports_direction": "yes",
                     "supports_confidence": 0.9,
                 },
                 {
-                    "source_url": "https://reuters.example.com/signed",
+                    "source_url": "https://reuters.com/signed",
                     "supports_direction": "yes",
                     "supports_confidence": 0.8,
                 },
                 {
-                    "source_url": "https://ap.example.com/ratification",
+                    "source_url": "https://apnews.com/ratification",
                     "supports_direction": "no",
                     "supports_confidence": 0.35,
                 },
@@ -3968,8 +3972,8 @@ async def test_strict_research_gate_uses_adjudicator_evidence_labels_for_decisio
     assert verdict.counterclaims == ("AP says ratification could still fail.",)
     assert verdict.open_questions == ("Would ratification be required instead of signing?",)
     labeled = {item.source_url: item.supports_direction for item in verdict.evidence}
-    assert labeled["https://official.example.com/signed"] == "yes"
-    assert labeled["https://ap.example.com/ratification"] == "no"
+    assert labeled["https://agency.gov/signed"] == "yes"
+    assert labeled["https://apnews.com/ratification"] == "no"
 
 
 @pytest.mark.asyncio
@@ -3984,7 +3988,7 @@ async def test_strict_research_gate_runs_side_aware_counter_search_before_candid
                 ResearchEvidence(
                     source_class="official_primary",
                     source_name="Official source",
-                    source_url="https://official.example.com/signed",
+                    source_url="https://agency.gov/signed",
                     title="Agreement notice",
                     snippet="Official notice says the agreement was signed before the deadline.",
                     claim_type=query.query_intent,
@@ -3996,7 +4000,7 @@ async def test_strict_research_gate_runs_side_aware_counter_search_before_candid
                 ResearchEvidence(
                     source_class="reputable_secondary",
                     source_name="Reuters",
-                    source_url="https://reuters.example.com/signed",
+                    source_url="https://reuters.com/signed",
                     title="Agreement signed",
                     snippet="Reuters independently reports the agreement was signed.",
                     claim_type=query.query_intent,
@@ -4024,7 +4028,7 @@ async def test_strict_research_gate_runs_side_aware_counter_search_before_candid
                 ResearchEvidence(
                     source_class="reputable_secondary",
                     source_name="AP",
-                    source_url="https://ap.example.com/not-final",
+                    source_url="https://apnews.com/not-final",
                     title="Not final",
                     snippet="AP reports opponents say the agreement is not final unless ratified.",
                     claim_type=query.query_intent,
@@ -4040,20 +4044,20 @@ async def test_strict_research_gate_runs_side_aware_counter_search_before_candid
         adjudicator_calls += 1
         assessments = [
             {
-                "source_url": "https://official.example.com/signed",
+                "source_url": "https://agency.gov/signed",
                 "supports_direction": "yes",
                 "supports_confidence": 0.9,
             },
             {
-                "source_url": "https://reuters.example.com/signed",
+                "source_url": "https://reuters.com/signed",
                 "supports_direction": "yes",
                 "supports_confidence": 0.8,
             },
         ]
-        if any(item.source_url == "https://ap.example.com/not-final" for item in evidence):
+        if any(item.source_url == "https://apnews.com/not-final" for item in evidence):
             assessments.append(
                 {
-                    "source_url": "https://ap.example.com/not-final",
+                    "source_url": "https://apnews.com/not-final",
                     "supports_direction": "no",
                     "supports_confidence": 0.35,
                 }
@@ -4105,7 +4109,7 @@ async def test_strict_research_gate_runs_side_aware_counter_search_before_candid
     assert {
         item.source_url: item.supports_direction
         for item in verdict.evidence
-    }["https://ap.example.com/not-final"] == "no"
+    }["https://apnews.com/not-final"] == "no"
 
 
 def test_crude_oil_query_pack_uses_contract_reporting_window():
@@ -4137,7 +4141,7 @@ def test_generic_market_query_pack_adds_contract_terms_context_fallback():
     news = SimpleNamespace(
         headline="Officials say ceasefire agreement could be signed this week",
         source="Reuters",
-        url="https://reuters.example.com/ceasefire",
+        url="https://reuters.com/ceasefire",
     )
     market = SimpleNamespace(
         ticker="KXCEASEFIRE-26JUL01",
@@ -4520,6 +4524,242 @@ def test_rss_search_uses_source_label_to_match_site_scoped_resolution(monkeypatc
     )
 
     assert evidence[0].source_class == "resolution_source"
+
+
+def test_rss_search_uses_publisher_url_to_match_site_scoped_official_source(
+    monkeypatch,
+):
+    rss = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss><channel><item>
+      <title>Oklo Aurora Powerhouse licensing update</title>
+      <link>https://news.google.com/rss/articles/nrc-example</link>
+      <source url="https://www.nrc.gov">Nuclear Regulatory Commission (NRC) (.gov)</source>
+      <description>NRC licensing material for the Aurora Powerhouse.</description>
+      <pubDate>Sat, 11 Jul 2026 12:00:00 GMT</pubDate>
+    </item></channel></rss>
+    """
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _limit):
+            return rss
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+
+    evidence = _rss_search(
+        ResearchQuery(
+            query="site:nrc.gov reactor criticality Oklo",
+            query_intent="official_resolution",
+            source_class="official_primary",
+        )
+    )
+
+    assert evidence[0].source_url == "https://www.nrc.gov"
+    assert evidence[0].aggregator_url == (
+        "https://news.google.com/rss/articles/nrc-example"
+    )
+    assert evidence[0].source_class == "official_primary"
+
+
+@pytest.mark.parametrize(
+    "source_element",
+    (
+        "<source>NRC.gov</source>",
+        '<source url="https://nrc.gov.attacker.example">nrc.gov</source>',
+    ),
+)
+def test_rss_search_rejects_unverified_official_publisher_identity(
+    monkeypatch,
+    source_element,
+):
+    rss = f"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss><channel><item>
+      <title>Claimed NRC update</title>
+      <link>https://news.google.com/rss/articles/unverified-nrc</link>
+      {source_element}
+      <description>Unverified publisher metadata.</description>
+      <pubDate>Sat, 11 Jul 2026 12:00:00 GMT</pubDate>
+    </item></channel></rss>
+    """.encode()
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _limit):
+            return rss
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+
+    evidence = _rss_search(
+        ResearchQuery(
+            query="site:nrc.gov reactor criticality Oklo",
+            query_intent="official_resolution",
+            source_class="official_primary",
+        )
+    )
+
+    assert evidence[0].source_class == "other"
+
+
+def test_rss_search_does_not_override_direct_link_with_publisher_metadata(monkeypatch):
+    rss = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss><channel><item>
+      <title>Claimed NRC update</title>
+      <link>https://attacker.example/claimed-nrc-update</link>
+      <source url="https://www.nrc.gov">Nuclear Regulatory Commission</source>
+      <description>Unverified publisher metadata on a direct link.</description>
+      <pubDate>Sat, 11 Jul 2026 12:00:00 GMT</pubDate>
+    </item></channel></rss>
+    """
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _limit):
+            return rss
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+
+    evidence = _rss_search(
+        ResearchQuery(
+            query="site:nrc.gov reactor criticality Oklo",
+            query_intent="official_resolution",
+            source_class="official_primary",
+        )
+    )
+
+    assert evidence[0].source_url == "https://attacker.example/claimed-nrc-update"
+    assert evidence[0].aggregator_url is None
+    assert evidence[0].source_class == "other"
+
+
+def test_google_wrapper_does_not_create_independent_source_path():
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="NRC",
+            source_url="https://www.nrc.gov",
+            title="NRC update",
+            snippet="Official update.",
+            claim_type="official_resolution",
+        ),
+        ResearchEvidence(
+            source_class="other",
+            source_name="Unknown publisher",
+            source_url="https://news.google.com/rss/articles/unknown",
+            title="Aggregated update",
+            snippet="Unverified update.",
+            claim_type="supporting",
+        ),
+    ]
+
+    assert _has_reliable_non_pending_source_path(evidence) is False
+
+
+def test_distinct_official_publishers_create_independent_source_path():
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="NRC",
+            source_url="https://www.nrc.gov",
+            title="NRC update",
+            snippet="Official update.",
+            claim_type="official_resolution",
+        ),
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="USTR",
+            source_url="https://ustr.gov",
+            title="USTR update",
+            snippet="Separate official update.",
+            claim_type="supporting",
+        ),
+    ]
+
+    assert _has_reliable_non_pending_source_path(evidence) is True
+
+
+def test_google_wrapper_cannot_promote_decision_grade_candidate():
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+    candidate = ResearchVerdict(
+        status=ResearchStatus.TRADE_CANDIDATE,
+        attempted=True,
+        queries=[
+            ResearchQuery(
+                query="evidence against reactor criticality",
+                query_intent="disconfirming",
+                source_class="reputable_secondary",
+            )
+        ],
+        evidence=[
+            ResearchEvidence(
+                source_class="official_primary",
+                source_name="NRC",
+                source_url="https://www.nrc.gov",
+                title="NRC criticality update",
+                snippet="The official update supports the threshold.",
+                claim_type="official_resolution",
+                supports_direction="yes",
+                supports_confidence=0.9,
+                retrieved_at=retrieved_at,
+            ),
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="Unknown publisher",
+                source_url="https://news.google.com/rss/articles/counter",
+                title="Counterclaim",
+                snippet="The counterclaim disputes the threshold.",
+                claim_type="disconfirming",
+                supports_direction="no",
+                supports_confidence=0.8,
+                retrieved_at=retrieved_at,
+            ),
+        ],
+        summary="NRC evidence supports YES while the only counterclaim is unverified.",
+        force_side="yes",
+        estimated_probability=0.7,
+        market_price=0.5,
+        estimated_edge=0.2,
+    )
+
+    verdict = _decision_grade_verdict(candidate, model_reason=candidate.summary)
+
+    assert verdict.status == ResearchStatus.NEEDS_RESEARCH
+    assert verdict.skip_reason == "no_reliable_source_path"
+
+
+def test_rss_articles_from_same_publisher_keep_distinct_evidence_identities():
+    first = ResearchEvidence(
+        source_class="reputable_secondary",
+        source_name="Reuters",
+        source_url="https://reuters.com",
+        aggregator_url="https://news.google.com/rss/articles/reuters-support",
+        title="Supporting report",
+        snippet="Support.",
+        claim_type="supporting",
+    )
+    second = replace(
+        first,
+        aggregator_url="https://news.google.com/rss/articles/reuters-counter",
+        title="Counter report",
+        snippet="Counter.",
+        claim_type="disconfirming",
+    )
+
+    assert _evidence_identity(first) != _evidence_identity(second)
 
 
 def test_rss_search_labels_trump_passport_reporting_as_supporting(monkeypatch):
@@ -5009,7 +5249,7 @@ def test_single_resolution_source_requires_independent_corroboration():
             ResearchEvidence(
                 source_class="resolution_source",
                 source_name="Official source",
-                source_url="https://official.example.com/result",
+                source_url="https://agency.gov/result",
                 title="Official result",
                 snippet="Official data supports YES.",
                 claim_type="resolution",
@@ -5040,7 +5280,7 @@ def test_reputable_secondary_resolution_evidence_can_satisfy_public_statement_ma
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Wall Street Journal",
-                source_url="https://wsj.example.com/schumer",
+                source_url="https://wsj.com/schumer",
                 title="Senator says Schumer should be replaced",
                 snippet=(
                     "A current Democratic senator publicly said Chuck Schumer "
@@ -5054,7 +5294,7 @@ def test_reputable_secondary_resolution_evidence_can_satisfy_public_statement_ma
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Time",
-                source_url="https://time.example.com/schumer",
+                source_url="https://time.com/schumer",
                 title="Backlash grows",
                 snippet="Time independently reports the public statement and its context.",
                 claim_type="supporting",
@@ -5065,7 +5305,7 @@ def test_reputable_secondary_resolution_evidence_can_satisfy_public_statement_ma
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="New York Times",
-                source_url="https://nytimes.example.com/schumer-counter",
+                source_url="https://nytimes.com/schumer-counter",
                 title="Democrats stop short of calling for replacement",
                 snippet="Other Democratic senators criticized Schumer but did not ask him to step down.",
                 claim_type="disconfirming",
@@ -5110,7 +5350,7 @@ def test_decision_grade_requires_directional_counter_evidence():
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Wall Street Journal",
-                source_url="https://wsj.example.com/schumer",
+                source_url="https://wsj.com/schumer",
                 title="Senator says Schumer should be replaced",
                 snippet=(
                     "A current Democratic senator publicly said Chuck Schumer "
@@ -5124,7 +5364,7 @@ def test_decision_grade_requires_directional_counter_evidence():
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Time",
-                source_url="https://time.example.com/schumer",
+                source_url="https://time.com/schumer",
                 title="Backlash grows",
                 snippet="Time independently reports the public statement and its context.",
                 claim_type="supporting",
@@ -5135,7 +5375,7 @@ def test_decision_grade_requires_directional_counter_evidence():
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="New York Times",
-                source_url="https://nytimes.example.com/schumer-counter",
+                source_url="https://nytimes.com/schumer-counter",
                 title="Senate votes on spending bill",
                 snippet="The Senate focused on unrelated spending legislation.",
                 claim_type="disconfirming",
@@ -5178,7 +5418,7 @@ def test_reputable_secondary_supporting_evidence_alone_is_not_settlement_evidenc
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Time",
-                source_url="https://time.example.com/schumer",
+                source_url="https://time.com/schumer",
                 title="Backlash grows",
                 snippet="Time reports broad backlash but no direct qualifying public statement.",
                 claim_type="supporting",
@@ -5189,7 +5429,7 @@ def test_reputable_secondary_supporting_evidence_alone_is_not_settlement_evidenc
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="New York Times",
-                source_url="https://nytimes.example.com/schumer-counter",
+                source_url="https://nytimes.com/schumer-counter",
                 title="Democrats stop short of calling for replacement",
                 snippet="Other Democratic senators criticized Schumer but did not ask him to step down.",
                 claim_type="disconfirming",
@@ -5230,7 +5470,7 @@ def test_decision_grade_ignores_stale_background_when_critical_evidence_retrieve
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Wall Street Journal",
-                source_url="https://wsj.example.com/schumer",
+                source_url="https://wsj.com/schumer",
                 title="Senator says Schumer should be replaced",
                 snippet="A current Democratic senator publicly said Schumer should be replaced.",
                 claim_type="official_resolution",
@@ -5242,7 +5482,7 @@ def test_decision_grade_ignores_stale_background_when_critical_evidence_retrieve
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="New York Times",
-                source_url="https://nytimes.example.com/schumer-counter",
+                source_url="https://nytimes.com/schumer-counter",
                 title="Democrats stop short",
                 snippet="Other Democrats criticized Schumer but did not ask him to step down.",
                 claim_type="disconfirming",
@@ -5254,7 +5494,7 @@ def test_decision_grade_ignores_stale_background_when_critical_evidence_retrieve
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="PBS",
-                source_url="https://pbs.example.com/baserate",
+                source_url="https://pbs.org/baserate",
                 title="Old party unity context",
                 snippet="Old party unity context.",
                 claim_type="base_rate",
@@ -5298,7 +5538,7 @@ def test_decision_grade_blocks_when_critical_evidence_not_freshly_retrieved():
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Wall Street Journal",
-                source_url="https://wsj.example.com/schumer",
+                source_url="https://wsj.com/schumer",
                 title="Senator says Schumer should be replaced",
                 snippet="A current Democratic senator publicly said Schumer should be replaced.",
                 claim_type="official_resolution",
@@ -5310,7 +5550,7 @@ def test_decision_grade_blocks_when_critical_evidence_not_freshly_retrieved():
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="New York Times",
-                source_url="https://nytimes.example.com/schumer-counter",
+                source_url="https://nytimes.com/schumer-counter",
                 title="Democrats stop short",
                 snippet="Other Democrats criticized Schumer but did not ask him to step down.",
                 claim_type="disconfirming",
@@ -5355,7 +5595,7 @@ def test_decision_grade_synthesizes_specific_reason_from_structured_evidence():
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Wall Street Journal",
-                source_url="https://wsj.example.com/schumer",
+                source_url="https://wsj.com/schumer",
                 title="Senator says Schumer should be replaced",
                 snippet="A current Democratic senator publicly said Schumer should be replaced.",
                 claim_type="official_resolution",
@@ -5366,7 +5606,7 @@ def test_decision_grade_synthesizes_specific_reason_from_structured_evidence():
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="New York Times",
-                source_url="https://nytimes.example.com/schumer-counter",
+                source_url="https://nytimes.com/schumer-counter",
                 title="Democrats stop short",
                 snippet="Other Democrats criticized Schumer but did not ask him to step down.",
                 claim_type="disconfirming",
@@ -5408,7 +5648,7 @@ def test_decision_grade_synthesized_reason_uses_no_probability_for_no_side():
             ResearchEvidence(
                 source_class="resolution_source",
                 source_name="Official Source",
-                source_url="https://official.example.com/result",
+                source_url="https://agency.gov/result",
                 title="Official result below threshold",
                 snippet="Official result is below the YES threshold.",
                 claim_type="official_resolution",
@@ -5419,7 +5659,7 @@ def test_decision_grade_synthesized_reason_uses_no_probability_for_no_side():
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Reuters",
-                source_url="https://reuters.example.com/counter",
+                source_url="https://reuters.com/counter",
                 title="Countercase",
                 snippet="Reuters says late revisions could still move the result above threshold.",
                 claim_type="disconfirming",
@@ -5456,7 +5696,7 @@ def test_live_tail_risk_blocks_chosen_no_side():
             ResearchEvidence(
                 source_class="resolution_source",
                 source_name="Resolution Source",
-                source_url="https://example.com/resolution",
+                source_url="https://agency.gov/resolution",
                 title="Resolution source table",
                 snippet="Official data supports NO.",
                 claim_type="resolution",
@@ -5466,7 +5706,7 @@ def test_live_tail_risk_blocks_chosen_no_side():
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Reuters",
-                source_url="https://reuters.example.com/no",
+                source_url="https://reuters.com/no",
                 title="Wire confirmation",
                 snippet="Wire report confirms the official data is below the threshold.",
                 claim_type="corroboration",
@@ -5493,7 +5733,7 @@ def test_direction_confidence_without_probability_continues_researching():
         ResearchEvidence(
             source_class="resolution_source",
             source_name="Resolution Source",
-            source_url="https://example.com/resolution",
+            source_url="https://agency.gov/resolution",
             title="Resolution source table",
             snippet="Official data supports YES.",
             claim_type="resolution",
@@ -5503,7 +5743,7 @@ def test_direction_confidence_without_probability_continues_researching():
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="Reuters",
-            source_url="https://reuters.example.com/yes",
+            source_url="https://reuters.com/yes",
             title="Wire confirmation",
             snippet="Wire report supports YES.",
             claim_type="corroboration",
@@ -5533,7 +5773,7 @@ def _decision_grade_evidence() -> list[ResearchEvidence]:
         ResearchEvidence(
             source_class="official_primary",
             source_name="Official ministry",
-            source_url="https://official.example.com/result",
+            source_url="https://agency.gov/result",
             title="Signed agreement notice",
             snippet="Official notice says the agreement was signed before the deadline.",
             claim_type="official_resolution",
@@ -5555,7 +5795,7 @@ def _decision_grade_evidence() -> list[ResearchEvidence]:
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="Reuters",
-            source_url="https://reuters.example.com/signed",
+            source_url="https://reuters.com/signed",
             title="Agreement signed",
             snippet="Reuters independently reports the agreement was signed.",
             claim_type="supporting",
@@ -5566,7 +5806,7 @@ def _decision_grade_evidence() -> list[ResearchEvidence]:
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="AP",
-            source_url="https://ap.example.com/not-yet-filed",
+            source_url="https://apnews.com/not-yet-filed",
             title="Ratification objection",
             snippet="AP notes opponents argue ratification could still fail.",
             claim_type="disconfirming",
@@ -5659,7 +5899,8 @@ async def test_strict_gate_uses_strong_settlement_aligned_evidence_when_adjudica
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="The Hill",
-            source_url="https://news.google.com/rss/articles/the-hill-schumer",
+            source_url="https://thehill.com",
+            aggregator_url="https://news.google.com/rss/articles/the-hill-schumer",
             title="Here are the Democrats calling for Schumer to be replaced as leader",
             snippet=(
                 "Current Democratic senators publicly called for Chuck Schumer "
@@ -5673,7 +5914,8 @@ async def test_strict_gate_uses_strong_settlement_aligned_evidence_when_adjudica
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="Time Magazine",
-            source_url="https://news.google.com/rss/articles/time-schumer",
+            source_url="https://time.com",
+            aggregator_url="https://news.google.com/rss/articles/time-schumer",
             title="'We Need New Leadership': Chuck Schumer Faces Broad Backlash",
             snippet=(
                 "A current Democratic caucus member said new leadership is "
@@ -5688,7 +5930,7 @@ async def test_strict_gate_uses_strong_settlement_aligned_evidence_when_adjudica
     counter = ResearchEvidence(
         source_class="reputable_secondary",
         source_name="The New York Times",
-        source_url="https://nytimes.example.com/shutdown-context",
+        source_url="https://nytimes.com/shutdown-context",
         title="The Senate votes to avert a shutdown after Schumer relents",
         snippet="Background coverage does not report a replacement call.",
         claim_type="disconfirming",
@@ -5898,7 +6140,7 @@ def test_decision_grade_accepts_neutral_disconfirming_search_result():
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="AP",
-            source_url="https://ap.example.com/counter-search",
+            source_url="https://apnews.com/counter-search",
             title="Counter search found no direct contradiction",
             snippet="AP background coverage does not dispute the signed agreement.",
             claim_type="disconfirming",
@@ -5933,7 +6175,7 @@ def test_decision_grade_rejects_unrelated_neutral_disconfirming_result_with_two_
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="The Hill",
-            source_url="https://thehill.example.com/schumer-replaced",
+            source_url="https://thehill.com/schumer-replaced",
             title="Here are the Democrats calling for Schumer to be replaced as leader",
             snippet="Current Democratic caucus members called for Schumer to be replaced as leader.",
             claim_type="supporting",
@@ -5944,7 +6186,7 @@ def test_decision_grade_rejects_unrelated_neutral_disconfirming_result_with_two_
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="Time",
-            source_url="https://time.example.com/schumer-new-leadership",
+            source_url="https://time.com/schumer-new-leadership",
             title="We need new leadership",
             snippet="Time independently reports backlash and calls for new Democratic leadership.",
             claim_type="supporting",
@@ -5955,7 +6197,7 @@ def test_decision_grade_rejects_unrelated_neutral_disconfirming_result_with_two_
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="The Hill",
-            source_url="https://thehill.example.com/ice-tactics",
+            source_url="https://thehill.com/ice-tactics",
             title="Republicans divided on ICE tactics as shutdown looms",
             snippet="Republicans debated ICE tactics and a shutdown deadline.",
             claim_type="disconfirming",
@@ -5997,7 +6239,7 @@ def test_decision_grade_fails_neutral_only_evidence():
         ResearchEvidence(
             source_class="official_primary",
             source_name="Official source",
-            source_url="https://official.example.com/current",
+            source_url="https://agency.gov/current",
             title="Current page",
             snippet="Current page lists background terms only.",
             claim_type="official_resolution",
@@ -6008,7 +6250,7 @@ def test_decision_grade_fails_neutral_only_evidence():
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="Reuters",
-            source_url="https://reuters.example.com/current",
+            source_url="https://reuters.com/current",
             title="Current coverage",
             snippet="Coverage gives background but no resolution fact.",
             claim_type="disconfirming",
@@ -6041,7 +6283,7 @@ def test_decision_grade_neutral_adjudicator_preserves_neutral_only_reason():
         ResearchEvidence(
             source_class="official_primary",
             source_name="Official source",
-            source_url="https://official.example.com/current",
+            source_url="https://agency.gov/current",
             title="Current page",
             snippet="Current page lists background terms only.",
             claim_type="official_resolution",
@@ -6052,7 +6294,7 @@ def test_decision_grade_neutral_adjudicator_preserves_neutral_only_reason():
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="Reuters",
-            source_url="https://reuters.example.com/current",
+            source_url="https://reuters.com/current",
             title="Current coverage",
             snippet="Coverage gives background but no resolution fact.",
             claim_type="disconfirming",
@@ -6216,7 +6458,7 @@ def test_adjudicator_url_keyed_evidence_assessments_label_evidence():
         ResearchEvidence(
             source_class="official_primary",
             source_name="Official source",
-            source_url="https://official.example.com/signed",
+            source_url="https://agency.gov/signed",
             title="Agreement notice",
             snippet="Official notice says the agreement was signed.",
             claim_type="official_resolution",
@@ -6229,7 +6471,7 @@ def test_adjudicator_url_keyed_evidence_assessments_label_evidence():
         evidence,
         {
             "evidence_assessments": {
-                "https://official.example.com/signed": {
+                "https://agency.gov/signed": {
                     "supports_direction": "yes",
                     "supports_confidence": 0.9,
                 }
@@ -6246,7 +6488,7 @@ def test_adjudicator_evidence_assessments_reject_irrelevant_directional_labels()
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="The Hill",
-            source_url="https://thehill.example.com/ice",
+            source_url="https://thehill.com/ice",
             title="Republicans divided on ICE tactics as shutdown looms",
             snippet="The article discusses immigration enforcement and shutdown politics.",
             claim_type="disconfirming",
@@ -6254,7 +6496,7 @@ def test_adjudicator_evidence_assessments_reject_irrelevant_directional_labels()
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="WSJ",
-            source_url="https://wsj.example.com/schumer",
+            source_url="https://wsj.com/schumer",
             title="Growing frustration with Chuck Schumer spurs talk of replacing him",
             snippet="Democrats are discussing whether Schumer should be replaced.",
             claim_type="official_resolution",
@@ -6277,12 +6519,12 @@ def test_adjudicator_evidence_assessments_reject_irrelevant_directional_labels()
         {
             "evidence_assessments": [
                 {
-                    "source_url": "https://thehill.example.com/ice",
+                    "source_url": "https://thehill.com/ice",
                     "supports_direction": "no",
                     "supports_confidence": 0.7,
                 },
                 {
-                    "source_url": "https://wsj.example.com/schumer",
+                    "source_url": "https://wsj.com/schumer",
                     "supports_direction": "yes",
                     "supports_confidence": 0.9,
                 },
@@ -6312,7 +6554,7 @@ def test_leadership_replacement_structured_pass_neutralizes_irrelevant_no_label(
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="The New York Times",
-            source_url="https://nytimes.example.com/shutdown",
+            source_url="https://nytimes.com/shutdown",
             title="The Senate votes to avert a shutdown after Schumer relents",
             snippet="The article covers government funding and shutdown politics.",
             claim_type="disconfirming",
@@ -6322,7 +6564,7 @@ def test_leadership_replacement_structured_pass_neutralizes_irrelevant_no_label(
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="The Hill",
-            source_url="https://thehill.example.com/criticism",
+            source_url="https://thehill.com/criticism",
             title="Democrats criticized Schumer but did not ask him to step down",
             snippet="Other Democrats criticized Schumer but did not ask him to step down.",
             claim_type="disconfirming",
@@ -6373,7 +6615,7 @@ def test_office_departure_structured_pass_relabels_refusal_and_proposals():
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="Reuters",
-            source_url="https://reuters.example.com/resigns",
+            source_url="https://reuters.com/resigns",
             title="Tamas Sulyok resigns as President of Hungary",
             snippet="Sulyok resigned as president before the market deadline.",
             claim_type="official_resolution",
@@ -6537,7 +6779,7 @@ def test_research_verdict_log_fields_include_probability_and_freshness_span():
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Reuters",
-                source_url="https://reuters.example.com/current",
+                source_url="https://reuters.com/current",
                 title="Wire report",
                 snippet="Wire report supports YES.",
                 claim_type="corroboration",
@@ -6948,6 +7190,93 @@ async def test_research_gate_refreshes_cached_missing_counter_evidence_dossier(t
     assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
     assert verdict.skip_reason is None
     assert verdict.force_side == "no"
+
+
+@pytest.mark.asyncio
+async def test_cached_rss_publisher_does_not_suppress_official_source_refresh(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    market = SimpleNamespace(
+        ticker="KXCRITICALITY-26AUG-OKLO",
+        title="Which nuclear power companies will achieve criticality before Aug 2026?",
+        rules_primary=(
+            "If Oklo achieves criticality before Aug 1, 2026, then the market "
+            "resolves to Yes."
+        ),
+        rules_secondary="",
+        settlement_sources=(),
+        contract_terms_url="",
+        status="open",
+        close_time="2026-08-01T23:59:59Z",
+    )
+    contract_fingerprint = _contract_fingerprint(market)
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    await store.record_research_run(
+        market.ticker,
+        "rr-cached-nrc-rss",
+        trigger_headline="scheduled prewarm",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Cached NRC result remains neutral.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        skip_reason="insufficient_corroboration",
+        decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+        contract_fingerprint=contract_fingerprint,
+        evidence=[
+            ResearchEvidence(
+                source_class="official_primary",
+                source_name="Nuclear Regulatory Commission",
+                source_url="https://www.nrc.gov",
+                aggregator_url="https://news.google.com/rss/articles/cached-nrc",
+                title="Cached NRC licensing update",
+                snippet="The cached result does not resolve the market condition.",
+                claim_type="official_resolution",
+                supports_direction="neutral",
+                retrieved_at=retrieved_at,
+                contract_fingerprint=contract_fingerprint,
+            )
+        ],
+    )
+    search_calls: list[ResearchQuery] = []
+
+    async def search_provider(query):
+        search_calls.append(query)
+        return []
+
+    async def direct_fetcher(*_args):
+        return None
+
+    async def adjudicator(**_kwargs):
+        return {
+            "direction": "neutral",
+            "confidence": 0.4,
+            "estimated_probability_yes": 0.5,
+            "reason": "Fresh official evidence is still required.",
+        }
+
+    await run_research_gate(
+        SimpleNamespace(headline="", source="research_prewarm", url=""),
+        market,
+        model_direction="neutral",
+        model_confidence=0.0,
+        model_reason="scheduled research prewarm",
+        yes_ask=0.45,
+        no_ask=0.56,
+        live_mode=False,
+        search_provider=search_provider,
+        direct_fetcher=direct_fetcher,
+        adjudicator=adjudicator,
+        dossier_store=store,
+        max_queries=8,
+        research_timeout_seconds=5.0,
+        require_decision_grade=True,
+    )
+
+    assert any(
+        query.source_class in {"official_primary", "resolution_source"}
+        and "site:nrc.gov" in query.query
+        for query in search_calls
+    )
 
 
 @pytest.mark.asyncio
@@ -7709,7 +8038,7 @@ async def test_run_research_gate_surfaces_direct_fetch_failure():
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Reuters",
-                source_url="https://reuters.example.com/ceasefire",
+                source_url="https://reuters.com/ceasefire",
                 title="Ceasefire agreement signed",
                 snippet="Officials confirm the agreement was signed before the deadline.",
                 claim_type="corroboration",
@@ -7720,7 +8049,7 @@ async def test_run_research_gate_surfaces_direct_fetch_failure():
         SimpleNamespace(
             headline="Officials confirm ceasefire agreement was signed",
             source="Reuters",
-            url="https://reuters.example.com/ceasefire",
+            url="https://reuters.com/ceasefire",
         ),
         SimpleNamespace(
             ticker="KXCEASEFIRE-26JUL01",
@@ -8061,7 +8390,7 @@ async def test_contract_terms_direct_fetch_alone_does_not_satisfy_resolution_evi
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Reuters",
-                source_url="https://reuters.example.com/ceasefire",
+                source_url="https://reuters.com/ceasefire",
                 title="Ceasefire agreement signed",
                 snippet="Officials confirm the agreement was signed before the deadline.",
                 claim_type="corroboration",
@@ -8095,7 +8424,7 @@ async def test_contract_terms_direct_fetch_alone_does_not_satisfy_resolution_evi
         SimpleNamespace(
             headline="Officials confirm ceasefire agreement was signed",
             source="Reuters",
-            url="https://reuters.example.com/ceasefire",
+            url="https://reuters.com/ceasefire",
         ),
         SimpleNamespace(
             ticker="KXCEASEFIRE-26JUL01",
@@ -8135,7 +8464,7 @@ async def test_run_research_gate_passes_current_asks_to_default_adjudicator(monk
             ResearchEvidence(
                 source_class="official_primary",
                 source_name="Official source",
-                source_url=f"https://official.example.com/{query.query_intent}",
+                source_url=f"https://agency.gov/{query.query_intent}",
                 title="Official result",
                 snippet="Official source says the event supports YES.",
                 claim_type=query.query_intent,
@@ -8244,7 +8573,7 @@ async def test_strict_research_gate_skips_adjudication_without_actionable_price(
             ResearchEvidence(
                 source_class="official_primary",
                 source_name="Official source",
-                source_url=f"https://official.example.com/{query.query_intent}",
+                source_url=f"https://agency.gov/{query.query_intent}",
                 title="Official result",
                 snippet="Official source says the event supports YES.",
                 claim_type=query.query_intent,
@@ -8383,7 +8712,7 @@ async def test_noncritical_provider_error_does_not_block_sufficient_evidence():
                 ResearchEvidence(
                     source_class="reputable_secondary",
                     source_name="Reuters",
-                    source_url="https://reuters.example.com/opec-corroboration",
+                    source_url="https://reuters.com/opec-corroboration",
                     title="Reuters confirms OPEC table",
                     snippet="OPEC table supports the reported production figure.",
                     claim_type="corroboration",
@@ -8446,7 +8775,7 @@ async def test_noncritical_provider_error_does_not_block_decision_grade_candidat
                 ResearchEvidence(
                     source_class="official_primary",
                     source_name="Official source",
-                    source_url="https://official.example.com/signed",
+                    source_url="https://agency.gov/signed",
                     title="Agreement notice",
                     snippet="Official notice says the agreement was signed before the deadline.",
                     claim_type=query.query_intent,
@@ -8458,7 +8787,7 @@ async def test_noncritical_provider_error_does_not_block_decision_grade_candidat
                 ResearchEvidence(
                     source_class="reputable_secondary",
                     source_name="Reuters",
-                    source_url="https://reuters.example.com/signed",
+                    source_url="https://reuters.com/signed",
                     title="Agreement signed",
                     snippet="Reuters independently reports the agreement was signed.",
                     claim_type=query.query_intent,
@@ -8470,7 +8799,7 @@ async def test_noncritical_provider_error_does_not_block_decision_grade_candidat
                 ResearchEvidence(
                     source_class="reputable_secondary",
                     source_name="AP",
-                    source_url="https://ap.example.com/ratification",
+                    source_url="https://apnews.com/ratification",
                     title="Ratification objection",
                     snippet="AP notes ratification could still fail.",
                     claim_type=query.query_intent,
@@ -8493,17 +8822,17 @@ async def test_noncritical_provider_error_does_not_block_decision_grade_candidat
             ),
             "evidence_assessments": [
                 {
-                    "source_url": "https://official.example.com/signed",
+                    "source_url": "https://agency.gov/signed",
                     "supports_direction": "yes",
                     "supports_confidence": 0.9,
                 },
                 {
-                    "source_url": "https://reuters.example.com/signed",
+                    "source_url": "https://reuters.com/signed",
                     "supports_direction": "yes",
                     "supports_confidence": 0.8,
                 },
                 {
-                    "source_url": "https://ap.example.com/ratification",
+                    "source_url": "https://apnews.com/ratification",
                     "supports_direction": "no",
                     "supports_confidence": 0.35,
                 },
@@ -8732,7 +9061,7 @@ async def test_generic_market_contract_terms_fallback_remains_non_promotable():
             ResearchEvidence(
                 source_class="reputable_secondary",
                 source_name="Reuters",
-                source_url="https://reuters.example.com/ceasefire",
+                source_url="https://reuters.com/ceasefire",
                 title="Ceasefire agreement signed",
                 snippet="Officials confirm the agreement was signed before the deadline.",
                 claim_type="corroboration",
@@ -8753,7 +9082,7 @@ async def test_generic_market_contract_terms_fallback_remains_non_promotable():
         SimpleNamespace(
             headline="Officials confirm ceasefire agreement was signed",
             source="Reuters",
-            url="https://reuters.example.com/ceasefire",
+            url="https://reuters.com/ceasefire",
         ),
         SimpleNamespace(
             ticker="KXCEASEFIRE-26JUL01",

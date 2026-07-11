@@ -1701,6 +1701,10 @@ def _evidence_id(market_ticker: str, research_run_id: str, evidence: ResearchEvi
 
 
 def _evidence_from_row(row: sqlite3.Row) -> ResearchEvidence:
+    try:
+        raw_payload = json.loads(row["raw_payload_json"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        raw_payload = {}
     return ResearchEvidence(
         source_class=row["source_class"],
         source_name=row["source_name"],
@@ -1718,6 +1722,9 @@ def _evidence_from_row(row: sqlite3.Row) -> ResearchEvidence:
         extraction_confidence=row["extraction_confidence"],
         inserted_at=row["inserted_at"],
         contract_fingerprint=row["contract_fingerprint"],
+        aggregator_url=(
+            raw_payload.get("aggregator_url") if isinstance(raw_payload, dict) else None
+        ),
     )
 
 
