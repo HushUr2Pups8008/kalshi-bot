@@ -18,7 +18,12 @@ import pytest
 from scripts.mark_open_positions import compute_open_position_marks
 
 
-def _make_db(path: Path, *, pm_rows: list[tuple] | None = None) -> None:
+def _make_db(
+    path: Path,
+    *,
+    pm_rows: list[tuple] | None = None,
+    kalshi_rows: list[tuple] | None = None,
+) -> None:
     conn = sqlite3.connect(path)
     try:
         conn.execute(
@@ -37,8 +42,14 @@ def _make_db(path: Path, *, pm_rows: list[tuple] | None = None) -> None:
         conn.executemany(
             "INSERT INTO paper_trades VALUES (?,?,?,?,?,?,?,?)",
             [
-                ("a", "KXPRICED-1", "kalshi", "yes", 5, 1.50, None, 0),
-                ("b", "KXFAILS-1", "kalshi", "yes", 5, 2.00, None, 0),
+                *(
+                    kalshi_rows
+                    if kalshi_rows is not None
+                    else [
+                        ("a", "KXPRICED-1", "kalshi", "yes", 5, 1.50, None, 0),
+                        ("b", "KXFAILS-1", "kalshi", "yes", 5, 2.00, None, 0),
+                    ]
+                ),
                 # resolved row: excluded from the open-position scan.
                 ("c", "KXDONE-1", "kalshi", "yes", 5, 1.00, None, 1),
                 *(pm_rows or []),
@@ -171,6 +182,10 @@ def test_corrected_polymarket_books_produce_audited_portfolio_equity(tmp_path: P
             )
             for index, (ticker, side, contracts, _mark) in enumerate(positions)
         ],
+        kalshi_rows=[
+            (f"kalshi-{index}", f"KXAUDIT-{index}", "kalshi", "yes", 1, 0.03, None, 0)
+            for index in range(4)
+        ],
     )
     with sqlite3.connect(db) as conn:
         conn.execute(
@@ -207,11 +222,11 @@ def test_corrected_polymarket_books_produce_audited_portfolio_equity(tmp_path: P
     class _FakeKalshi:
         def get_market(self, ticker):
             return SimpleNamespace(
-                yes_bid_cents=1.0,
-                yes_ask_cents=1.4,
-                no_bid_cents=98.6,
-                no_ask_cents=99.0,
-                last_price_cents=1.2,
+                yes_bid_cents=2,
+                yes_ask_cents=4,
+                no_bid_cents=96,
+                no_ask_cents=98,
+                last_price_cents=3,
             )
 
     with patch("polymarket.public_client.PolymarketPublicClient", _FakePoly), patch(
@@ -220,8 +235,14 @@ def test_corrected_polymarket_books_produce_audited_portfolio_equity(tmp_path: P
         marks = compute_open_position_marks(db)
 
     assert marks is not None
-    assert marks["priced_count"] == 13
+    assert marks["priced_count"] == 15
     assert marks["unpriced_count"] == 0
+    pm_rows = [row for row in marks["rows"] if row["venue"] == "polymarket_us"]
+    kalshi_rows = [row for row in marks["rows"] if row["venue"] == "kalshi"]
+    assert len(pm_rows) == 11
+    assert len(kalshi_rows) == 4
+    assert sum(row["value"] for row in pm_rows) == pytest.approx(29.47)
+    assert sum(row["value"] for row in kalshi_rows) == pytest.approx(0.12)
     assert marks["marked_value"] == pytest.approx(29.59)
     equity = marks["bankroll"] + marks["marked_value"]
     assert equity == pytest.approx(38.35)

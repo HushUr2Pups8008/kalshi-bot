@@ -1,6 +1,10 @@
 import asyncio
+import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -8,6 +12,8 @@ from analysis import SignalAnalysis
 from analysis.decision_blender import BlendResult
 from config import cfg
 from kalshi import KalshiMarket
+from main import _paper_open_exposure_drawdown_pct
+from polymarket.normalizer import normalize_polymarket_market
 from tasks.blend_task import (
     BlendTask,
     QueueInsertionError,
@@ -333,7 +339,63 @@ async def test_readiness_input_carries_open_exposure_drawdown_from_provider():
 
 
 @pytest.mark.asyncio
-async def test_corrected_polymarket_drawdown_binds_g7():
+async def test_computed_polymarket_marks_flow_through_startup_and_bind_g7(
+    tmp_path: Path, monkeypatch
+):
+    db = tmp_path / "paper.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            CREATE TABLE paper_trades (
+                trade_id TEXT PRIMARY KEY, ticker TEXT, venue TEXT, side TEXT,
+                contracts INTEGER, cost_dollars REAL, market_snapshot TEXT,
+                resolved INTEGER
+            )
+            """
+        )
+        conn.execute("CREATE TABLE bot_state (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO bot_state VALUES ('notional_bankroll', '8.76')")
+        conn.executemany(
+            "INSERT INTO paper_trades VALUES (?,?,?,?,?,?,?,?)",
+            [
+                ("pm", "pm-flow", "polymarket_us", "yes", 59, 29.50, None, 0),
+                ("kx", "KXFLOW", "kalshi", "yes", 3, 0.09, None, 0),
+            ],
+        )
+
+    class _FakePoly:
+        def get_market(self, ticker):
+            return normalize_polymarket_market(
+                {
+                    "slug": ticker,
+                    "title": ticker,
+                    "status": "open",
+                    "bestBidQuote": {"value": 0.50},
+                    "bestAskQuote": {"value": 0.51},
+                    "marketSides": [
+                        {"long": True, "quote": 0.51},
+                        {"long": False, "quote": 0.50},
+                    ],
+                    "outcomes": '["No","Yes"]',
+                    "outcomePrices": '["0.99","0.01"]',
+                }
+            )
+
+    class _FakeKalshi:
+        def get_market(self, ticker):
+            return SimpleNamespace(
+                yes_bid_cents=2,
+                yes_ask_cents=4,
+                no_bid_cents=96,
+                no_ask_cents=98,
+                last_price_cents=3,
+            )
+
+    monkeypatch.setattr(cfg, "bankroll", 50.0)
+    paper = SimpleNamespace(
+        db_path=db,
+        get_notional_bankroll=lambda: 8.76,
+    )
     captured: dict = {}
 
     def capture_and_evaluate(payload, regime_confidence):  # noqa: ANN001
@@ -345,11 +407,16 @@ async def test_corrected_polymarket_drawdown_binds_g7():
         store=FakeStore(),
         logger=SpyLogger(),
         readiness_evaluator=capture_and_evaluate,
-        open_exposure_drawdown_provider=lambda: 0.233,
+        open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_pct(
+            paper
+        ),
         is_paper_mode=True,
     )
 
-    result = await task.process_fast_lane_result(_analysis())
+    with patch("polymarket.public_client.PolymarketPublicClient", _FakePoly), patch(
+        "kalshi.rest_client.KalshiRestClient", _FakeKalshi
+    ):
+        result = await task.process_fast_lane_result(_analysis())
 
     assert captured["open_exposure_drawdown_pct"] == pytest.approx(0.233)
     assert result.trade_blocked_reason == "G7_open_exposure_drawdown"
