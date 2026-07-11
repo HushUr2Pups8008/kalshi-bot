@@ -1193,15 +1193,29 @@ class ResearchDossierStore:
                         'research_timeout_exhausted'
                    )
                 ORDER BY
-                    CASE state
-                        WHEN 'needs_counter_evidence' THEN 0
-                        WHEN 'needs_price_edge' THEN 1
-                        WHEN 'needs_research' THEN 2
-                        WHEN 'researching' THEN 3
-                        WHEN 'decision_grade_candidate' THEN 4
-                        WHEN 'untradeable' THEN 5
-                        ELSE 6
+                    CASE
+                        WHEN state = 'needs_counter_evidence' THEN 0
+                        WHEN state = 'needs_price_edge' THEN 1
+                        WHEN state = 'needs_research'
+                            AND COALESCE(last_skip_reason, terminal_reason, '') IN (
+                                'missing_counter_evidence',
+                                'missing_price_edge',
+                                'missing_probability_estimate',
+                                'missing_resolution_source',
+                                'missing_source_details',
+                                'missing_reasoning'
+                            ) THEN 2
+                        WHEN state = 'continue_researching' THEN 3
+                        WHEN state = 'needs_research' THEN 4
+                        WHEN state = 'researching' THEN 5
+                        WHEN state = 'decision_grade_candidate' THEN 6
+                        WHEN state = 'untradeable' THEN 7
+                        ELSE 8
                     END,
+                    CASE
+                        WHEN state = 'continue_researching' THEN updated_ts
+                        ELSE NULL
+                    END DESC,
                     CASE COALESCE(last_skip_reason, terminal_reason, '')
                         WHEN 'missing_counter_evidence' THEN 0
                         WHEN 'neutral_only_evidence' THEN 1
