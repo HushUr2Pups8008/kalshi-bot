@@ -94,6 +94,36 @@ class PolymarketPublicClient:
             raise ValueError("Polymarket market payload must be an object")
         return payload
 
+    def get_market_settlement(self, market_id: str) -> dict[str, Any]:
+        """Return the authoritative settlement payload for a market slug."""
+        requested = str(market_id).strip()
+        slug = requested
+        if requested.isdigit():
+            market = self.get_market_payload(requested)
+            slug = str(market.get("slug") or "").strip()
+        if not slug:
+            raise ValueError(f"Polymarket market {market_id!r} has no canonical slug")
+
+        try:
+            data = self._request("GET", f"/v1/markets/{slug}/settlement")
+        except HTTPError as exc:
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            if status_code == 404:
+                raise ValueError(
+                    f"Polymarket market {market_id!r} settlement not found"
+                ) from exc
+            raise
+
+        if not isinstance(data, dict):
+            raise ValueError("Polymarket settlement response must be an object")
+        returned_slug = str(data.get("slug") or "").strip()
+        if returned_slug != slug:
+            raise ValueError(
+                f"Polymarket settlement slug mismatch: expected {slug!r}, "
+                f"got {returned_slug!r}"
+            )
+        return data
+
     def _find_market_payload_by_slug_or_id(self, market_id: str) -> dict[str, Any]:
         # FIX-1 (PM feed-drop durable handling): resolve via the server-side
         # exact-match filter on /v1/markets instead of a cursor-paginated scan.
