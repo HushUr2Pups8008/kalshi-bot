@@ -688,15 +688,21 @@ def build_research_queries(news: Any, market: Any) -> list[ResearchQuery]:
                 source_class="trigger_source",
             )
         )
+    decision_grade_seed = title or ticker
+    if (
+        ticker
+        and _event_deadline_from_text(ticker) is not None
+        and _query_mentions_confirmation_event_window(title)
+    ):
+        decision_grade_seed = _query_fragment(ticker, title)
     if title:
         queries.append(
             ResearchQuery(
-                query=title,
+                query=decision_grade_seed,
                 query_intent="broad_context",
                 source_class="reputable_secondary",
             )
         )
-    decision_grade_seed = title or ticker
     if decision_grade_seed:
         counter_seed = _counter_query_seed_for_market(market, decision_grade_seed)
         existing_intents = {query.query_intent for query in queries}
@@ -764,6 +770,10 @@ def build_research_queries(news: Any, market: Any) -> list[ResearchQuery]:
 def _official_source_hints(text: str, fallback_query: str) -> list[tuple[str, str]]:
     lower = _clean(text).lower()
     fallback = _clean(fallback_query)
+    fallback_deadline = _event_deadline_from_text(fallback)
+    fallback_date_label = (
+        _fed_date_label(fallback_deadline) if fallback_deadline is not None else ""
+    )
     hints: list[tuple[str, str]] = []
     if (
         ("expunge" in lower or "expunges" in lower or "expunging" in lower)
@@ -800,6 +810,38 @@ def _official_source_hints(text: str, fallback_query: str) -> list[tuple[str, st
                 ("congress.gov", "budget resolution passed Senate August 2026"),
                 ("senate.gov", "budget resolution passed Senate August 2026"),
             ]
+        )
+    if "cabinet nominees" in lower and "senate" in lower and (
+        "confirmed" in lower or "confirmation" in lower
+    ):
+        deadline = fallback_deadline or _month_end_from_text(lower)
+        deadline_label = (
+            _fed_date_label(deadline)
+            if fallback_deadline is not None and deadline is not None
+            else deadline.strftime("%B %Y") if deadline is not None else ""
+        )
+        hints.append(
+            (
+                "senate.gov",
+                _clean(f"Cabinet nominees confirmed Senate {deadline_label}"),
+            )
+        )
+    if "white house livestream" in lower and "donald trump" in lower:
+        hints.append(
+            (
+                "whitehouse.gov",
+                "Donald Trump livestream transcript remarks",
+            )
+        )
+    if "pennsylvania defense and innovation summit" in lower:
+        hints.append(
+            (
+                "mccormick.senate.gov",
+                _clean(
+                    "Pennsylvania Defense and Innovation Summit Donald Trump "
+                    f"{fallback_date_label}"
+                ),
+            )
         )
     if "executive action" in lower or "executive order" in lower:
         hints.extend(
@@ -846,7 +888,40 @@ def _official_source_hints(text: str, fallback_query: str) -> list[tuple[str, st
     if "criticality" in lower:
         hints.append(("nrc.gov", fallback or "reactor criticality"))
     if "federal reserve" in lower or "member of the board of governors" in lower:
-        hints.append(("federalreserve.gov", fallback or "Federal Reserve Board governor"))
+        role_specific_departure = (
+            re.search(
+                r"\b(?:resign(?:s|ed|ing)?|departure|step(?:s|ped)? down|"
+                r"leav(?:e|es|ing))\s+"
+                r"(?:from\s+|as\s+)?(?:(?:his|the|a)\s+)?"
+                r"(?:role|seat|position|post|office|membership|"
+                r"member of (?:the )?(?:federal reserve )?board of governors|"
+                r"(?:federal reserve )?board of governors)\b",
+                lower,
+            )
+            is not None
+        )
+        powell_membership_query = (
+            "jerome powell" in lower
+            and "board of governors" in lower
+            and role_specific_departure
+        )
+        hints.append(
+            (
+                "federalreserve.gov",
+                (
+                    _clean(
+                        "Jerome Powell Board of Governors current member "
+                        + (
+                            f"before {fallback_date_label}"
+                            if fallback_date_label
+                            else ""
+                        )
+                    )
+                    if powell_membership_query
+                    else fallback or "Federal Reserve Board governor"
+                ),
+            )
+        )
     if "bank of israel" in lower or "monetary committee" in lower:
         hints.append(("boi.org.il", fallback or "Bank of Israel monetary committee"))
     if _query_mentions_trump_passport_image(lower):
@@ -2351,6 +2426,27 @@ def _is_official_data_pending_evidence(item: ResearchEvidence) -> bool:
 
 def _has_official_data_pending(evidence: list[ResearchEvidence]) -> bool:
     return any(_is_official_data_pending_evidence(item) for item in evidence)
+
+
+def _keep_pending_no_edge_researchable(verdict: ResearchVerdict) -> ResearchVerdict:
+    has_open_event_window = any(
+        item.metric_name == "event_window_pending" for item in verdict.evidence
+    )
+    if not has_open_event_window or verdict.skip_reason not in {
+        "no_edge",
+        "negative_net_edge_after_costs",
+    }:
+        return verdict
+    return replace(
+        verdict,
+        status=ResearchStatus.NEEDS_RESEARCH,
+        summary=(
+            "Current predictive evidence does not clear executable edge, but the "
+            "official event window remains open; keep research queued."
+        ),
+        skip_reason="official_data_pending",
+        force_side=None,
+    )
 
 
 def _has_reliable_non_pending_source_path(
@@ -4143,18 +4239,27 @@ def _query_mentions_truth_social_event(query: str) -> bool:
 def _month_end_from_text(text: str) -> date | None:
     cleaned = _clean(text)
     month_pattern = "|".join(_MONTH_NAME_TO_NUMBER)
-    matches = list(
-        re.finditer(
+    candidates = [
+        (match.start(), match.group(1), match.group(2))
+        for match in re.finditer(
             rf"\b({month_pattern}|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)"
             r"\.?\s+(20\d{2})\b",
             cleaned,
             flags=re.I,
         )
+    ]
+    candidates.extend(
+        (match.start(), match.group(2), match.group(1))
+        for match in re.finditer(
+            rf"\b(20\d{{2}})\s+({month_pattern}|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b",
+            cleaned,
+            flags=re.I,
+        )
     )
-    if not matches:
+    if not candidates:
         return None
-    match = matches[-1]
-    month_token = match.group(1).lower().rstrip(".")
+    _, raw_month, raw_year = max(candidates, key=lambda item: item[0])
+    month_token = raw_month.lower().rstrip(".")
     month_aliases = {
         "jan": "january",
         "feb": "february",
@@ -4173,7 +4278,7 @@ def _month_end_from_text(text: str) -> date | None:
     month_number = _MONTH_NAME_TO_NUMBER.get(month_name)
     if month_number is None:
         return None
-    year = int(match.group(2))
+    year = int(raw_year)
     if month_number == 12:
         return date(year, 12, 31)
     return date(year, month_number + 1, 1) - timedelta(days=1)
@@ -4189,6 +4294,8 @@ def _event_window_pending_search(
     deadline = _event_deadline_from_text(query.query) or _monthly_event_window_end_from_text(
         query.query
     )
+    if deadline is None and _query_mentions_confirmation_event_window(query.query):
+        deadline = _month_end_from_text(query.query)
     if deadline is None:
         return []
     now = now or datetime.now(timezone.utc)
@@ -4271,6 +4378,23 @@ def _query_mentions_generic_event_window(query: str) -> bool:
             or " by " in text
             or _event_deadline_from_text(text) is not None
         )
+    ):
+        return True
+    if (
+        ("gubernatorial election" in text or "republican governors" in text)
+        and ("called" in text or "certified" in text)
+        and _event_deadline_from_text(text) is not None
+    ):
+        return True
+    if (
+        "jerome powell" in text
+        and "board of governors current member" in text
+        and _event_deadline_from_text(text) is not None
+    ):
+        return True
+    if (
+        "pennsylvania defense and innovation summit" in text
+        and _event_deadline_from_text(text) is not None
     ):
         return True
     if _query_mentions_confirmation_event_window(text):
@@ -5379,6 +5503,8 @@ async def run_research_gate(
         counterclaims=decision_grade_counterclaims,
         open_questions=decision_grade_open_questions,
     )
+    if require_decision_grade:
+        verdict = _keep_pending_no_edge_researchable(verdict)
     if (
         provider_errors
         and not _is_vetted_candidate_status(verdict.status)
