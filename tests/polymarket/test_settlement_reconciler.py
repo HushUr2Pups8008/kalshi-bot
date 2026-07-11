@@ -136,24 +136,61 @@ def test_reconciler_resolves_polymarket_no_settlement(conn):
     assert resolver.resolved == [("will-example-fail-2026", False)]
 
 
-def test_resolved_yes_from_closed_yes_no_outcome_prices():
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(1, True), ("1", True), (0, False), ("0", False)],
+)
+def test_authoritative_settlement_values(value, expected):
+    assert _resolved_yes_from_payload(
+        "will-example-happen", {"settlement": value}
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    "value", [0.5, "0.5", float("nan"), float("inf"), -1, 2]
+)
+def test_nonbinary_settlement_values_fail_closed(value):
+    with pytest.raises(SettlementDriftError, match="nonbinary settlement"):
+        _resolved_yes_from_payload(
+            "will-example-happen", {"settlement": value}
+        )
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_boolean_settlement_values_fail_closed(value):
+    with pytest.raises(SettlementDriftError, match="boolean settlement"):
+        _resolved_yes_from_payload(
+            "will-example-happen", {"settlement": value}
+        )
+
+
+def test_unrepresentable_settlement_value_is_hard_drift():
+    with pytest.raises(SettlementDriftError, match="nonnumeric settlement"):
+        _resolved_yes_from_payload(
+            "will-example-happen", {"settlement": 10**10000}
+        )
+
+
+def test_outcome_prices_without_authoritative_result_fail_closed():
     payload = {
         "closed": True,
         "outcomes": '["No","Yes"]',
         "outcomePrices": '["0","1"]',
     }
 
-    assert _resolved_yes_from_payload("will-example-happen", payload) is True
+    with pytest.raises(SettlementDriftError, match="authoritative"):
+        _resolved_yes_from_payload("will-example-happen", payload)
 
 
-def test_resolved_no_from_closed_yes_no_outcome_prices():
-    payload = {
-        "closed": True,
-        "outcomes": ["Yes", "No"],
-        "outcomePrices": ["0", "1"],
-    }
+def test_missing_settlement_payload_fails_closed():
+    with pytest.raises(SettlementDriftError, match="authoritative"):
+        _resolved_yes_from_payload("will-example-happen", {})
 
-    assert _resolved_yes_from_payload("will-example-happen", payload) is False
+
+def test_explicit_resolved_outcome_compatibility_is_preserved():
+    assert _resolved_yes_from_payload(
+        "will-example-happen", {"settled": True, "resolvedOutcome": "YES"}
+    ) is True
 
 
 def test_reconciler_noops_when_settlement_not_found(conn):
@@ -286,7 +323,7 @@ def test_public_source_translates_not_found_valueerror_to_settlement_not_found()
     # must flow through reconcile()'s existing not_found path, not escape as a
     # raw ValueError that aborts the batch.
     class NotFoundClient:
-        def get_market_payload(self, market_id):
+        def get_market_settlement(self, market_id):
             raise ValueError(f"Polymarket market {market_id!r} not found")
 
     source = PolymarketPublicSettlementSource(client=NotFoundClient())
@@ -301,7 +338,7 @@ def test_public_source_does_not_mask_unrelated_valueerror():
     # SettlementNotFound -- it must propagate so the batch-level safety net can
     # log it loudly instead of silently counting it as "not settled yet".
     class BrokenClient:
-        def get_market_payload(self, market_id):
+        def get_market_settlement(self, market_id):
             raise ValueError("Polymarket market payload must be an object")
 
     source = PolymarketPublicSettlementSource(client=BrokenClient())
@@ -309,6 +346,25 @@ def test_public_source_does_not_mask_unrelated_valueerror():
     with pytest.raises(ValueError) as excinfo:
         source.get_settlement("will-example-happen-2026")
     assert not isinstance(excinfo.value, SettlementNotFound)
+
+
+def test_public_source_uses_dedicated_settlement_endpoint():
+    class SettlementClient:
+        def __init__(self):
+            self.calls = []
+
+        def get_market_settlement(self, market_id):
+            self.calls.append(market_id)
+            return {"slug": market_id, "settlement": 1}
+
+    client = SettlementClient()
+
+    payload = PolymarketPublicSettlementSource(client=client).get_settlement(
+        "will-example-happen-2026"
+    )
+
+    assert payload["settlement"] == 1
+    assert client.calls == ["will-example-happen-2026"]
 
 
 def test_reconciler_still_halts_on_settlement_drift_error(conn):

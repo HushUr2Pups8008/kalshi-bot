@@ -13,10 +13,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from scripts.mark_open_positions import compute_open_position_marks
 
 
-def _make_db(path: Path, *, pm_rows: list[tuple] | None = None) -> None:
+def _make_db(
+    path: Path,
+    *,
+    pm_rows: list[tuple] | None = None,
+    kalshi_rows: list[tuple] | None = None,
+) -> None:
     conn = sqlite3.connect(path)
     try:
         conn.execute(
@@ -35,8 +42,14 @@ def _make_db(path: Path, *, pm_rows: list[tuple] | None = None) -> None:
         conn.executemany(
             "INSERT INTO paper_trades VALUES (?,?,?,?,?,?,?,?)",
             [
-                ("a", "KXPRICED-1", "kalshi", "yes", 5, 1.50, None, 0),
-                ("b", "KXFAILS-1", "kalshi", "yes", 5, 2.00, None, 0),
+                *(
+                    kalshi_rows
+                    if kalshi_rows is not None
+                    else [
+                        ("a", "KXPRICED-1", "kalshi", "yes", 5, 1.50, None, 0),
+                        ("b", "KXFAILS-1", "kalshi", "yes", 5, 2.00, None, 0),
+                    ]
+                ),
                 # resolved row: excluded from the open-position scan.
                 ("c", "KXDONE-1", "kalshi", "yes", 5, 1.00, None, 1),
                 *(pm_rows or []),
@@ -132,12 +145,108 @@ def _poly_row(
     side: str,
     cost: float,
     snapshot: dict | None,
+    *,
+    contracts: int = 5,
 ) -> tuple:
     """A polymarket_us open paper_trades row matching _make_db's column order:
     (trade_id, ticker, venue, side, contracts, cost_dollars,
      market_snapshot, resolved)."""
     snap = json.dumps(snapshot) if snapshot is not None else None
-    return (trade_id, ticker, "polymarket_us", side, 5, cost, snap, 0)
+    return (trade_id, ticker, "polymarket_us", side, contracts, cost, snap, 0)
+
+
+def test_corrected_polymarket_books_produce_audited_portfolio_equity(tmp_path: Path):
+    """The corrected long book must expose the real >20% portfolio drawdown."""
+    from polymarket.normalizer import normalize_polymarket_market
+
+    # Same 11-position side/contract shape as the audited July 10 exposure.
+    positions = (
+        ("pm-01", "yes", 4, 32),
+        ("pm-02", "yes", 5, 46),
+        ("pm-03", "yes", 6, 94),
+        ("pm-04", "no", 5, 64),
+        ("pm-05", "yes", 5, 59),
+        ("pm-06", "no", 5, 49),
+        ("pm-ga-senate", "yes", 5, 12),
+        ("pm-08", "yes", 5, 64),
+        ("pm-09", "yes", 5, 59),
+        ("pm-10", "no", 5, 39),
+        ("pm-11", "yes", 5, 59),
+    )
+    db = tmp_path / "paper_trades.db"
+    _make_db(
+        db,
+        pm_rows=[
+            _poly_row(
+                f"trade-{index}", ticker, side, 1.0, None, contracts=contracts
+            )
+            for index, (ticker, side, contracts, _mark) in enumerate(positions)
+        ],
+        kalshi_rows=[
+            (f"kalshi-{index}", f"KXAUDIT-{index}", "kalshi", "yes", 1, 0.03, None, 0)
+            for index in range(4)
+        ],
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE bot_state SET value = '8.76' WHERE key = 'notional_bankroll'"
+        )
+
+    books = {}
+    for ticker, side, _contracts, mark in positions:
+        if side == "yes":
+            best_bid, best_ask = mark, mark + 1
+        else:
+            best_ask, best_bid = 100 - mark, 99 - mark
+        books[ticker] = normalize_polymarket_market(
+            {
+                "slug": ticker,
+                "title": ticker,
+                "status": "open",
+                "bestBidQuote": {"value": best_bid / 100},
+                "bestAskQuote": {"value": best_ask / 100},
+                "marketSides": [
+                    {"long": True, "quote": best_ask / 100},
+                    {"long": False, "quote": (100 - best_bid) / 100},
+                ],
+                # Deliberately reversed positional arrays: the long book wins.
+                "outcomes": '["No","Yes"]',
+                "outcomePrices": '["0.99","0.01"]',
+            }
+        )
+
+    class _FakePoly:
+        def get_market(self, ticker):
+            return books[ticker]
+
+    class _FakeKalshi:
+        def get_market(self, ticker):
+            return SimpleNamespace(
+                yes_bid_cents=2,
+                yes_ask_cents=4,
+                no_bid_cents=96,
+                no_ask_cents=98,
+                last_price_cents=3,
+            )
+
+    with patch("polymarket.public_client.PolymarketPublicClient", _FakePoly), patch(
+        "kalshi.rest_client.KalshiRestClient", _FakeKalshi
+    ):
+        marks = compute_open_position_marks(db)
+
+    assert marks is not None
+    assert marks["priced_count"] == 15
+    assert marks["unpriced_count"] == 0
+    pm_rows = [row for row in marks["rows"] if row["venue"] == "polymarket_us"]
+    kalshi_rows = [row for row in marks["rows"] if row["venue"] == "kalshi"]
+    assert len(pm_rows) == 11
+    assert len(kalshi_rows) == 4
+    assert sum(row["value"] for row in pm_rows) == pytest.approx(29.47)
+    assert sum(row["value"] for row in kalshi_rows) == pytest.approx(0.12)
+    assert marks["marked_value"] == pytest.approx(29.59)
+    equity = marks["bankroll"] + marks["marked_value"]
+    assert equity == pytest.approx(38.35)
+    assert (50.0 - equity) / 50.0 == pytest.approx(0.233)
 
 
 class _StubKalshiAllFail:
@@ -158,7 +267,11 @@ def test_poly_marking_falls_back_to_snapshot_when_live_absent(tmp_path: Path):
     db = tmp_path / "paper_trades.db"
     # Snapshot asks: yes=60, no=55 -> _poly_held_price_cents(yes) = min(60, 45)
     # = 45c -> 5 contracts -> $2.25 marked value.
-    snap = {"yes_ask_cents": 60, "no_ask_cents": 55}
+    snap = {
+        "yes_ask_cents": 60,
+        "no_ask_cents": 55,
+        "price_method": "pm_long_book_v1",
+    }
     _make_db(db, pm_rows=[_poly_row("p", "pm-absent-slug", "yes", 3.00, snap)])
 
     class _FakePoly:
@@ -185,6 +298,65 @@ def test_poly_marking_falls_back_to_snapshot_when_live_absent(tmp_path: Path):
     # The PM row's cost is NOT in unknown_cost (it is priced, just from snapshot);
     # unknown_cost holds only the two stubbed Kalshi rows (1.50 + 2.00).
     assert marks["unknown_cost"] == 3.50
+
+
+def test_unversioned_polymarket_snapshot_is_not_used(tmp_path: Path):
+    """Legacy snapshots have unknown side orientation and must fail closed."""
+    db = tmp_path / "paper_trades.db"
+    snapshot = {"yes_ask_cents": 88, "no_ask_cents": 13}
+    _make_db(db, pm_rows=[_poly_row("p", "pm-legacy", "yes", 3.00, snapshot)])
+
+    class _FakePoly:
+        def get_market(self, ticker):
+            raise RuntimeError("market not found")
+
+    with patch("polymarket.public_client.PolymarketPublicClient", _FakePoly), patch(
+        "kalshi.rest_client.KalshiRestClient", _StubKalshiAllFail
+    ):
+        marks = compute_open_position_marks(db)
+
+    assert marks is not None
+    assert marks["snapshot_fallback_count"] == 0
+    assert marks["priced_count"] == 0
+    assert marks["marked_value"] == 0.0
+
+
+def test_versioned_polymarket_snapshot_remains_usable(tmp_path: Path):
+    """Audited snapshot methods remain available when the live feed is absent."""
+    db = tmp_path / "paper_trades.db"
+    safe_methods = (
+        "pm_long_book_v1",
+        "pm_named_sides_v1",
+        "pm_named_outcomes_v1",
+    )
+    rows = [
+        _poly_row(
+            f"p-{index}",
+            f"pm-safe-{index}",
+            "yes",
+            0.65,
+            {
+                "yes_ask_cents": 13,
+                "no_ask_cents": 88,
+                "price_method": method,
+            },
+        )
+        for index, method in enumerate(safe_methods)
+    ]
+    _make_db(db, pm_rows=rows)
+
+    class _FakePoly:
+        def get_market(self, ticker):
+            raise RuntimeError("market not found")
+
+    with patch("polymarket.public_client.PolymarketPublicClient", _FakePoly), patch(
+        "kalshi.rest_client.KalshiRestClient", _StubKalshiAllFail
+    ):
+        marks = compute_open_position_marks(db)
+
+    assert marks is not None
+    assert marks["snapshot_fallback_count"] == len(safe_methods)
+    assert marks["priced_count"] == len(safe_methods)
 
 
 def test_poly_marking_missing_snapshot_stays_unpriced(tmp_path: Path):

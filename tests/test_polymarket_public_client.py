@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock
 
+import pytest
 import requests
 
 from polymarket.public_client import PolymarketPublicClient
@@ -16,6 +17,97 @@ def _market_payload(slug: str = "m1") -> dict:
             {"name": "No", "bestAsk": {"value": "0.61"}},
         ],
     }
+
+
+def _response(payload: dict, *, status_code: int = 200) -> MagicMock:
+    response = MagicMock()
+    response.text = "{}"
+    response.status_code = status_code
+    response.json.return_value = payload
+    if status_code >= 400:
+        response.raise_for_status.side_effect = requests.HTTPError(response=response)
+    else:
+        response.raise_for_status.return_value = None
+    return response
+
+
+def test_get_market_settlement_calls_slug_endpoint():
+    client = PolymarketPublicClient(base_url="https://gateway.polymarket.us")
+    client._session.request = MagicMock(
+        return_value=_response({"slug": "will-example-happen", "settlement": "1"})
+    )
+
+    payload = client.get_market_settlement("will-example-happen")
+
+    assert payload == {"slug": "will-example-happen", "settlement": "1"}
+    assert client._session.request.call_args.args[1].endswith(
+        "/v1/markets/will-example-happen/settlement"
+    )
+
+
+@pytest.mark.parametrize(
+    "slug",
+    ["will/example", "will?region=us", "will#result", ".", ".."],
+)
+def test_get_market_settlement_rejects_noncanonical_slug(slug):
+    client = PolymarketPublicClient(base_url="https://gateway.polymarket.us")
+    client._session.request = MagicMock()
+
+    with pytest.raises(ValueError, match="invalid canonical slug"):
+        client.get_market_settlement(slug)
+
+    client._session.request.assert_not_called()
+
+
+def test_get_market_settlement_resolves_numeric_id_to_slug():
+    client = PolymarketPublicClient()
+    client.get_market_payload = MagicMock(
+        return_value={"id": "123", "slug": "canonical-slug"}
+    )
+    client._request = MagicMock(
+        return_value={"slug": "canonical-slug", "settlement": 0}
+    )
+
+    payload = client.get_market_settlement("123")
+
+    assert payload["settlement"] == 0
+    client._request.assert_called_once_with(
+        "GET", "/v1/markets/canonical-slug/settlement"
+    )
+
+
+def test_get_market_settlement_rejects_slug_mismatch():
+    client = PolymarketPublicClient()
+    client._request = MagicMock(
+        return_value={"slug": "different", "settlement": 1}
+    )
+
+    with pytest.raises(ValueError, match="slug mismatch"):
+        client.get_market_settlement("expected")
+
+
+def test_get_market_settlement_rejects_nonobject_response():
+    client = PolymarketPublicClient()
+    client._request = MagicMock(return_value=[])
+
+    with pytest.raises(ValueError, match="must be an object"):
+        client.get_market_settlement("expected")
+
+
+def test_get_market_settlement_translates_only_http_404_to_not_found():
+    client = PolymarketPublicClient()
+    not_found_response = MagicMock(status_code=404)
+    client._request = MagicMock(
+        side_effect=requests.HTTPError(response=not_found_response)
+    )
+
+    with pytest.raises(ValueError, match="not found"):
+        client.get_market_settlement("expected")
+
+    server_error_response = MagicMock(status_code=503)
+    client._request.side_effect = requests.HTTPError(response=server_error_response)
+    with pytest.raises(requests.HTTPError):
+        client.get_market_settlement("expected")
 
 
 def test_get_markets_uses_public_gateway_and_normalizes():
