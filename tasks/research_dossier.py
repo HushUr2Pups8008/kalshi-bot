@@ -16,13 +16,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TypeVar
+from typing import Literal, TypeVar
 from urllib.parse import urlparse
 
 from analysis.research_gate import ResearchEvidence
 from config import DATA_DIR
 
 _T = TypeVar("_T")
+_UNSET = object()
 
 DEFAULT_RESEARCH_DOSSIER_DB_PATH = DATA_DIR / "evidence_store.db"
 RESEARCH_TASK_INITIAL_BACKOFF_SECONDS = 300.0
@@ -79,6 +80,8 @@ class ResearchDossierSnapshot:
     last_market_price: float | None = None
     last_estimated_edge: float | None = None
     last_decision_grade_status: str | None = None
+    market_status: str | None = None
+    market_close_time: str | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,8 @@ class ResearchDossierStore:
         confidence: float | None = None,
         contract_fingerprint: str | None = None,
         market_price: float | None = None,
+        market_status: object = _UNSET,
+        market_close_time: object = _UNSET,
         estimated_edge: float | None = None,
         decision_grade_status: str | None = None,
         decision_grade_reasons: list[str] | None = None,
@@ -160,6 +165,8 @@ class ResearchDossierStore:
                 confidence=confidence,
                 contract_fingerprint=contract_fingerprint,
                 market_price=market_price,
+                market_status=market_status,
+                market_close_time=market_close_time,
                 estimated_edge=estimated_edge,
                 decision_grade_status=decision_grade_status,
                 decision_grade_reasons=decision_grade_reasons or [],
@@ -170,6 +177,41 @@ class ResearchDossierStore:
                 update_dossier_snapshot=update_dossier_snapshot,
                 update_dossier_run_id=update_dossier_run_id,
             ),
+        )
+
+    async def claim_research_paper_admission(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._claim_research_paper_admission_sync,
+            market_ticker,
+            research_run_id,
+            contract_fingerprint,
+        )
+
+    async def complete_research_paper_admission(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+        *,
+        state: Literal["completed", "failed"],
+        enqueued: bool | None,
+        outcome_reason: str | None,
+    ) -> None:
+        if state not in {"completed", "failed"}:
+            raise ValueError("admission state must be completed or failed")
+        await asyncio.to_thread(
+            self._complete_research_paper_admission_sync,
+            market_ticker,
+            research_run_id,
+            contract_fingerprint,
+            state=state,
+            enqueued=enqueued,
+            outcome_reason=outcome_reason,
         )
 
     async def get_recent_evidence(
@@ -261,6 +303,8 @@ class ResearchDossierStore:
                     last_research_run_id TEXT,
                     last_contract_fingerprint TEXT,
                     contract_question TEXT,
+                    market_status TEXT,
+                    market_close_time TEXT,
                     last_researched_ts TEXT NOT NULL,
                     last_verdict_status TEXT NOT NULL,
                     last_skip_reason TEXT,
@@ -285,6 +329,8 @@ class ResearchDossierStore:
                 ("last_estimated_edge", "REAL"),
                 ("last_decision_grade_status", "TEXT"),
                 ("contract_question", "TEXT"),
+                ("market_status", "TEXT"),
+                ("market_close_time", "TEXT"),
             ):
                 if column not in dossier_columns:
                     conn.execute(
@@ -298,6 +344,8 @@ class ResearchDossierStore:
                     trigger_headline TEXT NOT NULL,
                     trigger_source TEXT NOT NULL,
                     contract_question TEXT,
+                    market_status TEXT,
+                    market_close_time TEXT,
                     attempted INTEGER NOT NULL CHECK (attempted IN (0, 1)),
                     summary TEXT NOT NULL,
                     verdict_status TEXT NOT NULL,
@@ -325,12 +373,30 @@ class ResearchDossierStore:
                 ("estimated_edge", "REAL"),
                 ("decision_grade_status", "TEXT"),
                 ("contract_question", "TEXT"),
+                ("market_status", "TEXT"),
+                ("market_close_time", "TEXT"),
                 ("decision_grade_reasons_json", "TEXT NOT NULL DEFAULT '[]'"),
                 ("open_questions_json", "TEXT NOT NULL DEFAULT '[]'"),
                 ("counterclaims_json", "TEXT NOT NULL DEFAULT '[]'"),
             ):
                 if column not in run_columns:
                     conn.execute(f"ALTER TABLE research_runs ADD COLUMN {column} {definition}")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS research_paper_admissions (
+                    market_ticker TEXT NOT NULL,
+                    research_run_id TEXT NOT NULL,
+                    contract_fingerprint TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK (state IN ('claimed', 'completed', 'failed')),
+                    enqueued INTEGER CHECK (enqueued IS NULL OR enqueued IN (0, 1)),
+                    outcome_reason TEXT,
+                    claimed_ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    completed_ts TEXT,
+                    updated_ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    PRIMARY KEY (market_ticker, research_run_id, contract_fingerprint)
+                )
+                """
+            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS research_tasks (
@@ -413,6 +479,64 @@ class ResearchDossierStore:
                 """
             )
 
+    def _claim_research_paper_admission_sync(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+    ) -> bool:
+        self._initialize_sync()
+        with self._connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO research_paper_admissions (
+                    market_ticker, research_run_id, contract_fingerprint, state
+                ) VALUES (?, ?, ?, 'claimed')
+                """,
+                (market_ticker, research_run_id, contract_fingerprint),
+            )
+            return cursor.rowcount == 1
+
+    def _complete_research_paper_admission_sync(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+        *,
+        state: Literal["completed", "failed"],
+        enqueued: bool | None,
+        outcome_reason: str | None,
+    ) -> None:
+        if state not in {"completed", "failed"}:
+            raise ValueError("admission state must be completed or failed")
+        self._initialize_sync()
+        with self._connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE research_paper_admissions
+                SET
+                    state=?,
+                    enqueued=?,
+                    outcome_reason=?,
+                    completed_ts=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                    updated_ts=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                WHERE market_ticker=?
+                  AND research_run_id=?
+                  AND contract_fingerprint=?
+                  AND state='claimed'
+                """,
+                (
+                    state,
+                    None if enqueued is None else int(enqueued),
+                    outcome_reason,
+                    market_ticker,
+                    research_run_id,
+                    contract_fingerprint,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise LookupError("claimed research paper admission not found")
+
     def _add_evidence_sync(
         self,
         market_ticker: str,
@@ -448,6 +572,8 @@ class ResearchDossierStore:
         confidence: float | None,
         contract_fingerprint: str | None,
         market_price: float | None,
+        market_status: object,
+        market_close_time: object,
         estimated_edge: float | None,
         decision_grade_status: str | None,
         decision_grade_reasons: list[str],
@@ -470,6 +596,14 @@ class ResearchDossierStore:
             )
         )
         final_contract_fingerprint = contract_fingerprint or _run_contract_fingerprint(evidence)
+        normalized_market_status = (
+            _UNSET if market_status is _UNSET else _normalize_market_status(market_status)
+        )
+        normalized_market_close_time = (
+            _UNSET
+            if market_close_time is _UNSET
+            else _normalize_market_close_time(market_close_time)
+        )
         with self._connection() as conn:
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("BEGIN")
@@ -517,6 +651,8 @@ class ResearchDossierStore:
                 update_dossier_snapshot=final_update_dossier_snapshot,
                 update_dossier_run_id=final_update_dossier_run_id,
                 market_price=market_price,
+                market_status=normalized_market_status,
+                market_close_time=normalized_market_close_time,
                 estimated_edge=estimated_edge,
                 decision_grade_status=final_decision_grade_status,
             )
@@ -549,6 +685,8 @@ class ResearchDossierStore:
                 UPDATE research_runs
                 SET
                     contract_question=?,
+                    market_status=CASE WHEN ? THEN ? ELSE market_status END,
+                    market_close_time=CASE WHEN ? THEN ? ELSE market_close_time END,
                     market_price=?,
                     estimated_edge=?,
                     decision_grade_status=?,
@@ -559,6 +697,14 @@ class ResearchDossierStore:
                 """,
                 (
                     contract_question,
+                    int(normalized_market_status is not _UNSET),
+                    None if normalized_market_status is _UNSET else normalized_market_status,
+                    int(normalized_market_close_time is not _UNSET),
+                    (
+                        None
+                        if normalized_market_close_time is _UNSET
+                        else normalized_market_close_time
+                    ),
                     market_price,
                     estimated_edge,
                     final_decision_grade_status,
@@ -587,6 +733,8 @@ class ResearchDossierStore:
         confidence: float | None = None,
         contract_fingerprint: str | None = None,
         market_price: float | None = None,
+        market_status: object = _UNSET,
+        market_close_time: object = _UNSET,
         estimated_edge: float | None = None,
         decision_grade_status: str | None = None,
         conn: sqlite3.Connection | None = None,
@@ -706,13 +854,30 @@ class ResearchDossierStore:
                     )
             conn.execute(
                 """
+                UPDATE research_dossiers
+                SET
+                    market_status=CASE WHEN ? THEN ? ELSE market_status END,
+                    market_close_time=CASE WHEN ? THEN ? ELSE market_close_time END,
+                    updated_ts=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                WHERE market_ticker=?
+                """,
+                (
+                    int(market_status is not _UNSET),
+                    None if market_status is _UNSET else market_status,
+                    int(market_close_time is not _UNSET),
+                    None if market_close_time is _UNSET else market_close_time,
+                    market_ticker,
+                ),
+            )
+            conn.execute(
+                """
                 INSERT OR IGNORE INTO research_runs (
                     research_run_id, market_ticker, trigger_headline, trigger_source,
-                    contract_question,
+                    contract_question, market_status, market_close_time,
                     attempted, summary, verdict_status, skip_reason, force_side,
                     estimated_probability, confidence, market_price, estimated_edge,
                     decision_grade_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     research_run_id,
@@ -720,6 +885,8 @@ class ResearchDossierStore:
                     trigger_headline,
                     trigger_source,
                     contract_question,
+                    None if market_status is _UNSET else market_status,
+                    None if market_close_time is _UNSET else market_close_time,
                     int(attempted),
                     summary,
                     verdict_status,
@@ -894,6 +1061,12 @@ class ResearchDossierStore:
                 row["last_decision_grade_status"]
                 if "last_decision_grade_status" in row.keys()
                 else None
+            ),
+            market_status=(
+                row["market_status"] if "market_status" in row.keys() else None
+            ),
+            market_close_time=(
+                row["market_close_time"] if "market_close_time" in row.keys() else None
             ),
         )
 
@@ -1136,6 +1309,32 @@ class ResearchDossierStore:
                 reason_key,
             ),
         )
+
+
+def _normalize_market_status(value: object) -> str | None:
+    raw_value = getattr(value, "value", value)
+    normalized = str(raw_value or "").strip().lower()
+    return normalized or None
+
+
+def _normalize_market_close_time(value: object) -> str | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        if raw.endswith("Z"):
+            raw = f"{raw[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _run_contract_fingerprint(evidence: list[ResearchEvidence]) -> str | None:

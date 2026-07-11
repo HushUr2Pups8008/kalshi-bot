@@ -24,6 +24,7 @@ class _TrackingConnection:
         self.entered = 0
         self.exit_args = None
         self.closed = 0
+        self.executed = []
 
     def __enter__(self):
         self.entered += 1
@@ -35,6 +36,10 @@ class _TrackingConnection:
 
     def close(self) -> None:
         self.closed += 1
+
+    def execute(self, statement, parameters=()):
+        self.executed.append((statement, parameters))
+        return SimpleNamespace(rowcount=1)
 
 
 def test_connection_context_commits_and_closes(monkeypatch, tmp_path):
@@ -61,6 +66,384 @@ def test_connection_context_rolls_back_and_closes(monkeypatch, tmp_path):
 
     assert connection.exit_args[0] is RuntimeError
     assert connection.closed == 1
+
+
+def test_admission_claim_uses_transaction_and_closes(monkeypatch, tmp_path):
+    store = ResearchDossierStore(tmp_path / "research.db")
+    connection = _TrackingConnection()
+    monkeypatch.setattr(store, "_initialize_sync", lambda: None)
+    monkeypatch.setattr(store, "_connect", lambda: connection)
+
+    claimed = store._claim_research_paper_admission_sync(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+    )
+
+    assert claimed is True
+    assert connection.entered == 1
+    assert connection.exit_args == (None, None, None)
+    assert connection.closed == 1
+    assert len(connection.executed) == 1
+
+
+def test_admission_claim_rolls_back_and_closes_on_error(monkeypatch, tmp_path):
+    store = ResearchDossierStore(tmp_path / "research.db")
+    connection = _TrackingConnection()
+    monkeypatch.setattr(store, "_initialize_sync", lambda: None)
+    monkeypatch.setattr(store, "_connect", lambda: connection)
+
+    def fail_execute(_statement, _parameters=()):
+        raise RuntimeError("insert failed")
+
+    monkeypatch.setattr(connection, "execute", fail_execute)
+
+    with pytest.raises(RuntimeError, match="insert failed"):
+        store._claim_research_paper_admission_sync(
+            "KXTEST-26",
+            "run-1",
+            "fingerprint-1",
+        )
+
+    assert connection.exit_args[0] is RuntimeError
+    assert connection.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_adds_and_persists_market_eligibility_columns(tmp_path):
+    db_path = tmp_path / "research.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_researched_ts TEXT NOT NULL,
+                last_verdict_status TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE research_runs (
+                research_run_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                trigger_headline TEXT NOT NULL,
+                trigger_source TEXT NOT NULL,
+                attempted INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                verdict_status TEXT NOT NULL
+            )
+            """
+        )
+
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        dossier_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(research_dossiers)")
+        }
+        run_columns = {row[1] for row in conn.execute("PRAGMA table_info(research_runs)")}
+
+    assert {"market_status", "market_close_time"} <= dossier_columns
+    assert {"market_status", "market_close_time"} <= run_columns
+
+    fresh_db_path = tmp_path / "fresh-research.db"
+    fresh_store = ResearchDossierStore(fresh_db_path)
+    await fresh_store.initialize()
+    await fresh_store.record_research_run(
+        "KXTEST-26",
+        "run-eligibility",
+        trigger_headline="Current market observation",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Still open.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        market_status="active",
+        market_close_time="2026-07-12T18:00:00Z",
+    )
+
+    snapshot = await fresh_store.get_dossier_snapshot("KXTEST-26")
+    with sqlite3.connect(fresh_db_path) as conn:
+        run_metadata = conn.execute(
+            """
+            SELECT market_status, market_close_time
+            FROM research_runs
+            WHERE research_run_id = 'run-eligibility'
+            """
+        ).fetchone()
+        dossier_metadata = conn.execute(
+            """
+            SELECT market_status, market_close_time
+            FROM research_dossiers
+            WHERE market_ticker = 'KXTEST-26'
+            """
+        ).fetchone()
+
+    assert snapshot is not None
+    assert snapshot.market_status == "active"
+    assert snapshot.market_close_time == "2026-07-12T18:00:00Z"
+    assert run_metadata == ("active", "2026-07-12T18:00:00Z")
+    assert dossier_metadata == run_metadata
+
+    await fresh_store.record_research_run(
+        "KXTEST-26",
+        "run-object-eligibility",
+        trigger_headline="Enum-like market observation",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Raw API metadata.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        market_status=SimpleNamespace(value="OPEN"),
+        market_close_time=datetime(2026, 7, 12, 20, tzinfo=timezone.utc),
+        update_dossier_snapshot=False,
+        update_dossier_run_id=False,
+    )
+    await fresh_store.record_research_run(
+        "KXINVALID-26",
+        "run-invalid-close",
+        trigger_headline="Invalid close observation",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Invalid raw API metadata.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        market_status="ACTIVE",
+        market_close_time=object(),
+    )
+    await fresh_store.record_research_run(
+        "KXMISSING-26",
+        "run-missing-close",
+        trigger_headline="Missing close observation",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Missing raw API metadata.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        market_status="OPEN",
+        market_close_time=None,
+    )
+
+    with sqlite3.connect(fresh_db_path) as conn:
+        object_metadata = conn.execute(
+            """
+            SELECT market_status, market_close_time
+            FROM research_runs
+            WHERE research_run_id = 'run-object-eligibility'
+            """
+        ).fetchone()
+        invalid_metadata = conn.execute(
+            """
+            SELECT market_status, market_close_time
+            FROM research_runs
+            WHERE research_run_id = 'run-invalid-close'
+            """
+        ).fetchone()
+        missing_metadata = conn.execute(
+            """
+            SELECT market_status, market_close_time
+            FROM research_runs
+            WHERE research_run_id = 'run-missing-close'
+            """
+        ).fetchone()
+
+    assert object_metadata == ("open", "2026-07-12T20:00:00Z")
+    assert invalid_metadata == ("active", None)
+    assert missing_metadata == ("open", None)
+
+
+@pytest.mark.asyncio
+async def test_market_eligibility_metadata_updates_without_demoting_snapshot(tmp_path):
+    db_path = tmp_path / "research.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    await store.record_research_run(
+        "KXTEST-26",
+        "run-proof",
+        trigger_headline="Decision-grade proof",
+        trigger_source="manual",
+        attempted=True,
+        summary="Retained proof.",
+        verdict_status=ResearchStatus.TRADE_CANDIDATE.value,
+        market_status="active",
+        market_close_time="2026-07-12T18:00:00Z",
+    )
+    await store.record_research_run(
+        "KXTEST-26",
+        "run-observation",
+        trigger_headline="Current market observation",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Market closed.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        market_status="closed",
+        market_close_time="2026-07-11T18:00:00Z",
+        update_dossier_snapshot=False,
+        update_dossier_run_id=False,
+    )
+
+    snapshot = await store.get_dossier_snapshot("KXTEST-26")
+
+    assert snapshot is not None
+    assert snapshot.last_research_run_id == "run-proof"
+    assert snapshot.last_verdict_status == ResearchStatus.TRADE_CANDIDATE.value
+    assert snapshot.market_status == "closed"
+    assert snapshot.market_close_time == "2026-07-11T18:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_research_paper_admission_claim_is_sequentially_at_most_once(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research.db")
+    await store.initialize()
+
+    first = await store.claim_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+    )
+    second = await store.claim_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+    )
+
+    assert first is True
+    assert second is False
+
+
+@pytest.mark.asyncio
+async def test_research_paper_admission_claim_is_atomic_across_stores(tmp_path):
+    db_path = tmp_path / "research.db"
+    stores = [ResearchDossierStore(db_path), ResearchDossierStore(db_path)]
+    await asyncio.gather(*(store.initialize() for store in stores))
+
+    results = await asyncio.gather(
+        *(
+            store.claim_research_paper_admission(
+                "KXTEST-26",
+                "run-1",
+                "fingerprint-1",
+            )
+            for store in stores
+        )
+    )
+
+    assert sorted(results) == [False, True]
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM research_paper_admissions").fetchone()[0]
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_research_paper_admission_claim_survives_store_reopen(tmp_path):
+    db_path = tmp_path / "research.db"
+    first_store = ResearchDossierStore(db_path)
+    await first_store.initialize()
+    assert await first_store.claim_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+    )
+
+    reopened_store = ResearchDossierStore(db_path)
+    await reopened_store.initialize()
+
+    assert not await reopened_store.claim_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_research_paper_admission_composite_key_keeps_distinct_claims(tmp_path):
+    db_path = tmp_path / "research.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    keys = (
+        ("KXTEST-26", "run-1", "fingerprint-1"),
+        ("KXTEST-26", "run-2", "fingerprint-1"),
+        ("KXTEST-26", "run-1", "fingerprint-2"),
+        ("KXOTHER-26", "run-1", "fingerprint-1"),
+    )
+
+    assert all([await store.claim_research_paper_admission(*key) for key in keys])
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM research_paper_admissions").fetchone()[0]
+    assert count == len(keys)
+
+
+@pytest.mark.asyncio
+async def test_research_paper_admission_records_completed_and_failed_outcomes(tmp_path):
+    db_path = tmp_path / "research.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    await store.claim_research_paper_admission("KXTEST-26", "run-1", "fingerprint-1")
+    await store.claim_research_paper_admission("KXTEST-26", "run-2", "fingerprint-2")
+
+    await store.complete_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+        state="completed",
+        enqueued=True,
+        outcome_reason="paper route accepted",
+    )
+    await store.complete_research_paper_admission(
+        "KXTEST-26",
+        "run-2",
+        "fingerprint-2",
+        state="failed",
+        enqueued=None,
+        outcome_reason="bridge crashed",
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT research_run_id, state, enqueued, outcome_reason,
+                   claimed_ts, completed_ts, updated_ts
+            FROM research_paper_admissions
+            ORDER BY research_run_id
+            """
+        ).fetchall()
+
+    assert rows[0][:4] == ("run-1", "completed", 1, "paper route accepted")
+    assert rows[1][:4] == ("run-2", "failed", None, "bridge crashed")
+    assert all(row[4] for row in rows)
+    assert all(row[5] for row in rows)
+    assert all(row[6] for row in rows)
+    assert not await store.claim_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+    )
+    assert not await store.claim_research_paper_admission(
+        "KXTEST-26",
+        "run-2",
+        "fingerprint-2",
+    )
+
+
+@pytest.mark.asyncio
+async def test_research_paper_admission_rejects_invalid_completion_state(tmp_path):
+    db_path = tmp_path / "research.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    await store.claim_research_paper_admission("KXTEST-26", "run-1", "fingerprint-1")
+
+    with pytest.raises(ValueError, match="completed or failed"):
+        await store.complete_research_paper_admission(
+            "KXTEST-26",
+            "run-1",
+            "fingerprint-1",
+            state="claimed",  # type: ignore[arg-type]
+            enqueued=False,
+            outcome_reason="invalid transition",
+        )
+
+    with sqlite3.connect(db_path) as conn:
+        state = conn.execute("SELECT state FROM research_paper_admissions").fetchone()[0]
+    assert state == "claimed"
 
 
 @pytest.fixture(autouse=True)
