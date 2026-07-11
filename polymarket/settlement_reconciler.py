@@ -160,9 +160,13 @@ class SettlementReconciler:
 
 
 def _resolved_yes_from_settlement_value(market_id: str, raw: Any) -> bool:
+    if isinstance(raw, bool):
+        raise SettlementDriftError(
+            f"settlement payload for {market_id} has boolean settlement"
+        )
     try:
         value = float(raw)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise SettlementDriftError(
             f"settlement payload for {market_id} has nonnumeric settlement"
         ) from exc

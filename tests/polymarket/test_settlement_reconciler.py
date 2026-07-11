@@ -156,6 +156,21 @@ def test_nonbinary_settlement_values_fail_closed(value):
         )
 
 
+@pytest.mark.parametrize("value", [True, False])
+def test_boolean_settlement_values_fail_closed(value):
+    with pytest.raises(SettlementDriftError, match="boolean settlement"):
+        _resolved_yes_from_payload(
+            "will-example-happen", {"settlement": value}
+        )
+
+
+def test_unrepresentable_settlement_value_is_hard_drift():
+    with pytest.raises(SettlementDriftError, match="nonnumeric settlement"):
+        _resolved_yes_from_payload(
+            "will-example-happen", {"settlement": 10**10000}
+        )
+
+
 def test_outcome_prices_without_authoritative_result_fail_closed():
     payload = {
         "closed": True,
