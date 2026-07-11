@@ -72,6 +72,8 @@ def _request_exception_status(exc: requests.RequestException) -> int | None:
 
 
 def _is_transient_request_exception(exc: requests.RequestException) -> bool:
+    if isinstance(exc, requests.Timeout):
+        return True
     status = _request_exception_status(exc)
     if _is_transient_http_status(status):
         return True

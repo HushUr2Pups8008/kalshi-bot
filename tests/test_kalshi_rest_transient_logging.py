@@ -150,6 +150,34 @@ def test_known_transient_request_failures_log_warning(
     assert not any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
+@pytest.mark.parametrize(
+    "exc",
+    [
+        requests.ConnectTimeout("opaque transport timeout"),
+        requests.ReadTimeout("opaque transport timeout"),
+        requests.Timeout("opaque transport timeout"),
+    ],
+)
+def test_typed_timeout_logs_transient_warning(
+    caplog,
+    exc: requests.Timeout,
+) -> None:
+    client = KalshiRestClient()
+    client._session = _FailingSession(exc)  # noqa: SLF001
+
+    with caplog.at_level(logging.WARNING, logger="kalshi_rest"):
+        with pytest.raises(type(exc)):
+            client._request("GET", "/markets")  # noqa: SLF001
+
+    record = _only_record(caplog)
+    assert record.levelno == logging.WARNING
+    assert "method=GET" in record.getMessage()
+    assert "endpoint=/markets" in record.getMessage()
+    assert "status=unknown" in record.getMessage()
+    assert "transient=true" in record.getMessage()
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+
+
 def test_wrapped_certificate_max_retry_failure_logs_error(caplog) -> None:
     exc = requests.exceptions.SSLError(
         "HTTPSConnectionPool(host='api.elections.kalshi.com', port=443): "
