@@ -13,6 +13,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from scripts.mark_open_positions import compute_open_position_marks
 
 
@@ -132,12 +134,98 @@ def _poly_row(
     side: str,
     cost: float,
     snapshot: dict | None,
+    *,
+    contracts: int = 5,
 ) -> tuple:
     """A polymarket_us open paper_trades row matching _make_db's column order:
     (trade_id, ticker, venue, side, contracts, cost_dollars,
      market_snapshot, resolved)."""
     snap = json.dumps(snapshot) if snapshot is not None else None
-    return (trade_id, ticker, "polymarket_us", side, 5, cost, snap, 0)
+    return (trade_id, ticker, "polymarket_us", side, contracts, cost, snap, 0)
+
+
+def test_corrected_polymarket_books_produce_audited_portfolio_equity(tmp_path: Path):
+    """The corrected long book must expose the real >20% portfolio drawdown."""
+    from polymarket.normalizer import normalize_polymarket_market
+
+    # Same 11-position side/contract shape as the audited July 10 exposure.
+    positions = (
+        ("pm-01", "yes", 4, 32),
+        ("pm-02", "yes", 5, 46),
+        ("pm-03", "yes", 6, 94),
+        ("pm-04", "no", 5, 64),
+        ("pm-05", "yes", 5, 59),
+        ("pm-06", "no", 5, 49),
+        ("pm-ga-senate", "yes", 5, 12),
+        ("pm-08", "yes", 5, 64),
+        ("pm-09", "yes", 5, 59),
+        ("pm-10", "no", 5, 39),
+        ("pm-11", "yes", 5, 59),
+    )
+    db = tmp_path / "paper_trades.db"
+    _make_db(
+        db,
+        pm_rows=[
+            _poly_row(
+                f"trade-{index}", ticker, side, 1.0, None, contracts=contracts
+            )
+            for index, (ticker, side, contracts, _mark) in enumerate(positions)
+        ],
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE bot_state SET value = '8.76' WHERE key = 'notional_bankroll'"
+        )
+
+    books = {}
+    for ticker, side, _contracts, mark in positions:
+        if side == "yes":
+            best_bid, best_ask = mark, mark + 1
+        else:
+            best_ask, best_bid = 100 - mark, 99 - mark
+        books[ticker] = normalize_polymarket_market(
+            {
+                "slug": ticker,
+                "title": ticker,
+                "status": "open",
+                "bestBidQuote": {"value": best_bid / 100},
+                "bestAskQuote": {"value": best_ask / 100},
+                "marketSides": [
+                    {"long": True, "quote": best_ask / 100},
+                    {"long": False, "quote": (100 - best_bid) / 100},
+                ],
+                # Deliberately reversed positional arrays: the long book wins.
+                "outcomes": '["No","Yes"]',
+                "outcomePrices": '["0.99","0.01"]',
+            }
+        )
+
+    class _FakePoly:
+        def get_market(self, ticker):
+            return books[ticker]
+
+    class _FakeKalshi:
+        def get_market(self, ticker):
+            return SimpleNamespace(
+                yes_bid_cents=1.0,
+                yes_ask_cents=1.4,
+                no_bid_cents=98.6,
+                no_ask_cents=99.0,
+                last_price_cents=1.2,
+            )
+
+    with patch("polymarket.public_client.PolymarketPublicClient", _FakePoly), patch(
+        "kalshi.rest_client.KalshiRestClient", _FakeKalshi
+    ):
+        marks = compute_open_position_marks(db)
+
+    assert marks is not None
+    assert marks["priced_count"] == 13
+    assert marks["unpriced_count"] == 0
+    assert marks["marked_value"] == pytest.approx(29.59)
+    equity = marks["bankroll"] + marks["marked_value"]
+    assert equity == pytest.approx(38.35)
+    assert (50.0 - equity) / 50.0 == pytest.approx(0.233)
 
 
 class _StubKalshiAllFail:

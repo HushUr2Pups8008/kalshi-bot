@@ -79,6 +79,23 @@ def test_paper_open_exposure_drawdown_uses_mark_to_market_equity(monkeypatch):
     assert drawdown == pytest.approx(0.21)
 
 
+def test_audited_polymarket_equity_exceeds_g7_drawdown_limit(monkeypatch):
+    monkeypatch.setattr(cfg, "bankroll", 50.0)
+    paper = SimpleNamespace(
+        db_path=Path("paper.db"),
+        get_notional_bankroll=lambda: 8.76,
+    )
+
+    with patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        return_value={"marked_value": 29.59},
+    ):
+        drawdown = _paper_open_exposure_drawdown_pct(paper)
+
+    assert drawdown == pytest.approx(0.233)
+    assert drawdown > 0.20
+
+
 def test_paper_open_exposure_drawdown_fails_closed_when_marks_unavailable(monkeypatch):
     monkeypatch.setattr(cfg, "bankroll", 100.0)
     paper = SimpleNamespace(

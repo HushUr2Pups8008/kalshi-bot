@@ -333,6 +333,29 @@ async def test_readiness_input_carries_open_exposure_drawdown_from_provider():
 
 
 @pytest.mark.asyncio
+async def test_corrected_polymarket_drawdown_binds_g7():
+    captured: dict = {}
+
+    def capture_and_evaluate(payload, regime_confidence):  # noqa: ANN001
+        captured.update(payload)
+        return evaluate_readiness(payload, regime_confidence)
+
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        readiness_evaluator=capture_and_evaluate,
+        open_exposure_drawdown_provider=lambda: 0.233,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(_analysis())
+
+    assert captured["open_exposure_drawdown_pct"] == pytest.approx(0.233)
+    assert result.trade_blocked_reason == "G7_open_exposure_drawdown"
+
+
+@pytest.mark.asyncio
 async def test_open_exposure_drawdown_provider_error_fails_closed():
     captured: dict = {}
 
