@@ -71,6 +71,7 @@ def _write_research_db(
                 research_run_id TEXT PRIMARY KEY,
                 market_ticker TEXT NOT NULL,
                 verdict_status TEXT NOT NULL,
+                decision_grade_status TEXT,
                 force_side TEXT,
                 estimated_probability REAL,
                 confidence REAL,
@@ -122,11 +123,20 @@ def _write_research_db(
         conn.execute(
             """
             INSERT INTO research_runs VALUES (
-                ?, ?, ?, 'yes', 0.63, 0.71, 0.51, 0.11,
+                ?, ?, ?, ?, 'yes', 0.63, 0.71, 0.51, 0.11,
                 '2026-05-10T22:45:00+00:00'
             )
             """,
-            (run_id, ticker, verdict_status),
+            (
+                run_id,
+                ticker,
+                verdict_status,
+                (
+                    verdict_status
+                    if verdict_status == "decision_grade_candidate"
+                    else None
+                ),
+            ),
         )
         conn.executemany(
             """
@@ -331,6 +341,122 @@ def test_unrelated_terminal_proof_does_not_excuse_ineligible_candidate(
         "no active market-eligible decision-grade proof" in item
         for item in assessment.failures
     )
+
+
+def test_same_ticker_terminal_proof_must_match_latest_dossier_identity(
+    tmp_path: Path,
+) -> None:
+    trades, bot_log = _write_candidate_runtime(tmp_path)
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "RESEARCH_PREWARM_RESULT",
+                "ts": "2026-05-10T22:54:00+00:00",
+                "ticker": "KX-READY",
+                "research_prewarm": True,
+                "research_attempted": True,
+                "research_status": "decision_grade_candidate",
+                "research_run_id": "run-1",
+                "research_contract_fingerprint": "contract-v1",
+            },
+            {
+                "type": "RESEARCH_PREWARM_RESULT",
+                "ts": "2026-05-10T22:55:00+00:00",
+                "ticker": "KX-READY",
+                "research_prewarm": True,
+                "research_attempted": True,
+                "research_status": "untradeable",
+                "research_skip_reason": "no_edge",
+                "research_run_id": "run-not-current",
+                "research_contract_fingerprint": "contract-not-current",
+            },
+        ],
+    )
+    _write_research_db(
+        tmp_path,
+        market_status="active",
+        market_close_time="2026-05-10T23:00:00Z",
+    )
+
+    assessment = evaluate_research_rollout(
+        tmp_path,
+        trades,
+        bot_log=bot_log,
+        expected_version="0.99.0",
+        now=NOW,
+    )
+
+    assert not assessment.ok
+    assert any(
+        "no active market-eligible decision-grade proof" in item
+        for item in assessment.failures
+    )
+
+
+@pytest.mark.parametrize(
+    "update_sql",
+    [
+        "UPDATE research_runs SET decision_grade_status = NULL",
+        "UPDATE research_dossiers SET last_decision_grade_status = NULL",
+    ],
+)
+def test_live_cache_requires_exact_decision_grade_run_and_dossier_status(
+    tmp_path: Path,
+    update_sql: str,
+) -> None:
+    trades, bot_log = _write_candidate_runtime(tmp_path)
+    _write_research_db(tmp_path)
+    with sqlite3.connect(tmp_path / "data" / "evidence_store.db") as conn:
+        conn.execute(update_sql)
+
+    assessment = evaluate_research_rollout(
+        tmp_path,
+        trades,
+        bot_log=bot_log,
+        expected_version="0.99.0",
+        now=NOW,
+    )
+
+    assert not assessment.ok
+    assert assessment.matched_research_proofs == 0
+    assert assessment.live_cache_eligible_dossiers == 0
+
+
+def test_rollout_accepts_structured_official_same_side_metric_countercheck(
+    tmp_path: Path,
+) -> None:
+    trades, bot_log = _write_candidate_runtime(tmp_path)
+    _write_research_db(tmp_path)
+    with sqlite3.connect(tmp_path / "data" / "evidence_store.db") as conn:
+        conn.execute("ALTER TABLE research_evidence ADD COLUMN metric_name TEXT")
+        conn.execute("ALTER TABLE research_evidence ADD COLUMN metric_value REAL")
+        conn.execute(
+            "ALTER TABLE research_evidence ADD COLUMN extraction_confidence REAL"
+        )
+        conn.execute(
+            """
+            UPDATE research_evidence
+            SET source_class = 'official_primary',
+                supports_direction = 'yes',
+                metric_name = 'nws_daily_high_temp_f',
+                metric_value = 93.0,
+                extraction_confidence = 0.95,
+                supports_confidence = 0.95
+            """
+        )
+
+    assessment = evaluate_research_rollout(
+        tmp_path,
+        trades,
+        bot_log=bot_log,
+        expected_version="0.99.0",
+        now=NOW,
+    )
+
+    assert assessment.ok
+    assert assessment.matched_research_proofs == 1
+    assert assessment.live_cache_eligible_dossiers == 1
 
 
 def test_rollout_gate_fails_closed_when_research_mode_is_off_and_no_evidence(tmp_path):

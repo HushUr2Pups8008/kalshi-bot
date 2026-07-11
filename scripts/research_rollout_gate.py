@@ -19,7 +19,11 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import botcheck
-from utils.research_evidence_quality import has_reliable_research_source_path
+from utils.research_evidence_quality import (
+    OFFICIAL_RESEARCH_SOURCE_CLASSES,
+    STRUCTURED_OFFICIAL_RESEARCH_METRICS,
+    has_reliable_research_source_path,
+)
 from utils.research_market_eligibility import evaluate_research_market_eligibility
 
 
@@ -217,6 +221,7 @@ def _active_decision_grade_proofs(
                 "research_run_id",
                 "market_ticker",
                 "verdict_status",
+                "decision_grade_status",
             } <= run_columns:
                 return set()
             if not {
@@ -224,6 +229,7 @@ def _active_decision_grade_proofs(
                 "last_research_run_id",
                 "last_contract_fingerprint",
                 "last_verdict_status",
+                "last_decision_grade_status",
                 "market_status",
                 "market_close_time",
             } <= dossier_columns:
@@ -243,7 +249,9 @@ def _active_decision_grade_proofs(
                   ON r.market_ticker = d.market_ticker
                  AND r.research_run_id = d.last_research_run_id
                 WHERE d.last_verdict_status = 'decision_grade_candidate'
+                  AND d.last_decision_grade_status = 'decision_grade_candidate'
                   AND r.verdict_status = 'decision_grade_candidate'
+                  AND r.decision_grade_status = 'decision_grade_candidate'
                 """
             ):
                 ticker = str(row["market_ticker"] or "").strip()
@@ -262,6 +270,49 @@ def _active_decision_grade_proofs(
     return proofs & active_dossier_proofs
 
 
+def _latest_dossier_proofs(repo_root: Path) -> set[tuple[str, str, str]]:
+    db_path = botcheck._research_dossier_db_path(repo_root)  # noqa: SLF001
+    if not db_path.exists():
+        return set()
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            if not botcheck._sqlite_table_exists(  # noqa: SLF001
+                conn,
+                "research_dossiers",
+            ):
+                return set()
+            columns = {
+                row["name"]
+                for row in conn.execute(
+                    "PRAGMA table_info(research_dossiers)"
+                ).fetchall()
+            }
+            if not {
+                "market_ticker",
+                "last_research_run_id",
+                "last_contract_fingerprint",
+            } <= columns:
+                return set()
+            proofs = {
+                (
+                    str(row["market_ticker"] or "").strip(),
+                    str(row["last_research_run_id"] or "").strip(),
+                    str(row["last_contract_fingerprint"] or "").strip(),
+                )
+                for row in conn.execute(
+                    """
+                    SELECT market_ticker, last_research_run_id,
+                           last_contract_fingerprint
+                    FROM research_dossiers
+                    """
+                )
+            }
+    except sqlite3.Error:
+        return set()
+    return {proof for proof in proofs if all(proof)}
+
+
 def _live_cache_eligible_proofs(
     repo_root: Path,
     *,
@@ -276,7 +327,11 @@ def _live_cache_eligible_proofs(
             conn.row_factory = sqlite3.Row
             if not all(
                 botcheck._sqlite_table_exists(conn, table_name)  # noqa: SLF001
-                for table_name in ("research_dossiers", "research_evidence")
+                for table_name in (
+                    "research_dossiers",
+                    "research_runs",
+                    "research_evidence",
+                )
             ):
                 return set()
             evidence_columns = {
@@ -286,6 +341,10 @@ def _live_cache_eligible_proofs(
             dossier_columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(research_dossiers)").fetchall()
+            }
+            run_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(research_runs)").fetchall()
             }
             required_evidence_columns = {
                 "market_ticker",
@@ -305,6 +364,7 @@ def _live_cache_eligible_proofs(
                 "last_research_run_id",
                 "last_contract_fingerprint",
                 "last_verdict_status",
+                "last_decision_grade_status",
                 "last_force_side",
                 "last_estimated_probability",
                 "last_confidence",
@@ -317,6 +377,13 @@ def _live_cache_eligible_proofs(
                 return set()
             if not required_dossier_columns <= dossier_columns:
                 return set()
+            if not {
+                "market_ticker",
+                "research_run_id",
+                "verdict_status",
+                "decision_grade_status",
+            } <= run_columns:
+                return set()
             live_cache_since = now - timedelta(
                 seconds=botcheck.RESEARCH_DOSSIER_MAX_AGE_SECONDS,
             )
@@ -324,7 +391,6 @@ def _live_cache_eligible_proofs(
                 tuple[str, str, str],
                 list[dict[str, object]],
             ] = {}
-            counter_directions_by_proof: dict[tuple[str, str, str], set[str]] = {}
             cache_evidence_ts_sql = """
                 CASE
                     WHEN inserted_at IS NOT NULL
@@ -384,28 +450,30 @@ def _live_cache_eligible_proofs(
                             "extraction_confidence": row["extraction_confidence"],
                         }
                     )
-                    claim_type = str(row["claim_type"] or "").strip().lower()
-                    direction = str(row["supports_direction"] or "").strip().lower()
-                    if claim_type in {"disconfirming", "contradiction_check"}:
-                        counter_directions_by_proof.setdefault(proof, set()).add(direction)
             vetted_proofs: set[tuple[str, str, str]] = set()
             side_by_proof: dict[tuple[str, str, str], str] = {}
             for row in conn.execute(
                 """
                 SELECT
-                    market_ticker,
-                    last_research_run_id,
-                    last_contract_fingerprint,
-                    last_force_side,
-                    market_status,
-                    market_close_time
-                FROM research_dossiers
-                WHERE last_verdict_status = 'decision_grade_candidate'
-                  AND last_force_side IN ('yes', 'no')
-                  AND last_estimated_probability IS NOT NULL
-                  AND last_confidence IS NOT NULL
-                  AND last_market_price IS NOT NULL
-                  AND last_estimated_edge IS NOT NULL
+                    d.market_ticker,
+                    d.last_research_run_id,
+                    d.last_contract_fingerprint,
+                    d.last_force_side,
+                    d.market_status,
+                    d.market_close_time
+                FROM research_dossiers AS d
+                JOIN research_runs AS r
+                  ON r.market_ticker = d.market_ticker
+                 AND r.research_run_id = d.last_research_run_id
+                WHERE d.last_verdict_status = 'decision_grade_candidate'
+                  AND d.last_decision_grade_status = 'decision_grade_candidate'
+                  AND r.verdict_status = 'decision_grade_candidate'
+                  AND r.decision_grade_status = 'decision_grade_candidate'
+                  AND d.last_force_side IN ('yes', 'no')
+                  AND d.last_estimated_probability IS NOT NULL
+                  AND d.last_confidence IS NOT NULL
+                  AND d.last_market_price IS NOT NULL
+                  AND d.last_estimated_edge IS NOT NULL
                 """
             ):
                 eligibility = evaluate_research_market_eligibility(
@@ -436,17 +504,55 @@ def _live_cache_eligible_proofs(
         and has_reliable_research_source_path(evidence_by_proof.get(proof, []))
         and _proof_has_countercase(
             side_by_proof.get(proof, ""),
-            counter_directions_by_proof.get(proof, set()),
+            evidence_by_proof.get(proof, []),
         )
     }
 
 
-def _proof_has_countercase(side: str, counter_directions: set[str]) -> bool:
+def _proof_has_countercase(
+    side: str,
+    evidence: list[dict[str, object]],
+) -> bool:
     normalized_side = side.strip().lower()
     if normalized_side not in {"yes", "no"}:
         return False
     opposite = "no" if normalized_side == "yes" else "yes"
-    return bool(counter_directions & {opposite, "neutral"})
+    structured_support_metrics = {
+        str(item.get("metric_name") or "").strip()
+        for item in evidence
+        if str(item.get("supports_direction") or "").strip().lower()
+        == normalized_side
+        and has_reliable_research_source_path([item])
+    }
+    for item in evidence:
+        claim_type = str(item.get("claim_type") or "").strip().lower()
+        if claim_type not in {"disconfirming", "contradiction_check"}:
+            continue
+        direction = str(item.get("supports_direction") or "").strip().lower()
+        if direction in {opposite, "neutral"}:
+            return True
+        source_class = str(item.get("source_class") or "").strip().lower()
+        metric_name = str(item.get("metric_name") or "").strip()
+        if (
+            direction == normalized_side
+            and source_class in OFFICIAL_RESEARCH_SOURCE_CLASSES
+            and metric_name in STRUCTURED_OFFICIAL_RESEARCH_METRICS
+            and metric_name in structured_support_metrics
+            and _optional_float(item.get("supports_confidence")) >= 0.8
+            and (
+                item.get("metric_value") is not None
+                or _optional_float(item.get("extraction_confidence")) >= 0.8
+            )
+        ):
+            return True
+    return False
+
+
+def _optional_float(value: object) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def evaluate_research_rollout(
@@ -500,6 +606,7 @@ def evaluate_research_rollout(
     )
     live_cache_eligible_proofs = _live_cache_eligible_proofs(repo_root, now=now)
     matched_research_proofs = active_decision_grade_proofs & live_cache_eligible_proofs
+    latest_dossier_proofs = _latest_dossier_proofs(repo_root)
     proven_researched_tickers = {
         ticker for ticker, _run_id, _fingerprint in matched_research_proofs
     }
@@ -560,11 +667,12 @@ def evaluate_research_rollout(
     active_decision_grade_tickers = {
         ticker for ticker, _run_id, _fingerprint in active_decision_grade_proofs
     }
+    terminal_success_proofs = (
+        successful_research_proofs - decision_grade_research_proofs
+    ) & latest_dossier_proofs
     terminal_success_tickers = {
         ticker
-        for ticker, _run_id, _fingerprint in (
-            successful_research_proofs - decision_grade_research_proofs
-        )
+        for ticker, _run_id, _fingerprint in terminal_success_proofs
     }
     unexcused_ineligible_tickers = (
         decision_grade_tickers
