@@ -14,6 +14,7 @@ from kalshi import KalshiMarket
 from tasks.blend_task import TradeCandidate
 from tasks.research_dossier import ResearchDossierSnapshot
 from tasks.research_paper_admission import (
+    ResearchBackedBlendStore,
     ResearchPaperAdmissionBridge,
     ResearchPaperSignal,
     _has_counter_query,
@@ -392,7 +393,7 @@ async def test_research_admission_claim_routes_same_proof_once() -> None:
     logger = SpyLogger()
     routed = []
 
-    async def route_analysis(analysis):
+    async def route_analysis(analysis, _store):
         routed.append(analysis)
         return SimpleNamespace(ready=True, enqueued=True, trade_blocked_reason=None)
 
@@ -485,7 +486,7 @@ async def test_research_admission_blocks_cross_ticker_result_before_dossier_load
     logger = SpyLogger()
     route_calls = 0
 
-    async def route_analysis(_analysis):
+    async def route_analysis(_analysis, _store):
         nonlocal route_calls
         route_calls += 1
 
@@ -575,7 +576,7 @@ async def test_research_admission_route_failure_is_not_retried() -> None:
     store = FakeResearchStore(snapshot=_snapshot(), evidence=_valid_evidence())
     route_calls = 0
 
-    async def route_analysis(_analysis):
+    async def route_analysis(_analysis, _store):
         nonlocal route_calls
         route_calls += 1
         raise RuntimeError("route failed")
@@ -716,8 +717,8 @@ async def test_decision_grade_dossier_uses_injected_blend_route() -> None:
     logger = SpyLogger()
     routed = []
 
-    async def route_analysis(analysis):
-        routed.append(analysis)
+    async def route_analysis(analysis, store):
+        routed.append((analysis, store))
         return SimpleNamespace(
             ready=True,
             enqueued=True,
@@ -750,8 +751,11 @@ async def test_decision_grade_dossier_uses_injected_blend_route() -> None:
     assert result.enqueued is True
     assert queue.qsize() == 0
     assert len(routed) == 1
-    assert routed[0].signal_type == "research_decision_grade"
-    assert routed[0].signal_meta["research_admission_status"] == "decision_grade_candidate"
+    analysis, store = routed[0]
+    assert analysis.signal_type == "research_decision_grade"
+    assert analysis.signal_meta["research_admission_status"] == "decision_grade_candidate"
+    assert isinstance(store, ResearchBackedBlendStore)
+    assert store.signal.research_run_id == "rr-decision"
 
 
 @pytest.mark.asyncio
@@ -913,7 +917,7 @@ async def test_decision_grade_dossier_requires_current_market_price() -> None:
     logger = SpyLogger()
     routed = []
 
-    async def route_analysis(analysis):
+    async def route_analysis(analysis, _store):
         routed.append(analysis)
         return SimpleNamespace(
             ready=True,
@@ -956,7 +960,7 @@ async def test_decision_grade_dossier_recomputes_edge_against_current_market_pri
     logger = SpyLogger()
     routed = []
 
-    async def route_analysis(analysis):
+    async def route_analysis(analysis, _store):
         routed.append(analysis)
         return SimpleNamespace(
             ready=True,

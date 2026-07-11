@@ -1580,6 +1580,41 @@ def _empty_source_hint_diagnostics(
     )
 
 
+@pytest.mark.asyncio
+async def test_research_analysis_route_uses_validated_store_without_feed_side_effects():
+    bot = _make_bot_stub()
+    bot._calibration_task = MagicMock()
+    analysis = _analysis_for_evidence()
+    analysis.news_item = None
+    research_store = MagicMock()
+    blend_result = SimpleNamespace(
+        ready=True,
+        enqueued=True,
+        trade_blocked_reason=None,
+    )
+    research_blend_task = MagicMock()
+    research_blend_task.process_fast_lane_result = AsyncMock(
+        return_value=blend_result,
+    )
+
+    with patch("main.BlendTask", return_value=research_blend_task) as blend_task_cls:
+        result = await bot._route_research_analysis_through_blend(
+            analysis,
+            research_store,
+        )
+
+    assert result is blend_result
+    blend_task_cls.assert_called_once()
+    kwargs = blend_task_cls.call_args.kwargs
+    assert kwargs["trading_queue"] is bot._trading_queue
+    assert kwargs["store"] is research_store
+    assert kwargs["calibration"] is bot._calibration_task
+    assert kwargs["is_paper_mode"] is True
+    research_blend_task.process_fast_lane_result.assert_awaited_once_with(analysis)
+    assert bot._evidence_queue.empty()
+    bot.ws.watch.assert_not_called()
+
+
 def test_signal_to_evidence_uses_deterministic_id():
     news = _make_news()
     news.published = datetime(2026, 4, 20, 1, 2, 3, tzinfo=timezone.utc)

@@ -256,7 +256,10 @@ class ResearchPaperAdmissionBridge:
         logger: Any = trade_log,
         now: Callable[[], datetime] | None = None,
         signal_provider: ResearchPaperSignalProvider | None = None,
-        route_analysis: Callable[[SignalAnalysis], Awaitable[Any]] | None = None,
+        route_analysis: (
+            Callable[[SignalAnalysis, ResearchBackedBlendStore], Awaitable[Any]]
+            | None
+        ) = None,
     ) -> None:
         self.provider = signal_provider or ResearchPaperSignalProvider(
             research_store,
@@ -356,12 +359,13 @@ class ResearchPaperAdmissionBridge:
             )
         try:
             _emit_research_opportunity(self.logger, market, current_signal, analysis)
+            research_store = ResearchBackedBlendStore(current_signal)
             if self._route_analysis is not None:
-                blend_result = await self._route_analysis(analysis)
+                blend_result = await self._route_analysis(analysis, research_store)
             else:
                 task = BlendTask(
                     trading_queue=self.trading_queue,
-                    store=ResearchBackedBlendStore(current_signal),
+                    store=research_store,
                     logger=self.logger,
                     is_paper_mode=True,
                     now=self._now,

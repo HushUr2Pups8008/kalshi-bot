@@ -74,7 +74,10 @@ from analysis.research_gate import (
 )
 from tasks.stats.keyword_stats import KeywordStats
 from tasks.research_dossier import default_store as default_research_dossier_store
-from tasks.research_paper_admission import ResearchPaperAdmissionBridge
+from tasks.research_paper_admission import (
+    ResearchBackedBlendStore,
+    ResearchPaperAdmissionBridge,
+)
 from tasks.research_prewarm_task import ResearchPrewarmTask, market_has_actionable_price
 from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
@@ -847,7 +850,7 @@ class TradingBot:
             trading_queue=self._trading_queue,
             logger=trade_log,
             now=lambda: datetime.now(timezone.utc),
-            route_analysis=self._route_analysis_through_blend,
+            route_analysis=self._route_research_analysis_through_blend,
         )
         self._accumulation_task = AccumulationTask()
         self._structural_task = StructuralTask()
@@ -2185,10 +2188,11 @@ class TradingBot:
         *,
         accumulate: bool = True,
         watch: bool = True,
+        blend_task: BlendTask | None = None,
     ):
         """Submit a prepared signal through the canonical blend/readiness path."""
-        evidence = _signal_to_evidence(analysis)
         if accumulate:
+            evidence = _signal_to_evidence(analysis)
             analysis.signal_meta = {
                 **(analysis.signal_meta or {}),
                 "trigger_evidence_id": evidence.evidence_id,
@@ -2206,10 +2210,34 @@ class TradingBot:
                     "[ACCUMULATION] evidence_queue_full ticker=%s — evidence dropped",
                     analysis.market.ticker,
                 )
-        blend_result = await self._blend_task.process_fast_lane_result(analysis)
+        task = blend_task or self._blend_task
+        blend_result = await task.process_fast_lane_result(analysis)
         if watch:
             self.ws.watch([analysis.market.ticker])
         return blend_result
+
+    async def _route_research_analysis_through_blend(
+        self,
+        analysis: SignalAnalysis,
+        store: ResearchBackedBlendStore,
+    ):
+        """Route research proof through blend without feed-only side effects."""
+        task = BlendTask(
+            trading_queue=self._trading_queue,
+            store=store,
+            calibration=self._calibration_task,
+            logger=trade_log,
+            is_paper_mode=True,
+            open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_pct(
+                self.paper
+            ),
+        )
+        return await self._route_analysis_through_blend(
+            analysis,
+            accumulate=False,
+            watch=False,
+            blend_task=task,
+        )
 
     # ── Fade tweet pipeline ────────────────────────────────────────────────────
 
