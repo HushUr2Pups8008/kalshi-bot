@@ -504,6 +504,7 @@ async def test_research_dossier_persists_and_returns_recent_evidence(tmp_path):
         supports_direction="yes",
         supports_confidence=0.9,
         contract_fingerprint="contract-v1",
+        aggregator_url="https://news.google.com/rss/articles/opec-example",
     )
 
     await store.add_evidence("KXIRANCRUDE-26JUL13-T3.8", "run-1", evidence)
@@ -514,6 +515,9 @@ async def test_research_dossier_persists_and_returns_recent_evidence(tmp_path):
     assert rows[0].source_class == "resolution_source"
     assert rows[0].source_url == "https://opec.org/momr"
     assert rows[0].contract_fingerprint == "contract-v1"
+    assert rows[0].aggregator_url == (
+        "https://news.google.com/rss/articles/opec-example"
+    )
 
 
 @pytest.mark.asyncio

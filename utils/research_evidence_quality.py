@@ -77,6 +77,7 @@ def has_reliable_research_source_path(
                 _field(item, "source_url"),
             )
         )
+        and source_key != "google.com"
     }
     normalized_classes = _normalized_nonempty([str(_field(item, "source_class") or "") for item in evidence])
     return (

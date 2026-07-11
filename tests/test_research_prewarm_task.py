@@ -180,7 +180,7 @@ async def test_prewarm_process_market_persists_research_run_and_evidence(tmp_pat
 
     result = await task.process_market(_market())
 
-    assert result.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE.value
+    assert result.status == ResearchStatus.NEEDS_RESEARCH.value
     assert result.attempted is True
     assert result.evidence_count == 2
     with sqlite3.connect(db_path) as conn:
@@ -195,7 +195,7 @@ async def test_prewarm_process_market_persists_research_run_and_evidence(tmp_pat
         ).fetchone()
         evidence_count = conn.execute("SELECT COUNT(*) FROM research_evidence").fetchone()
     assert dossier == (
-        ResearchStatus.NEEDS_COUNTER_EVIDENCE.value,
+        ResearchStatus.NEEDS_RESEARCH.value,
         None,
         "Will the researched event resolve yes?",
     )

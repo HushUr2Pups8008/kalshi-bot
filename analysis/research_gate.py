@@ -75,6 +75,7 @@ class ResearchEvidence:
     extraction_confidence: float | None = None
     inserted_at: str | None = None
     contract_fingerprint: str | None = None
+    aggregator_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -281,12 +282,20 @@ def _domains_match(actual: str, expected: str) -> bool:
     return bool(actual and expected and (actual == expected or actual.endswith(f".{expected}")))
 
 
-def _classify_evidence_source(query: ResearchQuery, source_name: str, source_url: str) -> str:
+def _classify_evidence_source(
+    query: ResearchQuery,
+    source_name: str,
+    source_url: str,
+    *,
+    allow_official_name_match: bool = True,
+) -> str:
     query_site = _query_site_domain(query.query)
     url_domain = _domain_from_url(source_url)
     name_domain = _source_domain(source_name)
     if query.source_class in {"resolution_source", "official_primary"} and query_site:
-        if _domains_match(url_domain, query_site) or _domains_match(name_domain, query_site):
+        if _domains_match(url_domain, query_site) or (
+            allow_official_name_match and _domains_match(name_domain, query_site)
+        ):
             return query.source_class
     official_domains = {
         "api.eia.gov",
@@ -297,7 +306,8 @@ def _classify_evidence_source(query: ResearchQuery, source_name: str, source_url
         "whitehouse.gov",
     }
     if any(
-        _domains_match(url_domain, domain) or _domains_match(name_domain, domain)
+        _domains_match(url_domain, domain)
+        or (allow_official_name_match and _domains_match(name_domain, domain))
         for domain in official_domains
     ):
         return "official_primary"
@@ -422,7 +432,7 @@ def _dedupe_queries(queries: Iterable[ResearchQuery]) -> list[ResearchQuery]:
 
 
 def _evidence_identity(item: ResearchEvidence) -> str:
-    base = item.source_url or hashlib.sha256(
+    base = item.aggregator_url or item.source_url or hashlib.sha256(
         f"{item.source_name}|{item.title}|{item.snippet}".encode("utf-8")
     ).hexdigest()
     if item.metric_name:
@@ -1436,9 +1446,14 @@ def _decision_grade_block(
     skip_reason: str,
     summary: str,
 ) -> ResearchVerdict:
+    status = (
+        ResearchStatus.NEEDS_RESEARCH
+        if skip_reason == "no_reliable_source_path"
+        else ResearchStatus.NEEDS_COUNTER_EVIDENCE
+    )
     return replace(
         verdict,
-        status=ResearchStatus.NEEDS_COUNTER_EVIDENCE,
+        status=status,
         summary=summary,
         skip_reason=skip_reason,
         force_side=None,
@@ -2363,9 +2378,20 @@ def _has_reliable_non_pending_source_path(
         for item in non_pending
     ):
         return True
-    urls = {item.source_url for item in non_pending if item.source_url}
+    source_keys = {
+        source_key
+        for item in non_pending
+        if (
+            source_key := research_source_key(
+                item.source_class,
+                item.source_name,
+                item.source_url,
+            )
+        )
+        and source_key != "google.com"
+    }
     return (
-        len(urls) >= 2
+        len(source_keys) >= 2
         and any(_is_settlement_evidence(item) for item in non_pending)
     )
 
@@ -2706,7 +2732,16 @@ def _rss_search(query: ResearchQuery, *, timeout: float = 5.0, limit: int = 3) -
     for item in root.findall(".//item")[:limit]:
         title = html.unescape(_clean(item.findtext("title")))
         link = html.unescape(_clean(item.findtext("link")))
+        source_element = item.find("source")
         source = item.findtext("source") or _domain_from_url(link) or "Google News"
+        publisher_url = html.unescape(
+            _clean(source_element.get("url") if source_element is not None else "")
+        )
+        classification_source_name = _clean(source)
+        link_domain = _domain_from_url(link)
+        is_aggregator_link = link_domain in {"google.com", "news.google.com"}
+        classification_url = publisher_url if publisher_url and is_aggregator_link else link
+        canonical_url = publisher_url if publisher_url and is_aggregator_link else link
         description = re.sub(r"<[^>]+>", " ", item.findtext("description") or "")
         snippet = html.unescape(_clean(description))
         direction, confidence = _rss_direction_for_query_result(
@@ -2716,9 +2751,14 @@ def _rss_search(query: ResearchQuery, *, timeout: float = 5.0, limit: int = 3) -
         )
         out.append(
             ResearchEvidence(
-                source_class=_classify_evidence_source(query, _clean(source), link),
+                source_class=_classify_evidence_source(
+                    query,
+                    classification_source_name,
+                    classification_url,
+                    allow_official_name_match=False,
+                ),
                 source_name=_clean(source),
-                source_url=link,
+                source_url=canonical_url,
                 title=title,
                 snippet=snippet[:500],
                 claim_type=query.query_intent,
@@ -2726,6 +2766,7 @@ def _rss_search(query: ResearchQuery, *, timeout: float = 5.0, limit: int = 3) -
                 supports_confidence=confidence,
                 published_at=_clean(item.findtext("pubDate")) or None,
                 retrieved_at=retrieved_at,
+                aggregator_url=(link if publisher_url and is_aggregator_link else None),
             )
         )
     return out
@@ -5027,7 +5068,7 @@ async def run_research_gate(
 
         direct_domains = {
             _domain_from_url(item.source_url)
-            for item in evidence
+            for item in fresh_evidence
             if item.source_class in {"resolution_source", "official_primary"}
             and item.source_url
         }
