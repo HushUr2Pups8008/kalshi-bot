@@ -27,7 +27,7 @@ def _probability_cents(value: Any) -> int | None:
         return None
     try:
         probability = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
         return None
@@ -173,8 +173,14 @@ def normalize_polymarket_market(payload: dict[str, Any]) -> PolymarketMarket:
     else:
         yes_ask_cents = _price_cents(by_name["yes"])
         no_ask_cents = _price_cents(by_name["no"])
-        price_source = "polymarket_public" if yes_ask_cents is not None or no_ask_cents is not None else ""
-        price_method = "pm_named_outcomes_v1" if price_source else ""
+        if yes_ask_cents is None or no_ask_cents is None:
+            yes_ask_cents = None
+            no_ask_cents = None
+            price_source = ""
+            price_method = ""
+        else:
+            price_source = "polymarket_public"
+            price_method = "pm_named_outcomes_v1"
 
     return PolymarketMarket(
         venue=Venue.POLYMARKET_US,

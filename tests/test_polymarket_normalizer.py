@@ -175,6 +175,34 @@ def test_invalid_market_side_quote_values_are_unpriced(invalid_value):
     assert market.no_ask_cents is None
 
 
+@pytest.mark.parametrize("surface", ["book", "sides", "outcomes"])
+def test_oversized_probability_values_are_unpriced(surface):
+    huge = 10**10000
+    if surface == "outcomes":
+        payload = {
+            "slug": "huge-outcome",
+            "title": "Huge outcome?",
+            "status": "open",
+            "outcomes": [
+                {"name": "Yes", "bestAsk": {"value": huge}},
+                {"name": "No", "bestAsk": {"value": 0.5}},
+            ],
+        }
+    else:
+        payload = _long_book_payload()
+        if surface == "book":
+            payload["bestBidQuote"] = {"value": huge}
+        else:
+            payload.pop("bestBidQuote")
+            payload.pop("bestAskQuote")
+            payload["marketSides"][0]["quote"] = {"value": huge}
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.yes_ask_cents is None
+    assert market.no_ask_cents is None
+
+
 def test_closed_public_gateway_market_is_not_tradeable():
     payload = {
         "id": "123",
@@ -225,7 +253,9 @@ def test_missing_best_ask_is_not_tradeable():
     market = normalize_polymarket_market(payload)
 
     assert market.yes_ask_cents is None
-    assert market.no_ask_cents == 58
+    assert market.no_ask_cents is None
+    assert market.price_source == ""
+    assert market.price_method == ""
     assert not market.is_tradeable()
 
 
