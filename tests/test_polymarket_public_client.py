@@ -45,18 +45,18 @@ def test_get_market_settlement_calls_slug_endpoint():
     )
 
 
-def test_get_market_settlement_encodes_slug_as_one_path_segment():
-    slug = "will/example?region=us#result"
+@pytest.mark.parametrize(
+    "slug",
+    ["will/example", "will?region=us", "will#result", ".", ".."],
+)
+def test_get_market_settlement_rejects_noncanonical_slug(slug):
     client = PolymarketPublicClient(base_url="https://gateway.polymarket.us")
-    client._session.request = MagicMock(
-        return_value=_response({"slug": slug, "settlement": "1"})
-    )
+    client._session.request = MagicMock()
 
-    client.get_market_settlement(slug)
+    with pytest.raises(ValueError, match="invalid canonical slug"):
+        client.get_market_settlement(slug)
 
-    assert client._session.request.call_args.args[1].endswith(
-        "/v1/markets/will%2Fexample%3Fregion%3Dus%23result/settlement"
-    )
+    client._session.request.assert_not_called()
 
 
 def test_get_market_settlement_resolves_numeric_id_to_slug():
