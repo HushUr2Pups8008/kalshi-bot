@@ -62,6 +62,8 @@ def test_normalizes_binary_market_payload():
     assert market.yes_price == 42
     assert market.no_price == 59
     assert market.price_available is True
+    assert market.price_source == "polymarket_public"
+    assert market.price_method == "pm_named_outcomes_v1"
 
 
 def _long_book_payload() -> dict:
@@ -106,7 +108,19 @@ def test_market_side_quotes_are_oriented_fallback_without_top_level_book():
     assert market.yes_ask_cents == 13
     assert market.no_ask_cents == 88
     assert market.price_source == "polymarket_public"
-    assert market.price_method == "pm_market_sides_quote_v1"
+    assert market.price_method == "pm_named_sides_v1"
+
+
+def test_present_null_top_level_book_is_unpriced():
+    payload = _long_book_payload()
+    payload["bestBidQuote"] = None
+    payload["bestAskQuote"] = None
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.yes_ask_cents is None
+    assert market.no_ask_cents is None
+    assert market.price_method == ""
 
 
 def test_string_outcomes_without_authoritative_book_are_unpriced():

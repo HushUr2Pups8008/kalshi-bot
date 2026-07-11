@@ -116,9 +116,10 @@ def _long_book_prices(payload: dict[str, Any]) -> tuple[int, int, str] | None:
     if sides is None:
         return None
 
+    has_top_book = "bestBidQuote" in payload or "bestAskQuote" in payload
     top_bid = payload.get("bestBidQuote")
     top_ask = payload.get("bestAskQuote")
-    if top_bid is not None or top_ask is not None:
+    if has_top_book:
         if top_bid is None or top_ask is None:
             return None
         yes_bid = _quote_cents(top_bid)
@@ -132,7 +133,7 @@ def _long_book_prices(payload: dict[str, Any]) -> tuple[int, int, str] | None:
     no_ask = _quote_cents(short_side.get("quote"))
     if yes_ask is None or no_ask is None:
         return None
-    return yes_ask, no_ask, "pm_market_sides_quote_v1"
+    return yes_ask, no_ask, "pm_named_sides_v1"
 
 
 def _status(payload: dict[str, Any]) -> str:
@@ -173,7 +174,7 @@ def normalize_polymarket_market(payload: dict[str, Any]) -> PolymarketMarket:
         yes_ask_cents = _price_cents(by_name["yes"])
         no_ask_cents = _price_cents(by_name["no"])
         price_source = "polymarket_public" if yes_ask_cents is not None or no_ask_cents is not None else ""
-        price_method = "pm_named_outcome_ask_v1" if price_source else ""
+        price_method = "pm_named_outcomes_v1" if price_source else ""
 
     return PolymarketMarket(
         venue=Venue.POLYMARKET_US,
