@@ -1501,6 +1501,158 @@ async def test_due_research_tasks_prioritize_actionable_source_work_before_pendi
 
 
 @pytest.mark.asyncio
+async def test_due_research_tasks_prioritize_active_retry_before_pending_and_terminal(
+    tmp_path,
+):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    for ticker, status, skip_reason in (
+        (
+            "KXACTIVE-RETRY",
+            ResearchStatus.CONTINUE_RESEARCHING.value,
+            "research_timeout",
+        ),
+        (
+            "KXPENDING-OFFICIAL",
+            ResearchStatus.NEEDS_RESEARCH.value,
+            "official_data_pending",
+        ),
+        (
+            "KXTERMINAL-SOURCE",
+            ResearchStatus.UNTRADEABLE.value,
+            "no_reliable_source_path",
+        ),
+    ):
+        await store.record_research_run(
+            ticker,
+            f"run-{ticker}",
+            trigger_headline="Research update",
+            trigger_source="research_prewarm",
+            attempted=True,
+            summary="Research needs another pass.",
+            verdict_status=status,
+            skip_reason=skip_reason,
+            decision_grade_status=status,
+        )
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-30T08:00:00.000Z',
+                cooldown_until_ts = NULL
+            """
+        )
+
+    assert store.get_due_research_task_tickers(
+        limit=3,
+        now=datetime(2026, 6, 30, 12, tzinfo=timezone.utc),
+        target_cooldown_seconds=0.0,
+    ) == [
+        "KXACTIVE-RETRY",
+        "KXPENDING-OFFICIAL",
+        "KXTERMINAL-SOURCE",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_due_research_tasks_prioritize_recent_active_retries(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    for ticker, skip_reason in (
+        ("KXACTIVE-OLD", "missing_counter_evidence"),
+        ("KXACTIVE-RECENT", "research_timeout"),
+    ):
+        await store.record_research_run(
+            ticker,
+            f"run-{ticker}",
+            trigger_headline="Research timed out",
+            trigger_source="research_prewarm",
+            attempted=True,
+            summary="Research needs another pass.",
+            verdict_status=ResearchStatus.CONTINUE_RESEARCHING.value,
+            skip_reason=skip_reason,
+            decision_grade_status=ResearchStatus.CONTINUE_RESEARCHING.value,
+        )
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-01T08:00:00.000Z',
+                cooldown_until_ts = NULL
+            WHERE market_ticker = 'KXACTIVE-OLD'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-30T08:00:00.000Z',
+                cooldown_until_ts = NULL
+            WHERE market_ticker = 'KXACTIVE-RECENT'
+            """
+        )
+
+    assert store.get_due_research_task_tickers(
+        limit=2,
+        now=datetime(2026, 6, 30, 12, tzinfo=timezone.utc),
+        target_cooldown_seconds=0.0,
+    ) == ["KXACTIVE-RECENT", "KXACTIVE-OLD"]
+
+
+@pytest.mark.asyncio
+async def test_due_research_tasks_keep_actionable_source_work_before_active_retries(
+    tmp_path,
+):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    for ticker, status, skip_reason in (
+        (
+            "KXACTIONABLE-SOURCE",
+            ResearchStatus.NEEDS_RESEARCH.value,
+            "missing_resolution_source",
+        ),
+        (
+            "KXACTIVE-RETRY",
+            ResearchStatus.CONTINUE_RESEARCHING.value,
+            "research_timeout",
+        ),
+    ):
+        await store.record_research_run(
+            ticker,
+            f"run-{ticker}",
+            trigger_headline="Research update",
+            trigger_source="research_prewarm",
+            attempted=True,
+            summary="Research needs another pass.",
+            verdict_status=status,
+            skip_reason=skip_reason,
+            decision_grade_status=status,
+        )
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-30T08:00:00.000Z',
+                cooldown_until_ts = NULL
+            """
+        )
+
+    assert store.get_due_research_task_tickers(
+        limit=2,
+        now=datetime(2026, 6, 30, 12, tzinfo=timezone.utc),
+        target_cooldown_seconds=0.0,
+    ) == ["KXACTIONABLE-SOURCE", "KXACTIVE-RETRY"]
+
+
+@pytest.mark.asyncio
 async def test_due_research_tasks_include_timeout_exhausted_terminal_tasks(tmp_path):
     db_path = tmp_path / "research_dossier.db"
     store = ResearchDossierStore(db_path)
