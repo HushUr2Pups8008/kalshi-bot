@@ -109,6 +109,13 @@ def _poly_snapshot_mark_cents(market_snapshot, side: str):
         snap = json.loads(market_snapshot) if isinstance(market_snapshot, str) else None
         if not isinstance(snap, dict):
             return None
+        safe_methods = {
+            "pm_long_book_v1",
+            "pm_named_sides_v1",
+            "pm_named_outcomes_v1",
+        }
+        if snap.get("price_method") not in safe_methods:
+            return None
         yes_ask = snap.get("yes_ask_cents")
         no_ask = snap.get("no_ask_cents")
         if yes_ask is None and no_ask is None:

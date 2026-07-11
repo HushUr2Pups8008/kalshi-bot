@@ -158,7 +158,11 @@ def test_poly_marking_falls_back_to_snapshot_when_live_absent(tmp_path: Path):
     db = tmp_path / "paper_trades.db"
     # Snapshot asks: yes=60, no=55 -> _poly_held_price_cents(yes) = min(60, 45)
     # = 45c -> 5 contracts -> $2.25 marked value.
-    snap = {"yes_ask_cents": 60, "no_ask_cents": 55}
+    snap = {
+        "yes_ask_cents": 60,
+        "no_ask_cents": 55,
+        "price_method": "pm_long_book_v1",
+    }
     _make_db(db, pm_rows=[_poly_row("p", "pm-absent-slug", "yes", 3.00, snap)])
 
     class _FakePoly:
@@ -185,6 +189,65 @@ def test_poly_marking_falls_back_to_snapshot_when_live_absent(tmp_path: Path):
     # The PM row's cost is NOT in unknown_cost (it is priced, just from snapshot);
     # unknown_cost holds only the two stubbed Kalshi rows (1.50 + 2.00).
     assert marks["unknown_cost"] == 3.50
+
+
+def test_unversioned_polymarket_snapshot_is_not_used(tmp_path: Path):
+    """Legacy snapshots have unknown side orientation and must fail closed."""
+    db = tmp_path / "paper_trades.db"
+    snapshot = {"yes_ask_cents": 88, "no_ask_cents": 13}
+    _make_db(db, pm_rows=[_poly_row("p", "pm-legacy", "yes", 3.00, snapshot)])
+
+    class _FakePoly:
+        def get_market(self, ticker):
+            raise RuntimeError("market not found")
+
+    with patch("polymarket.public_client.PolymarketPublicClient", _FakePoly), patch(
+        "kalshi.rest_client.KalshiRestClient", _StubKalshiAllFail
+    ):
+        marks = compute_open_position_marks(db)
+
+    assert marks is not None
+    assert marks["snapshot_fallback_count"] == 0
+    assert marks["priced_count"] == 0
+    assert marks["marked_value"] == 0.0
+
+
+def test_versioned_polymarket_snapshot_remains_usable(tmp_path: Path):
+    """Audited snapshot methods remain available when the live feed is absent."""
+    db = tmp_path / "paper_trades.db"
+    safe_methods = (
+        "pm_long_book_v1",
+        "pm_named_sides_v1",
+        "pm_named_outcomes_v1",
+    )
+    rows = [
+        _poly_row(
+            f"p-{index}",
+            f"pm-safe-{index}",
+            "yes",
+            0.65,
+            {
+                "yes_ask_cents": 13,
+                "no_ask_cents": 88,
+                "price_method": method,
+            },
+        )
+        for index, method in enumerate(safe_methods)
+    ]
+    _make_db(db, pm_rows=rows)
+
+    class _FakePoly:
+        def get_market(self, ticker):
+            raise RuntimeError("market not found")
+
+    with patch("polymarket.public_client.PolymarketPublicClient", _FakePoly), patch(
+        "kalshi.rest_client.KalshiRestClient", _StubKalshiAllFail
+    ):
+        marks = compute_open_position_marks(db)
+
+    assert marks is not None
+    assert marks["snapshot_fallback_count"] == len(safe_methods)
+    assert marks["priced_count"] == len(safe_methods)
 
 
 def test_poly_marking_missing_snapshot_stays_unpriced(tmp_path: Path):
