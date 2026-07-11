@@ -107,6 +107,69 @@ def _latest_active_boot_since(bot_log: Path | None, *, now: datetime) -> datetim
     return max(sessions)
 
 
+def _parse_bot_log_ts(line: str) -> datetime | None:
+    prefix = line[:23]
+    try:
+        parsed = datetime.strptime(prefix, "%Y-%m-%d %H:%M:%S,%f")
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc)
+
+
+def _prewarm_cycle_count(bot_log: Path | None, *, since: datetime) -> int:
+    if bot_log is None or not bot_log.exists():
+        return 0
+    count = 0
+    try:
+        with bot_log.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                if "[RESEARCH_PREWARM] cycle" not in line:
+                    continue
+                ts = _parse_bot_log_ts(line)
+                if ts is not None and ts >= since:
+                    count += 1
+    except OSError:
+        return 0
+    return count
+
+
+def _current_bot_process_start(repo_root: Path, *, now: datetime) -> datetime | None:
+    label = os.environ.get("KALSHI_LAUNCHD_LABEL", "com.jake.kalshi-bot")
+    python_path = Path(os.environ.get("KALSHI_PYTHON", repo_root / ".venv/bin/python"))
+    main_path = Path(os.environ.get("KALSHI_MAIN", repo_root / "main.py"))
+    repo_root_resolved = repo_root.resolve()
+    process_paths = (python_path.resolve(), main_path.resolve())
+    if any(repo_root_resolved not in (path, *path.parents) for path in process_paths):
+        return None
+    try:
+        launchd_output = botcheck.launchd_print(label)
+        wrapper_pid = botcheck.launchd_pid(launchd_output)
+        rows = botcheck.process_table()
+    except Exception:
+        return None
+    bots = botcheck._bot_pids(  # noqa: SLF001 - mirrors botcheck boundary logic.
+        rows,
+        launchd_pid=wrapper_pid,
+        python_path=python_path,
+        main_path=main_path,
+    )
+    if not bots:
+        return None
+    return botcheck.process_start_utc(bots[0], now.timestamp())
+
+
+def _prewarm_window_since(
+    signal_since: datetime,
+    active_boot_since: datetime | None,
+    process_started_since: datetime | None,
+) -> datetime:
+    if active_boot_since is not None:
+        return max(signal_since, active_boot_since)
+    if process_started_since is not None:
+        return max(signal_since, process_started_since)
+    return signal_since
+
+
 def _activation_agent(
     repo_root: Path,
     profile_path: Path,
@@ -165,6 +228,9 @@ def _prewarm_quality_agent(
     max_duplicate_ratio: float,
     target_cooldown_seconds: float,
     prewarm_window_since: datetime,
+    prewarm_interval_seconds: float,
+    prewarm_cycle_count: int,
+    now: datetime,
 ) -> ResearchAgentResult:
     prewarm = [
         record
@@ -209,7 +275,19 @@ def _prewarm_quality_agent(
                 + "; ".join(within_cooldown_repeats[:5])
             )
     else:
-        findings.append("no RESEARCH_PREWARM_RESULT rows in workflow window")
+        warmup_age_seconds = max(
+            0.0,
+            (now - prewarm_window_since).total_seconds(),
+        )
+        warmup_active = warmup_age_seconds < prewarm_interval_seconds
+        if not warmup_active and prewarm_cycle_count <= 0:
+            findings.append("no RESEARCH_PREWARM_RESULT rows in workflow window")
+    if tickers:
+        warmup_age_seconds = max(
+            0.0,
+            (now - prewarm_window_since).total_seconds(),
+        )
+        warmup_active = False
     if synthetic:
         findings.append(f"synthetic/probe prewarm tickers observed: {len(synthetic)}")
     if non_kalshi:
@@ -227,6 +305,10 @@ def _prewarm_quality_agent(
             "duplicate_ratio": round(duplicate_ratio, 4),
             "max_duplicate_ratio": max_duplicate_ratio,
             "target_cooldown_seconds": target_cooldown_seconds,
+            "prewarm_interval_seconds": prewarm_interval_seconds,
+            "prewarm_cycle_count": prewarm_cycle_count,
+            "prewarm_warmup_active": warmup_active,
+            "prewarm_window_age_seconds": round(warmup_age_seconds, 3),
             "within_cooldown_repeats": len(within_cooldown_repeats),
             "status_counts": dict(status_counts),
             "prewarm_window_since": prewarm_window_since.isoformat(),
@@ -355,10 +437,17 @@ def evaluate_research_multi_agent_workflow(
         window_hours=window_hours,
     )
     active_boot_since = _latest_active_boot_since(bot_log, now=now)
-    prewarm_window_since = max(
-        value for value in (signal_stats.since, active_boot_since) if value is not None
+    process_started_since = _current_bot_process_start(repo_root, now=now)
+    prewarm_window_since = _prewarm_window_since(
+        signal_stats.since,
+        active_boot_since,
+        process_started_since,
     )
     records = _trade_records_in_window(trades_log, since=prewarm_window_since)
+    prewarm_cycle_count = _prewarm_cycle_count(
+        bot_log,
+        since=prewarm_window_since,
+    )
     cooldown_raw, _cooldown_source = botcheck._research_env_value(  # noqa: SLF001
         repo_root,
         "RESEARCH_PREWARM_TARGET_COOLDOWN_SECONDS",
@@ -368,6 +457,15 @@ def evaluate_research_multi_agent_workflow(
         target_cooldown_seconds = float(cooldown_raw)
     except ValueError:
         target_cooldown_seconds = 1800.0
+    interval_raw, _interval_source = botcheck._research_env_value(  # noqa: SLF001
+        repo_root,
+        "RESEARCH_PREWARM_INTERVAL_SECONDS",
+        "900",
+    )
+    try:
+        prewarm_interval_seconds = max(0.0, float(interval_raw))
+    except ValueError:
+        prewarm_interval_seconds = 900.0
     agents = [
         _activation_agent(repo_root, profile_path, env_path),
         _signal_flow_agent(signal_stats, now=now),
@@ -376,6 +474,9 @@ def evaluate_research_multi_agent_workflow(
             max_duplicate_ratio=max_prewarm_duplicate_ratio,
             target_cooldown_seconds=target_cooldown_seconds,
             prewarm_window_since=prewarm_window_since,
+            prewarm_interval_seconds=prewarm_interval_seconds,
+            prewarm_cycle_count=prewarm_cycle_count,
+            now=now,
         ),
         _dossier_evidence_agent(repo_root, now=now),
         _capital_safety_agent(signal_stats, allow_paper_trades=allow_paper_trades),

@@ -7,6 +7,8 @@ from scripts.research_multi_agent_workflow import (
     evaluate_research_multi_agent_workflow,
     main,
 )
+from scripts import botcheck
+from scripts import research_multi_agent_workflow as workflow_module
 from tests._helpers import write_jsonl
 
 
@@ -223,6 +225,152 @@ def test_research_multi_agent_workflow_ignores_repeats_before_active_boot(tmp_pa
                 "ticker": "KXGDP-26JUL30-T4.0",
                 "research_status": "continue_researching",
             }
+        ],
+    )
+
+    assessment = evaluate_research_multi_agent_workflow(
+        tmp_path,
+        trades,
+        profile_path=tmp_path / "profile.env",
+        bot_log=bot_log,
+        now=NOW,
+        window_hours=1,
+    )
+
+    assert assessment.ok
+    prewarm = assessment.agent("prewarm_quality")
+    assert prewarm.ok
+    assert prewarm.metrics["prewarm_rows"] == 1
+    assert prewarm.metrics["prewarm_window_since"] == "2026-06-28T23:00:00+00:00"
+
+
+def test_research_multi_agent_workflow_allows_prewarm_startup_warmup(tmp_path):
+    _write_profile_and_env(tmp_path)
+    _write_dossier_db(tmp_path)
+    bot_log = tmp_path / "logs" / "app" / "bot.log"
+    _write_bot_log(bot_log)
+    trades = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    _write_trade_log(
+        trades,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-06-28T23:01:00Z",
+                "ticker": "KXGDP-26JUL30-T4.0",
+                "reason": "researched_no_edge",
+                "research_status": "continue_researching",
+            },
+        ],
+    )
+
+    assessment = evaluate_research_multi_agent_workflow(
+        tmp_path,
+        trades,
+        profile_path=tmp_path / "profile.env",
+        bot_log=bot_log,
+        now=datetime(2026, 6, 28, 23, 3, tzinfo=timezone.utc),
+        window_hours=1,
+    )
+
+    assert assessment.ok
+    prewarm = assessment.agent("prewarm_quality")
+    assert prewarm.ok
+    assert prewarm.metrics["prewarm_rows"] == 0
+    assert prewarm.metrics["prewarm_warmup_active"] is True
+    assert prewarm.findings == []
+
+
+def test_research_multi_agent_workflow_accepts_no_spend_prewarm_cycle(tmp_path):
+    _write_profile_and_env(tmp_path)
+    _write_dossier_db(tmp_path)
+    bot_log = tmp_path / "logs" / "app" / "bot.log"
+    _write_bot_log(bot_log)
+    with bot_log.open("a", encoding="utf-8") as fh:
+        fh.write(
+            "2026-06-28 23:05:00,000 UTC INFO     research_prewarm_task "
+            "[RESEARCH_PREWARM] cycle markets=25 results={}\n"
+        )
+    trades = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    _write_trade_log(
+        trades,
+        [
+            {
+                "type": "ANALYSIS_REJECTED",
+                "ts": "2026-06-28T23:10:00Z",
+                "ticker": "KXGDP-26JUL30-T4.0",
+                "reason": "researched_no_edge",
+                "research_status": "continue_researching",
+            },
+        ],
+    )
+
+    assessment = evaluate_research_multi_agent_workflow(
+        tmp_path,
+        trades,
+        profile_path=tmp_path / "profile.env",
+        bot_log=bot_log,
+        now=NOW,
+        window_hours=1,
+    )
+
+    assert assessment.ok
+    prewarm = assessment.agent("prewarm_quality")
+    assert prewarm.ok
+    assert prewarm.metrics["prewarm_rows"] == 0
+    assert prewarm.metrics["prewarm_cycle_count"] == 1
+    assert prewarm.findings == []
+
+
+def test_research_multi_agent_workflow_uses_process_start_without_boot_marker(
+    monkeypatch,
+    tmp_path,
+):
+    _write_profile_and_env(tmp_path)
+    _write_dossier_db(tmp_path)
+    bot_log = tmp_path / "logs" / "app" / "bot.log"
+    bot_log.parent.mkdir(parents=True, exist_ok=True)
+    bot_log.write_text("", encoding="utf-8")
+    monkeypatch.setenv("KALSHI_PYTHON", str(tmp_path / ".venv/bin/python"))
+    monkeypatch.setenv("KALSHI_MAIN", str(tmp_path / "main.py"))
+    trades = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    _write_trade_log(
+        trades,
+        [
+            {
+                "type": "RESEARCH_PREWARM_RESULT",
+                "ts": f"2026-06-28T22:4{index}:00Z",
+                "ticker": "KXOLDREPEAT-26JUL30-T4.0",
+                "research_status": "continue_researching",
+            }
+            for index in range(5)
+        ]
+        + [
+            {
+                "type": "RESEARCH_PREWARM_RESULT",
+                "ts": "2026-06-28T23:20:00Z",
+                "ticker": "KXGDP-26JUL30-T4.0",
+                "research_status": "continue_researching",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        workflow_module.botcheck,
+        "launchd_print",
+        lambda _label: "    pid = 123\n    state = running\n",
+    )
+    monkeypatch.setattr(workflow_module.botcheck, "launchd_pid", lambda _output: 123)
+    monkeypatch.setattr(
+        workflow_module.botcheck,
+        "process_table",
+        lambda: [
+            botcheck.ProcessInfo(
+                pid=123,
+                ppid=1,
+                cpu="0.0",
+                mem="0.1",
+                etimes=1800,
+                command=f"{tmp_path}/.venv/bin/python {tmp_path}/main.py",
+            )
         ],
     )
 

@@ -400,6 +400,27 @@ def test_summarize_research_prewarm_backlog_does_not_import_runtime_script(
     ) == ["KX-MISS"]
 
 
+def test_summarize_research_prewarm_backlog_includes_nonterminal_result(tmp_path):
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "RESEARCH_PREWARM_RESULT",
+                "ts": "2026-05-10T22:00:00+00:00",
+                "ticker": "KX-CONTINUE",
+                "venue": "kalshi",
+                "research_status": "needs_research",
+            }
+        ],
+    )
+
+    assert botcheck.summarize_research_prewarm_backlog(
+        trades,
+        since=datetime(2026, 5, 10, 21, 0, tzinfo=timezone.utc),
+    ) == ["KX-CONTINUE"]
+
+
 def test_summarize_research_prewarm_backlog_excludes_non_kalshi_targets(tmp_path):
     trades = tmp_path / "trades.jsonl"
     write_jsonl(
@@ -580,6 +601,9 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
                 last_force_side TEXT,
                 last_estimated_probability REAL,
                 last_confidence REAL,
+                last_market_price REAL,
+                last_estimated_edge REAL,
+                last_decision_grade_status TEXT,
                 created_ts TEXT,
                 updated_ts TEXT
             );
@@ -612,8 +636,11 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
                 last_verdict_status,
                 last_force_side,
                 last_estimated_probability,
-                last_confidence
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                last_confidence,
+                last_market_price,
+                last_estimated_edge,
+                last_decision_grade_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -621,10 +648,13 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
                     "run-1",
                     "contract-v1",
                     "2026-05-10T22:50:00+00:00",
-                    "trade_candidate",
+                    "decision_grade_candidate",
                     "yes",
                     0.63,
                     0.71,
+                    0.51,
+                    0.11,
+                    "decision_grade_candidate",
                 ),
                 (
                     "KXTEST-26JUN-T2",
@@ -632,6 +662,9 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
                     "contract-v2",
                     "2026-05-10T21:00:00+00:00",
                     "continue_researching",
+                    None,
+                    None,
+                    None,
                     None,
                     None,
                     None,
@@ -685,10 +718,10 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
                     "source",
                     "https://example.com/1b",
                     "Fresh corroboration",
-                    "snippet",
-                    "metric",
-                    "yes",
-                    0.7,
+                    "Counter search found no contradiction.",
+                    "disconfirming",
+                    "neutral",
+                    0.0,
                     "2026-05-10T22:35:00+00:00",
                     "2026-05-10T22:41:00+00:00",
                     "2026-05-10T22:41:00+00:00",
@@ -721,10 +754,135 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
     assert stats.evidence_rows == 3
     assert stats.latest_researched_ts == datetime(2026, 5, 10, 22, 50, tzinfo=timezone.utc)
     assert stats.latest_evidence_ts == datetime(2026, 5, 10, 22, 41, tzinfo=timezone.utc)
-    assert stats.verdict_counts == {"continue_researching": 1, "trade_candidate": 1}
-    assert stats.vetted_trade_candidate_dossiers == 1
+    assert stats.verdict_counts == {
+        "continue_researching": 1,
+        "decision_grade_candidate": 1,
+    }
+    assert stats.vetted_trade_candidate_dossiers == 0
+    assert stats.decision_grade_candidate_dossiers == 1
     assert stats.live_cache_eligible_dossiers == 1
     assert stats.fresh_evidence_rows_24h == 2
+
+
+def test_summarize_research_dossiers_rejects_same_side_countercase(tmp_path):
+    db_path = tmp_path / "data" / "evidence_store.db"
+    db_path.parent.mkdir()
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_research_run_id TEXT,
+                last_contract_fingerprint TEXT,
+                last_researched_ts TEXT NOT NULL,
+                last_verdict_status TEXT NOT NULL,
+                last_skip_reason TEXT,
+                last_force_side TEXT,
+                last_estimated_probability REAL,
+                last_confidence REAL,
+                last_market_price REAL,
+                last_estimated_edge REAL,
+                last_decision_grade_status TEXT,
+                created_ts TEXT,
+                updated_ts TEXT
+            );
+            CREATE TABLE research_evidence (
+                evidence_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                research_run_id TEXT NOT NULL,
+                contract_fingerprint TEXT,
+                source_class TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                title TEXT NOT NULL,
+                snippet TEXT NOT NULL,
+                claim_type TEXT NOT NULL,
+                supports_direction TEXT NOT NULL,
+                supports_confidence REAL NOT NULL,
+                retrieved_at TEXT,
+                inserted_at TEXT
+            );
+            INSERT INTO research_dossiers (
+                market_ticker,
+                last_research_run_id,
+                last_contract_fingerprint,
+                last_researched_ts,
+                last_verdict_status,
+                last_force_side,
+                last_estimated_probability,
+                last_confidence,
+                last_market_price,
+                last_estimated_edge,
+                last_decision_grade_status
+            ) VALUES (
+                'KXTEST-26JUN-T1',
+                'run-1',
+                'contract-v1',
+                '2026-05-10T22:50:00+00:00',
+                'decision_grade_candidate',
+                'yes',
+                0.63,
+                0.71,
+                0.51,
+                0.11,
+                'decision_grade_candidate'
+            );
+            INSERT INTO research_evidence (
+                evidence_id,
+                market_ticker,
+                research_run_id,
+                contract_fingerprint,
+                source_class,
+                source_name,
+                source_url,
+                title,
+                snippet,
+                claim_type,
+                supports_direction,
+                supports_confidence,
+                retrieved_at,
+                inserted_at
+            ) VALUES
+            (
+                'ev-1',
+                'KXTEST-26JUN-T1',
+                'run-1',
+                'contract-v1',
+                'resolution_source',
+                'Official',
+                'https://example.com/resolution',
+                'Official result',
+                'Official result supports YES.',
+                'supporting',
+                'yes',
+                0.9,
+                '2026-05-10T22:40:00+00:00',
+                '2026-05-10T22:40:00+00:00'
+            ),
+            (
+                'ev-2',
+                'KXTEST-26JUN-T1',
+                'run-1',
+                'contract-v1',
+                'official_primary',
+                'Official',
+                'https://example.com/counter',
+                'Same-side counter search',
+                'Counter search reused the same official fact supporting YES.',
+                'disconfirming',
+                'yes',
+                0.9,
+                '2026-05-10T22:41:00+00:00',
+                '2026-05-10T22:41:00+00:00'
+            );
+            """
+        )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+
+    stats = summarize_research_dossiers(tmp_path, now=now)
+
+    assert stats.decision_grade_candidate_dossiers == 1
+    assert stats.live_cache_eligible_dossiers == 0
 
 
 def test_summarize_research_dossiers_excludes_stale_live_cache_ready_count(tmp_path):
@@ -843,6 +1001,123 @@ def test_summarize_research_dossiers_excludes_stale_live_cache_ready_count(tmp_p
     assert stats.live_cache_eligible_dossiers == 0
 
 
+def test_summarize_research_dossiers_excludes_fresh_superseded_candidate_run(tmp_path):
+    db_path = tmp_path / "data" / "evidence_store.db"
+    db_path.parent.mkdir()
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_research_run_id TEXT,
+                last_contract_fingerprint TEXT,
+                last_researched_ts TEXT NOT NULL,
+                last_verdict_status TEXT NOT NULL,
+                last_force_side TEXT,
+                last_estimated_probability REAL,
+                last_confidence REAL,
+                last_market_price REAL,
+                last_estimated_edge REAL
+            );
+            CREATE TABLE research_runs (
+                research_run_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                verdict_status TEXT NOT NULL,
+                force_side TEXT,
+                estimated_probability REAL,
+                confidence REAL,
+                market_price REAL,
+                estimated_edge REAL
+            );
+            CREATE TABLE research_evidence (
+                evidence_id INTEGER PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                research_run_id TEXT NOT NULL,
+                contract_fingerprint TEXT,
+                source_class TEXT NOT NULL,
+                retrieved_at TEXT,
+                inserted_at TEXT
+            );
+            INSERT INTO research_dossiers VALUES (
+                'KX-MIXED',
+                'run-fresh-blocked',
+                'fingerprint-1',
+                '2026-05-10T22:55:00+00:00',
+                'needs_counter_evidence',
+                NULL,
+                0.7,
+                0.8,
+                0.5,
+                0.19
+            );
+            INSERT INTO research_runs VALUES (
+                'run-candidate-stale',
+                'KX-MIXED',
+                'decision_grade_candidate',
+                'yes',
+                0.7,
+                0.8,
+                0.5,
+                0.19
+            );
+            INSERT INTO research_runs VALUES (
+                'run-fresh-blocked',
+                'KX-MIXED',
+                'needs_counter_evidence',
+                NULL,
+                0.7,
+                0.8,
+                0.5,
+                0.19
+            );
+            INSERT INTO research_evidence VALUES (
+                1,
+                'KX-MIXED',
+                'run-candidate-stale',
+                'fingerprint-1',
+                'resolution_source',
+                '2026-05-10T22:50:00+00:00',
+                '2026-05-10T22:50:00+00:00'
+            );
+            INSERT INTO research_evidence VALUES (
+                2,
+                'KX-MIXED',
+                'run-candidate-stale',
+                'fingerprint-1',
+                'reputable_secondary',
+                '2026-05-10T22:50:00+00:00',
+                '2026-05-10T22:50:00+00:00'
+            );
+            INSERT INTO research_evidence VALUES (
+                3,
+                'KX-MIXED',
+                'run-fresh-blocked',
+                'fingerprint-1',
+                'resolution_source',
+                '2026-05-10T22:55:00+00:00',
+                '2026-05-10T22:55:00+00:00'
+            );
+            INSERT INTO research_evidence VALUES (
+                4,
+                'KX-MIXED',
+                'run-fresh-blocked',
+                'fingerprint-1',
+                'reputable_secondary',
+                '2026-05-10T22:55:00+00:00',
+                '2026-05-10T22:55:00+00:00'
+            );
+            """
+        )
+
+    stats = summarize_research_dossiers(
+        tmp_path,
+        now=datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc),
+    )
+
+    assert stats.decision_grade_candidate_dossiers == 0
+    assert stats.live_cache_eligible_dossiers == 0
+
+
 def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
     tmp_path,
 ):
@@ -876,6 +1151,8 @@ def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
                 force_side TEXT,
                 estimated_probability REAL,
                 confidence REAL,
+                market_price REAL,
+                estimated_edge REAL,
                 created_ts TEXT
             );
             CREATE TABLE research_evidence (
@@ -907,14 +1184,14 @@ def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
                 last_confidence
             ) VALUES (
                 'KXREADY',
-                'run-ambiguous',
+                'run-candidate',
                 'contract-v1',
                 '2026-05-10T22:55:00+00:00',
-                'researched_skip_ambiguous',
-                'ambiguous_direction',
+                'decision_grade_candidate',
                 NULL,
-                NULL,
-                NULL
+                'yes',
+                0.64,
+                0.72
             );
             INSERT INTO research_runs (
                 research_run_id,
@@ -927,6 +1204,8 @@ def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
                 force_side,
                 estimated_probability,
                 confidence,
+                market_price,
+                estimated_edge,
                 created_ts
             ) VALUES (
                 'run-candidate',
@@ -935,10 +1214,12 @@ def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
                 'research_prewarm',
                 1,
                 'Research supports yes.',
-                'trade_candidate',
+                'decision_grade_candidate',
                 'yes',
                 0.64,
                 0.72,
+                0.51,
+                0.11,
                 '2026-05-10T22:40:00+00:00'
             );
             INSERT INTO research_evidence (
@@ -972,7 +1253,7 @@ def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
                 'yes',
                 0.8,
                 '2026-05-10T22:30:00+00:00',
-                '2026-05-10T22:40:00+00:00',
+                '2026-05-10T12:40:00+00:00',
                 '2026-05-10T22:40:00+00:00'
             ),
             (
@@ -984,12 +1265,12 @@ def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
                 'source',
                 'https://example.com/corroboration',
                 'Fresh corroboration',
-                'snippet',
-                'metric',
-                'yes',
-                0.7,
+                'Counter search found no contradiction.',
+                'disconfirming',
+                'neutral',
+                0.0,
                 '2026-05-10T22:31:00+00:00',
-                '2026-05-10T22:41:00+00:00',
+                '2026-05-10T12:41:00+00:00',
                 '2026-05-10T22:41:00+00:00'
             );
             """
@@ -999,6 +1280,21 @@ def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
     stats = summarize_research_dossiers(tmp_path, now=now)
 
     assert stats.live_cache_eligible_dossiers == 1
+
+    for invalid_fingerprint in (None, ""):
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                UPDATE research_dossiers
+                SET last_contract_fingerprint = ?
+                WHERE market_ticker = 'KXREADY'
+                """,
+                (invalid_fingerprint,),
+            )
+
+        stats = summarize_research_dossiers(tmp_path, now=now)
+
+        assert stats.live_cache_eligible_dossiers == 0
 
 
 def test_print_research_gate_section_surfaces_dossier_cache(capsys, tmp_path, monkeypatch):
@@ -1014,6 +1310,7 @@ def test_print_research_gate_section_surfaces_dossier_cache(capsys, tmp_path, mo
         latest_evidence_ts=datetime(2026, 5, 10, 22, 45, tzinfo=timezone.utc),
         verdict_counts={"continue_researching": 1, "trade_candidate": 1},
         vetted_trade_candidate_dossiers=1,
+        decision_grade_candidate_dossiers=2,
         live_cache_eligible_dossiers=1,
         fresh_evidence_rows_24h=2,
     )
@@ -1030,7 +1327,10 @@ def test_print_research_gate_section_surfaces_dossier_cache(capsys, tmp_path, mo
     assert "dossiers   : 2 latest=2026-05-10T22:50:00+00:00 age=10m 00s" in out
     assert "evidence   : 3 latest=2026-05-10T22:45:00+00:00 age=15m 00s fresh_24h=2" in out
     assert "verdicts   : continue_researching=1, trade_candidate=1" in out
-    assert "vetted     : historical_trade_candidate=1 live_cache_eligible=1" in out
+    assert (
+        "vetted     : historical_trade_candidate=1 "
+        "decision_grade_candidate=2 live_cache_eligible=1"
+    ) in out
 
 
 def test_print_research_gate_section_surfaces_missing_dossier_db(capsys, tmp_path):
