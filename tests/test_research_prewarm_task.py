@@ -331,6 +331,40 @@ async def test_prewarm_run_once_limits_market_concurrency(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_prewarm_default_serializes_local_adjudication(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    active = 0
+    max_active = 0
+
+    async def research_gate(_news, _market, **_kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return SimpleNamespace(
+            status=ResearchStatus.CONTINUE_RESEARCHING,
+            attempted=True,
+            queries=[],
+            evidence=[],
+            skip_reason="no_research_hits",
+        )
+
+    task = ResearchPrewarmTask(
+        store=store,
+        research_gate=research_gate,
+    )
+
+    results = await task.run_once(
+        [_market(f"KXRESEARCH-DEFAULT-{i}") for i in range(3)]
+    )
+
+    assert len(results) == 3
+    assert max_active == 1
+
+
+@pytest.mark.asyncio
 async def test_prewarm_run_once_cools_down_attempted_ticker(
     monkeypatch,
     tmp_path,

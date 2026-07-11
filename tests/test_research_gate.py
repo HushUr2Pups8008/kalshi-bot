@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -1087,6 +1088,7 @@ async def test_default_search_prefers_bank_of_israel_policy_over_generic_event_w
             now=datetime(2026, 7, 2, tzinfo=timezone.utc),
         ),
     )
+    monkeypatch.setattr(research_gate_module, "_rss_search", lambda _query: [])
     evidence = await default_search_provider(
         ResearchQuery(
             (
@@ -1102,6 +1104,113 @@ async def test_default_search_prefers_bank_of_israel_policy_over_generic_event_w
     assert len(evidence) == 1
     assert evidence[0].source_name == "Bank of Israel"
     assert evidence[0].metric_name == "bank_of_israel_decision_pending"
+
+
+@pytest.mark.asyncio
+async def test_default_search_prefers_fed_policy_and_retains_pending_with_rss(
+    monkeypatch,
+):
+    calls: list[str] = []
+    pending = ResearchEvidence(
+        source_class="official_primary",
+        source_name="Federal Reserve",
+        source_url="https://federalreserve.gov/monetarypolicy/fomccalendars.htm",
+        title="FOMC decision pending",
+        snippet="The April 2027 FOMC decision has not occurred.",
+        claim_type="official_resolution",
+        supports_direction="neutral",
+        supports_confidence=0.0,
+        metric_name="fed_decision_pending",
+    )
+    predictive = ResearchEvidence(
+        source_class="reputable_secondary",
+        source_name="Reuters",
+        source_url="https://reuters.com/markets/rates-outlook",
+        title="Rates outlook",
+        snippet="Current forecasts discuss the likely 2027 policy path.",
+        claim_type="supporting",
+        supports_direction="neutral",
+        supports_confidence=0.0,
+    )
+
+    def fed_search(_query):
+        calls.append("fed")
+        return [pending]
+
+    def generic_search(_query):
+        calls.append("generic")
+        return [replace(pending, metric_name="event_window_pending")]
+
+    def rss_search(_query):
+        calls.append("rss")
+        return [predictive]
+
+    monkeypatch.setattr(research_gate_module, "_fed_policy_search", fed_search)
+    monkeypatch.setattr(research_gate_module, "_event_window_pending_search", generic_search)
+    monkeypatch.setattr(research_gate_module, "_rss_search", rss_search)
+
+    evidence = await default_search_provider(
+        ResearchQuery(
+            (
+                "Will the upper bound of the federal funds rate be above 1.75% "
+                "following the Fed's Apr 28, 2027 meeting?"
+            ),
+            "supporting",
+            "reputable_secondary",
+        )
+    )
+
+    assert calls == ["fed", "rss"]
+    assert evidence == [pending, predictive]
+
+
+@pytest.mark.asyncio
+async def test_default_search_returns_nonpending_fed_evidence_without_rss(
+    monkeypatch,
+):
+    calls: list[str] = []
+    structured = ResearchEvidence(
+        source_class="official_primary",
+        source_name="Federal Reserve",
+        source_url="https://federalreserve.gov/releases/h15/",
+        title="Federal funds rate",
+        snippet="The current upper bound is 4.25 percent.",
+        claim_type="official_resolution",
+        supports_direction="yes",
+        supports_confidence=1.0,
+        metric_name="fed_funds_upper_bound",
+        metric_value=4.25,
+    )
+
+    def fed_search(_query):
+        calls.append("fed")
+        return [structured]
+
+    def generic_search(_query):
+        calls.append("generic")
+        raise AssertionError("generic pending detection must follow Fed policy detection")
+
+    def rss_search(_query):
+        calls.append("rss")
+        raise AssertionError("non-pending structured evidence must retain early return")
+
+    monkeypatch.setattr(research_gate_module, "_fed_policy_search", fed_search)
+    monkeypatch.setattr(research_gate_module, "_event_window_pending_search", generic_search)
+    monkeypatch.setattr(research_gate_module, "_rss_search", rss_search)
+
+    evidence = await default_search_provider(
+        ResearchQuery(
+            (
+                "Will the upper bound of the federal funds rate be above 1.75% "
+                "following the Fed's Apr 28, 2027 meeting?"
+            ),
+            "official_resolution",
+            "official_primary",
+        )
+    )
+
+    assert calls == ["fed"]
+    assert evidence == [structured]
 
 
 def test_treasury_yield_search_marks_same_day_data_pending():
@@ -2336,6 +2445,235 @@ async def test_pending_visit_event_stays_research_backlog_even_without_price():
     assert verdict.skip_reason == "official_data_pending"
     assert verdict.market_price is None
     assert any(item.metric_name == "event_window_pending" for item in verdict.evidence)
+
+
+@pytest.mark.asyncio
+async def test_pending_event_with_provider_predictive_evidence_reaches_adjudicator():
+    market = SimpleNamespace(
+        ticker="KXVISITIRAN-26JUL01-BNET",
+        title="Will Benjamin Netanyahu visit Iran before Jul 1, 2026?",
+        rules_primary=(
+            "If Benjamin Netanyahu has physically visited Iran before Jul 1, 2026, "
+            "this market resolves to Yes."
+        ),
+        rules_secondary="Major reputable reporting decides this market.",
+        settlement_sources=(
+            SettlementSource(
+                label="Associated Press",
+                url="https://apnews.com/",
+                domain="apnews.com",
+            ),
+        ),
+    )
+    adjudication_evidence: list[list[ResearchEvidence]] = []
+
+    async def search_provider(query):
+        pending = _event_window_pending_search(
+            query,
+            now=datetime(2026, 6, 30, tzinfo=timezone.utc),
+        )
+        predictive = ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Reuters",
+            source_url=f"https://reuters.com/world/visit-{query.query_intent}",
+            title="Current diplomatic reporting",
+            snippet="Current reporting discusses whether the visit is likely before the deadline.",
+            claim_type=query.query_intent,
+            supports_direction="neutral",
+            supports_confidence=0.0,
+            retrieved_at="2026-06-30T12:00:00Z",
+        )
+        official_predictive = ResearchEvidence(
+            source_class="official_primary",
+            source_name="Associated Press",
+            source_url=f"https://apnews.com/visit-{query.query_intent}",
+            title="Current official-source reporting",
+            snippet="Current reporting tracks whether the visit will occur.",
+            claim_type=query.query_intent,
+            supports_direction="neutral",
+            supports_confidence=0.0,
+            retrieved_at="2026-06-30T12:00:00Z",
+        )
+        return [*pending, predictive, official_predictive]
+
+    async def direct_fetcher(url, source_class, claim_type):
+        return ResearchEvidence(
+            source_class=source_class,
+            source_name="AP",
+            source_url=url,
+            title="Associated Press News",
+            snippet="AP publishes major international travel reporting.",
+            claim_type=claim_type,
+            retrieved_at="2026-06-30T12:00:00Z",
+        )
+
+    async def adjudicator(**kwargs):
+        adjudication_evidence.append(list(kwargs["evidence"]))
+        return {
+            "direction": "neutral",
+            "confidence": 0.0,
+            "reason": "Current predictive reporting remains ambiguous.",
+        }
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="", source="research_prewarm"),
+        market,
+        model_direction="neutral",
+        model_confidence=0.0,
+        model_reason="scheduled research prewarm",
+        yes_ask=0.51,
+        no_ask=0.50,
+        live_mode=False,
+        search_provider=search_provider,
+        direct_fetcher=direct_fetcher,
+        adjudicator=adjudicator,
+        max_queries=8,
+        require_decision_grade=True,
+    )
+
+    assert adjudication_evidence
+    assert any(
+        item.metric_name == "event_window_pending"
+        for item in adjudication_evidence[0]
+    )
+    assert any(
+        item.source_name == "Reuters"
+        for item in adjudication_evidence[0]
+    )
+    assert verdict.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE
+    assert verdict.skip_reason != "official_data_pending"
+
+
+def test_pending_context_cannot_make_untrusted_evidence_decision_grade():
+    now = datetime.now(timezone.utc).isoformat()
+    candidate = research_gate_module.ResearchVerdict(
+        status=ResearchStatus.TRADE_CANDIDATE,
+        attempted=True,
+        queries=[ResearchQuery("find countercase", "disconfirming", "other")],
+        evidence=[
+            ResearchEvidence(
+                source_class="official_primary",
+                source_name="Event window",
+                source_url="https://kalshi.com/#pending-2026-08-01",
+                title="Event window pending",
+                snippet="The final settlement event has not occurred.",
+                claim_type="official_resolution",
+                metric_name="event_window_pending",
+                retrieved_at=now,
+            ),
+            ResearchEvidence(
+                source_class="other",
+                source_name="Unknown Support",
+                source_url="https://support.invalid/prediction",
+                title="Untrusted support",
+                snippet="An untrusted source predicts YES.",
+                claim_type="supporting",
+                supports_direction="yes",
+                supports_confidence=0.9,
+                metric_name="cpi_monthly_change_single_decimal",
+                retrieved_at=now,
+            ),
+            ResearchEvidence(
+                source_class="other",
+                source_name="Unknown Counter",
+                source_url="https://counter.invalid/prediction",
+                title="Untrusted counter",
+                snippet="An untrusted source presents a weak NO countercase.",
+                claim_type="disconfirming",
+                supports_direction="no",
+                supports_confidence=0.2,
+                retrieved_at=now,
+            ),
+        ],
+        force_side="yes",
+        estimated_probability=0.8,
+        confidence=0.8,
+        market_price=0.5,
+        estimated_edge=0.29,
+    )
+
+    verdict = research_gate_module._decision_grade_verdict(
+        candidate,
+        model_reason=(
+            "Trade YES because current evidence supports the outcome while the "
+            "explicit countercase is weak."
+        ),
+    )
+
+    assert verdict.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE
+    assert verdict.skip_reason == "no_reliable_source_path"
+
+
+@pytest.mark.parametrize(
+    ("source_url", "metric_value"),
+    [
+        ("https://evilstlouisfed.org/series/GDPNOW", 2.5),
+        ("https://fred.stlouisfed.org/series/GDPNOW", "not-a-number"),
+    ],
+)
+def test_pending_context_rejects_spoofed_gdpnow_signal(
+    source_url,
+    metric_value,
+):
+    now = datetime.now(timezone.utc).isoformat()
+    candidate = research_gate_module.ResearchVerdict(
+        status=ResearchStatus.TRADE_CANDIDATE,
+        attempted=True,
+        queries=[ResearchQuery("find countercase", "disconfirming", "other")],
+        evidence=[
+            ResearchEvidence(
+                source_class="official_primary",
+                source_name="Event window",
+                source_url="https://kalshi.com/#pending-2026-08-01",
+                title="Event window pending",
+                snippet="The final settlement event has not occurred.",
+                claim_type="official_resolution",
+                metric_name="event_window_pending",
+                retrieved_at=now,
+            ),
+            ResearchEvidence(
+                source_class="specialized_data",
+                source_name="Spoofed GDPNow",
+                source_url=source_url,
+                title="GDPNow estimate",
+                snippet="A claimed GDPNow estimate supports YES.",
+                claim_type="base_rate",
+                supports_direction="yes",
+                supports_confidence=0.9,
+                metric_name="gdpnow_real_gdp_growth_saar",
+                metric_value=metric_value,
+                extraction_confidence=0.95,
+                retrieved_at=now,
+            ),
+            ResearchEvidence(
+                source_class="other",
+                source_name="Unknown Counter",
+                source_url="https://counter.invalid/prediction",
+                title="Untrusted counter",
+                snippet="An untrusted source presents a weak NO countercase.",
+                claim_type="disconfirming",
+                supports_direction="no",
+                supports_confidence=0.2,
+                retrieved_at=now,
+            ),
+        ],
+        force_side="yes",
+        estimated_probability=0.8,
+        confidence=0.8,
+        market_price=0.5,
+        estimated_edge=0.29,
+    )
+
+    verdict = research_gate_module._decision_grade_verdict(
+        candidate,
+        model_reason=(
+            "Trade YES because current evidence supports the outcome while the "
+            "explicit countercase is weak."
+        ),
+    )
+
+    assert verdict.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE
+    assert verdict.skip_reason == "no_reliable_source_path"
 
 
 @pytest.mark.asyncio
