@@ -732,6 +732,221 @@ def test_query_pack_adds_primary_media_and_regulator_hints():
             assert domain in official_queries
 
 
+@pytest.mark.parametrize(
+    ("ticker", "title", "rules_primary", "domain", "compact_phrase"),
+    (
+        (
+            "KXLEAVEPOWELLGOV-26AUG01",
+            (
+                "Will Jerome Powell leave Member of the Board of Governors "
+                "of the Federal Reserve System before Aug 1, 2026?"
+            ),
+            "Jerome Powell must leave the Federal Reserve Board of Governors.",
+            "federalreserve.gov",
+            "Jerome Powell Board of Governors current member",
+        ),
+        (
+            "KXTRUMPMENTIONB-26JUL09-WORL",
+            "What will Donald Trump say during next White House livestream?",
+            "Video of the next White House livestream is the primary source.",
+            "whitehouse.gov",
+            "Donald Trump livestream transcript remarks",
+        ),
+        (
+            "KXAUGRECESSCAB-26AUG08-E2",
+            (
+                "Will the number of Cabinet nominees confirmed by the Senate be "
+                "exactly 2 before the 2026 August recess?"
+            ),
+            "Senate confirmation determines the count.",
+            "senate.gov",
+            "Cabinet nominees confirmed Senate",
+        ),
+        (
+            "KXTRUMPMENTION-26JUL15-IRAN",
+            "What will Donald Trump say during Pennsylvania Defense and Innovation Summit?",
+            "Video of the Pennsylvania Defense and Innovation Summit is primary.",
+            "mccormick.senate.gov",
+            "Pennsylvania Defense and Innovation Summit Donald Trump",
+        ),
+    ),
+)
+def test_query_pack_uses_compact_official_source_hints(
+    ticker,
+    title,
+    rules_primary,
+    domain,
+    compact_phrase,
+):
+    queries = build_research_queries(
+        SimpleNamespace(headline="", source="research_prewarm", url=""),
+        SimpleNamespace(
+            ticker=ticker,
+            title=title,
+            rules_primary=rules_primary,
+            rules_secondary="",
+            settlement_sources=(),
+        ),
+    )
+
+    official_query = next(query.query for query in queries if f"site:{domain}" in query.query)
+
+    assert compact_phrase in official_query
+    assert ticker not in official_query
+    assert len(official_query) <= 140
+
+
+def test_powell_membership_hint_does_not_override_rate_policy_market():
+    ticker = "KXFEDPOWELLRATE-27APR"
+    title = "Will Jerome Powell announce a rate cut after the Federal Reserve meeting?"
+    queries = build_research_queries(
+        SimpleNamespace(headline="", source="research_prewarm", url=""),
+        SimpleNamespace(
+            ticker=ticker,
+            title=title,
+            rules_primary="The announced federal funds target range decides the market.",
+            rules_secondary="",
+            settlement_sources=(),
+        ),
+    )
+
+    official_query = next(
+        query.query for query in queries if "site:federalreserve.gov" in query.query
+    )
+
+    assert "Board of Governors current member" not in official_query
+    assert ticker in official_query
+
+
+@pytest.mark.parametrize(
+    "title",
+    (
+        (
+            "Will Jerome Powell and the Board of Governors leave interest rates "
+            "unchanged after the Federal Reserve meeting?"
+        ),
+        (
+            "Will Jerome Powell and the Board of Governors signal a departure "
+            "from restrictive policy after the Federal Reserve meeting?"
+        ),
+        (
+            "Will Jerome Powell and the Board of Governors step down the pace "
+            "of quantitative tightening after the Federal Reserve meeting?"
+        ),
+    ),
+)
+def test_powell_membership_hint_does_not_match_policy_language(title):
+    ticker = "KXFEDPOWELLRATE-27APR"
+    queries = build_research_queries(
+        SimpleNamespace(headline="", source="research_prewarm", url=""),
+        SimpleNamespace(
+            ticker=ticker,
+            title=title,
+            rules_primary="The announced federal funds target range decides the market.",
+            rules_secondary="",
+            settlement_sources=(),
+        ),
+    )
+
+    official_query = next(
+        query.query for query in queries if "site:federalreserve.gov" in query.query
+    )
+
+    assert "Board of Governors current member" not in official_query
+    assert ticker in official_query
+
+
+def test_cabinet_confirmation_hint_derives_contract_month_and_year():
+    queries = build_research_queries(
+        SimpleNamespace(headline="", source="research_prewarm", url=""),
+        SimpleNamespace(
+            ticker="KXAUGRECESSCAB-27SEP-E2",
+            title=(
+                "Will exactly two Cabinet nominees be confirmed by the Senate "
+                "before the 2027 September recess?"
+            ),
+            rules_primary="Senate confirmation determines the count.",
+            rules_secondary="",
+            settlement_sources=(),
+        ),
+    )
+
+    official_query = next(query.query for query in queries if "site:senate.gov" in query.query)
+
+    assert "September 2027" in official_query
+    assert "August 2026" not in official_query
+
+
+def test_cabinet_confirmation_hint_preserves_exact_ticker_deadline():
+    queries = build_research_queries(
+        SimpleNamespace(headline="", source="research_prewarm", url=""),
+        SimpleNamespace(
+            ticker="KXAUGRECESSCAB-26AUG08-E2",
+            title=(
+                "Will exactly two Cabinet nominees be confirmed by the Senate "
+                "before the 2026 August recess?"
+            ),
+            rules_primary="Senate confirmation determines the count.",
+            rules_secondary="",
+            settlement_sources=(),
+        ),
+    )
+
+    official_query = next(query.query for query in queries if "site:senate.gov" in query.query)
+
+    assert "August 8, 2026" in official_query
+    pending = [
+        evidence
+        for query in queries
+        for evidence in _event_window_pending_search(
+            query,
+            now=datetime(2026, 8, 9, tzinfo=timezone.utc),
+        )
+    ]
+    assert not pending
+
+
+def test_compact_official_hints_preserve_future_event_dates():
+    cases = (
+        (
+            "KXLEAVEPOWELLGOV-26AUG01",
+            (
+                "Will Jerome Powell leave Member of the Board of Governors "
+                "before Aug 1, 2026?"
+            ),
+            "Jerome Powell must leave the Board of Governors.",
+            "federalreserve.gov",
+            "August 1, 2026",
+        ),
+        (
+            "KXTRUMPMENTION-26JUL15-IRAN",
+            "What will Donald Trump say during Pennsylvania Defense and Innovation Summit?",
+            "Video of the summit is primary.",
+            "mccormick.senate.gov",
+            "July 15, 2026",
+        ),
+    )
+
+    for ticker, title, rules_primary, domain, expected_date in cases:
+        queries = build_research_queries(
+            SimpleNamespace(headline="", source="research_prewarm", url=""),
+            SimpleNamespace(
+                ticker=ticker,
+                title=title,
+                rules_primary=rules_primary,
+                rules_secondary="",
+                settlement_sources=(),
+            ),
+        )
+        official_query = next(
+            query.query for query in queries if f"site:{domain}" in query.query
+        )
+
+        assert expected_date in official_query
+        assert ticker not in official_query
+        assert len(official_query) <= 140
+
+
 def test_decision_grade_query_intents_survive_long_contract_titles():
     long_title = (
         "Will any current member of the Democratic Senate caucus including "
@@ -2212,6 +2427,66 @@ def test_event_window_pending_search_marks_confirmation_deadline_pending():
     assert "August 1, 2026" in evidence[0].snippet
 
 
+def test_event_window_pending_search_marks_year_first_confirmation_month_pending():
+    evidence = _event_window_pending_search(
+        ResearchQuery(
+            (
+                "Will exactly two Cabinet nominees be confirmed by the Senate "
+                "before the 2026 August recess? official resolution latest"
+            ),
+            "official_resolution",
+            "official_primary",
+        ),
+        now=datetime(2026, 7, 11, tzinfo=timezone.utc),
+    )
+
+    assert len(evidence) == 1
+    assert evidence[0].metric_name == "event_window_pending"
+    assert "August 31, 2026" in evidence[0].snippet
+
+
+def test_event_window_pending_search_marks_future_gubernatorial_count_pending():
+    evidence = _event_window_pending_search(
+        ResearchQuery(
+            (
+                "Will the number of Republican governors be at least 24 once all "
+                "gubernatorial elections scheduled for Nov 3, 2026 are conclusively "
+                "called or certified? official resolution latest"
+            ),
+            "official_resolution",
+            "official_primary",
+        ),
+        now=datetime(2026, 7, 11, tzinfo=timezone.utc),
+    )
+
+    assert len(evidence) == 1
+    assert evidence[0].metric_name == "event_window_pending"
+    assert "November 3, 2026" in evidence[0].snippet
+
+
+@pytest.mark.parametrize(
+    "query_text",
+    (
+        (
+            "site:federalreserve.gov Jerome Powell Board of Governors current member "
+            "before August 1, 2026 official resolution current status"
+        ),
+        (
+            "site:mccormick.senate.gov Pennsylvania Defense and Innovation Summit "
+            "Donald Trump July 15, 2026 official resolution current status"
+        ),
+    ),
+)
+def test_event_window_pending_search_marks_compact_future_event_queries(query_text):
+    evidence = _event_window_pending_search(
+        ResearchQuery(query_text, "official_resolution", "official_primary"),
+        now=datetime(2026, 7, 11, tzinfo=timezone.utc),
+    )
+
+    assert len(evidence) == 1
+    assert evidence[0].metric_name == "event_window_pending"
+
+
 def test_nws_daily_climate_search_marks_future_high_temp_pending(monkeypatch):
     class FakeResponse:
         def __enter__(self):
@@ -2546,6 +2821,36 @@ async def test_pending_event_with_provider_predictive_evidence_reaches_adjudicat
     )
     assert verdict.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE
     assert verdict.skip_reason != "official_data_pending"
+
+
+def test_pending_event_no_edge_verdict_stays_researchable():
+    pending = ResearchEvidence(
+        source_class="official_primary",
+        source_name="Event window",
+        source_url="https://kalshi.com/#pending-2026-08-31",
+        title="Event window pending",
+        snippet="Final settlement reporting is not complete yet.",
+        claim_type="official_resolution",
+        metric_name="event_window_pending",
+    )
+    verdict = ResearchVerdict(
+        status=ResearchStatus.UNTRADEABLE,
+        attempted=True,
+        evidence=[pending],
+        summary="Neither side clears executable edge at the current price.",
+        skip_reason="no_edge",
+        force_side="yes",
+        estimated_probability=0.52,
+        market_price=0.51,
+        estimated_edge=0.0,
+    )
+
+    guarded = research_gate_module._keep_pending_no_edge_researchable(verdict)
+
+    assert guarded.status == ResearchStatus.NEEDS_RESEARCH
+    assert guarded.skip_reason == "official_data_pending"
+    assert guarded.force_side is None
+    assert guarded.market_price == pytest.approx(0.51)
 
 
 def test_pending_context_cannot_make_untrusted_evidence_decision_grade():
