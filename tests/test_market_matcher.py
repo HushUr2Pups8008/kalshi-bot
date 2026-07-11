@@ -333,6 +333,9 @@ class TestFindCandidates:
         assert isinstance(payload["publish_ts"], str)
         assert "age_at_match_seconds" in payload
         assert payload["age_at_match_seconds"] >= 0.0
+        match_meta = results[0][2]
+        assert payload["lifecycle_id"] == match_meta["lifecycle_id"]
+        assert payload["settlement_source_match"] is match_meta["settlement_source_match"]
 
     @pytest.mark.asyncio
     async def test_match_diagnostics_flags_single_named_entity_overlap_as_low_quality(self, matcher):

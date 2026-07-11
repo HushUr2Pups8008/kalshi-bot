@@ -180,7 +180,8 @@ async def test_process_news_routes_matched_polymarket_analysis_through_blend(cap
         market_cache_ttl_seconds=300,
     )
 
-    with caplog.at_level("INFO", logger="polymarket.paper_runtime"):
+    with patch("polymarket.paper_runtime.trade_log") as trade_log_mock, \
+         caplog.at_level("INFO", logger="polymarket.paper_runtime"):
         routed_count = await runtime.process_news(_news())
 
     assert routed_count == 1
@@ -194,6 +195,16 @@ async def test_process_news_routes_matched_polymarket_analysis_through_blend(cap
     assert analysis.edge == pytest.approx(0.23)
     assert analysis.signal_meta["venue"] == "polymarket_us"
     assert analysis.signal_meta["polymarket_match_score"] > 0
+    lifecycle_id = analysis.signal_meta["lifecycle_id"]
+    assert lifecycle_id.startswith("lc-")
+    match_kwargs = trade_log_mock.log_match_diagnostic.call_args.kwargs
+    opportunity_kwargs = trade_log_mock.log_opportunity.call_args.kwargs
+    assert match_kwargs["lifecycle_id"] == lifecycle_id
+    assert opportunity_kwargs["lifecycle_id"] == lifecycle_id
+    assert match_kwargs["venue"] == "polymarket_us"
+    assert opportunity_kwargs["venue"] == "polymarket_us"
+    assert match_kwargs["settlement_source_match"] is None
+    assert opportunity_kwargs["settlement_source_match"] is None
     stats = runtime.stats()
     assert stats.market_count == 1
     assert stats.news_processed == 1
@@ -203,6 +214,31 @@ async def test_process_news_routes_matched_polymarket_analysis_through_blend(cap
     assert "[POLYMARKET_MATCH] candidate ticker=will-example-event-happen-2026" in caplog.text
     assert "[POLYMARKET_ANALYSIS] candidate ticker=will-example-event-happen-2026" in caplog.text
     assert "[POLYMARKET_PAPER] heartbeat markets=1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_process_news_emits_match_but_not_opportunity_when_analysis_fails():
+    route_analysis = AsyncMock()
+
+    async def estimate_probability(*_args, **_kwargs):
+        raise ValueError("no executable side")
+
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([_market()]),
+        route_analysis=route_analysis,
+        keyword_stats=None,
+        estimate_probability_fn=estimate_probability,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+
+    with patch("polymarket.paper_runtime.trade_log") as trade_log_mock:
+        routed_count = await runtime.process_news(_news())
+
+    assert routed_count == 0
+    trade_log_mock.log_match_diagnostic.assert_called_once()
+    trade_log_mock.log_opportunity.assert_not_called()
+    route_analysis.assert_not_awaited()
 
 
 @pytest.mark.asyncio

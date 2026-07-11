@@ -356,6 +356,8 @@ async def test_decision_grade_dossier_enters_paper_review_blend_queue() -> None:
     assert candidate.fast_lane_analysis.signal_type == "research_decision_grade"
     assert candidate.signal_meta["research_admission_status"] == "decision_grade_candidate"
     assert candidate.signal_meta["research_run_id"] == "rr-decision"
+    assert candidate.signal_meta["lifecycle_id"].startswith("lc-")
+    assert candidate.fast_lane_analysis.signal_meta["lifecycle_id"] == candidate.signal_meta["lifecycle_id"]
     assert logger.records
     assert logger.opportunity_records == [
         {
@@ -379,6 +381,7 @@ async def test_decision_grade_dossier_enters_paper_review_blend_queue() -> None:
             "research_status": "decision_grade_candidate",
             "research_run_id": "rr-decision",
             "signal_type": "research_decision_grade",
+            "lifecycle_id": candidate.signal_meta["lifecycle_id"],
         }
     ]
 

@@ -61,7 +61,7 @@ import time
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from types import ModuleType, SimpleNamespace
-from typing import Any, Awaitable, Callable  # noqa: F401 — referenced in string annotations
+from typing import Any, Awaitable, Callable, Iterable  # noqa: F401 — referenced in string annotations
 from urllib.parse import urlparse
 
 from analysis import SignalAnalysis
@@ -74,7 +74,8 @@ from analysis.research_gate import (
 )
 from tasks.stats.keyword_stats import KeywordStats
 from tasks.research_dossier import default_store as default_research_dossier_store
-from tasks.research_prewarm_task import ResearchPrewarmTask
+from tasks.research_paper_admission import ResearchPaperAdmissionBridge
+from tasks.research_prewarm_task import ResearchPrewarmTask, market_has_actionable_price
 from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
 from polymarket.settlement_reconciler import (
@@ -112,7 +113,13 @@ from utils.logger import (
     get_logger,
     emit_startup_banner,
     rotate_logs,
+    trade_log,
     write_trade_log_async,
+)
+from utils.lifecycle import (
+    build_lifecycle_id,
+    settlement_source_match as evaluate_settlement_source_match,
+    strict_optional_bool,
 )
 from utils.runtime_overrides import (
     RuntimeOverridesReader,
@@ -124,6 +131,7 @@ from utils.research_prewarm_targets import (
     RESEARCH_PREWARM_EVENT_TYPES,
     record_targets_kalshi_research_prewarm,
 )
+from utils.research_market_eligibility import research_market_eligibility
 from utils.trade_log_reader import iter_trade_records
 from tasks.runtime_overrides_task import run_runtime_overrides_poll
 
@@ -710,39 +718,12 @@ def _source_domain(value: object) -> str:
 
 
 def _settlement_source_match(news: NewsItem, market: object) -> bool | None:
-    settlement_sources = tuple(getattr(market, "settlement_sources", ()) or ())
-    if not settlement_sources:
-        return None
-
-    evidence_parts = [
-        getattr(news, "source", None),
-        getattr(news, "url", None),
-        getattr(news, "source_hint_domain", None),
-        getattr(news, "source_hint_query", None),
-    ]
-    evidence_text = " ".join(
-        str(part).strip().lower()
-        for part in evidence_parts
-        if isinstance(part, str) and part.strip()
+    return evaluate_settlement_source_match(
+        source=getattr(news, "source", None),
+        url=getattr(news, "url", None),
+        source_hint_domain=getattr(news, "source_hint_domain", None),
+        settlement_sources=getattr(market, "settlement_sources", ()) or (),
     )
-    if not evidence_text:
-        return False
-
-    for source in settlement_sources:
-        candidates = [
-            getattr(source, "label", None),
-            getattr(source, "domain", None),
-            _source_domain(getattr(source, "url", None)),
-        ]
-        for candidate in candidates:
-            if not isinstance(candidate, str) or not candidate.strip():
-                continue
-            token = candidate.strip().lower()
-            if token.startswith("www."):
-                token = token[4:]
-            if token and token in evidence_text:
-                return True
-    return False
 
 
 def _counterfactual_llm_eval_context(news: NewsItem, market: object) -> dict[str, object]:
@@ -861,6 +842,13 @@ class TradingBot:
                 self.paper
             ),
         )
+        self._research_paper_admission_bridge = ResearchPaperAdmissionBridge(
+            research_store=default_research_dossier_store(),
+            trading_queue=self._trading_queue,
+            logger=trade_log,
+            now=lambda: datetime.now(timezone.utc),
+            route_analysis=self._route_analysis_through_blend,
+        )
         self._accumulation_task = AccumulationTask()
         self._structural_task = StructuralTask()
         # Priority queue decouples feed pollers from slow LLM inference.
@@ -903,6 +891,7 @@ class TradingBot:
         "direction_reason_conflict",
         "no_research_hits",
         "missing_resolution_source",
+        "official_data_pending",
         "insufficient_corroboration",
         "missing_estimated_probability",
         "probability_direction_conflict",
@@ -965,6 +954,21 @@ class TradingBot:
         if ticker:
             self._research_prewarm_cooldown_book().pop(ticker, None)
 
+    def _research_prewarm_due_task_tickers(
+        self,
+        *,
+        limit: int,
+        cooldown_seconds: float,
+    ) -> list[str]:
+        try:
+            return default_research_dossier_store().get_due_research_task_tickers(
+                limit=limit,
+                target_cooldown_seconds=cooldown_seconds,
+            )
+        except Exception as exc:
+            log.warning("[RESEARCH_PREWARM] due task lookup failed: %s", exc)
+            return []
+
     def _enrich_research_prewarm_market_source_path(self, market: object) -> object:
         if tuple(getattr(market, "settlement_sources", ()) or ()):
             return market
@@ -1009,12 +1013,24 @@ class TradingBot:
             return []
         max_markets = int(getattr(cfg, "research_prewarm_max_markets", 25))
         market_list = list(markets or [])
-        target_order = {
-            ticker: index
-            for index, ticker in enumerate(_recent_runtime_research_prewarm_tickers())
-        }
         now_monotonic = time.monotonic()
         cooldown = self._research_prewarm_target_cooldown_seconds()
+        target_sequence: list[str] = []
+        seen_targets: set[str] = set()
+        due_task_tickers = self._research_prewarm_due_task_tickers(
+            limit=max_markets,
+            cooldown_seconds=cooldown,
+        )
+        due_task_ticker_set = set(due_task_tickers)
+        for ticker in due_task_tickers + _recent_runtime_research_prewarm_tickers():
+            if ticker in seen_targets:
+                continue
+            seen_targets.add(ticker)
+            target_sequence.append(ticker)
+        target_order = {
+            ticker: index
+            for index, ticker in enumerate(target_sequence)
+        }
 
         def market_ticker(market: object) -> str:
             return str(getattr(market, "ticker", "") or "").strip()
@@ -1041,14 +1057,23 @@ class TradingBot:
             return selected
 
         def is_open_market(market: object) -> bool:
-            status = str(getattr(market, "status", "open") or "open").lower()
-            return status in {"open", "active"}
+            return research_market_eligibility(market).eligible
+
+        def is_terminal_market(market: object) -> bool:
+            status = str(getattr(market, "status", "") or "").lower()
+            return status in {"closed", "finalized", "settled", "resolved"}
 
         def is_sourceable_open_market(market: object) -> bool:
             if not is_open_market(market):
                 return False
             self._enrich_research_prewarm_market_source_path(market)
             return market_has_research_source_path(market)
+
+        def open_markets_by_price(markets: Iterable[object]) -> list[object]:
+            return sorted(
+                [market for market in markets if is_open_market(market)],
+                key=lambda market: 0 if market_has_actionable_price(market) else 1,
+            )
 
         def sourceable_series_fallback(selected_tickers: set[str] | None = None) -> list[object]:
             if not hasattr(self.rest, "get_markets"):
@@ -1102,6 +1127,7 @@ class TradingBot:
             }
             selected_tickers: set[str] = set()
             selected: list[object] = []
+            unsourceable_targets: list[object] = []
             direct_fetch_attempts = 0
 
             for ticker in target_order:
@@ -1123,12 +1149,22 @@ class TradingBot:
                             exc,
                         )
                         market = None
-                if market is not None and is_sourceable_open_market(market):
-                    selected.append(market)
-                    selected_tickers.add(market_ticker(market))
+                if market is not None:
+                    if is_sourceable_open_market(market):
+                        selected.append(market)
+                        selected_tickers.add(market_ticker(market))
+                    elif is_open_market(market):
+                        unsourceable_targets.append(market)
+                        selected_tickers.add(market_ticker(market))
+                    elif ticker in due_task_ticker_set and is_terminal_market(market):
+                        # Closed due tasks must reach process_market so the
+                        # research task can terminalize instead of consuming
+                        # direct-fetch budget on every prewarm cycle.
+                        selected.append(market)
+                        selected_tickers.add(market_ticker(market))
                 if len(selected) >= max_markets:
                     break
-            for market in market_list:
+            for market in open_markets_by_price(market_list):
                 if len(selected) >= max_markets:
                     break
                 ticker = market_ticker(market)
@@ -1146,28 +1182,41 @@ class TradingBot:
                             : max_markets - len(selected)
                         ]
                     )
+                if len(selected) < max_markets:
+                    selected.extend(
+                        unsourceable_targets[
+                            : max_markets - len(selected)
+                        ]
+                    )
                 return mark_selected(selected[:max_markets])
             fallback = sourceable_series_fallback(selected_tickers)
             if fallback:
+                if len(fallback) < max_markets:
+                    fallback.extend(
+                        unsourceable_targets[: max_markets - len(fallback)]
+                    )
                 return mark_selected(fallback)
-            return [market for market in market_list if is_open_market(market)][
-                :max_markets
-            ]
-        sourceable = [
-            market
-            for market in market_list
-            if is_open_market(market)
-            and ticker_available(market_ticker(market))
-            and market_has_research_source_path(
-                self._enrich_research_prewarm_market_source_path(market)
-            )
-        ][:max_markets]
+            if unsourceable_targets:
+                return unsourceable_targets[:max_markets]
+            return open_markets_by_price(market_list)[:max_markets]
+        sourceable = sorted(
+            [
+                market
+                for market in market_list
+                if is_open_market(market)
+                and ticker_available(market_ticker(market))
+                and market_has_research_source_path(
+                    self._enrich_research_prewarm_market_source_path(market)
+                )
+            ],
+            key=lambda market: 0 if market_has_actionable_price(market) else 1,
+        )[:max_markets]
         if sourceable:
             return mark_selected(sourceable)
         fallback = sourceable_series_fallback()
         if fallback:
             return mark_selected(fallback)
-        return [market for market in market_list if is_open_market(market)][:max_markets]
+        return open_markets_by_price(market_list)[:max_markets]
 
     def _create_research_prewarm_runtime_task(self) -> asyncio.Task | None:
         if not bool(getattr(cfg, "enable_research_prewarm_task", False)):
@@ -1181,6 +1230,7 @@ class TradingBot:
             target_cooldown_seconds=float(
                 getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0)
             ),
+            market_result_sink=self._admit_research_prewarm_paper_review,
         )
         return asyncio.create_task(
             prewarm.run_periodic(
@@ -1199,9 +1249,13 @@ class TradingBot:
                 getattr(cfg, "real_web_research_timeout_seconds", 12.0)
             ),
             max_concurrency=int(getattr(cfg, "research_prewarm_concurrency", 3)),
+            target_cooldown_seconds=float(
+                getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0)
+            ),
         )
         result = await prewarm.process_market(market)
         await prewarm.emit_result(result)
+        await self._admit_research_prewarm_paper_review(result, market)
         log.info(
             "[RESEARCH_PREWARM] targeted ticker=%s source_skip_reason=%s "
             "status=%s attempted=%s evidence=%d queries=%d",
@@ -1212,6 +1266,34 @@ class TradingBot:
             result.evidence_count,
             result.query_count,
         )
+
+    async def _admit_research_prewarm_paper_review(self, result, market) -> None:
+        try:
+            admission = await self._research_paper_admission_bridge.admit_prewarm_result(
+                result,
+                market,
+            )
+        except Exception as exc:
+            log.warning(
+                "[RESEARCH_PAPER_ADMISSION] failed ticker=%s status=%s error=%s",
+                getattr(result, "market_ticker", None),
+                getattr(result, "status", None),
+                exc,
+                exc_info=exc,
+            )
+            return
+        if admission.admitted:
+            log.info(
+                "[RESEARCH_PAPER_ADMISSION] admitted ticker=%s enqueued=%s",
+                admission.market_ticker,
+                admission.enqueued,
+            )
+        elif getattr(result, "status", None) == "decision_grade_candidate":
+            log.info(
+                "[RESEARCH_PAPER_ADMISSION] blocked ticker=%s reason=%s",
+                admission.market_ticker,
+                admission.reason,
+            )
 
     def _schedule_targeted_research_prewarm(self, market, skip_reason: str | None) -> bool:
         reason = str(skip_reason or "").strip()
@@ -1245,7 +1327,7 @@ class TradingBot:
             try:
                 done.result()
             except asyncio.CancelledError:
-                raise
+                return
             except Exception as exc:
                 self._clear_research_prewarm_started(ticker)
                 log.warning(
@@ -1256,6 +1338,19 @@ class TradingBot:
 
         task.add_done_callback(_discard)
         return True
+
+    async def cancel_targeted_research_prewarm_tasks(self) -> None:
+        tasks = [
+            task
+            for task in getattr(self, "_targeted_research_prewarm_tasks", set())
+            if not task.done()
+        ]
+        if not tasks:
+            return
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._targeted_research_prewarm_tasks.difference_update(tasks)
 
     # ── News pipeline ─────────────────────────────────────────────────────────
 
@@ -1635,14 +1730,33 @@ class TradingBot:
         # match is "right market, no edge from this headline", not a wrong
         # match. Without this the score-gate sees no score and stays a no-op.
         news_meta = _news_retrieval_meta(news)
-        settlement_source_match = _settlement_source_match(news, market)
+        raw_lifecycle_id = (
+            match_meta.get("lifecycle_id") if isinstance(match_meta, dict) else None
+        )
+        lifecycle_id = (
+            raw_lifecycle_id.strip()
+            if isinstance(raw_lifecycle_id, str) and raw_lifecycle_id.strip()
+            else build_lifecycle_id(
+                venue=str(getattr(market, "venue", None) or "kalshi"),
+                ticker=market.ticker,
+                source=news.source,
+                url=getattr(news, "url", None),
+                headline=news.headline,
+                published=getattr(news, "published", None),
+            )
+        )
+        settlement_source_match = (
+            strict_optional_bool(match_meta.get("settlement_source_match"))
+            if isinstance(match_meta, dict) and "settlement_source_match" in match_meta
+            else _settlement_source_match(news, market)
+        )
         if isinstance(match_meta, dict):
             match_meta.setdefault("match_score", round(float(match_score), 4))
             match_meta.setdefault("source_class", _source_class_for_evidence(news.source))
             for key, value in news_meta.items():
                 match_meta.setdefault(key, value)
-            if settlement_source_match is not None:
-                match_meta.setdefault("settlement_source_match", settlement_source_match)
+            match_meta["lifecycle_id"] = lifecycle_id
+            match_meta["settlement_source_match"] = settlement_source_match
 
         estimated_prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
             await estimate_probability(news, market, keyword_stats=self.keyword_stats, match_meta=match_meta)
@@ -1695,6 +1809,7 @@ class TradingBot:
                     ),
                     dossier_store=dossier_store,
                     cache_only=research_mode == "production",
+                    require_decision_grade=True,
                 )
                 research_completed = datetime.now(timezone.utc)
                 eval_context.update(research_verdict.log_fields())
@@ -1710,7 +1825,10 @@ class TradingBot:
                 )
                 if (
                     research_mode == "production"
-                    and research_verdict.status == ResearchStatus.TRADE_CANDIDATE
+                    and research_verdict.status
+                    in {
+                        ResearchStatus.TRADE_CANDIDATE,
+                    }
                     and research_verdict.force_side in {"yes", "no"}
                     and research_verdict.estimated_probability is not None
                 ):
@@ -1993,6 +2111,7 @@ class TradingBot:
             source_hint_domain=news_meta.get("source_hint_domain"),
             source_hint_query=news_meta.get("source_hint_query"),
             settlement_source_match=settlement_source_match,
+            lifecycle_id=lifecycle_id,
         )
         self.source_stats.increment_opportunities(news.source)
 
@@ -2012,8 +2131,8 @@ class TradingBot:
             )
 
         signal_meta = dict(news_meta)
-        if settlement_source_match is not None:
-            signal_meta["settlement_source_match"] = settlement_source_match
+        signal_meta["lifecycle_id"] = lifecycle_id
+        signal_meta["settlement_source_match"] = settlement_source_match
 
         analysis = SignalAnalysis(
             news_item=news,
@@ -3307,6 +3426,7 @@ class TradingBot:
         finally:
             for task in tasks:
                 task.cancel()
+            await self.cancel_targeted_research_prewarm_tasks()
             self.ws.stop()
 
     def stop(self) -> None:
@@ -3544,6 +3664,7 @@ def _handle_go_live(paper: PaperTrader) -> None:
 async def _shutdown(bot: TradingBot) -> None:
     log.info("Shutdown signal received")
     bot.stop()
+    await bot.cancel_targeted_research_prewarm_tasks()
     try:
         report = bot.paper.generate_report()
         log.info("\n%s", report)

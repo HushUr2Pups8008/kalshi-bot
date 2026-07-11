@@ -494,6 +494,33 @@ class TestValidateSkipReasons:
 
 class TestBlendedCandidateCompatibility:
     @pytest.mark.asyncio
+    async def test_live_executor_blocks_research_paper_review_candidate(self, monkeypatch):
+        ex, rest, _ = _make_executor(monkeypatch)
+        ex._execute_live = AsyncMock(return_value="live-order-id")
+        candidate = _make_blended_candidate(
+            blended_probability=0.65,
+            signal_meta={
+                "source_lane": "blend",
+                "blended_p": 0.65,
+                "readiness_gate_min_edge_override": 0.01,
+                "research_admission_status": "decision_grade_candidate",
+                "research_run_id": "rr-decision-grade",
+            },
+        )
+
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            trade_id = await ex.execute(candidate)
+
+        assert trade_id is None
+        ex._execute_live.assert_not_called()
+        rest.get_balance.assert_not_called()
+        trade_log_mock.log_skipped.assert_called_once()
+        kwargs = trade_log_mock.log_skipped.call_args.kwargs
+        assert kwargs["reason"] == "research_paper_review_live_block"
+        assert kwargs["method"] == "research_decision_grade"
+        assert kwargs["signal_meta"] == candidate.signal_meta
+
+    @pytest.mark.asyncio
     async def test_non_kalshi_blended_candidate_skips_kalshi_refetch(self, monkeypatch):
         ex, rest, _ = _make_paper_executor(monkeypatch)
         ex._execute_paper = AsyncMock(return_value="paper-trade-id")

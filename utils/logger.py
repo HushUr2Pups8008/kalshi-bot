@@ -52,6 +52,7 @@ from utils.output_paths import (
     RAW_TRADES_SHADOW_DIR,
 )
 from utils.log_records import SignalAnalysisDetail
+from utils.lifecycle import strict_optional_bool
 
 
 EVIDENCE_INGESTION_REQUIRED_FIELDS: tuple[str, ...] = (
@@ -106,6 +107,27 @@ BLEND_DECISION_REQUIRED_FIELDS: tuple[str, ...] = (
     "trade_blocked_reason",
     "evidence_ids_contributing",
 )
+
+
+def _promote_lifecycle_context(
+    record: dict[str, Any],
+    *,
+    lifecycle_id: object = None,
+    settlement_source_match: object = None,
+    signal_meta: dict[str, Any] | None = None,
+) -> None:
+    """Promote only the explicit lifecycle transport keys to record scope."""
+    meta = signal_meta if isinstance(signal_meta, dict) else {}
+    raw_lifecycle_id = lifecycle_id or meta.get("lifecycle_id")
+    if not isinstance(raw_lifecycle_id, str) or not raw_lifecycle_id.strip():
+        return
+    record["lifecycle_id"] = raw_lifecycle_id.strip()
+    raw_settlement_match = (
+        settlement_source_match
+        if isinstance(settlement_source_match, bool)
+        else meta.get("settlement_source_match")
+    )
+    record["settlement_source_match"] = strict_optional_bool(raw_settlement_match)
 
 CALIBRATION_CHECK_REQUIRED_FIELDS: tuple[str, ...] = (
     "market_ticker",
@@ -640,6 +662,10 @@ class TradeLogger:
         source_hint_query: str | None = None,
         evidence_id: str | None = None,
         settlement_source_match: bool | None = None,
+        research_status: str | None = None,
+        research_run_id: str | None = None,
+        signal_type: str | None = None,
+        lifecycle_id: str | None = None,
     ) -> None:
         record = {
             "type": "OPPORTUNITY",
@@ -680,7 +706,20 @@ class TradeLogger:
         if evidence_id:
             record["evidence_id"] = evidence_id
         if settlement_source_match is not None:
-            record["settlement_source_match"] = bool(settlement_source_match)
+            record["settlement_source_match"] = strict_optional_bool(
+                settlement_source_match
+            )
+        if research_status is not None:
+            record["research_status"] = research_status
+        if research_run_id is not None:
+            record["research_run_id"] = research_run_id
+        if signal_type is not None:
+            record["signal_type"] = signal_type
+        _promote_lifecycle_context(
+            record,
+            lifecycle_id=lifecycle_id,
+            settlement_source_match=settlement_source_match,
+        )
         self._write(record)
 
     def log_paper_trade(
@@ -727,6 +766,7 @@ class TradeLogger:
             record["keywords_matched"] = keywords_matched
         if signal_meta:
             record["signal_meta"] = signal_meta
+        _promote_lifecycle_context(record, signal_meta=signal_meta)
         if bankroll_delta_dollars is not None:
             record["bankroll_delta_dollars"] = round(bankroll_delta_dollars, 2)
         self._write(record)
@@ -790,6 +830,7 @@ class TradeLogger:
             record["min_edge_threshold"] = round(min_edge_threshold, 4)
         if signal_meta:
             record["signal_meta"] = signal_meta
+        _promote_lifecycle_context(record, signal_meta=signal_meta)
         self._write(record)
 
     def log_skipped(
@@ -879,6 +920,7 @@ class TradeLogger:
             record["recency_distance"] = round(float(recency_distance), 4)
         if signal_meta:
             record["signal_meta"] = signal_meta
+        _promote_lifecycle_context(record, signal_meta=signal_meta)
         self._write(record)
 
     def log_analysis_rejected(
@@ -918,6 +960,11 @@ class TradeLogger:
         research_model_direction: str | None = None,
         research_model_confidence: float | None = None,
         research_model_probability_yes: float | None = None,
+        research_market_price: float | None = None,
+        research_estimated_edge: float | None = None,
+        research_decision_grade_reasons: list[str] | None = None,
+        research_open_questions: list[str] | None = None,
+        research_counterclaims: list[str] | None = None,
         research_skip_reason: str | None = None,
         research_started_ts: str | None = None,
         research_completed_ts: str | None = None,
@@ -1003,6 +1050,18 @@ class TradeLogger:
                 float(research_model_probability_yes),
                 4,
             )
+        if research_market_price is not None:
+            record["research_market_price"] = round(float(research_market_price), 4)
+        if research_estimated_edge is not None:
+            record["research_estimated_edge"] = round(float(research_estimated_edge), 4)
+        if research_decision_grade_reasons:
+            record["research_decision_grade_reasons"] = list(
+                research_decision_grade_reasons
+            )
+        if research_open_questions:
+            record["research_open_questions"] = list(research_open_questions)
+        if research_counterclaims:
+            record["research_counterclaims"] = list(research_counterclaims)
         if research_skip_reason:
             record["research_skip_reason"] = research_skip_reason
         if research_started_ts:
@@ -1159,6 +1218,9 @@ class TradeLogger:
         publish_ts: str | None = None,
         age_at_match_seconds: float | None = None,
         market_specificity_score: float | None = None,
+        venue: str | None = None,
+        lifecycle_id: str | None = None,
+        settlement_source_match: bool | None = None,
     ) -> None:
         record = {
             "type": "MATCH_DIAGNOSTIC",
@@ -1200,6 +1262,13 @@ class TradeLogger:
             record["age_at_match_seconds"] = round(age_at_match_seconds, 1)
         if market_specificity_score is not None:
             record["market_specificity_score"] = round(market_specificity_score, 4)
+        if venue:
+            record["venue"] = venue
+        _promote_lifecycle_context(
+            record,
+            lifecycle_id=lifecycle_id,
+            settlement_source_match=settlement_source_match,
+        )
         self._write(record)
 
     def log_match_weight_applied(
@@ -1277,6 +1346,8 @@ class TradeLogger:
         recency_score: float | None = None,
         recency_threshold: float | None = None,
         recency_distance: float | None = None,
+        lifecycle_id: str | None = None,
+        settlement_source_match: bool | None = None,
     ) -> None:
         record = {
             "type": "BLEND_DECISION",
@@ -1305,6 +1376,11 @@ class TradeLogger:
             record["recency_threshold"] = round(float(recency_threshold), 4)
         if recency_distance is not None:
             record["recency_distance"] = round(float(recency_distance), 4)
+        _promote_lifecycle_context(
+            record,
+            lifecycle_id=lifecycle_id,
+            settlement_source_match=settlement_source_match,
+        )
         self._write(record)
 
     def log_evidence_ingestion(

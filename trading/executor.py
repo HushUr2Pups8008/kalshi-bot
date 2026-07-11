@@ -53,6 +53,13 @@ def classify_skip_category(reason: str | None) -> str:
     return "other"
 
 
+def _is_research_paper_review_signal(signal_meta: dict[str, Any]) -> bool:
+    return (
+        str(signal_meta.get("research_admission_status") or "")
+        == "decision_grade_candidate"
+    )
+
+
 def _correlated_exposure_prefix(market: Any) -> str:
     """Return the per-prefix cap key identifying a market's correlated-exposure family.
 
@@ -192,10 +199,40 @@ class TradeExecutor:
             analysis.estimated_probability,
             analysis.confidence,
         )
+        signal_meta = self._signal_meta(analysis)
+        if not self._is_paper and _is_research_paper_review_signal(signal_meta):
+            skip_reason = "research_paper_review_live_block"
+            log.warning(
+                "[DECISION] skip ticker=%s mode=live side=%s reason=%s",
+                analysis.market.ticker,
+                analysis.side.upper(),
+                skip_reason,
+            )
+            await write_trade_log_async(
+                trade_log.log_skipped,
+                reason=skip_reason,
+                skip_category=classify_skip_category(skip_reason),
+                ticker=analysis.market.ticker,
+                headline=analysis.news_item.headline[:80],
+                source=analysis.news_item.source,
+                method="research_decision_grade",
+                llm_direction=analysis.llm_direction,
+                llm_magnitude=analysis.llm_magnitude,
+                model_probability=analysis.estimated_probability,
+                market_price=(
+                    float(analysis.executed_price_cents)
+                    if analysis.executed_price_cents is not None
+                    else 0.0
+                ),
+                edge=analysis.edge,
+                min_edge_threshold=self._min_edge_threshold(analysis),
+                venue=self._venue_value(analysis.market),
+                signal_meta=signal_meta,
+            )
+            return None
         skip_reason = self._validate(analysis)
         if skip_reason:
             effective_min_edge = self._min_edge_threshold(analysis)
-            signal_meta = self._signal_meta(analysis)
             method = (
                 "llm"
                 if any(value is not None for value in (analysis.llm_direction, analysis.llm_magnitude, analysis.llm_confidence))

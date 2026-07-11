@@ -227,7 +227,15 @@ async def test_ready_candidate_reads_lanes_logs_and_enqueues():
         now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
     )
 
-    result = await task.process_fast_lane_result(_analysis())
+    result = await task.process_fast_lane_result(
+        _analysis(
+            signal_meta={
+                "lifecycle_id": "lc-ready",
+                "settlement_source_match": None,
+                "not_whitelisted": "drop-me",
+            }
+        )
+    )
 
     assert result.ready is True
     assert queue.qsize() == 1
@@ -235,6 +243,9 @@ async def test_ready_candidate_reads_lanes_logs_and_enqueues():
     assert candidate.blended_probability == pytest.approx(result.blend_result.blended_p)
     assert candidate.signal_meta["source_lane"] == "blend"
     assert candidate.signal_meta["readiness_gate_min_edge_override"] is None
+    assert candidate.signal_meta["lifecycle_id"] == "lc-ready"
+    assert candidate.signal_meta["settlement_source_match"] is None
+    assert "not_whitelisted" not in candidate.signal_meta
     assert logger.records == [
         {
             "market_ticker": "KXBLEND-1",
@@ -257,6 +268,8 @@ async def test_ready_candidate_reads_lanes_logs_and_enqueues():
             "recency_score": pytest.approx(1.0),
             "recency_threshold": pytest.approx(0.28),
             "recency_distance": pytest.approx(0.72),
+            "lifecycle_id": "lc-ready",
+            "settlement_source_match": None,
         }
     ]
     assert {call[0] for call in store.calls} == {

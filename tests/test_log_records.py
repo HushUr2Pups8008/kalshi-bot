@@ -272,10 +272,30 @@ def test_analysis_rejected_record_carries_research_replay_fields():
             research_max_published_at="2026-06-27T09:55:00+00:00",
             research_min_retrieved_at="2026-06-27T10:00:01+00:00",
             research_max_retrieved_at="2026-06-27T10:00:02+00:00",
+            research_market_price=0.51,
+            research_estimated_edge=0.12,
+            research_decision_grade_reasons=[
+                "price_present",
+                "edge_recomputed",
+            ],
+            research_open_questions=["What official correction would change this?"],
+            research_counterclaims=["Counter source says the opposite side remains possible."],
         )
         record = json.loads(log_file.read_text(encoding="utf-8").strip())
 
         assert record["research_model_probability_yes"] == 0.72
+        assert record["research_market_price"] == 0.51
+        assert record["research_estimated_edge"] == 0.12
+        assert record["research_decision_grade_reasons"] == [
+            "price_present",
+            "edge_recomputed",
+        ]
+        assert record["research_open_questions"] == [
+            "What official correction would change this?"
+        ]
+        assert record["research_counterclaims"] == [
+            "Counter source says the opposite side remains possible."
+        ]
         assert record["research_duration_ms"] == 2000.4
         assert record["research_started_ts"] == "2026-06-27T10:00:00+00:00"
         assert record["research_completed_ts"] == "2026-06-27T10:00:02+00:00"
@@ -313,6 +333,9 @@ def test_opportunity_record_carries_source_hint_and_settlement_attribution():
             source_hint_query="site:reuters.com vance iran",
             evidence_id="ev-op-1",
             settlement_source_match=True,
+            research_status="decision_grade_candidate",
+            research_run_id="rr-decision",
+            signal_type="research_decision_grade",
         )
         record = json.loads(log_file.read_text(encoding="utf-8").strip())
 
@@ -321,6 +344,9 @@ def test_opportunity_record_carries_source_hint_and_settlement_attribution():
         assert record["source_hint_query"] == "site:reuters.com vance iran"
         assert record["evidence_id"] == "ev-op-1"
         assert record["settlement_source_match"] is True
+        assert record["research_status"] == "decision_grade_candidate"
+        assert record["research_run_id"] == "rr-decision"
+        assert record["signal_type"] == "research_decision_grade"
     finally:
         _cleanup(tmp)
 

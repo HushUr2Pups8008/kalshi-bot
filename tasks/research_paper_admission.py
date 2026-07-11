@@ -15,6 +15,7 @@ from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRe
 from tasks.research_dossier import ResearchDossierSnapshot, default_store
 from tasks.research_prewarm_task import ResearchPrewarmResult
 from utils.logger import trade_log
+from utils.lifecycle import build_research_lifecycle_id
 from utils.research_evidence_quality import has_reliable_research_source_path
 from utils.research_market_eligibility import research_market_eligibility
 
@@ -443,6 +444,11 @@ def _signal_analysis_from_research(
     trigger_index, trigger_evidence = _select_trigger_evidence(signal)
     trigger_evidence_id = f"research:{signal.research_run_id}:{trigger_index}"
     settlement_source_match = _research_settlement_source_match(trigger_evidence)
+    lifecycle_id = build_research_lifecycle_id(
+        ticker=signal.market_ticker,
+        research_run_id=signal.research_run_id,
+        contract_fingerprint=signal.contract_fingerprint,
+    )
     return SignalAnalysis(
         news_item=None,
         market=market,
@@ -470,6 +476,7 @@ def _signal_analysis_from_research(
             ),
             "trigger_evidence_original_weight": 1.0,
             "settlement_source_match": settlement_source_match,
+            "lifecycle_id": lifecycle_id,
         },
     )
 
@@ -485,6 +492,11 @@ def _emit_research_opportunity(
         return
     trigger_index, evidence = _select_trigger_evidence(signal)
     settlement_source_match = _research_settlement_source_match(evidence)
+    lifecycle_id = build_research_lifecycle_id(
+        ticker=signal.market_ticker,
+        research_run_id=signal.research_run_id,
+        contract_fingerprint=signal.contract_fingerprint,
+    )
     log_opportunity(
         ticker=signal.market_ticker,
         market_title=str(getattr(market, "title", "") or signal.market_ticker),
@@ -506,6 +518,7 @@ def _emit_research_opportunity(
         research_status=DECISION_GRADE_STATUS,
         research_run_id=signal.research_run_id,
         signal_type=analysis.signal_type,
+        lifecycle_id=lifecycle_id,
     )
 
 
