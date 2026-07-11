@@ -45,6 +45,20 @@ def test_get_market_settlement_calls_slug_endpoint():
     )
 
 
+def test_get_market_settlement_encodes_slug_as_one_path_segment():
+    slug = "will/example?region=us#result"
+    client = PolymarketPublicClient(base_url="https://gateway.polymarket.us")
+    client._session.request = MagicMock(
+        return_value=_response({"slug": slug, "settlement": "1"})
+    )
+
+    client.get_market_settlement(slug)
+
+    assert client._session.request.call_args.args[1].endswith(
+        "/v1/markets/will%2Fexample%3Fregion%3Dus%23result/settlement"
+    )
+
+
 def test_get_market_settlement_resolves_numeric_id_to_slug():
     client = PolymarketPublicClient()
     client.get_market_payload = MagicMock(

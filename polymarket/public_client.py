@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from typing import Any
+from urllib.parse import quote
 
 import requests
 from requests import HTTPError
@@ -104,8 +105,9 @@ class PolymarketPublicClient:
         if not slug:
             raise ValueError(f"Polymarket market {market_id!r} has no canonical slug")
 
+        encoded_slug = quote(slug, safe="")
         try:
-            data = self._request("GET", f"/v1/markets/{slug}/settlement")
+            data = self._request("GET", f"/v1/markets/{encoded_slug}/settlement")
         except HTTPError as exc:
             status_code = getattr(getattr(exc, "response", None), "status_code", None)
             if status_code == 404:
