@@ -156,6 +156,7 @@ class ResearchDossierStore:
                 trigger_headline=trigger_headline,
                 trigger_source=trigger_source,
                 contract_question=contract_question,
+                contract_question_supplied=contract_question is not None,
                 attempted=attempted,
                 summary=summary,
                 verdict_status=verdict_status,
@@ -165,13 +166,19 @@ class ResearchDossierStore:
                 confidence=confidence,
                 contract_fingerprint=contract_fingerprint,
                 market_price=market_price,
+                market_price_supplied=market_price is not None,
                 market_status=market_status,
                 market_close_time=market_close_time,
                 estimated_edge=estimated_edge,
+                estimated_edge_supplied=estimated_edge is not None,
                 decision_grade_status=decision_grade_status,
+                decision_grade_status_supplied=decision_grade_status is not None,
                 decision_grade_reasons=decision_grade_reasons or [],
+                decision_grade_reasons_supplied=decision_grade_reasons is not None,
                 open_questions=open_questions or [],
+                open_questions_supplied=open_questions is not None,
                 counterclaims=counterclaims or [],
+                counterclaims_supplied=counterclaims is not None,
                 queries=queries or [],
                 evidence=evidence or [],
                 update_dossier_snapshot=update_dossier_snapshot,
@@ -566,19 +573,26 @@ class ResearchDossierStore:
         summary: str,
         verdict_status: str,
         contract_question: str | None,
+        contract_question_supplied: bool,
         skip_reason: str | None,
         force_side: str | None,
         estimated_probability: float | None,
         confidence: float | None,
         contract_fingerprint: str | None,
         market_price: float | None,
+        market_price_supplied: bool,
         market_status: object,
         market_close_time: object,
         estimated_edge: float | None,
+        estimated_edge_supplied: bool,
         decision_grade_status: str | None,
+        decision_grade_status_supplied: bool,
         decision_grade_reasons: list[str],
+        decision_grade_reasons_supplied: bool,
         open_questions: list[str],
+        open_questions_supplied: bool,
         counterclaims: list[str],
+        counterclaims_supplied: bool,
         queries: list[object],
         evidence: list[ResearchEvidence],
         update_dossier_snapshot: bool = True,
@@ -684,18 +698,27 @@ class ResearchDossierStore:
                 """
                 UPDATE research_runs
                 SET
-                    contract_question=?,
+                    contract_question=CASE WHEN ? THEN ? ELSE contract_question END,
                     market_status=CASE WHEN ? THEN ? ELSE market_status END,
                     market_close_time=CASE WHEN ? THEN ? ELSE market_close_time END,
-                    market_price=?,
-                    estimated_edge=?,
-                    decision_grade_status=?,
-                    decision_grade_reasons_json=?,
-                    open_questions_json=?,
-                    counterclaims_json=?
+                    market_price=CASE WHEN ? THEN ? ELSE market_price END,
+                    estimated_edge=CASE WHEN ? THEN ? ELSE estimated_edge END,
+                    decision_grade_status=CASE
+                        WHEN ? THEN ? ELSE decision_grade_status
+                    END,
+                    decision_grade_reasons_json=CASE
+                        WHEN ? THEN ? ELSE decision_grade_reasons_json
+                    END,
+                    open_questions_json=CASE
+                        WHEN ? THEN ? ELSE open_questions_json
+                    END,
+                    counterclaims_json=CASE
+                        WHEN ? THEN ? ELSE counterclaims_json
+                    END
                 WHERE research_run_id=?
                 """,
                 (
+                    int(contract_question_supplied),
                     contract_question,
                     int(normalized_market_status is not _UNSET),
                     None if normalized_market_status is _UNSET else normalized_market_status,
@@ -705,11 +728,17 @@ class ResearchDossierStore:
                         if normalized_market_close_time is _UNSET
                         else normalized_market_close_time
                     ),
+                    int(market_price_supplied),
                     market_price,
+                    int(estimated_edge_supplied),
                     estimated_edge,
+                    int(decision_grade_status_supplied),
                     final_decision_grade_status,
+                    int(decision_grade_reasons_supplied),
                     _json_list(decision_grade_reasons),
+                    int(open_questions_supplied),
                     _json_list(open_questions),
+                    int(counterclaims_supplied),
                     _json_list(counterclaims),
                     research_run_id,
                 ),

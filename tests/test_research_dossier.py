@@ -678,6 +678,35 @@ async def test_research_dossier_persists_decision_grade_price_edge_and_task_stat
             WHERE market_ticker = 'KXCEASEFIRE-26JUL01'
             """
         ).fetchone()[0]
+        proof_run_before = conn.execute(
+            """
+            SELECT trigger_headline, trigger_source, contract_question, attempted,
+                   summary, verdict_status, skip_reason, force_side,
+                   estimated_probability, confidence, market_price, estimated_edge,
+                   decision_grade_status, decision_grade_reasons_json,
+                   open_questions_json, counterclaims_json
+            FROM research_runs
+            WHERE research_run_id = 'run-decision-grade'
+            """
+        ).fetchone()
+        proof_queries_before = conn.execute(
+            """
+            SELECT ordinal, query, query_intent, source_class
+            FROM research_run_queries
+            WHERE research_run_id = 'run-decision-grade'
+            ORDER BY ordinal
+            """
+        ).fetchall()
+        proof_evidence_before = conn.execute(
+            """
+            SELECT evidence_id, source_class, source_name, source_url, claim_type,
+                   supports_direction, supports_confidence, contract_fingerprint,
+                   raw_payload_json
+            FROM research_evidence
+            WHERE research_run_id = 'run-decision-grade'
+            ORDER BY evidence_id
+            """
+        ).fetchall()
 
     assert snapshot is not None
     assert snapshot.last_market_price == pytest.approx(0.55)
@@ -695,6 +724,70 @@ async def test_research_dossier_persists_decision_grade_price_edge_and_task_stat
     assert run[6] == "Will a ceasefire agreement be signed by July 1?"
     assert snapshot.contract_question == "Will a ceasefire agreement be signed by July 1?"
     assert dossier_contract_question == "Will a ceasefire agreement be signed by July 1?"
+
+    await store.record_research_run(
+        "KXCEASEFIRE-26JUL01",
+        "run-decision-grade",
+        trigger_headline="Current market metadata",
+        trigger_source="market_status_refresh",
+        attempted=False,
+        summary="Metadata-only refresh.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        market_status="closed",
+        market_close_time="2026-07-11T18:00:00Z",
+        update_dossier_snapshot=False,
+        update_dossier_run_id=False,
+    )
+
+    retained_snapshot = await store.get_dossier_snapshot("KXCEASEFIRE-26JUL01")
+    with sqlite3.connect(db_path) as conn:
+        proof_run_after = conn.execute(
+            """
+            SELECT trigger_headline, trigger_source, contract_question, attempted,
+                   summary, verdict_status, skip_reason, force_side,
+                   estimated_probability, confidence, market_price, estimated_edge,
+                   decision_grade_status, decision_grade_reasons_json,
+                   open_questions_json, counterclaims_json
+            FROM research_runs
+            WHERE research_run_id = 'run-decision-grade'
+            """
+        ).fetchone()
+        proof_queries_after = conn.execute(
+            """
+            SELECT ordinal, query, query_intent, source_class
+            FROM research_run_queries
+            WHERE research_run_id = 'run-decision-grade'
+            ORDER BY ordinal
+            """
+        ).fetchall()
+        proof_evidence_after = conn.execute(
+            """
+            SELECT evidence_id, source_class, source_name, source_url, claim_type,
+                   supports_direction, supports_confidence, contract_fingerprint,
+                   raw_payload_json
+            FROM research_evidence
+            WHERE research_run_id = 'run-decision-grade'
+            ORDER BY evidence_id
+            """
+        ).fetchall()
+
+    assert proof_run_after == proof_run_before
+    assert proof_queries_after == proof_queries_before
+    assert proof_evidence_after == proof_evidence_before
+    assert retained_snapshot is not None
+    assert retained_snapshot.last_research_run_id == "run-decision-grade"
+    assert (
+        retained_snapshot.last_decision_grade_status
+        == ResearchStatus.DECISION_GRADE_CANDIDATE.value
+    )
+    assert retained_snapshot.last_contract_fingerprint == "contract-v1"
+    assert retained_snapshot.last_force_side == "yes"
+    assert retained_snapshot.last_estimated_probability == pytest.approx(0.68)
+    assert retained_snapshot.last_confidence == pytest.approx(0.82)
+    assert retained_snapshot.last_market_price == pytest.approx(0.55)
+    assert retained_snapshot.last_estimated_edge == pytest.approx(0.12)
+    assert retained_snapshot.market_status == "closed"
+    assert retained_snapshot.market_close_time == "2026-07-11T18:00:00Z"
 
 
 @pytest.mark.asyncio
