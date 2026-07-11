@@ -13,6 +13,7 @@ import hashlib
 import html
 import io
 import json
+import math
 import os
 import re
 import urllib.parse
@@ -23,6 +24,11 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Awaitable, Callable, Iterable, Sequence
+
+from utils.research_evidence_quality import (
+    has_reliable_research_source_path,
+    research_source_key,
+)
 
 
 class ResearchStatus(str, Enum):
@@ -1253,6 +1259,15 @@ def _decision_grade_verdict(
     *,
     model_reason: str | None,
 ) -> ResearchVerdict:
+    if not _has_reliable_non_pending_source_path(candidate.evidence):
+        return _decision_grade_block(
+            candidate,
+            "no_reliable_source_path",
+            (
+                "Decision-grade verifier requires a reliable independent "
+                "source path outside pending settlement context."
+            ),
+        )
     directions = {
         item.supports_direction
         for item in candidate.evidence
@@ -2301,21 +2316,65 @@ def _office_departure_mentions_condition(item: ResearchEvidence) -> bool:
     return _office_departure_direction(item) is not None
 
 
+_OFFICIAL_DATA_PENDING_METRICS = frozenset(
+    {
+        "cpi_official_data_pending",
+        "fed_decision_pending",
+        "bank_of_israel_decision_pending",
+        "event_window_pending",
+        "economic_stat_data_pending",
+        "treasury_yield_data_pending",
+        "truth_social_window_pending",
+        "nws_daily_high_temp_pending",
+    }
+)
+
+
+def _is_official_data_pending_evidence(item: ResearchEvidence) -> bool:
+    return item.metric_name in _OFFICIAL_DATA_PENDING_METRICS
+
+
 def _has_official_data_pending(evidence: list[ResearchEvidence]) -> bool:
-    return any(
-        item.metric_name
-        in {
-            "cpi_official_data_pending",
-            "fed_decision_pending",
-            "bank_of_israel_decision_pending",
-            "event_window_pending",
-            "economic_stat_data_pending",
-            "treasury_yield_data_pending",
-            "truth_social_window_pending",
-            "nws_daily_high_temp_pending",
-        }
-        for item in evidence
+    return any(_is_official_data_pending_evidence(item) for item in evidence)
+
+
+def _has_reliable_non_pending_source_path(
+    evidence: list[ResearchEvidence],
+) -> bool:
+    non_pending = [
+        item for item in evidence if not _is_official_data_pending_evidence(item)
+    ]
+    if has_reliable_research_source_path(non_pending):
+        return True
+    if any(
+        item.source_class == "specialized_data"
+        and item.claim_type == "base_rate"
+        and item.metric_name == "gdpnow_real_gdp_growth_saar"
+        and item.supports_direction in {"yes", "no"}
+        and float(item.supports_confidence or 0.0) >= 0.5
+        and _is_finite_number(item.metric_value)
+        and float(item.extraction_confidence or 0.0) >= 0.8
+        and research_source_key(
+            item.source_class,
+            item.source_name,
+            item.source_url,
+        )
+        == "stlouisfed.org"
+        for item in non_pending
+    ):
+        return True
+    urls = {item.source_url for item in non_pending if item.source_url}
+    return (
+        len(urls) >= 2
+        and any(_is_settlement_evidence(item) for item in non_pending)
     )
+
+
+def _is_finite_number(value: Any) -> bool:
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def _has_trade_selection_evidence(evidence: list[ResearchEvidence]) -> bool:
@@ -4319,47 +4378,65 @@ def _event_deadline_from_text(text: str) -> date | None:
 
 
 async def default_search_provider(query: ResearchQuery) -> list[ResearchEvidence]:
-    truth_social_evidence = _truth_social_event_search(query)
-    if truth_social_evidence:
-        return truth_social_evidence
-    bank_of_israel_policy_evidence = _bank_of_israel_policy_search(query)
-    if bank_of_israel_policy_evidence:
-        return bank_of_israel_policy_evidence
-    event_window_evidence = _event_window_pending_search(query)
-    if event_window_evidence:
-        return event_window_evidence
-    treasury_yield_evidence = _treasury_yield_search(query)
-    if treasury_yield_evidence:
-        return treasury_yield_evidence
-    fed_policy_evidence = _fed_policy_search(query)
-    if fed_policy_evidence:
-        return fed_policy_evidence
-    bls_cpi_evidence = await asyncio.to_thread(_bls_cpi_search, query)
-    if bls_cpi_evidence:
-        return bls_cpi_evidence
-    nws_climate_evidence = await asyncio.to_thread(_nws_daily_climate_search, query)
-    if nws_climate_evidence:
-        return nws_climate_evidence
-    govinfo_evidence = await asyncio.to_thread(
-        _govinfo_impeachment_expungement_search,
-        query,
-    )
-    if govinfo_evidence:
-        return govinfo_evidence
-    economic_stat_evidence = _economic_stat_pending_search(query)
-    if economic_stat_evidence:
-        return economic_stat_evidence
-    gdpnow_evidence = await asyncio.to_thread(_gdpnow_search, query)
-    if gdpnow_evidence:
-        return gdpnow_evidence
-    if _query_site_domain(query.query) == "federalregister.gov":
+    pending_evidence: list[ResearchEvidence] = []
+
+    def classify_structured(
+        candidate: list[ResearchEvidence],
+    ) -> list[ResearchEvidence] | None:
+        if not candidate:
+            return None
+        if _has_official_data_pending(candidate):
+            pending_evidence.extend(candidate)
+            return None
+        return candidate
+
+    for provider in (
+        _truth_social_event_search,
+        _bank_of_israel_policy_search,
+        _treasury_yield_search,
+        _fed_policy_search,
+    ):
+        structured = classify_structured(provider(query))
+        if structured is not None:
+            return structured
+        if pending_evidence:
+            break
+
+    if not pending_evidence:
+        for provider in (
+            _bls_cpi_search,
+            _nws_daily_climate_search,
+            _govinfo_impeachment_expungement_search,
+            _gdpnow_search,
+        ):
+            structured = classify_structured(
+                await asyncio.to_thread(provider, query)
+            )
+            if structured is not None:
+                return structured
+            if pending_evidence:
+                break
+
+    if not pending_evidence:
+        structured = classify_structured(_economic_stat_pending_search(query))
+        if structured is not None:
+            return structured
+
+    if not pending_evidence and _query_site_domain(query.query) == "federalregister.gov":
         federal_register_evidence = await asyncio.to_thread(_federal_register_search, query)
         if federal_register_evidence:
             return federal_register_evidence
+
+    if not pending_evidence:
+        structured = classify_structured(_event_window_pending_search(query))
+        if structured is not None:
+            return structured
+
     try:
-        return await asyncio.to_thread(_rss_search, query)
+        search_evidence = await asyncio.to_thread(_rss_search, query)
     except Exception:
-        return await asyncio.to_thread(_duckduckgo_lite_search, query)
+        search_evidence = await asyncio.to_thread(_duckduckgo_lite_search, query)
+    return [*pending_evidence, *search_evidence]
 
 
 
@@ -4856,6 +4933,7 @@ async def run_research_gate(
                 ),
             )
         return verdict
+    provider_non_pending_evidence: list[ResearchEvidence] = []
     if (
         _has_sufficient_dossier_evidence(usable_cached_evidence, contract_fingerprint)
         and not (
@@ -4990,6 +5068,8 @@ async def run_research_gate(
                 provider_errors.append(result)
                 continue
             for item in result:
+                if not _is_official_data_pending_evidence(item):
+                    provider_non_pending_evidence.append(item)
                 identity = _evidence_identity(item)
                 if identity in existing:
                     continue
@@ -5003,6 +5083,9 @@ async def run_research_gate(
         require_decision_grade
         and _has_official_data_pending(evidence)
         and not _has_trade_selection_evidence(evidence)
+        and not _has_reliable_non_pending_source_path(
+            provider_non_pending_evidence
+        )
     ):
         return await finalize_verdict(
             ResearchVerdict(

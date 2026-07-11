@@ -81,7 +81,7 @@ class ResearchPrewarmTask:
         adjudicator: ResearchAdjudicator | None = None,
         max_queries: int = 6,
         research_timeout_seconds: float = 12.0,
-        max_concurrency: int = 3,
+        max_concurrency: int = 1,
         target_cooldown_seconds: float = 0.0,
         result_sink: ResearchPrewarmResultSink | None = None,
         market_result_sink: ResearchPrewarmMarketResultSink | None = None,
