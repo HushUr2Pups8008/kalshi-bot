@@ -16,7 +16,10 @@ from analysis.research_gate import (
     run_research_gate,
     urllib,
 )
-from tasks.research_dossier import ResearchDossierStore
+from tasks.research_dossier import (
+    ResearchDossierStore,
+    _decision_grade_persistence_quality,
+)
 
 
 class _TrackingConnection:
@@ -40,6 +43,39 @@ class _TrackingConnection:
     def execute(self, statement, parameters=()):
         self.executed.append((statement, parameters))
         return SimpleNamespace(rowcount=1)
+
+
+def test_decision_grade_persistence_requires_source_class_diversity():
+    evidence = [
+        ResearchEvidence(
+            source_class="resolution_source",
+            source_name="Agency A",
+            source_url="https://agency-a.gov/result",
+            title="Result",
+            snippet="Supports yes.",
+            claim_type="resolution",
+            supports_direction="yes",
+            supports_confidence=0.9,
+        ),
+        ResearchEvidence(
+            source_class="resolution_source",
+            source_name="Agency B",
+            source_url="https://agency-b.gov/counter",
+            title="Counter",
+            snippet="Supports no.",
+            claim_type="settlement",
+            supports_direction="no",
+            supports_confidence=0.9,
+        ),
+    ]
+
+    quality = _decision_grade_persistence_quality(
+        side="yes",
+        queries=[SimpleNamespace(query_intent="disconfirming")],
+        evidence=evidence,
+    )
+
+    assert quality["has_reliable_source_path"] is False
 
 
 def test_connection_context_commits_and_closes(monkeypatch, tmp_path):
@@ -555,7 +591,7 @@ async def test_research_dossier_persists_decision_grade_price_edge_and_task_stat
         ResearchEvidence(
             source_class="resolution_source",
             source_name="Official",
-            source_url="https://official.example.com/final",
+            source_url="https://agency.gov/final",
             title="Official notice",
             snippet="Official notice supports yes.",
             claim_type="settlement",
@@ -566,7 +602,7 @@ async def test_research_dossier_persists_decision_grade_price_edge_and_task_stat
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="Reuters",
-            source_url="https://reuters.example.com/report",
+            source_url="https://reuters.com/report",
             title="Reuters report",
             snippet="Reuters independently supports yes.",
             claim_type="settlement",
@@ -577,7 +613,7 @@ async def test_research_dossier_persists_decision_grade_price_edge_and_task_stat
         ResearchEvidence(
             source_class="reputable_secondary",
             source_name="AP",
-            source_url="https://ap.example.com/counter",
+            source_url="https://apnews.com/counter",
             title="AP countercase",
             snippet="AP reports a ratification risk.",
             claim_type="disconfirming",

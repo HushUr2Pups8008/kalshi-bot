@@ -17,9 +17,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal, TypeVar
-from urllib.parse import urlparse
 
 from analysis.research_gate import ResearchEvidence
+from utils.research_evidence_quality import has_reliable_research_source_path
 from config import DATA_DIR
 
 _T = TypeVar("_T")
@@ -1538,11 +1538,8 @@ def _decision_grade_persistence_quality(
     evidence: list[ResearchEvidence],
 ) -> dict[str, bool]:
     opposite = "no" if side == "yes" else "yes" if side == "no" else ""
-    settlement_source_keys: set[str] = set()
-    settlement_source_classes: set[str] = set()
     supports_directions: set[str] = set()
     has_counter_evidence = False
-    has_structured_official_signal = False
     structured_support_metrics: set[str] = set()
     for item in evidence:
         direction = str(getattr(item, "supports_direction", "") or "").strip().lower()
@@ -1565,10 +1562,6 @@ def _decision_grade_persistence_quality(
             and float(getattr(item, "supports_confidence", 0.0) or 0.0) >= 0.6
         ):
             source_class = str(getattr(item, "source_class", "") or "").strip().lower()
-            settlement_source_classes.add(source_class)
-            source_key = _evidence_source_key(item)
-            if source_key:
-                settlement_source_keys.add(source_key)
             metric_name = str(getattr(item, "metric_name", "") or "").strip()
             extraction_confidence = float(
                 getattr(item, "extraction_confidence", 0.0) or 0.0
@@ -1578,7 +1571,6 @@ def _decision_grade_persistence_quality(
                 and source_class in _OFFICIAL_SOURCE_CLASSES
                 and extraction_confidence >= 0.6
             ):
-                has_structured_official_signal = True
                 if direction == side:
                     structured_support_metrics.add(metric_name)
                     if any(
@@ -1600,11 +1592,7 @@ def _decision_grade_persistence_quality(
         for query in queries
     )
     return {
-        "has_reliable_source_path": (
-            len(settlement_source_keys) >= 2
-            and bool(settlement_source_classes & _OFFICIAL_SOURCE_CLASSES)
-        )
-        or has_structured_official_signal,
+        "has_reliable_source_path": has_reliable_research_source_path(evidence),
         "has_directional_evidence": bool(supports_directions & {"yes", "no"}),
         "has_counter_query": has_counter_query,
         "has_counter_evidence": has_counter_evidence,
@@ -1624,20 +1612,6 @@ def _is_structured_official_metric_countercheck(item: ResearchEvidence) -> bool:
         getattr(item, "extraction_confidence", 0.0) or 0.0
     )
     return getattr(item, "metric_value", None) is not None or extraction_confidence >= 0.8
-
-
-def _evidence_source_key(item: ResearchEvidence) -> str:
-    url = str(getattr(item, "source_url", "") or "").strip()
-    if url:
-        host = urlparse(url).netloc.lower()
-        if host.startswith("www."):
-            host = host[4:]
-        if host:
-            return host
-    source_name = str(getattr(item, "source_name", "") or "").strip().lower()
-    if source_name:
-        return source_name
-    return str(getattr(item, "source_class", "") or "").strip().lower()
 
 
 def _utc_cooldown_until(backoff_seconds: float) -> str:
