@@ -33,6 +33,7 @@ from tasks.trade_readiness_gate import (
     evaluate_readiness,
 )
 from utils.logger import get_logger, trade_log, write_trade_log_async
+from utils.lifecycle import strict_optional_bool
 
 
 log = get_logger("blend_task")
@@ -98,6 +99,8 @@ class BlendDecisionLogger(Protocol):
         recency_score: float | None = None,
         recency_threshold: float | None = None,
         recency_distance: float | None = None,
+        lifecycle_id: str | None = None,
+        settlement_source_match: bool | None = None,
     ) -> None: ...
 
     def log_skipped(self, **kwargs: Any) -> None: ...
@@ -266,6 +269,20 @@ class BlendTask:
             getattr(fast_lane_result, "venue", None)
             or getattr(fast_lane_result.market, "venue", None)
         ) or "kalshi"
+        source_meta = (
+            fast_lane_result.signal_meta
+            if isinstance(fast_lane_result.signal_meta, dict)
+            else {}
+        )
+        raw_lifecycle_id = source_meta.get("lifecycle_id")
+        lifecycle_id = (
+            raw_lifecycle_id.strip()
+            if isinstance(raw_lifecycle_id, str) and raw_lifecycle_id.strip()
+            else None
+        )
+        settlement_source_match = strict_optional_bool(
+            source_meta.get("settlement_source_match")
+        )
         await self._emit_blend_decision(
             ticker=ticker,
             venue=venue,
@@ -275,6 +292,8 @@ class BlendTask:
             trade_blocked_reason=trade_blocked_reason,
             evidence_ids=evidence_ids,
             readiness=readiness,
+            lifecycle_id=lifecycle_id,
+            settlement_source_match=settlement_source_match,
         )
 
         if trade_blocked_reason is not None:
@@ -484,6 +503,8 @@ class BlendTask:
         trade_blocked_reason: str | None,
         evidence_ids: list[str],
         readiness: ReadinessDecision,
+        lifecycle_id: str | None,
+        settlement_source_match: bool | None,
     ) -> None:
         await write_trade_log_async(
             self._logger.log_blend_decision,
@@ -507,6 +528,8 @@ class BlendTask:
             recency_score=readiness.recency_score,
             recency_threshold=readiness.recency_threshold,
             recency_distance=readiness.recency_distance,
+            lifecycle_id=lifecycle_id,
+            settlement_source_match=settlement_source_match,
         )
 
     async def _emit_lane_skips(
@@ -787,12 +810,7 @@ def _settlement_source_relevant(analysis: SignalAnalysis) -> bool | None:
     meta = analysis.signal_meta
     if not isinstance(meta, dict) or "settlement_source_match" not in meta:
         return None
-    value = meta["settlement_source_match"]
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "y"}
-    return bool(value)
+    return strict_optional_bool(meta["settlement_source_match"])
 
 
 def _optional_float(value: Any) -> float | None:
@@ -841,6 +859,15 @@ def _trade_candidate(
         # vs multi-source trade performance can be compared once G2 allows single.
         "evidence_source_class_count": readiness.source_class_count,
     }
+    source_meta = fast_lane_result.signal_meta or {}
+    for key, value in source_meta.items():
+        if key == "lifecycle_id":
+            if isinstance(value, str) and value.strip():
+                signal_meta[key] = value.strip()
+        elif key == "settlement_source_match":
+            signal_meta[key] = strict_optional_bool(value)
+        elif key.startswith(("research_", "trigger_evidence_")):
+            signal_meta[key] = value
     # F-11 P1-A: SignalAnalysis.market_yes_price was deleted; the canonical
     # post-P0 source for the executed-side entry price is executed_price_cents.
     # entry_price_cents is the float mirror used by the executor's edge math.

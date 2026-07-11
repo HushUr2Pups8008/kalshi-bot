@@ -20,10 +20,17 @@ DEFAULT_TARGET_RESEARCH_SKIP_REASONS = (
         "missing_resolution_source",
         "new_market",
         "no_research_hits",
+        "official_data_pending",
         "probability_direction_conflict",
         "research_timeout",
         "research_provider_error",
         "research_adjudicator_error",
+)
+
+DEFAULT_TARGET_RESEARCH_STATUSES = (
+        "continue_researching",
+        "needs_counter_evidence",
+        "needs_research",
 )
 
 RESEARCH_PREWARM_EVENT_TYPES = frozenset(
@@ -65,6 +72,9 @@ def record_targets_research_prewarm(
     research_skip_reason_set: set[str] | frozenset[str] | tuple[str, ...] | None = (
         DEFAULT_TARGET_RESEARCH_SKIP_REASONS
     ),
+    research_status_set: set[str] | frozenset[str] | tuple[str, ...] | None = (
+        DEFAULT_TARGET_RESEARCH_STATUSES
+    ),
 ) -> bool:
     event_type = str(record.get("type") or "").strip()
     if event_type == "ANALYSIS_REJECTED":
@@ -87,7 +97,8 @@ def record_targets_research_prewarm(
             == "insufficient_semantic_overlap"
         )
     if event_type == "RESEARCH_PREWARM_RESULT":
-        return str(record.get("research_status") or "").strip() == "trade_candidate"
+        status = str(record.get("research_status") or "").strip()
+        return bool(research_status_set) and status in research_status_set
     return False
 
 
@@ -100,6 +111,9 @@ def record_targets_kalshi_research_prewarm(
     research_skip_reason_set: set[str] | frozenset[str] | tuple[str, ...] | None = (
         DEFAULT_TARGET_RESEARCH_SKIP_REASONS
     ),
+    research_status_set: set[str] | frozenset[str] | tuple[str, ...] | None = (
+        DEFAULT_TARGET_RESEARCH_STATUSES
+    ),
 ) -> bool:
     """Return whether a trade-log row is actionable for Kalshi prewarm repair."""
 
@@ -107,6 +121,7 @@ def record_targets_kalshi_research_prewarm(
         record,
         reason_set=reason_set,
         research_skip_reason_set=research_skip_reason_set,
+        research_status_set=research_status_set,
     ):
         return False
     if record.get("is_synthetic_probe") is True or record.get("is_startup_probe") is True:

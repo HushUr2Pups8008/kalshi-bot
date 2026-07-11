@@ -30,6 +30,7 @@ from kalshi import KalshiMarket
 from kalshi.rest_client import KalshiRestClient
 from kalshi.series_metadata import KalshiSeriesMetadata, normalize_series_list
 from utils.logger import get_logger, trade_log, write_trade_log_async
+from utils.lifecycle import build_lifecycle_id, settlement_source_match
 
 log = get_logger("market_matcher")
 
@@ -1143,6 +1144,22 @@ class MarketMatcher:
                 market.title,
                 sorted(overlap),
             )
+            lifecycle_id = build_lifecycle_id(
+                venue="kalshi",
+                ticker=market.ticker,
+                source=news.source,
+                url=getattr(news, "url", None),
+                headline=news.headline,
+                published=getattr(news, "published", None),
+            )
+            settlement_match = settlement_source_match(
+                source=news.source,
+                url=getattr(news, "url", None),
+                source_hint_domain=getattr(news, "source_hint_domain", None),
+                settlement_sources=getattr(market, "settlement_sources", ()) or (),
+            )
+            match_meta["lifecycle_id"] = lifecycle_id
+            match_meta["settlement_source_match"] = settlement_match
             # P3.2 diagnostic field -- pure function, no behavior change.
             market_specificity = compute_specificity_score(market)
             await write_trade_log_async(
@@ -1172,6 +1189,9 @@ class MarketMatcher:
                 publish_ts=news_publish_ts,
                 age_at_match_seconds=news_age_seconds,
                 market_specificity_score=market_specificity,
+                venue="kalshi",
+                lifecycle_id=lifecycle_id,
+                settlement_source_match=settlement_match,
             )
 
             flag_set = set(heuristic_flags)

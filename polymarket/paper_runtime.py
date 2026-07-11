@@ -21,6 +21,7 @@ from polymarket.models import PolymarketMarket
 from polymarket.public_client import PolymarketPublicClient
 from trading.venue import Venue
 from utils.logger import get_logger, trade_log
+from utils.lifecycle import build_lifecycle_id, settlement_source_match
 
 log = get_logger("polymarket.paper_runtime")
 
@@ -230,11 +231,103 @@ class PolymarketPaperRuntime:
                 match_score,
                 ",".join(match_meta.get("polymarket_matched_tokens", [])[:8]),
             )
+            matched_tokens = list(match_meta.get("matched_tokens", []))
+            headline_tokens = _meaningful_tokens(news.headline)
+            market_tokens = _meaningful_tokens(_market_match_text(market))
+            publish_ts = (
+                news.published.isoformat()
+                if getattr(news, "published", None) is not None
+                else None
+            )
+            trade_log.log_match_diagnostic(
+                source=news.source,
+                headline=news.headline,
+                ticker=market.ticker,
+                market_title=_market_match_text(market),
+                match_score=match_score,
+                matched_tokens=matched_tokens,
+                token_overlap_count=len(matched_tokens),
+                geo_overlap_count=0,
+                generic_overlap_count=0,
+                headline_token_count=len(headline_tokens),
+                market_title_token_count=len(market_tokens),
+                overlap_ratio=(
+                    len(matched_tokens)
+                    / max(1, min(len(headline_tokens), len(market_tokens)))
+                ),
+                low_match_quality=not bool(match_meta.get("pre_llm_quality_pass", True)),
+                pre_llm_semantic_overlap_count=match_meta.get(
+                    "pre_llm_semantic_overlap_count"
+                ),
+                pre_llm_semantic_overlap_ratio=match_meta.get(
+                    "pre_llm_semantic_overlap_ratio"
+                ),
+                would_fail_pre_llm_gate=not bool(
+                    match_meta.get("pre_llm_quality_pass", True)
+                ),
+                pre_llm_headline_token_count=match_meta.get(
+                    "pre_llm_headline_token_count"
+                ),
+                pre_llm_market_token_count=match_meta.get("pre_llm_market_token_count"),
+                pre_llm_filtered_stopword_count=match_meta.get(
+                    "pre_llm_filtered_stopword_count"
+                ),
+                pre_llm_filtered_generic_count=match_meta.get(
+                    "pre_llm_filtered_generic_count"
+                ),
+                pre_llm_semantic_token_types=match_meta.get(
+                    "pre_llm_semantic_token_types"
+                ),
+                publish_ts=publish_ts,
+                venue=Venue.POLYMARKET_US.value,
+                lifecycle_id=match_meta["lifecycle_id"],
+                settlement_source_match=match_meta["settlement_source_match"],
+            )
             analysis = await self._build_analysis(news, market, match_score, match_meta)
             if analysis is None:
                 continue
+            method = (
+                "llm"
+                if any(
+                    value is not None
+                    for value in (
+                        analysis.llm_direction,
+                        analysis.llm_magnitude,
+                        analysis.llm_confidence,
+                    )
+                )
+                else "keyword"
+            )
+            trade_log.log_opportunity(
+                ticker=market.ticker,
+                market_title=market.title,
+                entry_price_cents=float(analysis.executed_price_cents or 0),
+                estimated_probability=analysis.estimated_probability,
+                edge=analysis.edge,
+                kelly_fraction=analysis.kelly_fraction,
+                kelly_dollars=analysis.kelly_dollars,
+                capped_dollars=analysis.capped_dollars,
+                side=analysis.side,
+                reasoning=analysis.reasoning,
+                source=news.source,
+                headline=news.headline,
+                method=method,
+                llm_direction=analysis.llm_direction,
+                llm_magnitude=analysis.llm_magnitude,
+                venue=Venue.POLYMARKET_US.value,
+                keywords=analysis.keywords_matched,
+                source_class="news",
+                settlement_source_match=match_meta["settlement_source_match"],
+                lifecycle_id=match_meta["lifecycle_id"],
+                signal_type=analysis.signal_type,
+            )
             if self._source_stats is not None:
                 self._source_stats.increment_signals(news.source)
+                increment_opportunities = getattr(
+                    self._source_stats, "increment_opportunities", None
+                )
+                if callable(increment_opportunities):
+                    increment_opportunities(news.source)
             result = await self._route_analysis(analysis, accumulate=True, watch=False)
             routed += 1
             self._routed_count += 1
@@ -504,6 +597,22 @@ def match_polymarket_markets(
         meta.update(pre_llm_meta)
         meta["market_prefix"] = market_prefix
         meta["matched_tokens"] = matched_tokens
+        lifecycle_id = build_lifecycle_id(
+            venue=Venue.POLYMARKET_US.value,
+            ticker=market.ticker,
+            source=news.source,
+            url=getattr(news, "url", None),
+            headline=news.headline,
+            published=getattr(news, "published", None),
+        )
+        settlement_match = settlement_source_match(
+            source=news.source,
+            url=getattr(news, "url", None),
+            source_hint_domain=getattr(news, "source_hint_domain", None),
+            settlement_sources=(market.resolution_source,) if market.resolution_source else (),
+        )
+        meta["lifecycle_id"] = lifecycle_id
+        meta["settlement_source_match"] = settlement_match
         scored.append((market, rounded_score, meta))
 
     scored.sort(key=lambda item: item[1], reverse=True)

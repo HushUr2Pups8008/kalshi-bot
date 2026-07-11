@@ -583,7 +583,7 @@ if [[ "$RUN_DAILY_REVIEW" == "1" ]]; then
         PERFORMANCE_STDOUT="$(mktemp)"
         (
             cd "$REPO_ROOT" || exit 1
-            KALSHI_OUTPUT_ROOT="$OUTPUT_ROOT" "$PERFORMANCE_PY" -m scripts.performance_analysis
+            KALSHI_OUTPUT_ROOT="$OUTPUT_ROOT" "$PERFORMANCE_PY" "$PERFORMANCE_SCRIPT"
         ) >"$PERFORMANCE_STDOUT" 2>&1
         PERFORMANCE_EXIT=$?
         PERFORMANCE_REPORT="$(awk -F'Report saved to: ' '/Report saved to:/ {print $2}' "$PERFORMANCE_STDOUT" | tail -1)"

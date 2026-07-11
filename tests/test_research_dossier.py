@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import sqlite3
@@ -14,7 +16,470 @@ from analysis.research_gate import (
     run_research_gate,
     urllib,
 )
-from tasks.research_dossier import ResearchDossierStore
+from tasks.research_dossier import (
+    ResearchDossierStore,
+    _decision_grade_persistence_quality,
+)
+
+
+class _TrackingConnection:
+    def __init__(self) -> None:
+        self.entered = 0
+        self.exit_args = None
+        self.closed = 0
+        self.executed = []
+
+    def __enter__(self):
+        self.entered += 1
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.exit_args = (exc_type, exc, traceback)
+        return False
+
+    def close(self) -> None:
+        self.closed += 1
+
+    def execute(self, statement, parameters=()):
+        self.executed.append((statement, parameters))
+        return SimpleNamespace(rowcount=1)
+
+
+def test_decision_grade_persistence_requires_source_class_diversity():
+    evidence = [
+        ResearchEvidence(
+            source_class="resolution_source",
+            source_name="Agency A",
+            source_url="https://agency-a.gov/result",
+            title="Result",
+            snippet="Supports yes.",
+            claim_type="resolution",
+            supports_direction="yes",
+            supports_confidence=0.9,
+        ),
+        ResearchEvidence(
+            source_class="resolution_source",
+            source_name="Agency B",
+            source_url="https://agency-b.gov/counter",
+            title="Counter",
+            snippet="Supports no.",
+            claim_type="settlement",
+            supports_direction="no",
+            supports_confidence=0.9,
+        ),
+    ]
+
+    quality = _decision_grade_persistence_quality(
+        side="yes",
+        queries=[SimpleNamespace(query_intent="disconfirming")],
+        evidence=evidence,
+    )
+
+    assert quality["has_reliable_source_path"] is False
+
+
+def test_connection_context_commits_and_closes(monkeypatch, tmp_path):
+    store = ResearchDossierStore(tmp_path / "research.db")
+    connection = _TrackingConnection()
+    monkeypatch.setattr(store, "_connect", lambda: connection)
+
+    with store._connection() as yielded:
+        assert yielded is connection
+
+    assert connection.entered == 1
+    assert connection.exit_args == (None, None, None)
+    assert connection.closed == 1
+
+
+def test_connection_context_rolls_back_and_closes(monkeypatch, tmp_path):
+    store = ResearchDossierStore(tmp_path / "research.db")
+    connection = _TrackingConnection()
+    monkeypatch.setattr(store, "_connect", lambda: connection)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with store._connection():
+            raise RuntimeError("boom")
+
+    assert connection.exit_args[0] is RuntimeError
+    assert connection.closed == 1
+
+
+def test_admission_claim_uses_transaction_and_closes(monkeypatch, tmp_path):
+    store = ResearchDossierStore(tmp_path / "research.db")
+    connection = _TrackingConnection()
+    monkeypatch.setattr(store, "_initialize_sync", lambda: None)
+    monkeypatch.setattr(store, "_connect", lambda: connection)
+
+    claimed = store._claim_research_paper_admission_sync(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+    )
+
+    assert claimed is True
+    assert connection.entered == 1
+    assert connection.exit_args == (None, None, None)
+    assert connection.closed == 1
+    assert len(connection.executed) == 1
+
+
+def test_admission_claim_rolls_back_and_closes_on_error(monkeypatch, tmp_path):
+    store = ResearchDossierStore(tmp_path / "research.db")
+    connection = _TrackingConnection()
+    monkeypatch.setattr(store, "_initialize_sync", lambda: None)
+    monkeypatch.setattr(store, "_connect", lambda: connection)
+
+    def fail_execute(_statement, _parameters=()):
+        raise RuntimeError("insert failed")
+
+    monkeypatch.setattr(connection, "execute", fail_execute)
+
+    with pytest.raises(RuntimeError, match="insert failed"):
+        store._claim_research_paper_admission_sync(
+            "KXTEST-26",
+            "run-1",
+            "fingerprint-1",
+        )
+
+    assert connection.exit_args[0] is RuntimeError
+    assert connection.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_adds_and_persists_market_eligibility_columns(tmp_path):
+    db_path = tmp_path / "research.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_researched_ts TEXT NOT NULL,
+                last_verdict_status TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE research_runs (
+                research_run_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                trigger_headline TEXT NOT NULL,
+                trigger_source TEXT NOT NULL,
+                attempted INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                verdict_status TEXT NOT NULL
+            )
+            """
+        )
+
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        dossier_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(research_dossiers)")
+        }
+        run_columns = {row[1] for row in conn.execute("PRAGMA table_info(research_runs)")}
+
+    assert {"market_status", "market_close_time"} <= dossier_columns
+    assert {"market_status", "market_close_time"} <= run_columns
+
+    fresh_db_path = tmp_path / "fresh-research.db"
+    fresh_store = ResearchDossierStore(fresh_db_path)
+    await fresh_store.initialize()
+    await fresh_store.record_research_run(
+        "KXTEST-26",
+        "run-eligibility",
+        trigger_headline="Current market observation",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Still open.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        market_status="active",
+        market_close_time="2026-07-12T18:00:00Z",
+    )
+
+    snapshot = await fresh_store.get_dossier_snapshot("KXTEST-26")
+    with sqlite3.connect(fresh_db_path) as conn:
+        run_metadata = conn.execute(
+            """
+            SELECT market_status, market_close_time
+            FROM research_runs
+            WHERE research_run_id = 'run-eligibility'
+            """
+        ).fetchone()
+        dossier_metadata = conn.execute(
+            """
+            SELECT market_status, market_close_time
+            FROM research_dossiers
+            WHERE market_ticker = 'KXTEST-26'
+            """
+        ).fetchone()
+
+    assert snapshot is not None
+    assert snapshot.market_status == "active"
+    assert snapshot.market_close_time == "2026-07-12T18:00:00Z"
+    assert run_metadata == ("active", "2026-07-12T18:00:00Z")
+    assert dossier_metadata == run_metadata
+
+    await fresh_store.record_research_run(
+        "KXTEST-26",
+        "run-object-eligibility",
+        trigger_headline="Enum-like market observation",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Raw API metadata.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        market_status=SimpleNamespace(value="OPEN"),
+        market_close_time=datetime(2026, 7, 12, 20, tzinfo=timezone.utc),
+        update_dossier_snapshot=False,
+        update_dossier_run_id=False,
+    )
+    await fresh_store.record_research_run(
+        "KXINVALID-26",
+        "run-invalid-close",
+        trigger_headline="Invalid close observation",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Invalid raw API metadata.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        market_status="ACTIVE",
+        market_close_time=object(),
+    )
+    await fresh_store.record_research_run(
+        "KXMISSING-26",
+        "run-missing-close",
+        trigger_headline="Missing close observation",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Missing raw API metadata.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        market_status="OPEN",
+        market_close_time=None,
+    )
+
+    with sqlite3.connect(fresh_db_path) as conn:
+        object_metadata = conn.execute(
+            """
+            SELECT market_status, market_close_time
+            FROM research_runs
+            WHERE research_run_id = 'run-object-eligibility'
+            """
+        ).fetchone()
+        invalid_metadata = conn.execute(
+            """
+            SELECT market_status, market_close_time
+            FROM research_runs
+            WHERE research_run_id = 'run-invalid-close'
+            """
+        ).fetchone()
+        missing_metadata = conn.execute(
+            """
+            SELECT market_status, market_close_time
+            FROM research_runs
+            WHERE research_run_id = 'run-missing-close'
+            """
+        ).fetchone()
+
+    assert object_metadata == ("open", "2026-07-12T20:00:00Z")
+    assert invalid_metadata == ("active", None)
+    assert missing_metadata == ("open", None)
+
+
+@pytest.mark.asyncio
+async def test_market_eligibility_metadata_updates_without_demoting_snapshot(tmp_path):
+    db_path = tmp_path / "research.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    await store.record_research_run(
+        "KXTEST-26",
+        "run-proof",
+        trigger_headline="Decision-grade proof",
+        trigger_source="manual",
+        attempted=True,
+        summary="Retained proof.",
+        verdict_status=ResearchStatus.TRADE_CANDIDATE.value,
+        market_status="active",
+        market_close_time="2026-07-12T18:00:00Z",
+    )
+    await store.record_research_run(
+        "KXTEST-26",
+        "run-observation",
+        trigger_headline="Current market observation",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Market closed.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        market_status="closed",
+        market_close_time="2026-07-11T18:00:00Z",
+        update_dossier_snapshot=False,
+        update_dossier_run_id=False,
+    )
+
+    snapshot = await store.get_dossier_snapshot("KXTEST-26")
+
+    assert snapshot is not None
+    assert snapshot.last_research_run_id == "run-proof"
+    assert snapshot.last_verdict_status == ResearchStatus.TRADE_CANDIDATE.value
+    assert snapshot.market_status == "closed"
+    assert snapshot.market_close_time == "2026-07-11T18:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_research_paper_admission_claim_is_sequentially_at_most_once(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research.db")
+    await store.initialize()
+
+    first = await store.claim_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+    )
+    second = await store.claim_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+    )
+
+    assert first is True
+    assert second is False
+
+
+@pytest.mark.asyncio
+async def test_research_paper_admission_claim_is_atomic_across_stores(tmp_path):
+    db_path = tmp_path / "research.db"
+    stores = [ResearchDossierStore(db_path), ResearchDossierStore(db_path)]
+    await asyncio.gather(*(store.initialize() for store in stores))
+
+    results = await asyncio.gather(
+        *(
+            store.claim_research_paper_admission(
+                "KXTEST-26",
+                "run-1",
+                "fingerprint-1",
+            )
+            for store in stores
+        )
+    )
+
+    assert sorted(results) == [False, True]
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM research_paper_admissions").fetchone()[0]
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_research_paper_admission_claim_survives_store_reopen(tmp_path):
+    db_path = tmp_path / "research.db"
+    first_store = ResearchDossierStore(db_path)
+    await first_store.initialize()
+    assert await first_store.claim_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+    )
+
+    reopened_store = ResearchDossierStore(db_path)
+    await reopened_store.initialize()
+
+    assert not await reopened_store.claim_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_research_paper_admission_composite_key_keeps_distinct_claims(tmp_path):
+    db_path = tmp_path / "research.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    keys = (
+        ("KXTEST-26", "run-1", "fingerprint-1"),
+        ("KXTEST-26", "run-2", "fingerprint-1"),
+        ("KXTEST-26", "run-1", "fingerprint-2"),
+        ("KXOTHER-26", "run-1", "fingerprint-1"),
+    )
+
+    assert all([await store.claim_research_paper_admission(*key) for key in keys])
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM research_paper_admissions").fetchone()[0]
+    assert count == len(keys)
+
+
+@pytest.mark.asyncio
+async def test_research_paper_admission_records_completed_and_failed_outcomes(tmp_path):
+    db_path = tmp_path / "research.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    await store.claim_research_paper_admission("KXTEST-26", "run-1", "fingerprint-1")
+    await store.claim_research_paper_admission("KXTEST-26", "run-2", "fingerprint-2")
+
+    await store.complete_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+        state="completed",
+        enqueued=True,
+        outcome_reason="paper route accepted",
+    )
+    await store.complete_research_paper_admission(
+        "KXTEST-26",
+        "run-2",
+        "fingerprint-2",
+        state="failed",
+        enqueued=None,
+        outcome_reason="bridge crashed",
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT research_run_id, state, enqueued, outcome_reason,
+                   claimed_ts, completed_ts, updated_ts
+            FROM research_paper_admissions
+            ORDER BY research_run_id
+            """
+        ).fetchall()
+
+    assert rows[0][:4] == ("run-1", "completed", 1, "paper route accepted")
+    assert rows[1][:4] == ("run-2", "failed", None, "bridge crashed")
+    assert all(row[4] for row in rows)
+    assert all(row[5] for row in rows)
+    assert all(row[6] for row in rows)
+    assert not await store.claim_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+    )
+    assert not await store.claim_research_paper_admission(
+        "KXTEST-26",
+        "run-2",
+        "fingerprint-2",
+    )
+
+
+@pytest.mark.asyncio
+async def test_research_paper_admission_rejects_invalid_completion_state(tmp_path):
+    db_path = tmp_path / "research.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    await store.claim_research_paper_admission("KXTEST-26", "run-1", "fingerprint-1")
+
+    with pytest.raises(ValueError, match="completed or failed"):
+        await store.complete_research_paper_admission(
+            "KXTEST-26",
+            "run-1",
+            "fingerprint-1",
+            state="claimed",  # type: ignore[arg-type]
+            enqueued=False,
+            outcome_reason="invalid transition",
+        )
+
+    with sqlite3.connect(db_path) as conn:
+        state = conn.execute("SELECT state FROM research_paper_admissions").fetchone()[0]
+    assert state == "claimed"
 
 
 @pytest.fixture(autouse=True)
@@ -49,6 +514,16 @@ async def test_research_dossier_persists_and_returns_recent_evidence(tmp_path):
     assert rows[0].source_class == "resolution_source"
     assert rows[0].source_url == "https://opec.org/momr"
     assert rows[0].contract_fingerprint == "contract-v1"
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_initialize_is_safe_under_concurrency(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+
+    await asyncio.gather(*(store.initialize() for _ in range(5)))
+
+    snapshot = await store.get_dossier_snapshot("KX-MISSING")
+    assert snapshot is None
 
 
 @pytest.mark.asyncio
@@ -105,6 +580,1023 @@ async def test_research_dossier_records_run_queries_and_latest_verdict(tmp_path)
     assert run == ("Research supports yes.",)
     assert stored_query == ("site:opec.org Iran crude production",)
     assert stored_evidence == ("OPEC", "contract-v1")
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_persists_decision_grade_price_edge_and_task_state(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    evidence = [
+        ResearchEvidence(
+            source_class="resolution_source",
+            source_name="Official",
+            source_url="https://agency.gov/final",
+            title="Official notice",
+            snippet="Official notice supports yes.",
+            claim_type="settlement",
+            supports_direction="yes",
+            supports_confidence=0.9,
+            contract_fingerprint="contract-v1",
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Reuters",
+            source_url="https://reuters.com/report",
+            title="Reuters report",
+            snippet="Reuters independently supports yes.",
+            claim_type="settlement",
+            supports_direction="yes",
+            supports_confidence=0.85,
+            contract_fingerprint="contract-v1",
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="AP",
+            source_url="https://apnews.com/counter",
+            title="AP countercase",
+            snippet="AP reports a ratification risk.",
+            claim_type="disconfirming",
+            supports_direction="no",
+            supports_confidence=0.7,
+            contract_fingerprint="contract-v1",
+        ),
+    ]
+    queries = [
+        ResearchQuery(
+            query="official ceasefire final",
+            query_intent="official_resolution",
+            source_class="resolution_source",
+        ),
+        ResearchQuery(
+            query="ceasefire countercase",
+            query_intent="disconfirming",
+            source_class="reputable_secondary",
+        ),
+    ]
+
+    await store.record_research_run(
+        "KXCEASEFIRE-26JUL01",
+        "run-decision-grade",
+        trigger_headline="Agreement signed",
+        trigger_source="Reuters",
+        contract_question="Will a ceasefire agreement be signed by July 1?",
+        attempted=True,
+        summary="Official notice, Reuters support, and AP countercase produce YES edge.",
+        verdict_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.68,
+        confidence=0.82,
+        contract_fingerprint="contract-v1",
+        market_price=0.55,
+        estimated_edge=0.12,
+        decision_grade_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        decision_grade_reasons=["edge_recomputed", "counter_evidence_present"],
+        open_questions=["Would ratification be required?"],
+        counterclaims=["AP says ratification could fail."],
+        queries=queries,
+        evidence=evidence,
+    )
+
+    snapshot = await store.get_dossier_snapshot("KXCEASEFIRE-26JUL01")
+    task = await store.get_research_task_snapshot("KXCEASEFIRE-26JUL01")
+
+    with sqlite3.connect(db_path) as conn:
+        run = conn.execute(
+            """
+            SELECT market_price, estimated_edge, decision_grade_status,
+                   decision_grade_reasons_json, open_questions_json,
+                   counterclaims_json, contract_question
+            FROM research_runs
+            WHERE research_run_id = 'run-decision-grade'
+            """
+        ).fetchone()
+        dossier_contract_question = conn.execute(
+            """
+            SELECT contract_question
+            FROM research_dossiers
+            WHERE market_ticker = 'KXCEASEFIRE-26JUL01'
+            """
+        ).fetchone()[0]
+        proof_run_before = conn.execute(
+            """
+            SELECT trigger_headline, trigger_source, contract_question, attempted,
+                   summary, verdict_status, skip_reason, force_side,
+                   estimated_probability, confidence, market_price, estimated_edge,
+                   decision_grade_status, decision_grade_reasons_json,
+                   open_questions_json, counterclaims_json
+            FROM research_runs
+            WHERE research_run_id = 'run-decision-grade'
+            """
+        ).fetchone()
+        proof_queries_before = conn.execute(
+            """
+            SELECT ordinal, query, query_intent, source_class
+            FROM research_run_queries
+            WHERE research_run_id = 'run-decision-grade'
+            ORDER BY ordinal
+            """
+        ).fetchall()
+        proof_evidence_before = conn.execute(
+            """
+            SELECT evidence_id, source_class, source_name, source_url, claim_type,
+                   supports_direction, supports_confidence, contract_fingerprint,
+                   raw_payload_json
+            FROM research_evidence
+            WHERE research_run_id = 'run-decision-grade'
+            ORDER BY evidence_id
+            """
+        ).fetchall()
+
+    assert snapshot is not None
+    assert snapshot.last_market_price == pytest.approx(0.55)
+    assert snapshot.last_estimated_edge == pytest.approx(0.12)
+    assert snapshot.last_decision_grade_status == ResearchStatus.DECISION_GRADE_CANDIDATE.value
+    assert task is not None
+    assert task.state == ResearchStatus.DECISION_GRADE_CANDIDATE.value
+    assert task.terminal_reason is None
+    assert run[0] == pytest.approx(0.55)
+    assert run[1] == pytest.approx(0.12)
+    assert run[2] == ResearchStatus.DECISION_GRADE_CANDIDATE.value
+    assert json.loads(run[3]) == ["edge_recomputed", "counter_evidence_present"]
+    assert json.loads(run[4]) == ["Would ratification be required?"]
+    assert json.loads(run[5]) == ["AP says ratification could fail."]
+    assert run[6] == "Will a ceasefire agreement be signed by July 1?"
+    assert snapshot.contract_question == "Will a ceasefire agreement be signed by July 1?"
+    assert dossier_contract_question == "Will a ceasefire agreement be signed by July 1?"
+
+    await store.record_research_run(
+        "KXCEASEFIRE-26JUL01",
+        "run-decision-grade",
+        trigger_headline="Current market metadata",
+        trigger_source="market_status_refresh",
+        attempted=False,
+        summary="Metadata-only refresh.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        market_status="closed",
+        market_close_time="2026-07-11T18:00:00Z",
+        update_dossier_snapshot=False,
+        update_dossier_run_id=False,
+    )
+
+    retained_snapshot = await store.get_dossier_snapshot("KXCEASEFIRE-26JUL01")
+    with sqlite3.connect(db_path) as conn:
+        proof_run_after = conn.execute(
+            """
+            SELECT trigger_headline, trigger_source, contract_question, attempted,
+                   summary, verdict_status, skip_reason, force_side,
+                   estimated_probability, confidence, market_price, estimated_edge,
+                   decision_grade_status, decision_grade_reasons_json,
+                   open_questions_json, counterclaims_json
+            FROM research_runs
+            WHERE research_run_id = 'run-decision-grade'
+            """
+        ).fetchone()
+        proof_queries_after = conn.execute(
+            """
+            SELECT ordinal, query, query_intent, source_class
+            FROM research_run_queries
+            WHERE research_run_id = 'run-decision-grade'
+            ORDER BY ordinal
+            """
+        ).fetchall()
+        proof_evidence_after = conn.execute(
+            """
+            SELECT evidence_id, source_class, source_name, source_url, claim_type,
+                   supports_direction, supports_confidence, contract_fingerprint,
+                   raw_payload_json
+            FROM research_evidence
+            WHERE research_run_id = 'run-decision-grade'
+            ORDER BY evidence_id
+            """
+        ).fetchall()
+
+    assert proof_run_after == proof_run_before
+    assert proof_queries_after == proof_queries_before
+    assert proof_evidence_after == proof_evidence_before
+    assert retained_snapshot is not None
+    assert retained_snapshot.last_research_run_id == "run-decision-grade"
+    assert (
+        retained_snapshot.last_decision_grade_status
+        == ResearchStatus.DECISION_GRADE_CANDIDATE.value
+    )
+    assert retained_snapshot.last_contract_fingerprint == "contract-v1"
+    assert retained_snapshot.last_force_side == "yes"
+    assert retained_snapshot.last_estimated_probability == pytest.approx(0.68)
+    assert retained_snapshot.last_confidence == pytest.approx(0.82)
+    assert retained_snapshot.last_market_price == pytest.approx(0.55)
+    assert retained_snapshot.last_estimated_edge == pytest.approx(0.12)
+    assert retained_snapshot.market_status == "closed"
+    assert retained_snapshot.market_close_time == "2026-07-11T18:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_demotes_decision_grade_without_reliable_source_path(
+    tmp_path,
+):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="NWS",
+            source_url="https://weather.gov/forecast",
+            title="National Weather Service",
+            snippet="NWS forecast supports below threshold.",
+            claim_type="settlement",
+            supports_direction="yes",
+            supports_confidence=0.9,
+            contract_fingerprint="contract-v1",
+        ),
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="NWS",
+            source_url="https://weather.gov/counter",
+            title="National Weather Service counter",
+            snippet="NWS alternate scenario is neutral.",
+            claim_type="disconfirming",
+            supports_direction="neutral",
+            supports_confidence=0.5,
+            contract_fingerprint="contract-v1",
+        ),
+    ]
+    queries = [
+        ResearchQuery(
+            query="NYC high temp support",
+            query_intent="official_resolution",
+            source_class="official_primary",
+        ),
+        ResearchQuery(
+            query="NYC high temp disconfirming",
+            query_intent="disconfirming",
+            source_class="official_primary",
+        ),
+    ]
+
+    await store.record_research_run(
+        "KXHIGHNY-26JUL03-T98",
+        "run-single-source",
+        trigger_headline="NWS forecast",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Single-source weather evidence is not decision grade.",
+        verdict_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.7,
+        confidence=0.8,
+        contract_fingerprint="contract-v1",
+        market_price=0.55,
+        estimated_edge=0.15,
+        decision_grade_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        queries=queries,
+        evidence=evidence,
+    )
+
+    task = await store.get_research_task_snapshot("KXHIGHNY-26JUL03-T98")
+    snapshot = await store.get_dossier_snapshot("KXHIGHNY-26JUL03-T98")
+
+    assert task is not None
+    assert task.state == ResearchStatus.NEEDS_RESEARCH.value
+    assert task.last_skip_reason == "no_reliable_source_path"
+    assert snapshot is not None
+    assert snapshot.last_verdict_status == ResearchStatus.NEEDS_RESEARCH.value
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_keeps_structured_official_metric_decision_grade(
+    tmp_path,
+):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="NWS Climatological Report",
+            source_url=(
+                "https://forecast.weather.gov/product.php?"
+                "site=OKX&product=CLI&issuedby=NYC"
+            ),
+            title="NWS Central Park daily maximum for July 2, 2026: 93F",
+            snippet=(
+                "NWS Central Park climate report lists TODAY MAXIMUM 93F "
+                "for July 2, 2026, versus the below 99F market range."
+            ),
+            claim_type="official_resolution",
+            supports_direction="yes",
+            supports_confidence=0.95,
+            metric_name="nws_daily_high_temp_f",
+            metric_value=93.0,
+            metric_unit="fahrenheit",
+            extraction_confidence=0.95,
+            contract_fingerprint="contract-v1",
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Independent Weather Archive",
+            source_url="https://weather.example.com/nyc-counter",
+            title="NYC daily high countercheck",
+            snippet="Independent countercheck found no higher official reading.",
+            claim_type="disconfirming",
+            supports_direction="neutral",
+            supports_confidence=0.65,
+            contract_fingerprint="contract-v1",
+        ),
+    ]
+    queries = [
+        ResearchQuery(
+            query="site:forecast.weather.gov NYC climate daily high official",
+            query_intent="official_resolution",
+            source_class="official_primary",
+        ),
+        ResearchQuery(
+            query="NYC high temp disconfirming alternate station official",
+            query_intent="disconfirming",
+            source_class="reputable_secondary",
+        ),
+    ]
+
+    await store.record_research_run(
+        "KXHIGHNY-26JUL02-T99",
+        "run-structured-nws",
+        trigger_headline="NWS climate report",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Official NWS observation supports YES with countercheck.",
+        verdict_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.94,
+        confidence=0.9,
+        contract_fingerprint="contract-v1",
+        market_price=0.06,
+        estimated_edge=0.88,
+        decision_grade_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        queries=queries,
+        evidence=evidence,
+    )
+
+    task = await store.get_research_task_snapshot("KXHIGHNY-26JUL02-T99")
+    snapshot = await store.get_dossier_snapshot("KXHIGHNY-26JUL02-T99")
+
+    assert task is not None
+    assert task.state == ResearchStatus.DECISION_GRADE_CANDIDATE.value
+    assert task.last_skip_reason in {None, ""}
+    assert snapshot is not None
+    assert snapshot.last_verdict_status == ResearchStatus.DECISION_GRADE_CANDIDATE.value
+    assert snapshot.last_decision_grade_status == ResearchStatus.DECISION_GRADE_CANDIDATE.value
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_replaces_invalid_decision_grade_when_snapshot_update_disabled(
+    tmp_path,
+):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    await store.record_research_run(
+        "KXHIGHNY-26JUL03-T98",
+        "run-old-invalid",
+        trigger_headline="NWS forecast",
+        trigger_source="manual_backfill",
+        attempted=True,
+        summary="Invalid candidate persisted before strict source validation.",
+        verdict_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.7,
+        confidence=0.8,
+        contract_fingerprint="contract-v1",
+        market_price=0.55,
+        estimated_edge=0.14,
+        decision_grade_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        queries=[
+            ResearchQuery(
+                query="NYC high temp support",
+                query_intent="supporting",
+                source_class="official_primary",
+            ),
+            ResearchQuery(
+                query="NYC high temp disconfirming",
+                query_intent="disconfirming",
+                source_class="official_primary",
+            ),
+        ],
+        evidence=[
+            ResearchEvidence(
+                source_class="official_primary",
+                source_name="NWS",
+                source_url="https://weather.gov/forecast",
+                title="National Weather Service",
+                snippet="Single source supports YES.",
+                claim_type="supporting",
+                supports_direction="yes",
+                supports_confidence=0.9,
+                contract_fingerprint="contract-v1",
+            ),
+            ResearchEvidence(
+                source_class="official_primary",
+                source_name="NWS",
+                source_url="https://weather.gov/forecast",
+                title="National Weather Service counter",
+                snippet="Same source supplies the countercase.",
+                claim_type="disconfirming",
+                supports_direction="no",
+                supports_confidence=0.7,
+                contract_fingerprint="contract-v1",
+            ),
+        ],
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_dossiers
+            SET last_verdict_status = 'decision_grade_candidate',
+                last_decision_grade_status = 'decision_grade_candidate',
+                last_skip_reason = NULL
+            WHERE market_ticker = 'KXHIGHNY-26JUL03-T98'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET state = 'decision_grade_candidate',
+                cooldown_until_ts = NULL,
+                backoff_seconds = 0,
+                terminal_reason = NULL
+            WHERE market_ticker = 'KXHIGHNY-26JUL03-T98'
+            """
+        )
+
+    await store.record_research_run(
+        "KXHIGHNY-26JUL03-T98",
+        "run-followup-needs-research",
+        trigger_headline="",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Follow-up research no longer clears source validation.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        skip_reason="insufficient_corroboration",
+        decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+        queries=[
+            ResearchQuery(
+                query="NYC high temp official resolution",
+                query_intent="official_resolution",
+                source_class="official_primary",
+            ),
+        ],
+        evidence=[
+            ResearchEvidence(
+                source_class="official_primary",
+                source_name="NWS",
+                source_url="https://weather.gov/forecast",
+                title="National Weather Service",
+                snippet="Follow-up still has only one source path.",
+                claim_type="official_resolution",
+                supports_direction="yes",
+                supports_confidence=0.8,
+                contract_fingerprint="contract-v1",
+            ),
+        ],
+        update_dossier_snapshot=False,
+        update_dossier_run_id=True,
+    )
+
+    task = await store.get_research_task_snapshot("KXHIGHNY-26JUL03-T98")
+    snapshot = await store.get_dossier_snapshot("KXHIGHNY-26JUL03-T98")
+
+    assert task is not None
+    assert task.state == ResearchStatus.NEEDS_RESEARCH.value
+    assert task.last_skip_reason == "insufficient_corroboration"
+    assert snapshot is not None
+    assert snapshot.last_research_run_id == "run-followup-needs-research"
+    assert snapshot.last_verdict_status == ResearchStatus.NEEDS_RESEARCH.value
+    assert snapshot.last_decision_grade_status == ResearchStatus.NEEDS_RESEARCH.value
+    assert snapshot.last_skip_reason == "insufficient_corroboration"
+
+
+@pytest.mark.asyncio
+async def test_research_task_keeps_repeated_ambiguous_direction_queued(
+    tmp_path,
+):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    for attempt in range(1, 4):
+        await store.record_research_run(
+            "KXAMBIGUOUS-26JUL01",
+            f"run-ambiguous-{attempt}",
+            trigger_headline="Mixed signal",
+            trigger_source="Reuters",
+            attempted=True,
+            summary="Evidence remains balanced between yes and no.",
+            verdict_status=ResearchStatus.NEEDS_COUNTER_EVIDENCE.value,
+            skip_reason="ambiguous_direction",
+            decision_grade_status=ResearchStatus.NEEDS_COUNTER_EVIDENCE.value,
+            open_questions=["Which side has current official support?"],
+        )
+        task = await store.get_research_task_snapshot("KXAMBIGUOUS-26JUL01")
+        assert task is not None
+        assert task.attempt_count == attempt
+        assert task.same_reason_count == attempt
+        assert task.last_skip_reason == "ambiguous_direction"
+        assert task.state == ResearchStatus.NEEDS_COUNTER_EVIDENCE.value
+        assert task.terminal_reason is None
+        assert task.backoff_seconds > 0
+        assert task.cooldown_until_ts is not None
+
+
+@pytest.mark.asyncio
+async def test_research_task_keeps_neutral_only_evidence_queued(
+    tmp_path,
+):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    for attempt in range(1, 3):
+        await store.record_research_run(
+            "KXNEUTRALONLY-26JUL01",
+            f"run-neutral-only-{attempt}",
+            trigger_headline="Background only",
+            trigger_source="Reuters",
+            attempted=True,
+            summary="Searches returned source-present background without a directional settlement fact.",
+            verdict_status=ResearchStatus.NEEDS_COUNTER_EVIDENCE.value,
+            skip_reason="neutral_only_evidence",
+            decision_grade_status=ResearchStatus.NEEDS_COUNTER_EVIDENCE.value,
+            open_questions=["Need current directional settlement fact."],
+        )
+        task = await store.get_research_task_snapshot("KXNEUTRALONLY-26JUL01")
+        assert task is not None
+
+    assert task.state == ResearchStatus.NEEDS_COUNTER_EVIDENCE.value
+    assert task.terminal_reason is None
+    assert task.backoff_seconds > 0
+    assert task.cooldown_until_ts is not None
+
+
+@pytest.mark.asyncio
+async def test_research_task_keeps_research_timeouts_queued_after_retries(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    for attempt in range(1, 4):
+        await store.record_research_run(
+            "KXTIMEOUT-26JUL01",
+            f"run-timeout-{attempt}",
+            trigger_headline="Timeout",
+            trigger_source="research_prewarm",
+            attempted=True,
+            summary="Research timed out before adjudication.",
+            verdict_status=ResearchStatus.CONTINUE_RESEARCHING.value,
+            skip_reason="research_timeout",
+            decision_grade_status=ResearchStatus.CONTINUE_RESEARCHING.value,
+        )
+        task = await store.get_research_task_snapshot("KXTIMEOUT-26JUL01")
+        assert task is not None
+        assert task.same_reason_count == attempt
+        if attempt < 3:
+            assert task.state == ResearchStatus.CONTINUE_RESEARCHING.value
+            assert task.terminal_reason is None
+
+    assert task.state == ResearchStatus.CONTINUE_RESEARCHING.value
+    assert task.terminal_reason is None
+    assert task.backoff_seconds > 0
+    assert task.cooldown_until_ts is not None
+
+
+@pytest.mark.asyncio
+async def test_research_task_keeps_provider_outages_queued_after_retries(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    for attempt in range(1, 3):
+        await store.record_research_run(
+            "KXPROVIDER-26JUL01",
+            f"run-provider-{attempt}",
+            trigger_headline="Provider outage",
+            trigger_source="research_prewarm",
+            attempted=True,
+            summary="Research provider failed before evidence retrieval.",
+            verdict_status=ResearchStatus.RESEARCH_PROVIDER_ERROR.value,
+            skip_reason="research_provider_error",
+            decision_grade_status=ResearchStatus.RESEARCH_PROVIDER_ERROR.value,
+        )
+        task = await store.get_research_task_snapshot("KXPROVIDER-26JUL01")
+        assert task is not None
+        assert task.same_reason_count == attempt
+        if attempt < 3:
+            assert task.state == ResearchStatus.RESEARCH_PROVIDER_ERROR.value
+            assert task.terminal_reason is None
+
+    assert task.state == ResearchStatus.RESEARCH_PROVIDER_ERROR.value
+    assert task.terminal_reason is None
+    assert task.backoff_seconds > 0
+    assert task.cooldown_until_ts is not None
+
+
+@pytest.mark.asyncio
+async def test_research_task_caps_official_data_pending_backoff(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    for attempt in range(1, 8):
+        await store.record_research_run(
+            "KXOFFICIALPENDING-26JUL01",
+            f"run-official-pending-{attempt}",
+            trigger_headline="Official data pending",
+            trigger_source="research_prewarm",
+            attempted=True,
+            summary="Official settlement data has not been released yet.",
+            verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+            skip_reason="official_data_pending",
+            decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+        )
+        task = await store.get_research_task_snapshot("KXOFFICIALPENDING-26JUL01")
+        assert task is not None
+        assert task.state == ResearchStatus.NEEDS_RESEARCH.value
+        assert task.terminal_reason is None
+        assert task.same_reason_count == attempt
+        assert task.cooldown_until_ts is not None
+
+    assert task.backoff_seconds <= 1800.0
+
+
+@pytest.mark.asyncio
+async def test_research_task_terminalizes_insufficient_corroboration_after_retries(
+    tmp_path,
+):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    for attempt in range(1, 4):
+        await store.record_research_run(
+            "KXCORROBORATION-26JUL01",
+            f"run-corroboration-{attempt}",
+            trigger_headline="Official page found",
+            trigger_source="research_prewarm",
+            attempted=True,
+            summary="Only one official source was available.",
+            verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+            skip_reason="insufficient_corroboration",
+            decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+        )
+        task = await store.get_research_task_snapshot("KXCORROBORATION-26JUL01")
+        assert task is not None
+        assert task.same_reason_count == attempt
+
+    assert task.state == ResearchStatus.UNTRADEABLE.value
+    assert task.terminal_reason == "no_reliable_source_path"
+    assert task.backoff_seconds == 0
+    assert task.cooldown_until_ts is None
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_lists_due_researchable_tasks(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    for ticker, state, reason in (
+        ("KXDUE-26JUL01", ResearchStatus.NEEDS_COUNTER_EVIDENCE.value, "ambiguous_direction"),
+        ("KXCOOLING-26JUL01", ResearchStatus.NEEDS_COUNTER_EVIDENCE.value, "ambiguous_direction"),
+        ("KXDECISION-26JUL01", ResearchStatus.DECISION_GRADE_CANDIDATE.value, None),
+        (
+            "KXNEEDSRESEARCH-26JUL01",
+            ResearchStatus.NEEDS_RESEARCH.value,
+            "missing_resolution_source",
+        ),
+        (
+            "KXSOURCEPATH-26JUL01",
+            ResearchStatus.UNTRADEABLE.value,
+            "no_reliable_source_path",
+        ),
+        ("KXTERMINAL-26JUL01", ResearchStatus.UNTRADEABLE.value, "no_edge"),
+    ):
+        evidence = []
+        queries = []
+        if state == ResearchStatus.DECISION_GRADE_CANDIDATE.value:
+            evidence = [
+                ResearchEvidence(
+                    source_class="resolution_source",
+                    source_name="Official",
+                    source_url="https://official.example.com/final",
+                    title="Official result",
+                    snippet="Official result supports yes.",
+                    claim_type="settlement",
+                    supports_direction="yes",
+                    supports_confidence=0.9,
+                ),
+                ResearchEvidence(
+                    source_class="reputable_secondary",
+                    source_name="Reuters",
+                    source_url="https://reuters.example.com/report",
+                    title="Reuters report",
+                    snippet="Reuters supports yes independently.",
+                    claim_type="settlement",
+                    supports_direction="yes",
+                    supports_confidence=0.85,
+                ),
+                ResearchEvidence(
+                    source_class="reputable_secondary",
+                    source_name="AP",
+                    source_url="https://ap.example.com/counter",
+                    title="AP counter",
+                    snippet="AP reports a countercase.",
+                    claim_type="disconfirming",
+                    supports_direction="no",
+                    supports_confidence=0.7,
+                ),
+            ]
+            queries = [
+                ResearchQuery(
+                    query="official result",
+                    query_intent="official_resolution",
+                    source_class="resolution_source",
+                ),
+                ResearchQuery(
+                    query="countercase",
+                    query_intent="disconfirming",
+                    source_class="reputable_secondary",
+                ),
+            ]
+        await store.record_research_run(
+            ticker,
+            f"run-{ticker}",
+            trigger_headline="Research update",
+            trigger_source="research_prewarm",
+            attempted=True,
+            summary="Research state.",
+            verdict_status=state,
+            skip_reason=reason,
+            decision_grade_status=state,
+            force_side="yes" if state == ResearchStatus.DECISION_GRADE_CANDIDATE.value else None,
+            queries=queries,
+            evidence=evidence,
+        )
+
+    now = datetime(2026, 6, 30, 12, tzinfo=timezone.utc)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-30T10:00:00.000Z',
+                cooldown_until_ts = '2026-06-30T10:05:00.000Z'
+            WHERE market_ticker = 'KXDUE-26JUL01'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-30T11:00:00.000Z',
+                cooldown_until_ts = NULL
+            WHERE market_ticker = 'KXDECISION-26JUL01'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-30T11:55:00.000Z',
+                cooldown_until_ts = '2026-06-30T12:30:00.000Z'
+            WHERE market_ticker = 'KXCOOLING-26JUL01'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-30T09:30:00.000Z',
+                cooldown_until_ts = NULL
+            WHERE market_ticker = 'KXSOURCEPATH-26JUL01'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-30T09:45:00.000Z',
+                cooldown_until_ts = NULL
+            WHERE market_ticker = 'KXNEEDSRESEARCH-26JUL01'
+            """
+        )
+
+    assert store.get_due_research_task_tickers(
+        now=now,
+        target_cooldown_seconds=1800.0,
+    ) == [
+        "KXDUE-26JUL01",
+        "KXNEEDSRESEARCH-26JUL01",
+        "KXDECISION-26JUL01",
+        "KXSOURCEPATH-26JUL01",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_lists_repaired_zero_backoff_tasks_immediately(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    await store.record_research_run(
+        "KXREPAIRED-26JUL01",
+        "run-repaired",
+        trigger_headline="Research update",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Needs counter evidence.",
+        verdict_status=ResearchStatus.NEEDS_COUNTER_EVIDENCE.value,
+        skip_reason="missing_counter_evidence",
+        decision_grade_status=ResearchStatus.NEEDS_COUNTER_EVIDENCE.value,
+        queries=[
+            ResearchQuery(
+                query="countercase",
+                query_intent="disconfirming",
+                source_class="reputable_secondary",
+            )
+        ],
+        evidence=[],
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-30T11:59:00.000Z',
+                cooldown_until_ts = NULL,
+                backoff_seconds = 0,
+                last_skip_reason = 'missing_counter_evidence'
+            WHERE market_ticker = 'KXREPAIRED-26JUL01'
+            """
+        )
+
+    assert store.get_due_research_task_tickers(
+        limit=5,
+        now=datetime(2026, 6, 30, 12, tzinfo=timezone.utc),
+        target_cooldown_seconds=1800.0,
+    ) == ["KXREPAIRED-26JUL01"]
+
+
+@pytest.mark.asyncio
+async def test_due_research_tasks_prioritize_actionable_source_work_before_pending_official_data(
+    tmp_path,
+):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    for ticker, skip_reason in (
+        ("KXGENERIC-26JUL01", "no_research_hits"),
+        ("KXOFFICIAL-26JUL01", "official_data_pending"),
+        ("KXSOURCE-26JUL01", "missing_resolution_source"),
+    ):
+        await store.record_research_run(
+            ticker,
+            f"run-{ticker}",
+            trigger_headline="Research update",
+            trigger_source="research_prewarm",
+            attempted=True,
+            summary="Research needs another pass.",
+            verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+            skip_reason=skip_reason,
+            decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+        )
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-30T08:00:00.000Z',
+                cooldown_until_ts = NULL
+            WHERE market_ticker = 'KXGENERIC-26JUL01'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-30T11:00:00.000Z',
+                cooldown_until_ts = NULL
+            WHERE market_ticker = 'KXOFFICIAL-26JUL01'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-30T10:00:00.000Z',
+                cooldown_until_ts = NULL
+            WHERE market_ticker = 'KXSOURCE-26JUL01'
+            """
+        )
+
+    assert store.get_due_research_task_tickers(
+        now=datetime(2026, 6, 30, 12, tzinfo=timezone.utc),
+        target_cooldown_seconds=0.0,
+    ) == [
+        "KXSOURCE-26JUL01",
+        "KXOFFICIAL-26JUL01",
+        "KXGENERIC-26JUL01",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_due_research_tasks_include_timeout_exhausted_terminal_tasks(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    await store.record_research_run(
+        "KXTIMEOUT-26JUL01",
+        "run-timeout-terminal",
+        trigger_headline="Research timed out",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Timeout is not a trade decision.",
+        verdict_status=ResearchStatus.UNTRADEABLE.value,
+        skip_reason="research_timeout_exhausted",
+        decision_grade_status=ResearchStatus.UNTRADEABLE.value,
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET terminal_reason = 'research_timeout_exhausted',
+                last_skip_reason = 'research_timeout',
+                updated_ts = '2026-06-30T09:00:00.000Z',
+                cooldown_until_ts = NULL
+            WHERE market_ticker = 'KXTIMEOUT-26JUL01'
+            """
+        )
+
+    assert store.get_due_research_task_tickers(
+        now=datetime(2026, 6, 30, 12, tzinfo=timezone.utc),
+        target_cooldown_seconds=0.0,
+    ) == ["KXTIMEOUT-26JUL01"]
+
+
+@pytest.mark.asyncio
+async def test_due_research_tasks_cap_existing_official_pending_cooldown(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    await store.record_research_run(
+        "KXOFFICIAL-26JUL01",
+        "run-official-pending",
+        trigger_headline="Official data pending",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Official source has not published yet.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        skip_reason="official_data_pending",
+        decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-06-30T11:00:00.000Z',
+                cooldown_until_ts = '2026-06-30T17:00:00.000Z',
+                backoff_seconds = 21600
+            WHERE market_ticker = 'KXOFFICIAL-26JUL01'
+            """
+        )
+
+    assert store.get_due_research_task_tickers(
+        now=datetime(2026, 6, 30, 12, tzinfo=timezone.utc),
+        target_cooldown_seconds=0.0,
+    ) == ["KXOFFICIAL-26JUL01"]
+
+
+@pytest.mark.asyncio
+async def test_official_data_pending_records_as_needs_research_not_counter_evidence(
+    tmp_path,
+):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    await store.record_research_run(
+        "KXOFFICIALCOUNTER-26JUL01",
+        "run-official-counter-pending",
+        trigger_headline="Official data pending",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="The official result is not available yet.",
+        verdict_status=ResearchStatus.NEEDS_COUNTER_EVIDENCE.value,
+        skip_reason="official_data_pending",
+        decision_grade_status=ResearchStatus.NEEDS_COUNTER_EVIDENCE.value,
+    )
+
+    snapshot = await store.get_research_task_snapshot("KXOFFICIALCOUNTER-26JUL01")
+    dossier = await store.get_dossier_snapshot("KXOFFICIALCOUNTER-26JUL01")
+
+    assert snapshot is not None
+    assert snapshot.state == ResearchStatus.NEEDS_RESEARCH.value
+    assert snapshot.last_skip_reason == "official_data_pending"
+    assert dossier is not None
+    assert dossier.last_verdict_status == ResearchStatus.NEEDS_RESEARCH.value
+    assert dossier.last_decision_grade_status == ResearchStatus.NEEDS_RESEARCH.value
+    assert dossier.last_skip_reason == "official_data_pending"
 
 
 @pytest.mark.asyncio
@@ -263,6 +1755,63 @@ async def test_research_dossier_can_associate_same_evidence_with_multiple_runs(t
         ).fetchall()
 
     assert counts == [("run-1", 1), ("run-2", 1)]
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_preserves_structured_counter_evidence_same_url(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    source_url = (
+        "https://forecast.weather.gov/product.php"
+        "?site=OKX&product=CLI&issuedby=NYC#high-2026-07-01"
+    )
+    base = dict(
+        source_class="official_primary",
+        source_name="NWS Climatological Report",
+        source_url=source_url,
+        title="NWS Central Park daily maximum for July 1, 2026: 87F",
+        snippet="NWS Central Park climate report lists TODAY MAXIMUM 87F.",
+        supports_direction="no",
+        supports_confidence=0.95,
+        metric_name="nws_daily_high_temp_f",
+        metric_value=87.0,
+        metric_unit="fahrenheit",
+        extraction_confidence=0.95,
+        contract_fingerprint="contract-weather",
+    )
+
+    await store.record_research_run(
+        "KXHIGHNY-26JUL01-B94.5",
+        "run-weather",
+        trigger_headline="",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Weather research.",
+        verdict_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        force_side="no",
+        estimated_probability=0.05,
+        confidence=0.95,
+        contract_fingerprint="contract-weather",
+        evidence=[
+            ResearchEvidence(claim_type="supporting", **base),
+            ResearchEvidence(claim_type="disconfirming", **base),
+        ],
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT claim_type, metric_name
+            FROM research_evidence
+            ORDER BY claim_type
+            """
+        ).fetchall()
+
+    assert rows == [
+        ("disconfirming", "nws_daily_high_temp_f"),
+        ("supporting", "nws_daily_high_temp_f"),
+    ]
 
 
 @pytest.mark.asyncio

@@ -51,6 +51,47 @@ def _normalize_pem(raw: str | bytes) -> bytes:
 
 # Rate-limit guard: max 10 requests/second
 _MIN_REQUEST_INTERVAL = 0.12   # seconds
+_TRANSIENT_HTTP_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _is_transient_http_status(status: int | None) -> bool:
+    return int(status or 0) in _TRANSIENT_HTTP_STATUSES
+
+
+def _request_exception_status(exc: requests.RequestException) -> int | None:
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is not None:
+        return int(status)
+
+    text = str(exc).lower()
+    for transient_status in _TRANSIENT_HTTP_STATUSES:
+        if f"too many {transient_status}" in text:
+            return transient_status
+    return None
+
+
+def _is_transient_request_exception(exc: requests.RequestException) -> bool:
+    if isinstance(exc, requests.Timeout):
+        return True
+    status = _request_exception_status(exc)
+    if _is_transient_http_status(status):
+        return True
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "too many 429",
+            "too many 500",
+            "too many 502",
+            "too many 503",
+            "too many 504",
+            "read timed out",
+            "connection aborted",
+            "connection reset",
+            "temporary failure",
+        )
+    )
 
 
 class KalshiSigningError(RuntimeError):
@@ -178,10 +219,31 @@ class KalshiRestClient:
                 if sensitive.lower() in body.lower():
                     body = "(response body redacted -- may contain credentials)"
                     break
-            log.error("HTTP %s %s -> %s: %s", method, endpoint, status, body)
+            is_transient = _is_transient_http_status(status)
+            log_fn = log.warning if is_transient else log.error
+            log_fn(
+                "HTTP request failed method=%s endpoint=%s status=%s "
+                "transient=%s body=%s",
+                method,
+                endpoint,
+                status,
+                str(is_transient).lower(),
+                body,
+            )
             raise
         except requests.RequestException as exc:
-            log.error("Request error %s %s: %s", method, endpoint, exc)
+            status = _request_exception_status(exc)
+            is_transient = _is_transient_request_exception(exc)
+            log_fn = log.warning if is_transient else log.error
+            log_fn(
+                "Request failed method=%s endpoint=%s status=%s "
+                "transient=%s exception=%s",
+                method,
+                endpoint,
+                status if status is not None else "unknown",
+                str(is_transient).lower(),
+                exc,
+            )
             raise
 
     # ── Public market data ────────────────────────────────────────────────────

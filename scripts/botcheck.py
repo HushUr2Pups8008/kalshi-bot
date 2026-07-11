@@ -37,6 +37,7 @@ if str(REPO_ROOT_FOR_IMPORTS) not in sys.path:
 from utils.research_prewarm_targets import (
     DEFAULT_TARGET_REASONS,
     DEFAULT_TARGET_RESEARCH_SKIP_REASONS,
+    RESEARCH_PREWARM_EVENT_TYPES,
     record_targets_kalshi_research_prewarm,
 )
 from scripts.research_activation_status import evaluate_activation_profile
@@ -68,6 +69,14 @@ SIGNAL_FLOW_EVENTS = (
 )
 RESEARCH_DOSSIER_MAX_AGE_SECONDS = 6 * 60 * 60
 RESEARCH_REQUIRED_SOURCE_CLASSES = {"resolution_source", "official_primary"}
+
+
+def _research_proof_has_countercase(side: str, counter_directions: set[str]) -> bool:
+    normalized_side = side.strip().lower()
+    if normalized_side not in {"yes", "no"}:
+        return False
+    opposite = "no" if normalized_side == "yes" else "yes"
+    return bool(counter_directions & {opposite, "neutral"})
 
 
 @dataclass(frozen=True)
@@ -114,6 +123,7 @@ class ResearchDossierStats:
     latest_evidence_ts: datetime | None = None
     verdict_counts: Counter[str] = field(default_factory=Counter)
     vetted_trade_candidate_dossiers: int = 0
+    decision_grade_candidate_dossiers: int = 0
     live_cache_eligible_dossiers: int = 0
     fresh_evidence_rows_24h: int = 0
     error: str | None = None
@@ -325,9 +335,17 @@ def summarize_research_dossiers(
             latest_researched_raw = conn.execute(
                 "SELECT MAX(last_researched_ts) AS ts FROM research_dossiers"
             ).fetchone()["ts"]
+            cache_evidence_ts_sql = """
+                CASE
+                    WHEN inserted_at IS NOT NULL
+                         AND (retrieved_at IS NULL OR inserted_at > retrieved_at)
+                    THEN inserted_at
+                    ELSE retrieved_at
+                END
+            """
             latest_evidence_raw = conn.execute(
-                """
-                SELECT MAX(COALESCE(retrieved_at, inserted_at)) AS ts
+                f"""
+                SELECT MAX({cache_evidence_ts_sql}) AS ts
                 FROM research_evidence
                 """
             ).fetchone()["ts"]
@@ -355,6 +373,22 @@ def summarize_research_dossiers(
                     """
                 ).fetchone()["count"]
             )
+            decision_grade_candidate_dossiers = 0
+            if {"last_market_price", "last_estimated_edge"} <= dossier_columns:
+                decision_grade_candidate_dossiers = int(
+                    conn.execute(
+                        """
+                        SELECT COUNT(*) AS count
+                        FROM research_dossiers
+                        WHERE last_verdict_status = 'decision_grade_candidate'
+                          AND last_force_side IN ('yes', 'no')
+                          AND last_estimated_probability IS NOT NULL
+                          AND last_confidence IS NOT NULL
+                          AND last_market_price IS NOT NULL
+                          AND last_estimated_edge IS NOT NULL
+                        """
+                    ).fetchone()["count"]
+                )
             live_cache_eligible_tickers: set[str] = set()
             fresh_since = now - timedelta(hours=24)
             live_cache_since = now - timedelta(seconds=RESEARCH_DOSSIER_MAX_AGE_SECONDS)
@@ -363,6 +397,8 @@ def summarize_research_dossiers(
             evidence_by_proof: dict[
                 tuple[str, str, str], list[tuple[str, datetime]]
             ] = {}
+            counter_directions_by_contract: dict[tuple[str, str], set[str]] = {}
+            counter_directions_by_proof: dict[tuple[str, str, str], set[str]] = {}
             fingerprint_select = (
                 "contract_fingerprint"
                 if "contract_fingerprint" in evidence_columns
@@ -373,6 +409,12 @@ def summarize_research_dossiers(
                 if "research_run_id" in evidence_columns
                 else "NULL AS research_run_id"
             )
+            claim_type_select = "claim_type" if "claim_type" in evidence_columns else "NULL"
+            direction_select = (
+                "supports_direction" if "supports_direction" in evidence_columns else "NULL"
+            )
+            has_counter_columns = {"claim_type", "supports_direction"} <= evidence_columns
+            has_research_runs = _sqlite_table_exists(conn, "research_runs")
             for row in conn.execute(
                 f"""
                 SELECT
@@ -380,7 +422,9 @@ def summarize_research_dossiers(
                     {run_id_select},
                     source_class,
                     {fingerprint_select},
-                    COALESCE(retrieved_at, inserted_at) AS ts
+                    {claim_type_select} AS claim_type,
+                    {direction_select} AS supports_direction,
+                    {cache_evidence_ts_sql} AS ts
                 FROM research_evidence
                 """
             ):
@@ -394,33 +438,54 @@ def summarize_research_dossiers(
                         evidence_by_contract.setdefault((ticker, fingerprint), []).append(
                             (str(row["source_class"] or "").strip(), evidence_ts)
                         )
+                        claim_type = str(row["claim_type"] or "").strip().lower()
+                        direction = str(row["supports_direction"] or "").strip().lower()
+                        if claim_type in {"disconfirming", "contradiction_check"}:
+                            counter_directions_by_contract.setdefault(
+                                (ticker, fingerprint),
+                                set(),
+                            ).add(direction)
                     run_id = str(row["research_run_id"] or "").strip()
                     if ticker and run_id and fingerprint:
                         evidence_by_proof.setdefault(
                             (ticker, run_id, fingerprint),
                             [],
                         ).append((str(row["source_class"] or "").strip(), evidence_ts))
+                        if claim_type in {"disconfirming", "contradiction_check"}:
+                            counter_directions_by_proof.setdefault(
+                                (ticker, run_id, fingerprint),
+                                set(),
+                            ).add(direction)
             dossier_fingerprint_select = (
                 "last_contract_fingerprint"
                 if "last_contract_fingerprint" in dossier_columns
                 else "NULL AS last_contract_fingerprint"
             )
-            vetted_contracts = {
-                (
-                    str(row["market_ticker"] or "").strip(),
-                    str(row["last_contract_fingerprint"] or "").strip(),
-                )
+            vetted_contracts: set[tuple[str, str]] = set()
+            side_by_contract: dict[tuple[str, str], str] = {}
+            if (
+                not has_research_runs
+                and {"last_market_price", "last_estimated_edge"} <= dossier_columns
+            ):
                 for row in conn.execute(
                     f"""
-                    SELECT market_ticker, {dossier_fingerprint_select}
-                    FROM research_dossiers
-                    WHERE last_verdict_status = 'trade_candidate'
-                      AND last_force_side IN ('yes', 'no')
-                      AND last_estimated_probability IS NOT NULL
-                      AND last_confidence IS NOT NULL
-                    """
-                )
-            }
+                        SELECT market_ticker, {dossier_fingerprint_select}
+                        , last_force_side
+                        FROM research_dossiers
+                        WHERE last_verdict_status = 'decision_grade_candidate'
+                          AND last_force_side IN ('yes', 'no')
+                          AND last_estimated_probability IS NOT NULL
+                          AND last_confidence IS NOT NULL
+                          AND last_market_price IS NOT NULL
+                          AND last_estimated_edge IS NOT NULL
+                        """
+                ):
+                    contract = (
+                        str(row["market_ticker"] or "").strip(),
+                        str(row["last_contract_fingerprint"] or "").strip(),
+                    )
+                    vetted_contracts.add(contract)
+                    side_by_contract[contract] = str(row["last_force_side"] or "")
             for ticker, fingerprint in vetted_contracts:
                 if not ticker or not fingerprint:
                     continue
@@ -430,37 +495,85 @@ def summarize_research_dossiers(
                 if any(
                     source_class in RESEARCH_REQUIRED_SOURCE_CLASSES
                     for source_class, _ts in contract_evidence
+                ) and (
+                    not has_counter_columns
+                    or _research_proof_has_countercase(
+                        side_by_contract.get((ticker, fingerprint), ""),
+                        counter_directions_by_contract.get((ticker, fingerprint), set()),
+                    )
                 ):
                     live_cache_eligible_tickers.add(ticker)
-            if _sqlite_table_exists(conn, "research_runs"):
-                for row in conn.execute(
-                    """
-                    SELECT market_ticker, research_run_id
-                    FROM research_runs
-                    WHERE verdict_status = 'trade_candidate'
-                      AND force_side IN ('yes', 'no')
-                      AND estimated_probability IS NOT NULL
-                      AND confidence IS NOT NULL
-                    """
-                ):
-                    ticker = str(row["market_ticker"] or "").strip()
-                    run_id = str(row["research_run_id"] or "").strip()
-                    if not ticker or not run_id:
-                        continue
-                    for proof_ticker, proof_run_id, _fingerprint in evidence_by_proof:
-                        if proof_ticker != ticker or proof_run_id != run_id:
+            if has_research_runs:
+                run_columns = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(research_runs)").fetchall()
+                }
+                has_research_tasks = _sqlite_table_exists(conn, "research_tasks")
+                task_join = (
+                    "JOIN research_tasks t ON t.market_ticker = r.market_ticker"
+                    if has_research_tasks
+                    else ""
+                )
+                task_candidate_filter = (
+                    "AND t.state = 'decision_grade_candidate'"
+                    if has_research_tasks
+                    else ""
+                )
+                current_fingerprint_select = (
+                    "d.last_contract_fingerprint"
+                    if "last_contract_fingerprint" in dossier_columns
+                    else "NULL"
+                )
+                if {"market_price", "estimated_edge", "force_side"} <= run_columns:
+                    for row in conn.execute(
+                        f"""
+                        SELECT r.market_ticker, r.research_run_id, r.force_side,
+                               {current_fingerprint_select} AS contract_fingerprint
+                        FROM research_runs r
+                        JOIN research_dossiers d
+                          ON d.market_ticker = r.market_ticker
+                         AND d.last_research_run_id = r.research_run_id
+                        {task_join}
+                        WHERE r.verdict_status = 'decision_grade_candidate'
+                          AND d.last_verdict_status = 'decision_grade_candidate'
+                          {task_candidate_filter}
+                          AND r.force_side IN ('yes', 'no')
+                          AND r.estimated_probability IS NOT NULL
+                          AND r.confidence IS NOT NULL
+                          AND r.market_price IS NOT NULL
+                          AND r.estimated_edge IS NOT NULL
+                        """
+                    ):
+                        ticker = str(row["market_ticker"] or "").strip()
+                        run_id = str(row["research_run_id"] or "").strip()
+                        current_fingerprint = str(
+                            row["contract_fingerprint"] or ""
+                        ).strip()
+                        if not ticker or not run_id or not current_fingerprint:
                             continue
-                        proof_evidence = evidence_by_proof[
-                            (proof_ticker, proof_run_id, _fingerprint)
-                        ]
-                        if len(proof_evidence) < 2:
-                            continue
-                        if any(
-                            source_class in RESEARCH_REQUIRED_SOURCE_CLASSES
-                            for source_class, _ts in proof_evidence
-                        ):
-                            live_cache_eligible_tickers.add(ticker)
-                            break
+                        for proof_ticker, proof_run_id, _fingerprint in evidence_by_proof:
+                            if proof_ticker != ticker or proof_run_id != run_id:
+                                continue
+                            if _fingerprint != current_fingerprint:
+                                continue
+                            proof = (proof_ticker, proof_run_id, _fingerprint)
+                            proof_evidence = evidence_by_proof[
+                                proof
+                            ]
+                            if len(proof_evidence) < 2:
+                                continue
+                            if any(
+                                source_class in RESEARCH_REQUIRED_SOURCE_CLASSES
+                                for source_class, _ts in proof_evidence
+                            ) and (
+                                not has_counter_columns
+                                or _research_proof_has_countercase(
+                                    str(row["force_side"] or ""),
+                                    counter_directions_by_proof.get(proof, set()),
+                                )
+                            ):
+                                live_cache_eligible_tickers.add(ticker)
+                                break
     except sqlite3.Error as exc:
         return ResearchDossierStats(
             db_path=db_path,
@@ -477,6 +590,7 @@ def summarize_research_dossiers(
         latest_evidence_ts=_parse_research_ts(latest_evidence_raw),
         verdict_counts=verdict_counts,
         vetted_trade_candidate_dossiers=vetted_trade_candidate_dossiers,
+        decision_grade_candidate_dossiers=decision_grade_candidate_dossiers,
         live_cache_eligible_dossiers=len(live_cache_eligible_tickers),
         fresh_evidence_rows_24h=fresh_evidence_rows_24h,
     )
@@ -655,11 +769,7 @@ def _target_tickers_from_trade_log(
         )
     ):
         event_type = str(record.get("type") or "").strip()
-        if event_type not in {
-            "ANALYSIS_REJECTED",
-            "MATCH_LLM_REVIEW",
-            "SIGNAL_ANALYSIS_DETAIL",
-        }:
+        if event_type not in RESEARCH_PREWARM_EVENT_TYPES:
             continue
         ts = _parse_trade_ts(record.get("ts"))
         if ts is not None and ts < since:
@@ -845,6 +955,8 @@ def print_research_gate_section(
                 "vetted     : "
                 "historical_trade_candidate="
                 f"{dossier_stats.vetted_trade_candidate_dossiers} "
+                "decision_grade_candidate="
+                f"{dossier_stats.decision_grade_candidate_dossiers} "
                 f"live_cache_eligible={dossier_stats.live_cache_eligible_dossiers}"
             )
     print()
