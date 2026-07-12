@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -336,7 +337,7 @@ class TestWeightsFileRoundTrip:
             [
                 {
                     "type": "MATCH_LLM_REVIEW",
-                    "ts": "2026-06-28T00:00:00Z",
+                    "ts": datetime.now(timezone.utc).isoformat(),
                     "verdict": "false_positive_neutral",
                     "match_score": 0.01,
                     "market_prefix": "P",
