@@ -1459,23 +1459,45 @@ def decide_research_verdict(
             open_questions=open_questions,
             market_price=side_market_price,
         )
-    executable_ask = yes_ask if side == "yes" else no_ask
-    if require_decision_grade and executable_ask is None:
-        return ResearchVerdict(
-            status=ResearchStatus.NEEDS_PRICE_EDGE,
-            attempted=True,
+    spread_buffer = 0.01
+    min_edge = 0.04 if live_mode else 0.02
+    asks = {"yes": yes_ask, "no": no_ask}
+    edges = {
+        "yes": p_yes - float(yes_ask) - spread_buffer
+        if _actionable_market_price(yes_ask)
+        else None,
+        "no": (1.0 - p_yes) - float(no_ask) - spread_buffer
+        if _actionable_market_price(no_ask)
+        else None,
+    }
+    support_by_side = {
+        candidate_side: _qualifying_directional_support(
+            evidence,
+            candidate_side,
+            contract_ticker=contract_ticker,
             queries=queries,
-            evidence=evidence,
-            summary="Decision-grade verifier requires the executable market price.",
-            skip_reason="missing_market_price",
-            force_side=side,
-            estimated_probability=p_yes,
-            confidence=conf,
         )
-    yes_ask = yes_ask if yes_ask is not None else 1.0
-    no_ask = no_ask if no_ask is not None else 1.0
-    executable_ask = yes_ask if side == "yes" else no_ask
-    if live_mode and (executable_ask <= 0.03 or executable_ask >= 0.97):
+        for candidate_side in ("yes", "no")
+    }
+    qualifying_sides = [
+        (candidate_side, float(edges[candidate_side]), float(asks[candidate_side]))
+        for candidate_side in ("yes", "no")
+        if edges[candidate_side] is not None
+        and float(edges[candidate_side]) >= min_edge
+        and (
+            candidate_side == side
+            or (
+                require_decision_grade
+                and bool(support_by_side[candidate_side])
+            )
+        )
+    ]
+    safe_qualifying_sides = [
+        candidate
+        for candidate in qualifying_sides
+        if not live_mode or 0.03 < candidate[2] < 0.97
+    ]
+    if live_mode and qualifying_sides and not safe_qualifying_sides:
         return ResearchVerdict(
             status=ResearchStatus.HARD_CAPITAL_BLOCK,
             attempted=True,
@@ -1485,55 +1507,74 @@ def decide_research_verdict(
             skip_reason="no_trade_capital_protection",
         )
 
-    spread_buffer = 0.01
-    min_edge = 0.04 if live_mode else 0.02
-    yes_edge = p_yes - yes_ask - spread_buffer
-    no_edge = (1.0 - p_yes) - no_ask - spread_buffer
-    if side == "yes" and yes_edge >= min_edge:
-        candidate = ResearchVerdict(
-            status=ResearchStatus.TRADE_CANDIDATE,
-            attempted=True,
-            queries=queries,
-            evidence=evidence,
-            summary="Research supports YES and executable net edge clears threshold.",
-            force_side="yes",
-            estimated_probability=p_yes,
-            confidence=conf,
-            market_price=yes_ask,
-            estimated_edge=yes_edge,
-            counterclaims=counterclaims,
-            open_questions=open_questions,
+    if safe_qualifying_sides:
+        trade_side, trade_edge, executable_ask = max(
+            safe_qualifying_sides,
+            key=lambda candidate: (candidate[1], candidate[0] == side),
         )
-        if require_decision_grade:
-            return _decision_grade_verdict(
-                candidate,
-                model_reason=model_reason,
-                contract_ticker=contract_ticker,
+        flipped_side = trade_side != side
+        trade_confidence = conf
+        trade_counterclaims = counterclaims
+        trade_open_questions = open_questions
+        if flipped_side:
+            selected_support_confidence = max(
+                float(item.supports_confidence or 0.0)
+                for item in support_by_side[trade_side]
             )
-        return candidate
-    if side == "no" and no_edge >= min_edge:
+            trade_confidence = min(conf, selected_support_confidence)
+            trade_counterclaims = _counterclaims_for_side(evidence, trade_side)
+            trade_open_questions = ()
         candidate = ResearchVerdict(
             status=ResearchStatus.TRADE_CANDIDATE,
             attempted=True,
             queries=queries,
             evidence=evidence,
-            summary="Research supports NO and executable net edge clears threshold.",
-            force_side="no",
+            summary=(
+                f"Research probability and executable {trade_side.upper()} price "
+                "produce the strongest positive net edge."
+            ),
+            force_side=trade_side,
             estimated_probability=p_yes,
-            confidence=conf,
-            market_price=no_ask,
-            estimated_edge=no_edge,
-            counterclaims=counterclaims,
-            open_questions=open_questions,
+            confidence=trade_confidence,
+            market_price=executable_ask,
+            estimated_edge=trade_edge,
+            counterclaims=trade_counterclaims,
+            open_questions=trade_open_questions,
         )
         if require_decision_grade:
             return _decision_grade_verdict(
                 candidate,
-                model_reason=model_reason,
+                model_reason=(model_reason if trade_side == side else None),
                 contract_ticker=contract_ticker,
             )
         return candidate
     if require_decision_grade:
+        executable_ask = asks[side]
+        side_edge = edges[side]
+        if not _actionable_market_price(executable_ask):
+            quoted_price = _has_quoted_market_price(executable_ask)
+            return ResearchVerdict(
+                status=(
+                    ResearchStatus.UNTRADEABLE
+                    if quoted_price
+                    else ResearchStatus.NEEDS_PRICE_EDGE
+                ),
+                attempted=True,
+                queries=queries,
+                evidence=evidence,
+                summary=(
+                    "Model-side market price is quoted but not executable."
+                    if quoted_price
+                    else "Decision-grade verifier requires the executable market price."
+                ),
+                skip_reason=(
+                    "non_actionable_market_price"
+                    if quoted_price
+                    else "missing_market_price"
+                ),
+                estimated_probability=p_yes,
+                confidence=conf,
+            )
         return ResearchVerdict(
             status=ResearchStatus.UNTRADEABLE,
             attempted=True,
@@ -1545,7 +1586,7 @@ def decide_research_verdict(
             estimated_probability=p_yes,
             confidence=conf,
             market_price=executable_ask,
-            estimated_edge=yes_edge if side == "yes" else no_edge,
+            estimated_edge=side_edge,
             counterclaims=counterclaims,
             open_questions=open_questions,
         )
@@ -1683,6 +1724,55 @@ def _is_decision_directional_support(item: ResearchEvidence) -> bool:
         _is_structured_signal_metric(item)
         and item.claim_type in {"base_rate", "official_resolution", "settlement_source"}
     )
+
+
+def _qualifying_directional_support(
+    evidence: list[ResearchEvidence],
+    side: str,
+    *,
+    contract_ticker: str,
+    queries: Sequence[ResearchQuery],
+) -> list[ResearchEvidence]:
+    relevance_spec = _contract_relevance_spec(contract_ticker, queries)
+    return [
+        item
+        for item in evidence
+        if item.supports_direction == side
+        and float(item.supports_confidence or 0.0)
+        >= MIN_DIRECTIONAL_SUPPORT_CONFIDENCE
+        and _is_decision_directional_support(item)
+        and not _is_official_data_pending_evidence(item)
+        and _is_fresh_decision_evidence(item)
+        and (
+            not relevance_spec.detected
+            or _evidence_is_relevant_to_spec(item, relevance_spec)
+        )
+    ]
+
+
+def _counterclaims_for_side(
+    evidence: list[ResearchEvidence],
+    side: str,
+) -> tuple[str, ...]:
+    opposite = "no" if side == "yes" else "yes"
+    candidates = sorted(
+        (
+            item
+            for item in evidence
+            if item.supports_direction == opposite
+            and not _is_official_data_pending_evidence(item)
+            and _is_fresh_decision_evidence(item)
+            and (
+                item.claim_type
+                in {"contradiction", "disconfirming", "contradiction_check"}
+                or _is_decision_directional_support(item)
+            )
+        ),
+        key=lambda item: float(item.supports_confidence or 0.0),
+        reverse=True,
+    )
+    claims = [_clean(item.snippet or item.title)[:240] for item in candidates]
+    return tuple(dict.fromkeys(claim for claim in claims if claim))
 
 
 def _structured_decision_grade_reason(candidate: ResearchVerdict) -> str:
