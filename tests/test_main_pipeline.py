@@ -275,9 +275,77 @@ def test_research_prewarm_market_provider_prioritizes_recent_nonterminal_researc
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        candidate_market.ticker,
-    ]
+    selected = bot._research_prewarm_market_provider()
+
+    assert [market.ticker for market in selected] == [candidate_market.ticker]
+
+
+def test_research_prewarm_market_provider_ranks_expanded_due_pool(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    far_tail = replace(
+        _make_market(),
+        ticker="KXFAR-26DEC31",
+        yes_ask=2.0,
+        yes_ask_cents=2,
+        no_ask_cents=98,
+        close_time="2026-12-31T00:00:00Z",
+    )
+    near_mid = replace(
+        _make_market(),
+        ticker="KXNEAR-26JUL13",
+        yes_ask=41.0,
+        yes_ask_cents=41,
+        no_ask_cents=59,
+        close_time="2026-07-13T00:00:00Z",
+    )
+    bot.rest.get_all_open_markets.return_value = [far_tail]
+    bot.rest.get_market.return_value = near_mid
+    bot._research_prewarm_due_task_tickers = MagicMock(
+        return_value=[far_tail.ticker, near_mid.ticker]
+    )
+
+    selected = bot._research_prewarm_market_provider()
+
+    bot._research_prewarm_due_task_tickers.assert_called_once_with(
+        limit=5,
+        cooldown_seconds=bot._research_prewarm_target_cooldown_seconds(),
+    )
+    assert [market.ticker for market in selected] == [near_mid.ticker]
+    bot.rest.get_market.assert_called_once_with(near_mid.ticker)
+
+
+def test_research_prewarm_fallback_ranks_across_series(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        ("KXTAIL", "KXMID"),
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    bot.rest.get_all_open_markets.return_value = []
+    tail = replace(
+        _make_market(),
+        ticker="KXTAIL-26DEC31",
+        yes_ask=2.0,
+        yes_ask_cents=2,
+        no_ask_cents=98,
+        close_time="2026-12-31T00:00:00Z",
+    )
+    mid = replace(
+        _make_market(),
+        ticker="KXMID-26JUL13",
+        yes_ask=41.0,
+        yes_ask_cents=41,
+        no_ask_cents=59,
+        close_time="2026-07-13T00:00:00Z",
+    )
+    bot.rest.get_markets.side_effect = [([tail], None), ([mid], None)]
+
+    selected = bot._research_prewarm_market_provider()
+
+    assert [market.ticker for market in selected] == [mid.ticker]
 
 
 def test_research_prewarm_market_provider_skips_blocklisted_recent_backlog(
@@ -1477,8 +1545,9 @@ async def test_targeted_research_prewarm_emits_structured_result(monkeypatch):
             self.kwargs = kwargs
             instances.append(self)
 
-        async def process_market(self, received_market):
+        async def process_market(self, received_market, **kwargs):
             assert received_market is market
+            assert kwargs == {"bypass_persisted_cooldown": True}
             return result
 
         async def emit_result(self, received_result):

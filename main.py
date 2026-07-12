@@ -78,7 +78,7 @@ from tasks.research_paper_admission import (
     ResearchBackedBlendStore,
     ResearchPaperAdmissionBridge,
 )
-from tasks.research_prewarm_task import ResearchPrewarmTask, market_has_actionable_price
+from tasks.research_prewarm_task import ResearchPrewarmTask
 from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
 from polymarket.settlement_reconciler import (
@@ -134,6 +134,7 @@ from utils.research_prewarm_targets import (
     RESEARCH_PREWARM_EVENT_TYPES,
     record_targets_kalshi_research_prewarm,
 )
+from utils.research_priority import research_market_priority_key
 from utils.research_market_eligibility import research_market_eligibility
 from utils.trade_log_reader import iter_trade_records
 from tasks.runtime_overrides_task import run_runtime_overrides_poll
@@ -1021,15 +1022,47 @@ class TradingBot:
         target_sequence: list[str] = []
         seen_targets: set[str] = set()
         due_task_tickers = self._research_prewarm_due_task_tickers(
-            limit=max_markets,
+            limit=max(max_markets * 5, max_markets),
             cooldown_seconds=cooldown,
         )
         due_task_ticker_set = set(due_task_tickers)
-        for ticker in due_task_tickers + _recent_runtime_research_prewarm_tickers():
+        runtime_target_tickers = _recent_runtime_research_prewarm_tickers()
+        for ticker in due_task_tickers + runtime_target_tickers:
             if ticker in seen_targets:
                 continue
             seen_targets.add(ticker)
             target_sequence.append(ticker)
+        initial_target_order = {
+            ticker: index for index, ticker in enumerate(target_sequence)
+        }
+        open_by_ticker = {
+            str(getattr(market, "ticker", "") or "").strip(): market
+            for market in market_list
+        }
+        for ticker in due_task_tickers:
+            if ticker in open_by_ticker or not hasattr(self.rest, "get_market"):
+                continue
+            try:
+                market = self.rest.get_market(ticker)
+            except Exception as exc:
+                log.warning(
+                    "[RESEARCH_PREWARM] due market metadata fetch failed ticker=%s: %s",
+                    ticker,
+                    exc,
+                )
+                continue
+            if market is None:
+                continue
+            market_list.append(market)
+            open_by_ticker[ticker] = market
+        target_sequence.sort(
+            key=lambda ticker: (
+                research_market_priority_key(open_by_ticker[ticker])
+                if ticker in open_by_ticker
+                else (2, 4),
+                initial_target_order[ticker],
+            )
+        )
         target_order = {
             ticker: index
             for index, ticker in enumerate(target_sequence)
@@ -1075,19 +1108,17 @@ class TradingBot:
         def open_markets_by_price(markets: Iterable[object]) -> list[object]:
             return sorted(
                 [market for market in markets if is_open_market(market)],
-                key=lambda market: 0 if market_has_actionable_price(market) else 1,
+                key=research_market_priority_key,
             )
 
         def sourceable_series_fallback(selected_tickers: set[str] | None = None) -> list[object]:
             if not hasattr(self.rest, "get_markets"):
                 return []
-            selected_tickers = selected_tickers or set()
-            selected: list[object] = []
+            selected_tickers = selected_tickers if selected_tickers is not None else set()
+            candidates: dict[str, object] = {}
             for raw_series in getattr(
                 cfg, "research_prewarm_sourceable_series_fallback", ()
             ) or ():
-                if len(selected) >= max_markets:
-                    break
                 series_ticker = str(raw_series or "").strip()
                 if not series_ticker:
                     continue
@@ -1107,19 +1138,22 @@ class TradingBot:
                     )
                     continue
                 for market in page or ():
-                    if len(selected) >= max_markets:
-                        break
                     ticker = market_ticker(market)
                     if (
                         not ticker
                         or ticker in selected_tickers
+                        or ticker in candidates
                         or not ticker_available(ticker)
                     ):
                         continue
                     if not is_sourceable_open_market(market):
                         continue
-                    selected.append(market)
-                    selected_tickers.add(ticker)
+                    candidates[ticker] = market
+            selected = sorted(
+                candidates.values(),
+                key=research_market_priority_key,
+            )[:max_markets]
+            selected_tickers.update(market_ticker(market) for market in selected)
             return selected
 
         if target_order:
@@ -1212,7 +1246,7 @@ class TradingBot:
                     self._enrich_research_prewarm_market_source_path(market)
                 )
             ],
-            key=lambda market: 0 if market_has_actionable_price(market) else 1,
+            key=research_market_priority_key,
         )[:max_markets]
         if sourceable:
             return mark_selected(sourceable)
@@ -1256,7 +1290,10 @@ class TradingBot:
                 getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0)
             ),
         )
-        result = await prewarm.process_market(market)
+        result = await prewarm.process_market(
+            market,
+            bypass_persisted_cooldown=True,
+        )
         await prewarm.emit_result(result)
         await self._admit_research_prewarm_paper_review(result, market)
         log.info(

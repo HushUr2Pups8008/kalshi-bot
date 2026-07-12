@@ -797,7 +797,7 @@ async def test_prewarm_retries_terminal_official_pending_task(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_prewarm_caps_existing_official_pending_cooldown(tmp_path):
+async def test_prewarm_honors_existing_official_pending_cooldown(tmp_path):
     store = ResearchDossierStore(tmp_path / "research_dossier.db")
     await store.initialize()
     calls: list[str] = []
@@ -843,10 +843,47 @@ async def test_prewarm_caps_existing_official_pending_cooldown(tmp_path):
 
     result = await task.process_market(_market("KXOFFICIAL-26JUL01"))
 
-    assert calls == ["KXOFFICIAL-26JUL01"]
-    assert result.status == ResearchStatus.NEEDS_RESEARCH.value
+    assert calls == []
+    assert result.status == "skipped_cooldown"
+    assert result.attempted is False
+    assert result.skip_reason == "research_task_cooldown"
+
+
+@pytest.mark.asyncio
+async def test_targeted_refresh_bypasses_nonterminal_persisted_cooldown(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    ticker = "KXOFFICIAL-26JUL01"
+    await store.record_research_run(
+        ticker,
+        "run-official-pending",
+        trigger_headline="Official data pending",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Official source has not published yet.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        skip_reason="official_data_pending",
+        decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+    )
+    calls = []
+
+    async def research_gate(_news, market, **_kwargs):
+        calls.append(market.ticker)
+        return ResearchVerdict(
+            status=ResearchStatus.NEEDS_RESEARCH,
+            attempted=True,
+            skip_reason="official_data_pending",
+        )
+
+    task = ResearchPrewarmTask(store=store, research_gate=research_gate)
+
+    result = await task.process_market(
+        _market(ticker),
+        bypass_persisted_cooldown=True,
+    )
+
+    assert calls == [ticker]
     assert result.attempted is True
-    assert result.skip_reason == "official_data_pending"
 
 
 @pytest.mark.asyncio
@@ -2030,3 +2067,49 @@ async def test_countercase_lookup_exceptions_reopen_research(failure_stage):
     )
 
     assert not await task._decision_grade_task_has_countercase("KXFAIL")
+
+
+@pytest.mark.asyncio
+async def test_prewarm_injects_persisted_open_questions_into_retry(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    ticker = "KXGAP-26JUL12"
+    question = "Which official source reports the contract-window result?"
+    await store.record_research_run(
+        ticker,
+        "run-gap-seed",
+        trigger_headline="",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Missing settlement-aligned evidence.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        skip_reason="missing_resolution_source",
+        decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+        open_questions=[question],
+    )
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2000-01-01T00:00:00.000Z',
+                cooldown_until_ts = '2000-01-01T00:00:00.000Z'
+            WHERE market_ticker = ?
+            """,
+            (ticker,),
+        )
+    observed_questions = None
+
+    async def research_gate(news, _market, **_kwargs):
+        nonlocal observed_questions
+        observed_questions = news.research_open_questions
+        return ResearchVerdict(
+            status=ResearchStatus.NEEDS_RESEARCH,
+            attempted=True,
+            skip_reason="missing_resolution_source",
+        )
+
+    task = ResearchPrewarmTask(store=store, research_gate=research_gate)
+
+    await task.process_market(_market(ticker))
+
+    assert observed_questions == (question,)

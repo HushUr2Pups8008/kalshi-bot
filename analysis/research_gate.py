@@ -25,6 +25,7 @@ from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Awaitable, Callable, Iterable, Sequence
 
+from utils.research_gaps import research_gap_query_intent, research_questions_for_skip
 from utils.research_evidence_quality import (
     MIN_COUNTER_EVIDENCE_CONFIDENCE,
     MIN_DIRECTIONAL_SUPPORT_CONFIDENCE,
@@ -81,6 +82,7 @@ class ResearchEvidence:
     inserted_at: str | None = None
     contract_fingerprint: str | None = None
     aggregator_url: str | None = None
+    available_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -544,6 +546,18 @@ def build_research_queries(news: Any, market: Any) -> list[ResearchQuery]:
     ticker = _clean(getattr(market, "ticker", ""))
 
     queries: list[ResearchQuery] = []
+    for open_question in getattr(news, "research_open_questions", ()) or ():
+        question = _clean(open_question)
+        if not question:
+            continue
+        query_intent, source_class = research_gap_query_intent(question)
+        queries.append(
+            ResearchQuery(
+                query=_query_fragment(ticker, title, question),
+                query_intent=query_intent,
+                source_class=source_class,
+            )
+        )
     for source in getattr(market, "settlement_sources", ()) or ():
         if _is_placeholder_settlement_source(source):
             continue
@@ -3340,6 +3354,10 @@ def _bls_cpi_search(
                 supports_direction="neutral",
                 supports_confidence=0.0,
                 published_at=f"{target_year:04d}-{target_month:02d}-01",
+                available_at=_cpi_expected_release_guard(
+                    target_year,
+                    target_month,
+                ).isoformat(),
                 retrieved_at=_utc_now_iso(),
                 metric_name="cpi_official_data_pending",
                 metric_unit="period_status",
@@ -3463,6 +3481,7 @@ def _nws_daily_climate_search(
                 supports_direction="neutral",
                 supports_confidence=0.0,
                 published_at=report_date.isoformat() if report_date else None,
+                available_at=target_date.isoformat(),
                 retrieved_at=_utc_now_iso(),
                 metric_name="nws_daily_high_temp_pending",
                 metric_unit="period_status",
@@ -3803,6 +3822,7 @@ def _economic_stat_pending_search(
             supports_direction="neutral",
             supports_confidence=0.0,
             published_at=period_key,
+            available_at=pending_until.isoformat(),
             retrieved_at=_utc_now_iso(),
             metric_name="economic_stat_data_pending",
             metric_unit="period_status",
@@ -4146,6 +4166,7 @@ def _fed_policy_search(
                 supports_direction="neutral",
                 supports_confidence=0.0,
                 published_at=meeting_date.isoformat(),
+                available_at=meeting_date.isoformat(),
                 retrieved_at=_utc_now_iso(),
                 metric_name="fed_decision_pending",
                 metric_unit="period_status",
@@ -4199,6 +4220,7 @@ def _bank_of_israel_policy_search(
                 supports_direction="neutral",
                 supports_confidence=0.0,
                 published_at=meeting_date.isoformat(),
+                available_at=meeting_date.isoformat(),
                 retrieved_at=_utc_now_iso(),
                 metric_name="bank_of_israel_decision_pending",
                 metric_unit="period_status",
@@ -4298,6 +4320,7 @@ def _treasury_yield_search(
             supports_direction="neutral",
             supports_confidence=0.0,
             published_at=target_date.isoformat(),
+            available_at=target_date.isoformat(),
             retrieved_at=_utc_now_iso(),
             metric_name="treasury_yield_data_pending",
             metric_unit="period_status",
@@ -4354,6 +4377,7 @@ def _truth_social_event_search(
                 supports_direction="neutral",
                 supports_confidence=0.0,
                 published_at=deadline.isoformat(),
+                available_at=deadline.isoformat(),
                 retrieved_at=_utc_now_iso(),
                 metric_name="truth_social_window_pending",
                 metric_unit="period_status",
@@ -4458,6 +4482,7 @@ def _event_window_pending_search(
             supports_direction="neutral",
             supports_confidence=0.0,
             published_at=deadline.isoformat(),
+            available_at=deadline.isoformat(),
             retrieved_at=_utc_now_iso(),
             metric_name="event_window_pending",
             metric_unit="period_status",
@@ -5101,6 +5126,12 @@ async def run_research_gate(
     )
 
     async def finalize_verdict(verdict: ResearchVerdict) -> ResearchVerdict:
+        open_questions = research_questions_for_skip(
+            verdict.skip_reason,
+            verdict.open_questions,
+        )
+        if open_questions != verdict.open_questions:
+            verdict = replace(verdict, open_questions=open_questions)
         if direct_fetch_failures:
             verdict = replace(
                 verdict,

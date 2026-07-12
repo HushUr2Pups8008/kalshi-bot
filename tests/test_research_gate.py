@@ -47,6 +47,58 @@ from analysis.research_gate import (
 from analysis import research_gate as research_gate_module
 from kalshi.series_metadata import SettlementSource
 from tasks.research_dossier import ResearchDossierStore
+from utils.research_gaps import research_gap_query_intent, research_questions_for_skip
+
+
+def test_build_research_queries_prioritizes_persisted_resolution_gap():
+    news = SimpleNamespace(
+        headline="",
+        research_open_questions=(
+            "Which official source reports the contract-window result?",
+        ),
+    )
+    market = SimpleNamespace(
+        ticker="KXGAP-26JUL12",
+        title="Will the contract-window result be positive?",
+        rules_primary="The official agency result determines settlement.",
+        rules_secondary="",
+        settlement_sources=(),
+        contract_terms_url="",
+    )
+
+    queries = build_research_queries(news, market)
+
+    assert queries[0].query_intent == "official_resolution"
+    assert "Which official source" in queries[0].query
+
+
+def test_current_counter_gap_precedes_unrelated_existing_question():
+    questions = research_questions_for_skip(
+        "missing_counter_evidence",
+        ("When does the event occur?",),
+    )
+
+    assert research_gap_query_intent(questions[0])[0] == "disconfirming"
+    assert "contradicts" in questions[0]
+
+
+@pytest.mark.parametrize(
+    "skip_reason",
+    [
+        "direction_reason_conflict",
+        "missing_estimated_probability",
+        "cached_dossier_insufficient",
+        "cached_dossier_unvetted",
+        "persistence_status_unverified",
+        "research_provider_error",
+        "research_adjudicator_error",
+        "no_reliable_source_path",
+        "source_freshness_ttl_exceeded",
+        "generic_summary",
+    ],
+)
+def test_nonterminal_skip_reason_derives_research_gap(skip_reason):
+    assert research_questions_for_skip(skip_reason)
 
 
 @pytest.fixture(autouse=True)

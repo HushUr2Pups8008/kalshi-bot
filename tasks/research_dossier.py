@@ -19,6 +19,11 @@ from types import SimpleNamespace
 from typing import Literal, TypeVar
 
 from analysis.research_gate import ResearchEvidence
+from utils.research_gaps import research_questions_for_skip
+from utils.research_priority import (
+    extract_pending_event_at,
+    official_pending_retry_delay,
+)
 from utils.research_evidence_quality import (
     MIN_COUNTER_EVIDENCE_CONFIDENCE,
     MIN_DIRECTIONAL_SUPPORT_CONFIDENCE,
@@ -626,6 +631,12 @@ class ResearchDossierStore:
                 evidence=evidence,
             )
         )
+        final_open_questions = list(
+            research_questions_for_skip(final_skip_reason, open_questions)
+        )
+        final_open_questions_supplied = open_questions_supplied or bool(
+            final_open_questions
+        )
         final_contract_fingerprint = contract_fingerprint or _run_contract_fingerprint(evidence)
         normalized_market_status = (
             _UNSET if market_status is _UNSET else _normalize_market_status(market_status)
@@ -710,6 +721,7 @@ class ResearchDossierStore:
                 final_decision_grade_status or final_verdict_status,
                 terminal_reason=final_skip_reason,
                 open_questions=open_questions,
+                pending_event_at=extract_pending_event_at(evidence),
             )
             conn.execute(
                 """
@@ -753,8 +765,8 @@ class ResearchDossierStore:
                     final_decision_grade_status,
                     int(decision_grade_reasons_supplied),
                     _json_list(decision_grade_reasons),
-                    int(open_questions_supplied),
-                    _json_list(open_questions),
+                    int(final_open_questions_supplied),
+                    _json_list(final_open_questions),
                     int(counterclaims_supplied),
                     _json_list(counterclaims),
                     research_run_id,
@@ -1271,15 +1283,6 @@ class ResearchDossierStore:
             cooldown_until = _parse_utc_ts(row["cooldown_until_ts"])
             updated_at = _parse_utc_ts(row["updated_ts"])
             backoff_seconds = float(row["backoff_seconds"] or 0.0)
-            if (
-                str(row["last_skip_reason"] or "") == "official_data_pending"
-                and updated_at is not None
-            ):
-                capped_until = updated_at + timedelta(
-                    seconds=RESEARCH_TASK_OFFICIAL_PENDING_MAX_BACKOFF_SECONDS
-                )
-                if cooldown_until is None or capped_until < cooldown_until:
-                    cooldown_until = capped_until
             if cooldown_until is not None and cooldown_until > now:
                 continue
             if (
@@ -1305,10 +1308,12 @@ class ResearchDossierStore:
         *,
         terminal_reason: str | None,
         open_questions: list[str],
+        pending_event_at: datetime | None = None,
     ) -> None:
         prior = conn.execute(
             """
-            SELECT attempt_count, same_reason_count, last_skip_reason, backoff_seconds
+            SELECT attempt_count, same_reason_count, last_skip_reason, backoff_seconds,
+                   open_questions_json
             FROM research_tasks
             WHERE market_ticker = ?
             """,
@@ -1340,20 +1345,35 @@ class ResearchDossierStore:
                     else "contradictory_evidence_unresolved"
                 )
         terminal = final_state in {"decision_grade_candidate", "untradeable"}
+        prior_questions = (
+            _parse_json_list(prior["open_questions_json"]) if prior else []
+        )
+        if prior and str(prior["last_skip_reason"] or "") == reason_key:
+            open_questions = list(
+                research_questions_for_skip(
+                    reason_key,
+                    [*prior_questions, *open_questions],
+                )
+            )
+        else:
+            open_questions = list(research_questions_for_skip(reason_key, open_questions))
         if terminal:
             backoff_seconds = 0.0
             cooldown_until_ts = None
         else:
             previous_backoff = float(prior["backoff_seconds"] or 0.0) if prior else 0.0
-            max_backoff_seconds = (
-                RESEARCH_TASK_OFFICIAL_PENDING_MAX_BACKOFF_SECONDS
-                if reason_key == "official_data_pending"
-                else RESEARCH_TASK_MAX_BACKOFF_SECONDS
-            )
-            backoff_seconds = min(
-                previous_backoff * 2 if previous_backoff else RESEARCH_TASK_INITIAL_BACKOFF_SECONDS,
-                max_backoff_seconds,
-            )
+            if reason_key == "official_data_pending":
+                backoff_seconds = official_pending_retry_delay(
+                    now=datetime.now(timezone.utc),
+                    event_at=pending_event_at,
+                )
+            else:
+                backoff_seconds = min(
+                    previous_backoff * 2
+                    if previous_backoff
+                    else RESEARCH_TASK_INITIAL_BACKOFF_SECONDS,
+                    RESEARCH_TASK_MAX_BACKOFF_SECONDS,
+                )
             cooldown_until_ts = _utc_cooldown_until(backoff_seconds)
         final_terminal_reason = terminal_reason if final_state == "untradeable" else None
         conn.execute(
@@ -1786,6 +1806,9 @@ def _evidence_from_row(row: sqlite3.Row) -> ResearchEvidence:
         supports_direction=row["supports_direction"],
         supports_confidence=float(row["supports_confidence"]),
         published_at=row["published_at"],
+        available_at=(
+            raw_payload.get("available_at") if isinstance(raw_payload, dict) else None
+        ),
         retrieved_at=row["retrieved_at"],
         metric_name=row["metric_name"],
         metric_value=row["metric_value"],

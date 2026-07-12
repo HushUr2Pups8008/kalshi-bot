@@ -1334,6 +1334,86 @@ async def test_research_task_caps_official_data_pending_backoff(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_research_task_uses_pending_event_horizon_for_backoff(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    event_at = datetime.now(timezone.utc) + timedelta(days=14)
+
+    await store.record_research_run(
+        "KXOFFICIALPENDING-26JUL14",
+        "run-official-pending-horizon",
+        trigger_headline="Official data pending",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Official settlement data has not been released yet.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        skip_reason="official_data_pending",
+        decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+        evidence=[
+            ResearchEvidence(
+                source_class="official_primary",
+                source_name="Official agency",
+                source_url="https://agency.gov/release",
+                title="Release pending",
+                snippet="The target-period release is pending.",
+                claim_type="official_data_pending",
+                published_at=event_at.isoformat(),
+                available_at=event_at.isoformat(),
+                metric_name="target_period_pending",
+            )
+        ],
+    )
+
+    task = await store.get_research_task_snapshot("KXOFFICIALPENDING-26JUL14")
+    persisted = await store.get_research_run_evidence(
+        "KXOFFICIALPENDING-26JUL14",
+        "run-official-pending-horizon",
+    )
+
+    assert task is not None
+    assert task.backoff_seconds == 86400.0
+    assert persisted[0].available_at == event_at.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_research_task_preserves_open_question_across_empty_same_reason_retry(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    ticker = "KXGAP-26JUL12"
+    question = "Which official source reports the contract-window result?"
+
+    await store.record_research_run(
+        ticker,
+        "run-gap-1",
+        trigger_headline="",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Missing settlement-aligned evidence.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        skip_reason="missing_resolution_source",
+        decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+        open_questions=[question],
+    )
+    await store.record_research_run(
+        ticker,
+        "run-gap-2",
+        trigger_headline="",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Still missing settlement-aligned evidence.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        skip_reason="missing_resolution_source",
+        decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+        open_questions=[],
+    )
+
+    task = await store.get_research_task_snapshot(ticker)
+
+    assert task is not None
+    assert task.open_questions == (question,)
+
+
+@pytest.mark.asyncio
 async def test_research_task_terminalizes_insufficient_corroboration_after_retries(
     tmp_path,
 ):
@@ -1793,7 +1873,7 @@ async def test_due_research_tasks_include_timeout_exhausted_terminal_tasks(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_due_research_tasks_cap_existing_official_pending_cooldown(tmp_path):
+async def test_due_research_tasks_honor_existing_official_pending_cooldown(tmp_path):
     db_path = tmp_path / "research_dossier.db"
     store = ResearchDossierStore(db_path)
     await store.initialize()
@@ -1822,7 +1902,7 @@ async def test_due_research_tasks_cap_existing_official_pending_cooldown(tmp_pat
     assert store.get_due_research_task_tickers(
         now=datetime(2026, 6, 30, 12, tzinfo=timezone.utc),
         target_cooldown_seconds=0.0,
-    ) == ["KXOFFICIAL-26JUL01"]
+    ) == []
 
 
 @pytest.mark.asyncio
