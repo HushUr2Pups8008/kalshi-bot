@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import errno
+import logging
 import socket
 import time
 import urllib.error
@@ -12,6 +14,8 @@ from typing import Literal, TypeVar
 CircuitMode = Literal["off", "shadow", "enforce"]
 CircuitState = Literal["closed", "open", "half_open"]
 T = TypeVar("T")
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -95,8 +99,10 @@ class GenericSearchCircuit:
         self._cooldown_seconds = cooldown_seconds
         self._clock = clock
         self._event_sink = event_sink
+        self._lock = asyncio.Lock()
         self._state: CircuitState = "closed"
         self._generation = 0
+        self._half_open_owner: object | None = None
         self._open_until = 0.0
         self._last_failure_classes: tuple[str, ...] = ()
         self._total_attempts = 0
@@ -113,28 +119,63 @@ class GenericSearchCircuit:
         primary: Callable[[], Awaitable[T]],
         fallback: Callable[[], Awaitable[T]],
     ) -> T:
-        self._total_attempts += 1
+        admission_generation, owner_token, can_open = await self._admit()
         try:
-            return await primary()
-        except Exception as primary_exc:
             try:
-                return await fallback()
-            except Exception as fallback_exc:
-                if not (
-                    is_provider_availability_failure(primary_exc)
-                    and is_provider_availability_failure(fallback_exc)
-                ):
-                    raise
+                result = await primary()
+            except Exception as primary_exc:
+                try:
+                    result = await fallback()
+                except Exception as fallback_exc:
+                    failure_classes = (
+                        _failure_class(primary_exc),
+                        _failure_class(fallback_exc),
+                    )
+                    if not (
+                        is_provider_availability_failure(primary_exc)
+                        and is_provider_availability_failure(fallback_exc)
+                    ):
+                        event = await self._finish_owner_failure(
+                            admission_generation,
+                            owner_token,
+                            failure_classes,
+                        )
+                        self._emit_event(event)
+                        raise
 
-                failure_classes = (
-                    _failure_class(primary_exc),
-                    _failure_class(fallback_exc),
-                )
-                self._record_double_availability_failure(failure_classes)
-                diagnostic = ", ".join(failure_classes)
-                raise GenericSearchUnavailable(
-                    f"generic search unavailable ({diagnostic})"
-                ) from None
+                    event = await self._record_double_availability_failure(
+                        admission_generation,
+                        owner_token,
+                        can_open,
+                        failure_classes,
+                    )
+                    self._emit_event(event)
+                    diagnostic = ", ".join(failure_classes)
+                    raise GenericSearchUnavailable(
+                        f"generic search unavailable ({diagnostic})"
+                    ) from None
+
+            event = await self._finish_owner_success(
+                admission_generation,
+                owner_token,
+            )
+            self._emit_event(event)
+            return result
+        except asyncio.CancelledError:
+            event = await self._release_cancelled_owner(
+                admission_generation,
+                owner_token,
+            )
+            self._emit_event(event)
+            raise
+        except BaseException as exc:
+            event = await self._finish_owner_failure(
+                admission_generation,
+                owner_token,
+                (_failure_class(exc),),
+            )
+            self._emit_event(event)
+            raise
 
     def snapshot(self) -> GenericSearchCircuitSnapshot:
         return GenericSearchCircuitSnapshot(
@@ -153,33 +194,193 @@ class GenericSearchCircuit:
             probe_failures=self._probe_failures,
         )
 
-    def _record_double_availability_failure(
-        self,
-        failure_classes: tuple[str, ...],
-    ) -> None:
-        self._double_availability_failures += 1
-        self._last_failure_classes = failure_classes
-        if self._mode == "off":
-            return
+    async def _admit(self) -> tuple[int, object | None, bool]:
+        event: GenericSearchCircuitEvent | None = None
+        owner_token: object | None = None
+        can_open = False
+        blocked = False
+        async with self._lock:
+            self._total_attempts += 1
+            admission_generation = self._generation
+            if self._mode == "off":
+                can_open = True
+            elif self._state == "closed":
+                can_open = True
+            elif self._state == "open":
+                remaining = max(0.0, self._open_until - self._clock())
+                if remaining > 0.0:
+                    blocked, event = self._record_block_locked(remaining)
+                else:
+                    owner_token = object()
+                    self._half_open_owner = owner_token
+                    self._state = "half_open"
+                    event = self._event_locked(
+                        kind="half_open",
+                        remaining_cooldown_seconds=0.0,
+                    )
+            else:
+                blocked, event = self._record_block_locked(0.0)
 
-        self._state = "open"
-        self._generation += 1
-        self._open_until = self._clock() + self._cooldown_seconds
-        if self._mode == "enforce":
-            self._open_transitions += 1
-            kind = "open"
+        self._emit_event(event)
+        if blocked:
+            raise GenericSearchUnavailable("generic search circuit unavailable")
+        return admission_generation, owner_token, can_open
+
+    def _record_block_locked(
+        self,
+        remaining_cooldown_seconds: float,
+    ) -> tuple[bool, GenericSearchCircuitEvent]:
+        if self._mode == "shadow":
+            self._would_block_calls += 1
+            kind = "would_block"
+            blocked = False
         else:
-            self._would_open_transitions += 1
-            kind = "would_open"
-        if self._event_sink is not None:
-            self._event_sink(
-                GenericSearchCircuitEvent(
-                    kind=kind,
-                    mode=self._mode,
-                    state=self._state,
-                    generation=self._generation,
-                    failure_classes=failure_classes,
-                    cooldown_seconds=self._cooldown_seconds,
-                    remaining_cooldown_seconds=self._cooldown_seconds,
-                )
+            self._blocked_calls += 1
+            kind = "blocked"
+            blocked = True
+        return blocked, self._event_locked(
+            kind=kind,
+            remaining_cooldown_seconds=remaining_cooldown_seconds,
+        )
+
+    async def _record_double_availability_failure(
+        self,
+        admission_generation: int,
+        owner_token: object | None,
+        can_open: bool,
+        failure_classes: tuple[str, ...],
+    ) -> GenericSearchCircuitEvent | None:
+        async with self._lock:
+            self._double_availability_failures += 1
+            if self._mode == "off":
+                self._last_failure_classes = failure_classes
+                return None
+
+            owns_half_open = self._owns_half_open_locked(
+                admission_generation,
+                owner_token,
+            )
+            owns_closed_generation = (
+                can_open
+                and owner_token is None
+                and self._state == "closed"
+                and self._generation == admission_generation
+            )
+            if not (owns_half_open or owns_closed_generation):
+                return None
+
+            if owns_half_open:
+                self._probe_failures += 1
+            self._half_open_owner = None
+            self._state = "open"
+            self._generation += 1
+            self._open_until = self._clock() + self._cooldown_seconds
+            self._last_failure_classes = failure_classes
+            if self._mode == "enforce":
+                self._open_transitions += 1
+                kind = "open"
+            else:
+                self._would_open_transitions += 1
+                kind = "would_open"
+            return self._event_locked(
+                kind=kind,
+                remaining_cooldown_seconds=self._cooldown_seconds,
+            )
+
+    async def _finish_owner_success(
+        self,
+        admission_generation: int,
+        owner_token: object | None,
+    ) -> GenericSearchCircuitEvent | None:
+        async with self._lock:
+            if not self._owns_half_open_locked(admission_generation, owner_token):
+                return None
+            self._state = "closed"
+            self._half_open_owner = None
+            self._open_until = 0.0
+            self._probe_successes += 1
+            return self._event_locked(
+                kind="closed",
+                remaining_cooldown_seconds=0.0,
+            )
+
+    async def _finish_owner_failure(
+        self,
+        admission_generation: int,
+        owner_token: object | None,
+        failure_classes: tuple[str, ...],
+    ) -> GenericSearchCircuitEvent | None:
+        async with self._lock:
+            if not self._owns_half_open_locked(admission_generation, owner_token):
+                return None
+            self._state = "closed"
+            self._half_open_owner = None
+            self._open_until = 0.0
+            self._probe_failures += 1
+            return self._event_locked(
+                kind="closed",
+                failure_classes=failure_classes,
+                remaining_cooldown_seconds=0.0,
+            )
+
+    async def _release_cancelled_owner(
+        self,
+        admission_generation: int,
+        owner_token: object | None,
+    ) -> GenericSearchCircuitEvent | None:
+        async with self._lock:
+            if not self._owns_half_open_locked(admission_generation, owner_token):
+                return None
+            self._state = "open"
+            self._half_open_owner = None
+            return self._event_locked(
+                kind="probe_cancelled",
+                remaining_cooldown_seconds=max(
+                    0.0,
+                    self._open_until - self._clock(),
+                ),
+            )
+
+    def _owns_half_open_locked(
+        self,
+        admission_generation: int,
+        owner_token: object | None,
+    ) -> bool:
+        return (
+            owner_token is not None
+            and self._state == "half_open"
+            and self._generation == admission_generation
+            and self._half_open_owner is owner_token
+        )
+
+    def _event_locked(
+        self,
+        *,
+        kind: str,
+        remaining_cooldown_seconds: float,
+        failure_classes: tuple[str, ...] | None = None,
+    ) -> GenericSearchCircuitEvent:
+        return GenericSearchCircuitEvent(
+            kind=kind,
+            mode=self._mode,
+            state=self._state,
+            generation=self._generation,
+            failure_classes=(
+                self._last_failure_classes
+                if failure_classes is None
+                else failure_classes
+            ),
+            cooldown_seconds=self._cooldown_seconds,
+            remaining_cooldown_seconds=remaining_cooldown_seconds,
+        )
+
+    def _emit_event(self, event: GenericSearchCircuitEvent | None) -> None:
+        if event is None or self._event_sink is None:
+            return
+        try:
+            self._event_sink(event)
+        except BaseException as exc:
+            _LOGGER.warning(
+                "generic search circuit event sink failed (%s)",
+                type(exc).__name__,
             )
