@@ -9,12 +9,66 @@ from typing import Any
 
 import pytest
 
+import config as config_module
 from analysis.generic_search_circuit import (
     GenericSearchCircuit,
     GenericSearchCircuitEvent,
     GenericSearchUnavailable,
     is_provider_availability_failure,
 )
+
+
+def _valid_rsa_pem() -> str:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("ascii")
+
+
+def _bot_config() -> config_module.BotConfig:
+    return config_module.BotConfig(
+        api_key_id="kalshi-key",
+        api_key_secret=_valid_rsa_pem(),
+    )
+
+
+def test_generic_search_circuit_mode_defaults_to_shadow(monkeypatch) -> None:
+    monkeypatch.delenv("GENERIC_SEARCH_CIRCUIT_MODE", raising=False)
+
+    cfg = _bot_config()
+
+    assert cfg.generic_search_circuit_mode == "shadow"
+
+
+@pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
+def test_generic_search_circuit_mode_accepts_exact_values(monkeypatch, mode: str) -> None:
+    monkeypatch.setenv("GENERIC_SEARCH_CIRCUIT_MODE", mode)
+
+    cfg = _bot_config()
+
+    assert cfg.generic_search_circuit_mode == mode
+
+
+@pytest.mark.parametrize("mode", ["disabled", "SHADOW", "Enforce"])
+def test_generic_search_circuit_mode_rejects_other_or_case_mutated_values(
+    monkeypatch,
+    capsys,
+    mode: str,
+) -> None:
+    monkeypatch.setenv("GENERIC_SEARCH_CIRCUIT_MODE", mode)
+
+    with pytest.raises(SystemExit):
+        _bot_config()
+
+    assert (
+        "GENERIC_SEARCH_CIRCUIT_MODE must be one of off|shadow|enforce"
+        in capsys.readouterr().err
+    )
 
 
 def _http_error(status: int) -> urllib.error.HTTPError:
