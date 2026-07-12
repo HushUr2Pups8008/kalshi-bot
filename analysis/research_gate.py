@@ -26,6 +26,11 @@ from enum import Enum
 from typing import Any, Awaitable, Callable, Iterable, Sequence
 
 from utils.research_evidence_quality import (
+    MIN_COUNTER_EVIDENCE_CONFIDENCE,
+    MIN_DIRECTIONAL_SUPPORT_CONFIDENCE,
+    ContractRelevanceSpec,
+    build_contract_relevance_spec,
+    evidence_is_relevant_to_contract,
     has_reliable_research_source_path,
     research_source_key,
 )
@@ -292,6 +297,16 @@ def _classify_evidence_source(
     query_site = _query_site_domain(query.query)
     url_domain = _domain_from_url(source_url)
     name_domain = _source_domain(source_name)
+    if query.source_class in {"rules_source", "market_price"}:
+        trusted_domains = {
+            "kalshi.com",
+            "kalshi-public-docs.s3.amazonaws.com",
+        }
+        if any(
+            _domains_match(url_domain, domain) or _domains_match(name_domain, domain)
+            for domain in trusted_domains
+        ):
+            return query.source_class
     if query.source_class in {"resolution_source", "official_primary"} and query_site:
         if _domains_match(url_domain, query_site) or (
             allow_official_name_match and _domains_match(name_domain, query_site)
@@ -313,6 +328,8 @@ def _classify_evidence_source(
         return "official_primary"
     if url_domain in _REPUTABLE_SECONDARY_DOMAINS or name_domain in _REPUTABLE_SECONDARY_DOMAINS:
         return "reputable_secondary"
+    if query.source_class in {"rules_source", "market_price"}:
+        return "other"
     if query.source_class not in {"resolution_source", "official_primary"}:
         return query.source_class
     return "other"
@@ -1114,6 +1131,7 @@ def decide_research_verdict(
     require_decision_grade: bool = False,
     counterclaims: tuple[str, ...] = (),
     open_questions: tuple[str, ...] = (),
+    contract_ticker: str = "",
 ) -> ResearchVerdict:
     queries = list(queries or [])
     observed_market_price = _market_price_for_side(None, yes_ask, no_ask)
@@ -1293,7 +1311,11 @@ def decide_research_verdict(
             open_questions=open_questions,
         )
         if require_decision_grade:
-            return _decision_grade_verdict(candidate, model_reason=model_reason)
+            return _decision_grade_verdict(
+                candidate,
+                model_reason=model_reason,
+                contract_ticker=contract_ticker,
+            )
         return candidate
     if side == "no" and no_edge >= min_edge:
         candidate = ResearchVerdict(
@@ -1311,7 +1333,11 @@ def decide_research_verdict(
             open_questions=open_questions,
         )
         if require_decision_grade:
-            return _decision_grade_verdict(candidate, model_reason=model_reason)
+            return _decision_grade_verdict(
+                candidate,
+                model_reason=model_reason,
+                contract_ticker=contract_ticker,
+            )
         return candidate
     if require_decision_grade:
         return ResearchVerdict(
@@ -1339,10 +1365,31 @@ def decide_research_verdict(
     )
 
 
+def _contract_relevance_spec(
+    contract_ticker: str,
+    queries: Sequence[ResearchQuery],
+) -> ContractRelevanceSpec:
+    return build_contract_relevance_spec(
+        contract_ticker,
+        [query.query for query in queries],
+    )
+
+
+def _evidence_is_relevant_to_spec(
+    item: ResearchEvidence,
+    spec: ContractRelevanceSpec,
+) -> bool:
+    return evidence_is_relevant_to_contract(
+        f"{item.title} {item.snippet}",
+        spec,
+    )
+
+
 def _decision_grade_verdict(
     candidate: ResearchVerdict,
     *,
     model_reason: str | None,
+    contract_ticker: str = "",
 ) -> ResearchVerdict:
     if not _has_reliable_non_pending_source_path(candidate.evidence):
         return _decision_grade_block(
@@ -1353,21 +1400,41 @@ def _decision_grade_verdict(
                 "source path outside pending settlement context."
             ),
         )
-    directions = {
+    raw_directions = {
         item.supports_direction
         for item in candidate.evidence
         if item.supports_direction in {"yes", "no"}
     }
-    if not directions:
+    relevance_spec = _contract_relevance_spec(contract_ticker, candidate.queries)
+    directions = {
+        item.supports_direction
+        for item in candidate.evidence
+        if item.supports_direction in {"yes", "no"}
+        and _is_decision_directional_support(item)
+        and float(item.supports_confidence or 0.0)
+        >= MIN_DIRECTIONAL_SUPPORT_CONFIDENCE
+        and (
+            not relevance_spec.detected
+            or _evidence_is_relevant_to_spec(item, relevance_spec)
+        )
+    }
+    if not raw_directions:
         return _decision_grade_block(
             candidate,
             "neutral_only_evidence",
             "Decision-grade verifier found only neutral evidence.",
         )
+    if candidate.force_side not in directions:
+        return _decision_grade_block(
+            candidate,
+            "missing_directional_support",
+            "Decision-grade verifier found no directional support for the selected side.",
+        )
     if not _has_counter_evidence(
         candidate.queries,
         candidate.evidence,
         candidate.force_side,
+        contract_ticker=contract_ticker,
     ):
         return _decision_grade_block(
             candidate,
@@ -1414,6 +1481,13 @@ def _decision_grade_verdict(
         decision_grade_reasons=reasons,
         open_questions=candidate.open_questions or _extract_open_questions(summary),
         counterclaims=candidate.counterclaims or _extract_counterclaims(candidate.evidence),
+    )
+
+
+def _is_decision_directional_support(item: ResearchEvidence) -> bool:
+    return _is_settlement_evidence(item) or (
+        _is_structured_signal_metric(item)
+        and item.claim_type in {"base_rate", "official_resolution", "settlement_source"}
     )
 
 
@@ -1494,7 +1568,7 @@ def _strongest_counter_evidence(
     candidates = [
         item
         for item in evidence
-        if item.claim_type in {"disconfirming", "contradiction_check"}
+        if item.claim_type in {"contradiction", "disconfirming", "contradiction_check"}
         and item.supports_direction == opposite
     ]
     if candidates:
@@ -1502,7 +1576,7 @@ def _strongest_counter_evidence(
     neutral = [
         item
         for item in evidence
-        if item.claim_type in {"disconfirming", "contradiction_check"}
+        if item.claim_type in {"contradiction", "disconfirming", "contradiction_check"}
         and item.supports_direction == "neutral"
     ]
     return max(neutral, key=lambda item: float(item.supports_confidence or 0.0), default=None)
@@ -1539,6 +1613,8 @@ def _has_counter_evidence(
     queries: list[ResearchQuery],
     evidence: list[ResearchEvidence],
     side: str | None,
+    *,
+    contract_ticker: str = "",
 ) -> bool:
     if side not in {"yes", "no"}:
         return False
@@ -1546,47 +1622,88 @@ def _has_counter_evidence(
     has_query = any(
         query.query_intent in {"disconfirming", "contradiction_check"}
         for query in queries
-    )
-    has_result = any(
-        (
-            item.supports_direction == opposite
-            and item.supports_confidence > 0
-        )
+    ) or any(
+        item.claim_type
+        in {"contradiction", "disconfirming", "contradiction_check"}
         for item in evidence
-        if item.claim_type in {"disconfirming", "contradiction_check"}
+    )
+    relevance_spec = _contract_relevance_spec(contract_ticker, queries)
+    relevant_evidence = [
+        item
+        for item in evidence
+        if not relevance_spec.speech.detected
+        or _evidence_is_relevant_to_spec(item, relevance_spec)
+    ]
+    has_result = any(
+        _directional_counter_result_is_relevant(
+            item,
+            relevant_evidence,
+            side,
+        )
+        for item in relevant_evidence
+        if item.claim_type
+        in {"contradiction", "disconfirming", "contradiction_check"}
+        and item.supports_direction == opposite
     )
     if not has_result:
         has_same_side_structured_countercheck = any(
             _structured_official_same_side_countercheck_is_relevant(
                 item,
-                evidence,
+                relevant_evidence,
                 side,
             )
-            for item in evidence
-            if item.claim_type in {"disconfirming", "contradiction_check"}
+            for item in relevant_evidence
+            if item.claim_type in {"contradiction", "disconfirming", "contradiction_check"}
             and item.supports_direction == side
         )
         has_neutral_counter_result = any(
-            _neutral_counter_result_is_relevant(item, evidence, side)
-            for item in evidence
-            if item.claim_type in {"disconfirming", "contradiction_check"}
+            _neutral_counter_result_is_relevant(item, relevant_evidence, side)
+            for item in relevant_evidence
+            if item.claim_type in {"contradiction", "disconfirming", "contradiction_check"}
             and item.supports_direction == "neutral"
         )
         has_structured_official_countercheck = any(
-            _structured_official_neutral_countercheck_is_relevant(item, evidence, side)
-            for item in evidence
-            if item.claim_type in {"disconfirming", "contradiction_check"}
+            _structured_official_neutral_countercheck_is_relevant(
+                item,
+                relevant_evidence,
+                side,
+            )
+            for item in relevant_evidence
+            if item.claim_type in {"contradiction", "disconfirming", "contradiction_check"}
             and item.supports_direction == "neutral"
         )
         has_result = (
             has_same_side_structured_countercheck
             or has_neutral_counter_result
             and (
-                _has_two_strong_settlement_sources(evidence, side)
+                _has_two_strong_settlement_sources(relevant_evidence, side)
                 or has_structured_official_countercheck
             )
         )
     return has_query and has_result
+
+
+def _directional_counter_result_is_relevant(
+    item: ResearchEvidence,
+    evidence: list[ResearchEvidence],
+    side: str,
+) -> bool:
+    if float(item.supports_confidence or 0.0) < MIN_COUNTER_EVIDENCE_CONFIDENCE:
+        return False
+    counter_tokens = _counter_relevance_tokens(item)
+    support_tokens: set[str] = set()
+    for support in evidence:
+        if (
+            support.supports_direction == side
+            and float(support.supports_confidence or 0.0)
+            >= MIN_DIRECTIONAL_SUPPORT_CONFIDENCE
+            and (
+                _is_decision_directional_support(support)
+                or support.claim_type in {"supporting", "corroboration"}
+            )
+        ):
+            support_tokens.update(_counter_relevance_tokens(support))
+    return bool(counter_tokens & support_tokens)
 
 
 _COUNTER_RELEVANCE_STOPWORDS = {
@@ -2595,7 +2712,11 @@ def _apply_adjudication_evidence_assessments(
         if (
             market is not None
             and direction in {"yes", "no"}
-            and float(confidence if confidence is not None else 0.0) >= 0.6
+            and float(confidence if confidence is not None else 0.0) > 0.0
+            and (
+                float(confidence if confidence is not None else 0.0) >= 0.6
+                or _contract_relevance_spec_for_market(market).speech.detected
+            )
             and not _evidence_mentions_market_terms(item, market)
         ):
             direction = "neutral"
@@ -2653,6 +2774,12 @@ def _evidence_mentions_market_terms(item: ResearchEvidence, market: Any) -> bool
     if not evidence_text:
         return False
     market_text = _market_text(market)
+    relevance_spec = _contract_relevance_spec_for_market(market)
+    if relevance_spec.speech.detected:
+        return evidence_is_relevant_to_contract(
+            evidence_text,
+            relevance_spec,
+        )
     if _query_mentions_trump_passport_image(market_text):
         title_text = _clean(item.title).lower()
         return "passport" in title_text and "trump" in title_text
@@ -2672,6 +2799,17 @@ def _evidence_mentions_market_terms(item: ResearchEvidence, market: Any) -> bool
         if len(term) >= 6 and term not in _MARKET_RELEVANCE_STOPWORDS
     }
     return bool(overlap & distinctive)
+
+
+def _contract_relevance_spec_for_market(market: Any) -> ContractRelevanceSpec:
+    return build_contract_relevance_spec(
+        getattr(market, "ticker", ""),
+        (
+            getattr(market, "title", ""),
+            getattr(market, "rules_primary", ""),
+            getattr(market, "rules_secondary", ""),
+        ),
+    )
 
 
 def _market_relevance_terms(market: Any) -> set[str]:
@@ -5084,18 +5222,16 @@ async def run_research_gate(
             no_ask=no_ask,
             live_mode=live_mode,
             queries=queries,
+            contract_ticker=ticker,
         )
         if (
             cached_status == ResearchStatus.DECISION_GRADE_CANDIDATE.value
             and verdict.status == ResearchStatus.TRADE_CANDIDATE
         ):
-            return replace(
+            return _decision_grade_verdict(
                 verdict,
-                status=ResearchStatus.DECISION_GRADE_CANDIDATE,
-                summary=(
-                    "Cached decision-grade research dossier still clears edge "
-                    "at the current executable price."
-                ),
+                model_reason=verdict.summary,
+                contract_ticker=ticker,
             )
         return verdict
     provider_non_pending_evidence: list[ResearchEvidence] = []
@@ -5374,7 +5510,12 @@ async def run_research_gate(
                 if (
                     require_decision_grade
                     and model_direction in {"yes", "no"}
-                    and not _has_counter_evidence(queries, evidence, model_direction)
+                    and not _has_counter_evidence(
+                        queries,
+                        evidence,
+                        model_direction,
+                        contract_ticker=ticker,
+                    )
                 ):
                     counter_query = _side_aware_counter_query(market, model_direction)
                     if counter_query.query not in {query.query for query in queries}:
@@ -5502,6 +5643,7 @@ async def run_research_gate(
         require_decision_grade=require_decision_grade,
         counterclaims=decision_grade_counterclaims,
         open_questions=decision_grade_open_questions,
+        contract_ticker=ticker,
     )
     if require_decision_grade:
         verdict = _keep_pending_no_edge_researchable(verdict)

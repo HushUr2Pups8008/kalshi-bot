@@ -29,10 +29,12 @@ class FakeResearchStore:
         snapshot: ResearchDossierSnapshot | None,
         evidence: list[ResearchEvidence],
         has_counter_query: bool = True,
+        query_texts: list[str] | None = None,
     ) -> None:
         self.snapshot = snapshot
         self.evidence = evidence
         self.has_counter_query = has_counter_query
+        self.query_texts = query_texts or []
         self.claims: set[tuple[str, str, str]] = set()
         self.completions: list[dict] = []
         self.snapshot_calls = 0
@@ -57,6 +59,12 @@ class FakeResearchStore:
         intents: set[str],
     ) -> bool:
         return self.has_counter_query
+
+    async def get_research_run_query_texts(
+        self,
+        research_run_id: str,
+    ) -> list[str]:
+        return self.query_texts
 
     async def claim_research_paper_admission(
         self,
@@ -902,8 +910,152 @@ async def test_no_counter_evidence_does_not_enter_paper_review() -> None:
             status="decision_grade_candidate",
             attempted=True,
             research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
         ),
         _market(),
+    )
+
+    assert result.admitted is False
+    assert result.reason == "missing_counter_evidence"
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_irrelevant_speech_evidence_does_not_enter_paper_review() -> None:
+    ticker = "KXTRUMPMENTION-26JUL24-MAGA"
+    question = (
+        "What will Donald Trump say during White House Correspondents' Dinner "
+        "originally scheduled for July 24th, 2026?"
+    )
+    evidence = [
+        ResearchEvidence(
+            source_class="rules_source",
+            source_name="Kalshi",
+            source_url="https://kalshi.com/markets/KXTRUMPMENTION",
+            title="Contract terms",
+            snippet="The rules define the dinner mention condition.",
+            claim_type="rules",
+            supports_direction="neutral",
+            retrieved_at="2026-07-02T16:00:00+00:00",
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="USA Today",
+            source_url="https://usatoday.com/america-birthday",
+            title="Celebrations start in DC for America's birthday",
+            snippet="Officials expect tight security at the White House event.",
+            claim_type="supporting",
+            supports_direction="yes",
+            supports_confidence=0.9,
+            retrieved_at="2026-07-02T16:00:00+00:00",
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="New York Times",
+            source_url="https://nytimes.com/greenland",
+            title="Trump discusses Greenland",
+            snippet="Trump says the public will find out what happens next.",
+            claim_type="disconfirming",
+            supports_direction="no",
+            supports_confidence=0.1,
+            retrieved_at="2026-07-02T16:00:00+00:00",
+        ),
+    ]
+    research_store = FakeResearchStore(
+        snapshot=replace(
+            _snapshot(),
+            market_ticker=ticker,
+            contract_question=question,
+        ),
+        evidence=evidence,
+        query_texts=[
+            f"{question} If Donald Trump says MAGA / Make America Great Again "
+            "as part of the dinner, then the market resolves Yes."
+        ],
+    )
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=research_store,
+        trading_queue=queue,
+        logger=SpyLogger(),
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+    )
+
+    result = await bridge.admit_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker=ticker,
+            status="decision_grade_candidate",
+            attempted=True,
+            research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
+        ),
+        replace(_market(), ticker=ticker, title=question),
+    )
+
+    assert result.admitted is False
+    assert result.reason == "missing_directional_support"
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_unrelated_counter_boilerplate_does_not_enter_paper_review() -> None:
+    ticker = "KXUSTRDAGREEMENT-26JUL01"
+    question = "Will the US sign a trade agreement before July 1?"
+    research_store = FakeResearchStore(
+        snapshot=replace(
+            _snapshot(),
+            market_ticker=ticker,
+            contract_question=question,
+        ),
+        evidence=[
+            ResearchEvidence(
+                source_class="resolution_source",
+                source_name="Commerce Department",
+                source_url="https://commerce.gov/trade-agreement",
+                title="US signs bilateral trade agreement",
+                snippet="Officials signed the trade agreement before July 1.",
+                claim_type="official_resolution",
+                supports_direction="yes",
+                supports_confidence=0.9,
+                retrieved_at="2026-07-02T16:00:00+00:00",
+            ),
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="Sports Wire",
+                source_url="https://sports.example.com/objection",
+                title="Opponent denied objection",
+                snippet="The objection concerns an unrelated sports dispute.",
+                claim_type="disconfirming",
+                supports_direction="no",
+                supports_confidence=0.8,
+                retrieved_at="2026-07-02T16:00:00+00:00",
+            ),
+        ],
+        query_texts=[
+            question,
+            (
+                f"{question} evidence against YES evidence against NO false not "
+                "confirmed denied opponent objection"
+            ),
+        ],
+    )
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=research_store,
+        trading_queue=queue,
+        logger=SpyLogger(),
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+    )
+
+    result = await bridge.admit_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker=ticker,
+            status="decision_grade_candidate",
+            attempted=True,
+            research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
+        ),
+        replace(_market(), ticker=ticker, title=question),
     )
 
     assert result.admitted is False

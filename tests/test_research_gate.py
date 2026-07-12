@@ -4187,7 +4187,7 @@ async def test_strict_research_gate_uses_adjudicator_evidence_labels_for_decisio
                     source_name="AP",
                     source_url="https://apnews.com/ratification",
                     title="Ratification objection",
-                    snippet="AP notes ratification could still fail.",
+                    snippet="AP notes ratification of the ceasefire agreement could still fail.",
                     claim_type=query.query_intent,
                     retrieved_at=fresh,
                 )
@@ -5362,6 +5362,48 @@ def test_white_house_dot_gov_source_name_classifies_as_official_primary():
     assert source_class == "official_primary"
 
 
+@pytest.mark.parametrize(
+    ("query_source_class", "source_name", "source_url", "expected"),
+    (
+        (
+            "rules_source",
+            "Indy100",
+            "https://www.indy100.com/politics/trump-quotes",
+            "other",
+        ),
+        (
+            "market_price",
+            "Federal News Network",
+            "https://federalnewsnetwork.com/odds",
+            "other",
+        ),
+        (
+            "rules_source",
+            "Kalshi",
+            "https://kalshi.com/markets/KXTRUMPMENTION",
+            "rules_source",
+        ),
+    ),
+)
+def test_unscoped_structural_query_class_requires_matching_publisher(
+    query_source_class,
+    source_name,
+    source_url,
+    expected,
+):
+    source_class = research_gate_module._classify_evidence_source(
+        ResearchQuery(
+            query="contract context latest",
+            query_intent="rules",
+            source_class=query_source_class,
+        ),
+        source_name,
+        source_url,
+    )
+
+    assert source_class == expected
+
+
 def test_duckduckgo_lite_search_ignores_internal_navigation_links(monkeypatch):
     html = b"""
     <html><body>
@@ -5710,6 +5752,170 @@ def test_decision_grade_requires_directional_counter_evidence():
         live_mode=False,
         require_decision_grade=True,
     )
+
+    assert verdict.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE
+    assert verdict.skip_reason == "missing_counter_evidence"
+
+
+def test_decision_grade_requires_directional_support_for_selected_side():
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    candidate = ResearchVerdict(
+        status=ResearchStatus.TRADE_CANDIDATE,
+        attempted=True,
+        queries=[
+            ResearchQuery(
+                "MAGA mention evidence against YES",
+                "disconfirming",
+                "reputable_secondary",
+            )
+        ],
+        evidence=[
+            ResearchEvidence(
+                source_class="rules_source",
+                source_name="Kalshi",
+                source_url="https://kalshi.com/markets/KXTRUMPMENTION",
+                title="Contract terms",
+                snippet="The market resolves Yes if Trump says MAGA.",
+                claim_type="rules",
+                supports_direction="neutral",
+                retrieved_at=fresh,
+            ),
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="New York Times",
+                source_url="https://nytimes.com/no-maga-confirmation",
+                title="No MAGA wording confirmed",
+                snippet="No direct evidence confirms Trump will say MAGA.",
+                claim_type="disconfirming",
+                supports_direction="no",
+                supports_confidence=0.2,
+                retrieved_at=fresh,
+            ),
+        ],
+        summary=(
+            "Trade YES at 58c with 81% estimated probability despite no source "
+            "directly supporting the selected side."
+        ),
+        force_side="yes",
+        estimated_probability=0.81,
+        market_price=0.58,
+        estimated_edge=0.22,
+    )
+
+    verdict = _decision_grade_verdict(candidate, model_reason=candidate.summary)
+
+    assert verdict.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE
+    assert verdict.skip_reason == "missing_directional_support"
+    assert verdict.force_side is None
+
+
+def test_decision_grade_rejects_low_confidence_selected_side_support():
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    candidate = ResearchVerdict(
+        status=ResearchStatus.TRADE_CANDIDATE,
+        attempted=True,
+        queries=[
+            ResearchQuery(
+                "official Iran crude production threshold counter evidence",
+                "disconfirming",
+                "reputable_secondary",
+            )
+        ],
+        evidence=[
+            ResearchEvidence(
+                source_class="resolution_source",
+                source_name="OPEC",
+                source_url="https://opec.org/momr",
+                title="Iran crude production threshold",
+                snippet="The official table lists Iran crude production.",
+                claim_type="resolution",
+                supports_direction="yes",
+                supports_confidence=0.01,
+                retrieved_at=fresh,
+            ),
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="New York Times",
+                source_url="https://nytimes.com/greenland",
+                title="Greenland policy debate",
+                snippet="The article discusses an unrelated diplomatic dispute.",
+                claim_type="disconfirming",
+                supports_direction="no",
+                supports_confidence=0.9,
+                retrieved_at=fresh,
+            ),
+        ],
+        summary="Specific edge reasoning based on a weak directional label.",
+        force_side="yes",
+        estimated_probability=0.8,
+        market_price=0.5,
+        estimated_edge=0.29,
+    )
+
+    verdict = _decision_grade_verdict(candidate, model_reason=candidate.summary)
+
+    assert verdict.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE
+    assert verdict.skip_reason == "missing_directional_support"
+
+
+def test_decision_grade_rejects_unrelated_opposite_counter_evidence():
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    candidate = ResearchVerdict(
+        status=ResearchStatus.TRADE_CANDIDATE,
+        attempted=True,
+        queries=[
+            ResearchQuery(
+                "official Iran crude production threshold counter evidence",
+                "disconfirming",
+                "reputable_secondary",
+            )
+        ],
+        evidence=[
+            ResearchEvidence(
+                source_class="resolution_source",
+                source_name="OPEC",
+                source_url="https://opec.org/momr",
+                title="Iran crude production threshold",
+                snippet="The official table lists Iran crude production above the threshold.",
+                claim_type="resolution",
+                supports_direction="yes",
+                supports_confidence=0.9,
+                retrieved_at=fresh,
+            ),
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="Reuters",
+                source_url="https://reuters.com/iran-production",
+                title="Iran crude production rises",
+                snippet="Iran crude production may exceed the market threshold.",
+                claim_type="corroboration",
+                supports_direction="yes",
+                supports_confidence=0.8,
+                retrieved_at=fresh,
+            ),
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="New York Times",
+                source_url="https://nytimes.com/greenland",
+                title="Greenland policy debate",
+                snippet="The article discusses an unrelated diplomatic dispute.",
+                claim_type="disconfirming",
+                supports_direction="no",
+                supports_confidence=0.9,
+                retrieved_at=fresh,
+            ),
+        ],
+        summary=(
+            "Trade YES because the OPEC table and Reuters report show production "
+            "above the threshold; the Greenland article is unrelated."
+        ),
+        force_side="yes",
+        estimated_probability=0.8,
+        market_price=0.5,
+        estimated_edge=0.29,
+    )
+
+    verdict = _decision_grade_verdict(candidate, model_reason=candidate.summary)
 
     assert verdict.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE
     assert verdict.skip_reason == "missing_counter_evidence"
@@ -6113,7 +6319,7 @@ def _decision_grade_evidence() -> list[ResearchEvidence]:
             source_name="AP",
             source_url="https://apnews.com/not-yet-filed",
             title="Ratification objection",
-            snippet="AP notes opponents argue ratification could still fail.",
+            snippet="AP notes opponents argue ratification of the agreement could still fail.",
             claim_type="disconfirming",
             supports_direction="no",
             supports_confidence=0.35,
@@ -6844,6 +7050,91 @@ def test_adjudicator_evidence_assessments_reject_irrelevant_directional_labels()
     assert labeled[1].supports_confidence == pytest.approx(0.9)
 
 
+def test_adjudicator_assessments_require_speech_contract_resolution_phrase():
+    evidence = [
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Britannica",
+            source_url="https://britannica.com/topic/MAGA-movement",
+            title="MAGA movement meaning and history under Donald Trump",
+            snippet="The article explains the movement's political history.",
+            claim_type="supporting",
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="BBC",
+            source_url="https://bbc.com/white-house-event",
+            title="Donald Trump to attend White House dinner",
+            snippet="The article notes MAGA movement history and event attendance.",
+            claim_type="supporting",
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Reuters",
+            source_url="https://reuters.com/trump-maga",
+            title="Donald Trump previews MAGA message for rescheduled dinner",
+            snippet="Donald Trump said his remarks will repeat Make America Great Again.",
+            claim_type="supporting",
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="New York Times",
+            source_url="https://nytimes.com/no-maga-confirmation",
+            title="No MAGA wording confirmed for Donald Trump dinner",
+            snippet="No direct evidence confirms Donald Trump will say MAGA at the event.",
+            claim_type="disconfirming",
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Britannica",
+            source_url="https://britannica.com/topic/MAGA-movement",
+            title="MAGA movement meaning and history",
+            snippet="The MAGA movement became closely associated with Donald Trump.",
+            claim_type="supporting",
+        ),
+    ]
+    market = SimpleNamespace(
+        ticker="KXTRUMPMENTION-26JUL24-MAGA",
+        title=(
+            "What will Donald Trump say during White House Correspondents' Dinner "
+            "originally scheduled for July 24th, 2026?"
+        ),
+        rules_primary=(
+            "If Donald Trump says MAGA / Make America Great Again as part of the "
+            "White House Correspondents' Dinner, then the market resolves Yes."
+        ),
+        rules_secondary="Video of the event is the primary resolution source.",
+    )
+
+    from analysis.research_gate import _apply_adjudication_evidence_assessments
+
+    labeled = _apply_adjudication_evidence_assessments(
+        evidence,
+        {
+            "evidence_assessments": [
+                {
+                    "source_url": item.source_url,
+                    "supports_direction": "no" if index == 3 else "yes",
+                    "supports_confidence": 0.9,
+                }
+                for index, item in enumerate(evidence)
+            ]
+        },
+        market=market,
+    )
+
+    assert [item.supports_direction for item in labeled] == [
+        "neutral",
+        "neutral",
+        "yes",
+        "no",
+        "neutral",
+    ]
+    assert labeled[0].supports_confidence == 0.0
+    assert labeled[1].supports_confidence == 0.0
+    assert labeled[4].supports_confidence == 0.0
+
+
 def test_leadership_replacement_structured_pass_neutralizes_irrelevant_no_label():
     market = SimpleNamespace(
         ticker="KXDEMSCHUMER-27-JUL01",
@@ -7348,6 +7639,236 @@ async def test_cache_only_research_gate_promotes_from_decision_grade_cached_doss
     assert verdict.estimated_edge == pytest.approx(0.28)
     assert len(verdict.evidence) == 3
     assert verdict.research_run_id is None
+
+
+@pytest.mark.asyncio
+async def test_cache_only_research_gate_rejects_irrelevant_speech_candidate(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    market = SimpleNamespace(
+        ticker="KXTRUMPMENTION-26JUL24-MAGA",
+        title="What will Donald Trump say during the July 24 dinner?",
+        rules_primary=(
+            "If Donald Trump says MAGA as part of the dinner, then the market "
+            "resolves Yes."
+        ),
+        rules_secondary="Video of the event is the primary resolution source.",
+        settlement_sources=(),
+    )
+    fingerprint = _contract_fingerprint(market)
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="rules_source",
+            source_name="Kalshi",
+            source_url="https://kalshi.com/markets/KXTRUMPMENTION-26JUL24-MAGA",
+            title="Contract terms",
+            snippet="The market resolves Yes if Donald Trump says MAGA at the dinner.",
+            claim_type="rules",
+            supports_direction="neutral",
+            retrieved_at=retrieved_at,
+            contract_fingerprint=fingerprint,
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Britannica",
+            source_url="https://britannica.com/topic/MAGA-movement",
+            title="MAGA movement meaning and history under Donald Trump",
+            snippet="The article explains the movement's political history.",
+            claim_type="supporting",
+            supports_direction="yes",
+            supports_confidence=0.9,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=fingerprint,
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="BBC",
+            source_url="https://bbc.com/white-house-event",
+            title="Donald Trump to attend White House dinner",
+            snippet="The article notes MAGA movement history and event attendance.",
+            claim_type="supporting",
+            supports_direction="yes",
+            supports_confidence=0.8,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=fingerprint,
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="New York Times",
+            source_url="https://nytimes.com/greenland",
+            title="Trump discusses Greenland policy",
+            snippet="The article discusses an unrelated diplomatic dispute.",
+            claim_type="disconfirming",
+            supports_direction="no",
+            supports_confidence=0.1,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=fingerprint,
+        ),
+    ]
+    await store.record_research_run(
+        market.ticker,
+        "rr-irrelevant-speech-cache",
+        trigger_headline="scheduled prewarm",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Cached evidence was previously labeled decision grade.",
+        verdict_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.81,
+        confidence=0.8,
+        contract_fingerprint=fingerprint,
+        market_price=0.58,
+        estimated_edge=0.22,
+        decision_grade_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        evidence=evidence,
+        queries=[
+            ResearchQuery(
+                query=market.rules_primary,
+                query_intent="official_resolution",
+                source_class="rules_source",
+            ),
+            ResearchQuery(
+                query="Donald Trump MAGA dinner counter evidence",
+                query_intent="disconfirming",
+                source_class="reputable_secondary",
+            ),
+        ],
+    )
+    # Simulate a decision-grade snapshot written before evidence-specific
+    # persistence validation existed.
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_dossiers
+            SET last_verdict_status = ?,
+                last_skip_reason = NULL,
+                last_force_side = 'yes',
+                last_estimated_probability = 0.81,
+                last_confidence = 0.8,
+                last_market_price = 0.58,
+                last_estimated_edge = 0.22,
+                last_decision_grade_status = ?
+            WHERE market_ticker = ?
+            """,
+            (
+                ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+                ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+                market.ticker,
+            ),
+        )
+
+    async def fail_external(*_args, **_kwargs):
+        raise AssertionError("cache-only path must not call external research")
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="Dinner preview", source="research_prewarm"),
+        market,
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.58,
+        no_ask=0.43,
+        live_mode=False,
+        search_provider=fail_external,
+        direct_fetcher=fail_external,
+        adjudicator=fail_external,
+        dossier_store=store,
+        cache_only=True,
+    )
+
+    assert verdict.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE
+    assert verdict.skip_reason == "missing_directional_support"
+    assert verdict.force_side is None
+
+
+@pytest.mark.asyncio
+async def test_cache_only_rejects_irrelevant_non_speech_candidate():
+    market = SimpleNamespace(
+        ticker="KXUSTRDAGREEMENT-26JUL01",
+        title="Will the US sign a trade agreement before July 1?",
+        rules_primary=(
+            "The market resolves Yes if the United States signs a trade agreement "
+            "before July 1."
+        ),
+        rules_secondary="Official government announcements control resolution.",
+        settlement_sources=(),
+    )
+    fingerprint = _contract_fingerprint(market)
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="resolution_source",
+            source_name="Sports Authority",
+            source_url="https://sports.example.com/final",
+            title="Championship result",
+            snippet="The home team won the final before the July deadline.",
+            claim_type="official_resolution",
+            supports_direction="yes",
+            supports_confidence=0.9,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=fingerprint,
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Sports Wire",
+            source_url="https://sportswire.example.com/final",
+            title="Team confirms championship result",
+            snippet="Independent sports reporting confirms the win.",
+            claim_type="supporting",
+            supports_direction="yes",
+            supports_confidence=0.9,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=fingerprint,
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Opponent Blog",
+            source_url="https://sports.example.net/objection",
+            title="Opponent denied objection",
+            snippet="The objection concerns an unrelated sports dispute.",
+            claim_type="disconfirming",
+            supports_direction="no",
+            supports_confidence=0.5,
+            retrieved_at=retrieved_at,
+            contract_fingerprint=fingerprint,
+        ),
+    ]
+
+    class LegacyCacheStore:
+        async def get_recent_evidence(self, _ticker):
+            return evidence
+
+        async def get_dossier_snapshot(self, _ticker):
+            return SimpleNamespace(
+                last_verdict_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+                last_force_side="yes",
+                last_estimated_probability=0.8,
+                last_confidence=0.8,
+            )
+
+    async def fail_external(*_args, **_kwargs):
+        raise AssertionError("cache-only path must not call external research")
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="Trade agreement update", source="research_prewarm"),
+        market,
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.50,
+        live_mode=False,
+        search_provider=fail_external,
+        direct_fetcher=fail_external,
+        adjudicator=fail_external,
+        dossier_store=LegacyCacheStore(),
+        cache_only=True,
+    )
+
+    assert verdict.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE
+    assert verdict.skip_reason == "missing_directional_support"
+    assert verdict.force_side is None
 
 
 @pytest.mark.asyncio
@@ -9106,7 +9627,7 @@ async def test_noncritical_provider_error_does_not_block_decision_grade_candidat
                     source_name="AP",
                     source_url="https://apnews.com/ratification",
                     title="Ratification objection",
-                    snippet="AP notes ratification could still fail.",
+                    snippet="AP notes ratification of the ceasefire agreement could still fail.",
                     claim_type=query.query_intent,
                     retrieved_at=fresh,
                 )

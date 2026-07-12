@@ -730,6 +730,55 @@ def test_candidate_proofs_include_decision_grade_candidates(tmp_path: Path) -> N
     assert proof.live_cache_eligible
 
 
+def test_candidate_proofs_reject_counter_query_boilerplate_match(tmp_path: Path) -> None:
+    evidence_db = tmp_path / "proofs" / "evidence_store.db"
+    ticker = "KXUSTRDAGREEMENT-26JUL01"
+    question = "Will the US sign a trade agreement before July 1?"
+    _write_evidence_store(evidence_db, ticker=ticker)
+    with sqlite3.connect(evidence_db) as conn:
+        conn.execute(
+            """
+            UPDATE research_run_queries
+            SET query = CASE
+                WHEN query_intent = 'disconfirming'
+                THEN ?
+                ELSE ?
+            END
+            """,
+            (
+                (
+                    f"{question} evidence against YES evidence against NO false not "
+                    "confirmed denied opponent objection"
+                ),
+                question,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE research_evidence
+            SET title = 'US signs bilateral trade agreement',
+                snippet = 'Officials signed the trade agreement before July 1.'
+            WHERE claim_type = 'settlement'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE research_evidence
+            SET title = 'Opponent denied objection',
+                snippet = 'The objection concerns an unrelated sports dispute.'
+            WHERE claim_type = 'disconfirming'
+            """
+        )
+
+    proofs = _load_candidate_proofs(
+        evidence_db,
+        fresh_since=datetime(2026, 6, 29, 0, tzinfo=timezone.utc),
+        now=NOW,
+    )
+
+    assert proofs == {}
+
+
 @pytest.mark.parametrize(
     ("market_status", "market_close_time"),
     [
@@ -916,6 +965,56 @@ def test_candidate_proofs_reject_same_source_rewrites(tmp_path: Path) -> None:
             UPDATE research_evidence
             SET source_name = 'Wire rewrite',
                 source_url = 'https://wire.example.com/story'
+            """
+        )
+
+    proofs = _load_candidate_proofs(
+        evidence_db,
+        fresh_since=datetime(2026, 6, 29, 0, tzinfo=timezone.utc),
+        now=NOW,
+    )
+
+    assert proofs == {}
+
+
+def test_candidate_proofs_require_directional_support_for_speech_resolution_phrase(
+    tmp_path: Path,
+) -> None:
+    evidence_db = tmp_path / "proofs" / "evidence_store.db"
+    ticker = "KXTRUMPMENTION-26JUL24-MAGA"
+    _write_evidence_store(evidence_db, ticker=ticker)
+    with sqlite3.connect(evidence_db) as conn:
+        conn.execute(
+            """
+            UPDATE research_run_queries
+            SET query = ?
+            WHERE research_run_id = 'rr-profitable'
+              AND query_intent = 'official_resolution'
+            """,
+            (
+                "What will Donald Trump say during the rescheduled dinner? "
+                "If Donald Trump says MAGA / Make America Great Again as part "
+                "of the dinner, then the market resolves Yes. official resolution latest",
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE research_evidence
+            SET title = CASE evidence_id
+                    WHEN 'ev-1' THEN 'Celebrations start in DC for America birthday'
+                    WHEN 'ev-2' THEN 'Contract terms for the rescheduled dinner'
+                    ELSE 'No MAGA wording confirmed for the dinner'
+                END,
+                snippet = CASE evidence_id
+                    WHEN 'ev-1' THEN 'Officials expect tight security at the White House event.'
+                    WHEN 'ev-2' THEN 'Contract rules define the mention condition.'
+                    ELSE 'No direct evidence confirms Trump will say MAGA at the event.'
+                END,
+                supports_direction = CASE evidence_id
+                    WHEN 'ev-1' THEN 'yes'
+                    WHEN 'ev-2' THEN 'neutral'
+                    ELSE 'no'
+                END
             """
         )
 

@@ -21,9 +21,14 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.profit_evidence_report import collect_replay_evidence
 from utils.output_paths import EVIDENCE_STORE_DB, PAPER_TRADES_DB, RAW_EDGE_REPLAY_DIR
 from utils.research_evidence_quality import (
+    MIN_COUNTER_EVIDENCE_CONFIDENCE,
+    MIN_DIRECTIONAL_SUPPORT_CONFIDENCE,
     OFFICIAL_RESEARCH_SOURCE_CLASSES as OFFICIAL_SOURCE_CLASSES,
     STRUCTURED_OFFICIAL_RESEARCH_METRICS as STRUCTURED_SIGNAL_METRICS,
     STRUCTURED_OFFICIAL_SETTLEMENT_CLAIM_TYPES as SETTLEMENT_CLAIM_TYPES,
+    build_contract_relevance_spec,
+    effective_research_source_class,
+    evidence_is_relevant_to_contract,
     has_reliable_research_source_path,
 )
 from utils.research_market_eligibility import evaluate_research_market_eligibility
@@ -218,6 +223,7 @@ class CandidateEvidenceQuality:
     supports_directions: frozenset[str]
     has_counter_query: bool
     has_counter_evidence: bool
+    force_side: str
 
     @property
     def has_reliable_source_path(self) -> bool:
@@ -225,7 +231,7 @@ class CandidateEvidenceQuality:
 
     @property
     def has_directional_evidence(self) -> bool:
-        return bool(self.supports_directions & {"yes", "no"})
+        return self.force_side in self.supports_directions
 
     @property
     def live_cache_eligible(self) -> bool:
@@ -1625,6 +1631,7 @@ def _candidate_evidence_quality(
             frozenset(),
             False,
             False,
+            force_side.strip().lower(),
         )
     columns = {
         row["name"] for row in conn.execute("PRAGMA table_info(research_evidence)")
@@ -1660,6 +1667,8 @@ def _candidate_evidence_quality(
     )
     source_name_expr = "source_name" if "source_name" in columns else "NULL AS source_name"
     source_url_expr = "source_url" if "source_url" in columns else "NULL AS source_url"
+    title_expr = "title" if "title" in columns else "NULL AS title"
+    snippet_expr = "snippet" if "snippet" in columns else "NULL AS snippet"
     evidence_payloads: list[dict[str, Any]] = []
     supports_directions: set[str] = set()
     has_counter_query = _has_recorded_counter_query(conn, research_run_id)
@@ -1668,12 +1677,17 @@ def _candidate_evidence_quality(
     structured_same_side_counter_metrics: set[str] = set()
     side = force_side.strip().lower()
     opposite = "no" if side == "yes" else "yes" if side == "no" else ""
+    relevance_spec = build_contract_relevance_spec(
+        ticker,
+        _recorded_query_texts(conn, research_run_id),
+    )
     for evidence in conn.execute(
         f"""
         SELECT source_class, {source_name_expr}, {source_url_expr},
                {claim_type_expr}, {direction_expr}, {confidence_expr},
                {metric_name_expr}, {metric_value_expr},
-               {extraction_confidence_expr}, {retrieved_expr}
+               {extraction_confidence_expr}, {title_expr}, {snippet_expr},
+               {retrieved_expr}
         FROM research_evidence
         WHERE market_ticker = ?
           AND research_run_id = ?
@@ -1684,43 +1698,57 @@ def _candidate_evidence_quality(
         if ts is not None and ts < fresh_since:
             continue
         source_class = str(evidence["source_class"] or "unknown")
-        evidence_payloads.append(
-            {
+        direction = str(evidence["supports_direction"] or "").strip().lower()
+        evidence_text = f"{evidence['title'] or ''} {evidence['snippet'] or ''}"
+        is_relevant = evidence_is_relevant_to_contract(
+            evidence_text,
+            relevance_spec,
+        )
+        effective_direction = direction if is_relevant else "neutral"
+        evidence_payload = {
                 "source_class": source_class,
                 "source_name": evidence["source_name"],
                 "source_url": evidence["source_url"],
                 "claim_type": evidence["claim_type"],
-                "supports_direction": evidence["supports_direction"],
+                "supports_direction": effective_direction,
                 "supports_confidence": evidence["supports_confidence"],
                 "metric_name": evidence["metric_name"],
                 "metric_value": evidence["metric_value"],
                 "extraction_confidence": evidence["extraction_confidence"],
             }
-        )
-        direction = str(evidence["supports_direction"] or "").strip().lower()
-        if direction:
-            supports_directions.add(direction)
+        evidence_payloads.append(evidence_payload)
         claim_type = str(evidence["claim_type"] or "").strip().lower()
         confidence = float(evidence["supports_confidence"] or 0.0)
+        if (
+            is_relevant
+            and claim_type in SETTLEMENT_CLAIM_TYPES
+            and direction in {"yes", "no"}
+            and confidence >= MIN_DIRECTIONAL_SUPPORT_CONFIDENCE
+        ):
+            supports_directions.add(direction)
         metric_name = str(evidence["metric_name"] or "").strip()
         extraction_confidence = float(evidence["extraction_confidence"] or 0.0)
+        effective_source_class = effective_research_source_class(evidence_payload)
         if (
             claim_type in SETTLEMENT_CLAIM_TYPES
             and direction in {"yes", "no"}
-            and confidence >= 0.6
+            and confidence >= MIN_DIRECTIONAL_SUPPORT_CONFIDENCE
             and metric_name in STRUCTURED_SIGNAL_METRICS
-            and source_class in OFFICIAL_SOURCE_CLASSES
+            and effective_source_class in OFFICIAL_SOURCE_CLASSES
         ):
             if direction == side:
                 structured_support_metrics.add(metric_name)
-        if claim_type in {"disconfirming", "contradiction_check"}:
-            if direction in {opposite, "neutral"}:
+        if is_relevant and claim_type in {"disconfirming", "contradiction_check"}:
+            if (
+                direction == opposite
+                and confidence >= MIN_COUNTER_EVIDENCE_CONFIDENCE
+            ) or direction == "neutral":
                 has_counter_evidence = True
             elif (
                 direction == side
                 and confidence >= 0.8
                 and metric_name in STRUCTURED_SIGNAL_METRICS
-                and source_class in OFFICIAL_SOURCE_CLASSES
+                and effective_source_class in OFFICIAL_SOURCE_CLASSES
                 and (
                     evidence["metric_value"] is not None
                     or extraction_confidence >= 0.8
@@ -1734,6 +1762,32 @@ def _candidate_evidence_quality(
         supports_directions=frozenset(supports_directions),
         has_counter_query=has_counter_query,
         has_counter_evidence=has_counter_evidence,
+        force_side=side,
+    )
+
+
+def _recorded_query_texts(
+    conn: sqlite3.Connection,
+    research_run_id: str,
+) -> tuple[str, ...]:
+    if not _has_table_conn(conn, "research_run_queries"):
+        return ()
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(research_run_queries)")
+    }
+    if "query" not in columns:
+        return ()
+    return tuple(
+        str(row[0] or "")
+        for row in conn.execute(
+            """
+            SELECT query
+            FROM research_run_queries
+            WHERE research_run_id = ?
+            ORDER BY ordinal
+            """,
+            (research_run_id,),
+        )
     )
 
 

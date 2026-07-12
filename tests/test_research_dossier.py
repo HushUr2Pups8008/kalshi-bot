@@ -70,12 +70,114 @@ def test_decision_grade_persistence_requires_source_class_diversity():
     ]
 
     quality = _decision_grade_persistence_quality(
+        ticker="KXTEST-1",
         side="yes",
-        queries=[SimpleNamespace(query_intent="disconfirming")],
+        queries=[SimpleNamespace(query="counter", query_intent="disconfirming")],
         evidence=evidence,
     )
 
     assert quality["has_reliable_source_path"] is False
+
+
+def test_persistence_quality_rejects_irrelevant_speech_directional_evidence():
+    quality = _decision_grade_persistence_quality(
+        ticker="KXTRUMPMENTION-26JUL24-MAGA",
+        side="yes",
+        queries=[
+            SimpleNamespace(
+                query=(
+                    "What will Trump say during the dinner? If Donald Trump says "
+                    "MAGA / Make America Great Again as part of the dinner, then "
+                    "the market resolves Yes."
+                ),
+                query_intent="official_resolution",
+            ),
+            SimpleNamespace(
+                query="MAGA evidence against YES",
+                query_intent="disconfirming",
+            ),
+        ],
+        evidence=[
+            ResearchEvidence(
+                source_class="rules_source",
+                source_name="Kalshi",
+                source_url="https://kalshi.com/markets/KXTRUMPMENTION",
+                title="Contract terms",
+                snippet="The rules define the mention condition.",
+                claim_type="rules",
+                supports_direction="neutral",
+            ),
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="USA Today",
+                source_url="https://usatoday.com/america-birthday",
+                title="Celebrations start in DC for America's birthday",
+                snippet="Officials expect tight security at the White House event.",
+                claim_type="supporting",
+                supports_direction="yes",
+                supports_confidence=0.9,
+            ),
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="New York Times",
+                source_url="https://nytimes.com/greenland",
+                title="Trump discusses Greenland",
+                snippet="Trump says the public will find out what happens next.",
+                claim_type="disconfirming",
+                supports_direction="no",
+                supports_confidence=0.1,
+            ),
+        ],
+    )
+
+    assert quality["has_directional_evidence"] is False
+    assert quality["has_counter_evidence"] is False
+
+
+def test_persistence_quality_rejects_counter_query_boilerplate_match():
+    quality = _decision_grade_persistence_quality(
+        ticker="KXUSTRDAGREEMENT-26JUL01",
+        side="yes",
+        queries=[
+            SimpleNamespace(
+                query="Will the US sign a trade agreement before July 1?",
+                query_intent="official_resolution",
+            ),
+            SimpleNamespace(
+                query=(
+                    "Will the US sign a trade agreement before July 1? evidence "
+                    "against YES evidence against NO false not confirmed denied "
+                    "opponent objection"
+                ),
+                query_intent="disconfirming",
+            ),
+        ],
+        evidence=[
+            ResearchEvidence(
+                source_class="resolution_source",
+                source_name="Commerce Department",
+                source_url="https://commerce.gov/trade-agreement",
+                title="US signs bilateral trade agreement",
+                snippet="Officials signed the trade agreement before July 1.",
+                claim_type="official_resolution",
+                supports_direction="yes",
+                supports_confidence=0.9,
+            ),
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="Sports Wire",
+                source_url="https://sports.example.com/objection",
+                title="Opponent denied objection",
+                snippet="The objection concerns an unrelated sports dispute.",
+                claim_type="disconfirming",
+                supports_direction="no",
+                supports_confidence=0.8,
+            ),
+        ],
+    )
+
+    assert quality["has_directional_evidence"] is True
+    assert quality["has_counter_evidence"] is False
 
 
 def test_connection_context_commits_and_closes(monkeypatch, tmp_path):

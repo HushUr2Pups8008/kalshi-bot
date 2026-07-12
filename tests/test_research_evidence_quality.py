@@ -4,6 +4,9 @@ import pytest
 
 from utils.research_evidence_quality import (
     STRUCTURED_OFFICIAL_RESEARCH_METRICS,
+    build_contract_relevance_spec,
+    build_speech_contract_spec,
+    evidence_is_relevant_to_contract,
     has_reliable_research_source_path,
     research_source_key,
 )
@@ -50,6 +53,70 @@ def test_two_identities_and_classes_with_official_source_are_reliable() -> None:
     ]
 
     assert has_reliable_research_source_path(evidence) is True
+
+
+def test_untrusted_rules_publisher_does_not_create_official_source_path() -> None:
+    evidence = [
+        _evidence(
+            "rules_source",
+            url="https://www.indy100.com/politics/trump-quotes",
+        ),
+        _evidence(
+            "reputable_secondary",
+            url="https://usatoday.com/america-birthday",
+        ),
+    ]
+
+    assert has_reliable_research_source_path(evidence) is False
+
+
+def test_kalshi_rules_publisher_can_create_official_source_path() -> None:
+    evidence = [
+        _evidence(
+            "rules_source",
+            url="https://kalshi.com/markets/KXTRUMPMENTION",
+        ),
+        _evidence(
+            "reputable_secondary",
+            url="https://reuters.com/trump-maga",
+        ),
+    ]
+
+    assert has_reliable_research_source_path(evidence) is True
+
+
+def test_kalshi_source_name_cannot_override_untrusted_rules_url() -> None:
+    evidence = [
+        _evidence(
+            "rules_source",
+            url="https://www.indy100.com/politics/trump-quotes",
+            name="Kalshi",
+        ),
+        _evidence(
+            "reputable_secondary",
+            url="https://usatoday.com/america-birthday",
+        ),
+    ]
+
+    assert has_reliable_research_source_path(evidence) is False
+
+
+def test_untrusted_rules_url_cannot_use_structured_official_exception() -> None:
+    evidence = [
+        _evidence(
+            "rules_source",
+            url="https://www.indy100.com/politics/trump-quotes",
+            name="Kalshi",
+            claim_type="official_resolution",
+            direction="yes",
+            confidence=0.9,
+            metric_name="cpi_monthly_change_single_decimal",
+            metric_value=0.3,
+            extraction_confidence=0.95,
+        )
+    ]
+
+    assert has_reliable_research_source_path(evidence) is False
 
 
 def test_two_nonofficial_source_classes_are_not_reliable() -> None:
@@ -219,3 +286,143 @@ def test_mapping_evidence_is_supported() -> None:
     ]
 
     assert has_reliable_research_source_path(evidence) is True
+
+
+@pytest.mark.parametrize(
+    ("rules", "expected_phrase", "expected_subject"),
+    [
+        (
+            "The market resolves Yes if Donald Trump says MAGA at the rally.",
+            "MAGA",
+            "trump",
+        ),
+        (
+            "The market resolves Yes if Donald Trump mentions MAGA before midnight.",
+            "MAGA",
+            "trump",
+        ),
+        (
+            "The market resolves Yes if MAGA is uttered by Donald Trump during the speech.",
+            "MAGA",
+            "trump",
+        ),
+    ],
+)
+def test_speech_contract_spec_extracts_supported_rule_syntaxes(
+    rules: str,
+    expected_phrase: str,
+    expected_subject: str,
+) -> None:
+    spec = build_speech_contract_spec("KXTRUMPMENTION-26JUL24-MAGA", [rules])
+
+    assert spec.detected is True
+    assert expected_phrase in spec.phrases
+    assert expected_subject in spec.subject_terms
+
+
+def test_speech_contract_relevance_rejects_phrase_only_background_article() -> None:
+    spec = build_contract_relevance_spec(
+        "KXTRUMPMENTION-26JUL24-MAGA",
+        ["The market resolves Yes if Donald Trump says MAGA during the speech."],
+    )
+
+    assert (
+        evidence_is_relevant_to_contract(
+            "Britannica explains the history and meaning of the MAGA movement under Trump.",
+            spec,
+        )
+        is False
+    )
+
+
+def test_speech_contract_relevance_accepts_explicit_speech_evidence() -> None:
+    spec = build_contract_relevance_spec(
+        "KXTRUMPMENTION-26JUL24-MAGA",
+        ["The market resolves Yes if Donald Trump says MAGA during the speech."],
+    )
+
+
+@pytest.mark.parametrize(
+    "evidence_text",
+    [
+        "Ivanka Trump says MAGA during her remarks.",
+        "Donald Duck mentioned MAGA during the event.",
+        "Donald Trump says he will make changes. America is great again.",
+    ],
+)
+def test_speech_contract_relevance_rejects_wrong_speaker_or_split_phrase(
+    evidence_text: str,
+) -> None:
+    spec = build_contract_relevance_spec(
+        "KXTRUMPMENTION-26JUL24-MAGA",
+        [
+            "The market resolves Yes if Donald Trump says Make America Great Again "
+            "during the speech."
+        ],
+    )
+
+    assert evidence_is_relevant_to_contract(evidence_text, spec) is False
+
+
+def test_speech_contract_relevance_accepts_uses_relation() -> None:
+    spec = build_contract_relevance_spec(
+        "KXTRUMPMENTION-26JUL24-MAGA",
+        ["The market resolves Yes if Donald Trump uses MAGA during the speech."],
+    )
+
+    assert (
+        evidence_is_relevant_to_contract(
+            "Donald Trump uses MAGA during his prepared remarks.",
+            spec,
+        )
+        is True
+    )
+
+    assert (
+        evidence_is_relevant_to_contract(
+            "Transcript: Donald Trump said MAGA during his White House remarks.",
+            spec,
+        )
+        is True
+    )
+
+
+def test_detected_mention_contract_without_phrase_fails_closed() -> None:
+    spec = build_contract_relevance_spec(
+        "KXTRUMPMENTION-26JUL24-MAGA",
+        ["Official resolution rules are available from the market page."],
+    )
+
+    assert spec.speech.detected is True
+    assert spec.speech.phrases == ()
+    assert evidence_is_relevant_to_contract("Trump said MAGA in a speech.", spec) is False
+
+
+def test_counter_query_boilerplate_is_not_contract_identity() -> None:
+    spec = build_contract_relevance_spec(
+        "KXUSTRDAGREEMENT-26JUL01",
+        [
+            "Will the US sign a trade agreement before July 1?",
+            (
+                "Will the US sign a trade agreement before July 1? evidence against "
+                "YES evidence against NO false not confirmed denied opponent objection"
+            ),
+            "Will the US sign a trade agreement before July 1? latest update current status",
+        ],
+    )
+
+    assert spec.detected is True
+    assert (
+        evidence_is_relevant_to_contract(
+            "Opponent denied objection in an unrelated sports dispute.",
+            spec,
+        )
+        is False
+    )
+    assert (
+        evidence_is_relevant_to_contract(
+            "Officials signed the bilateral trade agreement before July 1.",
+            spec,
+        )
+        is True
+    )
