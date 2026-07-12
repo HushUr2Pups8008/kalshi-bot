@@ -22,6 +22,20 @@ T = TypeVar("T")
 _LOGGER = logging.getLogger(__name__)
 GENERIC_SEARCH_CIRCUIT_LOG_PREFIX = "[GENERIC_SEARCH_CIRCUIT] "
 GENERIC_SEARCH_CIRCUIT_SCHEMA_VERSION = 1
+GENERIC_SEARCH_CIRCUIT_EVENT_KINDS = frozenset(
+    {
+        "attempt",
+        "blocked",
+        "closed",
+        "double_availability_failure",
+        "half_open",
+        "open",
+        "probe_cancelled",
+        "provider_error",
+        "would_block",
+        "would_open",
+    }
+)
 _SAFE_FAILURE_CLASS_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_.]*(?::(?:[A-Za-z_][A-Za-z0-9_.]*|\d{3}))?$"
 )

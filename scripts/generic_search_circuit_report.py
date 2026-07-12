@@ -15,6 +15,7 @@ if str(REPO_ROOT_FOR_IMPORTS) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT_FOR_IMPORTS))
 
 from analysis.generic_search_circuit import (
+    GENERIC_SEARCH_CIRCUIT_EVENT_KINDS,
     GENERIC_SEARCH_CIRCUIT_LOG_PREFIX,
     GENERIC_SEARCH_CIRCUIT_SCHEMA_VERSION,
 )
@@ -74,8 +75,7 @@ def _is_schema_v1_event(payload: dict[str, Any]) -> bool:
         and payload.get("mode") in {"off", "shadow", "enforce"}
         and payload.get("state") in {"closed", "open", "half_open"}
         and _is_nonnegative_int(payload.get("generation"))
-        and isinstance(payload.get("event_kind"), str)
-        and bool(payload["event_kind"])
+        and payload.get("event_kind") in GENERIC_SEARCH_CIRCUIT_EVENT_KINDS
         and isinstance(failure_classes, list)
         and all(isinstance(value, str) for value in failure_classes)
         and _is_nonnegative_number(payload.get("cooldown_seconds"))
@@ -90,7 +90,9 @@ def _iter_log_paths(log_dir: Path) -> Iterable[Path]:
     if not log_dir.is_dir():
         return
     for path in sorted(log_dir.iterdir()):
-        if path.is_file() and ".log" in path.name:
+        if path.is_file() and (
+            path.name == "bot.log" or path.name.startswith("bot.log.")
+        ):
             yield path
 
 
@@ -124,6 +126,7 @@ def build_report(
     first_timestamp: datetime | None = None
     events_read = 0
     files_read = 0
+    event_source_by_payload: dict[str, Path] = {}
 
     for path in _iter_log_paths(log_dir):
         try:
@@ -149,7 +152,11 @@ def build_report(
                     if not isinstance(payload, dict):
                         warnings["malformed_lines"] += 1
                         continue
-                    if payload.get("schema_version") != GENERIC_SEARCH_CIRCUIT_SCHEMA_VERSION:
+                    schema_version = payload.get("schema_version")
+                    if (
+                        type(schema_version) is not int
+                        or schema_version != GENERIC_SEARCH_CIRCUIT_SCHEMA_VERSION
+                    ):
                         warnings["unsupported_schema_versions"] += 1
                         continue
                     if not _is_schema_v1_event(payload):
@@ -161,6 +168,15 @@ def build_report(
                         continue
                     if observed_at < window_start or observed_at > window_end:
                         continue
+                    canonical_payload = json.dumps(
+                        payload,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                    prior_source = event_source_by_payload.get(canonical_payload)
+                    if prior_source is not None and prior_source != path:
+                        continue
+                    event_source_by_payload.setdefault(canonical_payload, path)
                     event_kind = payload["event_kind"]
                     events_read += 1
                     total_key = _EVENT_TOTAL_KEYS.get(event_kind)

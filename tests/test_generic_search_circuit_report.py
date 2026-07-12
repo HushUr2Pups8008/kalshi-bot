@@ -179,7 +179,7 @@ def test_report_counts_malformed_and_unsupported_version_lines(tmp_path: Path) -
     now = datetime(2026, 7, 12, 20, 0, tzinfo=timezone.utc)
     log_dir = tmp_path / "app"
     log_dir.mkdir()
-    (log_dir / "errors.log").write_text(
+    (log_dir / "bot.log").write_text(
         "unrelated application line\n"
         f"{GENERIC_SEARCH_CIRCUIT_LOG_PREFIX}not-json\n"
         + _record("attempt", now, schema_version=2)
@@ -195,6 +195,73 @@ def test_report_counts_malformed_and_unsupported_version_lines(tmp_path: Path) -
         "malformed_lines": 3,
         "unsupported_schema_versions": 1,
     }
+
+
+def test_report_rejects_equal_but_non_integer_versions_and_unknown_events(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 7, 12, 20, 0, tzinfo=timezone.utc)
+    log_dir = tmp_path / "app"
+    log_dir.mkdir()
+    (log_dir / "bot.log").write_text(
+        _record("attempt", now, schema_version=True)
+        + _record("attempt", now, schema_version=1.0)
+        + _record("made_up_transition", now),
+        encoding="utf-8",
+    )
+
+    report = build_report(log_dir=log_dir, since_hours=24, now=now)
+
+    assert report["events_read"] == 0
+    assert report["warnings"] == {
+        "malformed_lines": 1,
+        "unsupported_schema_versions": 2,
+    }
+
+
+def test_report_uses_only_bot_logs_and_deduplicates_rotation_overlap(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 7, 12, 20, 0, tzinfo=timezone.utc)
+    log_dir = tmp_path / "app"
+    log_dir.mkdir()
+    active_attempt = _record("attempt", now - timedelta(minutes=5))
+    rotated_failure = _record(
+        "double_availability_failure",
+        now - timedelta(minutes=10),
+    )
+    (log_dir / "bot.log").write_text(
+        active_attempt + _record("provider_error", now - timedelta(minutes=4)),
+        encoding="utf-8",
+    )
+    (log_dir / "bot.log.1").write_text(
+        active_attempt + rotated_failure,
+        encoding="utf-8",
+    )
+    with gzip.open(log_dir / "bot.log.2.gz", "wt", encoding="utf-8") as handle:
+        handle.write(rotated_failure)
+    (log_dir / "launchd.stderr.log").write_text(
+        active_attempt + _record("open", now - timedelta(minutes=3)),
+        encoding="utf-8",
+    )
+
+    report = build_report(log_dir=log_dir, since_hours=24, now=now)
+
+    assert report["log_files_read"] == 3
+    assert report["events_read"] == 3
+    assert report["totals"] == {
+        "attempts": 1,
+        "double_availability_failures": 1,
+        "open_transitions": 0,
+        "would_open_transitions": 0,
+        "blocked_calls": 0,
+        "would_block_calls": 0,
+        "probes": 0,
+        "provider_error_events": 1,
+    }
+    assert report["latest"]["observed_at"] == (
+        now - timedelta(minutes=4)
+    ).isoformat()
 
 
 def test_report_returns_zero_event_shape_for_missing_log_directory(tmp_path: Path) -> None:
