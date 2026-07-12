@@ -2,9 +2,13 @@ import asyncio
 import errno
 import json
 import socket
+import subprocess
+import sys
+import textwrap
 import urllib.error
 import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -25,9 +29,6 @@ def _reset_generic_search_circuit() -> None:
     research_gate_module._reset_generic_search_circuit_for_tests()
     yield
     research_gate_module._reset_generic_search_circuit_for_tests()
-
-
-_OPEN_CIRCUIT_FROM_PREVIOUS_TEST: GenericSearchCircuit | None = None
 
 
 def _valid_rsa_pem() -> str:
@@ -219,32 +220,71 @@ async def test_structured_evidence_returns_while_generic_circuit_is_open(
     assert research_gate_module._get_generic_search_circuit().snapshot().state == "open"
 
 
-@pytest.mark.asyncio
-async def test_autouse_reset_fixture_leaves_an_open_generation_for_next_test(
-    monkeypatch,
-) -> None:
-    global _OPEN_CIRCUIT_FROM_PREVIOUS_TEST
-    monkeypatch.setattr(research_gate_module.cfg, "generic_search_circuit_mode", "enforce")
-    first = research_gate_module._get_generic_search_circuit()
+def test_autouse_reset_fixture_isolates_open_generation_in_subprocess(tmp_path) -> None:
+    regression = tmp_path / "test_generic_circuit_reset_boundary.py"
+    regression.write_text(
+        textwrap.dedent(
+            """
+            import pytest
 
-    async def fail(exc: Exception) -> None:
-        raise exc
-
-    with pytest.raises(GenericSearchUnavailable):
-        await first.run(
-            lambda: fail(TimeoutError("RSS unavailable")),
-            lambda: fail(ConnectionError("DDG unavailable")),
-        )
-    assert first.snapshot().generation == 1
-    _OPEN_CIRCUIT_FROM_PREVIOUS_TEST = first
+            from analysis import research_gate as research_gate_module
+            from analysis.generic_search_circuit import GenericSearchUnavailable
 
 
-def test_autouse_reset_fixture_discards_open_generation_from_previous_test() -> None:
-    assert _OPEN_CIRCUIT_FROM_PREVIOUS_TEST is not None
-    second = research_gate_module._get_generic_search_circuit()
-    assert second is not _OPEN_CIRCUIT_FROM_PREVIOUS_TEST
-    assert second.snapshot().state == "closed"
-    assert second.snapshot().generation == 0
+            _OPEN_CIRCUIT = None
+
+
+            @pytest.fixture(autouse=True)
+            def _reset_generic_search_circuit():
+                research_gate_module._reset_generic_search_circuit_for_tests()
+                yield
+                research_gate_module._reset_generic_search_circuit_for_tests()
+
+
+            @pytest.mark.asyncio
+            async def test_open_generation(monkeypatch):
+                global _OPEN_CIRCUIT
+                monkeypatch.setattr(
+                    research_gate_module.cfg,
+                    "generic_search_circuit_mode",
+                    "enforce",
+                )
+                circuit = research_gate_module._get_generic_search_circuit()
+
+                async def fail(exc):
+                    raise exc
+
+                with pytest.raises(GenericSearchUnavailable):
+                    await circuit.run(
+                        lambda: fail(TimeoutError("RSS unavailable")),
+                        lambda: fail(ConnectionError("DDG unavailable")),
+                    )
+                assert circuit.snapshot().generation == 1
+                _OPEN_CIRCUIT = circuit
+
+
+            def test_next_boundary_starts_closed():
+                assert _OPEN_CIRCUIT is not None
+                current = research_gate_module._get_generic_search_circuit()
+                assert current is not _OPEN_CIRCUIT
+                assert current.snapshot().state == "closed"
+                assert current.snapshot().generation == 0
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", str(regression), "-q"],
+        check=False,
+        capture_output=True,
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "2 passed" in completed.stdout
 
 
 @pytest.mark.asyncio
