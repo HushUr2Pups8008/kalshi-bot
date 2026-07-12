@@ -638,6 +638,48 @@ async def test_shadow_has_one_logical_probe_owner_while_followers_keep_calling()
     assert event_kinds.count("would_block") == 2
 
 
+@pytest.mark.asyncio
+async def test_successful_shadow_follower_cannot_close_pending_owner_generation() -> None:
+    clock = _Clock(0.0)
+    circuit = GenericSearchCircuit(
+        mode="shadow",
+        cooldown_seconds=120.0,
+        clock=clock,
+    )
+    await _open_circuit(circuit)
+    clock.now = 120.0
+    owner_started = asyncio.Event()
+    owner_future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+    owner_result = object()
+    owner = asyncio.create_task(
+        circuit.run(
+            _controlled_provider("owner-rss", [], owner_future, owner_started),
+            _successful_provider("owner-ddg", [], object()),
+        )
+    )
+    await owner_started.wait()
+    follower_calls: list[str] = []
+    follower_result = object()
+
+    assert await circuit.run(
+        _successful_provider("follower-rss", follower_calls, follower_result),
+        _successful_provider("follower-ddg", follower_calls, object()),
+    ) is follower_result
+
+    pending = circuit.snapshot()
+    assert follower_calls == ["follower-rss"]
+    assert pending.state == "half_open"
+    assert pending.generation == 1
+    assert pending.probe_successes == 0
+    assert pending.would_block_calls == 1
+    owner_future.set_result(owner_result)
+    assert await owner is owner_result
+    closed = circuit.snapshot()
+    assert closed.state == "closed"
+    assert closed.generation == 1
+    assert closed.probe_successes == 1
+
+
 def test_http_error_status_precedes_generic_url_error_reason_handling() -> None:
     assert isinstance(_http_error(404), urllib.error.URLError)
     assert is_provider_availability_failure(_http_error(404)) is False
