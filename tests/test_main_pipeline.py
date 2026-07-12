@@ -300,9 +300,12 @@ def test_research_prewarm_market_provider_ranks_expanded_due_pool(monkeypatch):
         close_time="2026-07-13T00:00:00Z",
     )
     bot.rest.get_all_open_markets.return_value = [far_tail]
-    bot.rest.get_market.return_value = near_mid
+    bot.rest.get_market.side_effect = lambda ticker: (
+        near_mid if ticker == near_mid.ticker else None
+    )
+    blocked_ticker = "KXMVECROSSCATEGORY-S2026DEADBEEF-123456789AB"
     bot._research_prewarm_due_task_tickers = MagicMock(
-        return_value=[far_tail.ticker, near_mid.ticker]
+        return_value=[blocked_ticker, far_tail.ticker, near_mid.ticker]
     )
 
     selected = bot._research_prewarm_market_provider()

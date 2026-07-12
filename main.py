@@ -1021,10 +1021,14 @@ class TradingBot:
         cooldown = self._research_prewarm_target_cooldown_seconds()
         target_sequence: list[str] = []
         seen_targets: set[str] = set()
-        due_task_tickers = self._research_prewarm_due_task_tickers(
-            limit=max(max_markets * 5, max_markets),
-            cooldown_seconds=cooldown,
-        )
+        due_task_tickers = [
+            ticker
+            for ticker in self._research_prewarm_due_task_tickers(
+                limit=max(max_markets * 5, max_markets),
+                cooldown_seconds=cooldown,
+            )
+            if not _research_prewarm_ticker_blocked(ticker)
+        ]
         due_task_ticker_set = set(due_task_tickers)
         runtime_target_tickers = _recent_runtime_research_prewarm_tickers()
         for ticker in due_task_tickers + runtime_target_tickers:
