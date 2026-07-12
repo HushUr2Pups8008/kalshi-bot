@@ -30,6 +30,7 @@ from utils.research_evidence_quality import (
     effective_research_source_class,
     evidence_is_relevant_to_contract,
     has_reliable_research_source_path,
+    research_evidence_temporally_valid,
 )
 from utils.research_market_eligibility import evaluate_research_market_eligibility
 from utils.trade_log_reader import iter_trade_records
@@ -964,6 +965,7 @@ def _decision_grade_evidence(
                 research_run_id=str(row["research_run_id"] or ""),
                 force_side=str(row["force_side"] or ""),
                 fresh_since=fresh_since,
+                as_of=now,
             )
             if not quality.has_reliable_source_path:
                 counts["blocked_by_no_reliable_source_path"] += 1
@@ -1385,6 +1387,7 @@ def _load_candidate_proofs(
                 research_run_id=str(row["research_run_id"] or ""),
                 force_side=str(row["force_side"] or ""),
                 fresh_since=fresh_since,
+                as_of=now,
             )
             if not quality.live_cache_eligible:
                 continue
@@ -1624,6 +1627,7 @@ def _candidate_evidence_quality(
     research_run_id: str,
     force_side: str,
     fresh_since: datetime,
+    as_of: datetime,
 ) -> CandidateEvidenceQuality:
     if not _has_table_conn(conn, "research_evidence"):
         return CandidateEvidenceQuality(
@@ -1669,6 +1673,17 @@ def _candidate_evidence_quality(
     source_url_expr = "source_url" if "source_url" in columns else "NULL AS source_url"
     title_expr = "title" if "title" in columns else "NULL AS title"
     snippet_expr = "snippet" if "snippet" in columns else "NULL AS snippet"
+    published_at_expr = (
+        "published_at" if "published_at" in columns else "NULL AS published_at"
+    )
+    retrieved_at_expr = (
+        "retrieved_at" if "retrieved_at" in columns else "NULL AS retrieved_at"
+    )
+    raw_payload_expr = (
+        "raw_payload_json"
+        if "raw_payload_json" in columns
+        else "NULL AS raw_payload_json"
+    )
     evidence_payloads: list[dict[str, Any]] = []
     supports_directions: set[str] = set()
     has_counter_query = _has_recorded_counter_query(conn, research_run_id)
@@ -1687,6 +1702,7 @@ def _candidate_evidence_quality(
                {claim_type_expr}, {direction_expr}, {confidence_expr},
                {metric_name_expr}, {metric_value_expr},
                {extraction_confidence_expr}, {title_expr}, {snippet_expr},
+               {published_at_expr}, {retrieved_at_expr}, {raw_payload_expr},
                {retrieved_expr}
         FROM research_evidence
         WHERE market_ticker = ?
@@ -1694,6 +1710,22 @@ def _candidate_evidence_quality(
         """,
         (ticker, research_run_id),
     ):
+        try:
+            raw_payload = json.loads(evidence["raw_payload_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            raw_payload = {}
+        temporal_payload = {
+            "metric_name": evidence["metric_name"],
+            "published_at": evidence["published_at"],
+            "retrieved_at": evidence["retrieved_at"],
+            "available_at": (
+                raw_payload.get("available_at")
+                if isinstance(raw_payload, dict)
+                else None
+            ),
+        }
+        if not research_evidence_temporally_valid(temporal_payload, as_of=as_of):
+            continue
         ts = _parse_ts(evidence["ts"])
         if ts is not None and ts < fresh_since:
             continue

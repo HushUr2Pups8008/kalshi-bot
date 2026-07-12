@@ -27,10 +27,16 @@ from analysis.research_gate import (
     _federal_register_search,
     _fed_policy_search,
     _gdpnow_search,
+    _getty_distinct_date_search,
+    _getty_distinct_date_spec_from_text,
+    _getty_search_payload,
     _govinfo_impeachment_expungement_search,
     _has_reliable_non_pending_source_path,
     _nws_daily_climate_search,
     _nws_daily_high_temp_from_text,
+    _white_house_action_cards_from_html,
+    _white_house_action_count_spec_from_text,
+    _white_house_presidential_actions_search,
     _should_direct_fetch_source,
     urllib,
     _rss_search,
@@ -1139,6 +1145,536 @@ def test_gdpnow_search_extracts_latest_threshold_direction(monkeypatch):
     assert item.supports_confidence > 0.5
 
 
+def test_getty_distinct_date_spec_parses_exact_count_window_and_cutoff():
+    spec = _getty_distinct_date_spec_from_text(
+        "KXTRUMPPHOTO-26JUL12-5 Will the number of distinct days with a "
+        "Getty Images editorial photo of Trump be exactly 5 between Jul 6, "
+        "2026 and Jul 12, 2026? cutoff 2026-07-13T14:00:00Z"
+    )
+
+    assert spec is not None
+    assert spec.target_count == 5
+    assert spec.start_date.isoformat() == "2026-07-06"
+    assert spec.end_date.isoformat() == "2026-07-12"
+    assert spec.cutoff_at.isoformat() == "2026-07-13T14:00:00+00:00"
+
+
+def test_getty_search_payload_requires_exact_filters_and_trump_witness():
+    raw = json.dumps(
+        {
+            "query": {
+                "params": {
+                    "assettype": "image",
+                    "enddate": "2026-07-12",
+                    "family": "editorial",
+                    "sort": "newest",
+                    "specificpeople": "118600",
+                }
+            },
+            "gallery": {
+                "page": 1,
+                "totalNumberOfResults": 204499,
+                "assets": [
+                    {
+                        "assetId": "2285194371",
+                        "dateCreated": "July 12, 2026",
+                        "people": "Donald John Trump",
+                        "caption": "President Donald Trump departs the White House.",
+                    }
+                ],
+            },
+        }
+    ).encode()
+
+    snapshot = _getty_search_payload(raw, expected_end_date="2026-07-12")
+
+    assert snapshot.total_results == 204499
+    assert snapshot.witness_asset_ids == ("2285194371",)
+    assert snapshot.newest_asset_date.isoformat() == "2026-07-12"
+
+
+def test_white_house_action_spec_and_card_parser_are_settlement_aligned():
+    spec = _white_house_action_count_spec_from_text(
+        "KXTRUMPACT-26JUL12-T5 at least 5 presidential actions from Jul 12, "
+        "2026 through Jul 18, 2026 checked at 10:00 AM ET on Jul 19, 2026"
+    )
+    raw = """
+    <ul class="wp-block-post-template">
+      <li class="wp-block-post category-presidential-actions category-proclamations">
+        <h2 class="wp-block-post-title"><a href="https://www.whitehouse.gov/presidential-actions/2026/07/a/">Action A</a></h2>
+        <div class="wp-block-post-date"><time datetime="2026-07-12T09:00:00-04:00">July 12, 2026</time></div>
+      </li>
+      <li class="wp-block-post category-presidential-actions category-executive-orders">
+        <h2 class="wp-block-post-title"><a href="https://www.whitehouse.gov/presidential-actions/2026/07/b/">Action B</a></h2>
+        <div class="wp-block-post-date"><time datetime="2026-07-11T09:00:00-04:00">July 11, 2026</time></div>
+      </li>
+    </ul>
+    """
+
+    assert spec is not None
+    assert spec.threshold == 5
+    assert spec.start_date.isoformat() == "2026-07-12"
+    assert spec.end_date.isoformat() == "2026-07-18"
+    assert spec.cutoff_at.isoformat() == "2026-07-19T14:00:00+00:00"
+    cards = _white_house_action_cards_from_html(raw)
+    assert [(card.title, card.published_date.isoformat()) for card in cards] == [
+        ("Action A", "2026-07-12"),
+        ("Action B", "2026-07-11"),
+    ]
+
+
+def test_nws_daily_climate_search_rejects_matching_future_local_report(monkeypatch):
+    raw = """
+    CLIMATE REPORT NATIONAL WEATHER SERVICE NEW YORK, NY
+    ...THE CENTRAL PARK NY CLIMATE SUMMARY FOR JULY 11 2026...
+    TEMPERATURE (F)
+    TODAY
+    MAXIMUM         82   1226 PM
+    """
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return raw.encode()
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+    monkeypatch.setattr(research_gate_module, "_utc_now_iso", lambda: "2026-07-10T14:11:14Z")
+
+    evidence = _nws_daily_climate_search(
+        ResearchQuery(
+            "KXHIGHNY-26JUL11-B81.5 Will the high temp in NYC be 81-82 on Jul 11, 2026?",
+            "official_resolution",
+            "official_primary",
+        )
+    )
+
+    assert len(evidence) == 1
+    assert evidence[0].metric_name == "nws_daily_high_temp_pending"
+    assert evidence[0].metric_value is None
+    assert evidence[0].supports_direction == "neutral"
+    assert evidence[0].available_at == "2026-07-12T04:00:00+00:00"
+
+
+def test_nws_expected_availability_uses_dst_aware_next_local_midnight():
+    assert research_gate_module._nws_expected_availability(
+        datetime(2026, 7, 11).date()
+    ) == "2026-07-12T04:00:00+00:00"
+    assert research_gate_module._nws_expected_availability(
+        datetime(2026, 1, 11).date()
+    ) == "2026-01-12T05:00:00+00:00"
+
+
+def test_decision_freshness_rejects_legacy_future_published_nws_evidence():
+    item = ResearchEvidence(
+        source_class="official_primary",
+        source_name="NWS Climatological Report",
+        source_url="https://forecast.weather.gov/product.php?site=OKX&product=CLI&issuedby=NYC",
+        title="NWS Central Park daily maximum for July 11, 2026: 82F",
+        snippet="Future-dated persisted row.",
+        claim_type="official_resolution",
+        supports_direction="yes",
+        supports_confidence=0.95,
+        published_at="2026-07-11",
+        retrieved_at="2026-07-10T14:11:14Z",
+        metric_name="nws_daily_high_temp_f",
+        metric_value=82.0,
+        metric_unit="fahrenheit",
+        extraction_confidence=0.95,
+    )
+
+    assert not research_gate_module._is_fresh_decision_evidence(
+        item,
+        now=datetime(2026, 7, 12, tzinfo=timezone.utc),
+    )
+    assert not research_gate_module._is_fresh_evidence(
+        item,
+        now=datetime(2026, 7, 12, tzinfo=timezone.utc),
+    )
+
+
+@pytest.mark.parametrize(
+    "metric_name",
+    [
+        "getty_trump_distinct_photo_days",
+        "getty_distinct_photo_days_pending",
+        "white_house_presidential_actions_pending",
+        "white_house_snapshot_missed",
+    ],
+)
+def test_adjudication_cannot_directionally_override_pending_structured_evidence(
+    metric_name,
+):
+    item = ResearchEvidence(
+        source_class="official_primary",
+        source_name="White House Presidential Actions",
+        source_url="https://www.whitehouse.gov/presidential-actions/",
+        title="White House presidential-action count: 0",
+        snippet="Current official count is zero while the contract window remains open.",
+        claim_type="official_resolution",
+        available_at=None,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        metric_name=metric_name,
+        metric_value=0.0,
+        metric_unit="actions",
+        extraction_confidence=0.98,
+    )
+
+    labeled = _apply_adjudication_evidence_assessments(
+        [item],
+        {
+            "evidence_assessments": [
+                {
+                    "ordinal": 0,
+                    "supports_direction": "no",
+                    "supports_confidence": 0.9,
+                }
+            ]
+        },
+    )
+
+    assert labeled[0].supports_direction == "neutral"
+    assert labeled[0].supports_confidence == 0.0
+
+
+def test_getty_distinct_date_search_remains_neutral_without_source_finality(
+    monkeypatch,
+):
+    calls: list[str] = []
+    totals = {
+        "2026-07-05": 10,
+        "2026-07-06": 11,
+        "2026-07-07": 12,
+    }
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return self.payload
+
+    def fake_urlopen(request, **_kwargs):
+        end_date = urllib.parse.parse_qs(
+            urllib.parse.urlparse(request.full_url).query
+        )["enddate"][0]
+        calls.append(end_date)
+        asset_date = datetime.fromisoformat(end_date).strftime("%B %-d, %Y")
+        payload = {
+            "query": {
+                "params": {
+                    "assettype": "image",
+                    "enddate": end_date,
+                    "family": "editorial",
+                    "sort": "newest",
+                    "specificpeople": "118600",
+                }
+            },
+            "gallery": {
+                "page": 1,
+                "totalNumberOfResults": totals[end_date],
+                "assets": [
+                    {
+                        "assetId": f"asset-{end_date}",
+                        "dateCreated": asset_date,
+                        "people": "Donald John Trump",
+                        "caption": "Donald Trump at the White House.",
+                    }
+                ],
+            },
+        }
+        return FakeResponse(json.dumps(payload).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    evidence = _getty_distinct_date_search(
+        ResearchQuery(
+            "KXTRUMPPHOTO exactly 1 Getty Images editorial photo of Trump "
+            "distinct days between Jul 6, 2026 and Jul 7, 2026 "
+            "cutoff 2026-07-13T14:00:00Z",
+            "official_resolution",
+            "resolution_source",
+        ),
+        now=datetime(2026, 7, 14, tzinfo=timezone.utc),
+    )
+    pending = _getty_distinct_date_search(
+        ResearchQuery(
+            "KXTRUMPPHOTO exactly 1 Getty Images editorial photo of Trump "
+            "distinct days between Jul 6, 2026 and Jul 7, 2026 "
+            "cutoff 2026-07-13T14:00:00Z",
+            "official_resolution",
+            "resolution_source",
+        ),
+        now=datetime(2026, 7, 12, tzinfo=timezone.utc),
+    )
+
+    assert len(evidence) == 3
+    assert evidence[0].metric_value == 2
+    assert evidence[0].supports_direction == "neutral"
+    assert evidence[0].supports_confidence == 0.0
+    assert evidence[1].claim_type == "contradiction_check"
+    assert evidence[1].supports_direction == "neutral"
+    assert evidence[-1].metric_name == "getty_distinct_photo_days_pending"
+    assert pending[0].supports_direction == "neutral"
+    assert pending[-1].metric_name == "getty_distinct_photo_days_pending"
+    assert calls == ["2026-07-05", "2026-07-06", "2026-07-07"]
+
+
+def test_white_house_action_search_only_locks_at_contract_snapshot(monkeypatch):
+    raw = b"""
+    <ul class="wp-block-post-template">
+      <li class="wp-block-post category-presidential-actions category-proclamations">
+        <h2><a href="https://www.whitehouse.gov/presidential-actions/2026/07/a/">Action A</a></h2>
+        <time datetime="2026-07-12T09:00:00-04:00">July 12, 2026</time>
+      </li>
+      <li class="wp-block-post category-presidential-actions category-memoranda">
+        <h2><a href="https://www.whitehouse.gov/presidential-actions/2026/07/old/">Old Action</a></h2>
+        <time datetime="2026-07-11T09:00:00-04:00">July 11, 2026</time>
+      </li>
+    </ul>
+    """
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return raw
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+    base = (
+        "KXTRUMPACT at least {threshold} presidential actions from Jul 12, "
+        "2026 through Jul 18, 2026 checked at 10:00 AM ET on Jul 19, 2026"
+    )
+
+    pre_cutoff = _white_house_presidential_actions_search(
+        ResearchQuery(base.format(threshold=1), "official_resolution", "official_primary")
+    )
+    locked = _white_house_presidential_actions_search(
+        ResearchQuery(base.format(threshold=1), "official_resolution", "official_primary"),
+        now=datetime(2026, 7, 19, 14, 2, tzinfo=timezone.utc),
+    )
+    missed = _white_house_presidential_actions_search(
+        ResearchQuery(base.format(threshold=1), "official_resolution", "official_primary"),
+        now=datetime(2026, 7, 20, tzinfo=timezone.utc),
+    )
+    straddled = _white_house_presidential_actions_search(
+        ResearchQuery(base.format(threshold=1), "official_resolution", "official_primary"),
+        observation_started_at=datetime(2026, 7, 19, 13, 59, 55, tzinfo=timezone.utc),
+        now=datetime(2026, 7, 19, 14, 0, 10, tzinfo=timezone.utc),
+    )
+    pending = _white_house_presidential_actions_search(
+        ResearchQuery(base.format(threshold=5), "official_resolution", "official_primary")
+    )
+
+    assert pre_cutoff[0].supports_direction == "neutral"
+    assert pre_cutoff[-1].metric_name == "white_house_presidential_actions_pending"
+    assert locked[0].metric_value == 1
+    assert locked[0].supports_direction == "yes"
+    assert len(locked) == 1
+    assert missed[0].metric_name == "white_house_snapshot_missed"
+    assert missed[0].supports_direction == "neutral"
+    assert straddled[0].supports_direction == "neutral"
+    assert straddled[-1].metric_name == "white_house_presidential_actions_pending"
+    assert pending[0].supports_direction == "neutral"
+    assert pending[-1].metric_name == "white_house_presidential_actions_pending"
+    assert pending[-1].available_at == "2026-07-19T14:00:00+00:00"
+
+
+def test_white_house_action_search_rejects_unordered_archive(monkeypatch):
+    raw = b"""
+    <ul class="wp-block-post-template">
+      <li class="wp-block-post"><h2><a href="https://www.whitehouse.gov/presidential-actions/2026/07/old/">Old</a></h2><time datetime="2026-07-11T09:00:00-04:00">July 11, 2026</time></li>
+      <li class="wp-block-post"><h2><a href="https://www.whitehouse.gov/presidential-actions/2026/07/new/">New</a></h2><time datetime="2026-07-12T09:00:00-04:00">July 12, 2026</time></li>
+    </ul>
+    """
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return raw
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+
+    with pytest.raises(ValueError, match="newest-first"):
+        _white_house_presidential_actions_search(
+            ResearchQuery(
+                "KXTRUMPACT at least 5 presidential actions from Jul 12, 2026 "
+                "through Jul 18, 2026 checked at 10:00 AM ET on Jul 19, 2026",
+                "official_resolution",
+                "official_primary",
+            )
+        )
+
+
+def test_white_house_action_search_rejects_conflicting_duplicate_url(monkeypatch):
+    raw = b"""
+    <ul class="wp-block-post-template">
+      <li class="wp-block-post"><h2><a href="https://www.whitehouse.gov/presidential-actions/2026/07/a/">Action A</a></h2><time datetime="2026-07-12T09:00:00-04:00">July 12, 2026</time></li>
+      <li class="wp-block-post"><h2><a href="https://www.whitehouse.gov/presidential-actions/2026/07/a/">Action A revised</a></h2><time datetime="2026-07-11T09:00:00-04:00">July 11, 2026</time></li>
+    </ul>
+    """
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return raw
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+
+    with pytest.raises(ValueError, match="conflicting metadata"):
+        _white_house_presidential_actions_search(
+            ResearchQuery(
+                "KXTRUMPACT at least 5 presidential actions from Jul 12, 2026 "
+                "through Jul 18, 2026 checked at 10:00 AM ET on Jul 19, 2026",
+                "official_resolution",
+                "official_primary",
+            )
+        )
+
+
+def test_specialized_count_queries_suppress_generic_official_hints():
+    getty_market = SimpleNamespace(
+        ticker="KXTRUMPPHOTO-26JUL12-5",
+        title=(
+            "Will the number of distinct days with a Getty Images editorial "
+            "photo of Trump be exactly 5 between Jul 6, 2026 and Jul 12, 2026?"
+        ),
+        rules_primary="Getty Images tagged editorial photo count.",
+        rules_secondary="",
+        close_time="2026-07-13T14:00:00Z",
+        settlement_sources=(),
+    )
+    white_house_market = SimpleNamespace(
+        ticker="KXTRUMPACT-26JUL12-T5",
+        title="Will there be at least 5 presidential actions?",
+        rules_primary=(
+            "At least 5 presidential actions from Jul 12, 2026 through Jul 18, "
+            "2026 checked at 10:00 AM ET on Jul 19, 2026 at whitehouse.gov."
+        ),
+        rules_secondary="Executive orders and proclamations count.",
+        close_time="2026-07-19T14:00:00Z",
+        settlement_sources=(),
+    )
+
+    getty_queries = build_research_queries(SimpleNamespace(headline=""), getty_market)
+    white_house_queries = build_research_queries(
+        SimpleNamespace(headline=""), white_house_market
+    )
+
+    assert any(_getty_distinct_date_spec_from_text(item.query) for item in getty_queries)
+    assert any(
+        _white_house_action_count_spec_from_text(item.query)
+        for item in white_house_queries
+    )
+    assert not any("federalregister.gov" in item.query for item in white_house_queries)
+
+
+@pytest.mark.asyncio
+async def test_getty_structured_count_can_reach_decision_grade_without_gate_relaxation(
+    monkeypatch,
+):
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    support = ResearchEvidence(
+        source_class="resolution_source",
+        source_name="Getty Images",
+        source_url="https://www.gettyimages.com/search/2/image?enddate=2026-07-12",
+        title="Getty Trump editorial-photo distinct-day count: 6",
+        snippet=(
+            "Getty filtered editorial search validates 6 distinct Trump-photo "
+            "days versus exact target 5."
+        ),
+        claim_type="official_resolution",
+        supports_direction="no",
+        supports_confidence=0.98,
+        published_at="2026-07-12",
+        retrieved_at=retrieved_at,
+        metric_name="getty_trump_distinct_photo_days",
+        metric_value=6.0,
+        metric_unit="distinct_days",
+        extraction_confidence=0.98,
+    )
+    counter = replace(
+        support,
+        source_url=f"{support.source_url}#cumulative-delta-countercheck",
+        title="Getty cumulative-total countercheck: 6 distinct days",
+        snippet=(
+            "Contradiction check compared cumulative Getty totals and also "
+            "found 6 distinct days versus exact target 5."
+        ),
+        claim_type="contradiction_check",
+        supports_confidence=0.95,
+    )
+    monkeypatch.setattr(
+        research_gate_module,
+        "_structured_official_search",
+        lambda _query: [support, counter],
+    )
+
+    async def no_search(_query):
+        return []
+
+    async def no_direct(*_args):
+        return None
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="", source="research_prewarm"),
+        SimpleNamespace(
+            ticker="KXTRUMPPHOTO-26JUL12-5",
+            title=(
+                "Will the number of distinct days with a Getty Images editorial "
+                "photo of Trump be exactly 5 between Jul 6, 2026 and Jul 12, 2026?"
+            ),
+            rules_primary=(
+                "If Donald Trump is photographed in a tagged Getty editorial photo "
+                "on exactly 5 distinct days between Jul 6, 2026 and Jul 12, 2026, "
+                "the market resolves Yes."
+            ),
+            rules_secondary="Materially mis-tagged photos may be disregarded.",
+            close_time="2026-07-13T14:00:00Z",
+            settlement_sources=(),
+        ),
+        model_direction="neutral",
+        model_confidence=0.0,
+        model_reason="scheduled research prewarm",
+        yes_ask=0.81,
+        no_ask=0.20,
+        live_mode=False,
+        search_provider=no_search,
+        direct_fetcher=no_direct,
+        adjudicator=None,
+        max_queries=8,
+        require_decision_grade=True,
+    )
+
+    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
+    assert verdict.force_side == "no"
+    assert verdict.estimated_probability == pytest.approx(0.02)
+    assert verdict.estimated_edge == pytest.approx(0.77)
+
+
 @pytest.mark.asyncio
 async def test_default_provider_routes_gdp_base_rate_to_gdpnow_before_pending(
     monkeypatch,
@@ -1883,6 +2419,7 @@ def test_rules_only_weather_market_adds_nws_direct_source_target():
 @pytest.mark.asyncio
 async def test_structured_weather_counter_query_reuses_same_official_metric_as_countercheck():
     fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    published = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
     market = SimpleNamespace(
         ticker="KXHIGHNY-26JUL01-B94.5",
         title="Will the high temp in NYC be 94-95° on Jul 1, 2026?",
@@ -1923,6 +2460,7 @@ async def test_structured_weather_counter_query_reuses_same_official_metric_as_c
                 metric_value=87.0,
                 metric_unit="fahrenheit",
                 extraction_confidence=0.95,
+                published_at=published,
                 retrieved_at=fresh,
             )
         ]
@@ -3426,7 +3964,6 @@ async def test_pending_official_data_does_not_block_structured_forecast_decision
                     supports_direction="neutral",
                     supports_confidence=0.0,
                     metric_name="economic_stat_data_pending",
-                    published_at="2026-Q2",
                     retrieved_at=now_iso,
                 )
             ]
@@ -3628,7 +4165,6 @@ async def test_pending_official_data_can_become_decision_grade_with_forecast_edg
                     supports_direction="neutral",
                     supports_confidence=0.0,
                     metric_name="economic_stat_data_pending",
-                    published_at="2026-Q2",
                     retrieved_at=now_iso,
                 )
             ]
@@ -7924,7 +8460,12 @@ async def test_cache_only_rejects_irrelevant_non_speech_candidate():
 
 
 @pytest.mark.asyncio
-async def test_research_gate_refreshes_cached_missing_counter_evidence_dossier(tmp_path):
+async def test_research_gate_refreshes_cached_missing_counter_evidence_dossier(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(research_gate_module, "_structured_official_search", lambda _query: [])
+    monkeypatch.setattr(research_gate_module, "_is_fresh_evidence", lambda _item: True)
     store = ResearchDossierStore(tmp_path / "research_dossier.db")
     await store.initialize()
     market = SimpleNamespace(
@@ -7957,6 +8498,7 @@ async def test_research_gate_refreshes_cached_missing_counter_evidence_dossier(t
             metric_name="nws_daily_high_temp_f",
             metric_value=93.0,
             metric_unit="fahrenheit",
+            published_at="2026-07-02",
             retrieved_at=retrieved_at,
             contract_fingerprint=_contract_fingerprint(market),
         ),
@@ -7972,6 +8514,7 @@ async def test_research_gate_refreshes_cached_missing_counter_evidence_dossier(t
             metric_name="nws_daily_high_temp_f",
             metric_value=93.0,
             metric_unit="fahrenheit",
+            published_at="2026-07-02",
             retrieved_at=retrieved_at,
             contract_fingerprint=_contract_fingerprint(market),
         ),
@@ -8029,6 +8572,7 @@ async def test_research_gate_refreshes_cached_missing_counter_evidence_dossier(t
                     metric_name="nws_daily_high_temp_f",
                     metric_value=93.0,
                     metric_unit="fahrenheit",
+                    published_at="2026-07-02",
                     retrieved_at=retrieved_at,
                 )
             ]
@@ -8065,7 +8609,11 @@ async def test_research_gate_refreshes_cached_missing_counter_evidence_dossier(t
     )
 
     assert "disconfirming" in search_calls
-    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
+    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE, (
+        verdict.skip_reason,
+        verdict.summary,
+        [(item.metric_name, item.claim_type, item.supports_direction) for item in verdict.evidence],
+    )
     assert verdict.skip_reason is None
     assert verdict.force_side == "no"
 

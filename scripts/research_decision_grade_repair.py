@@ -164,6 +164,7 @@ def find_invalid_decision_grade_candidates(
                 research_run_id=run_id,
                 force_side=side,
                 fresh_since=datetime.min.replace(tzinfo=timezone.utc),
+                as_of=datetime.now(timezone.utc),
             )
             if not quality.has_reliable_source_path:
                 reason = "no_reliable_source_path"

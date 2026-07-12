@@ -875,9 +875,10 @@ def test_candidate_proofs_require_source_class_diversity(tmp_path: Path) -> None
 
 def test_candidate_proofs_accept_structured_official_metric(tmp_path: Path) -> None:
     evidence_db = tmp_path / "proofs" / "evidence_store.db"
-    _write_evidence_store(evidence_db, ticker="KXHIGHNY-26JUL02-T99")
+    _write_evidence_store(evidence_db, ticker="KXHIGHNY-26JUN28-T99")
     with sqlite3.connect(evidence_db) as conn:
         conn.execute("ALTER TABLE research_evidence ADD COLUMN metric_name TEXT")
+        conn.execute("ALTER TABLE research_evidence ADD COLUMN published_at TEXT")
         conn.execute(
             """
             UPDATE research_runs
@@ -898,18 +899,18 @@ def test_candidate_proofs_accept_structured_official_metric(tmp_path: Path) -> N
                 evidence_id, market_ticker, research_run_id, source_class,
                 source_name, source_url, title, snippet, claim_type,
                 supports_direction, supports_confidence, retrieved_at,
-                inserted_at, contract_fingerprint, metric_name
+                inserted_at, contract_fingerprint, metric_name, published_at
             )
-            VALUES (?, ?, 'rr-profitable', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, 'rr-profitable', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     "ev-structured-nws",
-                    "KXHIGHNY-26JUL02-T99",
+                    "KXHIGHNY-26JUN28-T99",
                     "official_primary",
                     "NWS Climatological Report",
                     "https://forecast.weather.gov/product.php?site=OKX&product=CLI&issuedby=NYC",
-                    "NWS Central Park daily maximum for July 2, 2026: 93F",
+                    "NWS Central Park daily maximum for June 28, 2026: 93F",
                     "NWS Central Park climate report lists TODAY MAXIMUM 93F.",
                     "official_resolution",
                     "yes",
@@ -918,10 +919,11 @@ def test_candidate_proofs_accept_structured_official_metric(tmp_path: Path) -> N
                     "2026-06-29T10:00:00Z",
                     "fp-profitable",
                     "nws_daily_high_temp_f",
+                    "2026-06-28",
                 ),
                 (
                     "ev-counter",
-                    "KXHIGHNY-26JUL02-T99",
+                    "KXHIGHNY-26JUN28-T99",
                     "reputable_secondary",
                     "Independent Weather Archive",
                     "https://weather.example.com/nyc-counter",
@@ -934,6 +936,7 @@ def test_candidate_proofs_accept_structured_official_metric(tmp_path: Path) -> N
                     "2026-06-29T10:00:00Z",
                     "fp-profitable",
                     None,
+                    None,
                 ),
             ],
         )
@@ -944,7 +947,7 @@ def test_candidate_proofs_accept_structured_official_metric(tmp_path: Path) -> N
         now=NOW,
     )
 
-    proof = proofs["KXHIGHNY-26JUL02-T99"]
+    proof = proofs["KXHIGHNY-26JUN28-T99"]
     assert proof.research_run_id == "rr-profitable"
     assert proof.live_cache_eligible
 
@@ -1760,3 +1763,27 @@ def test_log_error_samples_ignore_legacy_transient_kalshi_503(
         "2026-06-29 10:01:00,000 UTC ERROR    main                 "
         "unexpected research persistence failure"
     ]
+def test_candidate_proofs_reject_future_nws_evidence(tmp_path: Path) -> None:
+    evidence_db = tmp_path / "data" / "evidence_store.db"
+    _write_evidence_store(evidence_db)
+    with sqlite3.connect(evidence_db) as conn:
+        conn.execute("ALTER TABLE research_evidence ADD COLUMN metric_name TEXT")
+        conn.execute("ALTER TABLE research_evidence ADD COLUMN published_at TEXT")
+        conn.execute("ALTER TABLE research_evidence ADD COLUMN raw_payload_json TEXT")
+        conn.execute(
+            """
+            UPDATE research_evidence
+            SET metric_name = 'nws_daily_high_temp_f',
+                published_at = '2026-06-30',
+                raw_payload_json = '{}'
+            WHERE claim_type = 'settlement'
+            """
+        )
+
+    proofs = _load_candidate_proofs(
+        evidence_db,
+        fresh_since=datetime(2026, 6, 29, 0, tzinfo=timezone.utc),
+        now=NOW,
+    )
+
+    assert proofs == {}

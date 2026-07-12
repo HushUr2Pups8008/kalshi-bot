@@ -8,7 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts.research_rollout_gate import evaluate_research_rollout
+from scripts.research_rollout_gate import (
+    _live_cache_eligible_proofs,
+    evaluate_research_rollout,
+)
 from tests._helpers import write_jsonl
 
 
@@ -91,7 +94,10 @@ def _write_research_db(
                 claim_type TEXT,
                 supports_direction TEXT,
                 supports_confidence REAL,
+                metric_name TEXT,
+                published_at TEXT,
                 retrieved_at TEXT,
+                raw_payload_json TEXT,
                 inserted_at TEXT NOT NULL
             );
             """
@@ -429,7 +435,6 @@ def test_rollout_accepts_structured_official_same_side_metric_countercheck(
     trades, bot_log = _write_candidate_runtime(tmp_path)
     _write_research_db(tmp_path)
     with sqlite3.connect(tmp_path / "data" / "evidence_store.db") as conn:
-        conn.execute("ALTER TABLE research_evidence ADD COLUMN metric_name TEXT")
         conn.execute("ALTER TABLE research_evidence ADD COLUMN metric_value REAL")
         conn.execute(
             "ALTER TABLE research_evidence ADD COLUMN extraction_confidence REAL"
@@ -442,7 +447,8 @@ def test_rollout_accepts_structured_official_same_side_metric_countercheck(
                 metric_name = 'nws_daily_high_temp_f',
                 metric_value = 93.0,
                 extraction_confidence = 0.95,
-                supports_confidence = 0.95
+                supports_confidence = 0.95,
+                published_at = '2026-05-09'
             """
         )
 
@@ -970,6 +976,35 @@ def test_rollout_gate_accepts_decision_grade_candidate_research_proof(tmp_path):
     assert assessment.successful_research_rows == 1
     assert assessment.matched_research_proofs == 1
     assert assessment.live_cache_eligible_dossiers == 1
+
+
+@pytest.mark.parametrize(
+    ("published_at", "expected_eligible"),
+    [
+        ("2026-05-10", False),
+        ("2026-05-09", True),
+    ],
+)
+def test_rollout_live_cache_applies_nws_temporal_validation(
+    tmp_path,
+    published_at,
+    expected_eligible,
+):
+    _write_research_db(tmp_path, verdict_status="decision_grade_candidate")
+    with sqlite3.connect(tmp_path / "data" / "evidence_store.db") as conn:
+        conn.execute(
+            """
+            UPDATE research_evidence
+            SET metric_name = 'nws_daily_high_temp_f',
+                published_at = ?
+            WHERE source_class = 'resolution_source'
+            """,
+            (published_at,),
+        )
+
+    proofs = _live_cache_eligible_proofs(tmp_path, now=NOW)
+
+    assert bool(proofs) is expected_eligible
 
 
 def test_rollout_gate_accepts_persisted_live_cache_candidate_after_restart(tmp_path):

@@ -19,6 +19,7 @@ from analysis.research_gate import (
 from tasks.research_dossier import (
     ResearchDossierStore,
     _decision_grade_persistence_quality,
+    _stored_decision_grade_snapshot_is_valid_sync,
 )
 
 
@@ -996,6 +997,8 @@ async def test_research_dossier_keeps_structured_official_metric_decision_grade(
             metric_value=93.0,
             metric_unit="fahrenheit",
             extraction_confidence=0.95,
+            published_at="2026-07-02",
+            retrieved_at="2026-07-03T14:00:00+00:00",
             contract_fingerprint="contract-v1",
         ),
         ResearchEvidence(
@@ -2517,3 +2520,90 @@ async def test_research_gate_refreshes_old_published_article_even_if_retrieved_n
 
     assert verdict.status == ResearchStatus.TRADE_CANDIDATE
     assert "https://opec.org/current-published" in {item.source_url for item in verdict.evidence}
+@pytest.mark.asyncio
+async def test_persisted_future_nws_evidence_invalidates_decision_grade_snapshot(
+    tmp_path,
+):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    ticker = "KXHIGHNY-26JUL11-B81.5"
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="NWS",
+            source_url="https://weather.gov/climate",
+            title="Central Park high temperature July 11",
+            snippet="The July 11 maximum supports YES.",
+            claim_type="official_resolution",
+            supports_direction="yes",
+            supports_confidence=0.95,
+            published_at="2026-07-11",
+            retrieved_at="2026-07-10T14:11:00+00:00",
+            metric_name="nws_daily_high_temp_f",
+            metric_value=82.0,
+            extraction_confidence=0.95,
+            contract_fingerprint="contract-v1",
+        ),
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="NWS",
+            source_url="https://weather.gov/climate",
+            title="Central Park high temperature countercheck July 11",
+            snippet="The same official maximum was checked against the contract.",
+            claim_type="disconfirming",
+            supports_direction="yes",
+            supports_confidence=0.95,
+            published_at="2026-07-11",
+            retrieved_at="2026-07-10T14:11:00+00:00",
+            metric_name="nws_daily_high_temp_f",
+            metric_value=82.0,
+            extraction_confidence=0.95,
+            contract_fingerprint="contract-v1",
+        ),
+    ]
+    await store.record_research_run(
+        ticker,
+        "run-future-nws",
+        trigger_headline="Central Park high temperature July 11",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Future-dated NWS evidence must not remain decision grade.",
+        verdict_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.7,
+        confidence=0.8,
+        contract_fingerprint="contract-v1",
+        market_price=0.55,
+        estimated_edge=0.14,
+        decision_grade_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        queries=[
+            ResearchQuery(
+                query="Central Park high temperature July 11 official result",
+                query_intent="official_resolution",
+                source_class="official_primary",
+            ),
+            ResearchQuery(
+                query="Central Park high temperature July 11 disconfirming evidence",
+                query_intent="disconfirming",
+                source_class="official_primary",
+            ),
+        ],
+        evidence=evidence,
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM research_dossiers WHERE market_ticker = ?",
+            (ticker,),
+        ).fetchone()
+        assert row is not None
+        assert (
+            _stored_decision_grade_snapshot_is_valid_sync(
+                conn,
+                market_ticker=ticker,
+                row=row,
+            )
+            is False
+        )

@@ -6,8 +6,10 @@ import ipaddress
 import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 
 OFFICIAL_RESEARCH_SOURCE_CLASSES = frozenset(
@@ -23,8 +25,10 @@ OFFICIAL_RESEARCH_SOURCE_CLASSES = frozenset(
 STRUCTURED_OFFICIAL_RESEARCH_METRICS = frozenset(
     {
         "cpi_monthly_change_single_decimal",
+        "getty_trump_distinct_photo_days",
         "gdpnow_real_gdp_growth_saar",
         "nws_daily_high_temp_f",
+        "white_house_presidential_actions_count",
     }
 )
 
@@ -38,6 +42,8 @@ STRUCTURED_OFFICIAL_SETTLEMENT_CLAIM_TYPES = frozenset(
         "supporting",
     }
 )
+
+_NEW_YORK = ZoneInfo("America/New_York")
 
 _COUNTRY_CODE_SECOND_LEVEL_LABELS = frozenset({"ac", "co", "com", "edu", "gov", "net", "org"})
 _SPEECH_CONTRACT_ACTIVE_PATTERN = re.compile(
@@ -431,6 +437,100 @@ def _field(evidence: object, name: str) -> Any:
     if isinstance(evidence, Mapping):
         return evidence.get(name)
     return getattr(evidence, name, None)
+
+
+def research_evidence_temporally_valid(
+    evidence: object,
+    *,
+    as_of: datetime | None = None,
+) -> bool:
+    """Return whether evidence was available when it claims to have been retrieved."""
+    validation_time = _as_utc_datetime(as_of or datetime.now(timezone.utc))
+    if validation_time is None:
+        return False
+
+    raw_retrieved_at = _field(evidence, "retrieved_at")
+    raw_available_at = _field(evidence, "available_at")
+    raw_published_at = _field(evidence, "published_at")
+    retrieved_at = _optional_temporal_value(raw_retrieved_at)
+    available_at = _optional_temporal_value(raw_available_at)
+    published_at = _optional_temporal_value(raw_published_at)
+    if retrieved_at is False or available_at is False or published_at is False:
+        return False
+
+    if (
+        isinstance(retrieved_at, datetime)
+        and retrieved_at > validation_time + timedelta(minutes=5)
+    ):
+        return False
+    if isinstance(available_at, datetime):
+        if available_at > validation_time:
+            return False
+        if isinstance(retrieved_at, datetime) and available_at > retrieved_at:
+            return False
+    if (
+        isinstance(published_at, datetime)
+        and isinstance(retrieved_at, datetime)
+        and published_at > retrieved_at
+    ):
+        return False
+
+    metric_name = str(_field(evidence, "metric_name") or "").strip()
+    if (
+        metric_name in STRUCTURED_OFFICIAL_RESEARCH_METRICS
+        and not isinstance(retrieved_at, datetime)
+    ):
+        return False
+    if metric_name != "nws_daily_high_temp_f":
+        return True
+    if not isinstance(retrieved_at, datetime) or not isinstance(published_at, datetime):
+        return False
+    published_date = _temporal_calendar_date(raw_published_at, _NEW_YORK)
+    if published_date is None:
+        return False
+    return published_date < retrieved_at.astimezone(_NEW_YORK).date()
+
+
+def _optional_temporal_value(value: object) -> datetime | None | bool:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    parsed = _as_utc_datetime(value)
+    return parsed if parsed is not None else False
+
+
+def _as_utc_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, date):
+        parsed = datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
+    elif isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _temporal_calendar_date(value: object, zone: ZoneInfo) -> date | None:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip()
+        try:
+            return date.fromisoformat(normalized)
+        except ValueError:
+            pass
+    parsed = _as_utc_datetime(value)
+    return parsed.astimezone(zone).date() if parsed is not None else None
 
 
 def _as_float(value: object) -> float:
