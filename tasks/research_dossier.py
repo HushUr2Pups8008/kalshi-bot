@@ -19,7 +19,14 @@ from types import SimpleNamespace
 from typing import Literal, TypeVar
 
 from analysis.research_gate import ResearchEvidence
-from utils.research_evidence_quality import has_reliable_research_source_path
+from utils.research_evidence_quality import (
+    MIN_COUNTER_EVIDENCE_CONFIDENCE,
+    MIN_DIRECTIONAL_SUPPORT_CONFIDENCE,
+    build_contract_relevance_spec,
+    effective_research_source_class,
+    evidence_is_relevant_to_contract,
+    has_reliable_research_source_path,
+)
 from config import DATA_DIR
 
 _T = TypeVar("_T")
@@ -249,6 +256,15 @@ class ResearchDossierStore:
             self._has_research_run_query_intent_sync,
             research_run_id,
             frozenset(query_intents),
+        )
+
+    async def get_research_run_query_texts(
+        self,
+        research_run_id: str,
+    ) -> list[str]:
+        return await asyncio.to_thread(
+            self._get_research_run_query_texts_sync,
+            research_run_id,
         )
 
     async def get_dossier_snapshot(self, market_ticker: str) -> ResearchDossierSnapshot | None:
@@ -601,6 +617,7 @@ class ResearchDossierStore:
         self._initialize_sync()
         final_verdict_status, final_decision_grade_status, final_skip_reason = (
             _validated_research_status(
+                market_ticker=market_ticker,
                 verdict_status=verdict_status,
                 decision_grade_status=decision_grade_status,
                 skip_reason=skip_reason,
@@ -1043,6 +1060,23 @@ class ResearchDossierStore:
             ).fetchone()
         return row is not None
 
+    def _get_research_run_query_texts_sync(
+        self,
+        research_run_id: str,
+    ) -> list[str]:
+        self._initialize_sync()
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT query
+                FROM research_run_queries
+                WHERE research_run_id = ?
+                ORDER BY ordinal
+                """,
+                (research_run_id,),
+            ).fetchall()
+        return [str(row["query"] or "") for row in rows]
+
     def _get_dossier_snapshot_sync(self, market_ticker: str) -> ResearchDossierSnapshot | None:
         self._initialize_sync()
         with self._connection() as conn:
@@ -1393,6 +1427,7 @@ def _run_contract_fingerprint(evidence: list[ResearchEvidence]) -> str | None:
 
 def _validated_research_status(
     *,
+    market_ticker: str,
     verdict_status: str,
     decision_grade_status: str | None,
     skip_reason: str | None,
@@ -1407,6 +1442,7 @@ def _validated_research_status(
         return verdict_status, decision_grade_status, skip_reason
     side = str(force_side or "").strip().lower()
     quality = _decision_grade_persistence_quality(
+        ticker=market_ticker,
         side=side,
         queries=queries,
         evidence=evidence,
@@ -1517,10 +1553,13 @@ def _stored_decision_grade_snapshot_is_valid_sync(
     ):
         return False
     queries = [
-        SimpleNamespace(query_intent=query_row["query_intent"])
+        SimpleNamespace(
+            query=query_row["query"],
+            query_intent=query_row["query_intent"],
+        )
         for query_row in conn.execute(
             """
-            SELECT query_intent
+            SELECT query, query_intent
             FROM research_run_queries
             WHERE research_run_id = ?
             """,
@@ -1535,11 +1574,17 @@ def _stored_decision_grade_snapshot_is_valid_sync(
             claim_type=evidence_row["claim_type"],
             supports_direction=evidence_row["supports_direction"],
             supports_confidence=evidence_row["supports_confidence"],
+            title=evidence_row["title"],
+            snippet=evidence_row["snippet"],
+            metric_name=evidence_row["metric_name"],
+            metric_value=evidence_row["metric_value"],
+            extraction_confidence=evidence_row["extraction_confidence"],
         )
         for evidence_row in conn.execute(
             """
             SELECT source_class, source_name, source_url, claim_type,
-                   supports_direction, supports_confidence
+                   supports_direction, supports_confidence, title, snippet,
+                   metric_name, metric_value, extraction_confidence
             FROM research_evidence
             WHERE market_ticker = ?
               AND research_run_id = ?
@@ -1548,6 +1593,7 @@ def _stored_decision_grade_snapshot_is_valid_sync(
         ).fetchall()
     ]
     quality = _decision_grade_persistence_quality(
+        ticker=market_ticker,
         side=side,
         queries=queries,
         evidence=evidence,
@@ -1576,6 +1622,7 @@ def _decision_grade_edge_recomputes(
 
 def _decision_grade_persistence_quality(
     *,
+    ticker: str,
     side: str,
     queries: list[object],
     evidence: list[ResearchEvidence],
@@ -1584,15 +1631,40 @@ def _decision_grade_persistence_quality(
     supports_directions: set[str] = set()
     has_counter_evidence = False
     structured_support_metrics: set[str] = set()
+    relevance_spec = build_contract_relevance_spec(
+        ticker,
+        [getattr(query, "query", "") for query in queries],
+    )
     for item in evidence:
         direction = str(getattr(item, "supports_direction", "") or "").strip().lower()
-        if direction:
-            supports_directions.add(direction)
         claim_type = str(getattr(item, "claim_type", "") or "").strip().lower()
-        if claim_type in _COUNTER_CLAIM_TYPES and direction in {opposite, "neutral"}:
+        confidence = float(getattr(item, "supports_confidence", 0.0) or 0.0)
+        is_relevant = evidence_is_relevant_to_contract(
+            f"{getattr(item, 'title', '')} {getattr(item, 'snippet', '')}",
+            relevance_spec,
+        )
+        if (
+            is_relevant
+            and claim_type in _SETTLEMENT_CLAIM_TYPES
+            and direction in {"yes", "no"}
+            and confidence >= MIN_DIRECTIONAL_SUPPORT_CONFIDENCE
+        ):
+            supports_directions.add(direction)
+        if (
+            is_relevant
+            and claim_type in _COUNTER_CLAIM_TYPES
+            and (
+                direction == "neutral"
+                or (
+                    direction == opposite
+                    and confidence >= MIN_COUNTER_EVIDENCE_CONFIDENCE
+                )
+            )
+        ):
             has_counter_evidence = True
         if (
-            claim_type in _COUNTER_CLAIM_TYPES
+            is_relevant
+            and claim_type in _COUNTER_CLAIM_TYPES
             and direction == side
             and _is_structured_official_metric_countercheck(item)
         ):
@@ -1600,18 +1672,18 @@ def _decision_grade_persistence_quality(
             if metric_name in structured_support_metrics:
                 has_counter_evidence = True
         if (
-            claim_type in _SETTLEMENT_CLAIM_TYPES
+            is_relevant
+            and claim_type in _SETTLEMENT_CLAIM_TYPES
             and direction in {"yes", "no"}
-            and float(getattr(item, "supports_confidence", 0.0) or 0.0) >= 0.6
+            and confidence >= MIN_DIRECTIONAL_SUPPORT_CONFIDENCE
         ):
-            source_class = str(getattr(item, "source_class", "") or "").strip().lower()
             metric_name = str(getattr(item, "metric_name", "") or "").strip()
             extraction_confidence = float(
                 getattr(item, "extraction_confidence", 0.0) or 0.0
             )
             if (
                 metric_name in _STRUCTURED_SIGNAL_METRICS
-                and source_class in _OFFICIAL_SOURCE_CLASSES
+                and effective_research_source_class(item) in _OFFICIAL_SOURCE_CLASSES
                 and extraction_confidence >= 0.6
             ):
                 if direction == side:
@@ -1636,7 +1708,7 @@ def _decision_grade_persistence_quality(
     )
     return {
         "has_reliable_source_path": has_reliable_research_source_path(evidence),
-        "has_directional_evidence": bool(supports_directions & {"yes", "no"}),
+        "has_directional_evidence": side in supports_directions,
         "has_counter_query": has_counter_query,
         "has_counter_evidence": has_counter_evidence,
     }
@@ -1646,8 +1718,7 @@ def _is_structured_official_metric_countercheck(item: ResearchEvidence) -> bool:
     metric_name = str(getattr(item, "metric_name", "") or "").strip()
     if metric_name not in _STRUCTURED_SIGNAL_METRICS:
         return False
-    source_class = str(getattr(item, "source_class", "") or "").strip().lower()
-    if source_class not in _OFFICIAL_SOURCE_CLASSES:
+    if effective_research_source_class(item) not in _OFFICIAL_SOURCE_CLASSES:
         return False
     if float(getattr(item, "supports_confidence", 0.0) or 0.0) < 0.8:
         return False

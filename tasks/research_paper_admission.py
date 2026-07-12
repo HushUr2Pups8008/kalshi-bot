@@ -16,7 +16,15 @@ from tasks.research_dossier import ResearchDossierSnapshot, default_store
 from tasks.research_prewarm_task import ResearchPrewarmResult
 from utils.logger import trade_log
 from utils.lifecycle import build_research_lifecycle_id
-from utils.research_evidence_quality import has_reliable_research_source_path
+from utils.research_evidence_quality import (
+    MIN_COUNTER_EVIDENCE_CONFIDENCE,
+    MIN_DIRECTIONAL_SUPPORT_CONFIDENCE,
+    ContractRelevanceSpec,
+    build_contract_relevance_spec,
+    effective_research_source_class,
+    evidence_is_relevant_to_contract,
+    has_reliable_research_source_path,
+)
 from utils.research_market_eligibility import research_market_eligibility
 
 DECISION_GRADE_STATUS = "decision_grade_candidate"
@@ -58,6 +66,11 @@ class ResearchAdmissionStore(Protocol):
         market_ticker: str,
         research_run_id: str,
     ) -> list[ResearchEvidence]: ...
+
+    async def get_research_run_query_texts(
+        self,
+        research_run_id: str,
+    ) -> list[str]: ...
 
     async def claim_research_paper_admission(
         self,
@@ -163,11 +176,43 @@ class ResearchPaperSignalProvider:
                 snapshot.last_research_run_id,
             )
         )
-        if not has_reliable_research_source_path(evidence):
+        query_texts = await _research_run_query_texts(
+            self.store,
+            snapshot.last_research_run_id,
+        )
+        relevance_spec = build_contract_relevance_spec(
+            market_ticker,
+            query_texts,
+        )
+        validated_evidence = tuple(
+            item
+            if _evidence_is_relevant(item, relevance_spec)
+            or str(item.supports_direction or "").strip().lower() == "neutral"
+            else replace(
+                item,
+                supports_direction="neutral",
+                supports_confidence=0.0,
+            )
+            for item in evidence
+        )
+        relevant_evidence = tuple(
+            item
+            for item in validated_evidence
+            if _evidence_is_relevant(item, relevance_spec)
+        )
+        if not has_reliable_research_source_path(validated_evidence):
             return None, "no_reliable_source_path"
+        if not any(
+            str(item.supports_direction or "").strip().lower() == side
+            and str(item.claim_type or "").strip().lower() in _SETTLEMENT_CLAIM_TYPES
+            and float(item.supports_confidence or 0.0)
+            >= MIN_DIRECTIONAL_SUPPORT_CONFIDENCE
+            for item in relevant_evidence
+        ):
+            return None, "missing_directional_support"
         if not await _has_counter_query(self.store, snapshot.last_research_run_id):
             return None, "missing_counter_query"
-        if not _has_counter_evidence(side, evidence):
+        if not _has_counter_evidence(side, relevant_evidence):
             return None, "missing_counter_evidence"
         return (
             ResearchPaperSignal(
@@ -180,7 +225,7 @@ class ResearchPaperSignalProvider:
                 market_price=float(snapshot.last_market_price),
                 estimated_edge=float(snapshot.last_estimated_edge),
                 researched_ts=researched_ts,
-                evidence=evidence,
+                evidence=validated_evidence,
             ),
             None,
         )
@@ -587,6 +632,50 @@ def _recompute_edge(
     return side_probability - market_price - 0.01
 
 
+def _evidence_is_relevant(
+    item: ResearchEvidence,
+    spec: ContractRelevanceSpec,
+) -> bool:
+    return evidence_is_relevant_to_contract(
+        f"{item.title} {item.snippet}",
+        spec,
+    )
+
+
+async def _research_run_query_texts(
+    store: ResearchAdmissionStore,
+    research_run_id: str,
+) -> list[str]:
+    query_loader = getattr(store, "get_research_run_query_texts", None)
+    if callable(query_loader):
+        return [str(value or "") for value in await query_loader(research_run_id)]
+    db_path = getattr(store, "db_path", None)
+    if db_path is None:
+        return []
+
+    def load_db() -> list[str]:
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            rows = conn.execute(
+                """
+                SELECT query
+                FROM research_run_queries
+                WHERE research_run_id = ?
+                ORDER BY ordinal
+                """,
+                (research_run_id,),
+            ).fetchall()
+            return [str(row[0] or "") for row in rows]
+        except sqlite3.Error:
+            return []
+        finally:
+            if conn is not None:
+                conn.close()
+
+    return await asyncio.to_thread(load_db)
+
+
 def _has_counter_evidence(
     side: str,
     evidence: tuple[ResearchEvidence, ...],
@@ -602,7 +691,14 @@ def _has_counter_evidence(
     for item in evidence:
         claim_type = item.claim_type.strip().lower()
         direction = item.supports_direction.strip().lower()
-        if claim_type in _COUNTER_CLAIM_TYPES and direction in {opposite, "neutral"}:
+        if claim_type in _COUNTER_CLAIM_TYPES and (
+            direction == "neutral"
+            or (
+                direction == opposite
+                and float(item.supports_confidence or 0.0)
+                >= MIN_COUNTER_EVIDENCE_CONFIDENCE
+            )
+        ):
             return True
         if (
             claim_type in _COUNTER_CLAIM_TYPES
@@ -615,11 +711,10 @@ def _has_counter_evidence(
 
 
 def _is_structured_official_metric_countercheck(item: ResearchEvidence) -> bool:
-    source_class = item.source_class.strip().lower()
     metric_name = str(item.metric_name or "").strip()
     extraction_confidence = float(item.extraction_confidence or 0.0)
     return (
-        source_class in _OFFICIAL_SOURCE_CLASSES
+        effective_research_source_class(item) in _OFFICIAL_SOURCE_CLASSES
         and metric_name in _STRUCTURED_SIGNAL_METRICS
         and float(item.supports_confidence or 0.0) >= 0.8
         and (item.metric_value is not None or extraction_confidence >= 0.8)
