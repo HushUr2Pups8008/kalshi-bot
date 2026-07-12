@@ -37,6 +37,7 @@ from utils.research_prewarm_targets import (
     RESEARCH_PREWARM_EVENT_TYPES,
     record_targets_kalshi_research_prewarm,
 )
+from utils.research_priority import research_market_priority_key
 from utils.trade_log_reader import iter_trade_records
 
 
@@ -166,15 +167,18 @@ def _load_markets(
         for ticker in tickers:
             market = client.get_market(ticker)
             if market is not None:
-                markets.append(_enrich_market_source_path(market, client))
+                market = _enrich_market_source_path(market, client)
             else:
-                markets.append(_closed_market_placeholder(ticker))
+                market = _closed_market_placeholder(ticker)
+            setattr(market, "_research_prewarm_bypass_cooldown", True)
+            markets.append(market)
             if len(markets) >= args.max_markets:
                 break
         return markets
 
     if due_store is not None:
         due_limit = max(args.max_markets, args.max_markets * 5)
+        due_markets: list[Any] = []
         for ticker in due_store.get_due_research_task_tickers(
             limit=due_limit,
             target_cooldown_seconds=_target_cooldown_seconds(),
@@ -182,14 +186,19 @@ def _load_markets(
             market = client.get_market(ticker)
             if market is None:
                 continue
-            else:
-                market = _enrich_market_source_path(market, client)
+            market = _enrich_market_source_path(market, client)
             status = str(getattr(market, "status", "open") or "open").lower()
-            if status not in {"open", "active"}:
+            if status not in {
+                "open",
+                "active",
+                "closed",
+                "finalized",
+                "settled",
+                "resolved",
+            }:
                 continue
-            markets.append(market)
-            if len(markets) >= args.max_markets:
-                break
+            due_markets.append(market)
+        markets.extend(sorted(due_markets, key=_open_market_priority)[: args.max_markets])
         if len(markets) >= args.max_markets:
             return markets
 
@@ -263,14 +272,12 @@ def _sourceable_series_fallback(
 ) -> list[Any]:
     if not hasattr(client, "get_markets"):
         return []
-    selected_tickers = selected_tickers or set()
-    out: list[Any] = []
+    selected_tickers = selected_tickers if selected_tickers is not None else set()
+    candidates: dict[str, Any] = {}
     series_values = getattr(args, "sourceable_series_fallback", None)
     if series_values is None:
         series_values = getattr(cfg, "research_prewarm_sourceable_series_fallback", ())
     for raw_series in series_values or ():
-        if len(out) >= args.max_markets:
-            break
         series_ticker = str(raw_series or "").strip()
         if not series_ticker or _is_multi_venue_synthetic_ticker(series_ticker):
             continue
@@ -282,10 +289,8 @@ def _sourceable_series_fallback(
         except Exception:
             continue
         for market in page or ():
-            if len(out) >= args.max_markets:
-                break
             ticker = str(getattr(market, "ticker", "") or "").strip()
-            if not ticker or ticker in selected_tickers:
+            if not ticker or ticker in selected_tickers or ticker in candidates:
                 continue
             market = _enrich_market_source_path(market, client)
             status = str(getattr(market, "status", "open") or "open").lower()
@@ -295,8 +300,11 @@ def _sourceable_series_fallback(
                 continue
             if not market_has_research_source_path(market):
                 continue
-            out.append(market)
-            selected_tickers.add(ticker)
+            candidates[ticker] = market
+    out = sorted(candidates.values(), key=research_market_priority_key)[
+        : args.max_markets
+    ]
+    selected_tickers.update(str(getattr(market, "ticker", "") or "") for market in out)
     return out
 
 
@@ -340,9 +348,9 @@ def _enrich_market_source_path(
     return market
 
 
-def _open_market_priority(market: Any) -> tuple[int, int, int, str]:
+def _open_market_priority(market: Any) -> tuple[tuple[int, int], int, int, str]:
     return (
-        0 if market_has_actionable_price(market) else 1,
+        research_market_priority_key(market),
         0 if market_has_research_source_path(market) else 1,
         1 if _is_multi_venue_synthetic_market(market) else 0,
         str(getattr(market, "ticker", "") or ""),

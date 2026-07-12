@@ -467,6 +467,90 @@ async def test_run_once_prioritizes_due_research_task_from_db(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_once_ranks_overfetched_due_markets_before_cap():
+    class DueStore:
+        def get_due_research_task_tickers(self, **_kwargs):
+            return ["KX-FAR-TAIL", "KX-NEAR-MID"]
+
+    class RankedClient(FakeClient):
+        def get_market(self, ticker: str):
+            self.market_calls.append(ticker)
+            if ticker == "KX-FAR-TAIL":
+                return SimpleNamespace(
+                    ticker=ticker,
+                    status="open",
+                    yes_ask_cents=2,
+                    no_ask_cents=98,
+                    close_time="2026-12-31T00:00:00Z",
+                )
+            return SimpleNamespace(
+                ticker=ticker,
+                status="open",
+                yes_ask_cents=41,
+                no_ask_cents=59,
+                close_time="2026-07-13T00:00:00Z",
+            )
+
+    client = RankedClient()
+    task = FakeTask()
+    task.store = DueStore()
+    args = Namespace(
+        ticker=[],
+        max_markets=1,
+        max_pages=2,
+        target_from_log=None,
+    )
+
+    await research_prewarm.run_once(args, client=client, task=task)
+
+    assert client.market_calls == ["KX-FAR-TAIL", "KX-NEAR-MID"]
+    assert [market.ticker for market in task.markets] == ["KX-NEAR-MID"]
+
+
+def test_sourceable_fallback_ranks_across_series():
+    class MultiSeriesClient(FakeClient):
+        def get_markets(self, *, series_ticker: str, limit: int):
+            self.series_market_calls.append(series_ticker)
+            if series_ticker == "KXTAIL":
+                market = SimpleNamespace(
+                    ticker="KXTAIL-26DEC31",
+                    status="open",
+                    yes_ask_cents=2,
+                    no_ask_cents=98,
+                    close_time="2026-12-31T00:00:00Z",
+                    rules_primary="Official result.",
+                    settlement_sources=(
+                        SettlementSource(label="Official", domain="example.gov"),
+                    ),
+                )
+            else:
+                market = SimpleNamespace(
+                    ticker="KXMID-26JUL13",
+                    status="open",
+                    yes_ask_cents=41,
+                    no_ask_cents=59,
+                    close_time="2026-07-13T00:00:00Z",
+                    rules_primary="Official result.",
+                    settlement_sources=(
+                        SettlementSource(label="Official", domain="example.gov"),
+                    ),
+                )
+            return [market], None
+
+    args = Namespace(
+        max_markets=1,
+        sourceable_series_fallback=["KXTAIL", "KXMID"],
+    )
+
+    selected = research_prewarm._sourceable_series_fallback(
+        args,
+        MultiSeriesClient(),
+    )
+
+    assert [market.ticker for market in selected] == ["KXMID-26JUL13"]
+
+
+@pytest.mark.asyncio
 async def test_run_once_uses_default_store_for_due_tasks_when_db_path_omitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

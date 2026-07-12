@@ -11,7 +11,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Iterable
 
@@ -25,7 +25,6 @@ from analysis.research_gate import (
     run_research_gate,
 )
 from tasks.research_dossier import (
-    RESEARCH_TASK_OFFICIAL_PENDING_MAX_BACKOFF_SECONDS,
     RESEARCH_TASK_TERMINAL_AFTER_SAME_REASON,
     ResearchDossierStore,
     default_store,
@@ -33,6 +32,7 @@ from tasks.research_dossier import (
 from utils.logger import get_logger, trade_log, write_trade_log_async
 from utils.research_evidence_quality import has_reliable_research_source_path
 from utils.research_market_eligibility import research_market_eligibility
+from utils.research_priority import research_market_priority_key
 
 _log = get_logger("research_prewarm_task")
 _TERMINAL_RESEARCH_TASK_STATES = {"decision_grade_candidate", "untradeable"}
@@ -99,7 +99,12 @@ class ResearchPrewarmTask:
         self.result_sink = result_sink or _write_research_prewarm_result
         self.market_result_sink = market_result_sink
 
-    async def process_market(self, market: Any) -> ResearchPrewarmResult:
+    async def process_market(
+        self,
+        market: Any,
+        *,
+        bypass_persisted_cooldown: bool = False,
+    ) -> ResearchPrewarmResult:
         ticker = str(getattr(market, "ticker", "") or "")
         if not ticker:
             raise ResearchPrewarmError("market ticker is required")
@@ -150,12 +155,17 @@ class ResearchPrewarmTask:
                 market=market,
             )
         try:
-            persisted_skip = await self._persisted_task_skip_result(ticker, market)
+            persisted_skip = await self._persisted_task_skip_result(
+                ticker,
+                market,
+                bypass_persisted_cooldown=bypass_persisted_cooldown,
+            )
             if persisted_skip is not None:
                 return persisted_skip
+            open_questions = await self._task_open_questions(ticker)
             await self.store.mark_research_task_researching(ticker)
             verdict = await self.research_gate(
-                _prewarm_news(market),
+                _prewarm_news(market, open_questions),
                 market,
                 model_direction="neutral",
                 model_confidence=0.0,
@@ -450,7 +460,14 @@ class ResearchPrewarmTask:
         due_set = {ticker for ticker in due_tickers if ticker in by_ticker}
         if not due_set:
             return markets
-        due_markets = [by_ticker[ticker] for ticker in due_tickers if ticker in by_ticker]
+        due_order = {ticker: index for index, ticker in enumerate(due_tickers)}
+        due_markets = sorted(
+            [by_ticker[ticker] for ticker in due_tickers if ticker in by_ticker],
+            key=lambda market: (
+                research_market_priority_key(market),
+                due_order[str(getattr(market, "ticker", "") or "")],
+            ),
+        )
         rest = [
             market
             for market in markets
@@ -484,6 +501,8 @@ class ResearchPrewarmTask:
         self,
         ticker: str,
         market: Any | None = None,
+        *,
+        bypass_persisted_cooldown: bool = False,
     ) -> ResearchPrewarmResult | None:
         try:
             snapshot = await self.store.get_research_task_snapshot(ticker)
@@ -515,6 +534,11 @@ class ResearchPrewarmTask:
                 attempted=False,
                 skip_reason=snapshot.terminal_reason or snapshot.state,
             )
+        if bypass_persisted_cooldown or (
+            market is not None
+            and bool(getattr(market, "_research_prewarm_bypass_cooldown", False))
+        ):
+            return None
         cooldown_until = _parse_utc_ts(snapshot.cooldown_until_ts)
         updated_at = _parse_utc_ts(snapshot.updated_ts)
         repaired_immediate_retry = (
@@ -536,15 +560,6 @@ class ResearchPrewarmTask:
                 or configured_cooldown_until > cooldown_until
             ):
                 cooldown_until = configured_cooldown_until
-        if (
-            snapshot.last_skip_reason == "official_data_pending"
-            and updated_at is not None
-        ):
-            official_pending_until = updated_at + timedelta(
-                seconds=RESEARCH_TASK_OFFICIAL_PENDING_MAX_BACKOFF_SECONDS
-            )
-            if cooldown_until is None or official_pending_until < cooldown_until:
-                cooldown_until = official_pending_until
         if cooldown_until is not None and cooldown_until > datetime.now(timezone.utc):
             return ResearchPrewarmResult(
                 market_ticker=ticker,
@@ -553,6 +568,20 @@ class ResearchPrewarmTask:
                 skip_reason="research_task_cooldown",
             )
         return None
+
+    async def _task_open_questions(self, ticker: str) -> tuple[str, ...]:
+        try:
+            snapshot = await self.store.get_research_task_snapshot(ticker)
+        except Exception as exc:
+            _log.warning(
+                "[RESEARCH_PREWARM] research task gap lookup failed ticker=%s: %s",
+                ticker,
+                exc,
+            )
+            return ()
+        if snapshot is None:
+            return ()
+        return tuple(snapshot.open_questions or ())
 
     async def _decision_grade_task_has_countercase(self, ticker: str) -> bool:
         try:
@@ -618,11 +647,15 @@ class ResearchPrewarmTask:
                     continue
 
 
-def _prewarm_news(market: Any) -> SimpleNamespace:
+def _prewarm_news(
+    market: Any,
+    open_questions: Iterable[str] = (),
+) -> SimpleNamespace:
     return SimpleNamespace(
         headline="",
         source="research_prewarm",
         url="",
+        research_open_questions=tuple(open_questions),
     )
 
 
