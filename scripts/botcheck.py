@@ -861,6 +861,11 @@ def print_research_gate_section(
         "REAL_WEB_RESEARCH_TIMEOUT_SECONDS",
         "12.0",
     )
+    search_circuit_mode, search_circuit_mode_source = _research_env_value(
+        repo_root,
+        "GENERIC_SEARCH_CIRCUIT_MODE",
+        "shadow",
+    )
     prewarm_enabled, prewarm_source = _research_env_value(
         repo_root,
         "ENABLE_RESEARCH_PREWARM_TASK",
@@ -886,6 +891,11 @@ def print_research_gate_section(
     print(f"mode       : {mode} ({mode_source})")
     print(f"max_queries: {max_queries} ({max_queries_source})")
     print(f"timeout_s  : {timeout} ({timeout_source})")
+    print(
+        "search_cb : "
+        f"{search_circuit_mode.strip().lower() or 'shadow'} "
+        f"({search_circuit_mode_source})"
+    )
     profile_path = Path("docs/governance/research-shadow.env.example")
     activation = evaluate_activation_profile(repo_root, profile_path)
     relative_profile = _relative_display_path(activation.profile_path, repo_root)

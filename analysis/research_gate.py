@@ -32,6 +32,7 @@ from zoneinfo import ZoneInfo
 from analysis.generic_search_circuit import (
     GenericSearchCircuit,
     GenericSearchCircuitEvent,
+    generic_search_circuit_event_record,
 )
 from config import cfg
 from utils.logger import get_logger
@@ -53,18 +54,20 @@ _GENERIC_SEARCH_CIRCUIT: GenericSearchCircuit | None = None
 
 
 def _log_generic_search_circuit_event(event: GenericSearchCircuitEvent) -> None:
-    log_method = log.warning if event.kind in {"open", "would_open"} else log.info
-    log_method(
-        "generic_search_circuit kind=%s mode=%s state=%s generation=%d "
-        "failure_classes=%s cooldown_seconds=%.3f remaining_cooldown_seconds=%.3f",
-        event.kind,
-        event.mode,
-        event.state,
-        event.generation,
-        ",".join(event.failure_classes),
-        event.cooldown_seconds,
-        event.remaining_cooldown_seconds,
-    )
+    log.info("%s", generic_search_circuit_event_record(event))
+    if event.kind in {"open", "would_open"}:
+        log.warning(
+            "generic_search_circuit kind=%s mode=%s state=%s generation=%d "
+            "failure_classes=%s cooldown_seconds=%.3f "
+            "remaining_cooldown_seconds=%.3f",
+            event.kind,
+            event.mode,
+            event.state,
+            event.generation,
+            ",".join(event.failure_classes),
+            event.cooldown_seconds,
+            event.remaining_cooldown_seconds,
+        )
 
 
 def _get_generic_search_circuit() -> GenericSearchCircuit:
@@ -72,7 +75,7 @@ def _get_generic_search_circuit() -> GenericSearchCircuit:
     if _GENERIC_SEARCH_CIRCUIT is None:
         _GENERIC_SEARCH_CIRCUIT = GenericSearchCircuit(
             mode=cfg.generic_search_circuit_mode,
-            event_sink=_log_generic_search_circuit_event,
+            telemetry_sink=_log_generic_search_circuit_event,
         )
     return _GENERIC_SEARCH_CIRCUIT
 

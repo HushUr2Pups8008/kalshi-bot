@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import json
 import logging
+import os
+import re
 import socket
 import time
 import urllib.error
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Literal, TypeVar
 
 
@@ -16,6 +20,11 @@ CircuitState = Literal["closed", "open", "half_open"]
 T = TypeVar("T")
 
 _LOGGER = logging.getLogger(__name__)
+GENERIC_SEARCH_CIRCUIT_LOG_PREFIX = "[GENERIC_SEARCH_CIRCUIT] "
+GENERIC_SEARCH_CIRCUIT_SCHEMA_VERSION = 1
+_SAFE_FAILURE_CLASS_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_.]*(?::(?:[A-Za-z_][A-Za-z0-9_.]*|\d{3}))?$"
+)
 
 
 @dataclass(frozen=True)
@@ -27,6 +36,14 @@ class GenericSearchCircuitEvent:
     failure_classes: tuple[str, ...]
     cooldown_seconds: float
     remaining_cooldown_seconds: float
+    total_attempts: int
+    double_availability_failures: int
+    open_transitions: int
+    would_open_transitions: int
+    blocked_calls: int
+    would_block_calls: int
+    probe_successes: int
+    probe_failures: int
 
 
 @dataclass(frozen=True)
@@ -48,6 +65,47 @@ class GenericSearchCircuitSnapshot:
 
 class GenericSearchUnavailable(RuntimeError):
     pass
+
+
+def generic_search_circuit_event_record(
+    event: GenericSearchCircuitEvent,
+    *,
+    observed_at: datetime | None = None,
+    pid: int | None = None,
+) -> str:
+    timestamp = observed_at or datetime.now(timezone.utc)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    payload = {
+        "schema_version": GENERIC_SEARCH_CIRCUIT_SCHEMA_VERSION,
+        "observed_at": timestamp.astimezone(timezone.utc).isoformat(),
+        "pid": os.getpid() if pid is None else pid,
+        "event_kind": event.kind,
+        "mode": event.mode,
+        "state": event.state,
+        "generation": event.generation,
+        "failure_classes": [
+            value if _SAFE_FAILURE_CLASS_RE.fullmatch(value) else "UnknownFailure"
+            for value in event.failure_classes
+        ],
+        "cooldown_seconds": event.cooldown_seconds,
+        "remaining_cooldown_seconds": event.remaining_cooldown_seconds,
+        "counters": {
+            "total_attempts": event.total_attempts,
+            "double_availability_failures": event.double_availability_failures,
+            "open_transitions": event.open_transitions,
+            "would_open_transitions": event.would_open_transitions,
+            "blocked_calls": event.blocked_calls,
+            "would_block_calls": event.would_block_calls,
+            "probe_successes": event.probe_successes,
+            "probe_failures": event.probe_failures,
+        },
+    }
+    return GENERIC_SEARCH_CIRCUIT_LOG_PREFIX + json.dumps(
+        payload,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 _NETWORK_ERRNOS = frozenset(
@@ -94,11 +152,13 @@ class GenericSearchCircuit:
         cooldown_seconds: float = 120.0,
         clock: Callable[[], float] = time.monotonic,
         event_sink: Callable[[GenericSearchCircuitEvent], None] | None = None,
+        telemetry_sink: Callable[[GenericSearchCircuitEvent], None] | None = None,
     ) -> None:
         self._mode = mode
         self._cooldown_seconds = cooldown_seconds
         self._clock = clock
         self._event_sink = event_sink
+        self._telemetry_sink = telemetry_sink
         self._lock = asyncio.Lock()
         self._state: CircuitState = "closed"
         self._generation = 0
@@ -124,9 +184,11 @@ class GenericSearchCircuit:
             try:
                 result = await primary()
             except Exception as primary_exc:
+                await self._emit_provider_error(primary_exc)
                 try:
                     result = await fallback()
                 except Exception as fallback_exc:
+                    await self._emit_provider_error(fallback_exc)
                     failure_classes = (
                         _failure_class(primary_exc),
                         _failure_class(fallback_exc),
@@ -143,13 +205,16 @@ class GenericSearchCircuit:
                         self._emit_event(event)
                         raise
 
-                    event = await self._record_double_availability_failure(
+                    event, double_failure_event = (
+                        await self._record_double_availability_failure(
                         admission_generation,
                         owner_token,
                         can_open,
                         failure_classes,
                     )
+                    )
                     self._emit_event(event)
+                    self._emit_telemetry_event(double_failure_event)
                     diagnostic = ", ".join(failure_classes)
                     raise GenericSearchUnavailable(
                         f"generic search unavailable ({diagnostic})"
@@ -196,6 +261,7 @@ class GenericSearchCircuit:
 
     async def _admit(self) -> tuple[int, object | None, bool]:
         event: GenericSearchCircuitEvent | None = None
+        attempt_event: GenericSearchCircuitEvent
         owner_token: object | None = None
         can_open = False
         blocked = False
@@ -220,7 +286,16 @@ class GenericSearchCircuit:
                     )
             else:
                 blocked, event = self._record_block_locked(0.0)
+            attempt_event = self._event_locked(
+                kind="attempt",
+                failure_classes=(),
+                remaining_cooldown_seconds=max(
+                    0.0,
+                    self._open_until - self._clock(),
+                ),
+            )
 
+        self._emit_telemetry_event(attempt_event)
         self._emit_event(event)
         if blocked:
             raise GenericSearchUnavailable("generic search circuit unavailable")
@@ -249,12 +324,16 @@ class GenericSearchCircuit:
         owner_token: object | None,
         can_open: bool,
         failure_classes: tuple[str, ...],
-    ) -> GenericSearchCircuitEvent | None:
+    ) -> tuple[GenericSearchCircuitEvent | None, GenericSearchCircuitEvent]:
         async with self._lock:
             self._double_availability_failures += 1
             if self._mode == "off":
                 self._last_failure_classes = failure_classes
-                return None
+                return None, self._event_locked(
+                    kind="double_availability_failure",
+                    failure_classes=failure_classes,
+                    remaining_cooldown_seconds=0.0,
+                )
 
             owns_half_open = self._owns_half_open_locked(
                 admission_generation,
@@ -267,7 +346,14 @@ class GenericSearchCircuit:
                 and self._generation == admission_generation
             )
             if not (owns_half_open or owns_closed_generation):
-                return None
+                return None, self._event_locked(
+                    kind="double_availability_failure",
+                    failure_classes=failure_classes,
+                    remaining_cooldown_seconds=max(
+                        0.0,
+                        self._open_until - self._clock(),
+                    ),
+                )
 
             if owns_half_open:
                 self._probe_failures += 1
@@ -282,10 +368,27 @@ class GenericSearchCircuit:
             else:
                 self._would_open_transitions += 1
                 kind = "would_open"
-            return self._event_locked(
+            transition_event = self._event_locked(
                 kind=kind,
                 remaining_cooldown_seconds=self._cooldown_seconds,
             )
+            return transition_event, self._event_locked(
+                kind="double_availability_failure",
+                failure_classes=failure_classes,
+                remaining_cooldown_seconds=self._cooldown_seconds,
+            )
+
+    async def _emit_provider_error(self, exc: BaseException) -> None:
+        async with self._lock:
+            event = self._event_locked(
+                kind="provider_error",
+                failure_classes=(_failure_class(exc),),
+                remaining_cooldown_seconds=max(
+                    0.0,
+                    self._open_until - self._clock(),
+                ),
+            )
+        self._emit_telemetry_event(event)
 
     async def _finish_owner_success(
         self,
@@ -372,13 +475,33 @@ class GenericSearchCircuit:
             ),
             cooldown_seconds=self._cooldown_seconds,
             remaining_cooldown_seconds=remaining_cooldown_seconds,
+            total_attempts=self._total_attempts,
+            double_availability_failures=self._double_availability_failures,
+            open_transitions=self._open_transitions,
+            would_open_transitions=self._would_open_transitions,
+            blocked_calls=self._blocked_calls,
+            would_block_calls=self._would_block_calls,
+            probe_successes=self._probe_successes,
+            probe_failures=self._probe_failures,
         )
 
     def _emit_event(self, event: GenericSearchCircuitEvent | None) -> None:
-        if event is None or self._event_sink is None:
+        self._emit_to_sink(self._event_sink, event)
+        if self._telemetry_sink is not self._event_sink:
+            self._emit_to_sink(self._telemetry_sink, event)
+
+    def _emit_telemetry_event(self, event: GenericSearchCircuitEvent | None) -> None:
+        self._emit_to_sink(self._telemetry_sink, event)
+
+    @staticmethod
+    def _emit_to_sink(
+        sink: Callable[[GenericSearchCircuitEvent], None] | None,
+        event: GenericSearchCircuitEvent | None,
+    ) -> None:
+        if event is None or sink is None:
             return
         try:
-            self._event_sink(event)
+            sink(event)
         except BaseException as exc:
             _LOGGER.warning(
                 "generic search circuit event sink failed (%s)",
