@@ -4675,8 +4675,8 @@ async def test_structured_nws_high_temp_metric_prevents_insufficient_corrob_doss
     )
 
     assert verdict.status == ResearchStatus.UNTRADEABLE
-    assert verdict.skip_reason == "no_edge"
-    assert verdict.force_side == "yes"
+    assert verdict.skip_reason == "non_actionable_market_price"
+    assert verdict.force_side is None
     assert verdict.estimated_probability == pytest.approx(0.95)
     high_temp = [
         item
@@ -6178,6 +6178,274 @@ def test_inconsistent_research_reason_continues_researching():
     assert verdict.force_side is None
 
 
+def test_decision_grade_selects_supported_underdog_edge_across_both_sides():
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Official bill status",
+            source_url="https://congress.gov/bill/status",
+            title="Bill has not reached a Senate vote",
+            snippet="The official record does not yet show a Senate vote.",
+            claim_type="official_resolution",
+            supports_direction="no",
+            supports_confidence=0.6,
+            retrieved_at=fresh,
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Congressional reporting",
+            source_url="https://example.com/senate-status",
+            title="Senate vote remains possible before the deadline",
+            snippet="The measure has not been scheduled, but time remains before the deadline.",
+            claim_type="disconfirming",
+            supports_direction="no",
+            supports_confidence=0.6,
+            retrieved_at=fresh,
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Floor-watch reporting",
+            source_url="https://example.net/senate-possibility",
+            title="A vote remains possible before the deadline",
+            snippet="Leadership could still schedule a qualifying vote before the deadline.",
+            claim_type="supporting",
+            supports_direction="yes",
+            supports_confidence=0.8,
+            retrieved_at=fresh,
+        ),
+    ]
+
+    verdict = decide_research_verdict(
+        evidence=evidence,
+        model_direction="no",
+        model_confidence=0.95,
+        model_reason="Official status favors NO; estimated probability is 0.19.",
+        estimated_probability_yes=0.19,
+        yes_ask=0.04,
+        no_ask=0.97,
+        live_mode=False,
+        queries=[
+            ResearchQuery(
+                "Senate vote scheduling counter evidence",
+                "disconfirming",
+                "reputable_secondary",
+            )
+        ],
+        require_decision_grade=True,
+        counterclaims=("The model-side NO case should not survive a YES flip.",),
+        open_questions=("What would strengthen the model-side NO case?",),
+    )
+
+    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
+    assert verdict.force_side == "yes"
+    assert verdict.market_price == pytest.approx(0.04)
+    assert verdict.estimated_edge == pytest.approx(0.14)
+    assert verdict.confidence == pytest.approx(0.8)
+    assert all("model-side NO case" not in claim for claim in verdict.counterclaims)
+    assert verdict.open_questions != ("What would strengthen the model-side NO case?",)
+
+
+def test_decision_grade_two_sided_edge_still_requires_selected_side_support():
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Official bill status",
+            source_url="https://congress.gov/bill/status",
+            title="Bill has not reached a Senate vote",
+            snippet="The official record does not yet show a Senate vote.",
+            claim_type="official_resolution",
+            supports_direction="no",
+            supports_confidence=0.8,
+            retrieved_at=fresh,
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Congressional reporting",
+            source_url="https://example.com/senate-status",
+            title="No Senate vote is scheduled",
+            snippet="Reporting confirms that no vote is currently scheduled.",
+            claim_type="disconfirming",
+            supports_direction="no",
+            supports_confidence=0.6,
+            retrieved_at=fresh,
+        ),
+    ]
+
+    verdict = decide_research_verdict(
+        evidence=evidence,
+        queries=[
+            ResearchQuery(
+                "Senate vote counter evidence",
+                "disconfirming",
+                "reputable_secondary",
+            )
+        ],
+        model_direction="no",
+        model_confidence=0.8,
+        model_reason="Official status favors NO; estimated probability is 0.19.",
+        estimated_probability_yes=0.19,
+        yes_ask=0.04,
+        no_ask=0.97,
+        live_mode=False,
+        require_decision_grade=True,
+    )
+
+    assert verdict.status == ResearchStatus.UNTRADEABLE
+    assert verdict.skip_reason == "no_edge"
+    assert verdict.force_side == "no"
+
+
+def test_decision_grade_two_sided_edge_rejects_stale_opposite_side_support():
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    stale = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat().replace(
+        "+00:00", "Z"
+    )
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Official bill status",
+            source_url="https://congress.gov/bill/status",
+            title="Bill has not reached a Senate vote",
+            snippet="The official record does not yet show a Senate vote.",
+            claim_type="official_resolution",
+            supports_direction="no",
+            supports_confidence=0.8,
+            retrieved_at=fresh,
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Current congressional reporting",
+            source_url="https://example.com/current-senate-status",
+            title="No Senate vote is scheduled",
+            snippet="Current reporting confirms that no vote is scheduled.",
+            claim_type="disconfirming",
+            supports_direction="no",
+            supports_confidence=0.7,
+            retrieved_at=fresh,
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Stale floor-watch reporting",
+            source_url="https://example.net/stale-senate-possibility",
+            title="A vote once appeared possible",
+            snippet="Old reporting said leadership could schedule a vote.",
+            claim_type="supporting",
+            supports_direction="yes",
+            supports_confidence=0.9,
+            retrieved_at=stale,
+        ),
+    ]
+
+    verdict = decide_research_verdict(
+        evidence=evidence,
+        queries=_decision_grade_queries(),
+        model_direction="no",
+        model_confidence=0.8,
+        model_reason="Current official status favors NO.",
+        estimated_probability_yes=0.19,
+        yes_ask=0.04,
+        no_ask=0.97,
+        live_mode=False,
+        require_decision_grade=True,
+    )
+
+    assert verdict.status == ResearchStatus.UNTRADEABLE
+    assert verdict.skip_reason == "no_edge"
+    assert verdict.force_side == "no"
+
+
+def test_decision_grade_can_select_supported_opposite_side_when_model_price_missing():
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        *_decision_grade_evidence(),
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Official floor schedule",
+            source_url="https://senate.gov/floor/schedule",
+            title="Qualifying vote scheduled",
+            snippet="The official floor schedule lists the qualifying vote.",
+            claim_type="official_resolution",
+            supports_direction="yes",
+            supports_confidence=0.85,
+            retrieved_at=fresh,
+        ),
+    ]
+
+    verdict = decide_research_verdict(
+        evidence=evidence,
+        queries=_decision_grade_queries(),
+        model_direction="no",
+        model_confidence=0.9,
+        model_reason="The original model case favored NO.",
+        estimated_probability_yes=0.19,
+        yes_ask=0.04,
+        no_ask=None,
+        live_mode=False,
+        require_decision_grade=True,
+    )
+
+    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
+    assert verdict.force_side == "yes"
+    assert verdict.market_price == pytest.approx(0.04)
+
+
+def test_live_two_sided_edge_uses_safe_side_when_stronger_edge_is_in_tail_band():
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Official NO source",
+            source_url="https://agency.gov/no",
+            title="Official evidence supports NO",
+            snippet="A separate current official record supports NO.",
+            claim_type="official_resolution",
+            supports_direction="no",
+            supports_confidence=0.8,
+            retrieved_at=fresh,
+        ),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Independent countercase",
+            source_url="https://example.com/yes-countercase",
+            title="Countercase says the official record favors YES",
+            snippet="Independent reporting says the official record supports YES.",
+            claim_type="disconfirming",
+            supports_direction="yes",
+            supports_confidence=0.6,
+            retrieved_at=fresh,
+        ),
+    ]
+
+    verdict = decide_research_verdict(
+        evidence=evidence,
+        queries=[
+            ResearchQuery(
+                "independent countercase",
+                "disconfirming",
+                "reputable_secondary",
+            )
+        ],
+        model_direction="yes",
+        model_confidence=0.9,
+        model_reason="The original model case favored YES.",
+        estimated_probability_yes=0.55,
+        yes_ask=0.02,
+        no_ask=0.30,
+        live_mode=True,
+        require_decision_grade=True,
+    )
+
+    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE, (
+        verdict.skip_reason,
+        verdict.summary,
+    )
+    assert verdict.force_side == "no"
+    assert verdict.market_price == pytest.approx(0.30)
+    assert verdict.estimated_edge == pytest.approx(0.14)
+
+
 def test_single_resolution_source_requires_independent_corroboration():
     verdict = decide_research_verdict(
         evidence=[
@@ -7502,6 +7770,38 @@ def test_decision_grade_fails_without_market_price():
 
     assert verdict.status == ResearchStatus.NEEDS_PRICE_EDGE
     assert verdict.skip_reason == "missing_market_price"
+
+
+@pytest.mark.parametrize(
+    ("yes_ask", "expected_status", "expected_reason"),
+    [
+        (0.0, ResearchStatus.UNTRADEABLE, "non_actionable_market_price"),
+        (1.0, ResearchStatus.UNTRADEABLE, "non_actionable_market_price"),
+        ("malformed", ResearchStatus.NEEDS_PRICE_EDGE, "missing_market_price"),
+    ],
+)
+def test_decision_grade_rejects_non_actionable_model_price_after_two_side_scan(
+    yes_ask,
+    expected_status,
+    expected_reason,
+):
+    verdict = decide_research_verdict(
+        evidence=_decision_grade_evidence(),
+        queries=_decision_grade_queries(),
+        model_direction="yes",
+        model_confidence=0.82,
+        model_reason="Current settlement evidence favors YES.",
+        estimated_probability_yes=0.68,
+        yes_ask=yes_ask,
+        no_ask=0.47,
+        live_mode=False,
+        require_decision_grade=True,
+    )
+
+    assert verdict.status == expected_status
+    assert verdict.skip_reason == expected_reason
+    assert verdict.force_side is None
+    assert verdict.market_price is None
 
 
 def test_decision_grade_repairs_generic_summary_from_structured_evidence():
