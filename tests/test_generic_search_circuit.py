@@ -10,12 +10,24 @@ from typing import Any
 import pytest
 
 import config as config_module
+from analysis import research_gate as research_gate_module
 from analysis.generic_search_circuit import (
     GenericSearchCircuit,
     GenericSearchCircuitEvent,
     GenericSearchUnavailable,
     is_provider_availability_failure,
 )
+from analysis.research_gate import ResearchEvidence, ResearchQuery, default_search_provider
+
+
+@pytest.fixture(autouse=True)
+def _reset_generic_search_circuit() -> None:
+    research_gate_module._reset_generic_search_circuit_for_tests()
+    yield
+    research_gate_module._reset_generic_search_circuit_for_tests()
+
+
+_OPEN_CIRCUIT_FROM_PREVIOUS_TEST: GenericSearchCircuit | None = None
 
 
 def _valid_rsa_pem() -> str:
@@ -69,6 +81,237 @@ def test_generic_search_circuit_mode_rejects_other_or_case_mutated_values(
         "GENERIC_SEARCH_CIRCUIT_MODE must be one of off|shadow|enforce"
         in capsys.readouterr().err
     )
+
+
+def _generic_evidence(query: ResearchQuery, *, source_name: str) -> ResearchEvidence:
+    return ResearchEvidence(
+        source_class=query.source_class,
+        source_name=source_name,
+        source_url=f"https://example.com/{source_name.lower()}",
+        title=f"{source_name} result",
+        snippet="Current result.",
+        claim_type=query.query_intent,
+    )
+
+
+@pytest.mark.asyncio
+async def test_generic_search_runner_returns_rss_success_without_fallback(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(research_gate_module.cfg, "generic_search_circuit_mode", "enforce")
+    query = ResearchQuery("private query", "supporting", "reputable_secondary")
+    expected = [_generic_evidence(query, source_name="RSS")]
+    calls: list[str] = []
+
+    def rss_search(_query: ResearchQuery) -> list[ResearchEvidence]:
+        calls.append("rss")
+        return expected
+
+    def fallback_search(_query: ResearchQuery) -> list[ResearchEvidence]:
+        calls.append("ddg")
+        raise AssertionError("fallback must not run after RSS success")
+
+    monkeypatch.setattr(research_gate_module, "_rss_search", rss_search)
+    monkeypatch.setattr(
+        research_gate_module,
+        "_duckduckgo_lite_search",
+        fallback_search,
+    )
+
+    assert await research_gate_module._run_generic_search(query) == expected
+    assert calls == ["rss"]
+    assert research_gate_module._get_generic_search_circuit().snapshot().state == "closed"
+
+
+@pytest.mark.asyncio
+async def test_generic_search_runner_opens_after_two_availability_failures(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(research_gate_module.cfg, "generic_search_circuit_mode", "enforce")
+    query = ResearchQuery("private query", "supporting", "reputable_secondary")
+    calls: list[str] = []
+
+    def rss_search(_query: ResearchQuery) -> list[ResearchEvidence]:
+        calls.append("rss")
+        raise TimeoutError("private RSS failure")
+
+    def fallback_search(_query: ResearchQuery) -> list[ResearchEvidence]:
+        calls.append("ddg")
+        raise ConnectionError("private DDG failure")
+
+    monkeypatch.setattr(research_gate_module, "_rss_search", rss_search)
+    monkeypatch.setattr(
+        research_gate_module,
+        "_duckduckgo_lite_search",
+        fallback_search,
+    )
+
+    with pytest.raises(GenericSearchUnavailable):
+        await research_gate_module._run_generic_search(query)
+
+    snapshot = research_gate_module._get_generic_search_circuit().snapshot()
+    assert calls == ["rss", "ddg"]
+    assert snapshot.state == "open"
+    assert snapshot.generation == 1
+    assert snapshot.double_availability_failures == 1
+
+
+@pytest.mark.asyncio
+async def test_generic_search_runner_parser_failure_uses_fallback_without_mutation(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(research_gate_module.cfg, "generic_search_circuit_mode", "enforce")
+    query = ResearchQuery("private query", "supporting", "reputable_secondary")
+    expected = [_generic_evidence(query, source_name="DDG")]
+    calls: list[str] = []
+
+    def rss_search(_query: ResearchQuery) -> list[ResearchEvidence]:
+        calls.append("rss")
+        raise ET.ParseError("private response body")
+
+    def fallback_search(_query: ResearchQuery) -> list[ResearchEvidence]:
+        calls.append("ddg")
+        return expected
+
+    monkeypatch.setattr(research_gate_module, "_rss_search", rss_search)
+    monkeypatch.setattr(
+        research_gate_module,
+        "_duckduckgo_lite_search",
+        fallback_search,
+    )
+
+    assert await research_gate_module._run_generic_search(query) == expected
+    snapshot = research_gate_module._get_generic_search_circuit().snapshot()
+    assert calls == ["rss", "ddg"]
+    assert snapshot.state == "closed"
+    assert snapshot.generation == 0
+    assert snapshot.double_availability_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_structured_evidence_returns_while_generic_circuit_is_open(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(research_gate_module.cfg, "generic_search_circuit_mode", "enforce")
+    query = ResearchQuery("private query", "supporting", "reputable_secondary")
+    structured = [_generic_evidence(query, source_name="Official")]
+
+    monkeypatch.setattr(
+        research_gate_module,
+        "_rss_search",
+        lambda _query: (_ for _ in ()).throw(TimeoutError("RSS unavailable")),
+    )
+    monkeypatch.setattr(
+        research_gate_module,
+        "_duckduckgo_lite_search",
+        lambda _query: (_ for _ in ()).throw(ConnectionError("DDG unavailable")),
+    )
+    with pytest.raises(GenericSearchUnavailable):
+        await research_gate_module._run_generic_search(query)
+
+    monkeypatch.setattr(
+        research_gate_module,
+        "_truth_social_event_search",
+        lambda _query: structured,
+    )
+
+    assert await default_search_provider(query) == structured
+    assert research_gate_module._get_generic_search_circuit().snapshot().state == "open"
+
+
+@pytest.mark.asyncio
+async def test_autouse_reset_fixture_leaves_an_open_generation_for_next_test(
+    monkeypatch,
+) -> None:
+    global _OPEN_CIRCUIT_FROM_PREVIOUS_TEST
+    monkeypatch.setattr(research_gate_module.cfg, "generic_search_circuit_mode", "enforce")
+    first = research_gate_module._get_generic_search_circuit()
+
+    async def fail(exc: Exception) -> None:
+        raise exc
+
+    with pytest.raises(GenericSearchUnavailable):
+        await first.run(
+            lambda: fail(TimeoutError("RSS unavailable")),
+            lambda: fail(ConnectionError("DDG unavailable")),
+        )
+    assert first.snapshot().generation == 1
+    _OPEN_CIRCUIT_FROM_PREVIOUS_TEST = first
+
+
+def test_autouse_reset_fixture_discards_open_generation_from_previous_test() -> None:
+    assert _OPEN_CIRCUIT_FROM_PREVIOUS_TEST is not None
+    second = research_gate_module._get_generic_search_circuit()
+    assert second is not _OPEN_CIRCUIT_FROM_PREVIOUS_TEST
+    assert second.snapshot().state == "closed"
+    assert second.snapshot().generation == 0
+
+
+@pytest.mark.asyncio
+async def test_repository_circuit_event_logging_is_sanitized(monkeypatch) -> None:
+    monkeypatch.setattr(research_gate_module.cfg, "generic_search_circuit_mode", "enforce")
+    secret_query = "private query token"
+    secret_rss = "private RSS response"
+    secret_ddg = "https://private.example/ddg"
+    captured: list[tuple[str, tuple[Any, ...]]] = []
+
+    monkeypatch.setattr(
+        research_gate_module.log,
+        "warning",
+        lambda message, *args: captured.append((message, args)),
+    )
+    monkeypatch.setattr(
+        research_gate_module,
+        "_rss_search",
+        lambda _query: (_ for _ in ()).throw(TimeoutError(secret_rss)),
+    )
+    monkeypatch.setattr(
+        research_gate_module,
+        "_duckduckgo_lite_search",
+        lambda _query: (_ for _ in ()).throw(ConnectionError(secret_ddg)),
+    )
+
+    with pytest.raises(GenericSearchUnavailable):
+        await research_gate_module._run_generic_search(
+            ResearchQuery(secret_query, "supporting", "reputable_secondary")
+        )
+
+    assert len(captured) == 1
+    message, args = captured[0]
+    assert message == (
+        "generic_search_circuit kind=%s mode=%s state=%s generation=%d "
+        "failure_classes=%s cooldown_seconds=%.3f remaining_cooldown_seconds=%.3f"
+    )
+    assert args[:5] == ("open", "enforce", "open", 1, "TimeoutError,ConnectionError")
+    rendered = f"{message} {args}"
+    assert secret_query not in rendered
+    assert secret_rss not in rendered
+    assert secret_ddg not in rendered
+
+
+@pytest.mark.asyncio
+async def test_repository_logger_failure_cannot_change_circuit_result(monkeypatch) -> None:
+    monkeypatch.setattr(research_gate_module.cfg, "generic_search_circuit_mode", "enforce")
+    query = ResearchQuery("private query", "supporting", "reputable_secondary")
+
+    def fail_logging(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("logger unavailable")
+
+    monkeypatch.setattr(research_gate_module.log, "warning", fail_logging)
+    monkeypatch.setattr(
+        research_gate_module,
+        "_rss_search",
+        lambda _query: (_ for _ in ()).throw(TimeoutError("RSS unavailable")),
+    )
+    monkeypatch.setattr(
+        research_gate_module,
+        "_duckduckgo_lite_search",
+        lambda _query: (_ for _ in ()).throw(ConnectionError("DDG unavailable")),
+    )
+
+    with pytest.raises(GenericSearchUnavailable):
+        await research_gate_module._run_generic_search(query)
+    assert research_gate_module._get_generic_search_circuit().snapshot().state == "open"
 
 
 def _http_error(status: int) -> urllib.error.HTTPError:

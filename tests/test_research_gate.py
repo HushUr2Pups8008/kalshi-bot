@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from analysis.generic_search_circuit import GenericSearchUnavailable
 from analysis.research_gate import (
     ResearchEvidence,
     ResearchQuery,
@@ -113,6 +114,13 @@ def _block_unmocked_research_http(monkeypatch):
         raise AssertionError("research-gate tests must inject search_provider; real HTTP is blocked")
 
     monkeypatch.setattr(urllib.request, "urlopen", fail_urlopen)
+
+
+@pytest.fixture(autouse=True)
+def _reset_generic_search_circuit() -> None:
+    research_gate_module._reset_generic_search_circuit_for_tests()
+    yield
+    research_gate_module._reset_generic_search_circuit_for_tests()
 
 
 def test_crude_oil_query_pack_targets_resolution_and_contradictions():
@@ -10346,7 +10354,7 @@ async def test_strict_research_gate_skips_adjudication_without_actionable_price(
 @pytest.mark.asyncio
 async def test_run_research_gate_reports_provider_exception():
     async def failing_search(_query):
-        raise RuntimeError("rss unavailable")
+        raise GenericSearchUnavailable("generic search circuit unavailable")
 
     verdict = await run_research_gate(
         SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
