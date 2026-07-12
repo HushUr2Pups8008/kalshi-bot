@@ -14,6 +14,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 import scripts.botcheck as botcheck
 from scripts.botcheck import (
     BotSession,
@@ -764,6 +766,134 @@ def test_summarize_research_dossiers_counts_cache_readiness(tmp_path):
     assert stats.fresh_evidence_rows_24h == 2
 
 
+def _write_temporal_live_cache_db(tmp_path, *, published_at: str) -> None:
+    db_path = tmp_path / "data" / "evidence_store.db"
+    db_path.parent.mkdir()
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_research_run_id TEXT,
+                last_contract_fingerprint TEXT,
+                last_researched_ts TEXT NOT NULL,
+                last_verdict_status TEXT NOT NULL,
+                last_skip_reason TEXT,
+                last_force_side TEXT,
+                last_estimated_probability REAL,
+                last_confidence REAL,
+                last_market_price REAL,
+                last_estimated_edge REAL,
+                last_decision_grade_status TEXT
+            );
+            CREATE TABLE research_runs (
+                research_run_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                verdict_status TEXT NOT NULL,
+                force_side TEXT,
+                estimated_probability REAL,
+                confidence REAL,
+                market_price REAL,
+                estimated_edge REAL
+            );
+            CREATE TABLE research_evidence (
+                evidence_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                research_run_id TEXT NOT NULL,
+                contract_fingerprint TEXT,
+                source_class TEXT NOT NULL,
+                source_name TEXT,
+                source_url TEXT,
+                title TEXT,
+                snippet TEXT,
+                claim_type TEXT,
+                supports_direction TEXT,
+                supports_confidence REAL,
+                metric_name TEXT,
+                published_at TEXT,
+                retrieved_at TEXT,
+                raw_payload_json TEXT,
+                inserted_at TEXT
+            );
+            INSERT INTO research_dossiers VALUES (
+                'KXHIGHNY-26MAY10-B80', 'run-temporal', 'contract-v1',
+                '2026-05-10T22:50:00+00:00', 'decision_grade_candidate', NULL,
+                'yes', 0.70, 0.80, 0.50, 0.19, 'decision_grade_candidate'
+            );
+            INSERT INTO research_runs VALUES (
+                'run-temporal', 'KXHIGHNY-26MAY10-B80',
+                'decision_grade_candidate', 'yes', 0.70, 0.80, 0.50, 0.19
+            );
+            """
+        )
+        conn.executemany(
+            """
+            INSERT INTO research_evidence (
+                evidence_id, market_ticker, research_run_id,
+                contract_fingerprint, source_class, source_name, source_url,
+                title, snippet, claim_type, supports_direction,
+                supports_confidence, metric_name, published_at, retrieved_at,
+                raw_payload_json, inserted_at
+            ) VALUES (
+                ?, 'KXHIGHNY-26MAY10-B80', 'run-temporal', 'contract-v1',
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                '2026-05-10T22:40:00+00:00', NULL,
+                '2026-05-10T22:40:00+00:00'
+            )
+            """,
+            (
+                (
+                    "ev-support",
+                    "resolution_source",
+                    "NWS",
+                    "https://weather.gov/climate",
+                    "Central Park daily high",
+                    "Official high supports YES.",
+                    "official_resolution",
+                    "yes",
+                    0.95,
+                    "nws_daily_high_temp_f",
+                    published_at,
+                ),
+                (
+                    "ev-counter",
+                    "reputable_secondary",
+                    "Archive",
+                    "https://archive.test/counter",
+                    "Countercheck",
+                    "No contrary official observation was found.",
+                    "disconfirming",
+                    "neutral",
+                    0.0,
+                    None,
+                    "2026-05-09",
+                ),
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("published_at", "expected_eligible"),
+    [
+        ("2026-05-10", False),
+        ("2026-05-09", True),
+    ],
+)
+def test_botcheck_live_cache_applies_nws_temporal_validation(
+    tmp_path,
+    published_at,
+    expected_eligible,
+):
+    _write_temporal_live_cache_db(tmp_path, published_at=published_at)
+
+    stats = summarize_research_dossiers(
+        tmp_path,
+        now=datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc),
+    )
+
+    assert (stats.live_cache_eligible_dossiers == 1) is expected_eligible
+
+
 def test_summarize_research_dossiers_rejects_same_side_countercase(tmp_path):
     db_path = tmp_path / "data" / "evidence_store.db"
     db_path.parent.mkdir()
@@ -1253,7 +1383,7 @@ def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
                 'yes',
                 0.8,
                 '2026-05-10T22:30:00+00:00',
-                '2026-05-10T12:40:00+00:00',
+                '2026-05-10T22:40:00+00:00',
                 '2026-05-10T22:40:00+00:00'
             ),
             (
@@ -1270,7 +1400,7 @@ def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
                 'neutral',
                 0.0,
                 '2026-05-10T22:31:00+00:00',
-                '2026-05-10T12:41:00+00:00',
+                '2026-05-10T22:41:00+00:00',
                 '2026-05-10T22:41:00+00:00'
             );
             """

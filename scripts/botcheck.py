@@ -40,6 +40,7 @@ from utils.research_prewarm_targets import (
     RESEARCH_PREWARM_EVENT_TYPES,
     record_targets_kalshi_research_prewarm,
 )
+from utils.research_evidence_quality import research_evidence_temporally_valid
 from scripts.research_activation_status import evaluate_activation_profile
 
 
@@ -413,6 +414,20 @@ def summarize_research_dossiers(
             direction_select = (
                 "supports_direction" if "supports_direction" in evidence_columns else "NULL"
             )
+            metric_name_select = (
+                "metric_name" if "metric_name" in evidence_columns else "NULL"
+            )
+            published_at_select = (
+                "published_at" if "published_at" in evidence_columns else "NULL"
+            )
+            retrieved_at_select = (
+                "retrieved_at" if "retrieved_at" in evidence_columns else "NULL"
+            )
+            raw_payload_select = (
+                "raw_payload_json"
+                if "raw_payload_json" in evidence_columns
+                else "NULL"
+            )
             has_counter_columns = {"claim_type", "supports_direction"} <= evidence_columns
             has_research_runs = _sqlite_table_exists(conn, "research_runs")
             for row in conn.execute(
@@ -424,6 +439,10 @@ def summarize_research_dossiers(
                     {fingerprint_select},
                     {claim_type_select} AS claim_type,
                     {direction_select} AS supports_direction,
+                    {metric_name_select} AS metric_name,
+                    {published_at_select} AS published_at,
+                    {retrieved_at_select} AS retrieved_at,
+                    {raw_payload_select} AS raw_payload_json,
                     {cache_evidence_ts_sql} AS ts
                 FROM research_evidence
                 """
@@ -432,6 +451,24 @@ def summarize_research_dossiers(
                 if evidence_ts is not None and evidence_ts >= fresh_since:
                     fresh_evidence_rows_24h += 1
                 if evidence_ts is not None and evidence_ts >= live_cache_since:
+                    try:
+                        raw_payload = json.loads(row["raw_payload_json"] or "{}")
+                    except (json.JSONDecodeError, TypeError):
+                        raw_payload = {}
+                    if not research_evidence_temporally_valid(
+                        {
+                            "metric_name": row["metric_name"],
+                            "published_at": row["published_at"],
+                            "retrieved_at": row["retrieved_at"],
+                            "available_at": (
+                                raw_payload.get("available_at")
+                                if isinstance(raw_payload, dict)
+                                else None
+                            ),
+                        },
+                        as_of=now,
+                    ):
+                        continue
                     ticker = str(row["market_ticker"] or "").strip()
                     fingerprint = str(row["contract_fingerprint"] or "").strip()
                     if ticker and fingerprint:

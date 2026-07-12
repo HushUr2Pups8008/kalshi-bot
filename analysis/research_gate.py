@@ -16,6 +16,8 @@ import json
 import math
 import os
 import re
+import threading
+import time
 import urllib.parse
 import urllib.request
 import uuid
@@ -23,7 +25,9 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
+from html.parser import HTMLParser
 from typing import Any, Awaitable, Callable, Iterable, Sequence
+from zoneinfo import ZoneInfo
 
 from utils.research_gaps import research_gap_query_intent, research_questions_for_skip
 from utils.research_evidence_quality import (
@@ -33,6 +37,7 @@ from utils.research_evidence_quality import (
     build_contract_relevance_spec,
     evidence_is_relevant_to_contract,
     has_reliable_research_source_path,
+    research_evidence_temporally_valid,
     research_source_key,
 )
 
@@ -83,6 +88,45 @@ class ResearchEvidence:
     contract_fingerprint: str | None = None
     aggregator_url: str | None = None
     available_at: str | None = None
+
+
+@dataclass(frozen=True)
+class GettyDistinctDateSpec:
+    target_count: int
+    start_date: date
+    end_date: date
+    cutoff_at: datetime
+
+
+@dataclass(frozen=True)
+class GettySearchSnapshot:
+    end_date: date
+    total_results: int
+    newest_asset_date: date | None
+    witness_asset_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class WhiteHouseActionCountSpec:
+    threshold: int
+    start_date: date
+    end_date: date
+    cutoff_at: datetime
+
+
+@dataclass(frozen=True)
+class WhiteHouseActionCard:
+    title: str
+    url: str
+    published_date: date
+
+
+_GETTY_SNAPSHOT_CACHE_TTL_SECONDS = 120.0
+_GETTY_SNAPSHOT_CACHE: dict[
+    tuple[date, date],
+    tuple[float, tuple[GettySearchSnapshot, ...]],
+] = {}
+_GETTY_SNAPSHOT_CACHE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -385,6 +429,121 @@ def _market_rules_text(market: Any) -> str:
     ))
 
 
+def _named_date(value: str) -> date | None:
+    cleaned = _clean(value).replace("Sept ", "Sep ")
+    for pattern in ("%b %d, %Y", "%B %d, %Y"):
+        try:
+            return datetime.strptime(cleaned, pattern).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _getty_distinct_date_spec_from_text(
+    text: str,
+) -> GettyDistinctDateSpec | None:
+    cleaned = _clean(text)
+    if not _query_mentions_getty_distinct_photo_days(cleaned):
+        return None
+    count_match = re.search(r"\bexactly\s+(\d+)\b", cleaned, re.I)
+    window_match = re.search(
+        r"\bbetween\s+([A-Z][a-z]{2,8}\s+\d{1,2},\s+20\d{2})\s+"
+        r"and\s+([A-Z][a-z]{2,8}\s+\d{1,2},\s+20\d{2})",
+        cleaned,
+        re.I,
+    )
+    cutoff_match = re.search(
+        r"\bcutoff\s+(20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2}))",
+        cleaned,
+        re.I,
+    )
+    if not count_match or not window_match or not cutoff_match:
+        return None
+    start_date = _named_date(window_match.group(1))
+    end_date = _named_date(window_match.group(2))
+    cutoff_at = _parse_timestamp(cutoff_match.group(1))
+    if start_date is None or end_date is None or cutoff_at is None:
+        return None
+    target_count = int(count_match.group(1))
+    window_days = (end_date - start_date).days + 1
+    if target_count < 0 or window_days < 1 or window_days > 14:
+        return None
+    return GettyDistinctDateSpec(target_count, start_date, end_date, cutoff_at)
+
+
+def _query_mentions_getty_distinct_photo_days(text: str) -> bool:
+    lower = _clean(text).lower()
+    return (
+        "kxtrumpphoto" in lower
+        or (
+            "getty images" in lower
+            and "editorial photo" in lower
+            and "distinct days" in lower
+            and "trump" in lower
+        )
+    )
+
+
+def _white_house_action_count_spec_from_text(
+    text: str,
+) -> WhiteHouseActionCountSpec | None:
+    cleaned = _clean(text)
+    if not _query_mentions_white_house_action_count(cleaned):
+        return None
+    threshold_match = re.search(
+        r"\bat least\s+(\d+)\s+presidential actions\b",
+        cleaned,
+        re.I,
+    )
+    window_match = re.search(
+        r"\bfrom\s+([A-Z][a-z]{2,8}\s+\d{1,2},\s+20\d{2})\s+"
+        r"through\s+([A-Z][a-z]{2,8}\s+\d{1,2},\s+20\d{2})",
+        cleaned,
+        re.I,
+    )
+    cutoff_match = re.search(
+        r"\bat\s+(\d{1,2}):(\d{2})\s*(AM|PM)\s+ET\s+on\s+"
+        r"([A-Z][a-z]{2,8}\s+\d{1,2},\s+20\d{2})",
+        cleaned,
+        re.I,
+    )
+    if not threshold_match or not window_match or not cutoff_match:
+        return None
+    start_date = _named_date(window_match.group(1))
+    end_date = _named_date(window_match.group(2))
+    cutoff_date = _named_date(cutoff_match.group(4))
+    if start_date is None or end_date is None or cutoff_date is None:
+        return None
+    hour = int(cutoff_match.group(1)) % 12
+    if cutoff_match.group(3).upper() == "PM":
+        hour += 12
+    cutoff_at = datetime(
+        cutoff_date.year,
+        cutoff_date.month,
+        cutoff_date.day,
+        hour,
+        int(cutoff_match.group(2)),
+        tzinfo=ZoneInfo("America/New_York"),
+    ).astimezone(timezone.utc)
+    threshold = int(threshold_match.group(1))
+    window_days = (end_date - start_date).days + 1
+    if threshold < 1 or window_days < 1 or window_days > 31:
+        return None
+    return WhiteHouseActionCountSpec(threshold, start_date, end_date, cutoff_at)
+
+
+def _query_mentions_white_house_action_count(text: str) -> bool:
+    lower = _clean(text).lower()
+    return (
+        "kxtrumpact" in lower
+        or (
+            "presidential actions" in lower
+            and "whitehouse.gov" in lower
+            and "at least" in lower
+        )
+    )
+
+
 def _query_mentions_trump_passport_image(text: str) -> bool:
     lower = _clean(text).lower()
     if "passport" not in lower or "trump" not in lower:
@@ -544,8 +703,28 @@ def build_research_queries(news: Any, market: Any) -> list[ResearchQuery]:
     rule_sources = _market_rules_text(market)
     combined = f"{title} {headline} {rules}"
     ticker = _clean(getattr(market, "ticker", ""))
+    close_time = _clean(getattr(market, "close_time", ""))
+    structured_text = _clean(f"{ticker} {combined} cutoff {close_time}")
+    getty_spec = _getty_distinct_date_spec_from_text(structured_text)
+    white_house_spec = _white_house_action_count_spec_from_text(structured_text)
 
     queries: list[ResearchQuery] = []
+    if getty_spec is not None:
+        queries.append(
+            ResearchQuery(
+                query=structured_text,
+                query_intent="official_resolution",
+                source_class="resolution_source",
+            )
+        )
+    if white_house_spec is not None:
+        queries.append(
+            ResearchQuery(
+                query=structured_text,
+                query_intent="official_resolution",
+                source_class="official_primary",
+            )
+        )
     for open_question in getattr(news, "research_open_questions", ()) or ():
         question = _clean(open_question)
         if not question:
@@ -574,20 +753,21 @@ def build_research_queries(news: Any, market: Any) -> list[ResearchQuery]:
                     source_class="resolution_source",
                 )
             )
-    for domain, hint_query in _official_source_hints(
-        combined,
-        _query_fragment(ticker, title) or title or ticker,
-    ):
-        queries.append(
-            ResearchQuery(
-                query=(
-                    f"site:{domain} {hint_query} "
-                    "official resolution current status"
-                ),
-                query_intent="official_resolution",
-                source_class="official_primary",
+    if getty_spec is None and white_house_spec is None:
+        for domain, hint_query in _official_source_hints(
+            combined,
+            _query_fragment(ticker, title) or title or ticker,
+        ):
+            queries.append(
+                ResearchQuery(
+                    query=(
+                        f"site:{domain} {hint_query} "
+                        "official resolution current status"
+                    ),
+                    query_intent="official_resolution",
+                    source_class="official_primary",
+                )
             )
-        )
     if (
         _query_mentions_sports_event_window(f"{ticker} {title} {rules}")
         or _query_mentions_market_data_event_window(f"{ticker} {title} {rules}")
@@ -1917,6 +2097,8 @@ def _is_fresh_decision_evidence(
     now: datetime | None = None,
 ) -> bool:
     now = now or datetime.now(timezone.utc)
+    if not research_evidence_temporally_valid(evidence, as_of=now):
+        return False
     max_age_seconds = _decision_evidence_max_age_seconds(evidence)
     if evidence.retrieved_at:
         parsed = _parse_timestamp(evidence.retrieved_at)
@@ -1995,6 +2177,24 @@ def _structured_indicator_signal(
             _market_text(market),
         )
     )
+    if _getty_distinct_date_spec_from_text(
+        f"{market_text} cutoff {_clean(getattr(market, 'close_time', ''))}"
+    ) is not None:
+        signal = _structured_count_signal(
+            evidence,
+            "getty_trump_distinct_photo_days",
+            "Getty distinct Trump-photo days",
+        )
+        if signal is not None:
+            return signal
+    if _white_house_action_count_spec_from_text(market_text) is not None:
+        signal = _structured_count_signal(
+            evidence,
+            "white_house_presidential_actions_count",
+            "White House presidential actions",
+        )
+        if signal is not None:
+            return signal
     weather_range = _weather_high_range_from_text(market_text)
     if weather_range is not None:
         weather_signal = _structured_weather_high_signal(evidence, weather_range)
@@ -2117,13 +2317,47 @@ def _independent_evidence_key(item: ResearchEvidence) -> str:
 
 _STRUCTURED_SIGNAL_METRICS = {
     "cpi_monthly_change_single_decimal",
+    "getty_trump_distinct_photo_days",
     "gdpnow_real_gdp_growth_saar",
     "nws_daily_high_temp_f",
+    "white_house_presidential_actions_count",
 }
 
 
 def _is_structured_signal_metric(item: ResearchEvidence) -> bool:
     return item.metric_name in _STRUCTURED_SIGNAL_METRICS
+
+
+def _structured_count_signal(
+    evidence: list[ResearchEvidence],
+    metric_name: str,
+    label: str,
+) -> dict[str, Any] | None:
+    candidates = [
+        item
+        for item in evidence
+        if item.metric_name == metric_name
+        and item.metric_value is not None
+        and item.supports_direction in {"yes", "no"}
+        and float(item.supports_confidence or 0.0) >= 0.8
+    ]
+    if not candidates:
+        return None
+    item = max(candidates, key=lambda candidate: float(candidate.supports_confidence))
+    direction = item.supports_direction
+    probability_yes = 0.98 if direction == "yes" else 0.02
+    return {
+        "direction": direction,
+        "estimated_probability_yes": probability_yes,
+        "confidence": float(item.supports_confidence),
+        "reason": _query_fragment(
+            f"Trade {direction.upper()} because settlement-aligned {label} "
+            f"evidence reports {item.metric_value:g}.",
+            item.snippet,
+            "Market edge still depends on executable price and counter-evidence.",
+            limit=700,
+        ),
+    }
 
 
 def _structured_gdpnow_signal(
@@ -2544,9 +2778,12 @@ _OFFICIAL_DATA_PENDING_METRICS = frozenset(
         "bank_of_israel_decision_pending",
         "event_window_pending",
         "economic_stat_data_pending",
+        "getty_distinct_photo_days_pending",
         "treasury_yield_data_pending",
         "truth_social_window_pending",
         "nws_daily_high_temp_pending",
+        "white_house_presidential_actions_pending",
+        "white_house_snapshot_missed",
     }
 )
 
@@ -2697,6 +2934,22 @@ def _apply_adjudication_evidence_assessments(
             by_ordinal[index] = raw
     labeled: list[ResearchEvidence] = []
     for index, item in enumerate(evidence):
+        if item.supports_direction == "neutral" and (
+            item.metric_name in _STRUCTURED_SIGNAL_METRICS
+            or _is_official_data_pending_evidence(item)
+        ):
+            labeled.append(item)
+            continue
+        available_at = _parse_timestamp(item.available_at)
+        if available_at is not None and available_at > datetime.now(timezone.utc):
+            labeled.append(
+                replace(
+                    item,
+                    supports_direction="neutral",
+                    supports_confidence=0.0,
+                )
+            )
+            continue
         assessment = by_url.get(item.source_url) or by_ordinal.get(index)
         if assessment is None:
             labeled.append(item)
@@ -3131,6 +3384,442 @@ def _duckduckgo_result_url(href: str) -> str:
     return cleaned if parsed.scheme in {"http", "https"} else ""
 
 
+def _getty_search_payload(
+    raw: bytes,
+    *,
+    expected_end_date: str,
+) -> GettySearchSnapshot:
+    if len(raw) > 2_000_000:
+        raise ValueError("Getty response exceeded structured payload limit")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Getty response was not structured JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Getty response root was not an object")
+    params = payload.get("query", {}).get("params", {})
+    required_params = {
+        "assettype": "image",
+        "enddate": expected_end_date,
+        "family": "editorial",
+        "sort": "newest",
+        "specificpeople": "118600",
+    }
+    if not isinstance(params, dict) or any(
+        str(params.get(key, "")).lower() != value
+        for key, value in required_params.items()
+    ):
+        raise ValueError("Getty response filters did not match the contract query")
+    gallery = payload.get("gallery")
+    if not isinstance(gallery, dict) or int(gallery.get("page", 0) or 0) != 1:
+        raise ValueError("Getty response did not contain gallery page one")
+    total = gallery.get("totalNumberOfResults")
+    if not isinstance(total, int) or total < 0:
+        raise ValueError("Getty response did not contain a valid result total")
+    assets = gallery.get("assets")
+    if not isinstance(assets, list):
+        raise ValueError("Getty response did not contain an asset list")
+    expected_date = date.fromisoformat(expected_end_date)
+    asset_dates: list[date] = []
+    witness_ids: set[str] = set()
+    seen_ids: set[str] = set()
+    for asset in assets:
+        if not isinstance(asset, dict):
+            raise ValueError("Getty response contained a malformed asset")
+        asset_id = _clean(asset.get("assetId") or asset.get("id") or "")
+        if not asset_id or asset_id in seen_ids:
+            raise ValueError("Getty response contained a missing or duplicate asset id")
+        seen_ids.add(asset_id)
+        created = _named_date(_clean(asset.get("dateCreated") or ""))
+        if created is None:
+            raise ValueError("Getty response contained an unparseable asset date")
+        asset_dates.append(created)
+        people = _clean(asset.get("people") or "").lower()
+        description = _clean(
+            f"{asset.get('caption') or ''} {asset.get('altText') or ''}"
+        ).lower()
+        if (
+            created == expected_date
+            and "donald" in people
+            and "trump" in people
+            and "trump" in description
+        ):
+            witness_ids.add(asset_id)
+    return GettySearchSnapshot(
+        end_date=expected_date,
+        total_results=total,
+        newest_asset_date=max(asset_dates, default=None),
+        witness_asset_ids=tuple(sorted(witness_ids)),
+    )
+
+
+def _getty_daily_search_url(end_date: date) -> str:
+    params = urllib.parse.urlencode(
+        {
+            "family": "editorial",
+            "sort": "newest",
+            "specificpeople": "118600",
+            "enddate": end_date.isoformat(),
+        }
+    )
+    return f"https://www.gettyimages.com/search/2/image?{params}"
+
+
+def _fetch_getty_snapshot(
+    end_date: date,
+    *,
+    timeout: float,
+) -> GettySearchSnapshot:
+    request = urllib.request.Request(
+        _getty_daily_search_url(end_date),
+        headers={
+            "Accept": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+            "User-Agent": "kalshi-bot-research/1.0",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
+        raw = response.read(2_000_001)
+    return _getty_search_payload(raw, expected_end_date=end_date.isoformat())
+
+
+def _getty_distinct_date_search(
+    query: ResearchQuery,
+    *,
+    timeout: float = 5.0,
+    now: datetime | None = None,
+) -> list[ResearchEvidence]:
+    spec = _getty_distinct_date_spec_from_text(query.query)
+    if spec is None:
+        return []
+    dates = [
+        spec.start_date + timedelta(days=offset)
+        for offset in range((spec.end_date - spec.start_date).days + 1)
+    ]
+    cache_key = (spec.start_date, spec.end_date)
+    with _GETTY_SNAPSHOT_CACHE_LOCK:
+        cached = _GETTY_SNAPSHOT_CACHE.get(cache_key)
+        if (
+            cached is not None
+            and time.monotonic() - cached[0] <= _GETTY_SNAPSHOT_CACHE_TTL_SECONDS
+        ):
+            snapshots = list(cached[1])
+        else:
+            deadline = time.monotonic() + timeout
+            snapshots = []
+            for day in [spec.start_date - timedelta(days=1), *dates]:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Getty structured search exceeded its total timeout")
+                snapshots.append(_fetch_getty_snapshot(day, timeout=remaining))
+            _GETTY_SNAPSHOT_CACHE[cache_key] = (time.monotonic(), tuple(snapshots))
+    witness_dates: list[date] = []
+    delta_dates: list[date] = []
+    witness_ids: list[str] = []
+    deltas: list[int] = []
+    for prior, current in zip(snapshots, snapshots[1:]):
+        delta = current.total_results - prior.total_results
+        if delta < 0:
+            raise ValueError("Getty cumulative result total decreased")
+        deltas.append(delta)
+        has_witness = bool(current.witness_asset_ids)
+        newest_matches = current.newest_asset_date == current.end_date
+        if has_witness and newest_matches:
+            witness_dates.append(current.end_date)
+            witness_ids.extend(current.witness_asset_ids)
+        if delta > 0:
+            delta_dates.append(current.end_date)
+    if witness_dates != delta_dates:
+        raise ValueError("Getty witness dates disagreed with cumulative result deltas")
+    count = len(witness_dates)
+    now = now or datetime.now(timezone.utc)
+    direction = "neutral"
+    confidence = 0.0
+    retrieved_at = _utc_now_iso()
+    date_text = ", ".join(item.isoformat() for item in witness_dates) or "none"
+    delta_date_text = ", ".join(item.isoformat() for item in delta_dates) or "none"
+    witness_text = ", ".join(witness_ids[:8]) or "none"
+    source_url = _getty_daily_search_url(spec.end_date)
+    support = ResearchEvidence(
+        source_class="resolution_source",
+        source_name="Getty Images",
+        source_url=source_url,
+        title=f"Getty Trump editorial-photo distinct-day count: {count}",
+        snippet=(
+            f"Getty filtered editorial search validates {count} distinct Trump-photo "
+            f"days ({date_text}); witness assets {witness_text}. Exact target is "
+            f"{spec.target_count}; cumulative daily deltas were {deltas}."
+        ),
+        claim_type="official_resolution",
+        supports_direction=direction,
+        supports_confidence=confidence,
+        published_at=spec.end_date.isoformat(),
+        available_at=(spec.cutoff_at.isoformat() if now < spec.cutoff_at else None),
+        retrieved_at=retrieved_at,
+        metric_name="getty_trump_distinct_photo_days",
+        metric_value=float(count),
+        metric_unit="distinct_days",
+        extraction_confidence=0.98,
+    )
+    counter = ResearchEvidence(
+        source_class="resolution_source",
+        source_name="Getty Images",
+        source_url=f"{source_url}#cumulative-delta-countercheck",
+        title=f"Getty cumulative-total countercheck: {count} distinct days",
+        snippet=(
+            f"Contradiction check compared cumulative Getty totals across each date; "
+            f"positive deltas occur on {delta_date_text}, independently totaling "
+            f"{count} distinct days for exact target {spec.target_count}."
+        ),
+        claim_type="contradiction_check",
+        supports_direction="neutral",
+        supports_confidence=0.65,
+        published_at=spec.end_date.isoformat(),
+        available_at=(spec.cutoff_at.isoformat() if now < spec.cutoff_at else None),
+        retrieved_at=retrieved_at,
+        metric_name="getty_trump_distinct_photo_days",
+        metric_value=float(len(delta_dates)),
+        metric_unit="distinct_days",
+        extraction_confidence=0.98,
+    )
+    pending = ResearchEvidence(
+        source_class="resolution_source",
+        source_name="Getty Images",
+        source_url=source_url,
+        title="Getty distinct-day result remains open",
+        snippet=(
+            f"Current validated count is {count}; late uploads, tag corrections, "
+            "or Kalshi review can change the exact-day result. Market close is not "
+            "evidence that Getty metadata is final."
+        ),
+        claim_type="official_resolution",
+        supports_direction="neutral",
+        supports_confidence=0.0,
+        available_at=(spec.cutoff_at.isoformat() if now < spec.cutoff_at else None),
+        retrieved_at=retrieved_at,
+        metric_name="getty_distinct_photo_days_pending",
+        metric_unit="period_status",
+        extraction_confidence=0.98,
+    )
+    return [support, counter, pending]
+
+
+class _WhiteHouseActionCardParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.cards: list[WhiteHouseActionCard] = []
+        self._in_card = False
+        self._in_title_link = False
+        self._in_time = False
+        self._title_parts: list[str] = []
+        self._time_parts: list[str] = []
+        self._url = ""
+        self._datetime = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = {key: value or "" for key, value in attrs}
+        classes = set(values.get("class", "").split())
+        if tag == "li" and "wp-block-post" in classes:
+            if self._in_card:
+                raise ValueError("nested White House action card")
+            self._in_card = True
+            self._title_parts = []
+            self._time_parts = []
+            self._url = ""
+            self._datetime = ""
+        elif self._in_card and tag == "a" and not self._url:
+            href = _clean(values.get("href", ""))
+            if "/presidential-actions/" in href and href.rstrip("/") != "https://www.whitehouse.gov/presidential-actions":
+                self._url = href
+                self._in_title_link = True
+        elif self._in_card and tag == "time":
+            self._datetime = _clean(values.get("datetime", ""))
+            self._in_time = True
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title_link:
+            self._title_parts.append(data)
+        if self._in_time:
+            self._time_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a":
+            self._in_title_link = False
+        elif tag == "time":
+            self._in_time = False
+        elif tag == "li" and self._in_card:
+            title = _clean(" ".join(self._title_parts))
+            visible_date = _named_date(_clean(" ".join(self._time_parts)))
+            try:
+                attribute_date = datetime.fromisoformat(self._datetime).date()
+            except ValueError as exc:
+                raise ValueError("White House action card had invalid datetime") from exc
+            if not title or not self._url or visible_date is None:
+                raise ValueError("White House action card was missing title, URL, or date")
+            if visible_date != attribute_date:
+                raise ValueError("White House visible and machine dates disagreed")
+            self.cards.append(
+                WhiteHouseActionCard(title, self._url, visible_date)
+            )
+            self._in_card = False
+
+
+def _white_house_action_cards_from_html(raw: str) -> tuple[WhiteHouseActionCard, ...]:
+    parser = _WhiteHouseActionCardParser()
+    parser.feed(raw)
+    parser.close()
+    if parser._in_card:
+        raise ValueError("White House action archive ended inside a card")
+    if not parser.cards:
+        raise ValueError("White House action archive contained no action cards")
+    return tuple(parser.cards)
+
+
+def _white_house_presidential_actions_search(
+    query: ResearchQuery,
+    *,
+    timeout: float = 5.0,
+    max_pages: int = 5,
+    now: datetime | None = None,
+    observation_started_at: datetime | None = None,
+) -> list[ResearchEvidence]:
+    spec = _white_house_action_count_spec_from_text(query.query)
+    if spec is None:
+        return []
+    supplied_now = now
+    observation_started_at = (
+        observation_started_at or supplied_now or datetime.now(timezone.utc)
+    )
+    cards_by_url: dict[str, WhiteHouseActionCard] = {}
+    reached_boundary = False
+    deadline = time.monotonic() + timeout
+    previous_page_oldest: date | None = None
+    for page in range(1, max_pages + 1):
+        source_url = (
+            "https://www.whitehouse.gov/presidential-actions/"
+            if page == 1
+            else f"https://www.whitehouse.gov/presidential-actions/page/{page}/"
+        )
+        request = urllib.request.Request(
+            source_url,
+            headers={"User-Agent": "kalshi-bot-research/1.0"},
+        )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("White House action search exceeded its total timeout")
+        with urllib.request.urlopen(request, timeout=remaining) as response:  # nosec B310
+            raw = response.read(1_000_001)
+        if len(raw) > 1_000_000:
+            raise ValueError("White House action archive exceeded page limit")
+        cards = _white_house_action_cards_from_html(raw.decode("utf-8", errors="strict"))
+        card_dates = [card.published_date for card in cards]
+        if any(later > earlier for earlier, later in zip(card_dates, card_dates[1:])):
+            raise ValueError("White House action cards were not newest-first")
+        if previous_page_oldest is not None and max(card_dates) > previous_page_oldest:
+            raise ValueError("White House action pages were not monotonically ordered")
+        for card in cards:
+            canonical_url = card.url.rstrip("/")
+            existing_card = cards_by_url.get(canonical_url)
+            if existing_card is not None and existing_card != card:
+                raise ValueError("White House duplicate action URL had conflicting metadata")
+            cards_by_url.setdefault(canonical_url, card)
+        previous_page_oldest = min(card_dates)
+        if previous_page_oldest < spec.start_date:
+            reached_boundary = True
+            break
+    if not reached_boundary:
+        raise ValueError("White House action pagination did not reach the contract boundary")
+    qualifying = sorted(
+        (
+            card
+            for card in cards_by_url.values()
+            if spec.start_date <= card.published_date <= spec.end_date
+        ),
+        key=lambda card: (card.published_date, card.url),
+    )
+    count = len(qualifying)
+    observation_finished_at = supplied_now or datetime.now(timezone.utc)
+    if (
+        observation_started_at > spec.cutoff_at + timedelta(minutes=5)
+        or observation_finished_at > spec.cutoff_at + timedelta(minutes=5)
+    ):
+        return [
+            ResearchEvidence(
+                source_class="official_primary",
+                source_name="White House Presidential Actions",
+                source_url="https://www.whitehouse.gov/presidential-actions/",
+                title="White House contract snapshot was not captured",
+                snippet=(
+                    f"The archive was fetched after the {spec.cutoff_at.isoformat()} "
+                    "contract snapshot tolerance; current contents cannot prove the "
+                    "page state at settlement time."
+                ),
+                claim_type="official_resolution",
+                supports_direction="neutral",
+                supports_confidence=0.0,
+                retrieved_at=_utc_now_iso(),
+                metric_name="white_house_snapshot_missed",
+                metric_unit="snapshot_status",
+                extraction_confidence=0.98,
+            )
+        ]
+    locked = (
+        observation_started_at >= spec.cutoff_at
+        and observation_finished_at >= spec.cutoff_at
+    )
+    direction = "neutral"
+    confidence = 0.0
+    if locked:
+        direction = "yes" if count >= spec.threshold else "no"
+        confidence = 0.98
+    retrieved_at = _utc_now_iso()
+    card_text = "; ".join(
+        f"{card.published_date.isoformat()} {card.title}" for card in qualifying
+    ) or "none"
+    source_url = "https://www.whitehouse.gov/presidential-actions/"
+    support = ResearchEvidence(
+        source_class="official_primary",
+        source_name="White House Presidential Actions",
+        source_url=source_url,
+        title=f"White House presidential-action count: {count}",
+        snippet=(
+            f"Official archive has {count} unique actions dated from "
+            f"{spec.start_date.isoformat()} through {spec.end_date.isoformat()}: "
+            f"{card_text}. Threshold is at least {spec.threshold}."
+        ),
+        claim_type="official_resolution",
+        supports_direction=direction,
+        supports_confidence=confidence,
+        available_at=None if locked else spec.cutoff_at.isoformat(),
+        retrieved_at=retrieved_at,
+        metric_name="white_house_presidential_actions_count",
+        metric_value=float(count),
+        metric_unit="actions",
+        extraction_confidence=0.98,
+    )
+    if locked:
+        return [support]
+    pending = ResearchEvidence(
+        source_class="official_primary",
+        source_name="White House Presidential Actions",
+        source_url=source_url,
+        title="White House presidential-action window remains open",
+        snippet=(
+            f"Current official count is {count}; {max(spec.threshold - count, 0)} "
+            f"more actions are needed before the {spec.cutoff_at.isoformat()} check."
+        ),
+        claim_type="official_resolution",
+        supports_direction="neutral",
+        supports_confidence=0.0,
+        available_at=spec.cutoff_at.isoformat(),
+        retrieved_at=retrieved_at,
+        metric_name="white_house_presidential_actions_pending",
+        metric_unit="period_status",
+        extraction_confidence=0.98,
+    )
+    return [support, pending]
+
+
 def _federal_register_search(
     query: ResearchQuery,
     *,
@@ -3463,10 +4152,20 @@ def _nws_daily_climate_search(
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
         raw = response.read(300_000).decode("utf-8", errors="ignore")
+    retrieved_at = _utc_now_iso()
     report_date = _nws_daily_climate_report_date_from_text(raw)
-    if report_date != target_date:
+    report_available = _nws_report_date_available_at_retrieval(
+        report_date,
+        retrieved_at,
+    )
+    if report_date != target_date or not report_available:
         target_label = _fed_date_label(target_date)
         latest_label = _fed_date_label(report_date) if report_date else "unknown"
+        timing_reason = (
+            "The matching report date was not yet a completed prior local day."
+            if report_date == target_date and not report_available
+            else f"latest official report is {latest_label}."
+        )
         return [
             ResearchEvidence(
                 source_class="official_primary",
@@ -3475,14 +4174,14 @@ def _nws_daily_climate_search(
                 title=f"NWS Central Park daily maximum pending for {target_label}",
                 snippet=(
                     f"NWS daily climate report date does not match target "
-                    f"{target_label}; latest official report is {latest_label}."
+                    f"{target_label}. {timing_reason}"
                 ),
                 claim_type=query.query_intent,
                 supports_direction="neutral",
                 supports_confidence=0.0,
                 published_at=report_date.isoformat() if report_date else None,
-                available_at=target_date.isoformat(),
-                retrieved_at=_utc_now_iso(),
+                available_at=_nws_expected_availability(target_date),
+                retrieved_at=retrieved_at,
                 metric_name="nws_daily_high_temp_pending",
                 metric_unit="period_status",
                 extraction_confidence=0.95 if report_date else 0.5,
@@ -3515,7 +4214,7 @@ def _nws_daily_climate_search(
                 supports_direction="neutral",
                 supports_confidence=0.95,
                 published_at=target_date.isoformat(),
-                retrieved_at=_utc_now_iso(),
+                retrieved_at=retrieved_at,
                 metric_name="nws_daily_high_temp_f",
                 metric_value=high_temp,
                 metric_unit="fahrenheit",
@@ -3537,13 +4236,34 @@ def _nws_daily_climate_search(
             supports_direction=direction,
             supports_confidence=0.95,
             published_at=target_date.isoformat(),
-            retrieved_at=_utc_now_iso(),
+            retrieved_at=retrieved_at,
             metric_name="nws_daily_high_temp_f",
             metric_value=high_temp,
             metric_unit="fahrenheit",
             extraction_confidence=0.95,
         )
     ]
+
+
+def _nws_report_date_available_at_retrieval(
+    report_date: date | None,
+    retrieved_at: str,
+) -> bool:
+    retrieved = _parse_timestamp(retrieved_at)
+    if report_date is None or retrieved is None:
+        return False
+    local_date = retrieved.astimezone(ZoneInfo("America/New_York")).date()
+    return report_date < local_date
+
+
+def _nws_expected_availability(target_date: date) -> str:
+    local_midnight = datetime(
+        target_date.year,
+        target_date.month,
+        target_date.day,
+        tzinfo=ZoneInfo("America/New_York"),
+    ) + timedelta(days=1)
+    return local_midnight.astimezone(timezone.utc).isoformat()
 
 
 def _query_mentions_nws_high_temp(query: str) -> bool:
@@ -3663,6 +4383,26 @@ def _structured_direct_source_queries(
     market: Any,
     queries: Sequence[ResearchQuery],
 ) -> list[ResearchQuery]:
+    market_text = _clean(
+        f"{getattr(market, 'ticker', '')} {_market_text(market)} "
+        f"cutoff {getattr(market, 'close_time', '')}"
+    )
+    if _getty_distinct_date_spec_from_text(market_text) is not None:
+        return [
+            ResearchQuery(
+                market_text,
+                "official_resolution",
+                "resolution_source",
+            )
+        ]
+    if _white_house_action_count_spec_from_text(market_text) is not None:
+        return [
+            ResearchQuery(
+                market_text,
+                "official_resolution",
+                "official_primary",
+            )
+        ]
     direct_domains = {
         _domain_from_url(url)
         for url, _source_class, _claim_type in _direct_source_targets(market)
@@ -3681,7 +4421,6 @@ def _structured_direct_source_queries(
                     "official_primary",
                 )
             ]
-    market_text = f"{_clean(getattr(market, 'ticker', ''))} {_market_text(market)}"
     if not _query_mentions_nws_high_temp(market_text):
         return []
     return [
@@ -3691,6 +4430,16 @@ def _structured_direct_source_queries(
             "official_primary",
         )
     ]
+
+
+def _structured_official_search(query: ResearchQuery) -> list[ResearchEvidence]:
+    if _getty_distinct_date_spec_from_text(query.query) is not None:
+        return _getty_distinct_date_search(query)
+    if _white_house_action_count_spec_from_text(query.query) is not None:
+        return _white_house_presidential_actions_search(query)
+    if _query_mentions_nws_high_temp(query.query):
+        return _nws_daily_climate_search(query)
+    return []
 
 
 def _nws_daily_climate_report_date_from_text(raw: str) -> date | None:
@@ -4732,6 +5481,8 @@ async def default_search_provider(query: ResearchQuery) -> list[ResearchEvidence
 
     if not pending_evidence:
         for provider in (
+            _getty_distinct_date_search,
+            _white_house_presidential_actions_search,
             _bls_cpi_search,
             _nws_daily_climate_search,
             _govinfo_impeachment_expungement_search,
@@ -5328,7 +6079,7 @@ async def run_research_gate(
                 )
             try:
                 structured_items = await asyncio.wait_for(
-                    asyncio.to_thread(_nws_daily_climate_search, query),
+                    asyncio.to_thread(_structured_official_search, query),
                     timeout=remaining,
                 )
             except TimeoutError:
@@ -5369,6 +6120,20 @@ async def run_research_gate(
             if not (
                 query.source_class in {"resolution_source", "official_primary"}
                 and _query_site_domain(query.query) in direct_domains
+            )
+            and not (
+                _getty_distinct_date_spec_from_text(query.query) is not None
+                and any(
+                    item.metric_name == "getty_trump_distinct_photo_days"
+                    for item in fresh_evidence
+                )
+            )
+            and not (
+                _white_house_action_count_spec_from_text(query.query) is not None
+                and any(
+                    item.metric_name == "white_house_presidential_actions_count"
+                    for item in fresh_evidence
+                )
             )
         ]
         provider = search_provider or default_search_provider
@@ -5761,6 +6526,8 @@ def _is_fresh_evidence(
     now: datetime | None = None,
 ) -> bool:
     now = now or datetime.now(timezone.utc)
+    if not research_evidence_temporally_valid(evidence, as_of=now):
+        return False
     max_age_seconds = _decision_evidence_max_age_seconds(evidence)
     authoritative = [
         _parse_timestamp(value)

@@ -7,6 +7,7 @@ services, write databases, or call external APIs.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sqlite3
 import sys
@@ -23,6 +24,7 @@ from utils.research_evidence_quality import (
     OFFICIAL_RESEARCH_SOURCE_CLASSES,
     STRUCTURED_OFFICIAL_RESEARCH_METRICS,
     has_reliable_research_source_path,
+    research_evidence_temporally_valid,
 )
 from utils.research_market_eligibility import evaluate_research_market_eligibility
 
@@ -410,6 +412,17 @@ def _live_cache_eligible_proofs(
                 if "extraction_confidence" in evidence_columns
                 else "NULL"
             )
+            published_at_select = (
+                "published_at" if "published_at" in evidence_columns else "NULL"
+            )
+            retrieved_at_select = (
+                "retrieved_at" if "retrieved_at" in evidence_columns else "NULL"
+            )
+            raw_payload_select = (
+                "raw_payload_json"
+                if "raw_payload_json" in evidence_columns
+                else "NULL"
+            )
             for row in conn.execute(
                 f"""
                 SELECT
@@ -425,10 +438,31 @@ def _live_cache_eligible_proofs(
                     {metric_name_select} AS metric_name,
                     {metric_value_select} AS metric_value,
                     {extraction_confidence_select} AS extraction_confidence,
+                    {published_at_select} AS published_at,
+                    {retrieved_at_select} AS retrieved_at,
+                    {raw_payload_select} AS raw_payload_json,
                     {cache_evidence_ts_sql} AS ts
                 FROM research_evidence
                 """
             ):
+                try:
+                    raw_payload = json.loads(row["raw_payload_json"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    raw_payload = {}
+                if not research_evidence_temporally_valid(
+                    {
+                        "metric_name": row["metric_name"],
+                        "published_at": row["published_at"],
+                        "retrieved_at": row["retrieved_at"],
+                        "available_at": (
+                            raw_payload.get("available_at")
+                            if isinstance(raw_payload, dict)
+                            else None
+                        ),
+                    },
+                    as_of=now,
+                ):
+                    continue
                 evidence_ts = botcheck._parse_research_ts(row["ts"])  # noqa: SLF001
                 if evidence_ts is None or evidence_ts < live_cache_since:
                     continue

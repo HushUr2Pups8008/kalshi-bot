@@ -31,6 +31,7 @@ from utils.research_evidence_quality import (
     effective_research_source_class,
     evidence_is_relevant_to_contract,
     has_reliable_research_source_path,
+    research_evidence_temporally_valid,
 )
 from config import DATA_DIR
 
@@ -54,8 +55,10 @@ _COUNTER_EVIDENCE_EXHAUSTED_REASONS = {
 }
 _STRUCTURED_SIGNAL_METRICS = {
     "cpi_monthly_change_single_decimal",
+    "getty_trump_distinct_photo_days",
     "gdpnow_real_gdp_growth_saar",
     "nws_daily_high_temp_f",
+    "white_house_presidential_actions_count",
 }
 _OFFICIAL_SOURCE_CLASSES = {
     "official",
@@ -1587,24 +1590,10 @@ def _stored_decision_grade_snapshot_is_valid_sync(
         ).fetchall()
     ]
     evidence = [
-        SimpleNamespace(
-            source_class=evidence_row["source_class"],
-            source_name=evidence_row["source_name"],
-            source_url=evidence_row["source_url"],
-            claim_type=evidence_row["claim_type"],
-            supports_direction=evidence_row["supports_direction"],
-            supports_confidence=evidence_row["supports_confidence"],
-            title=evidence_row["title"],
-            snippet=evidence_row["snippet"],
-            metric_name=evidence_row["metric_name"],
-            metric_value=evidence_row["metric_value"],
-            extraction_confidence=evidence_row["extraction_confidence"],
-        )
+        _evidence_from_row(evidence_row)
         for evidence_row in conn.execute(
             """
-            SELECT source_class, source_name, source_url, claim_type,
-                   supports_direction, supports_confidence, title, snippet,
-                   metric_name, metric_value, extraction_confidence
+            SELECT *
             FROM research_evidence
             WHERE market_ticker = ?
               AND research_run_id = ?
@@ -1647,6 +1636,9 @@ def _decision_grade_persistence_quality(
     queries: list[object],
     evidence: list[ResearchEvidence],
 ) -> dict[str, bool]:
+    evidence = [
+        item for item in evidence if research_evidence_temporally_valid(item)
+    ]
     opposite = "no" if side == "yes" else "yes" if side == "no" else ""
     supports_directions: set[str] = set()
     has_counter_evidence = False

@@ -24,6 +24,7 @@ from utils.research_evidence_quality import (
     effective_research_source_class,
     evidence_is_relevant_to_contract,
     has_reliable_research_source_path,
+    research_evidence_temporally_valid,
 )
 from utils.research_market_eligibility import research_market_eligibility
 
@@ -38,8 +39,10 @@ _OFFICIAL_SOURCE_CLASSES = frozenset(
 _STRUCTURED_SIGNAL_METRICS = frozenset(
     {
         "cpi_monthly_change_single_decimal",
+        "getty_trump_distinct_photo_days",
         "gdpnow_real_gdp_growth_saar",
         "nws_daily_high_temp_f",
+        "white_house_presidential_actions_count",
     }
 )
 _EDGE_TOLERANCE = 0.005
@@ -155,7 +158,8 @@ class ResearchPaperSignalProvider:
         researched_ts = _parse_ts(snapshot.last_researched_ts)
         if researched_ts is None:
             return None, "missing_research_timestamp"
-        if self._now().astimezone(UTC) - researched_ts > self.max_age:
+        now = self._now().astimezone(UTC)
+        if now - researched_ts > self.max_age:
             return None, "stale_research"
         if _recompute_edge(
             side=side,
@@ -176,6 +180,14 @@ class ResearchPaperSignalProvider:
                 snapshot.last_research_run_id,
             )
         )
+        temporally_valid_evidence = tuple(
+            item
+            for item in evidence
+            if research_evidence_temporally_valid(item, as_of=now)
+        )
+        if not temporally_valid_evidence:
+            return None, "temporally_invalid_evidence"
+        evidence = temporally_valid_evidence
         query_texts = await _research_run_query_texts(
             self.store,
             snapshot.last_research_run_id,

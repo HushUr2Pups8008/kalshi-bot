@@ -264,10 +264,10 @@ def _structured_official_weather_evidence() -> list[ResearchEvidence]:
             source_class="official_primary",
             source_name="NWS Climatological Report",
             source_url=source_url,
-            title="NWS Central Park daily maximum for July 2, 2026: 93F",
+            title="NWS Central Park daily maximum for July 1, 2026: 93F",
             snippet=(
                 "NWS Central Park climate report lists TODAY MAXIMUM 93F "
-                "for July 2, 2026, versus the below 99F market range, supporting YES."
+                "for July 1, 2026, versus the below 99F market range, supporting YES."
             ),
             claim_type="official_resolution",
             supports_direction="yes",
@@ -276,6 +276,7 @@ def _structured_official_weather_evidence() -> list[ResearchEvidence]:
             metric_value=93.0,
             metric_unit="fahrenheit",
             extraction_confidence=0.95,
+            published_at="2026-07-01",
             retrieved_at="2026-07-02T16:00:00+00:00",
             inserted_at="2026-07-02T16:00:00+00:00",
             contract_fingerprint="contract-v1",
@@ -284,7 +285,7 @@ def _structured_official_weather_evidence() -> list[ResearchEvidence]:
             source_class="official_primary",
             source_name="NWS Climatological Report",
             source_url=source_url,
-            title="NWS Central Park daily maximum countercheck for July 2, 2026: 93F",
+            title="NWS Central Park daily maximum countercheck for July 1, 2026: 93F",
             snippet=(
                 "Disconfirming search checked the NWS Central Park daily maximum "
                 "of 93F against the below 99F market range; no contrary official "
@@ -297,6 +298,7 @@ def _structured_official_weather_evidence() -> list[ResearchEvidence]:
             metric_value=93.0,
             metric_unit="fahrenheit",
             extraction_confidence=0.95,
+            published_at="2026-07-01",
             retrieved_at="2026-07-02T16:00:00+00:00",
             inserted_at="2026-07-02T16:00:00+00:00",
             contract_fingerprint="contract-v1",
@@ -312,7 +314,7 @@ def _structured_official_weather_same_side_countercheck() -> list[ResearchEviden
             source_class="official_primary",
             source_name="NWS Climatological Report",
             source_url=evidence[0].source_url,
-            title="NWS Central Park daily maximum countercheck for July 2, 2026: 93F",
+            title="NWS Central Park daily maximum countercheck for July 1, 2026: 93F",
             snippet=(
                 "Disconfirming search rechecked the NWS Central Park daily maximum "
                 "of 93F against the below 99F market range and found the same "
@@ -325,6 +327,7 @@ def _structured_official_weather_same_side_countercheck() -> list[ResearchEviden
             metric_value=93.0,
             metric_unit="fahrenheit",
             extraction_confidence=0.95,
+            published_at="2026-07-01",
             retrieved_at="2026-07-02T16:00:00+00:00",
             inserted_at="2026-07-02T16:00:00+00:00",
             contract_fingerprint="contract-v1",
@@ -1235,3 +1238,77 @@ async def test_invalid_decision_grade_dossiers_do_not_enter_paper_review(
     assert result.admitted is False
     assert result.reason == expected_reason
     assert queue.empty()
+@pytest.mark.asyncio
+async def test_future_nws_evidence_does_not_enter_paper_review() -> None:
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    future_evidence = [
+        replace(
+            item,
+            published_at="2026-07-03",
+            retrieved_at="2026-07-02T16:00:00+00:00",
+        )
+        for item in _structured_official_weather_same_side_countercheck()
+    ]
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=FakeResearchStore(
+            snapshot=_snapshot(),
+            evidence=future_evidence,
+        ),
+        trading_queue=queue,
+        logger=SpyLogger(),
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+    )
+
+    result = await bridge.admit_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker="KXRESEARCH-1",
+            status="decision_grade_candidate",
+            attempted=True,
+            research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
+        ),
+        _market(),
+    )
+
+    assert result.admitted is False
+    assert result.reason == "temporally_invalid_evidence"
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_invalid_ancillary_evidence_does_not_block_valid_paper_signal() -> None:
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    evidence = [
+        *_structured_official_weather_same_side_countercheck(),
+        ResearchEvidence(
+            source_class="reputable_secondary",
+            source_name="Malformed ancillary source",
+            source_url="https://example.com/ancillary",
+            title="Irrelevant ancillary item",
+            snippet="This neutral item is not part of the settlement proof.",
+            claim_type="corroboration",
+            supports_direction="neutral",
+            supports_confidence=0.0,
+            retrieved_at="not-a-timestamp",
+        ),
+    ]
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=FakeResearchStore(snapshot=_snapshot(), evidence=evidence),
+        trading_queue=queue,
+        logger=SpyLogger(),
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+    )
+
+    result = await bridge.admit_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker="KXRESEARCH-1",
+            status="decision_grade_candidate",
+            attempted=True,
+            research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
+        ),
+        _market(),
+    )
+
+    assert result.admitted is True
+    assert result.enqueued is True

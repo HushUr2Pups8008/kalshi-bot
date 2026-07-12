@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,7 @@ from utils.research_evidence_quality import (
     build_speech_contract_spec,
     evidence_is_relevant_to_contract,
     has_reliable_research_source_path,
+    research_evidence_temporally_valid,
     research_source_key,
 )
 
@@ -286,6 +288,62 @@ def test_mapping_evidence_is_supported() -> None:
     ]
 
     assert has_reliable_research_source_path(evidence) is True
+
+
+def test_future_nws_report_date_is_temporally_invalid() -> None:
+    evidence = {
+        "metric_name": "nws_daily_high_temp_f",
+        "published_at": "2026-07-11",
+        "retrieved_at": "2026-07-10T14:11:00+00:00",
+    }
+
+    assert research_evidence_temporally_valid(evidence) is False
+
+
+def test_nws_report_requires_prior_new_york_local_date() -> None:
+    evidence = SimpleNamespace(
+        metric_name="nws_daily_high_temp_f",
+        published_at="2026-07-10",
+        retrieved_at="2026-07-11T03:30:00+00:00",
+    )
+
+    assert research_evidence_temporally_valid(evidence) is False
+
+
+def test_prior_day_nws_report_is_temporally_valid() -> None:
+    evidence = SimpleNamespace(
+        metric_name="nws_daily_high_temp_f",
+        published_at="2026-07-10",
+        retrieved_at="2026-07-11T14:00:00+00:00",
+    )
+
+    assert research_evidence_temporally_valid(evidence) is True
+
+
+@pytest.mark.parametrize("metric_name", sorted(STRUCTURED_OFFICIAL_RESEARCH_METRICS))
+def test_structured_official_metric_requires_retrieval_timestamp(metric_name: str) -> None:
+    evidence = {
+        "metric_name": metric_name,
+        "metric_value": 1.0,
+        "supports_direction": "yes",
+    }
+
+    assert research_evidence_temporally_valid(evidence) is False
+
+
+def test_evidence_unavailable_as_of_validation_time_is_temporally_invalid() -> None:
+    evidence = {
+        "available_at": "2026-07-11T12:01:00Z",
+        "retrieved_at": "2026-07-11T12:00:00Z",
+    }
+
+    assert (
+        research_evidence_temporally_valid(
+            evidence,
+            as_of=datetime(2026, 7, 11, 12, tzinfo=timezone.utc),
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(
