@@ -8,7 +8,20 @@
         "url": "https://forecast.weather.gov/product.php?site=OKX&product=CLI&issuedby=NYC"
       }
     ],
-    "markets": []
+    "markets": [
+      {
+        "ticker": "KXHIGHNY-26JUL13-T82",
+        "event_ticker": "KXHIGHNY-26JUL13"
+      },
+      {
+        "ticker": "KXHIGHNY-26JUL13-B86.5",
+        "event_ticker": "KXHIGHNY-26JUL13"
+      },
+      {
+        "ticker": "KXHIGHNY-26JUL13-T89",
+        "event_ticker": "KXHIGHNY-26JUL13"
+      }
+    ]
   },
   "markets": []
 }

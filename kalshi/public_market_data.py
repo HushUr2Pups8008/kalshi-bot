@@ -186,11 +186,12 @@ class KalshiPublicMarketDataReader:
     @classmethod
     def _validate_nested_markets(
         cls, event: Mapping[str, Any], event_ticker: str
-    ) -> None:
+    ) -> tuple[str, ...]:
         markets = event.get("markets")
         if not isinstance(markets, list):
             raise KalshiPublicMarketDataError("nested markets are missing")
         seen: set[str] = set()
+        tickers: list[str] = []
         for raw_market in markets:
             market = _require_mapping(raw_market, "nested market")
             ticker = _require_string(market, "ticker")
@@ -201,6 +202,8 @@ class KalshiPublicMarketDataReader:
             if ticker in seen:
                 raise KalshiPublicMarketDataError("duplicate market ticker")
             seen.add(ticker)
+            tickers.append(ticker)
+        return tuple(tickers)
 
     @classmethod
     def _validate_event(
@@ -209,7 +212,13 @@ class KalshiPublicMarketDataReader:
         *,
         expected_series: str | None = None,
         expected_event: str | None = None,
-    ) -> tuple[Mapping[str, Any], str, str, tuple[Mapping[str, str], ...]]:
+    ) -> tuple[
+        Mapping[str, Any],
+        str,
+        str,
+        tuple[Mapping[str, str], ...],
+        tuple[str, ...],
+    ]:
         event = _require_mapping(raw_event, "event")
         event_ticker = _require_string(event, "event_ticker")
         series_ticker = _require_string(event, "series_ticker")
@@ -219,8 +228,14 @@ class KalshiPublicMarketDataReader:
             raise KalshiPublicMarketDataError("returned event ticker does not match request")
         if not event_ticker.startswith(f"{series_ticker}-"):
             raise KalshiPublicMarketDataError("event ticker is outside returned series")
-        cls._validate_nested_markets(event, event_ticker)
-        return event, event_ticker, series_ticker, cls._settlement_sources(event)
+        nested_tickers = cls._validate_nested_markets(event, event_ticker)
+        return (
+            event,
+            event_ticker,
+            series_ticker,
+            cls._settlement_sources(event),
+            nested_tickers,
+        )
 
     async def _list_markets(
         self,
@@ -378,8 +393,19 @@ class KalshiPublicMarketDataReader:
         markets: tuple[RetrievedMarket, ...],
         retrieved_at: datetime,
         *,
+        authoritative_market_tickers: tuple[str, ...],
         requested_open: bool,
     ) -> RetrievedEvent:
+        retrieved_market_tickers = tuple(market.market_ticker for market in markets)
+        if (
+            not authoritative_market_tickers
+            or len(authoritative_market_tickers) != len(set(authoritative_market_tickers))
+            or len(retrieved_market_tickers) != len(set(retrieved_market_tickers))
+            or set(authoritative_market_tickers) != set(retrieved_market_tickers)
+        ):
+            raise KalshiPublicMarketDataError(
+                "event nested enumeration does not match markets response"
+            )
         close_times = {market.close_time for market in markets}
         statuses = {market.status for market in markets}
         if len(close_times) != 1 or len(statuses) != 1:
@@ -390,7 +416,7 @@ class KalshiPublicMarketDataReader:
             event_ticker=event_ticker,
             status=event_status,
             close_time=next(iter(close_times)),
-            market_tickers=tuple(market.market_ticker for market in markets),
+            market_tickers=authoritative_market_tickers,
             markets=markets,
             retrieved_at=retrieved_at,
         )
@@ -402,7 +428,9 @@ class KalshiPublicMarketDataReader:
             cursor: str | None = None
             seen_cursors: set[str] = set()
             seen_events: set[str] = set()
-            event_records: list[tuple[str, tuple[Mapping[str, str], ...]]] = []
+            event_records: list[
+                tuple[str, tuple[Mapping[str, str], ...], tuple[str, ...]]
+            ] = []
             while True:
                 params: dict[str, Any] = {
                     "series_ticker": series,
@@ -417,13 +445,13 @@ class KalshiPublicMarketDataReader:
                 if not isinstance(raw_events, list):
                     raise KalshiPublicMarketDataError("events page is malformed")
                 for raw_event in raw_events:
-                    _, event_ticker, _, sources = self._validate_event(
+                    _, event_ticker, _, sources, nested_tickers = self._validate_event(
                         raw_event, expected_series=series
                     )
                     if event_ticker in seen_events:
                         raise KalshiPublicMarketDataError("duplicate event ticker")
                     seen_events.add(event_ticker)
-                    event_records.append((event_ticker, sources))
+                    event_records.append((event_ticker, sources, nested_tickers))
                 next_cursor = self._cursor(payload)
                 if not next_cursor:
                     break
@@ -432,7 +460,7 @@ class KalshiPublicMarketDataReader:
                 seen_cursors.add(next_cursor)
                 cursor = next_cursor
             normalized: list[RetrievedEvent] = []
-            for event_ticker, sources in event_records:
+            for event_ticker, sources, nested_tickers in event_records:
                 retrieved_at = self._clock().astimezone(timezone.utc)
                 markets = await self._list_markets(
                     session,
@@ -442,7 +470,11 @@ class KalshiPublicMarketDataReader:
                 )
                 normalized.append(
                     self._normalize_event(
-                        event_ticker, markets, retrieved_at, requested_open=True
+                        event_ticker,
+                        markets,
+                        retrieved_at,
+                        authoritative_market_tickers=nested_tickers,
+                        requested_open=True,
                     )
                 )
             return tuple(normalized)
@@ -456,7 +488,7 @@ class KalshiPublicMarketDataReader:
                 self._event_url(expected),
                 params={"with_nested_markets": "true"},
             )
-            _, returned, _, sources = self._validate_event(
+            _, returned, _, sources, nested_tickers = self._validate_event(
                 payload.get("event"), expected_event=expected
             )
             retrieved_at = self._clock().astimezone(timezone.utc)
@@ -467,5 +499,9 @@ class KalshiPublicMarketDataReader:
                 retrieved_at=retrieved_at,
             )
             return self._normalize_event(
-                returned, markets, retrieved_at, requested_open=False
+                returned,
+                markets,
+                retrieved_at,
+                authoritative_market_tickers=nested_tickers,
+                requested_open=False,
             )

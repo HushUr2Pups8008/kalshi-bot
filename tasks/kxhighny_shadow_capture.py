@@ -181,12 +181,12 @@ class WeatherShadowCaptureTask:
         state = await self._store.label_state(target.event_ticker)
         if state.sealed or state.quarantined:
             return None
-        event_payload, cli_product = await asyncio.gather(
-            self._label_markets.get_event(event_ticker=target.event_ticker),
-            self._label_weather.fetch_daily_label(
-                target_date=target.target_date,
-                station_id=_STATION_ID,
-            ),
+        event_payload = await self._label_markets.get_event(
+            event_ticker=target.event_ticker
+        )
+        cli_product = await self._label_weather.fetch_daily_label(
+            target_date=target.target_date,
+            station_id=_STATION_ID,
         )
         if cli_product is None:
             return None

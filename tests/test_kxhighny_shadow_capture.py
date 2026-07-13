@@ -14,7 +14,11 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from kalshi.public_market_data import KalshiPublicMarketDataReader
+from kalshi.public_market_data import (
+    KalshiPublicMarketDataError,
+    KalshiPublicMarketDataReader,
+)
+import tasks.kxhighny_shadow_capture as capture_module
 from tasks.kxhighny_shadow_validation import canonical_sha256
 from tasks.kxhighny_shadow_capture import WeatherShadowCaptureTask
 import tasks.weather_shadow_store as weather_store_module
@@ -217,6 +221,14 @@ class FakeWeather:
             self.active -= 1
 
 
+class IncompleteCrossEndpointMarkets(FakeMarkets):
+    async def get_event(self, *, event_ticker: str) -> RetrievedEvent:
+        self.get_calls += 1
+        raise KalshiPublicMarketDataError(
+            "event nested enumeration does not match markets response"
+        )
+
+
 def task(
     *,
     store: object,
@@ -237,6 +249,31 @@ def task(
         now=now,
         sleep=sleep,
     )
+
+
+@pytest.mark.asyncio
+async def test_incomplete_cross_endpoint_ladder_never_reaches_capture_build_or_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_event = event()
+    store = FakeStore()
+    markets = IncompleteCrossEndpointMarkets((source_event,))
+    weather = FakeWeather()
+
+    def build_bomb(*args: object, **kwargs: object) -> object:
+        raise AssertionError("incomplete ladder reached capture build")
+
+    monkeypatch.setattr(capture_module, "build_capture_batch", build_bomb)
+
+    result = await task(store=store, markets=markets, weather=weather).capture_event(
+        source_event, "T-1h"
+    )
+
+    assert result.captured is False
+    assert result.reason == "ineligible"
+    assert markets.get_calls == 1
+    assert weather.fetch_calls == 1
+    assert store.batches == []
 
 
 @pytest.mark.asyncio

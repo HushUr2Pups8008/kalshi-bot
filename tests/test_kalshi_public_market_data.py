@@ -43,6 +43,10 @@ def test_representative_kalshi_fixture_key_sets_are_explicit() -> None:
     }
     assert set(events["events"][0]) == expected_event_keys
     assert set(event_detail["event"]) == expected_event_keys
+    assert all(
+        set(market) == {"ticker", "event_ticker"}
+        for market in event_detail["event"]["markets"]
+    )
     assert set(events["events"][0]["settlement_sources"][0]) == {"name", "url"}
     expected_market_keys = {
         "ticker",
@@ -221,9 +225,83 @@ async def test_get_event_uses_fixed_path_and_complete_paginated_markets() -> Non
     event = await reader.get_event(event_ticker="KXHIGHNY-26JUL13")
 
     assert len(event.markets) == 3
+    assert event.market_tickers == (
+        "KXHIGHNY-26JUL13-T82",
+        "KXHIGHNY-26JUL13-B86.5",
+        "KXHIGHNY-26JUL13-T89",
+    )
     assert factory.calls[0]["url"] == EVENT_URL
     assert factory.calls[0]["params"] == {"with_nested_markets": "true"}
     assert factory.calls[2]["params"]["cursor"] == "next"
+
+
+@pytest.mark.asyncio
+async def test_settled_event_rejects_nested_sibling_missing_from_markets_rows() -> None:
+    event_payload = _fixture("kalshi_event.json")
+    event_payload["event"]["markets"].append(
+        {
+            "ticker": "KXHIGHNY-26JUL13-B84.5",
+            "event_ticker": "KXHIGHNY-26JUL13",
+        }
+    )
+    markets = _fixture("kalshi_markets_page_1.json")
+    for market in markets["markets"]:
+        market["status"] = "settled"
+        market["result"] = "no"
+    reader, _ = _reader(
+        event=event_payload,
+        markets=markets,
+    )
+
+    with pytest.raises(KalshiPublicMarketDataError, match="enumeration"):
+        await reader.get_event(event_ticker="KXHIGHNY-26JUL13")
+
+
+@pytest.mark.asyncio
+async def test_rejects_markets_row_missing_from_nested_enumeration() -> None:
+    markets = _fixture("kalshi_markets_page_1.json")
+    extra = deepcopy(markets["markets"][1])
+    extra.update(
+        ticker="KXHIGHNY-26JUL13-B84.5",
+        cap_strike=85,
+        title="Will the high temp in NYC be 84-85 degrees on Jul 13, 2026?",
+    )
+    markets["markets"].append(extra)
+    reader, _ = _reader(event=_fixture("kalshi_event.json"), markets=markets)
+
+    with pytest.raises(KalshiPublicMarketDataError, match="enumeration"):
+        await reader.get_event(event_ticker="KXHIGHNY-26JUL13")
+
+
+@pytest.mark.asyncio
+async def test_rejects_duplicate_authoritative_nested_ticker() -> None:
+    event_payload = _fixture("kalshi_event.json")
+    event_payload["event"]["markets"].append(
+        deepcopy(event_payload["event"]["markets"][0])
+    )
+    reader, _ = _reader(event=event_payload)
+
+    with pytest.raises(KalshiPublicMarketDataError, match="duplicate market"):
+        await reader.get_event(event_ticker="KXHIGHNY-26JUL13")
+
+
+@pytest.mark.asyncio
+async def test_accepts_markets_rows_reordered_from_authoritative_nested_enumeration() -> None:
+    event_payload = _fixture("kalshi_event.json")
+    nested_tickers = tuple(
+        market["ticker"] for market in reversed(event_payload["event"]["markets"])
+    )
+    event_payload["event"]["markets"].reverse()
+    markets = _fixture("kalshi_markets_page_1.json")
+    reader, _ = _reader(event=event_payload, markets=markets)
+
+    event = await reader.get_event(event_ticker="KXHIGHNY-26JUL13")
+
+    assert event.market_tickers == nested_tickers
+    assert tuple(market.market_ticker for market in event.markets) != nested_tickers
+    assert set(event.market_tickers) == {
+        market.market_ticker for market in event.markets
+    }
 
 
 @pytest.mark.asyncio

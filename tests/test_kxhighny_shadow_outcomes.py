@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from kalshi.public_market_data import KalshiPublicMarketDataError
 import tasks.kxhighny_shadow_capture as capture_module
 from tasks.kxhighny_shadow_capture import WeatherShadowCaptureTask
 from tasks.kxhighny_shadow_validation import (
@@ -428,6 +429,14 @@ class LabelMarkets:
         return self.source
 
 
+class IncompleteCrossEndpointLabelMarkets(LabelMarkets):
+    async def get_event(self, *, event_ticker: str) -> RetrievedEvent:
+        self.get_calls.append(event_ticker)
+        raise KalshiPublicMarketDataError(
+            "event nested enumeration does not match markets response"
+        )
+
+
 class LabelWeather:
     def __init__(self, label: NwsDailyLabel | None) -> None:
         self.label = label
@@ -494,6 +503,28 @@ def label_task(store: LabelStore, markets: LabelMarkets, weather: LabelWeather) 
         label_weather=weather,  # type: ignore[arg-type]
         now=lambda: dt("2026-07-14T12:00:00Z"),
     )
+
+
+@pytest.mark.asyncio
+async def test_incomplete_cross_endpoint_ladder_never_reaches_label_build_or_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LabelStore()
+    markets = IncompleteCrossEndpointLabelMarkets(event())
+    weather = LabelWeather(cli_label())
+
+    def validate_bomb(*args: object, **kwargs: object) -> object:
+        raise AssertionError("incomplete ladder reached outcome build")
+
+    monkeypatch.setattr(capture_module, "validate_outcome_batch", validate_bomb)
+
+    await label_task(store, markets, weather).run_label_once()
+
+    assert markets.get_calls == [EVENT_TICKER]
+    assert weather.calls == []
+    assert store.batches == []
+    assert store.checks == []
+    assert store.seals == []
 
 
 @pytest.mark.asyncio
