@@ -22,13 +22,16 @@ from analysis.generic_search_circuit import (
 
 _EVENT_TOTAL_KEYS = {
     "attempt": "attempts",
+    "provider_error": "backend_provider_errors",
     "double_availability_failure": "double_availability_failures",
+    "gate_provider_error_verdict": "gate_provider_error_verdicts",
     "open": "open_transitions",
     "would_open": "would_open_transitions",
     "blocked": "blocked_calls",
     "would_block": "would_block_calls",
     "half_open": "probes",
-    "provider_error": "provider_error_events",
+    "probe_succeeded": "probe_successes",
+    "probe_failed": "probe_failures",
 }
 _COUNTER_KEYS = {
     "total_attempts",

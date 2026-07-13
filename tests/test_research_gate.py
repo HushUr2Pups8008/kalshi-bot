@@ -10352,7 +10352,14 @@ async def test_strict_research_gate_skips_adjudication_without_actionable_price(
 
 
 @pytest.mark.asyncio
-async def test_run_research_gate_reports_provider_exception():
+async def test_run_research_gate_reports_provider_exception(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        research_gate_module,
+        "_log_generic_search_circuit_event",
+        events.append,
+    )
+
     async def failing_search(_query):
         raise GenericSearchUnavailable("generic search circuit unavailable")
 
@@ -10377,14 +10384,116 @@ async def test_run_research_gate_reports_provider_exception():
 
     assert verdict.status == ResearchStatus.RESEARCH_PROVIDER_ERROR
     assert verdict.skip_reason == "research_provider_error"
+    assert [event.kind for event in events].count("gate_provider_error_verdict") == 1
 
 
 @pytest.mark.asyncio
-async def test_provider_error_does_not_hide_direct_official_evidence_blocker():
+async def test_generic_backend_failure_with_fallback_recovery_is_not_gate_error(
+    monkeypatch,
+):
+    events = []
+    monkeypatch.setattr(research_gate_module.cfg, "generic_search_circuit_mode", "enforce")
+    monkeypatch.setattr(
+        research_gate_module,
+        "_log_generic_search_circuit_event",
+        events.append,
+    )
+    monkeypatch.setattr(
+        research_gate_module,
+        "_rss_search",
+        lambda _query: (_ for _ in ()).throw(TimeoutError("private RSS payload")),
+    )
+    monkeypatch.setattr(research_gate_module, "_duckduckgo_lite_search", lambda _query: [])
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
+        SimpleNamespace(
+            ticker="KXIRANCRUDE-26JUL13-T3.8",
+            title="Will Iran crude oil production be at least 3.8M bpd?",
+            rules_primary="OPEC MOMR secondary sources decide the market.",
+            rules_secondary="Later revisions ignored.",
+            settlement_sources=(),
+        ),
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=research_gate_module._run_generic_search,
+        adjudicator=_fake_adjudicator,
+    )
+
+    assert verdict.status != ResearchStatus.RESEARCH_PROVIDER_ERROR
+    assert [event.kind for event in events].count("provider_error") > 0
+    assert [event.kind for event in events].count("gate_provider_error_verdict") == 0
+
+
+@pytest.mark.asyncio
+async def test_enforced_open_blocked_generic_search_emits_one_gate_error_verdict(
+    monkeypatch,
+):
+    events = []
+    monkeypatch.setattr(research_gate_module.cfg, "generic_search_circuit_mode", "enforce")
+    monkeypatch.setattr(
+        research_gate_module,
+        "_log_generic_search_circuit_event",
+        events.append,
+    )
+    monkeypatch.setattr(
+        research_gate_module,
+        "_rss_search",
+        lambda _query: (_ for _ in ()).throw(TimeoutError("private RSS payload")),
+    )
+    monkeypatch.setattr(
+        research_gate_module,
+        "_duckduckgo_lite_search",
+        lambda _query: (_ for _ in ()).throw(ConnectionError("private DDG payload")),
+    )
+    with pytest.raises(GenericSearchUnavailable):
+        await research_gate_module._run_generic_search(
+            ResearchQuery("private pre-open query", "supporting", "reputable_secondary")
+        )
+    events.clear()
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
+        SimpleNamespace(
+            ticker="KXIRANCRUDE-26JUL13-T3.8",
+            title="Will Iran crude oil production be at least 3.8M bpd?",
+            rules_primary="OPEC MOMR secondary sources decide the market.",
+            rules_secondary="Later revisions ignored.",
+            settlement_sources=(),
+        ),
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=research_gate_module._run_generic_search,
+        adjudicator=_fake_adjudicator,
+    )
+
+    assert verdict.status == ResearchStatus.RESEARCH_PROVIDER_ERROR
+    assert [event.kind for event in events].count("gate_provider_error_verdict") == 1
+    assert "private pre-open query" not in repr(events)
+
+
+@pytest.mark.asyncio
+async def test_provider_error_does_not_hide_direct_official_evidence_blocker(
+    monkeypatch,
+):
     fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    events = []
+    monkeypatch.setattr(
+        research_gate_module,
+        "_log_generic_search_circuit_event",
+        events.append,
+    )
 
     async def failing_search(_query):
-        raise RuntimeError("rss unavailable")
+        raise GenericSearchUnavailable("private generic search unavailable")
 
     async def direct_fetcher(url, source_class, claim_type):
         return ResearchEvidence(
@@ -10436,6 +10545,7 @@ async def test_provider_error_does_not_hide_direct_official_evidence_blocker():
     assert verdict.status == ResearchStatus.NEEDS_RESEARCH
     assert verdict.skip_reason != "research_provider_error"
     assert {item.source_name for item in verdict.evidence} == {"BEA"}
+    assert [event.kind for event in events].count("gate_provider_error_verdict") == 0
 
 
 @pytest.mark.asyncio

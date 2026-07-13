@@ -891,10 +891,13 @@ def print_research_gate_section(
     print(f"mode       : {mode} ({mode_source})")
     print(f"max_queries: {max_queries} ({max_queries_source})")
     print(f"timeout_s  : {timeout} ({timeout_source})")
+    search_circuit_mode = search_circuit_mode.strip()
+    search_circuit_suffix = (
+        "" if search_circuit_mode in {"off", "shadow", "enforce"} else " INVALID"
+    )
     print(
-        "search_cb : "
-        f"{search_circuit_mode.strip().lower() or 'shadow'} "
-        f"({search_circuit_mode_source})"
+        f"search_cb : {search_circuit_mode} "
+        f"({search_circuit_mode_source}){search_circuit_suffix}"
     )
     profile_path = Path("docs/governance/research-shadow.env.example")
     activation = evaluate_activation_profile(repo_root, profile_path)

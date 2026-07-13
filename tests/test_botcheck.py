@@ -277,6 +277,38 @@ def test_print_research_gate_section_process_env_overrides_dotenv_search_circuit
     assert "search_cb : off (process-env)" in capsys.readouterr().out
 
 
+def test_print_research_gate_section_preserves_invalid_process_env_search_circuit_case(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("GENERIC_SEARCH_CIRCUIT_MODE", " ENFORCE ")
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    assert "search_cb : ENFORCE (process-env) INVALID" in capsys.readouterr().out
+
+
+def test_print_research_gate_section_preserves_invalid_dotenv_search_circuit_case(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("GENERIC_SEARCH_CIRCUIT_MODE", raising=False)
+    (tmp_path / ".env").write_text(
+        "GENERIC_SEARCH_CIRCUIT_MODE=Shadow\n",
+        encoding="utf-8",
+    )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(tmp_path, stats, now=now)
+
+    assert "search_cb : Shadow (.env) INVALID" in capsys.readouterr().out
+
+
 def test_print_research_gate_section_warns_when_disabled(capsys, tmp_path, monkeypatch):
     monkeypatch.delenv("REAL_WEB_RESEARCH_MODE", raising=False)
     monkeypatch.delenv("REAL_WEB_RESEARCH_MAX_QUERIES", raising=False)

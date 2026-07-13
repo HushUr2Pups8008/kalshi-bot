@@ -32,6 +32,7 @@ from zoneinfo import ZoneInfo
 from analysis.generic_search_circuit import (
     GenericSearchCircuit,
     GenericSearchCircuitEvent,
+    GenericSearchUnavailable,
     generic_search_circuit_event_record,
 )
 from config import cfg
@@ -6595,6 +6596,10 @@ async def run_research_gate(
             skip_reason="research_provider_error",
             market_price=observed_market_price,
         )
+        if any(isinstance(error, GenericSearchUnavailable) for error in provider_errors):
+            await _get_generic_search_circuit().emit_telemetry_observation(
+                "gate_provider_error_verdict"
+            )
     return await finalize_verdict(verdict)
 
 

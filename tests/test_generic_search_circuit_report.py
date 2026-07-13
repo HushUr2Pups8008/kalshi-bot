@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from analysis.generic_search_circuit import (
+    GENERIC_SEARCH_CIRCUIT_EVENT_KINDS,
     GENERIC_SEARCH_CIRCUIT_LOG_PREFIX,
     GenericSearchCircuit,
     GenericSearchCircuitEvent,
@@ -64,6 +65,24 @@ def _record(kind: str, timestamp: datetime, **overrides: object) -> str:
     }
     payload.update(overrides)
     return f"2026-07-12 INFO {GENERIC_SEARCH_CIRCUIT_LOG_PREFIX}{json.dumps(payload)}\n"
+
+
+def test_schema_v1_event_kind_enum_is_exact() -> None:
+    assert GENERIC_SEARCH_CIRCUIT_EVENT_KINDS == {
+        "attempt",
+        "blocked",
+        "closed",
+        "double_availability_failure",
+        "gate_provider_error_verdict",
+        "half_open",
+        "open",
+        "probe_cancelled",
+        "probe_failed",
+        "probe_succeeded",
+        "provider_error",
+        "would_block",
+        "would_open",
+    }
 
 
 def test_event_record_is_schema_v1_timestamped_pid_scoped_and_sanitized() -> None:
@@ -128,6 +147,41 @@ async def test_stale_double_failure_still_emits_telemetry_event() -> None:
     assert [event.kind for event in events].count("open") == 1
 
 
+@pytest.mark.asyncio
+async def test_probe_outcomes_emit_explicit_telemetry_events() -> None:
+    now = [0.0]
+    events: list[GenericSearchCircuitEvent] = []
+    circuit = GenericSearchCircuit(
+        mode="enforce",
+        cooldown_seconds=10.0,
+        clock=lambda: now[0],
+        telemetry_sink=events.append,
+    )
+
+    async def unavailable() -> None:
+        raise TimeoutError("private provider payload")
+
+    async def recovered() -> str:
+        return "recovered"
+
+    with pytest.raises(Exception):
+        await circuit.run(unavailable, unavailable)
+    now[0] = 10.0
+    assert await circuit.run(recovered, unavailable) == "recovered"
+    with pytest.raises(Exception):
+        await circuit.run(unavailable, unavailable)
+    now[0] = 20.0
+    with pytest.raises(Exception):
+        await circuit.run(unavailable, unavailable)
+
+    event_kinds = [event.kind for event in events]
+    assert event_kinds.count("probe_succeeded") == 1
+    assert event_kinds.count("probe_failed") == 1
+    succeeded = next(event for event in events if event.kind == "probe_succeeded")
+    assert succeeded.failure_classes == ()
+    assert "private provider payload" not in repr(events)
+
+
 def test_report_aggregates_active_and_rotated_logs_with_window_filtering(
     tmp_path: Path,
 ) -> None:
@@ -156,13 +210,16 @@ def test_report_aggregates_active_and_rotated_logs_with_window_filtering(
 
     assert report["totals"] == {
         "attempts": 2,
+        "backend_provider_errors": 1,
         "double_availability_failures": 1,
+        "gate_provider_error_verdicts": 0,
         "open_transitions": 1,
         "would_open_transitions": 1,
         "blocked_calls": 1,
         "would_block_calls": 1,
         "probes": 1,
-        "provider_error_events": 1,
+        "probe_successes": 0,
+        "probe_failures": 0,
     }
     assert report["latest"]["pid"] == 1234
     assert report["latest"]["state"] == "open"
@@ -251,17 +308,41 @@ def test_report_uses_only_bot_logs_and_deduplicates_rotation_overlap(
     assert report["events_read"] == 3
     assert report["totals"] == {
         "attempts": 1,
+        "backend_provider_errors": 1,
         "double_availability_failures": 1,
+        "gate_provider_error_verdicts": 0,
         "open_transitions": 0,
         "would_open_transitions": 0,
         "blocked_calls": 0,
         "would_block_calls": 0,
         "probes": 0,
-        "provider_error_events": 1,
+        "probe_successes": 0,
+        "probe_failures": 0,
     }
     assert report["latest"]["observed_at"] == (
         now - timedelta(minutes=4)
     ).isoformat()
+
+
+def test_report_separates_backend_gate_and_probe_outcomes(tmp_path: Path) -> None:
+    now = datetime(2026, 7, 12, 20, 0, tzinfo=timezone.utc)
+    log_dir = tmp_path / "app"
+    log_dir.mkdir()
+    (log_dir / "bot.log").write_text(
+        _record("provider_error", now - timedelta(minutes=5))
+        + _record("provider_error", now - timedelta(minutes=4))
+        + _record("gate_provider_error_verdict", now - timedelta(minutes=3))
+        + _record("probe_succeeded", now - timedelta(minutes=2))
+        + _record("probe_failed", now - timedelta(minutes=1)),
+        encoding="utf-8",
+    )
+
+    report = build_report(log_dir=log_dir, since_hours=24, now=now)
+
+    assert report["totals"]["backend_provider_errors"] == 2
+    assert report["totals"]["gate_provider_error_verdicts"] == 1
+    assert report["totals"]["probe_successes"] == 1
+    assert report["totals"]["probe_failures"] == 1
 
 
 def test_report_returns_zero_event_shape_for_missing_log_directory(tmp_path: Path) -> None:

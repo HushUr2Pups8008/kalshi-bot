@@ -10,7 +10,7 @@ import socket
 import time
 import urllib.error
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Literal, TypeVar
 
@@ -30,8 +30,11 @@ GENERIC_SEARCH_CIRCUIT_EVENT_KINDS = frozenset(
         "double_availability_failure",
         "half_open",
         "open",
+        "probe_failed",
         "probe_cancelled",
+        "probe_succeeded",
         "provider_error",
+        "gate_provider_error_verdict",
         "would_block",
         "would_open",
     }
@@ -87,6 +90,8 @@ def generic_search_circuit_event_record(
     observed_at: datetime | None = None,
     pid: int | None = None,
 ) -> str:
+    if event.kind not in GENERIC_SEARCH_CIRCUIT_EVENT_KINDS:
+        raise ValueError(f"unsupported generic search circuit event kind: {event.kind}")
     timestamp = observed_at or datetime.now(timezone.utc)
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=timezone.utc)
@@ -217,6 +222,7 @@ class GenericSearchCircuit:
                             failure_classes,
                         )
                         self._emit_event(event)
+                        self._emit_probe_outcome(event, "probe_failed")
                         raise
 
                     event, double_failure_event = (
@@ -228,6 +234,8 @@ class GenericSearchCircuit:
                     )
                     )
                     self._emit_event(event)
+                    if owner_token is not None:
+                        self._emit_probe_outcome(event, "probe_failed")
                     self._emit_telemetry_event(double_failure_event)
                     diagnostic = ", ".join(failure_classes)
                     raise GenericSearchUnavailable(
@@ -239,6 +247,7 @@ class GenericSearchCircuit:
                 owner_token,
             )
             self._emit_event(event)
+            self._emit_probe_outcome(event, "probe_succeeded")
             return result
         except asyncio.CancelledError:
             event = await self._release_cancelled_owner(
@@ -254,7 +263,22 @@ class GenericSearchCircuit:
                 (_failure_class(exc),),
             )
             self._emit_event(event)
+            self._emit_probe_outcome(event, "probe_failed")
             raise
+
+    async def emit_telemetry_observation(self, kind: str) -> None:
+        if kind not in GENERIC_SEARCH_CIRCUIT_EVENT_KINDS:
+            raise ValueError(f"unsupported generic search circuit event kind: {kind}")
+        async with self._lock:
+            event = self._event_locked(
+                kind=kind,
+                failure_classes=(),
+                remaining_cooldown_seconds=max(
+                    0.0,
+                    self._open_until - self._clock(),
+                ),
+            )
+        self._emit_telemetry_event(event)
 
     def snapshot(self) -> GenericSearchCircuitSnapshot:
         return GenericSearchCircuitSnapshot(
@@ -506,6 +530,21 @@ class GenericSearchCircuit:
 
     def _emit_telemetry_event(self, event: GenericSearchCircuitEvent | None) -> None:
         self._emit_to_sink(self._telemetry_sink, event)
+
+    def _emit_probe_outcome(
+        self,
+        event: GenericSearchCircuitEvent | None,
+        kind: str,
+    ) -> None:
+        if event is None:
+            return
+        self._emit_telemetry_event(
+            replace(
+                event,
+                kind=kind,
+                failure_classes=() if kind == "probe_succeeded" else event.failure_classes,
+            )
+        )
 
     @staticmethod
     def _emit_to_sink(
