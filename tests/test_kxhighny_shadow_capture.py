@@ -409,6 +409,27 @@ async def test_initialize_cancellation_propagates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_set_during_initialize_skips_capture_and_all_network() -> None:
+    stop_event = asyncio.Event()
+
+    class StopDuringInitializeStore(FakeStore):
+        async def initialize(self) -> None:
+            self.initialized += 1
+            stop_event.set()
+
+    store = StopDuringInitializeStore()
+    markets = FakeMarkets((event(),))
+    weather = FakeWeather()
+
+    await task(store=store, markets=markets, weather=weather).run(stop_event)
+
+    assert store.initialized == 1
+    assert markets.series_calls == markets.get_calls == 0
+    assert weather.fetch_calls == 0
+    assert store.batches == []
+
+
+@pytest.mark.asyncio
 async def test_three_due_events_process_exactly_two_with_global_concurrency_one() -> None:
     calls: list[str] = []
     events = (

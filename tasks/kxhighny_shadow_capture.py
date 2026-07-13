@@ -95,6 +95,8 @@ class WeatherShadowCaptureTask:
                     if stop_event is None or not stop_event.is_set():
                         await self._sleep(CAPTURE_CADENCE_SECONDS)
                     continue
+            if stop_event is not None and stop_event.is_set():
+                break
             try:
                 await self.run_capture_once()
             except asyncio.CancelledError:
