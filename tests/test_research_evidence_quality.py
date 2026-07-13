@@ -320,6 +320,23 @@ def test_prior_day_nws_report_is_temporally_valid() -> None:
     assert research_evidence_temporally_valid(evidence) is True
 
 
+def test_nws_report_at_utc_midnight_requires_prior_new_york_civil_date() -> None:
+    retrieved_at = "2026-07-13T00:10:00+00:00"
+    utc_yesterday = SimpleNamespace(
+        metric_name="nws_daily_high_temp_f",
+        published_at="2026-07-12",
+        retrieved_at=retrieved_at,
+    )
+    completed_report = SimpleNamespace(
+        metric_name="nws_daily_high_temp_f",
+        published_at="2026-07-01",
+        retrieved_at=retrieved_at,
+    )
+
+    assert research_evidence_temporally_valid(utc_yesterday) is False
+    assert research_evidence_temporally_valid(completed_report) is True
+
+
 @pytest.mark.parametrize("metric_name", sorted(STRUCTURED_OFFICIAL_RESEARCH_METRICS))
 def test_structured_official_metric_requires_retrieval_timestamp(metric_name: str) -> None:
     evidence = {

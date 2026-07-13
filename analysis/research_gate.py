@@ -29,6 +29,14 @@ from html.parser import HTMLParser
 from typing import Any, Awaitable, Callable, Iterable, Sequence
 from zoneinfo import ZoneInfo
 
+from analysis.generic_search_circuit import (
+    GenericSearchCircuit,
+    GenericSearchCircuitEvent,
+    GenericSearchUnavailable,
+    generic_search_circuit_event_record,
+)
+from config import cfg
+from utils.logger import get_logger
 from utils.research_gaps import research_gap_query_intent, research_questions_for_skip
 from utils.research_evidence_quality import (
     MIN_COUNTER_EVIDENCE_CONFIDENCE,
@@ -40,6 +48,42 @@ from utils.research_evidence_quality import (
     research_evidence_temporally_valid,
     research_source_key,
 )
+
+
+log = get_logger("research_gate")
+_GENERIC_SEARCH_CIRCUIT: GenericSearchCircuit | None = None
+
+
+def _log_generic_search_circuit_event(event: GenericSearchCircuitEvent) -> None:
+    log.info("%s", generic_search_circuit_event_record(event))
+    if event.kind in {"open", "would_open"}:
+        log.warning(
+            "generic_search_circuit kind=%s mode=%s state=%s generation=%d "
+            "failure_classes=%s cooldown_seconds=%.3f "
+            "remaining_cooldown_seconds=%.3f",
+            event.kind,
+            event.mode,
+            event.state,
+            event.generation,
+            ",".join(event.failure_classes),
+            event.cooldown_seconds,
+            event.remaining_cooldown_seconds,
+        )
+
+
+def _get_generic_search_circuit() -> GenericSearchCircuit:
+    global _GENERIC_SEARCH_CIRCUIT
+    if _GENERIC_SEARCH_CIRCUIT is None:
+        _GENERIC_SEARCH_CIRCUIT = GenericSearchCircuit(
+            mode=cfg.generic_search_circuit_mode,
+            telemetry_sink=_log_generic_search_circuit_event,
+        )
+    return _GENERIC_SEARCH_CIRCUIT
+
+
+def _reset_generic_search_circuit_for_tests() -> None:
+    global _GENERIC_SEARCH_CIRCUIT
+    _GENERIC_SEARCH_CIRCUIT = None
 
 
 class ResearchStatus(str, Enum):
@@ -5544,6 +5588,14 @@ def _event_deadline_from_text(text: str) -> date | None:
     return max(parsed_dates) if parsed_dates else None
 
 
+async def _run_generic_search(query: ResearchQuery) -> list[ResearchEvidence]:
+    circuit = _get_generic_search_circuit()
+    return await circuit.run(
+        lambda: asyncio.to_thread(_rss_search, query),
+        lambda: asyncio.to_thread(_duckduckgo_lite_search, query),
+    )
+
+
 async def default_search_provider(query: ResearchQuery) -> list[ResearchEvidence]:
     pending_evidence: list[ResearchEvidence] = []
 
@@ -5601,10 +5653,7 @@ async def default_search_provider(query: ResearchQuery) -> list[ResearchEvidence
         if structured is not None:
             return structured
 
-    try:
-        search_evidence = await asyncio.to_thread(_rss_search, query)
-    except Exception:
-        search_evidence = await asyncio.to_thread(_duckduckgo_lite_search, query)
+    search_evidence = await _run_generic_search(query)
     return [*pending_evidence, *search_evidence]
 
 
@@ -6547,6 +6596,10 @@ async def run_research_gate(
             skip_reason="research_provider_error",
             market_price=observed_market_price,
         )
+        if any(isinstance(error, GenericSearchUnavailable) for error in provider_errors):
+            await _get_generic_search_circuit().emit_telemetry_observation(
+                "gate_provider_error_verdict"
+            )
     return await finalize_verdict(verdict)
 
 

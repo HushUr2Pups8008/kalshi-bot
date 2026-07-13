@@ -1496,6 +1496,11 @@ class BotConfig:
     market_source_hints_emit_records: bool = field(
         default_factory=lambda: _parse_bool_env("MARKET_SOURCE_HINTS_EMIT_RECORDS", "false")
     )
+    generic_search_circuit_mode: str = field(
+        default_factory=lambda: os.getenv(
+            "GENERIC_SEARCH_CIRCUIT_MODE", "shadow"
+        ).strip()
+    )
     real_web_research_mode: str = field(default_factory=lambda: REAL_WEB_RESEARCH_MODE)
     real_web_research_max_queries: int = field(
         default_factory=lambda: REAL_WEB_RESEARCH_MAX_QUERIES
@@ -1587,6 +1592,11 @@ class BotConfig:
             errors.append(
                 "MARKET_SOURCE_HINTS_MODE must be one of off|shadow|advisory|production, "
                 f"got '{self.market_source_hints_mode}'"
+            )
+        if self.generic_search_circuit_mode not in {"off", "shadow", "enforce"}:
+            errors.append(
+                "GENERIC_SEARCH_CIRCUIT_MODE must be one of off|shadow|enforce, "
+                f"got '{self.generic_search_circuit_mode}'"
             )
         if self.real_web_research_mode not in {"off", "shadow", "production"}:
             errors.append(
