@@ -411,7 +411,7 @@ def test_weather_shadow_status_enabled_reads_only_bounded_health(
     botcheck.print_weather_shadow_status(tmp_path)
 
     assert connect_calls == [
-        ((f"file:{db_path}?mode=ro",), {"uri": True})
+        ((f"{db_path.resolve().as_uri()}?mode=ro",), {"uri": True})
     ]
     sql = "\n".join(statements)
     assert "PRAGMA integrity_check" in sql
@@ -429,9 +429,68 @@ def test_weather_shadow_status_enabled_reads_only_bounded_health(
     )
     assert capsys.readouterr().out.strip() == (
         "weather_shadow: on (.env) integrity=ok tables=5/5 "
+        "schema=ok missing=none unexpected=none "
         "rows=snapshots:1,quotes:0,outcomes:0,conflicts:0,checks:0 "
         "last_capture=2026-07-12T18:30:00+00:00"
     )
+
+
+def test_weather_shadow_status_escapes_reserved_path_characters_without_creation(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("ENABLE_WEATHER_SHADOW_CAPTURE", "true")
+    repo_root = tmp_path / "repo ? # % ' apostrophe and space"
+    db_path = repo_root / "data" / "weather_shadow.db"
+    db_path.parent.mkdir(parents=True)
+    with sqlite3.connect(db_path) as conn:
+        for table_name in botcheck.WEATHER_SHADOW_TABLES:
+            extra_column = (
+                ", capture_finished_at TEXT"
+                if table_name == "research_weather_shadow_snapshots"
+                else ""
+            )
+            conn.execute(f'CREATE TABLE "{table_name}" (id INTEGER{extra_column})')
+
+    before = set(tmp_path.rglob("*"))
+
+    botcheck.print_weather_shadow_status(repo_root)
+
+    assert "integrity=ok" in capsys.readouterr().out
+    assert set(tmp_path.rglob("*")) == before
+    assert not (tmp_path / "repo ").exists()
+
+
+def test_weather_shadow_status_reports_missing_and_unexpected_application_tables(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("ENABLE_WEATHER_SHADOW_CAPTURE", "true")
+    db_path = tmp_path / "data" / "weather_shadow.db"
+    db_path.parent.mkdir(parents=True)
+    missing_table = "research_weather_shadow_quotes"
+    unexpected_table = "research_weather_shadow_unexpected"
+    with sqlite3.connect(db_path) as conn:
+        for table_name in botcheck.WEATHER_SHADOW_TABLES:
+            if table_name == missing_table:
+                continue
+            extra_column = (
+                ", capture_finished_at TEXT"
+                if table_name == "research_weather_shadow_snapshots"
+                else ""
+            )
+            conn.execute(f'CREATE TABLE "{table_name}" (id INTEGER{extra_column})')
+        conn.execute(f'CREATE TABLE "{unexpected_table}" (id INTEGER)')
+
+    botcheck.print_weather_shadow_status(tmp_path)
+
+    out = capsys.readouterr().out.strip()
+    assert "tables=4/5 schema=mismatch" in out
+    assert f"missing={missing_table}" in out
+    assert f"unexpected={unexpected_table}" in out
+    assert "rows=snapshots:0,quotes:missing,outcomes:0,conflicts:0,checks:0" in out
 
 
 def test_print_research_gate_section_surfaces_prewarm_backlog(

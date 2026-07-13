@@ -20,6 +20,29 @@ set -euo pipefail
 RETENTION_DAYS=7
 INCLUDE_WEATHER=0
 
+sqlite_dot_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"' "$value"
+}
+
+sqlite_backup() {
+  local source="$1"
+  local destination="$2"
+  local quoted_destination
+  quoted_destination="$(sqlite_dot_quote "$destination")"
+  sqlite3 -readonly "$source" ".backup $quoted_destination"
+}
+
+sqlite_restore() {
+  local destination="$1"
+  local source="$2"
+  local quoted_source
+  quoted_source="$(sqlite_dot_quote "$source")"
+  sqlite3 "$destination" ".restore $quoted_source"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --retention-days) RETENTION_DAYS="$2"; shift 2 ;;
@@ -89,18 +112,18 @@ fi
 mkdir -p "$DEST"
 
 # sqlite3 .backup is online-safe — does not block writers, no torn reads
-sqlite3 "$PAPER_DB" ".backup '$DEST/paper_trades.db'" || {
+sqlite_backup "$PAPER_DB" "$DEST/paper_trades.db" || {
   echo "ERROR: paper_trades.db backup failed" >&2
   exit 2
 }
-sqlite3 "$EVIDENCE_DB" ".backup '$DEST/evidence_store.db'" || {
+sqlite_backup "$EVIDENCE_DB" "$DEST/evidence_store.db" || {
   echo "ERROR: evidence_store.db backup failed" >&2
   exit 2
 }
 
 WEATHER_BACKED_UP=0
 if [[ "$INCLUDE_WEATHER" == "1" && -f "$WEATHER_DB" ]]; then
-  sqlite3 "$WEATHER_DB" ".backup '$DEST/weather_shadow.db'" || {
+  sqlite_backup "$WEATHER_DB" "$DEST/weather_shadow.db" || {
     echo "ERROR: weather_shadow.db backup failed" >&2
     exit 2
   }
@@ -124,13 +147,16 @@ if [[ "$WEATHER_BACKED_UP" == "1" ]]; then
     echo "ERROR: snapshot empty: $DEST/weather_shadow.db" >&2
     exit 2
   fi
-  WEATHER_RESTORE_DB="$(mktemp "${TMPDIR:-/tmp}/kalshi-weather-restore.XXXXXX")"
+  if ! WEATHER_RESTORE_DB="$(mktemp "${TMPDIR:-/tmp}/kalshi-weather-restore.XXXXXX")"; then
+    echo "ERROR: weather_shadow.db restore temp creation failed" >&2
+    exit 2
+  fi
   trap 'rm -f "$WEATHER_RESTORE_DB" "$WEATHER_RESTORE_DB-wal" "$WEATHER_RESTORE_DB-shm"' EXIT
-  sqlite3 "$WEATHER_RESTORE_DB" ".restore '$DEST/weather_shadow.db'" || {
+  sqlite_restore "$WEATHER_RESTORE_DB" "$DEST/weather_shadow.db" || {
     echo "ERROR: weather_shadow.db restore validation failed" >&2
     exit 2
   }
-  WEATHER_INTEGRITY="$(sqlite3 -readonly "$WEATHER_RESTORE_DB" "PRAGMA integrity_check;")" || {
+  WEATHER_INTEGRITY="$(sqlite3 "$WEATHER_RESTORE_DB" "PRAGMA integrity_check;")" || {
     echo "ERROR: weather_shadow.db integrity check failed" >&2
     exit 2
   }

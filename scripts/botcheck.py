@@ -799,18 +799,22 @@ def print_weather_shadow_status(repo_root: Path) -> None:
         return
 
     try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        db_uri = f"{db_path.resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(db_uri, uri=True) as conn:
             integrity_row = conn.execute("PRAGMA integrity_check").fetchone()
             integrity = str(integrity_row[0]) if integrity_row else "unknown"
-            placeholders = ", ".join("?" for _ in WEATHER_SHADOW_TABLES)
-            present_tables = {
+            application_tables = {
                 str(row[0])
                 for row in conn.execute(
                     "SELECT name FROM sqlite_schema "
-                    f"WHERE type = 'table' AND name IN ({placeholders})",
-                    tuple(WEATHER_SHADOW_TABLES),
+                    "WHERE type = 'table' "
+                    "AND name GLOB 'research_weather_shadow_*'"
                 )
             }
+            expected_tables = set(WEATHER_SHADOW_TABLES)
+            present_tables = application_tables & expected_tables
+            missing_tables = expected_tables - application_tables
+            unexpected_tables = application_tables - expected_tables
             counts: dict[str, int | None] = {}
             for table_name, label in WEATHER_SHADOW_TABLES.items():
                 if table_name not in present_tables:
@@ -840,9 +844,14 @@ def print_weather_shadow_status(repo_root: Path) -> None:
         f"{label}:{'missing' if count is None else f'{WEATHER_SHADOW_ROW_COUNT_LIMIT}+' if count > WEATHER_SHADOW_ROW_COUNT_LIMIT else count}"
         for label, count in counts.items()
     )
+    missing_summary = ",".join(sorted(missing_tables)) or "none"
+    unexpected_summary = ",".join(sorted(unexpected_tables)) or "none"
+    schema_status = "ok" if not missing_tables and not unexpected_tables else "mismatch"
     print(
         f"weather_shadow: on ({source}) integrity={integrity} "
         f"tables={len(present_tables)}/{len(WEATHER_SHADOW_TABLES)} "
+        f"schema={schema_status} missing={missing_summary} "
+        f"unexpected={unexpected_summary} "
         f"rows={row_summary} last_capture={last_capture or 'n/a'}"
     )
 
