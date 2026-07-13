@@ -163,6 +163,9 @@ class FakeStore:
         self.claimed.add(batch.capture_key)
         return SimpleNamespace(status="inserted", snapshot_id=batch.snapshot_id)
 
+    async def list_outcome_targets(self, now: datetime) -> tuple[object, ...]:
+        return ()
+
 
 class FakeMarkets:
     def __init__(self, events: tuple[RetrievedEvent, ...], calls: list[str] | None = None) -> None:

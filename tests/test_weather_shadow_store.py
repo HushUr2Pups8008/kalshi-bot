@@ -741,14 +741,32 @@ async def test_list_outcome_targets_persists_missed_day_quarantine(tmp_path: Pat
     assert state.labeled is True
     assert state.sealed is False
     assert state.quarantined is True
-    assert await reopened.list_outcome_targets(dt("2026-08-01T00:00:00Z")) == (
-        outcome_batch_target(),
-    )
+    assert await reopened.list_outcome_targets(dt("2026-08-01T00:00:00Z")) == ()
     conflicts = rows(
         db_path,
         "SELECT entity_key FROM research_weather_shadow_conflicts ORDER BY entity_key",
     )
     assert ("outcome_check:KXHIGHNY-26JUL13:2026-07-16:daily",) in conflicts
+
+
+@pytest.mark.asyncio
+async def test_completed_daily_check_suppresses_same_utc_day_target_after_reopen(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "weather.db"
+    store = WeatherShadowStore(db_path=db_path)
+    await store.initialize()
+    await store.append_capture(batch())
+    await store.append_outcome_batch(outcome_batch())
+    check_day = date(2026, 7, 15)
+
+    assert await store.list_outcome_targets(dt("2026-07-15T01:00:00Z")) == (
+        outcome_batch_target(),
+    )
+    await store.append_outcome_check(outcome_check(check_day))
+
+    reopened = WeatherShadowStore(db_path=db_path)
+    assert await reopened.list_outcome_targets(dt("2026-07-15T23:59:59Z")) == ()
 
 
 def outcome_batch_target() -> object:

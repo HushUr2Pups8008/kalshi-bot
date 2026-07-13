@@ -12,10 +12,12 @@ from kalshi.public_market_data import PublicMarketDataReader
 from tasks.kxhighny_shadow_validation import (
     WeatherShadowValidationError,
     build_capture_batch,
+    canonical_json,
     canonical_sha256,
     derive_weather_features,
     parse_event_target_date,
     select_due_horizon,
+    validate_outcome_batch,
 )
 from tasks.weather_shadow_store import CaptureWriteResult, WeatherShadowStore
 from weather.nws_public_client import NwsPublicClient
@@ -26,12 +28,15 @@ from weather.shadow_models import (
     CaptureBatch,
     CaptureCycleResult,
     HorizonBucket,
+    OutcomeCheck,
+    OutcomeTarget,
     RetrievedEvent,
 )
 
 CAPTURE_CADENCE_SECONDS = 300
 MAX_EVENTS_PER_CYCLE = 2
 NETWORK_BUILD_BUDGET_SECONDS = 20
+LABEL_BUILD_BUDGET_SECONDS = 20
 _SERIES_TICKER = "KXHIGHNY"
 _STATION_ID = "KNYC"
 
@@ -97,17 +102,104 @@ class WeatherShadowCaptureTask:
                     continue
             if stop_event is not None and stop_event.is_set():
                 break
-            try:
-                await self.run_capture_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning(
-                    "KXHIGHNY weather shadow capture cycle failed (%s)",
-                    type(exc).__name__,
-                )
+            await asyncio.gather(
+                self._run_lane("capture", self.run_capture_once),
+                self._run_lane("label", self.run_label_once),
+            )
             if stop_event is None or not stop_event.is_set():
                 await self._sleep(CAPTURE_CADENCE_SECONDS)
+
+    @staticmethod
+    async def _run_lane(name: str, operation: Callable[[], Awaitable[object]]) -> None:
+        try:
+            await operation()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "KXHIGHNY weather shadow %s cycle failed (%s)",
+                name,
+                type(exc).__name__,
+            )
+
+    async def run_label_once(self) -> None:
+        """Revalidate captured outcome targets within an independent budget."""
+        try:
+            async with asyncio.timeout(LABEL_BUILD_BUDGET_SECONDS):
+                targets = await self._store.list_outcome_targets(self._now())
+                for target in targets:
+                    try:
+                        await self.label_event(target)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        logger.warning(
+                            "KXHIGHNY weather shadow event label failed (%s)",
+                            type(exc).__name__,
+                        )
+        except TimeoutError:
+            logger.warning("KXHIGHNY weather shadow label budget expired")
+
+    async def label_event(self, target: OutcomeTarget) -> None:
+        """Validate and persist one captured event's public outcome evidence."""
+        state = await self._store.label_state(target.event_ticker)
+        if state.sealed or state.quarantined:
+            return
+        event_payload, cli_product = await asyncio.gather(
+            self._label_markets.get_event(event_ticker=target.event_ticker),
+            self._label_weather.fetch_daily_label(
+                target_date=target.target_date,
+                station_id=_STATION_ID,
+            ),
+        )
+        if cli_product is None:
+            return
+        fingerprints = await self._store.capture_fingerprints(target.event_ticker)
+        batch = validate_outcome_batch(event_payload, cli_product, fingerprints)
+        if batch.target_date != target.target_date:
+            raise WeatherShadowValidationError("outcome target identity changed")
+        if not state.labeled:
+            await self._store.append_outcome_batch(batch)
+            return
+        if len(state.outcome_batch_ids) != 1:
+            return
+
+        baseline_hash = state.outcome_batch_ids[0]
+        observed_hash = batch.outcome_batch_id
+        agrees = observed_hash == baseline_hash
+        if not agrees:
+            await self._store.append_outcome_batch(batch)
+        checked_at = self._now()
+        check_date = checked_at.astimezone(timezone.utc).date()
+        details = canonical_json(
+            {
+                "event_ticker": target.event_ticker,
+                "official_evidence_id": cli_product.evidence_id,
+                "official_product_id": cli_product.product_id,
+                "official_retrieved_at": cli_product.retrieved_at,
+                "settlement_observed_at": event_payload.retrieved_at,
+            }
+        )
+        check = OutcomeCheck(
+            check_id=canonical_sha256(
+                {
+                    "event_ticker": target.event_ticker,
+                    "check_date_utc": check_date,
+                    "observed_batch_hash": observed_hash,
+                    "baseline_batch_hash": baseline_hash,
+                }
+            ),
+            event_ticker=target.event_ticker,
+            check_date_utc=check_date,
+            checked_at=checked_at,
+            check_kind="daily",
+            observed_batch_hash=observed_hash,
+            baseline_batch_hash=baseline_hash,
+            agrees_with_baseline=agrees,
+            details_json=details,
+        )
+        await self._store.append_outcome_check(check)
+        await self._store.try_seal_event(target.event_ticker, checked_at)
 
     async def run_capture_once(self) -> CaptureCycleResult:
         prepared: list[_PreparedCapture] = []

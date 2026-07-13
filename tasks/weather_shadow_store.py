@@ -242,11 +242,29 @@ class WeatherShadowStore:
             ).fetchall()
             targets: list[OutcomeTarget] = []
             for event_ticker, target_date in captures:
-                _record_missed_check_conflicts(conn, str(event_ticker), now)
-                state = _label_state(conn, str(event_ticker))
+                ticker = str(event_ticker)
+                _record_missed_check_conflicts(conn, ticker, now)
+                state = _label_state(conn, ticker)
                 if state.sealed:
                     continue
-                targets.append(OutcomeTarget(str(event_ticker), date.fromisoformat(str(target_date))))
+                target = OutcomeTarget(ticker, date.fromisoformat(str(target_date)))
+                if not state.labeled:
+                    targets.append(target)
+                    continue
+                baseline = _outcome_baseline(conn, ticker)
+                if baseline is None:
+                    continue
+                today = now.astimezone(timezone.utc).date()
+                if today not in _expected_check_dates(baseline[1]):
+                    continue
+                checked = conn.execute(
+                    "SELECT 1 FROM research_weather_shadow_outcome_checks "
+                    "WHERE event_ticker = ? AND check_date_utc = ? "
+                    "AND check_kind = 'daily' LIMIT 1",
+                    (ticker, today.isoformat()),
+                ).fetchone()
+                if checked is None:
+                    targets.append(target)
             return tuple(targets)
 
         return self._write(write)

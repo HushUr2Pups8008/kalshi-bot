@@ -17,10 +17,14 @@ from weather.shadow_models import (
     WEATHER_SHADOW_CAPTURE_MODEL_VERSION,
     WEATHER_SHADOW_FEE_SCHEDULE_VERSION,
     CaptureBatch,
+    Fingerprints,
     HorizonBucket,
     NwsCapturePayloads,
+    NwsDailyLabel,
     NwsGridForecast,
     NwsHourlyForecast,
+    OutcomeBatch,
+    OutcomeRow,
     RetrievedEvent,
     RetrievedMarket,
     ShadowQuote,
@@ -57,6 +61,10 @@ class LadderValidationError(WeatherShadowValidationError):
 
 class CaptureTimingError(WeatherShadowValidationError):
     """Raised when inputs do not share a leakage-free capture time."""
+
+
+class OutcomeValidationError(WeatherShadowValidationError):
+    """Raised when public settlement or official label evidence is incoherent."""
 
 
 def _require_aware(value: object, error_type: type[WeatherShadowValidationError], name: str) -> None:
@@ -453,6 +461,211 @@ def validate_one_hot_ladder(quotes: Sequence[ShadowQuote]) -> None:
             _require_decimal(getattr(item, name), name)
         if item.last_price_cents is not None and not 0 <= item.last_price_cents <= 100:
             raise LadderValidationError("last price cents are invalid")
+
+
+def _contains_high(item: ShadowQuote | RetrievedMarket, high_f: int) -> bool:
+    return (
+        (item.lower_bound_f is None or item.lower_bound_f <= high_f)
+        and (item.upper_bound_f is None or high_f <= item.upper_bound_f)
+    )
+
+
+def _official_high_ticker(
+    high_f: Decimal,
+    markets: Sequence[ShadowQuote | RetrievedMarket],
+) -> str:
+    if (
+        type(high_f) is not Decimal
+        or not high_f.is_finite()
+        or high_f != high_f.to_integral_value()
+    ):
+        raise OutcomeValidationError("official high must be an integer Fahrenheit value")
+    matches = [item.market_ticker for item in markets if _contains_high(item, int(high_f))]
+    if len(matches) != 1:
+        raise OutcomeValidationError("official high must match exactly one sibling market")
+    return matches[0]
+
+
+def official_high_market(high_f: Decimal, quotes: Sequence[ShadowQuote]) -> str:
+    """Return the unique sibling ticker containing an official integer high."""
+    return _official_high_ticker(high_f, quotes)
+
+
+def _validate_cli_product(cli_product: NwsDailyLabel, target_date: date) -> None:
+    for name, value in (
+        ("official issued_at", cli_product.issued_at),
+        ("official retrieved_at", cli_product.retrieved_at),
+    ):
+        _require_aware(value, OutcomeValidationError, name)
+    if cli_product.issued_at > cli_product.retrieved_at:
+        raise OutcomeValidationError("official product cannot be issued after retrieval")
+    if cli_product.target_date != target_date:
+        raise OutcomeValidationError("official product target date does not match event civil day")
+    if cli_product.station_id != "KNYC":
+        raise OutcomeValidationError("official product must identify KNYC")
+    if re.fullmatch(r"[A-Za-z0-9-]+", cli_product.product_id) is None:
+        raise OutcomeValidationError("official product id is invalid")
+    expected_url = f"https://api.weather.gov/products/{cli_product.product_id}"
+    if cli_product.source_url != expected_url:
+        raise OutcomeValidationError("official product source identity is invalid")
+    payload = _canonical_raw_json(
+        cli_product.raw_payload_json,
+        "official raw_payload_json",
+        OutcomeValidationError,
+    )
+    if not isinstance(payload, dict):
+        raise OutcomeValidationError("official raw payload must be an object")
+    if (
+        payload.get("id") != cli_product.product_id
+        or payload.get("@id") != expected_url
+        or payload.get("productCode") != "CLI"
+        or payload.get("issuingOffice") != "KOKX"
+    ):
+        raise OutcomeValidationError("official CLI payload identity is invalid")
+    raw_issuance = payload.get("issuanceTime")
+    if not isinstance(raw_issuance, str):
+        raise OutcomeValidationError("official CLI issuance identity is invalid")
+    try:
+        payload_issued_at = datetime.fromisoformat(raw_issuance.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise OutcomeValidationError("official CLI issuance identity is invalid") from exc
+    if payload_issued_at.tzinfo is None or _utc(payload_issued_at) != _utc(cli_product.issued_at):
+        raise OutcomeValidationError("official CLI issuance identity is invalid")
+    if cli_product.evidence_id != canonical_sha256(payload):
+        raise OutcomeValidationError("official evidence id does not match CLI payload")
+    product_text = payload.get("productText")
+    if not isinstance(product_text, str):
+        raise OutcomeValidationError("official CLI product text is missing")
+    report_date = re.search(
+        r"THE CENTRAL PARK NY CLIMATE SUMMARY FOR ([A-Z]+ \d{1,2} \d{4})",
+        product_text,
+    )
+    maximum = re.search(r"\bMAXIMUM\s+(-?\d+(?:\.\d+)?)\b", product_text)
+    if report_date is None or maximum is None:
+        raise OutcomeValidationError("official CLI target or maximum is missing")
+    try:
+        parsed_date = datetime.strptime(report_date.group(1), "%B %d %Y").date()
+        parsed_high = Decimal(maximum.group(1))
+    except (ValueError, ArithmeticError) as exc:
+        raise OutcomeValidationError("official CLI target or maximum is malformed") from exc
+    if parsed_date != target_date or parsed_high != cli_product.official_high_f:
+        raise OutcomeValidationError("official CLI content does not match normalized label")
+
+
+def validate_outcome_batch(
+    event_payload: RetrievedEvent,
+    cli_product: NwsDailyLabel,
+    captured_fingerprints: Mapping[str, Fingerprints],
+) -> OutcomeBatch:
+    """Build a deterministic complete outcome batch from public evidence."""
+    target_date = parse_event_target_date(event_payload.event_ticker)
+    _require_aware(event_payload.retrieved_at, OutcomeValidationError, "settlement retrieved_at")
+    if event_payload.status not in {"finalized", "settled"}:
+        raise OutcomeValidationError("event must be finalized or settled")
+    markets = event_payload.markets
+    enumerated = event_payload.market_tickers
+    retrieved = tuple(item.market_ticker for item in markets)
+    if (
+        len(markets) <= 1
+        or len(enumerated) != len(set(enumerated))
+        or len(retrieved) != len(set(retrieved))
+        or set(enumerated) != set(retrieved)
+        or set(captured_fingerprints) != set(retrieved)
+    ):
+        raise OutcomeValidationError("complete captured sibling enumeration is required")
+    if any(
+        item.event_ticker != event_payload.event_ticker
+        or item.status not in {"finalized", "settled"}
+        or item.result not in {"yes", "no"}
+        or captured_fingerprints.get(item.market_ticker) != item.fingerprints
+        for item in markets
+    ):
+        raise OutcomeValidationError("settled siblings or capture fingerprints are invalid")
+    if sum(item.result == "yes" for item in markets) != 1:
+        raise OutcomeValidationError("complete outcome ladder requires exactly one YES")
+
+    _validate_cli_product(cli_product, target_date)
+    winning_ticker = _official_high_ticker(cli_product.official_high_f, markets)
+    yes_ticker = next(item.market_ticker for item in markets if item.result == "yes")
+    if winning_ticker != yes_ticker:
+        raise OutcomeValidationError("settled YES does not match official integer high")
+
+    official_inputs = {
+        "target_date": cli_product.target_date,
+        "station_id": cli_product.station_id,
+        "official_high_f": cli_product.official_high_f,
+        "issued_at": cli_product.issued_at,
+        "source_url": cli_product.source_url,
+        "product_id": cli_product.product_id,
+        "evidence_id": cli_product.evidence_id,
+    }
+    stable_rows: list[tuple[RetrievedMarket, str]] = []
+    for item in sorted(markets, key=lambda sibling: sibling.market_ticker):
+        settlement_inputs = {
+            "event_ticker": event_payload.event_ticker,
+            "event_status": event_payload.status,
+            "market_ticker": item.market_ticker,
+            "market_status": item.status,
+            "result": item.result,
+            "lower_bound_f": item.lower_bound_f,
+            "upper_bound_f": item.upper_bound_f,
+            "is_lower_tail": item.is_lower_tail,
+            "is_upper_tail": item.is_upper_tail,
+            "fingerprints": item.fingerprints,
+        }
+        stable_rows.append(
+            (
+                item,
+                canonical_sha256(
+                    {"settlement": settlement_inputs, "official": official_inputs}
+                ),
+            )
+        )
+    outcome_batch_id = canonical_sha256(
+        {
+            "event_ticker": event_payload.event_ticker,
+            "target_date": target_date,
+            "source_payload_hashes": tuple(value for _, value in stable_rows),
+        }
+    )
+    settlement_observed_at = event_payload.retrieved_at
+    label_available_at = max(settlement_observed_at, cli_product.retrieved_at)
+    rows = tuple(
+        OutcomeRow(
+            outcome_id=canonical_sha256(
+                {
+                    "outcome_batch_id": outcome_batch_id,
+                    "market_ticker": item.market_ticker,
+                    "source_payload_hash": source_hash,
+                }
+            ),
+            outcome_batch_id=outcome_batch_id,
+            market_ticker=item.market_ticker,
+            event_ticker=event_payload.event_ticker,
+            expected_sibling_count=len(markets),
+            result=item.result,  # type: ignore[arg-type]
+            kalshi_status=item.status,
+            settlement_observed_at=settlement_observed_at,
+            source_payload_hash=source_hash,
+            fingerprints=item.fingerprints,
+            official_high_f=cli_product.official_high_f,
+            official_evidence_id=cli_product.evidence_id,
+            official_source_url=cli_product.source_url,
+            official_product_id=cli_product.product_id,
+            official_issued_at=cli_product.issued_at,
+            official_retrieved_at=cli_product.retrieved_at,
+            label_available_at=label_available_at,
+        )
+        for item, source_hash in stable_rows
+    )
+    return OutcomeBatch(
+        outcome_batch_id=outcome_batch_id,
+        event_ticker=event_payload.event_ticker,
+        target_date=target_date,
+        settlement_observed_at=settlement_observed_at,
+        label_available_at=label_available_at,
+        rows=rows,
+    )
 
 
 def validate_capture_timing(batch: CaptureBatch, max_sweep: timedelta) -> None:
