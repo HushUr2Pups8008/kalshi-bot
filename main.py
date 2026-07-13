@@ -1283,6 +1283,27 @@ class TradingBot:
             name="research_prewarm",
         )
 
+    def _create_weather_shadow_runtime_task(self) -> asyncio.Task | None:
+        if not bool(getattr(cfg, "enable_weather_shadow_capture", False)):
+            return None
+
+        from kalshi.public_market_data import KalshiPublicMarketDataReader
+        from tasks.kxhighny_shadow_capture import WeatherShadowCaptureTask
+        from tasks.weather_shadow_store import WeatherShadowStore
+        from weather.nws_public_client import NwsPublicClient
+
+        supervisor = WeatherShadowCaptureTask(
+            store=WeatherShadowStore(),
+            capture_markets=KalshiPublicMarketDataReader(),
+            capture_weather=NwsPublicClient(),
+            label_markets=KalshiPublicMarketDataReader(),
+            label_weather=NwsPublicClient(),
+        )
+        return asyncio.create_task(
+            supervisor.run(),
+            name="weather_shadow_capture",
+        )
+
     async def _run_targeted_research_prewarm(self, market, skip_reason: str) -> None:
         prewarm = ResearchPrewarmTask(
             max_queries=int(getattr(cfg, "real_web_research_max_queries", 6)),
@@ -3487,6 +3508,9 @@ class TradingBot:
         research_prewarm_task = self._create_research_prewarm_runtime_task()
         if research_prewarm_task is not None:
             tasks.append(research_prewarm_task)
+        weather_shadow_task = self._create_weather_shadow_runtime_task()
+        if weather_shadow_task is not None:
+            tasks.append(weather_shadow_task)
 
         try:
             await asyncio.gather(*tasks)
@@ -3495,8 +3519,14 @@ class TradingBot:
         finally:
             for task in tasks:
                 task.cancel()
-            await self.cancel_targeted_research_prewarm_tasks()
-            self.ws.stop()
+            try:
+                if weather_shadow_task is not None:
+                    await asyncio.gather(weather_shadow_task, return_exceptions=True)
+            finally:
+                try:
+                    await self.cancel_targeted_research_prewarm_tasks()
+                finally:
+                    self.ws.stop()
 
     def stop(self) -> None:
         self.ws.stop()

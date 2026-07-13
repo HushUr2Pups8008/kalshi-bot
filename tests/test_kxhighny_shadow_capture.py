@@ -386,17 +386,18 @@ async def test_initialize_failure_is_sanitized_retried_and_does_not_cancel_sibli
 
 
 @pytest.mark.asyncio
-async def test_initialize_cancellation_propagates() -> None:
+async def test_initialize_cancellation_drains_before_propagating() -> None:
     started = asyncio.Event()
-    cancelled = asyncio.Event()
+    release = asyncio.Event()
+    completed = asyncio.Event()
 
     class BlockingStore(FakeStore):
         async def initialize(self) -> None:
             started.set()
             try:
-                await asyncio.Future()
+                await release.wait()
             finally:
-                cancelled.set()
+                completed.set()
 
     owner = asyncio.create_task(
         task(
@@ -405,10 +406,15 @@ async def test_initialize_cancellation_propagates() -> None:
     )
     await started.wait()
     owner.cancel()
+    await asyncio.sleep(0)
+
+    assert owner.done() is False
+    assert completed.is_set() is False
+    release.set()
 
     with pytest.raises(asyncio.CancelledError):
         await owner
-    assert cancelled.is_set()
+    assert completed.is_set()
 
 
 @pytest.mark.asyncio

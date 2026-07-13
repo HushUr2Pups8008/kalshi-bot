@@ -95,7 +95,15 @@ class WeatherShadowCaptureTask:
         while stop_event is None or not stop_event.is_set():
             if not initialized:
                 try:
-                    await self._store.initialize()
+                    initialization = asyncio.create_task(
+                        self._store.initialize(),
+                        name="kxhighny-shadow-initialize",
+                    )
+                    try:
+                        await asyncio.shield(initialization)
+                    except asyncio.CancelledError:
+                        await self._drain_cancelled_persistence(initialization)
+                        raise
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:

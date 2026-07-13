@@ -44,6 +44,12 @@ def _default_research_off(monkeypatch):
         False,
         raising=False,
     )
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "enable_weather_shadow_capture",
+        False,
+        raising=False,
+    )
 
 
 def _make_bot_stub():
