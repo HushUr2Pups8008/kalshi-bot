@@ -49,6 +49,7 @@ DB_SNAPSHOTS_DIR = BACKUPS_ROOT / "db_snapshots"
 DB_STATE_DIR = REPO_ROOT / "data"
 PAPER_TRADES_DB = DB_STATE_DIR / "paper_trades.db"
 EVIDENCE_STORE_DB = DB_STATE_DIR / "evidence_store.db"
+WEATHER_SHADOW_DB = DB_STATE_DIR / "weather_shadow.db"
 RUNTIME_STATE_DIR = DB_STATE_DIR / "runtime"
 
 RAW_PATHS = {
