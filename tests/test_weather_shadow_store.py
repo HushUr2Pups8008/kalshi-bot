@@ -612,6 +612,75 @@ async def test_append_outcome_check_rejects_caller_supplied_seal(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("timing", ["naive", "predated", "future_dated"])
+async def test_daily_check_rejects_invalid_utc_date_at_store_boundary(
+    tmp_path: Path, timing: str
+) -> None:
+    store = WeatherShadowStore(db_path=tmp_path / "weather.db")
+    await store.initialize()
+    source = outcome_check(date(2026, 7, 15))
+    if timing == "naive":
+        source = replace(source, checked_at=datetime(2026, 7, 15, 12))
+    elif timing == "predated":
+        source = replace(source, checked_at=dt("2026-07-14T23:59:59Z"))
+    else:
+        source = replace(source, checked_at=dt("2026-07-16T00:00:00Z"))
+
+    with pytest.raises(ValueError, match="UTC date") as error:
+        await store.append_outcome_check(source)
+
+    assert type(error.value).__name__ == "OutcomeCheckTimingError"
+    assert rows(store.db_path, "SELECT * FROM research_weather_shadow_outcome_checks") == []
+
+
+@pytest.mark.asyncio
+async def test_forged_correction_days_sharing_label_day_timestamp_cannot_seal_or_quarantine(
+    tmp_path: Path,
+) -> None:
+    store = WeatherShadowStore(db_path=tmp_path / "weather.db")
+    await store.initialize()
+    await store.append_outcome_batch(outcome_batch())
+    forged_timestamp = dt("2026-07-14T12:00:00Z")
+
+    for offset in range(1, 8):
+        forged = replace(
+            outcome_check(date(2026, 7, 14) + timedelta(days=offset)),
+            checked_at=forged_timestamp,
+        )
+        with pytest.raises(ValueError, match="UTC date"):
+            await store.append_outcome_check(forged)
+
+    state = await store.label_state("KXHIGHNY-26JUL13")
+    assert (state.labeled, state.sealed, state.quarantined, state.daily_check_count) == (
+        True,
+        False,
+        False,
+        0,
+    )
+    result = await store.try_seal_event("KXHIGHNY-26JUL13", dt("2026-07-14T20:00:00Z"))
+    assert result.status == "not_ready"
+    assert (await store.label_state("KXHIGHNY-26JUL13")).quarantined is False
+
+
+@pytest.mark.asyncio
+async def test_daily_check_accepts_offset_timestamp_matching_utc_date(tmp_path: Path) -> None:
+    store = WeatherShadowStore(db_path=tmp_path / "weather.db")
+    await store.initialize()
+    source = replace(
+        outcome_check(date(2026, 7, 15)),
+        checked_at=datetime.fromisoformat("2026-07-14T20:30:00-04:00"),
+    )
+
+    result = await store.append_outcome_check(source)
+
+    assert result.status == "inserted"
+    assert rows(
+        store.db_path,
+        "SELECT check_date_utc, checked_at FROM research_weather_shadow_outcome_checks",
+    ) == [("2026-07-15", "2026-07-15T00:30:00Z")]
+
+
+@pytest.mark.asyncio
 async def test_daily_check_retry_compares_full_content_and_audits_conflict(tmp_path: Path) -> None:
     store = WeatherShadowStore(db_path=tmp_path / "weather.db")
     await store.initialize()

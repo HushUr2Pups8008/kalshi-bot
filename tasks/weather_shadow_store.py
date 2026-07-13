@@ -74,6 +74,10 @@ class OutcomeCheckKindError(ValueError):
     """Raised when a caller attempts to append a store-owned seal check."""
 
 
+class OutcomeCheckTimingError(ValueError):
+    """Raised when a daily check is attributed to the wrong UTC date."""
+
+
 @dataclass(frozen=True)
 class SealResult:
     status: Literal["sealed", "already_sealed", "not_ready", "quarantined"]
@@ -127,6 +131,7 @@ class WeatherShadowStore:
     async def append_outcome_check(self, check: OutcomeCheck) -> CheckWriteResult:
         if check.check_kind != "daily":
             raise OutcomeCheckKindError("append_outcome_check accepts daily checks only")
+        _validate_outcome_check_timing(check)
         return await asyncio.to_thread(self._append_outcome_check_sync, check)
 
     async def try_seal_event(self, event_ticker: str, now: datetime) -> SealResult:
@@ -724,6 +729,16 @@ def _validate_complete_outcome_batch(batch: OutcomeBatch) -> None:
         raise ValueError("complete outcome ladder required")
     if sum(row.result == "yes" for row in batch.rows) != 1:
         raise ValueError("complete outcome ladder requires exactly one YES")
+
+
+def _validate_outcome_check_timing(check: OutcomeCheck) -> None:
+    if check.checked_at.tzinfo is None or check.checked_at.utcoffset() is None:
+        raise OutcomeCheckTimingError("checked_at must be timezone-aware with a UTC date")
+    checked_date = check.checked_at.astimezone(timezone.utc).date()
+    if check.check_date_utc != checked_date:
+        raise OutcomeCheckTimingError(
+            "check_date_utc must equal the checked_at UTC date"
+        )
 
 
 def _coherent_outcome_batches(
