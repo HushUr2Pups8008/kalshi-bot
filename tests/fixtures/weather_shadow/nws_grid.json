@@ -1,0 +1,14 @@
+{
+  "id": "https://api.weather.gov/gridpoints/OKX/34,45",
+  "properties": {
+    "@id": "https://api.weather.gov/gridpoints/OKX/34,45",
+    "updateTime": "2026-07-12T22:42:51+00:00",
+    "temperature": {
+      "uom": "wmoUnit:degC",
+      "values": [
+        {"validTime": "2026-07-13T04:00:00+00:00/PT2H", "value": 23.3333333333},
+        {"validTime": "2026-07-13T06:00:00+00:00/PT3H", "value": 22.7777777778}
+      ]
+    }
+  }
+}

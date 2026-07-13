@@ -324,6 +324,175 @@ def test_print_research_gate_section_warns_when_disabled(capsys, tmp_path, monke
     assert "research_rows: 0 latest=n/a age=n/a" in out
 
 
+def test_weather_shadow_status_disabled_does_not_open_or_create_db(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("ENABLE_WEATHER_SHADOW_CAPTURE", raising=False)
+    db_path = tmp_path / "data" / "weather_shadow.db"
+
+    def unexpected_connect(*args, **kwargs):
+        pytest.fail(f"disabled weather status opened SQLite: {args!r} {kwargs!r}")
+
+    monkeypatch.setattr(botcheck.sqlite3, "connect", unexpected_connect)
+
+    botcheck.print_weather_shadow_status(tmp_path)
+
+    assert capsys.readouterr().out.strip() == "weather_shadow: off (default)"
+    assert not db_path.exists()
+
+
+def test_weather_shadow_status_enabled_missing_does_not_create_db(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("ENABLE_WEATHER_SHADOW_CAPTURE", "true")
+    db_path = tmp_path / "data" / "weather_shadow.db"
+
+    def unexpected_connect(*args, **kwargs):
+        pytest.fail(f"missing weather DB was opened: {args!r} {kwargs!r}")
+
+    monkeypatch.setattr(botcheck.sqlite3, "connect", unexpected_connect)
+
+    botcheck.print_weather_shadow_status(tmp_path)
+
+    assert capsys.readouterr().out.strip() == (
+        "weather_shadow: on (process-env) db=missing"
+    )
+    assert not db_path.exists()
+
+
+def test_weather_shadow_status_enabled_reads_only_bounded_health(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("ENABLE_WEATHER_SHADOW_CAPTURE", raising=False)
+    (tmp_path / ".env").write_text(
+        "ENABLE_WEATHER_SHADOW_CAPTURE=true\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "data" / "weather_shadow.db"
+    db_path.parent.mkdir(parents=True)
+    table_names = (
+        "research_weather_shadow_snapshots",
+        "research_weather_shadow_quotes",
+        "research_weather_shadow_outcomes",
+        "research_weather_shadow_conflicts",
+        "research_weather_shadow_outcome_checks",
+    )
+    with sqlite3.connect(db_path) as conn:
+        for table_name in table_names:
+            extra_column = (
+                ", capture_finished_at TEXT NOT NULL"
+                if table_name == "research_weather_shadow_snapshots"
+                else ""
+            )
+            conn.execute(f'CREATE TABLE "{table_name}" (id INTEGER{extra_column})')
+        conn.execute(
+            "INSERT INTO research_weather_shadow_snapshots "
+            "(id, capture_finished_at) VALUES (1, '2026-07-12T18:30:00+00:00')"
+        )
+
+    real_connect = sqlite3.connect
+    connect_calls = []
+    statements = []
+
+    def traced_connect(*args, **kwargs):
+        connect_calls.append((args, kwargs))
+        conn = real_connect(*args, **kwargs)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(botcheck.sqlite3, "connect", traced_connect)
+
+    botcheck.print_weather_shadow_status(tmp_path)
+
+    assert connect_calls == [
+        ((f"{db_path.resolve().as_uri()}?mode=ro",), {"uri": True})
+    ]
+    sql = "\n".join(statements)
+    assert "PRAGMA integrity_check" in sql
+    assert "sqlite_schema" in sql
+    count_queries = [
+        statement
+        for statement in statements
+        if "COUNT(*)" in statement and "sqlite_schema" not in statement
+    ]
+    assert len(count_queries) == len(table_names)
+    assert all("LIMIT" in statement for statement in count_queries)
+    assert any(
+        "ORDER BY capture_finished_at DESC LIMIT 1" in statement
+        for statement in statements
+    )
+    assert capsys.readouterr().out.strip() == (
+        "weather_shadow: on (.env) integrity=ok tables=5/5 "
+        "schema=ok missing=none unexpected=none "
+        "rows=snapshots:1,quotes:0,outcomes:0,conflicts:0,checks:0 "
+        "last_capture=2026-07-12T18:30:00+00:00"
+    )
+
+
+def test_weather_shadow_status_escapes_reserved_path_characters_without_creation(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("ENABLE_WEATHER_SHADOW_CAPTURE", "true")
+    repo_root = tmp_path / "repo ? # % ' apostrophe and space"
+    db_path = repo_root / "data" / "weather_shadow.db"
+    db_path.parent.mkdir(parents=True)
+    with sqlite3.connect(db_path) as conn:
+        for table_name in botcheck.WEATHER_SHADOW_TABLES:
+            extra_column = (
+                ", capture_finished_at TEXT"
+                if table_name == "research_weather_shadow_snapshots"
+                else ""
+            )
+            conn.execute(f'CREATE TABLE "{table_name}" (id INTEGER{extra_column})')
+
+    before = set(tmp_path.rglob("*"))
+
+    botcheck.print_weather_shadow_status(repo_root)
+
+    assert "integrity=ok" in capsys.readouterr().out
+    assert set(tmp_path.rglob("*")) == before
+    assert not (tmp_path / "repo ").exists()
+
+
+def test_weather_shadow_status_reports_missing_and_unexpected_application_tables(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("ENABLE_WEATHER_SHADOW_CAPTURE", "true")
+    db_path = tmp_path / "data" / "weather_shadow.db"
+    db_path.parent.mkdir(parents=True)
+    missing_table = "research_weather_shadow_quotes"
+    unexpected_table = "research_weather_shadow_unexpected"
+    with sqlite3.connect(db_path) as conn:
+        for table_name in botcheck.WEATHER_SHADOW_TABLES:
+            if table_name == missing_table:
+                continue
+            extra_column = (
+                ", capture_finished_at TEXT"
+                if table_name == "research_weather_shadow_snapshots"
+                else ""
+            )
+            conn.execute(f'CREATE TABLE "{table_name}" (id INTEGER{extra_column})')
+        conn.execute(f'CREATE TABLE "{unexpected_table}" (id INTEGER)')
+
+    botcheck.print_weather_shadow_status(tmp_path)
+
+    out = capsys.readouterr().out.strip()
+    assert "tables=4/5 schema=mismatch" in out
+    assert f"missing={missing_table}" in out
+    assert f"unexpected={unexpected_table}" in out
+    assert "rows=snapshots:0,quotes:missing,outcomes:0,conflicts:0,checks:0" in out
+
+
 def test_print_research_gate_section_surfaces_prewarm_backlog(
     capsys,
     tmp_path,

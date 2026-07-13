@@ -1508,6 +1508,11 @@ class BotConfig:
     real_web_research_timeout_seconds: float = field(
         default_factory=lambda: REAL_WEB_RESEARCH_TIMEOUT_SECONDS
     )
+    enable_weather_shadow_capture: bool = field(
+        default_factory=lambda: _parse_bool_env(
+            "ENABLE_WEATHER_SHADOW_CAPTURE", "false"
+        )
+    )
     enable_research_prewarm_task: bool = field(
         default_factory=lambda: ENABLE_RESEARCH_PREWARM_TASK
     )

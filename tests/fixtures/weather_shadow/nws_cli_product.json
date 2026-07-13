@@ -1,0 +1,10 @@
+{
+  "@id": "https://api.weather.gov/products/fixture-cli-20260713",
+  "id": "fixture-cli-20260713",
+  "wmoCollectiveId": "CDUS41",
+  "issuingOffice": "KOKX",
+  "issuanceTime": "2026-07-13T20:31:00+00:00",
+  "productCode": "CLI",
+  "productName": "Climatological Report (Daily)",
+  "productText": "CLINYC\nCLIMATE REPORT\nNATIONAL WEATHER SERVICE NEW YORK NY\n...THE CENTRAL PARK NY CLIMATE SUMMARY FOR JULY 13 2026...\nTEMPERATURE (F)\n YESTERDAY\n  MAXIMUM         89    315 PM  99    1966  85      4       87\n  MINIMUM         73\n"
+}
