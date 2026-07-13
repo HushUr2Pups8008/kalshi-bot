@@ -2426,8 +2426,9 @@ def test_rules_only_weather_market_adds_nws_direct_source_target():
 
 @pytest.mark.asyncio
 async def test_structured_weather_counter_query_reuses_same_official_metric_as_countercheck():
-    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    published = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
+    now = datetime.now(timezone.utc)
+    fresh = now.isoformat().replace("+00:00", "Z")
+    published = "2026-07-01"
     market = SimpleNamespace(
         ticker="KXHIGHNY-26JUL01-B94.5",
         title="Will the high temp in NYC be 94-95° on Jul 1, 2026?",

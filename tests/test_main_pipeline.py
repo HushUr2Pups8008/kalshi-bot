@@ -283,13 +283,14 @@ def test_research_prewarm_market_provider_prioritizes_recent_nonterminal_researc
 def test_research_prewarm_market_provider_ranks_expanded_due_pool(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
     bot = _make_bot_stub()
+    now = datetime.now(timezone.utc)
     far_tail = replace(
         _make_market(),
         ticker="KXFAR-26DEC31",
         yes_ask=2.0,
         yes_ask_cents=2,
         no_ask_cents=98,
-        close_time="2026-12-31T00:00:00Z",
+        close_time=(now + timedelta(days=90)).isoformat(),
     )
     near_mid = replace(
         _make_market(),
@@ -297,7 +298,7 @@ def test_research_prewarm_market_provider_ranks_expanded_due_pool(monkeypatch):
         yes_ask=41.0,
         yes_ask_cents=41,
         no_ask_cents=59,
-        close_time="2026-07-13T00:00:00Z",
+        close_time=(now + timedelta(days=1)).isoformat(),
     )
     bot.rest.get_all_open_markets.return_value = [far_tail]
     bot.rest.get_market.side_effect = lambda ticker: (
@@ -327,6 +328,7 @@ def test_research_prewarm_fallback_ranks_across_series(monkeypatch):
         raising=False,
     )
     bot = _make_bot_stub()
+    now = datetime.now(timezone.utc)
     bot.rest.get_all_open_markets.return_value = []
     tail = replace(
         _make_market(),
@@ -334,7 +336,7 @@ def test_research_prewarm_fallback_ranks_across_series(monkeypatch):
         yes_ask=2.0,
         yes_ask_cents=2,
         no_ask_cents=98,
-        close_time="2026-12-31T00:00:00Z",
+        close_time=(now + timedelta(days=90)).isoformat(),
     )
     mid = replace(
         _make_market(),
@@ -342,7 +344,7 @@ def test_research_prewarm_fallback_ranks_across_series(monkeypatch):
         yes_ask=41.0,
         yes_ask_cents=41,
         no_ask_cents=59,
-        close_time="2026-07-13T00:00:00Z",
+        close_time=(now + timedelta(days=1)).isoformat(),
     )
     bot.rest.get_markets.side_effect = [([tail], None), ([mid], None)]
 
