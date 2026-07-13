@@ -191,8 +191,12 @@ class NwsPublicClient:
         return start, end
 
     @staticmethod
-    def _parse_grid(payload: Mapping[str, Any]) -> tuple[NwsGridForecast, ...]:
+    def _parse_grid(
+        payload: Mapping[str, Any], source_url: str
+    ) -> tuple[NwsGridForecast, ...]:
         properties = _mapping(payload.get("properties"), "grid properties")
+        if payload.get("id") != source_url or properties.get("@id") != source_url:
+            raise NwsPublicClientError("grid response identity does not match request")
         issued_at = _timestamp(properties.get("updateTime"), "grid updateTime")
         temperature = _mapping(properties.get("temperature"), "grid temperature")
         if temperature.get("uom") != "wmoUnit:degC":
@@ -223,8 +227,13 @@ class NwsPublicClient:
         return tuple(normalized)
 
     @staticmethod
-    def _parse_hourly(payload: Mapping[str, Any]) -> tuple[NwsHourlyForecast, ...]:
+    def _parse_hourly(
+        payload: Mapping[str, Any], source_url: str
+    ) -> tuple[NwsHourlyForecast, ...]:
         properties = _mapping(payload.get("properties"), "hourly properties")
+        for identity in (payload.get("id"), properties.get("@id")):
+            if identity is not None and identity != source_url:
+                raise NwsPublicClientError("hourly response identity does not match request")
         issued_at = _timestamp(properties.get("updateTime"), "hourly updateTime")
         periods = properties.get("periods")
         if not isinstance(periods, list) or not periods:
@@ -257,8 +266,13 @@ class NwsPublicClient:
 
     @staticmethod
     def _parse_observations(
-        payload: Mapping[str, Any], station_id: str
+        payload: Mapping[str, Any],
+        station_id: str,
+        start: datetime,
+        end: datetime,
     ) -> tuple[NwsObservation, ...]:
+        if start.tzinfo is None or end.tzinfo is None or end <= start:
+            raise NwsPublicClientError("observation target bounds are invalid")
         features = payload.get("features")
         if not isinstance(features, list) or not features:
             raise NwsPublicClientError("station observations are missing")
@@ -268,18 +282,17 @@ class NwsPublicClient:
         normalized: list[NwsObservation] = []
         for raw_feature in features:
             feature = _mapping(raw_feature, "observation feature")
-            feature_url = _string(feature, "id")
-            parsed_feature_url = urlsplit(feature_url)
-            if (
-                parsed_feature_url.scheme != "https"
-                or parsed_feature_url.netloc != "api.weather.gov"
-                or not parsed_feature_url.path.startswith(f"/stations/{station_id}/observations/")
-            ):
-                raise NwsPublicClientError("observation source identity is invalid")
             properties = _mapping(feature.get("properties"), "observation properties")
             if properties.get("station") != station_url:
                 raise NwsPublicClientError("observation station identity is invalid")
-            measured_at = _timestamp(properties.get("timestamp"), "observation timestamp")
+            raw_timestamp = _string(properties, "timestamp")
+            measured_at = _timestamp(raw_timestamp, "observation timestamp")
+            feature_url = _string(feature, "id")
+            expected_feature_url = f"{station_url}/observations/{raw_timestamp}"
+            if feature_url != expected_feature_url:
+                raise NwsPublicClientError("observation source identity is invalid")
+            if not start <= measured_at < end:
+                raise NwsPublicClientError("observation is outside target bounds")
             if measured_at in seen:
                 raise NwsPublicClientError("duplicate observation timestamp")
             seen.add(measured_at)
@@ -311,6 +324,8 @@ class NwsPublicClient:
             timeout=timeout, headers={"User-Agent": _USER_AGENT}
         ) as session:
             point_payload = await self._request_json(session, _POINTS_URL)
+            if point_payload.get("id") != _POINTS_URL:
+                raise NwsPublicClientError("point response identity does not match request")
             point_properties = _mapping(point_payload.get("properties"), "point properties")
             grid_url = _string(point_properties, "forecastGridData")
             hourly_url = _string(point_properties, "forecastHourly")
@@ -329,9 +344,11 @@ class NwsPublicClient:
             )
             retrieved_at = self._clock().astimezone(timezone.utc)
             return NwsCapturePayloads(
-                grid=self._parse_grid(grid_payload),
-                hourly=self._parse_hourly(hourly_payload),
-                observations=self._parse_observations(observations_payload, station),
+                grid=self._parse_grid(grid_payload, grid_url),
+                hourly=self._parse_hourly(hourly_payload, hourly_url),
+                observations=self._parse_observations(
+                    observations_payload, station, start, end
+                ),
                 retrieved_at=retrieved_at,
                 grid_payload_json=_canonical_json(grid_payload),
                 hourly_payload_json=_canonical_json(hourly_payload),

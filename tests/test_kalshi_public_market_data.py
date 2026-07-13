@@ -27,6 +27,47 @@ def _fixture(name: str) -> dict[str, Any]:
     return json.loads((FIXTURES / name).read_text())
 
 
+def test_representative_kalshi_fixture_key_sets_are_explicit() -> None:
+    events = _fixture("kalshi_events_page_1.json")
+    event_detail = _fixture("kalshi_event.json")
+    markets = _fixture("kalshi_markets_page_1.json")
+
+    assert set(events) == {"cursor", "events"}
+    assert set(event_detail) == {"event", "markets"}
+    assert set(markets) == {"cursor", "markets"}
+    expected_event_keys = {
+        "event_ticker",
+        "series_ticker",
+        "settlement_sources",
+        "markets",
+    }
+    assert set(events["events"][0]) == expected_event_keys
+    assert set(event_detail["event"]) == expected_event_keys
+    assert set(events["events"][0]["settlement_sources"][0]) == {"name", "url"}
+    expected_market_keys = {
+        "ticker",
+        "event_ticker",
+        "status",
+        "close_time",
+        "strike_type",
+        "cap_strike",
+        "title",
+        "rules_primary",
+        "rules_secondary",
+        "yes_bid_dollars",
+        "yes_ask_dollars",
+        "no_bid_dollars",
+        "no_ask_dollars",
+        "yes_bid_size_fp",
+        "yes_ask_size_fp",
+        "last_price_dollars",
+        "volume_fp",
+        "result",
+    }
+    assert all(set(market) == expected_market_keys for market in events["events"][0]["markets"])
+    assert all(set(market) == expected_market_keys for market in markets["markets"])
+
+
 class FakeResponse:
     def __init__(self, payload: Any, *, status: int = 200, headers: dict[str, str] | None = None):
         self.payload = payload
@@ -148,6 +189,23 @@ async def test_lists_complete_normalized_ladder_with_fixed_public_contract() -> 
         "limit": 200,
     }
     assert factory.calls[1]["params"] == {"event_ticker": "KXHIGHNY-26JUL13", "limit": 1000}
+
+
+@pytest.mark.asyncio
+async def test_normalization_tolerates_unrelated_live_payload_keys() -> None:
+    events = _fixture("kalshi_events_page_1.json")
+    markets = _fixture("kalshi_markets_page_1.json")
+    events["milestones"] = []
+    events["events"][0]["category"] = "Climate and Weather"
+    events["events"][0]["markets"][0]["subtitle"] = "81 or below"
+    markets["unrelated"] = {"future": True}
+    markets["markets"][0]["price_level_structure"] = "linear_cent"
+    reader, _ = _reader(events=events, markets=markets)
+
+    normalized = await reader.list_active_events(series_ticker="KXHIGHNY")
+
+    assert len(normalized) == 1
+    assert len(normalized[0].markets) == 3
 
 
 @pytest.mark.asyncio

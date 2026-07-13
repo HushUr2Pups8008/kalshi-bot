@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -25,6 +25,54 @@ USER_AGENT = "kalshi-bot-weather-shadow/1.0 (https://github.com/HushUr2Pups8008/
 
 def _fixture(name: str) -> dict[str, Any]:
     return json.loads((FIXTURES / name).read_text())
+
+
+def test_representative_nws_fixture_key_sets_are_explicit() -> None:
+    points = _fixture("nws_points.json")
+    grid = _fixture("nws_grid.json")
+    hourly = _fixture("nws_hourly.json")
+    observations = _fixture("nws_observations.json")
+    products = _fixture("nws_cli_products.json")
+    product = _fixture("nws_cli_product.json")
+
+    assert set(points) == {"id", "properties"}
+    assert set(points["properties"]) == {"forecastGridData", "forecastHourly"}
+    assert set(grid) == {"id", "properties"}
+    assert set(grid["properties"]) == {"@id", "updateTime", "temperature"}
+    assert set(grid["properties"]["temperature"]) == {"uom", "values"}
+    assert all(
+        set(value) == {"validTime", "value"}
+        for value in grid["properties"]["temperature"]["values"]
+    )
+    assert set(hourly) == {"properties"}
+    assert set(hourly["properties"]) == {"updateTime", "periods"}
+    assert all(
+        set(period) == {"startTime", "endTime", "temperature", "temperatureUnit"}
+        for period in hourly["properties"]["periods"]
+    )
+    assert set(observations) == {"features"}
+    assert all(set(feature) == {"id", "properties"} for feature in observations["features"])
+    assert all(
+        set(feature["properties"]) == {"station", "timestamp", "temperature"}
+        for feature in observations["features"]
+    )
+    assert all(
+        set(feature["properties"]["temperature"])
+        == {"unitCode", "value", "qualityControl"}
+        for feature in observations["features"]
+    )
+    assert set(products) == {"@graph"}
+    expected_product_metadata_keys = {
+        "@id",
+        "id",
+        "wmoCollectiveId",
+        "issuingOffice",
+        "issuanceTime",
+        "productCode",
+        "productName",
+    }
+    assert all(set(metadata) == expected_product_metadata_keys for metadata in products["@graph"])
+    assert set(product) == expected_product_metadata_keys | {"productText"}
 
 
 class FakeResponse:
@@ -112,6 +160,67 @@ async def test_fetch_capture_bundle_discovers_and_normalizes_public_payloads() -
 
 
 @pytest.mark.asyncio
+async def test_normalization_tolerates_unrelated_live_payload_keys() -> None:
+    points = _fixture("nws_points.json")
+    grid = _fixture("nws_grid.json")
+    hourly = _fixture("nws_hourly.json")
+    observations = _fixture("nws_observations.json")
+    points["@context"] = {"version": "1.1"}
+    points["properties"]["gridId"] = "OKX"
+    grid["geometry"] = None
+    grid["properties"]["gridId"] = "OKX"
+    grid["properties"]["temperature"]["futureField"] = True
+    hourly["geometry"] = None
+    hourly["properties"]["units"] = "us"
+    hourly["properties"]["periods"][0]["name"] = ""
+    observations["pagination"] = {"next": None}
+    observations["features"][0]["type"] = "Feature"
+    observations["features"][0]["properties"]["rawMessage"] = "fixture"
+    client, _ = _client(
+        **{
+            POINTS_URL: [FakeResponse(points)],
+            GRID_URL: [FakeResponse(grid)],
+            HOURLY_URL: [FakeResponse(hourly)],
+            OBS_URL: [FakeResponse(observations)],
+        }
+    )
+
+    bundle = await client.fetch_capture_bundle(target_date=date(2026, 7, 13))
+
+    assert len(bundle.grid) == 2
+    assert len(bundle.hourly) == 2
+    assert len(bundle.observations) == 2
+
+
+@pytest.mark.parametrize(
+    ("target_date", "expected_start", "expected_end", "duration"),
+    [
+        (
+            date(2026, 3, 8),
+            datetime(2026, 3, 8, 5, tzinfo=timezone.utc),
+            datetime(2026, 3, 9, 4, tzinfo=timezone.utc),
+            timedelta(hours=23),
+        ),
+        (
+            date(2026, 11, 1),
+            datetime(2026, 11, 1, 4, tzinfo=timezone.utc),
+            datetime(2026, 11, 2, 5, tzinfo=timezone.utc),
+            timedelta(hours=25),
+        ),
+    ],
+)
+def test_target_bounds_follow_new_york_dst_days(
+    target_date: date,
+    expected_start: datetime,
+    expected_end: datetime,
+    duration: timedelta,
+) -> None:
+    start, end = NwsPublicClient._target_bounds(target_date)
+    assert (start, end) == (expected_start, expected_end)
+    assert end - start == duration
+
+
+@pytest.mark.asyncio
 async def test_fetch_daily_label_uses_cli_nyc_product_identity() -> None:
     client, factory = _client()
 
@@ -139,6 +248,9 @@ async def test_daily_label_returns_none_when_no_product_matches_date() -> None:
     ("fixture_name", "mutate", "message"),
     [
         ("nws_points.json", lambda p: p["properties"].update(forecastGridData="https://evil.example/grid"), "origin"),
+        ("nws_points.json", lambda p: p["properties"].update(forecastGridData=f"{GRID_URL}?bad=1"), "origin"),
+        ("nws_points.json", lambda p: p["properties"].update(forecastHourly="https://evil.example/hourly"), "origin"),
+        ("nws_points.json", lambda p: p["properties"].update(forecastHourly=f"{HOURLY_URL}#bad"), "origin"),
         ("nws_grid.json", lambda p: p["properties"]["temperature"].update(uom="wmoUnit:degF"), "unit"),
         ("nws_grid.json", lambda p: p["properties"]["temperature"]["values"][0].update(validTime="bad"), "interval"),
         ("nws_hourly.json", lambda p: p["properties"]["periods"][0].update(temperatureUnit="C"), "unit"),
@@ -160,6 +272,93 @@ async def test_capture_rejects_off_origin_units_intervals_qc_and_identity(
     client, _ = _client(**{url: [FakeResponse(payload)]})
     with pytest.raises(NwsPublicClientError, match=message):
         await client.fetch_capture_bundle(target_date=date(2026, 7, 13))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fixture_name", "url", "mutate", "message"),
+    [
+        (
+            "nws_points.json",
+            POINTS_URL,
+            lambda p: p.update(id=f"{POINTS_URL}/"),
+            "point.*identity",
+        ),
+        (
+            "nws_grid.json",
+            GRID_URL,
+            lambda p: p.update(id=f"{GRID_URL}/other"),
+            "grid.*identity",
+        ),
+        (
+            "nws_grid.json",
+            GRID_URL,
+            lambda p: p["properties"].update({"@id": f"{GRID_URL}?bad=1"}),
+            "grid.*identity",
+        ),
+        (
+            "nws_hourly.json",
+            HOURLY_URL,
+            lambda p: p.update(id=f"{HOURLY_URL}/other"),
+            "hourly.*identity",
+        ),
+        (
+            "nws_observations.json",
+            OBS_URL,
+            lambda p: p["features"][0].update(
+                id=f"{ORIGIN}/stations/KNYC/observations/2026-07-13T04:51:00+00:00?bad=1"
+            ),
+            "observation.*identity",
+        ),
+        (
+            "nws_observations.json",
+            OBS_URL,
+            lambda p: p["features"][0].update(
+                id=f"{ORIGIN}/stations/KNYC/observations/../other"
+            ),
+            "observation.*identity",
+        ),
+    ],
+)
+async def test_capture_rejects_response_source_identity_mismatches(
+    fixture_name: str, url: str, mutate, message: str
+) -> None:
+    payload = _fixture(fixture_name)
+    mutate(payload)
+    client, _ = _client(**{url: [FakeResponse(payload)]})
+    with pytest.raises(NwsPublicClientError, match=message):
+        await client.fetch_capture_bundle(target_date=date(2026, 7, 13))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "timestamp",
+    ["2026-07-13T03:59:59+00:00", "2026-07-14T04:00:00+00:00"],
+)
+async def test_capture_rejects_observations_outside_end_exclusive_target_bounds(
+    timestamp: str,
+) -> None:
+    payload = _fixture("nws_observations.json")
+    payload["features"][0]["id"] = f"{ORIGIN}/stations/KNYC/observations/{timestamp}"
+    payload["features"][0]["properties"]["timestamp"] = timestamp
+    client, _ = _client(**{OBS_URL: [FakeResponse(payload)]})
+    with pytest.raises(NwsPublicClientError, match="target bounds"):
+        await client.fetch_capture_bundle(target_date=date(2026, 7, 13))
+
+
+@pytest.mark.asyncio
+async def test_capture_accepts_observation_at_inclusive_target_start() -> None:
+    timestamp = "2026-07-13T04:00:00+00:00"
+    payload = _fixture("nws_observations.json")
+    payload["features"][0]["id"] = f"{ORIGIN}/stations/KNYC/observations/{timestamp}"
+    payload["features"][0]["properties"]["timestamp"] = timestamp
+    client, _ = _client(**{OBS_URL: [FakeResponse(payload)]})
+
+    bundle = await client.fetch_capture_bundle(target_date=date(2026, 7, 13))
+
+    assert bundle.observations[0].measured_at == datetime(
+        2026, 7, 13, 4, tzinfo=timezone.utc
+    )
 
 
 @pytest.mark.asyncio
