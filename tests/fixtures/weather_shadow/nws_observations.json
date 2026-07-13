@@ -1,0 +1,28 @@
+{
+  "features": [
+    {
+      "id": "https://api.weather.gov/stations/KNYC/observations/2026-07-13T04:51:00+00:00",
+      "properties": {
+        "station": "https://api.weather.gov/stations/KNYC",
+        "timestamp": "2026-07-13T04:51:00+00:00",
+        "temperature": {
+          "unitCode": "wmoUnit:degC",
+          "value": 23.3,
+          "qualityControl": "V"
+        }
+      }
+    },
+    {
+      "id": "https://api.weather.gov/stations/KNYC/observations/2026-07-13T05:51:00+00:00",
+      "properties": {
+        "station": "https://api.weather.gov/stations/KNYC",
+        "timestamp": "2026-07-13T05:51:00+00:00",
+        "temperature": {
+          "unitCode": "wmoUnit:degC",
+          "value": 22.8,
+          "qualityControl": "V"
+        }
+      }
+    }
+  ]
+}

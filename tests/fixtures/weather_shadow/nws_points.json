@@ -1,0 +1,7 @@
+{
+  "id": "https://api.weather.gov/points/40.7812,-73.9665",
+  "properties": {
+    "forecastGridData": "https://api.weather.gov/gridpoints/OKX/34,45",
+    "forecastHourly": "https://api.weather.gov/gridpoints/OKX/34,45/forecast/hourly"
+  }
+}

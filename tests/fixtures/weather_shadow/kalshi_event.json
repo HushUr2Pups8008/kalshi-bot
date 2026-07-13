@@ -1,0 +1,14 @@
+{
+  "event": {
+    "event_ticker": "KXHIGHNY-26JUL13",
+    "series_ticker": "KXHIGHNY",
+    "settlement_sources": [
+      {
+        "name": "NWS Climatological Report",
+        "url": "https://forecast.weather.gov/product.php?site=OKX&product=CLI&issuedby=NYC"
+      }
+    ],
+    "markets": []
+  },
+  "markets": []
+}

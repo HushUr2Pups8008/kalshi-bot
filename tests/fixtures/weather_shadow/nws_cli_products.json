@@ -1,0 +1,13 @@
+{
+  "@graph": [
+    {
+      "@id": "https://api.weather.gov/products/fixture-cli-20260713",
+      "id": "fixture-cli-20260713",
+      "wmoCollectiveId": "CDUS41",
+      "issuingOffice": "KOKX",
+      "issuanceTime": "2026-07-13T20:31:00+00:00",
+      "productCode": "CLI",
+      "productName": "Climatological Report (Daily)"
+    }
+  ]
+}
