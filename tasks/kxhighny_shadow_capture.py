@@ -28,6 +28,7 @@ from weather.shadow_models import (
     CaptureBatch,
     CaptureCycleResult,
     HorizonBucket,
+    OutcomeBatch,
     OutcomeCheck,
     OutcomeTarget,
     RetrievedEvent,
@@ -53,6 +54,14 @@ class _PreparedCapture:
     horizon_bucket: HorizonBucket
     batch: CaptureBatch | None
     skipped: CaptureAttemptResult | None = None
+
+
+@dataclass(frozen=True)
+class _LabelPersistencePlan:
+    event_ticker: str
+    batch: OutcomeBatch | None
+    check: OutcomeCheck | None
+    seal_at: datetime | None
 
 
 class WeatherShadowCaptureTask:
@@ -124,12 +133,13 @@ class WeatherShadowCaptureTask:
 
     async def run_label_once(self) -> None:
         """Revalidate captured outcome targets within an independent budget."""
+        targets = await self._store.list_outcome_targets(self._now())
+        plans: list[_LabelPersistencePlan] = []
         try:
             async with asyncio.timeout(LABEL_BUILD_BUDGET_SECONDS):
-                targets = await self._store.list_outcome_targets(self._now())
                 for target in targets:
                     try:
-                        await self.label_event(target)
+                        plan = await self._prepare_label(target)
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
@@ -137,14 +147,32 @@ class WeatherShadowCaptureTask:
                             "KXHIGHNY weather shadow event label failed (%s)",
                             type(exc).__name__,
                         )
+                    else:
+                        if plan is not None:
+                            plans.append(plan)
         except TimeoutError:
             logger.warning("KXHIGHNY weather shadow label budget expired")
+            return
+        for plan in plans:
+            await self._persist_label_plan(plan)
 
     async def label_event(self, target: OutcomeTarget) -> None:
         """Validate and persist one captured event's public outcome evidence."""
+        try:
+            async with asyncio.timeout(LABEL_BUILD_BUDGET_SECONDS):
+                plan = await self._prepare_label(target)
+        except TimeoutError:
+            logger.warning("KXHIGHNY weather shadow event label budget expired")
+            return
+        if plan is not None:
+            await self._persist_label_plan(plan)
+
+    async def _prepare_label(
+        self, target: OutcomeTarget
+    ) -> _LabelPersistencePlan | None:
         state = await self._store.label_state(target.event_ticker)
         if state.sealed or state.quarantined:
-            return
+            return None
         event_payload, cli_product = await asyncio.gather(
             self._label_markets.get_event(event_ticker=target.event_ticker),
             self._label_weather.fetch_daily_label(
@@ -153,22 +181,19 @@ class WeatherShadowCaptureTask:
             ),
         )
         if cli_product is None:
-            return
+            return None
         fingerprints = await self._store.capture_fingerprints(target.event_ticker)
         batch = validate_outcome_batch(event_payload, cli_product, fingerprints)
         if batch.target_date != target.target_date:
             raise WeatherShadowValidationError("outcome target identity changed")
         if not state.labeled:
-            await self._store.append_outcome_batch(batch)
-            return
+            return _LabelPersistencePlan(target.event_ticker, batch, None, None)
         if len(state.outcome_batch_ids) != 1:
-            return
+            return None
 
         baseline_hash = state.outcome_batch_ids[0]
         observed_hash = batch.outcome_batch_id
         agrees = observed_hash == baseline_hash
-        if not agrees:
-            await self._store.append_outcome_batch(batch)
         checked_at = self._now()
         check_date = checked_at.astimezone(timezone.utc).date()
         details = canonical_json(
@@ -198,8 +223,31 @@ class WeatherShadowCaptureTask:
             agrees_with_baseline=agrees,
             details_json=details,
         )
-        await self._store.append_outcome_check(check)
-        await self._store.try_seal_event(target.event_ticker, checked_at)
+        return _LabelPersistencePlan(
+            target.event_ticker,
+            None if agrees else batch,
+            check,
+            checked_at,
+        )
+
+    async def _persist_label_plan(self, plan: _LabelPersistencePlan) -> None:
+        persistence = asyncio.create_task(
+            self._execute_label_persistence(plan),
+            name=f"kxhighny-shadow-label-persist:{plan.event_ticker}",
+        )
+        try:
+            await asyncio.shield(persistence)
+        except asyncio.CancelledError:
+            await self._drain_cancelled_persistence(persistence)
+            raise
+
+    async def _execute_label_persistence(self, plan: _LabelPersistencePlan) -> None:
+        if plan.batch is not None:
+            await self._store.append_outcome_batch(plan.batch)
+        if plan.check is not None:
+            await self._store.append_outcome_check(plan.check)
+        if plan.seal_at is not None:
+            await self._store.try_seal_event(plan.event_ticker, plan.seal_at)
 
     async def run_capture_once(self) -> CaptureCycleResult:
         prepared: list[_PreparedCapture] = []
@@ -402,7 +450,7 @@ class WeatherShadowCaptureTask:
 
     @staticmethod
     async def _drain_cancelled_persistence(
-        persistence: asyncio.Task[CaptureWriteResult],
+        persistence: asyncio.Task[object],
     ) -> None:
         owner = asyncio.current_task()
         if owner is not None:

@@ -599,9 +599,9 @@ def validate_outcome_batch(
         "product_id": cli_product.product_id,
         "evidence_id": cli_product.evidence_id,
     }
-    stable_rows: list[tuple[RetrievedMarket, str]] = []
+    market_projections: list[tuple[RetrievedMarket, dict[str, Any]]] = []
     for item in sorted(markets, key=lambda sibling: sibling.market_ticker):
-        settlement_inputs = {
+        market_projection = {
             "event_ticker": event_payload.event_ticker,
             "event_status": event_payload.status,
             "market_ticker": item.market_ticker,
@@ -613,20 +613,32 @@ def validate_outcome_batch(
             "is_upper_tail": item.is_upper_tail,
             "fingerprints": item.fingerprints,
         }
-        stable_rows.append(
-            (
-                item,
-                canonical_sha256(
-                    {"settlement": settlement_inputs, "official": official_inputs}
-                ),
-            )
-        )
-    outcome_batch_id = canonical_sha256(
+        market_projections.append((item, market_projection))
+    complete_projection_hash = canonical_sha256(
         {
             "event_ticker": event_payload.event_ticker,
             "target_date": target_date,
-            "source_payload_hashes": tuple(value for _, value in stable_rows),
+            "siblings": tuple(projection for _, projection in market_projections),
+            "official": official_inputs,
         }
+    )
+    outcome_batch_id = canonical_sha256(
+        {
+            "hash_kind": "complete_stable_sibling_projection_v1",
+            "complete_projection_hash": complete_projection_hash,
+        }
+    )
+    stable_rows = tuple(
+        (
+            item,
+            canonical_sha256(
+                {
+                    "market_source_identity": canonical_sha256(market_projection),
+                    "complete_projection_hash": complete_projection_hash,
+                }
+            ),
+        )
+        for item, market_projection in market_projections
     )
     settlement_observed_at = event_payload.retrieved_at
     label_available_at = max(settlement_observed_at, cli_product.retrieved_at)

@@ -6,6 +6,9 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from hashlib import sha256
 import json
+from pathlib import Path
+import sqlite3
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +20,7 @@ from tasks.kxhighny_shadow_validation import (
     official_high_market,
     validate_outcome_batch,
 )
+from tasks.weather_shadow_store import WeatherShadowStore
 from weather.shadow_models import (
     Fingerprints,
     NwsDailyLabel,
@@ -118,7 +122,10 @@ def cli_label(
         "issuanceTime": issued_at.isoformat().replace("+00:00", "Z"),
         "issuingOffice": "KOKX",
         "productCode": "CLI",
-        "productText": "THE CENTRAL PARK NY CLIMATE SUMMARY FOR JULY 12 2026\nMAXIMUM 70",
+        "productText": (
+            "THE CENTRAL PARK NY CLIMATE SUMMARY FOR JULY 12 2026\n"
+            f"MAXIMUM {high}"
+        ),
     }
     raw = _canonical(payload)
     return NwsDailyLabel(
@@ -292,6 +299,84 @@ def test_stable_outcome_hashes_include_settlement_and_official_evidence() -> Non
     assert len({baseline.outcome_batch_id, settlement.outcome_batch_id, official.outcome_batch_id}) == 3
 
 
+@pytest.mark.asyncio
+async def test_any_sibling_correction_versions_every_row_and_appends_complete_batch(
+    tmp_path: Path,
+) -> None:
+    source = event()
+    changed_market = replace(
+        source.markets[0],
+        status="finalized",
+        raw_payload_json=_canonical(
+            {
+                "ticker": source.markets[0].market_ticker,
+                "result": source.markets[0].result,
+                "status": "finalized",
+            }
+        ),
+    )
+    corrected = event(markets=(changed_market, *source.markets[1:]))
+    baseline = validate_outcome_batch(source, cli_label(), captured(source))
+    correction = validate_outcome_batch(corrected, cli_label(), captured(corrected))
+
+    assert baseline.outcome_batch_id != correction.outcome_batch_id
+    assert {row.outcome_id for row in baseline.rows}.isdisjoint(
+        row.outcome_id for row in correction.rows
+    )
+    assert {row.source_payload_hash for row in baseline.rows}.isdisjoint(
+        row.source_payload_hash for row in correction.rows
+    )
+
+    store = WeatherShadowStore(db_path=tmp_path / "weather.db")
+    await store.initialize()
+    assert (await store.append_outcome_batch(baseline)).status == "inserted"
+    assert (await store.append_outcome_batch(correction)).status == "conflict"
+    assert (await store.append_outcome_batch(correction)).status == "identical"
+
+    with sqlite3.connect(store.db_path) as conn:
+        rows = conn.execute(
+            "SELECT outcome_batch_id, COUNT(*) "
+            "FROM research_weather_shadow_outcomes GROUP BY outcome_batch_id"
+        ).fetchall()
+    assert sorted(count for _, count in rows) == [3, 3]
+    state = await store.label_state(EVENT_TICKER)
+    assert len(state.outcome_batch_ids) == 2
+    assert state.quarantined is True
+
+
+@pytest.mark.asyncio
+async def test_corrected_one_hot_yes_move_preserves_two_complete_versions(
+    tmp_path: Path,
+) -> None:
+    baseline_event = event()
+    corrected_event = event(
+        markets=(
+            market("T70", lower=None, upper=69, result="no"),
+            market("B70.5", lower=70, upper=71, result="no"),
+            market("T71", lower=72, upper=None, result="yes"),
+        )
+    )
+    baseline = validate_outcome_batch(
+        baseline_event, cli_label(), captured(baseline_event)
+    )
+    correction = validate_outcome_batch(
+        corrected_event,
+        cli_label(high="72"),
+        captured(corrected_event),
+    )
+
+    store = WeatherShadowStore(db_path=tmp_path / "weather.db")
+    await store.initialize()
+    await store.append_outcome_batch(baseline)
+    result = await store.append_outcome_batch(correction)
+
+    assert result.status == "conflict"
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM research_weather_shadow_outcomes"
+        ).fetchone() == (6,)
+
+
 class LabelStore:
     def __init__(self, *, labeled: bool = False) -> None:
         self.targets = (OutcomeTarget(EVENT_TICKER, date(2026, 7, 12)),)
@@ -351,6 +436,48 @@ class LabelWeather:
     async def fetch_daily_label(self, *, target_date: date, station_id: str) -> NwsDailyLabel | None:
         self.calls.append((target_date, station_id))
         return self.label
+
+
+class BlockingThreadStore(LabelStore):
+    def __init__(self, *, labeled: bool = False) -> None:
+        super().__init__(labeled=labeled)
+        self.entered = {
+            name: threading.Event() for name in ("outcome", "check", "seal")
+        }
+        self.release = {
+            name: threading.Event() for name in ("outcome", "check", "seal")
+        }
+        self.mutations: list[str] = []
+
+    def _commit(self, name: str, value: object) -> None:
+        self.entered[name].set()
+        assert self.release[name].wait(timeout=2)
+        if name == "outcome":
+            assert isinstance(value, OutcomeBatch)
+            self.batches.append(value)
+        elif name == "check":
+            assert isinstance(value, OutcomeCheck)
+            self.checks.append(value)
+        else:
+            assert isinstance(value, tuple)
+            self.seals.append(value)
+        self.mutations.append(name)
+
+    async def append_outcome_batch(self, batch: OutcomeBatch) -> SimpleNamespace:
+        await asyncio.to_thread(self._commit, "outcome", batch)
+        return SimpleNamespace(status="inserted")
+
+    async def append_outcome_check(self, check: OutcomeCheck) -> SimpleNamespace:
+        await asyncio.to_thread(self._commit, "check", check)
+        return SimpleNamespace(status="inserted")
+
+    async def try_seal_event(self, event_ticker: str, now: datetime) -> SimpleNamespace:
+        await asyncio.to_thread(self._commit, "seal", (event_ticker, now))
+        return SimpleNamespace(status="not_ready")
+
+
+async def wait_for_thread(event: threading.Event) -> bool:
+    return await asyncio.wait_for(asyncio.to_thread(event.wait, 0.5), timeout=1)
 
 
 class CaptureBomb:
@@ -454,6 +581,74 @@ async def test_label_budget_is_independent_exact_and_cancels_without_writes(
 
     assert cancelled.is_set()
     assert store.batches == store.checks == store.seals == []
+
+
+@pytest.mark.asyncio
+async def test_label_budget_expires_before_persistence_and_cannot_leave_late_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = BlockingThreadStore()
+    monkeypatch.setattr(capture_module, "LABEL_BUILD_BUDGET_SECONDS", 0.01)
+    run = asyncio.create_task(
+        label_task(store, LabelMarkets(event()), LabelWeather(cli_label())).run_label_once()
+    )
+    assert await wait_for_thread(store.entered["outcome"])
+
+    await asyncio.sleep(0.03)
+    pending_while_commit_blocked = not run.done()
+    store.release["outcome"].set()
+    await run
+
+    assert pending_while_commit_blocked is True
+    assert store.mutations == ["outcome"]
+    snapshot = list(store.mutations)
+    await asyncio.sleep(0.02)
+    assert store.mutations == snapshot
+
+
+@pytest.mark.asyncio
+async def test_external_label_cancellation_drains_full_changed_version_plan() -> None:
+    baseline_event = event()
+    baseline = validate_outcome_batch(
+        baseline_event, cli_label(), captured(baseline_event)
+    )
+    corrected_event = event(
+        markets=(
+            market("T70", lower=None, upper=69, result="no"),
+            market("B70.5", lower=70, upper=71, result="no"),
+            market("T71", lower=72, upper=None, result="yes"),
+        )
+    )
+    store = BlockingThreadStore(labeled=True)
+    store.baseline_id = baseline.outcome_batch_id
+    run = asyncio.create_task(
+        label_task(
+            store,
+            LabelMarkets(corrected_event),
+            LabelWeather(cli_label(high="72")),
+        ).run_label_once()
+    )
+    assert await wait_for_thread(store.entered["outcome"])
+
+    run.cancel()
+    await asyncio.sleep(0)
+    pending_after_cancel = not run.done()
+    store.release["outcome"].set()
+    check_entered = await wait_for_thread(store.entered["check"])
+    if check_entered:
+        store.release["check"].set()
+    seal_entered = await wait_for_thread(store.entered["seal"])
+    if seal_entered:
+        store.release["seal"].set()
+    result = await asyncio.gather(run, return_exceptions=True)
+
+    assert pending_after_cancel is True
+    assert check_entered is seal_entered is True
+    assert isinstance(result[0], asyncio.CancelledError)
+    assert store.mutations == ["outcome", "check", "seal"]
+    snapshot = list(store.mutations)
+    await asyncio.sleep(0.02)
+    assert store.mutations == snapshot
 
 
 @pytest.mark.asyncio
