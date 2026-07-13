@@ -59,8 +59,8 @@ class CaptureTimingError(WeatherShadowValidationError):
     """Raised when inputs do not share a leakage-free capture time."""
 
 
-def _require_aware(value: datetime, error_type: type[WeatherShadowValidationError], name: str) -> None:
-    if value.tzinfo is None or value.utcoffset() is None:
+def _require_aware(value: object, error_type: type[WeatherShadowValidationError], name: str) -> None:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise error_type(f"{name} must be timezone-aware")
 
 
@@ -406,6 +406,21 @@ def normalize_complete_ladder(event: RetrievedEvent, target_date: date) -> tuple
 def validate_one_hot_ladder(quotes: Sequence[ShadowQuote]) -> None:
     if len(quotes) < 3:
         raise LadderValidationError("ladder is incomplete")
+    for item in quotes:
+        if any(bound is not None and type(bound) is not int for bound in (item.lower_bound_f, item.upper_bound_f)):
+            raise LadderValidationError("quote bounds must be exact integers or null")
+        if type(item.is_lower_tail) is not bool or type(item.is_upper_tail) is not bool:
+            raise LadderValidationError("quote tail flags must be bool")
+        prices = (item.yes_bid_cents, item.yes_ask_cents, item.no_bid_cents, item.no_ask_cents)
+        if any(type(value) is not int for value in prices):
+            raise LadderValidationError("quote cents must be exact integers")
+        for name in ("yes_bid_size", "yes_ask_size", "no_bid_size", "no_ask_size"):
+            if type(getattr(item, name)) is not Decimal:
+                raise LadderValidationError(f"{name} must be a Decimal")
+        if item.volume is not None and type(item.volume) is not Decimal:
+            raise LadderValidationError("volume must be a Decimal or null")
+        if item.last_price_cents is not None and type(item.last_price_cents) is not int:
+            raise LadderValidationError("last price cents must be an exact integer or null")
     lower_tails = [item for item in quotes if item.is_lower_tail]
     upper_tails = [item for item in quotes if item.is_upper_tail]
     if len(lower_tails) != 1 or len(upper_tails) != 1:
@@ -427,12 +442,8 @@ def validate_one_hot_ladder(quotes: Sequence[ShadowQuote]) -> None:
         if previous.upper_bound_f + 1 != current.lower_bound_f:
             raise LadderValidationError("ladder ranges are not contiguous and non-overlapping")
     for item in quotes:
-        if any(bound is not None and type(bound) is not int for bound in (item.lower_bound_f, item.upper_bound_f)):
-            raise LadderValidationError("quote bounds must be exact integers or null")
-        if type(item.is_lower_tail) is not bool or type(item.is_upper_tail) is not bool:
-            raise LadderValidationError("quote tail flags must be bool")
         prices = (item.yes_bid_cents, item.yes_ask_cents, item.no_bid_cents, item.no_ask_cents)
-        if any(type(value) is not int or not 0 <= value <= 100 for value in prices):
+        if any(not 0 <= value <= 100 for value in prices):
             raise LadderValidationError("quote cents must be integers in [0, 100]")
         if item.yes_bid_cents > item.yes_ask_cents or item.no_bid_cents > item.no_ask_cents:
             raise LadderValidationError("quote book is crossed")
@@ -440,7 +451,7 @@ def validate_one_hot_ladder(quotes: Sequence[ShadowQuote]) -> None:
             raise LadderValidationError("yes/no complements are inconsistent")
         for name in ("yes_bid_size", "yes_ask_size", "no_bid_size", "no_ask_size", "volume"):
             _require_decimal(getattr(item, name), name)
-        if item.last_price_cents is not None and (type(item.last_price_cents) is not int or not 0 <= item.last_price_cents <= 100):
+        if item.last_price_cents is not None and not 0 <= item.last_price_cents <= 100:
             raise LadderValidationError("last price cents are invalid")
 
 
@@ -449,6 +460,19 @@ def validate_capture_timing(batch: CaptureBatch, max_sweep: timedelta) -> None:
         raise CaptureTimingError("max_sweep cannot be negative")
     for name in ("capture_started_at", "capture_finished_at", "as_of", "close_time", "event_retrieved_at"):
         _require_aware(getattr(batch, name), CaptureTimingError, name)
+    feature_time_names = (
+        "forecast_issued_at",
+        "forecast_valid_start",
+        "forecast_valid_end",
+        "observation_measured_at",
+        "observation_coverage_start",
+        "weather_retrieved_at",
+    )
+    for name in feature_time_names:
+        _require_aware(getattr(batch.features, name), CaptureTimingError, name)
+    for quote in batch.quotes:
+        _require_aware(quote.close_time, CaptureTimingError, "quote close_time")
+        _require_aware(quote.price_retrieved_at, CaptureTimingError, "price_retrieved_at")
     if _utc(batch.as_of) != _utc(batch.capture_finished_at):
         raise CaptureTimingError("as_of must equal capture_finished_at")
     if _utc(batch.capture_finished_at) < _utc(batch.capture_started_at):
@@ -493,7 +517,6 @@ def validate_capture_timing(batch: CaptureBatch, max_sweep: timedelta) -> None:
     if not batch.quotes:
         raise CaptureTimingError("capture has no quotes")
     for quote in batch.quotes:
-        _require_aware(quote.price_retrieved_at, CaptureTimingError, "price_retrieved_at")
         if quote.close_time != batch.close_time:
             raise CaptureTimingError("quote close does not match batch close")
         quote_retrieved = _utc(quote.price_retrieved_at)

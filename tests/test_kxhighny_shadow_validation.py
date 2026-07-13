@@ -462,12 +462,71 @@ def test_ladder_runtime_types_fail_closed(field: str, bad_value: object) -> None
         normalize_complete_ladder(replace(source, markets=tuple(markets)), date(2026, 7, 12))
 
 
+@pytest.mark.parametrize(
+    ("quote_index", "field", "bad_value"),
+    [
+        (1, "lower_bound_f", "70"),
+        (1, "lower_bound_f", None),
+        (1, "lower_bound_f", True),
+        (0, "upper_bound_f", "69"),
+        (0, "is_lower_tail", 1),
+        (1, "yes_bid_cents", "30"),
+        (1, "yes_bid_size", "10"),
+    ],
+)
+def test_standalone_ladder_validator_raises_typed_errors_for_malformed_dtos(
+    quote_index: int,
+    field: str,
+    bad_value: object,
+) -> None:
+    quotes = list(normalize_complete_ladder(event(), date(2026, 7, 12)))
+    quotes[quote_index] = replace(quotes[quote_index], **{field: bad_value})
+    with pytest.raises(LadderValidationError):
+        validate_one_hot_ladder(quotes)
+
+
 @pytest.mark.parametrize("field", ["grid_forecast_high_f", "hourly_forecast_high_f", "running_observed_high_f", "forecast_spread_f"])
 def test_capture_weather_feature_values_require_decimal(field: str) -> None:
     batch = build_batch()
     batch = replace(batch, features=replace(batch.features, **{field: 80.0}))
     with pytest.raises(CaptureTimingError):
         validate_capture_timing(batch, timedelta(seconds=10))
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "forecast_issued_at",
+        "forecast_valid_start",
+        "forecast_valid_end",
+        "observation_measured_at",
+        "observation_coverage_start",
+        "weather_retrieved_at",
+    ],
+)
+def test_standalone_capture_validator_rejects_naive_feature_timestamps(field: str) -> None:
+    batch = build_batch()
+    naive = getattr(batch.features, field).replace(tzinfo=None)
+    malformed = replace(batch, features=replace(batch.features, **{field: naive}))
+    with pytest.raises(CaptureTimingError):
+        validate_capture_timing(malformed, timedelta(seconds=10))
+
+
+@pytest.mark.parametrize("location", ["batch", "feature", "quote"])
+def test_standalone_capture_validator_rejects_non_datetime_timestamps(location: str) -> None:
+    batch = build_batch()
+    if location == "batch":
+        malformed = replace(batch, event_retrieved_at="not-a-datetime")
+    elif location == "feature":
+        malformed = replace(
+            batch,
+            features=replace(batch.features, forecast_issued_at="not-a-datetime"),
+        )
+    else:
+        quote = replace(batch.quotes[0], price_retrieved_at="not-a-datetime")
+        malformed = replace(batch, quotes=(quote, *batch.quotes[1:]))
+    with pytest.raises(CaptureTimingError):
+        validate_capture_timing(malformed, timedelta(seconds=10))
 
 
 def test_fee_provenance_is_static_canonical_and_official() -> None:
