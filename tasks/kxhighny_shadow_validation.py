@@ -210,8 +210,10 @@ def derive_weather_features(
         for value in asdict(item).values():
             if isinstance(value, datetime):
                 _require_aware(value, WeatherInputError, "weather timestamp")
-        if not item.temperature_c.is_finite():
-            raise WeatherInputError("weather temperature is not finite")
+        if type(item.temperature_c) is not Decimal or not item.temperature_c.is_finite():
+            raise WeatherInputError("weather temperature must be a finite Decimal")
+        if type(item.qc_passed) is not bool:
+            raise WeatherInputError("weather QC flag must be bool")
 
     day_start_utc, day_end_utc = _utc(day_start), _utc(day_end)
     grid = tuple(
@@ -224,8 +226,8 @@ def derive_weather_features(
         raise WeatherInputError("target-day forecast inputs are incomplete")
     if any(_utc(item.valid_end) <= _utc(item.valid_start) for item in grid):
         raise WeatherInputError("grid valid interval is invalid")
-    _reject_conflicting_duplicates(grid, ("valid_start", "valid_end", "issued_at", "source_id"))
-    _reject_conflicting_duplicates(hourly, ("start_time", "issued_at", "source_id"))
+    _reject_conflicting_duplicates(grid, ("valid_start", "valid_end", "issued_at"))
+    _reject_conflicting_duplicates(hourly, ("start_time", "issued_at"))
     forecast_issued_at = _validate_forecasts(grid, hourly, as_of)
 
     if any(item.station_id != "KNYC" for item in payloads.observations):
@@ -241,15 +243,52 @@ def derive_weather_features(
         raise WeatherInputError("observation failed QC")
     if any(not item.source_id for item in target_observations):
         raise WeatherInputError("observation identity is missing")
-    _reject_conflicting_duplicates(target_observations, ("station_id", "measured_at", "source_id"))
+    _reject_conflicting_duplicates(target_observations, ("station_id", "measured_at"))
 
     grid_high = max(celsius_to_fahrenheit(item.temperature_c) for item in grid)
     hourly_high = max(celsius_to_fahrenheit(item.temperature_c) for item in hourly)
     observed_high = max(celsius_to_fahrenheit(item.temperature_c) for item in target_observations)
+    canonical_grid = tuple(
+        sorted(
+            payloads.grid,
+            key=lambda item: (
+                _utc_text(item.valid_start),
+                _utc_text(item.valid_end),
+                _utc_text(item.issued_at),
+                str(item.temperature_c),
+                item.source_id or "",
+                item.qc_passed,
+            ),
+        )
+    )
+    canonical_hourly = tuple(
+        sorted(
+            payloads.hourly,
+            key=lambda item: (
+                _utc_text(item.start_time),
+                _utc_text(item.issued_at),
+                str(item.temperature_c),
+                item.source_id or "",
+                item.qc_passed,
+            ),
+        )
+    )
+    canonical_observations = tuple(
+        sorted(
+            payloads.observations,
+            key=lambda item: (
+                item.station_id,
+                _utc_text(item.measured_at),
+                str(item.temperature_c),
+                item.source_id or "",
+                item.qc_passed,
+            ),
+        )
+    )
     source_payload = {
-        "grid": payloads.grid,
-        "hourly": payloads.hourly,
-        "observations": payloads.observations,
+        "grid": canonical_grid,
+        "hourly": canonical_hourly,
+        "observations": canonical_observations,
         "retrieved_at": payloads.retrieved_at,
         "raw": {
             "grid": _canonical_raw_json(payloads.grid_payload_json, "grid_payload_json"),
@@ -281,7 +320,7 @@ def derive_weather_features(
 def _require_decimal(value: Decimal | None, name: str) -> None:
     if value is None:
         return
-    if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
+    if type(value) is not Decimal or not value.is_finite() or value < 0:
         raise LadderValidationError(f"{name} must be a finite nonnegative Decimal")
 
 
@@ -339,6 +378,10 @@ def normalize_complete_ladder(event: RetrievedEvent, target_date: date) -> tuple
             raise LadderValidationError("market does not belong to the same open event")
         if item.close_time != event.close_time:
             raise LadderValidationError("market close times differ")
+        if any(bound is not None and type(bound) is not int for bound in (item.lower_bound_f, item.upper_bound_f)):
+            raise LadderValidationError("market bounds must be exact integers or null")
+        if type(item.is_lower_tail) is not bool or type(item.is_upper_tail) is not bool:
+            raise LadderValidationError("market tail flags must be bool")
         if _utc(item.price_retrieved_at) > _utc(event.retrieved_at):
             raise LadderValidationError("event retrieval predates a sibling quote")
         if not all(asdict(item.fingerprints).values()):
@@ -349,7 +392,11 @@ def normalize_complete_ladder(event: RetrievedEvent, target_date: date) -> tuple
         _quote_from_market(item)
         for item in sorted(
             event.markets,
-            key=lambda item: (item.lower_bound_f is not None, item.lower_bound_f if item.lower_bound_f is not None else -10_000),
+            key=lambda item: (
+                item.lower_bound_f is not None,
+                item.lower_bound_f if item.lower_bound_f is not None else -10_000,
+                item.market_ticker,
+            ),
         )
     )
     validate_one_hot_ladder(quotes)
@@ -380,6 +427,10 @@ def validate_one_hot_ladder(quotes: Sequence[ShadowQuote]) -> None:
         if previous.upper_bound_f + 1 != current.lower_bound_f:
             raise LadderValidationError("ladder ranges are not contiguous and non-overlapping")
     for item in quotes:
+        if any(bound is not None and type(bound) is not int for bound in (item.lower_bound_f, item.upper_bound_f)):
+            raise LadderValidationError("quote bounds must be exact integers or null")
+        if type(item.is_lower_tail) is not bool or type(item.is_upper_tail) is not bool:
+            raise LadderValidationError("quote tail flags must be bool")
         prices = (item.yes_bid_cents, item.yes_ask_cents, item.no_bid_cents, item.no_ask_cents)
         if any(type(value) is not int or not 0 <= value <= 100 for value in prices):
             raise LadderValidationError("quote cents must be integers in [0, 100]")
@@ -396,10 +447,12 @@ def validate_one_hot_ladder(quotes: Sequence[ShadowQuote]) -> None:
 def validate_capture_timing(batch: CaptureBatch, max_sweep: timedelta) -> None:
     if max_sweep < timedelta(0):
         raise CaptureTimingError("max_sweep cannot be negative")
-    for name in ("capture_started_at", "capture_finished_at", "as_of", "close_time"):
+    for name in ("capture_started_at", "capture_finished_at", "as_of", "close_time", "event_retrieved_at"):
         _require_aware(getattr(batch, name), CaptureTimingError, name)
-    if not _utc(batch.capture_started_at) <= _utc(batch.as_of) <= _utc(batch.capture_finished_at):
-        raise CaptureTimingError("as_of must fall inside the capture sweep")
+    if _utc(batch.as_of) != _utc(batch.capture_finished_at):
+        raise CaptureTimingError("as_of must equal capture_finished_at")
+    if _utc(batch.capture_finished_at) < _utc(batch.capture_started_at):
+        raise CaptureTimingError("capture sweep is reversed")
     if _utc(batch.capture_finished_at) - _utc(batch.capture_started_at) > max_sweep:
         raise CaptureTimingError("capture sweep exceeded its bound")
     if _utc(batch.as_of) >= _utc(batch.close_time):
@@ -420,16 +473,34 @@ def validate_capture_timing(batch: CaptureBatch, max_sweep: timedelta) -> None:
         raise CaptureTimingError("feature evidence became available after as_of")
     if batch.features.observation_coverage_start > batch.features.observation_measured_at:
         raise CaptureTimingError("observation coverage is reversed")
+    for name in (
+        "grid_forecast_high_f",
+        "hourly_forecast_high_f",
+        "running_observed_high_f",
+        "forecast_spread_f",
+    ):
+        value = getattr(batch.features, name)
+        if type(value) is not Decimal or not value.is_finite():
+            raise CaptureTimingError(f"{name} must be a finite Decimal")
+    capture_start = _utc(batch.capture_started_at)
+    capture_as_of = _utc(batch.as_of)
+    weather_retrieved = _utc(batch.features.weather_retrieved_at)
+    event_retrieved = _utc(batch.event_retrieved_at)
+    if not capture_start <= weather_retrieved <= capture_as_of:
+        raise CaptureTimingError("weather retrieval fell outside the capture sweep")
+    if not capture_start <= event_retrieved <= capture_as_of:
+        raise CaptureTimingError("event retrieval fell outside the capture sweep")
     if not batch.quotes:
         raise CaptureTimingError("capture has no quotes")
     for quote in batch.quotes:
         _require_aware(quote.price_retrieved_at, CaptureTimingError, "price_retrieved_at")
         if quote.close_time != batch.close_time:
             raise CaptureTimingError("quote close does not match batch close")
-        if _utc(quote.price_retrieved_at) < _utc(batch.features.weather_retrieved_at):
-            raise CaptureTimingError("weather was retrieved after quote retrieval")
-        if _utc(quote.price_retrieved_at) > _utc(batch.capture_finished_at):
+        quote_retrieved = _utc(quote.price_retrieved_at)
+        if not capture_start <= quote_retrieved <= capture_as_of:
             raise CaptureTimingError("quote retrieval fell outside the capture sweep")
+        if quote_retrieved < weather_retrieved:
+            raise CaptureTimingError("weather was retrieved after quote retrieval")
 
 
 def build_capture_batch(
@@ -456,7 +527,7 @@ def build_capture_batch(
             "event_status": event.status,
             "event_close_time": event.close_time,
             "event_retrieved_at": event.retrieved_at,
-            "event_market_tickers": event.market_tickers,
+            "event_market_tickers": tuple(sorted(event.market_tickers)),
             "quotes": quotes,
             "model_version": model_version,
             "fee_schedule_version": fee_schedule_version,
@@ -475,6 +546,7 @@ def build_capture_batch(
         capture_finished_at=capture_finished_at,
         as_of=as_of,
         close_time=event.close_time,
+        event_retrieved_at=event.retrieved_at,
         seconds_to_close=seconds_to_close,
         horizon_bucket=horizon_bucket,
         features=features,

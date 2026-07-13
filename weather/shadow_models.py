@@ -167,6 +167,7 @@ class CaptureBatch:
     capture_finished_at: datetime
     as_of: datetime
     close_time: datetime
+    event_retrieved_at: datetime
     seconds_to_close: Decimal
     horizon_bucket: HorizonBucket
     features: WeatherFeatures
