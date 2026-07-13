@@ -19,6 +19,7 @@ from weather.shadow_models import (
     Fingerprints,
     OutcomeBatch,
     OutcomeCheck,
+    OutcomeRow,
     OutcomeTarget,
     ShadowQuote,
 )
@@ -26,6 +27,17 @@ from weather.shadow_models import (
 
 _BUSY_TIMEOUT_MS = 5_000
 _T = TypeVar("_T")
+_OUTCOME_IMMUTABLE_COLUMNS = (
+    "outcome_id, outcome_batch_id, market_ticker, event_ticker, expected_sibling_count, "
+    "result, kalshi_status, settlement_observed_at, source_payload_hash, "
+    "contract_fingerprint, rules_source_fingerprint, settlement_source_fingerprint, "
+    "official_high_f, official_evidence_id, official_source_url, official_product_id, "
+    "official_issued_at, official_retrieved_at, label_available_at"
+)
+_CHECK_IMMUTABLE_COLUMNS = (
+    "check_id, event_ticker, check_date_utc, checked_at, check_kind, "
+    "observed_batch_hash, baseline_batch_hash, agrees_with_baseline, details_json"
+)
 
 
 @dataclass(frozen=True)
@@ -55,6 +67,11 @@ class OutcomeWriteResult:
 class CheckWriteResult:
     status: Literal["inserted", "identical", "conflict"]
     check_id: str
+    conflict_id: str | None = None
+
+
+class OutcomeCheckKindError(ValueError):
+    """Raised when a caller attempts to append a store-owned seal check."""
 
 
 @dataclass(frozen=True)
@@ -108,6 +125,8 @@ class WeatherShadowStore:
         return await asyncio.to_thread(self._append_outcome_batch_sync, batch)
 
     async def append_outcome_check(self, check: OutcomeCheck) -> CheckWriteResult:
+        if check.check_kind != "daily":
+            raise OutcomeCheckKindError("append_outcome_check accepts daily checks only")
         return await asyncio.to_thread(self._append_outcome_check_sync, check)
 
     async def try_seal_event(self, event_ticker: str, now: datetime) -> SealResult:
@@ -211,29 +230,21 @@ class WeatherShadowStore:
         return self._write(write)
 
     def _list_outcome_targets_sync(self, now: datetime) -> tuple[OutcomeTarget, ...]:
-        def read(conn: sqlite3.Connection) -> tuple[OutcomeTarget, ...]:
+        def write(conn: sqlite3.Connection) -> tuple[OutcomeTarget, ...]:
             captures = conn.execute(
                 "SELECT DISTINCT event_ticker, target_date "
                 "FROM research_weather_shadow_snapshots ORDER BY target_date, event_ticker"
             ).fetchall()
             targets: list[OutcomeTarget] = []
             for event_ticker, target_date in captures:
+                _record_missed_check_conflicts(conn, str(event_ticker), now)
                 state = _label_state(conn, str(event_ticker))
                 if state.sealed:
                     continue
-                if not state.labeled:
-                    targets.append(OutcomeTarget(str(event_ticker), date.fromisoformat(str(target_date))))
-                    continue
-                first_label = conn.execute(
-                    "SELECT MIN(label_available_at) FROM research_weather_shadow_outcomes "
-                    "WHERE event_ticker = ?",
-                    (event_ticker,),
-                ).fetchone()[0]
-                if first_label is not None and now <= _parse_timestamp(str(first_label)) + timedelta(days=7):
-                    targets.append(OutcomeTarget(str(event_ticker), date.fromisoformat(str(target_date))))
+                targets.append(OutcomeTarget(str(event_ticker), date.fromisoformat(str(target_date))))
             return tuple(targets)
 
-        return self._read(read)
+        return self._write(write)
 
     def _capture_fingerprints_sync(self, event_ticker: str) -> dict[str, Fingerprints]:
         def read(conn: sqlite3.Connection) -> dict[str, Fingerprints]:
@@ -256,40 +267,80 @@ class WeatherShadowStore:
 
     def _append_outcome_batch_sync(self, batch: OutcomeBatch) -> OutcomeWriteResult:
         def write(conn: sqlite3.Connection) -> OutcomeWriteResult:
-            incoming = {(row.market_ticker, row.source_payload_hash) for row in batch.rows}
-            existing_batch = {
-                (str(row[0]), str(row[1]))
+            incoming = sorted(_outcome_values(row) for row in batch.rows)
+            existing_batch = sorted(
+                tuple(row)
                 for row in conn.execute(
-                    "SELECT market_ticker, source_payload_hash "
+                    f"SELECT {_OUTCOME_IMMUTABLE_COLUMNS} "
                     "FROM research_weather_shadow_outcomes WHERE outcome_batch_id = ?",
                     (batch.outcome_batch_id,),
                 )
-            }
+            )
             if existing_batch == incoming:
                 return OutcomeWriteResult("identical", batch.outcome_batch_id)
             if existing_batch:
-                raise sqlite3.IntegrityError("partial outcome batch already exists")
+                conflict_id = _insert_conflict(
+                    conn,
+                    entity_type="outcome",
+                    entity_key=batch.event_ticker,
+                    existing_hash=_records_hash(existing_batch),
+                    incoming_hash=_records_hash(incoming),
+                    details={
+                        "event_ticker": batch.event_ticker,
+                        "existing_batch_id": batch.outcome_batch_id,
+                        "incoming_batch_id": batch.outcome_batch_id,
+                        "reason": "immutable_outcome_retry_mismatch",
+                    },
+                )
+                return OutcomeWriteResult("conflict", batch.outcome_batch_id, conflict_id)
 
-            prior_batch_ids = {
-                str(row[0])
+            collisions: list[tuple[object, ...]] = []
+            for row in batch.rows:
+                collisions.extend(
+                    tuple(item)
+                    for item in conn.execute(
+                        f"SELECT {_OUTCOME_IMMUTABLE_COLUMNS} "
+                        "FROM research_weather_shadow_outcomes "
+                        "WHERE outcome_id = ? OR (market_ticker = ? AND source_payload_hash = ?)",
+                        (row.outcome_id, row.market_ticker, row.source_payload_hash),
+                    )
+                )
+            if collisions:
+                conflict_id = _insert_conflict(
+                    conn,
+                    entity_type="outcome",
+                    entity_key=batch.event_ticker,
+                    existing_hash=_records_hash(sorted(set(collisions))),
+                    incoming_hash=_records_hash(incoming),
+                    details={
+                        "event_ticker": batch.event_ticker,
+                        "incoming_batch_id": batch.outcome_batch_id,
+                        "reason": "outcome_identity_collision",
+                    },
+                )
+                return OutcomeWriteResult("conflict", batch.outcome_batch_id, conflict_id)
+
+            prior_rows = sorted(
+                tuple(row)
                 for row in conn.execute(
-                    "SELECT DISTINCT outcome_batch_id FROM research_weather_shadow_outcomes "
+                    f"SELECT {_OUTCOME_IMMUTABLE_COLUMNS} "
+                    "FROM research_weather_shadow_outcomes "
                     "WHERE event_ticker = ?",
                     (batch.event_ticker,),
                 )
-            }
+            )
             for row in batch.rows:
                 _insert_outcome(conn, row)
-            if not prior_batch_ids:
+            if not prior_rows:
                 return OutcomeWriteResult("inserted", batch.outcome_batch_id)
 
-            existing_hash = _set_hash(prior_batch_ids)
+            existing_hash = _records_hash(prior_rows)
             conflict_id = _insert_conflict(
                 conn,
                 entity_type="outcome",
                 entity_key=batch.event_ticker,
                 existing_hash=existing_hash,
-                incoming_hash=batch.outcome_batch_id,
+                incoming_hash=_records_hash(incoming),
                 details={
                     "event_ticker": batch.event_ticker,
                     "existing_batch_hash": existing_hash,
@@ -303,24 +354,32 @@ class WeatherShadowStore:
     def _append_outcome_check_sync(self, check: OutcomeCheck) -> CheckWriteResult:
         def write(conn: sqlite3.Connection) -> CheckWriteResult:
             existing = conn.execute(
-                "SELECT check_id, checked_at, observed_batch_hash, baseline_batch_hash, "
-                "agrees_with_baseline, details_json FROM research_weather_shadow_outcome_checks "
+                f"SELECT {_CHECK_IMMUTABLE_COLUMNS} "
+                "FROM research_weather_shadow_outcome_checks "
                 "WHERE event_ticker = ? AND check_date_utc = ? AND check_kind = ?",
                 (check.event_ticker, check.check_date_utc.isoformat(), check.check_kind),
             ).fetchone()
-            expected = (
-                check.check_id,
-                _timestamp(check.checked_at),
-                check.observed_batch_hash,
-                check.baseline_batch_hash,
-                int(check.agrees_with_baseline),
-                check.details_json,
-            )
+            expected = _check_values(check)
             if existing is not None:
-                status: Literal["identical", "conflict"] = (
-                    "identical" if existing == expected else "conflict"
+                if tuple(existing) == expected:
+                    return CheckWriteResult("identical", check.check_id)
+                identity = _check_entity_key(
+                    check.event_ticker, check.check_date_utc.isoformat(), check.check_kind
                 )
-                return CheckWriteResult(status, check.check_id)
+                conflict_id = _insert_conflict(
+                    conn,
+                    entity_type="outcome",
+                    entity_key=identity,
+                    existing_hash=_records_hash([tuple(existing)]),
+                    incoming_hash=_records_hash([expected]),
+                    details={
+                        "check_date_utc": check.check_date_utc.isoformat(),
+                        "check_kind": check.check_kind,
+                        "event_ticker": check.event_ticker,
+                        "reason": "immutable_check_retry_mismatch",
+                    },
+                )
+                return CheckWriteResult("conflict", check.check_id, conflict_id)
             conn.execute(
                 "INSERT INTO research_weather_shadow_outcome_checks "
                 "(check_id, event_ticker, check_date_utc, checked_at, check_kind, "
@@ -345,6 +404,7 @@ class WeatherShadowStore:
 
     def _try_seal_event_sync(self, event_ticker: str, now: datetime) -> SealResult:
         def write(conn: sqlite3.Connection) -> SealResult:
+            _record_missed_check_conflicts(conn, event_ticker, now)
             state = _label_state(conn, event_ticker)
             if state.quarantined:
                 return SealResult("quarantined", event_ticker)
@@ -352,21 +412,38 @@ class WeatherShadowStore:
                 return SealResult("already_sealed", event_ticker)
             if not state.labeled:
                 return SealResult("not_ready", event_ticker)
+            baseline = _outcome_baseline(conn, event_ticker)
+            if baseline is None:
+                return SealResult("not_ready", event_ticker)
+            baseline_hash, first_label = baseline
+            expected_dates = _expected_check_dates(first_label)
+            if now.astimezone(timezone.utc).date() < expected_dates[-1]:
+                return SealResult("not_ready", event_ticker)
             rows = conn.execute(
-                "SELECT check_date_utc, observed_batch_hash, baseline_batch_hash "
+                "SELECT check_date_utc, observed_batch_hash, baseline_batch_hash, agrees_with_baseline "
                 "FROM research_weather_shadow_outcome_checks "
-                "WHERE event_ticker = ? AND check_kind = 'daily' AND agrees_with_baseline = 1 "
+                "WHERE event_ticker = ? AND check_kind = 'daily' "
                 "ORDER BY check_date_utc",
                 (event_ticker,),
             ).fetchall()
-            if len(rows) < 7 or not _seven_consecutive_dates([str(row[0]) for row in rows]):
+            by_date = {date.fromisoformat(str(row[0])): row for row in rows}
+            if any(expected not in by_date for expected in expected_dates):
                 return SealResult("not_ready", event_ticker)
-            baseline = str(rows[0][2])
-            if any(str(row[1]) != baseline or str(row[2]) != baseline for row in rows[:7]):
+            if any(
+                not bool(by_date[expected][3])
+                or str(by_date[expected][1]) != baseline_hash
+                or str(by_date[expected][2]) != baseline_hash
+                for expected in expected_dates
+            ):
                 return SealResult("quarantined", event_ticker)
             check_date = now.astimezone(timezone.utc).date().isoformat()
             check_id = _content_hash(
-                {"event_ticker": event_ticker, "check_date_utc": check_date, "kind": "seal", "baseline": baseline}
+                {
+                    "event_ticker": event_ticker,
+                    "check_date_utc": check_date,
+                    "kind": "seal",
+                    "baseline": baseline_hash,
+                }
             )
             conn.execute(
                 "INSERT INTO research_weather_shadow_outcome_checks "
@@ -378,8 +455,8 @@ class WeatherShadowStore:
                     event_ticker,
                     check_date,
                     _timestamp(now),
-                    baseline,
-                    baseline,
+                    baseline_hash,
+                    baseline_hash,
                     _canonical_json({"daily_checks": 7, "event_ticker": event_ticker}),
                     _now_timestamp(),
                 ),
@@ -473,7 +550,7 @@ def _insert_quote(conn: sqlite3.Connection, snapshot_id: str, quote: ShadowQuote
     )
 
 
-def _insert_outcome(conn: sqlite3.Connection, row: object) -> None:
+def _insert_outcome(conn: sqlite3.Connection, row: OutcomeRow) -> None:
     conn.execute(
         "INSERT INTO research_weather_shadow_outcomes "
         "(outcome_id, outcome_batch_id, market_ticker, event_ticker, expected_sibling_count, "
@@ -481,29 +558,54 @@ def _insert_outcome(conn: sqlite3.Connection, row: object) -> None:
         "rules_source_fingerprint, settlement_source_fingerprint, official_high_f, official_evidence_id, "
         "official_source_url, official_product_id, official_issued_at, official_retrieved_at, "
         "label_available_at, created_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            row.outcome_id,
-            row.outcome_batch_id,
-            row.market_ticker,
-            row.event_ticker,
-            row.expected_sibling_count,
-            row.result,
-            row.kalshi_status,
-            _timestamp(row.settlement_observed_at),
-            row.source_payload_hash,
-            row.fingerprints.contract,
-            row.fingerprints.rules_source,
-            row.fingerprints.settlement_source,
-            float(row.official_high_f),
-            row.official_evidence_id,
-            row.official_source_url,
-            row.official_product_id,
-            _timestamp(row.official_issued_at),
-            _timestamp(row.official_retrieved_at),
-            _timestamp(row.label_available_at),
-            _now_timestamp(),
-        ),
+        (*_outcome_values(row), _now_timestamp()),
     )
+
+
+def _outcome_values(row: OutcomeRow) -> tuple[object, ...]:
+    return (
+        row.outcome_id,
+        row.outcome_batch_id,
+        row.market_ticker,
+        row.event_ticker,
+        row.expected_sibling_count,
+        row.result,
+        row.kalshi_status,
+        _timestamp(row.settlement_observed_at),
+        row.source_payload_hash,
+        row.fingerprints.contract,
+        row.fingerprints.rules_source,
+        row.fingerprints.settlement_source,
+        float(row.official_high_f),
+        row.official_evidence_id,
+        row.official_source_url,
+        row.official_product_id,
+        _timestamp(row.official_issued_at),
+        _timestamp(row.official_retrieved_at),
+        _timestamp(row.label_available_at),
+    )
+
+
+def _check_values(check: OutcomeCheck) -> tuple[object, ...]:
+    return (
+        check.check_id,
+        check.event_ticker,
+        check.check_date_utc.isoformat(),
+        _timestamp(check.checked_at),
+        check.check_kind,
+        check.observed_batch_hash,
+        check.baseline_batch_hash,
+        int(check.agrees_with_baseline),
+        check.details_json,
+    )
+
+
+def _records_hash(records: list[tuple[object, ...]]) -> str:
+    return _content_hash([list(record) for record in sorted(records)])
+
+
+def _check_entity_key(event_ticker: str, check_date: str, check_kind: str) -> str:
+    return f"outcome_check:{event_ticker}:{check_date}:{check_kind}"
 
 
 def _insert_conflict(
@@ -615,54 +717,164 @@ def _validate_complete_outcome_batch(batch: OutcomeBatch) -> None:
         row.event_ticker != batch.event_ticker
         or row.outcome_batch_id != batch.outcome_batch_id
         or row.expected_sibling_count != expected
+        or row.settlement_observed_at != batch.settlement_observed_at
+        or row.label_available_at != batch.label_available_at
         for row in batch.rows
     ):
         raise ValueError("complete outcome ladder required")
+    if sum(row.result == "yes" for row in batch.rows) != 1:
+        raise ValueError("complete outcome ladder requires exactly one YES")
+
+
+def _coherent_outcome_batches(
+    conn: sqlite3.Connection, event_ticker: str
+) -> tuple[list[tuple[str, datetime]], bool, tuple[str, ...]]:
+    batch_ids = tuple(
+        sorted(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT outcome_batch_id FROM research_weather_shadow_outcomes "
+                "WHERE event_ticker = ?",
+                (event_ticker,),
+            )
+        )
+    )
+    coherent: list[tuple[str, datetime]] = []
+    incoherent = False
+    for batch_id in batch_ids:
+        batch_rows = conn.execute(
+            "SELECT market_ticker, event_ticker, expected_sibling_count, result, label_available_at "
+            "FROM research_weather_shadow_outcomes WHERE outcome_batch_id = ?",
+            (batch_id,),
+        ).fetchall()
+        expected_values = {int(row[2]) for row in batch_rows}
+        label_values = {str(row[4]) for row in batch_rows}
+        valid = (
+            len(expected_values) == 1
+            and len(label_values) == 1
+            and len(batch_rows) == next(iter(expected_values))
+            and len({str(row[0]) for row in batch_rows}) == len(batch_rows)
+            and all(str(row[1]) == event_ticker for row in batch_rows)
+            and sum(str(row[3]) == "yes" for row in batch_rows) == 1
+        )
+        if valid:
+            coherent.append((batch_id, _parse_timestamp(next(iter(label_values)))))
+        else:
+            incoherent = True
+    return coherent, incoherent, batch_ids
+
+
+def _outcome_baseline(
+    conn: sqlite3.Connection, event_ticker: str
+) -> tuple[str, datetime] | None:
+    coherent, _, _ = _coherent_outcome_batches(conn, event_ticker)
+    if not coherent:
+        return None
+    return min(coherent, key=lambda item: (item[1], item[0]))
+
+
+def _expected_check_dates(first_label: datetime) -> tuple[date, ...]:
+    first_date = first_label.astimezone(timezone.utc).date()
+    return tuple(first_date + timedelta(days=offset) for offset in range(1, 8))
+
+
+def _record_missed_check_conflicts(
+    conn: sqlite3.Connection, event_ticker: str, now: datetime
+) -> None:
+    baseline = _outcome_baseline(conn, event_ticker)
+    if baseline is None:
+        return
+    baseline_hash, first_label = baseline
+    present = {
+        date.fromisoformat(str(row[0]))
+        for row in conn.execute(
+            "SELECT check_date_utc FROM research_weather_shadow_outcome_checks "
+            "WHERE event_ticker = ? AND check_kind = 'daily'",
+            (event_ticker,),
+        )
+    }
+    now_date = now.astimezone(timezone.utc).date()
+    for expected in _expected_check_dates(first_label):
+        if now_date <= expected or expected in present:
+            continue
+        identity = _check_entity_key(event_ticker, expected.isoformat(), "daily")
+        _insert_conflict(
+            conn,
+            entity_type="outcome",
+            entity_key=identity,
+            existing_hash=baseline_hash,
+            incoming_hash=_content_hash(
+                {"check_date_utc": expected.isoformat(), "status": "missing"}
+            ),
+            details={
+                "check_date_utc": expected.isoformat(),
+                "check_kind": "daily",
+                "event_ticker": event_ticker,
+                "reason": "expected_daily_check_missing",
+            },
+        )
 
 
 def _label_state(conn: sqlite3.Connection, event_ticker: str) -> LabelState:
-    outcomes = conn.execute(
-        "SELECT outcome_batch_id, market_ticker, result, expected_sibling_count, source_payload_hash "
+    coherent, incoherent, batch_ids = _coherent_outcome_batches(conn, event_ticker)
+    labeled = bool(coherent)
+    baseline = _outcome_baseline(conn, event_ticker)
+    baseline_hash = None if baseline is None else baseline[0]
+    expected_dates = () if baseline is None else _expected_check_dates(baseline[1])
+    versions: dict[str, set[tuple[str, str]]] = {}
+    for ticker, result, source_hash in conn.execute(
+        "SELECT market_ticker, result, source_payload_hash "
         "FROM research_weather_shadow_outcomes WHERE event_ticker = ?",
         (event_ticker,),
-    ).fetchall()
-    batches: dict[str, list[tuple[object, ...]]] = {}
-    versions: dict[str, set[tuple[str, str]]] = {}
-    for batch_id, ticker, result, expected, source_hash in outcomes:
-        batches.setdefault(str(batch_id), []).append((ticker, result, expected, source_hash))
+    ):
         versions.setdefault(str(ticker), set()).add((str(result), str(source_hash)))
-    complete = [
-        batch_id
-        for batch_id, rows in batches.items()
-        if len(rows) == int(rows[0][2]) and sum(row[1] == "yes" for row in rows) == 1
-    ]
     conflict = conn.execute(
         "SELECT 1 FROM research_weather_shadow_conflicts "
-        "WHERE entity_type = 'outcome' AND entity_key = ? LIMIT 1",
-        (event_ticker,),
+        "WHERE entity_type = 'outcome' AND (entity_key = ? OR entity_key LIKE ?) LIMIT 1",
+        (event_ticker, f"outcome_check:{event_ticker}:%"),
     ).fetchone()
     checks = conn.execute(
-        "SELECT check_kind, agrees_with_baseline FROM research_weather_shadow_outcome_checks "
+        "SELECT check_date_utc, check_kind, observed_batch_hash, baseline_batch_hash, "
+        "agrees_with_baseline FROM research_weather_shadow_outcome_checks "
         "WHERE event_ticker = ?",
         (event_ticker,),
     ).fetchall()
-    quarantined = conflict is not None or any(len(values) > 1 for values in versions.values()) or any(
-        kind == "daily" and not agrees for kind, agrees in checks
+    daily = {date.fromisoformat(str(row[0])): row for row in checks if row[1] == "daily"}
+    seal_rows = [row for row in checks if row[1] == "seal"]
+    invalid_daily = any(
+        not bool(row[4])
+        or str(row[2]) != str(row[3])
+        or baseline_hash is None
+        or str(row[3]) != baseline_hash
+        for row in daily.values()
+    )
+    correction_complete = bool(expected_dates) and all(
+        expected in daily
+        and bool(daily[expected][4])
+        and str(daily[expected][2]) == baseline_hash
+        and str(daily[expected][3]) == baseline_hash
+        for expected in expected_dates
+    )
+    valid_seal = bool(seal_rows) and labeled and correction_complete and all(
+        bool(row[4])
+        and str(row[2]) == baseline_hash
+        and str(row[3]) == baseline_hash
+        for row in seal_rows
+    )
+    quarantined = (
+        incoherent
+        or conflict is not None
+        or any(len(values) > 1 for values in versions.values())
+        or invalid_daily
+        or (bool(seal_rows) and not valid_seal)
     )
     return LabelState(
         event_ticker=event_ticker,
-        labeled=bool(complete),
-        sealed=any(kind == "seal" and agrees for kind, agrees in checks),
+        labeled=labeled,
+        sealed=valid_seal and not quarantined,
         quarantined=quarantined,
-        outcome_batch_ids=tuple(sorted(batches)),
-        daily_check_count=sum(kind == "daily" for kind, _ in checks),
-    )
-
-
-def _seven_consecutive_dates(values: list[str]) -> bool:
-    dates = sorted({date.fromisoformat(value) for value in values})
-    return len(dates) >= 7 and all(
-        right - left == timedelta(days=1) for left, right in zip(dates[:7], dates[1:7])
+        outcome_batch_ids=batch_ids,
+        daily_check_count=len(daily),
     )
 
 
@@ -692,9 +904,3 @@ def _canonical_json(value: object) -> str:
 
 def _content_hash(value: object) -> str:
     return sha256(_canonical_json(value).encode()).hexdigest()
-
-
-def _set_hash(values: set[str]) -> str:
-    if len(values) == 1:
-        return next(iter(values))
-    return _content_hash(sorted(values))
