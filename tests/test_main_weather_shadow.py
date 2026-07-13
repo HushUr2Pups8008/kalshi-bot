@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import importlib
+import os
 import sqlite3
 import sys
 import threading
@@ -13,9 +15,21 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-import config as config_module
-import main as main_module
-from main import TradingBot
+
+def _import_runtime_modules():
+    original = os.environ.get("POLYMARKET_US_ENABLED")
+    os.environ["POLYMARKET_US_ENABLED"] = "false"
+    try:
+        return importlib.import_module("config"), importlib.import_module("main")
+    finally:
+        if original is None:
+            os.environ.pop("POLYMARKET_US_ENABLED", None)
+        else:
+            os.environ["POLYMARKET_US_ENABLED"] = original
+
+
+config_module, main_module = _import_runtime_modules()
+TradingBot = main_module.TradingBot
 
 
 _LAZY_WEATHER_MODULES = (
@@ -26,29 +40,42 @@ _LAZY_WEATHER_MODULES = (
 )
 
 
+def _weather_config():
+    return config_module.BotConfig(
+        polymarket_us_enabled=False,
+        polymarket_us_live_trading_enabled=False,
+    )
+
+
 def test_weather_shadow_config_defaults_disabled(monkeypatch):
     monkeypatch.delenv("ENABLE_WEATHER_SHADOW_CAPTURE", raising=False)
 
-    assert config_module.BotConfig().enable_weather_shadow_capture is False
+    assert _weather_config().enable_weather_shadow_capture is False
 
 
 @pytest.mark.parametrize("value", ["1", "true", "yes", "on", " TRUE ", "On"])
 def test_weather_shadow_config_accepts_existing_true_spellings(monkeypatch, value):
     monkeypatch.setenv("ENABLE_WEATHER_SHADOW_CAPTURE", value)
 
-    assert config_module.BotConfig().enable_weather_shadow_capture is True
+    assert _weather_config().enable_weather_shadow_capture is True
 
 
 def test_weather_shadow_config_uses_shared_bool_parser(monkeypatch):
+    monkeypatch.setenv("POLYMARKET_US_ENABLED", "true")
+    monkeypatch.delenv("POLYMARKET_US_KEY_ID", raising=False)
+    monkeypatch.delenv("POLYMARKET_US_SECRET", raising=False)
     calls = []
+    parse_bool_env = config_module._parse_bool_env
 
     def _parse(name, default="false"):
         calls.append((name, default))
-        return True
+        if name == "ENABLE_WEATHER_SHADOW_CAPTURE":
+            return True
+        return parse_bool_env(name, default)
 
     monkeypatch.setattr(config_module, "_parse_bool_env", _parse)
 
-    assert config_module.BotConfig().enable_weather_shadow_capture is True
+    assert _weather_config().enable_weather_shadow_capture is True
     assert [call for call in calls if call[0] == "ENABLE_WEATHER_SHADOW_CAPTURE"] == [
         ("ENABLE_WEATHER_SHADOW_CAPTURE", "false")
     ]
