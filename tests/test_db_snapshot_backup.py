@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import sqlite3
@@ -60,6 +61,22 @@ def _integrity(path: Path) -> str:
         return str(conn.execute("PRAGMA integrity_check").fetchone()[0])
 
 
+def _run_backup(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "scripts/db_snapshot_backup.sh", *args],
+        cwd=repo,
+        env={**os.environ, "KALSHI_OUTPUT_ROOT": str(repo / "logs")},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _fingerprint(path: Path) -> tuple[str, int, int]:
+    stat = path.stat()
+    return hashlib.sha256(path.read_bytes()).hexdigest(), stat.st_size, stat.st_mtime_ns
+
+
 @_DARWIN_ONLY
 def test_db_snapshot_backup_seeds_online_safe_sqlite_copies(tmp_path: Path):
     repo = _seed_repo(tmp_path)
@@ -106,3 +123,62 @@ def test_db_snapshot_backup_prunes_expired_snapshot_directories(tmp_path: Path):
     assert not old_snapshot.exists()
     snapshots = sorted((repo / "logs/backups/db_snapshots").glob("????-??-??T????Z"))
     assert len(snapshots) == 1
+
+
+@_DARWIN_ONLY
+def test_db_snapshot_backup_default_does_not_inspect_weather_state(tmp_path: Path):
+    repo = _seed_repo(tmp_path)
+    weather_db = repo / "data/weather_shadow.db"
+    weather_db.write_text("not a sqlite database", encoding="utf-8")
+    before = _fingerprint(weather_db)
+
+    result = _run_backup(repo)
+
+    snapshot = next((repo / "logs/backups/db_snapshots").iterdir())
+    assert (snapshot / "paper_trades.db").is_file()
+    assert (snapshot / "evidence_store.db").is_file()
+    assert not (snapshot / "weather_shadow.db").exists()
+    assert "weather_shadow" not in result.stdout
+    assert _fingerprint(weather_db) == before
+
+
+@_DARWIN_ONLY
+def test_db_snapshot_backup_opt_in_skips_absent_weather_without_creation(
+    tmp_path: Path,
+):
+    repo = _seed_repo(tmp_path)
+    weather_db = repo / "data/weather_shadow.db"
+
+    result = _run_backup(repo, "--include-weather")
+
+    snapshot = next((repo / "logs/backups/db_snapshots").iterdir())
+    assert (snapshot / "paper_trades.db").is_file()
+    assert (snapshot / "evidence_store.db").is_file()
+    assert not (snapshot / "weather_shadow.db").exists()
+    assert "weather_shadow.db: skipped (not found)" in result.stdout
+    assert not weather_db.exists()
+
+
+@_DARWIN_ONLY
+def test_db_snapshot_backup_opt_in_backs_up_and_restores_weather_without_mutation(
+    tmp_path: Path,
+):
+    repo = _seed_repo(tmp_path)
+    weather_db = repo / "data/weather_shadow.db"
+    _create_sqlite(weather_db, "weather")
+    before = _fingerprint(weather_db)
+
+    result = _run_backup(repo, "--include-weather")
+
+    snapshot = next((repo / "logs/backups/db_snapshots").iterdir())
+    weather_snapshot = snapshot / "weather_shadow.db"
+    assert (snapshot / "paper_trades.db").is_file()
+    assert (snapshot / "evidence_store.db").is_file()
+    assert weather_snapshot.is_file()
+    assert _integrity(weather_snapshot) == "ok"
+    with sqlite3.connect(weather_snapshot) as conn:
+        assert conn.execute("SELECT value FROM sample").fetchone() == ("weather",)
+    assert f"  weather_shadow.db: {weather_snapshot.stat().st_size} bytes" in result.stdout
+    assert _fingerprint(weather_db) == before
+    assert not weather_db.with_name("weather_shadow.db-wal").exists()
+    assert not weather_db.with_name("weather_shadow.db-shm").exists()

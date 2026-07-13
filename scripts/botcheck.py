@@ -70,6 +70,14 @@ SIGNAL_FLOW_EVENTS = (
 )
 RESEARCH_DOSSIER_MAX_AGE_SECONDS = 6 * 60 * 60
 RESEARCH_REQUIRED_SOURCE_CLASSES = {"resolution_source", "official_primary"}
+WEATHER_SHADOW_ROW_COUNT_LIMIT = 10_000
+WEATHER_SHADOW_TABLES = {
+    "research_weather_shadow_snapshots": "snapshots",
+    "research_weather_shadow_quotes": "quotes",
+    "research_weather_shadow_outcomes": "outcomes",
+    "research_weather_shadow_conflicts": "conflicts",
+    "research_weather_shadow_outcome_checks": "checks",
+}
 
 
 def _research_proof_has_countercase(side: str, counter_directions: set[str]) -> bool:
@@ -773,6 +781,70 @@ def _format_ts_age(ts: datetime | None, *, now: datetime) -> tuple[str, str]:
     if ts is None:
         return "n/a", "n/a"
     return ts.isoformat(), human_duration((now - ts).total_seconds())
+
+
+def print_weather_shadow_status(repo_root: Path) -> None:
+    enabled_value, source = _research_env_value(
+        repo_root,
+        "ENABLE_WEATHER_SHADOW_CAPTURE",
+        "false",
+    )
+    if not _env_bool(enabled_value):
+        print(f"weather_shadow: off ({source})")
+        return
+
+    db_path = repo_root / "data" / "weather_shadow.db"
+    if not db_path.is_file():
+        print(f"weather_shadow: on ({source}) db=missing")
+        return
+
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            integrity_row = conn.execute("PRAGMA integrity_check").fetchone()
+            integrity = str(integrity_row[0]) if integrity_row else "unknown"
+            placeholders = ", ".join("?" for _ in WEATHER_SHADOW_TABLES)
+            present_tables = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_schema "
+                    f"WHERE type = 'table' AND name IN ({placeholders})",
+                    tuple(WEATHER_SHADOW_TABLES),
+                )
+            }
+            counts: dict[str, int | None] = {}
+            for table_name, label in WEATHER_SHADOW_TABLES.items():
+                if table_name not in present_tables:
+                    counts[label] = None
+                    continue
+                row = conn.execute(
+                    f'SELECT COUNT(*) FROM (SELECT 1 FROM "{table_name}" LIMIT ?)',
+                    (WEATHER_SHADOW_ROW_COUNT_LIMIT + 1,),
+                ).fetchone()
+                counts[label] = int(row[0]) if row else 0
+
+            last_capture = None
+            snapshots_table = "research_weather_shadow_snapshots"
+            if snapshots_table in present_tables:
+                row = conn.execute(
+                    f"SELECT capture_finished_at FROM {snapshots_table} "
+                    "WHERE capture_finished_at IS NOT NULL "
+                    "ORDER BY capture_finished_at DESC LIMIT 1"
+                ).fetchone()
+                if row:
+                    last_capture = str(row[0])
+    except sqlite3.Error as exc:
+        print(f"weather_shadow: on ({source}) db=error error={exc}")
+        return
+
+    row_summary = ",".join(
+        f"{label}:{'missing' if count is None else f'{WEATHER_SHADOW_ROW_COUNT_LIMIT}+' if count > WEATHER_SHADOW_ROW_COUNT_LIMIT else count}"
+        for label, count in counts.items()
+    )
+    print(
+        f"weather_shadow: on ({source}) integrity={integrity} "
+        f"tables={len(present_tables)}/{len(WEATHER_SHADOW_TABLES)} "
+        f"rows={row_summary} last_capture={last_capture or 'n/a'}"
+    )
 
 
 def summarize_research_prewarm_backlog(path: Path, *, since: datetime) -> list[str]:
@@ -1562,6 +1634,7 @@ def main() -> int:
         now=now,
         dossier_stats=research_dossiers,
     )
+    print_weather_shadow_status(args.home)
     print_kalshi_drift_section(now=now)
     print_history(sessions=sessions, current_proc=current_proc, now=now)
     return 0
