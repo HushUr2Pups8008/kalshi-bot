@@ -77,8 +77,24 @@ class WeatherShadowCaptureTask:
         self._sleep = sleep
 
     async def run(self, stop_event: asyncio.Event | None = None) -> None:
-        await self._store.initialize()
+        initialized = False
         while stop_event is None or not stop_event.is_set():
+            if not initialized:
+                try:
+                    await self._store.initialize()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning(
+                        "KXHIGHNY weather shadow failed stage=initialize error=%s",
+                        type(exc).__name__,
+                    )
+                else:
+                    initialized = True
+                if not initialized:
+                    if stop_event is None or not stop_event.is_set():
+                        await self._sleep(CAPTURE_CADENCE_SECONDS)
+                    continue
             try:
                 await self.run_capture_once()
             except asyncio.CancelledError:
