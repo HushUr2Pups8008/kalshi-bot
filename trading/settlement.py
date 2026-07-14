@@ -6,7 +6,7 @@ import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
@@ -67,8 +67,9 @@ class SettlementObservation:
     rules_version: str
     source_id: str
     payload_sha256: str
+    observation_sha256: str
     void_refund: VoidRefundContract | None = None
-    supersedes_payload_sha256: str | None = None
+    supersedes_observation_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.market_ref, MarketRef):
@@ -113,14 +114,30 @@ class SettlementObservation:
                 "void_refund is only valid for void outcome"
             )
 
-        if self.supersedes_payload_sha256 is not None:
-            _require_sha256(
-                self.supersedes_payload_sha256,
-                "supersedes_payload_sha256",
+        _require_sha256(self.observation_sha256, "observation_sha256")
+        expected_observation_sha256 = _compute_observation_sha256(
+            market_ref=self.market_ref,
+            outcome=self.outcome,
+            authoritative_outcome_json=self.authoritative_outcome_json,
+            payload_sha256=self.payload_sha256,
+            effective_at=self.effective_at,
+            rules_version=self.rules_version,
+            source_id=self.source_id,
+            void_refund=self.void_refund,
+        )
+        if self.observation_sha256 != expected_observation_sha256:
+            raise SettlementValidationError(
+                "observation_sha256 does not match settlement semantics"
             )
-            if self.supersedes_payload_sha256 == self.payload_sha256:
+
+        if self.supersedes_observation_sha256 is not None:
+            _require_sha256(
+                self.supersedes_observation_sha256,
+                "supersedes_observation_sha256",
+            )
+            if self.supersedes_observation_sha256 == self.observation_sha256:
                 raise SettlementValidationError(
-                    "supersedes_payload_sha256 must reference an earlier payload"
+                    "supersedes_observation_sha256 must reference an earlier observation"
                 )
 
 
@@ -154,7 +171,7 @@ def build_settlement_observation(
     source_id: str,
     void_refund: VoidRefundContract | None = None,
     previous_observation: SettlementObservation | None = None,
-    supersedes_payload_sha256: str | None = None,
+    supersedes_observation_sha256: str | None = None,
 ) -> SettlementObservation:
     if outcome is MarketOutcome.VOID and void_refund is None:
         raise UnsupportedVoidError(
@@ -162,18 +179,31 @@ def build_settlement_observation(
         )
 
     payload_json = canonical_payload_json(authoritative_payload)
+    authoritative_outcome_json = canonical_payload_json(authoritative_outcome)
+    payload_sha256 = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+    observation_sha256 = _compute_observation_sha256(
+        market_ref=market_ref,
+        outcome=outcome,
+        authoritative_outcome_json=authoritative_outcome_json,
+        payload_sha256=payload_sha256,
+        effective_at=effective_at,
+        rules_version=rules_version,
+        source_id=source_id,
+        void_refund=void_refund,
+    )
     observation = SettlementObservation(
         market_ref=market_ref,
         outcome=outcome,
-        authoritative_outcome_json=canonical_payload_json(authoritative_outcome),
+        authoritative_outcome_json=authoritative_outcome_json,
         canonical_payload_json=payload_json,
         observed_at=observed_at,
         effective_at=effective_at,
         rules_version=rules_version,
         source_id=source_id,
-        payload_sha256=hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
+        payload_sha256=payload_sha256,
+        observation_sha256=observation_sha256,
         void_refund=void_refund,
-        supersedes_payload_sha256=supersedes_payload_sha256,
+        supersedes_observation_sha256=supersedes_observation_sha256,
     )
     validate_observation_transition(previous_observation, observation)
     return observation
@@ -186,7 +216,7 @@ def validate_observation_transition(
     """Require explicit, hash-linked supersession for changed observations."""
 
     if previous is None:
-        if current.supersedes_payload_sha256 is not None:
+        if current.supersedes_observation_sha256 is not None:
             raise SettlementDriftError(
                 "settlement supersession cannot be validated without prior observation"
             )
@@ -199,21 +229,65 @@ def validate_observation_transition(
     if current.effective_at < previous.effective_at:
         raise SettlementDriftError("settlement effective_at cannot move backward")
 
-    if previous.payload_sha256 == current.payload_sha256:
-        if previous.outcome is not current.outcome:
+    if previous.observation_sha256 == current.observation_sha256:
+        if current.supersedes_observation_sha256 is not None:
             raise SettlementDriftError(
-                "identical settlement payload produced conflicting outcomes"
-            )
-        if current.supersedes_payload_sha256 is not None:
-            raise SettlementDriftError(
-                "unchanged settlement payload cannot declare supersession"
+                "unchanged settlement observation cannot declare supersession"
             )
         return
 
-    if current.supersedes_payload_sha256 != previous.payload_sha256:
+    if current.supersedes_observation_sha256 != previous.observation_sha256:
         raise SettlementDriftError(
-            "changed settlement payload requires valid supersession"
+            "changed settlement observation requires valid supersession"
         )
+
+
+def _compute_observation_sha256(
+    *,
+    market_ref: MarketRef,
+    outcome: MarketOutcome,
+    authoritative_outcome_json: str,
+    payload_sha256: str,
+    effective_at: datetime,
+    rules_version: str,
+    source_id: str,
+    void_refund: VoidRefundContract | None,
+) -> str:
+    _require_aware(effective_at, "effective_at")
+    refund_fields = None
+    if void_refund is not None:
+        refund_fields = {
+            "refund_cents_per_contract": _canonical_decimal(
+                void_refund.refund_cents_per_contract
+            ),
+            "refunds_entry_fee": void_refund.refunds_entry_fee,
+        }
+    semantic_json = canonical_payload_json(
+        {
+            "authoritative_outcome_json": authoritative_outcome_json,
+            "effective_at_utc": effective_at.astimezone(timezone.utc).isoformat(
+                timespec="microseconds"
+            ),
+            "market_ref": {
+                "alias": market_ref.alias,
+                "venue": market_ref.venue.value,
+                "venue_market_id": market_ref.venue_market_id,
+            },
+            "outcome": outcome.value,
+            "payload_sha256": payload_sha256,
+            "rules_version": rules_version,
+            "source_id": source_id,
+            "void_refund": refund_fields,
+        }
+    )
+    return hashlib.sha256(semantic_json.encode("utf-8")).hexdigest()
+
+
+def _canonical_decimal(value: Decimal) -> str:
+    normalized = value.normalize()
+    if normalized == 0:
+        return "0"
+    return format(normalized, "f")
 
 
 def _normalize_json_value(value: object, *, seen: set[int]) -> Any:

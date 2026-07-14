@@ -27,7 +27,7 @@ def normalize_kalshi_settlement(
     source_id: str,
     void_refund: VoidRefundContract | None = None,
     previous_observation: SettlementObservation | None = None,
-    supersedes_payload_sha256: str | None = None,
+    supersedes_observation_sha256: str | None = None,
 ) -> SettlementObservation:
     """Normalize an already-parsed Kalshi market into a pure observation."""
 
@@ -82,5 +82,5 @@ def normalize_kalshi_settlement(
         source_id=source_id,
         void_refund=void_refund,
         previous_observation=previous_observation,
-        supersedes_payload_sha256=supersedes_payload_sha256,
+        supersedes_observation_sha256=supersedes_observation_sha256,
     )
