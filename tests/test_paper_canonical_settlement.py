@@ -685,9 +685,31 @@ def test_void_credits_exact_refund_and_emits_no_directional_feedback_requirement
     trader = trader_factory("void-refund")
     stored_ticker = "stored-void-alias"
     market_ref = MarketRef(Venue.POLYMARKET_US, "8594", stored_ticker)
-    trade_id = _record_mapped_trade(
-        trader, market_ref, trade_id="void00000001"
+    analysis = _make_mock_analysis(
+        ticker=stored_ticker,
+        series_ticker="PMVOID",
+        side="yes",
+        yes_price=40.0,
+        estimated_prob=0.61,
+        source="wire:void-source",
+        keywords=["missile strike", "ceasefire"],
+        llm_direction="yes",
+        llm_magnitude="small",
+        llm_confidence=0.73,
     )
+    analysis.venue = market_ref.venue.value
+    analysis.market.venue = market_ref.venue.value
+    analysis.market.market_id = stored_ticker
+    analysis.market.venue_market_id = market_ref.venue_market_id
+    analysis.signal_meta = {
+        "fast_lane_p": 0.71,
+        "fast_lane_confidence": 0.91,
+        "accumulation_p": 0.66,
+        "accumulation_confidence": 0.81,
+        "structural_p": 0.61,
+        "structural_confidence": 0.71,
+    }
+    trade_id = _record_analysis(trader, analysis, trade_id="void00000001")
     observation = _observation(
         MarketRef(
             market_ref.venue,
@@ -725,7 +747,7 @@ def test_void_credits_exact_refund_and_emits_no_directional_feedback_requirement
         """
     ).fetchone()
     trade = trader._conn.execute(
-        "SELECT ticker, settled_at FROM paper_trades WHERE trade_id=?",
+        "SELECT ticker, ts, settled_at FROM paper_trades WHERE trade_id=?",
         (trade_id,),
     ).fetchone()
     payload = json.loads(outbox["payload_json"])
@@ -751,10 +773,28 @@ def test_void_credits_exact_refund_and_emits_no_directional_feedback_requirement
     assert payload["venue_market_id"] == market_ref.venue_market_id
     assert payload["alias"] == observation.market_ref.alias
     assert payload["outcome"] == "void"
+    assert payload["side"] == "yes"
     assert payload["resolved_yes"] is None
     assert payload["terminal_state"] == "void"
     assert payload["won"] is None
     assert payload["settled_at"] == trade["settled_at"]
+    assert payload["signal_source"] == "wire:void-source"
+    assert payload["series_ticker"] == "PMVOID"
+    assert payload["entry_ts"] == trade["ts"]
+    assert payload["estimated_prob"] == pytest.approx(0.61)
+    assert payload["entry_price_cents"] == pytest.approx(40.0)
+    assert payload["cost_dollars"] == pytest.approx(10.0)
+    assert payload["llm_magnitude"] == "small"
+    assert payload["llm_confidence"] == pytest.approx(0.73)
+    assert payload["keyword_outcomes"] == [
+        {"keyword": "missile strike", "direction": "yes", "correct": None},
+        {"keyword": "ceasefire", "direction": "no", "correct": None},
+    ]
+    assert payload["lane_estimates"] == {
+        "fast": pytest.approx(0.71),
+        "accumulation": pytest.approx(0.66),
+        "structural": pytest.approx(0.61),
+    }
     assert payload["gross_payout_cents"] == "1250"
     assert payload["gross_pnl_cents"] == "250"
 
@@ -945,7 +985,7 @@ def test_different_alias_unmapped_canonical_collision_rolls_back_and_quarantines
     }
 
 
-def test_mid_transaction_failure_rolls_back_finances_before_separate_quarantine(
+def test_late_keyword_requirement_failure_rolls_back_outbox_and_finances(
     trader_factory,
 ):
     trader = trader_factory("mid-transaction-failure")
@@ -953,10 +993,11 @@ def test_mid_transaction_failure_rolls_back_finances_before_separate_quarantine(
     _record_mapped_trade(trader, market_ref, trade_id="failure00001")
     trader._conn.execute(
         """
-        CREATE TRIGGER inject_outbox_failure
-        BEFORE INSERT ON paper_settlement_outbox
+        CREATE TRIGGER inject_keyword_requirement_failure
+        BEFORE INSERT ON paper_settlement_outbox_requirements
+        WHEN NEW.consumer_name = 'keyword_outcomes'
         BEGIN
-            SELECT RAISE(ABORT, 'injected outbox failure');
+            SELECT RAISE(ABORT, 'injected keyword requirement failure');
         END
         """
     )
@@ -969,6 +1010,12 @@ def test_mid_transaction_failure_rolls_back_finances_before_separate_quarantine(
     _attempt_resolution(trader, observation)
     trader._conn.set_trace_callback(None)
 
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_settlement_outbox"
+    ).fetchone()[0] == 0
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_settlement_outbox_requirements"
+    ).fetchone()[0] == 0
     _assert_quarantined_without_financial_change(trader, observation, before)
     normalized = [" ".join(statement.upper().split()) for statement in statements]
     rollback_index = normalized.index("ROLLBACK")
@@ -1048,6 +1095,17 @@ def test_observation_and_outbox_ids_are_deterministic_across_databases(trader_fa
             True,
             "2500",
             "1500",
+        ),
+        (
+            MarketOutcome.YES,
+            "outboxloss01",
+            "no",
+            60.0,
+            True,
+            "lost",
+            False,
+            "0",
+            "-1000",
         ),
     ],
 )
@@ -1147,6 +1205,7 @@ def test_directional_outbox_v1_is_complete_immutable_and_exactly_routed(
     assert payload["venue_market_id"] == market_ref.venue_market_id
     assert payload["alias"] == observation.market_ref.alias
     assert payload["outcome"] == outcome.value
+    assert payload["side"] == side
     assert payload["resolved_yes"] is resolved_yes
     assert payload["terminal_state"] == terminal_state
     assert payload["won"] is won
