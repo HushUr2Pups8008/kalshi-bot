@@ -145,43 +145,65 @@ git diff --check
 
 Commit: `feat: migrate and quarantine paper market identity`
 
-### Task 4: Resolve by Venue and Canonical ID
+### Task 4: Add Unwired Canonical Gross Settlement
 
 **Files**
 
 - Modify: `trading/paper_trader.py`
-- Modify: `polymarket/settlement_reconciler.py`
-- Modify: Kalshi settlement routing files
+- Modify: `polymarket/models.py`, `polymarket/normalizer.py`
+- Create: `trading/settlement_store.py`
+- Create: `scripts/migrate_paper_settlement_schema.py`
 - Test: `tests/test_paper_trader_venue.py`
-- Test: `tests/polymarket/test_settlement_reconciler.py`
+- Create: `tests/test_paper_settlement_schema.py`
+- Modify: Polymarket normalizer/entry tests
 
 **Contract**
 
-- `PaperTrader` consumes `SettlementObservation`, not `resolved_yes: bool`.
-- Financial update filters `venue`, `venue_market_id`, and `resolved=0`.
-- Row-count mismatch rolls back and quarantines; no alias-only fallback.
-- Portfolio closure receives the exact `MarketRef`.
-- Legacy-null and quarantined rows cannot mutate bankroll.
+- Persist authoritative canonical ID plus `identity_status='mapped'` on every new
+  trade; Polymarket preserves numeric ID separately from slug. Missing identity
+  blocks entry rather than creating an unresolvable row.
+- Before explicit schema apply and while cutover is false, preserve the legacy
+  insert shape so merge/restart cannot reference absent columns. After schema
+  apply, all new rows require and persist canonical identity.
+- Explicit reviewed migration adds observation receipts, settlement quarantine,
+  feedback outbox/consumer receipts, terminal state, and observation-ID fields.
+  It is read-only by default, uses a reviewed plan fingerprint and encoded path,
+  and commits DDL atomically. Normal startup does not auto-migrate an existing DB.
+- Implement the exact tables, columns, keys, event version, delivery claim/lease,
+  pending/drained definition, migration fingerprint, readiness queries, and
+  conservation queries in the design's PR 1 Settlement Schema Contract.
+- Add `resolve_observation()` beside legacy `resolve_market()`; do not change
+  runtime callers in this task.
+- One `BEGIN IMMEDIATE` transaction selects `venue`, `venue_market_id`,
+  `identity_status='mapped'`, and `resolved=0`; CAS every trade; update bankroll
+  directly without `_credit_bankroll()`; insert receipt and outbox before commit.
+- YES/NO preserve gross behavior. VOID credits exact refund, stores
+  `resolved_yes=NULL`, terminal `void`, and no directional feedback.
+- Duplicate applied observation is a no-op. Correction after terminal receipt,
+  row-count drift, legacy-null identity, and unsupported void roll back financial
+  writes and append a separate settlement-quarantine record.
+- After commit, portfolio closure receives exact `MarketRef`.
 
 **TDD**
 
-1. RED tests for cross-venue alias collision, wrong ID, duplicate observation,
-   two-row collision, void, and correction conflict.
-2. Implement exact compare-and-set routing.
-3. Run related settlement and paper suites.
+1. RED tests for new-trade canonical identity, cross-venue alias collision, wrong
+   ID, duplicate/corrected observation, multi-row CAS drift, YES/NO/VOID,
+   migration rollback, and identity-versus-settlement quarantine separation.
+2. Implement explicit schema migration and additive unwired resolver.
+3. Prove legacy resolver/callers and false runtime behavior are unchanged.
 
 ```bash
 .venv/bin/python -m pytest tests/test_paper_trader_venue.py \
-  tests/polymarket/test_settlement_reconciler.py \
-  tests/test_paper_trader.py -q
-.venv/bin/ruff check trading/paper_trader.py \
-  polymarket/settlement_reconciler.py tests/test_paper_trader_venue.py
+  tests/test_paper_settlement_schema.py tests/test_paper_trader.py \
+  tests/polymarket/test_normalizer.py -q
+.venv/bin/ruff check trading/paper_trader.py trading/settlement_store.py \
+  scripts/migrate_paper_settlement_schema.py tests/test_paper_trader_venue.py
 git diff --check
 ```
 
-Commit: `fix: settle paper rows by authoritative market id`
+Commit: `feat: add unwired canonical settlement accounting`
 
-### Task 5: Decouple Persisted Settlement from Entry Flags
+### Task 5: Add Idempotent Feedback and Two-Venue Cutover
 
 **Files**
 
@@ -189,22 +211,48 @@ Commit: `fix: settle paper rows by authoritative market id`
 - Modify: `.env.example`
 - Modify: `main.py`
 - Modify: `scripts/botcheck.py`
+- Modify: `polymarket/settlement_reconciler.py` or replace with shared reconciler
+- Modify: source-credibility and calibration consumers
 - Test: `tests/test_main_pipeline.py`
 - Test: `tests/test_botcheck.py`
 
 **Contract**
 
-- Add `ENABLE_PERSISTED_POSITION_SETTLEMENT_RECONCILIATION=false`.
-- When false, current routing is unchanged.
-- When true, unresolved mapped positions reconcile even when entry/discovery is
-  disabled. Entry, discovery, and startup probes keep their existing flags.
-- Botcheck reports flag state, mapped/quarantined backlog, and last observation.
+- Add `ENABLE_CANONICAL_PERSISTED_SETTLEMENT_RECONCILIATION=false`.
+- Fresh false with settlement schema absent preserves the exact current task
+  graph, insert shape, and database access: no new worker or new-column read.
+- Rollback false with settlement schema present stops canonical observation
+  admission. Legacy routing may resume only after an alias-uniqueness preflight;
+  any collision pauses settlement fail-closed. The outbox worker remains active
+  until every persisted requirement has a consumer receipt.
+- When true, one shared persisted-position reconciler replaces both Kalshi and
+  Polymarket legacy paths. Polymarket mapped positions reconcile even when its
+  entry/discovery flag is false. Entry, discovery, and startup probes retain
+  their existing flags. True mode refuses startup when schema readiness, mapped
+  backlog, or settlement/outbox conservation checks fail.
+- Source credibility applies `outbox_id` in its target transaction. Calibration
+  consumes unique durable events and rebuilds on restart. Nonfinancial log rows
+  include `outbox_id` and are explicitly at-least-once.
+- Turning the cutover false stops new observation reconciliation but leaves
+  outbox drainage active for already-committed events.
+- CLI false mode preserves strict `YES|NO` validation. True mode requires exactly
+  one mapped `MarketRef`, fetches authoritative observation, requires agreement,
+  and never synthesizes authority from the CLI boolean.
+- Botcheck reports flag/schema state, mapped/identity-quarantined backlog,
+  settlement quarantine, pending outbox, and last observation.
 
 **TDD**
 
-1. RED tests for false parity, true persisted routing, and no entry-path leak.
-2. Implement narrow routing condition.
-3. Prove false mode produces the same task graph as baseline.
+1. RED tests for fresh-false exact parity, rollback-false drainage and alias
+   collision fail-closed behavior, true two-venue routing, PM entry flag
+   independence, target-side outbox dedupe, claim expiry/retry, multi-consumer
+   pending/drained state, crash after outbox commit before first claim, runtime
+   connection orphan rejection with foreign keys enabled, calibration restart
+   rebuild, CLI ambiguity/disagreement, readiness/conservation queries, and no
+   entry-path leak.
+2. Implement shared reconciliation and idempotent consumers.
+3. Prove fresh false/schema-absent matches baseline exactly; prove rollback
+   false/schema-present runs only guarded legacy routing plus outbox drainage.
 
 ```bash
 .venv/bin/python -m pytest tests/test_main_pipeline.py \
@@ -214,7 +262,7 @@ Commit: `fix: settle paper rows by authoritative market id`
 git diff --check
 ```
 
-Commit: `feat: gate persisted-position settlement routing`
+Commit: `feat: gate canonical persisted settlement routing`
 
 ### PR 1 Gate
 
@@ -223,9 +271,14 @@ Commit: `feat: gate persisted-position settlement routing`
 3. Obtain independent financial review.
 4. Open protected PR; merge only after CI and explicit operator approval.
 5. Sync main. Snapshot canonical DB and run identity dry run.
-6. Review mapping report; apply migration only with zero unexplained rows.
-7. Enable the settlement flag in a separate protected restart.
-8. Roll back flag to false on mutation count, quarantine, or backlog regression.
+6. Review mapping report; apply identity migration only with zero unexplained
+   rows. Dry-run, review, then apply settlement schema migration separately.
+7. Prove outbox consumers idempotent and drain all pre-cutover test events.
+8. Enable the canonical two-venue settlement flag in a separate protected
+   restart.
+9. Roll back flag to false on mutation count, financial conservation, quarantine,
+   outbox, calibration, or backlog regression. Already committed receipts remain
+   immutable and drain idempotently after rollback.
 
 ## PR 2: Pinned Fees and Report-Only Liquidation
 
@@ -355,9 +408,9 @@ G7 decisions byte-for-byte. Any future G7 mark cutover requires a new T3 design.
 **Contract**
 
 - Add `ENABLE_FEE_NET_PAPER_ACCOUNTING=false`; it gates new entry admission.
-- Add nullable fill, schedule, fee-component, gross/net, refund, terminal-state,
-  settlement-receipt, observation-hash, and immutable `accounting_version`
-  columns.
+- Extend the PR 1 gross settlement schema with nullable fill, schedule,
+  fee-component, gross/net, and immutable `accounting_version` fields; reuse its
+  terminal state, observation receipt, quarantine, outbox, and consumer tables.
 - False mode preserves canonical cash/P&L/Kelly behavior.
 - Existing fee-net rows continue version-matched settlement when the flag is
   false; missing implementation or schedule quarantines without gross fallback.
@@ -396,13 +449,15 @@ Commit: `fix: commit paper entry fees and cash atomically`
 
 **Files**
 
-- Create: `trading/settlement_accounting.py`
+- Create: `trading/settlement_accounting.py` as a fee-net extension of the PR 1
+  gross settlement transaction
 - Modify: `trading/paper_trader.py`, settlement reconcilers
 - Create: `tests/test_settlement_accounting.py`
 
 **Contract**
 
-- Unique settlement receipt and compare-and-set `resolved=0`.
+- Reuse the unique settlement receipt and compare-and-set `resolved=0`; do not
+  create a parallel settlement/outbox path.
 - One transaction commits payout/refund, fee components, net P&L,
   bankroll-after, and immutable outbox event.
 - Same-database consumers commit effect plus receipt atomically. External

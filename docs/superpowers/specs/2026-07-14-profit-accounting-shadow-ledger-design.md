@@ -48,7 +48,14 @@ until realized, settled evidence meets the promotion standard below.
 - `venue_market_id`: authoritative immutable venue identifier;
 - `alias`: ticker or slug used only for display and legacy lookup.
 
-`Position` and new paper rows persist `venue_market_id`. Portfolio storage may
+`Position` and new paper rows persist `venue_market_id`. New entries are
+admissible only when the normalized venue object carries authoritative canonical
+identity after the reviewed identity schema exists; Polymarket retains numeric
+market ID separately from its slug alias, while Kalshi uses its exact market
+ticker. Before explicit schema apply and while canonical cutover is false, the
+legacy insert path remains unchanged so merge/restart cannot fail on absent
+columns. Canonical cutover refuses to start unless schema and backlog checks
+pass. Portfolio storage may
 remain keyed by alias for read compatibility, but settlement must select an
 alias bucket and then match exact normalized venue plus exact canonical ID.
 Ticker alone never authorizes a financial mutation.
@@ -78,8 +85,121 @@ Venue adapters produce one frozen `SettlementObservation`:
 - correction/supersession reference when supported.
 
 `PaperTrader` derives position `won` or `lost` from the held side and the market
-outcome. Malformed outcomes, identity drift, unsupported voids, or correction
-conflicts quarantine before any bankroll write.
+outcome. Malformed outcomes, identity drift, unsupported voids, correction
+conflicts, and compare-and-set drift append a dedicated settlement-quarantine
+record before any bankroll write. Identity quarantine remains a separate state.
+
+### PR 1 Settlement Schema Contract
+
+The explicit migration adds a versioned schema with DDL hash and no startup
+auto-migration:
+
+`paper_settlement_schema_meta`
+
+- `schema_version INTEGER PRIMARY KEY` (initial value `1`);
+- `ddl_sha256 TEXT NOT NULL UNIQUE`;
+- `migration_plan_sha256 TEXT NOT NULL`;
+- `applied_at TEXT NOT NULL`.
+
+`paper_trades` gains nullable columns. Existing resolved legacy rows remain null:
+
+- `terminal_state TEXT CHECK (terminal_state IN ('won','lost','void'))`;
+- `settlement_observation_sha256 TEXT`;
+- `settled_at TEXT`;
+- `gross_payout_cents TEXT` and `gross_pnl_cents TEXT`, each canonical finite
+  `Decimal` text.
+
+`paper_settlement_observations`
+
+- `observation_sha256 TEXT PRIMARY KEY`;
+- immutable `venue`, `venue_market_id`, `alias`, `outcome`,
+  `authoritative_outcome_json`, `canonical_payload_json`, `payload_sha256`,
+  `observed_at`, `effective_at`, `rules_version`, and `source_id`;
+- nullable exact `refund_cents_per_contract`, `refunds_entry_fee`, and
+  `supersedes_observation_sha256`;
+- `applied_trade_count INTEGER NOT NULL CHECK (applied_trade_count > 0)`;
+- exact `bankroll_before_cents`, `gross_payout_cents`, and
+  `bankroll_after_cents` canonical integer/Decimal text;
+- `applied_at TEXT NOT NULL`;
+- unique `(venue, venue_market_id, observation_sha256)` and foreign key from
+  `supersedes_observation_sha256` to an earlier observation when present.
+
+The primary key is the semantic observation fingerprint from
+`SettlementObservation`, not the payload hash alone. A repeated identical
+observation is a no-op. A financially different payload/rules/refund/effective
+time has a different fingerprint; after terminal application it is quarantined
+because reversal accounting is not designed.
+
+`paper_settlement_quarantine`
+
+- `quarantine_id TEXT PRIMARY KEY`, the SHA-256 of observation fingerprint,
+  reason code, and open-row-set fingerprint;
+- `observation_sha256`, `payload_sha256`, `venue`, `venue_market_id`, and `alias`;
+- versioned `reason_code`, canonical `details_json`,
+  `open_row_set_sha256`, and `detected_at`;
+- unique `(observation_sha256, reason_code, open_row_set_sha256)`.
+
+Quarantine is append-only and written only after the failed financial
+transaction rolls back. Invalid observations that cannot produce a trusted
+semantic fingerprint use a deterministic attempt hash over their trusted source
+identity and canonical failure details.
+
+`paper_settlement_outbox`
+
+- `outbox_id TEXT PRIMARY KEY`, deterministic SHA-256 of event version,
+  observation fingerprint, trade ID, and event kind;
+- `event_version INTEGER NOT NULL` (initial value `1`);
+- `event_kind TEXT NOT NULL`, `observation_sha256 TEXT NOT NULL`,
+  `trade_id TEXT NOT NULL`, canonical `payload_json TEXT NOT NULL`, and
+  `created_at TEXT NOT NULL`;
+- foreign keys to observation and trade rows.
+
+`paper_settlement_outbox_requirements`
+
+- `(outbox_id, consumer_name)` composite primary key;
+- immutable required consumer set derived from event version and payload.
+
+`paper_settlement_consumer_receipts`
+
+- `(consumer_name, outbox_id)` composite primary key;
+- `processed_at TEXT NOT NULL`, `result_sha256 TEXT NOT NULL`;
+- foreign key to the matching requirement.
+
+`paper_settlement_delivery_claims`
+
+- `(consumer_name, outbox_id)` composite primary key;
+- mutable `claim_token`, `lease_expires_at`, `attempt_count`, and `updated_at`;
+- claim acquisition is compare-and-set only when no receipt exists and the prior
+  lease is absent or expired.
+
+Every migration, settlement-store, readiness, and consumer connection enables
+and verifies `PRAGMA foreign_keys=ON` before beginning a transaction. Triggers
+reject UPDATE or DELETE on observations, quarantine, outbox, requirements, and
+receipts; delivery claims are the only mutable operational table.
+
+An outbox event is pending when any requirement lacks a receipt and drained only
+when every required `(consumer_name, outbox_id)` receipt exists. A worker claims
+one requirement, applies a target-side idempotent effect using `outbox_id`, then
+inserts the receipt. Crash before receipt permits retry: source credibility
+deduplicates inside its target transaction; calibration rebuilds from unique
+durable events after restart and deduplicates in process; nonfinancial logs may
+repeat with the same `outbox_id`. An expired claim never implies completion.
+
+The migration plan fingerprint binds the resolved encoded DB path, current
+`sqlite_schema` hash, exact open-row fingerprints, schema version, and expected
+DDL hash. Apply requires the reviewed fingerprint before write access, acquires
+`BEGIN IMMEDIATE`, rechecks schema and open-row-set hashes, then commits all DDL
+atomically. Any drift rolls back every schema change.
+
+Startup readiness requires: SQLite integrity `ok`; schema meta version and DDL
+hash match; every open row is mapped with nonempty canonical ID; zero identity
+or settlement quarantine; and zero pre-cutover pending outbox requirements.
+Conservation requires, for every applied observation: stored trade count equals
+the exact linked trade rows; summed exact trade payout equals observation payout;
+bankroll before plus payout equals bankroll after; every canonical resolved row
+links one observation; and every outbox requirement has at most one receipt and
+zero or one claim. A missing receipt is valid pending work even before its first
+claim; when a claim exists it must be active or expired under the lease rules.
 
 ### Fee Context
 
@@ -114,8 +234,8 @@ schedule data rather than hard-coded call-site assumptions.
 
 ### 1. Venue-Qualified Settlement Safety
 
-PR 1 adds identity and observation contracts, persists canonical IDs, migrates
-or quarantines legacy open rows, and resolves with:
+PR 1 adds identity and observation contracts, persists canonical IDs on every
+new row, migrates or quarantines legacy open rows, and resolves with:
 
 ```sql
 UPDATE paper_trades
@@ -123,9 +243,35 @@ SET ...
 WHERE venue = ? AND venue_market_id = ? AND resolved = 0
 ```
 
-The update must affect exactly the expected row set. Settlement reconciliation
-for persisted positions is independent of entry/discovery flags, but that new
-routing is behind a separate default-false cutover and T3 restart gate.
+The update must affect exactly the expected row set. A new observation resolver
+lands beside the legacy resolver and remains unwired at first. One explicit
+`ENABLE_CANONICAL_PERSISTED_SETTLEMENT_RECONCILIATION=false` flag later replaces
+both venue-specific legacy routes at once; false preserves the current task
+graph. In true mode persisted mapped positions reconcile independently of entry
+or discovery flags.
+
+Before that cutover, a read-only-default, plan-fingerprint-bound, URI-safe schema
+migration creates immutable
+settlement-observation receipts, settlement quarantine, feedback outbox, and
+consumer-receipt tables plus nullable terminal-state and observation-ID columns.
+The financial `BEGIN IMMEDIATE` transaction inserts the unique observation
+receipt, selects exact mapped rows, compare-and-sets each trade, directly updates
+bankroll state without nested commits, and inserts outbox events. A duplicate
+applied observation is a no-op. A correction after terminal application or any
+row-count mismatch rolls back all financial writes and appends quarantine in a
+separate nonfinancial transaction.
+
+YES and NO retain current gross payout semantics. VOID credits the explicit
+contractual refund, stores `resolved_yes=NULL`, emits no directional feedback,
+and records terminal state `void`.
+
+Feedback that affects future decisions must be idempotent before cutover.
+Source-credibility consumers commit `outbox_id` dedupe with their target-side
+update. Calibration is rebuilt from unique durable feedback events on restart
+and deduplicates by event ID in process. Nonfinancial JSONL/log consumers may be
+at-least-once but must include `outbox_id` for downstream dedupe. Turning
+canonical reconciliation off stops new observations but does not stop drainage
+of already-committed outbox events.
 
 ### 2. Report-Only Executable Liquidation
 
@@ -145,7 +291,8 @@ and pre/post acceptance evidence.
 
 ### 3. Additive Fee-Net Paper Ledger
 
-New schema is additive. A disabled accounting mode records proposed fee-net
+PR 3 extends the PR 1 gross settlement receipt/outbox instead of creating a
+parallel path. New schema is additive. A disabled accounting mode records proposed fee-net
 entry and settlement rows beside canonical gross accounting without changing
 canonical bankroll or Kelly inputs. Every position stores an immutable
 `accounting_version`; the feature flag gates admission of new fee-net entries,
