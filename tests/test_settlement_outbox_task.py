@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from analysis.calibration_monitor import _MIN_BASELINE_SAMPLES, _MIN_LANE_SAMPLES
 from tasks.calibration_task import CalibrationTask
 from tests.test_paper_canonical_settlement import (
     _observation,
@@ -1186,6 +1187,7 @@ async def test_current_calibration_crossing_drift_warns_once_after_silent_replay
 ):
     db_path = tmp_path / "drift-transition.db"
     event_time = WORKER_NOW + timedelta(minutes=20)
+    sample_threshold = max(_MIN_BASELINE_SAMPLES, _MIN_LANE_SAMPLES)
     seeds = [
         _seed_directional_event(
             monkeypatch,
@@ -1197,7 +1199,7 @@ async def test_current_calibration_crossing_drift_warns_once_after_silent_replay
             lane_estimates=(0.90, 0.80, None),
             event_time=event_time + timedelta(seconds=index),
         )
-        for index in range(10)
+        for index in range(sample_threshold)
     ]
     for seed in seeds[:-1]:
         _record_receipts(seed, DIRECTIONAL_CONSUMERS)
@@ -1221,8 +1223,8 @@ async def test_current_calibration_crossing_drift_warns_once_after_silent_replay
     summary = calibration.get_calibration_summary()
     assert len(live_warnings) == 1
     assert "accumulation" in live_warnings[0].message
-    assert summary["fast"]["sample_count"] == 10
-    assert summary["accumulation"]["sample_count"] == 10
+    assert summary["fast"]["sample_count"] == sample_threshold
+    assert summary["accumulation"]["sample_count"] == sample_threshold
     assert summary["accumulation"]["drift_detected"] is True
 
     replayed = CalibrationTask()
