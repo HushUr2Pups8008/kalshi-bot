@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tests.test_paper_trader import _cfg_module, _make_mock_analysis
-from trading.portfolio import Portfolio
+from trading.portfolio import Portfolio, Position
 from trading.settlement import (
     MarketOutcome,
     SettlementObservation,
@@ -540,6 +540,66 @@ def test_alias_drift_closes_exact_canonical_portfolio_position(trader_factory):
         wrong_id_trade,
         cross_venue_trade,
     }
+
+
+def test_alias_drift_skips_unrelated_invalid_legacy_portfolio_venue(trader_factory):
+    trader = trader_factory("canonical-invalid-legacy-venue")
+    stored_ref = MarketRef(
+        Venue.POLYMARKET_US,
+        "8594",
+        "stored-target-alias",
+    )
+    target_trade = _record_mapped_trade(
+        trader,
+        stored_ref,
+        trade_id="target000001",
+    )
+    target_position = trader.portfolio.open_positions(stored_ref.alias)[0]
+    invalid_position = Position(
+        trade_id="invalid00001",
+        ticker="invalid-legacy-alias",
+        side="yes",
+        contracts=1,
+        cost_dollars=1.0,
+        price_cents=50,
+        estimated_prob=0.5,
+        entry_price_cents=50.0,
+        ts="2026-01-01T00:00:00+00:00",
+        venue="unsupported_legacy",
+        venue_market_id="unrelated-market-id",
+    )
+    portfolio = Portfolio()
+    portfolio.add(invalid_position)
+    portfolio.add(target_position)
+    trader.portfolio = portfolio
+    observation = _observation(
+        MarketRef(
+            Venue.POLYMARKET_US,
+            "8594",
+            "renamed-target-alias",
+        ),
+        MarketOutcome.YES,
+    )
+
+    assert _resolve(trader, observation) is True
+
+    row = trader._conn.execute(
+        """
+        SELECT resolved, settlement_observation_sha256
+        FROM paper_trades
+        WHERE trade_id = ?
+        """,
+        (target_trade,),
+    ).fetchone()
+    assert row["resolved"] == 1
+    assert row["settlement_observation_sha256"] == observation.observation_sha256
+    assert _bankroll_cents(trader) == Decimal("51500")
+    assert trader.portfolio.open_positions() == [invalid_position]
+
+    after_first = _financial_snapshot(trader)
+    assert _resolve(trader, observation) is False
+    assert _financial_snapshot(trader) == after_first
+    assert trader.portfolio.open_positions() == [invalid_position]
 
 
 def test_resolution_uses_one_immediate_transaction_direct_bankroll_update_and_per_trade_cas(
