@@ -3807,6 +3807,89 @@ class TestMainAsyncBlocking:
         bot.paper.resolve_observation.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("legacy_failure", ("flush", "open_trades_query"))
+    async def test_auto_resolve_schema_present_drains_before_legacy_failure(
+        self,
+        monkeypatch,
+        tmp_path,
+        legacy_failure,
+    ):
+        bot = self._make_bot()
+        bot._calibration_task = main_module.CalibrationTask()
+        bot.paper._db_path = tmp_path / "paper-trades.db"
+        bot.paper.settlement_schema_present = True
+        bot.paper.resolve_observation = MagicMock()
+        events = []
+        failure = RuntimeError(f"legacy {legacy_failure} failed")
+
+        outbox_task = create_autospec(SettlementOutboxTask, spec_set=True)
+        worker = outbox_task.return_value
+        worker.run_once.side_effect = lambda **_kwargs: events.append("drain")
+        monkeypatch.setattr(
+            main_module,
+            "settlement_schema_contract_matches",
+            MagicMock(return_value=True),
+        )
+        monkeypatch.setattr(main_module, "SettlementOutboxTask", outbox_task)
+
+        if legacy_failure == "flush":
+            bot.source_stats.flush.side_effect = failure
+        else:
+            bot.source_stats.flush.side_effect = lambda: events.append("flush")
+            bot.paper._conn.execute.side_effect = failure
+
+        with pytest.raises(RuntimeError, match=f"legacy {legacy_failure} failed"):
+            await bot._check_and_resolve()
+
+        assert events[:1] == ["drain"]
+        worker.run_once.assert_awaited_once_with(limit=100)
+        assert bot._settlement_outbox_task is worker
+        bot.paper.resolve_observation.assert_not_called()
+        if legacy_failure == "flush":
+            bot.paper._conn.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_drains_schema_present_outbox_before_initial_sleep(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        bot = self._make_bot()
+        bot._calibration_task = main_module.CalibrationTask()
+        bot.paper._db_path = tmp_path / "paper-trades.db"
+        bot.paper.settlement_schema_present = True
+        bot.paper.resolve_observation = MagicMock()
+        events = []
+
+        outbox_task = create_autospec(SettlementOutboxTask, spec_set=True)
+        worker = outbox_task.return_value
+        worker.run_once.side_effect = lambda **_kwargs: events.append("drain")
+        monkeypatch.setattr(
+            main_module,
+            "settlement_schema_contract_matches",
+            MagicMock(return_value=True),
+        )
+        monkeypatch.setattr(main_module, "SettlementOutboxTask", outbox_task)
+
+        async def cancel_at_initial_sleep(delay):
+            events.append(("sleep", delay))
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", cancel_at_initial_sleep)
+
+        with pytest.raises(asyncio.CancelledError):
+            await bot._auto_resolve_task()
+
+        assert events == ["drain", ("sleep", 1800)]
+        worker.run_once.assert_awaited_once_with(limit=100)
+        assert bot._settlement_outbox_task is worker
+        bot.source_stats.flush.assert_not_called()
+        bot.paper._conn.execute.assert_not_called()
+        bot.rest.get_market.assert_not_called()
+        bot.paper.resolve_market.assert_not_awaited()
+        bot.paper.resolve_observation.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_auto_resolve_outbox_drain_ignores_polymarket_entry_flag(
         self,
         monkeypatch,
