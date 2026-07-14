@@ -251,31 +251,78 @@ def _insert_invalid_event(seed: SeededEvent, invalid_case: str) -> SeededEvent:
 
     _record_receipts(seed.db_path, seed.outbox_id, DIRECTIONAL_CONSUMERS)
     payload = dict(seed.payload)
-    event_version = 2 if invalid_case == "unknown_version" else 1
-    event_kind = (
-        "unknown_settlement_event"
-        if invalid_case == "unknown_kind"
-        else "paper_trade_settled"
-    )
+    original_observation_sha256 = str(payload["observation_sha256"])
+    outer_observation_sha256 = hashlib.sha256(
+        f"{original_observation_sha256}:{invalid_case}".encode()
+    ).hexdigest()
+    outer_event_version = 1
+    outer_event_kind = "paper_trade_settled"
+    outer_trade_id = seed.trade_id
+    payload["observation_sha256"] = outer_observation_sha256
+
+    if invalid_case == "unknown_version":
+        outer_event_version = 2
+        payload["event_version"] = 2
+    elif invalid_case == "unknown_kind":
+        outer_event_kind = "unknown_settlement_event"
+        payload["event_kind"] = outer_event_kind
+    elif invalid_case == "missing_field":
+        payload.pop("signal_source")
+    elif invalid_case == "wrong_type":
+        payload["keyword_outcomes"] = "not-a-list"
+    elif invalid_case == "invalid_enum":
+        payload["side"] = "hold"
+    elif invalid_case == "outer_event_version_mismatch":
+        outer_event_version = 2
+    elif invalid_case == "outer_event_kind_mismatch":
+        outer_event_kind = "unknown_settlement_event"
+    elif invalid_case == "outer_observation_mismatch":
+        payload["observation_sha256"] = original_observation_sha256
+    elif invalid_case == "outer_trade_mismatch":
+        payload["trade_id"] = "payload-trade-mismatch"
+    elif invalid_case not in {"malformed_json", "outer_outbox_mismatch"}:
+        raise AssertionError(f"unsupported invalid case: {invalid_case}")
+
     outer_outbox_id = _outbox_id(
-        event_version=event_version,
-        event_kind=event_kind,
-        observation_sha256=str(payload["observation_sha256"]),
-        trade_id=seed.trade_id,
+        event_version=outer_event_version,
+        event_kind=outer_event_kind,
+        observation_sha256=outer_observation_sha256,
+        trade_id=outer_trade_id,
     )
-    payload["event_version"] = event_version
-    payload["event_kind"] = event_kind
     payload["outbox_id"] = outer_outbox_id
-    if invalid_case == "outer_payload_mismatch":
+    if invalid_case == "outer_outbox_mismatch":
         outer_outbox_id = hashlib.sha256(
             f"{seed.outbox_id}:outer-mismatch".encode()
         ).hexdigest()
-        payload["outbox_id"] = seed.outbox_id
+    payload_json = (
+        "{not-json"
+        if invalid_case == "malformed_json"
+        else _canonical_json(payload)
+    )
 
     conn = sqlite3.connect(seed.db_path)
     try:
         conn.execute("PRAGMA foreign_keys=ON")
-        if event_version != 1:
+        observation_columns = [
+            str(row[1])
+            for row in conn.execute(
+                "PRAGMA table_info(paper_settlement_observations)"
+            )
+        ]
+        observation_projection = [
+            "?" if column == "observation_sha256" else column
+            for column in observation_columns
+        ]
+        conn.execute(
+            f"""
+            INSERT INTO paper_settlement_observations ({', '.join(observation_columns)})
+            SELECT {', '.join(observation_projection)}
+            FROM paper_settlement_observations
+            WHERE observation_sha256=?
+            """,
+            (outer_observation_sha256, original_observation_sha256),
+        )
+        if outer_event_version != 1 or outer_event_kind != "paper_trade_settled":
             conn.execute("PRAGMA ignore_check_constraints=ON")
         conn.execute(
             """
@@ -286,11 +333,11 @@ def _insert_invalid_event(seed: SeededEvent, invalid_case: str) -> SeededEvent:
             """,
             (
                 outer_outbox_id,
-                event_version,
-                event_kind,
-                payload["observation_sha256"],
-                seed.trade_id,
-                _canonical_json(payload),
+                outer_event_version,
+                outer_event_kind,
+                outer_observation_sha256,
+                outer_trade_id,
+                payload_json,
                 payload["settled_at"],
             ),
         )
@@ -569,7 +616,15 @@ async def test_second_keyword_insert_failure_rolls_back_batch_receipt_and_claim(
 @pytest.mark.parametrize(
     "invalid_case",
     (
-        "outer_payload_mismatch",
+        "malformed_json",
+        "missing_field",
+        "wrong_type",
+        "invalid_enum",
+        "outer_event_version_mismatch",
+        "outer_event_kind_mismatch",
+        "outer_observation_mismatch",
+        "outer_trade_mismatch",
+        "outer_outbox_mismatch",
         "unknown_version",
         "unknown_kind",
         "unknown_consumer",
