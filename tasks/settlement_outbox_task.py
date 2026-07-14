@@ -32,6 +32,8 @@ _KNOWN_CONSUMERS = frozenset(
 _SUPPORTED_CONSUMERS = frozenset(
     {"paper_trade_log", "source_credibility", "keyword_outcomes"}
 )
+_CALIBRATION_CONSUMER = "calibration_state"
+_CALIBRATION_LANES = ("fast", "accumulation", "structural")
 _SHA256_LENGTH = 64
 _REQUIRED_FIELDS = frozenset(
     {
@@ -383,22 +385,102 @@ class SettlementOutboxTask:
                         payload["settled_at"],
                     ),
                 )
+        elif requirement.consumer_name == _CALIBRATION_CONSUMER:
+            pass
         else:
             raise ValueError("unsupported settlement consumer")
         self._fault("after_effect")
 
+    @staticmethod
+    def _completed_calibration_requirements(
+        store: SettlementStore,
+    ) -> tuple[PendingRequirement, ...]:
+        rows = store.connection.execute(
+            """
+            SELECT r.outbox_id, r.consumer_name, o.event_version, o.event_kind,
+                   o.payload_json, o.created_at
+            FROM paper_settlement_consumer_receipts AS receipt
+            JOIN paper_settlement_outbox_requirements AS r
+              ON r.outbox_id = receipt.outbox_id
+             AND r.consumer_name = receipt.consumer_name
+            JOIN paper_settlement_outbox AS o ON o.outbox_id = r.outbox_id
+            WHERE receipt.consumer_name=?
+            """,
+            (_CALIBRATION_CONSUMER,),
+        ).fetchall()
+        return tuple(PendingRequirement(*tuple(row)) for row in rows)
+
+    @staticmethod
+    def _calibration_checks(payload: dict[str, Any]) -> tuple[dict[str, object], ...]:
+        if payload["outcome"] == "void":
+            return ()
+        final_resolution = 1.0 if payload["resolved_yes"] else 0.0
+        checks: list[dict[str, object]] = []
+        for lane in _CALIBRATION_LANES:
+            lane_estimate = payload["lane_estimates"][lane]
+            if lane_estimate is None:
+                continue
+            estimate = float(lane_estimate)
+            checks.append(
+                {
+                    "market_ticker": payload["ticker"],
+                    "lane": lane,
+                    "lane_estimate": estimate,
+                    "final_resolution": final_resolution,
+                    "error": abs(estimate - final_resolution),
+                    "outbox_id": payload["outbox_id"],
+                }
+            )
+        return tuple(checks)
+
+    async def _rebuild_calibration_state(
+        self,
+        store: SettlementStore,
+        *,
+        current: tuple[PendingRequirement, dict[str, Any]] | None = None,
+    ) -> None:
+        payloads = {
+            requirement.outbox_id: self._validated_event(store, requirement)
+            for requirement in self._completed_calibration_requirements(store)
+        }
+        if current is not None:
+            requirement, payload = current
+            payloads[requirement.outbox_id] = payload
+        ordered_payloads = sorted(
+            payloads.values(),
+            key=lambda payload: (payload["settled_at"], payload["trade_id"]),
+        )
+        checks = tuple(
+            check
+            for payload in ordered_payloads
+            for check in self._calibration_checks(payload)
+        )
+        await self._calibration_task.replace_calibration_checks(checks)
+
     async def run_once(self, *, limit: int = 100) -> int:
         processed = 0
         with SettlementStore(self._db_path) as store:
+            try:
+                await self._rebuild_calibration_state(store)
+            except Exception:  # noqa: BLE001 - keep corrupt replay fail-closed
+                log.exception("Settlement calibration state rebuild failed")
+            pending = store.pending_requirements()
             supported = tuple(
                 requirement
-                for requirement in store.pending_requirements()
+                for requirement in pending
                 if requirement.consumer_name in _SUPPORTED_CONSUMERS
+            ) + tuple(
+                requirement
+                for requirement in pending
+                if requirement.consumer_name == _CALIBRATION_CONSUMER
             )
             for requirement in supported[:limit]:
                 try:
                     payload = self._validated_event(store, requirement)
-                    if requirement.consumer_name not in _SUPPORTED_CONSUMERS:
+                    if (
+                        requirement.consumer_name not in _SUPPORTED_CONSUMERS
+                        and requirement.consumer_name != _CALIBRATION_CONSUMER
+                    ):
                         continue
                     self._fault("before_claim")
                     claim_token = self._token_factory()
@@ -412,6 +494,11 @@ class SettlementOutboxTask:
                     ):
                         continue
                     self._fault("after_claim")
+                    if requirement.consumer_name == _CALIBRATION_CONSUMER:
+                        await self._rebuild_calibration_state(
+                            store,
+                            current=(requirement, payload),
+                        )
                     store.complete_claim(
                         requirement.consumer_name,
                         requirement.outbox_id,
