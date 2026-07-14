@@ -6,7 +6,10 @@ Covers: position queries, exposure math, concentration checks, and resolution.
 
 import sqlite3
 
+import pytest
+
 from trading.portfolio import Portfolio, Position
+from trading.venue import MarketRef, Venue
 
 
 def _pos(
@@ -16,6 +19,7 @@ def _pos(
     side: str = "yes",
     cost: float = 10.0,
     ts: str = "2026-01-01T00:00:00+00:00",
+    venue: str = Venue.KALSHI.value,
 ):
     return Position(
         trade_id=trade_id,
@@ -27,6 +31,7 @@ def _pos(
         estimated_prob=0.60,
         entry_price_cents=50.0,
         ts=ts,
+        venue=venue,
     )
 
 
@@ -96,6 +101,27 @@ class TestPortfolioRisk:
         p.resolve("KXONE")
         assert p.open_positions("KXONE") == []
         assert len(p.open_positions("KXTWO")) == 1
+
+    def test_market_ref_rejects_empty_market_id(self):
+        with pytest.raises(ValueError, match="venue_market_id"):
+            MarketRef(Venue.KALSHI, "", "KX-SHARED")
+
+    def test_resolve_closes_only_matching_venue_market_identity(self):
+        p = Portfolio()
+        p.add(_pos("k1", "shared-id", venue=Venue.KALSHI.value))
+        p.add(_pos("p1", "shared-id", venue=Venue.POLYMARKET_US.value))
+
+        closed = p.resolve(
+            MarketRef(
+                Venue.POLYMARKET_US,
+                "shared-id",
+                "shared-id",
+            )
+        )
+
+        assert {row.venue for row in closed} == {Venue.POLYMARKET_US.value}
+        assert len(p.open_positions("shared-id")) == 1
+        assert p.open_positions("shared-id")[0].venue == Venue.KALSHI.value
 
 
 class TestPortfolioLoadFromDb:

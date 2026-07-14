@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 
 
 class Venue(StrEnum):
     KALSHI = "kalshi"
     POLYMARKET_US = "polymarket_us"
+
+
+@dataclass(frozen=True)
+class MarketRef:
+    venue: Venue
+    venue_market_id: str
+    alias: str
+
+    def __post_init__(self) -> None:
+        if not self.venue_market_id.strip():
+            raise ValueError("venue_market_id is required")
 
 
 def normalize_venue(value: str | Venue) -> Venue:

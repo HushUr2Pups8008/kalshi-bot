@@ -13,7 +13,9 @@ Key guarantees:
 
 import sqlite3
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, overload
+
+from trading.venue import MarketRef, normalize_venue
 
 
 @dataclass
@@ -124,9 +126,29 @@ class Portfolio:
         """Record a newly opened position."""
         self._positions.setdefault(pos.ticker, []).append(pos)
 
-    def resolve(self, ticker: str) -> None:
-        """Remove all open positions for ticker after market resolution."""
-        self._positions.pop(ticker, None)
+    @overload
+    def resolve(self, market_ref: MarketRef) -> list[Position]: ...
+
+    @overload
+    def resolve(self, market_ref: str) -> None: ...
+
+    def resolve(self, market_ref: MarketRef | str) -> list[Position] | None:
+        """Remove positions by exact market identity or legacy ticker."""
+        if isinstance(market_ref, str):
+            self._positions.pop(market_ref, None)
+            return None
+
+        ticker = market_ref.venue_market_id
+        positions = self._positions.get(ticker, [])
+        venue = normalize_venue(market_ref.venue)
+        closed = [pos for pos in positions if normalize_venue(pos.venue) == venue]
+        remaining = [pos for pos in positions if normalize_venue(pos.venue) != venue]
+
+        if remaining:
+            self._positions[ticker] = remaining
+        else:
+            self._positions.pop(ticker, None)
+        return closed
 
     # ── Queries ───────────────────────────────────────────────────────────────
 
