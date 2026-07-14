@@ -48,6 +48,7 @@ def test_record_trade_uses_analysis_venue_when_present(venue_trader):
     analysis = _make_mock_analysis(ticker="will-example-happen-2026")
     analysis.venue = "polymarket_us"
     analysis.market.venue = "polymarket_us"
+    analysis.market.venue_market_id = "8594"
 
     with patch("dataclasses.asdict", return_value={"series_ticker": ""}):
         venue_trader.record_trade(analysis)
@@ -67,6 +68,7 @@ def test_portfolio_hydrates_venue_when_column_exists(venue_trader):
     analysis = _make_mock_analysis(ticker="will-example-happen-2026")
     analysis.venue = "polymarket_us"
     analysis.market.venue = "polymarket_us"
+    analysis.market.venue_market_id = "8594"
 
     with patch("dataclasses.asdict", return_value={"series_ticker": ""}):
         venue_trader.record_trade(analysis)

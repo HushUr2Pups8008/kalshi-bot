@@ -27,6 +27,7 @@ def _analysis(*, executed_price_cents: int | None = 42) -> SignalAnalysis:
     market = PolymarketMarket(
         venue=Venue.POLYMARKET_US,
         market_id="will-example-happen-2026",
+        venue_market_id="8594",
         title="Will example happen in 2026?",
         status="open",
         yes_ask_cents=42,
