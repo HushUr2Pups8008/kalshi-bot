@@ -598,6 +598,116 @@ def test_receipts_drain_multi_consumer_event(tmp_path):
         assert store.pending_requirements() == ()
 
 
+def test_complete_claim_commits_consumer_effect_and_receipt_together(tmp_path):
+    db = tmp_path / "paper.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db, consumers=("consumer-a",))
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE consumer_projection (outbox_id TEXT PRIMARY KEY, value TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        assert store.acquire_claim(
+            "consumer-a",
+            OUTBOX_ID,
+            claim_token="token-1",
+            now=NOW,
+            lease_seconds=60,
+        )
+
+        def apply_effect(
+            conn: sqlite3.Connection,
+            requirement,
+        ) -> None:
+            assert requirement.outbox_id == OUTBOX_ID
+            assert requirement.consumer_name == "consumer-a"
+            conn.execute(
+                "INSERT INTO consumer_projection (outbox_id, value) VALUES (?, ?)",
+                (requirement.outbox_id, "applied"),
+            )
+
+        assert store.complete_claim(
+            "consumer-a",
+            OUTBOX_ID,
+            claim_token="token-1",
+            processed_at=NOW + timedelta(seconds=1),
+            result_sha256="a" * 64,
+            apply=apply_effect,
+        )
+        assert tuple(
+            store.connection.execute(
+                "SELECT outbox_id, value FROM consumer_projection"
+            ).fetchone()
+        ) == (OUTBOX_ID, "applied")
+        assert tuple(
+            store.connection.execute(
+                "SELECT consumer_name, outbox_id, result_sha256 "
+                "FROM paper_settlement_consumer_receipts"
+            ).fetchone()
+        ) == ("consumer-a", OUTBOX_ID, "a" * 64)
+        assert store.claim_state("consumer-a", OUTBOX_ID, now=NOW) == "missing"
+
+
+def test_complete_claim_rolls_back_effect_and_receipt_on_callback_failure(tmp_path):
+    db = tmp_path / "paper.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db, consumers=("consumer-a",))
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE consumer_projection (outbox_id TEXT PRIMARY KEY, value TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        assert store.acquire_claim(
+            "consumer-a",
+            OUTBOX_ID,
+            claim_token="token-1",
+            now=NOW,
+            lease_seconds=60,
+        )
+
+        def fail_after_effect(
+            conn: sqlite3.Connection,
+            requirement,
+        ) -> None:
+            conn.execute(
+                "INSERT INTO consumer_projection (outbox_id, value) VALUES (?, ?)",
+                (requirement.outbox_id, "must-roll-back"),
+            )
+            raise RuntimeError("injected consumer failure")
+
+        with pytest.raises(RuntimeError, match="injected consumer failure"):
+            store.complete_claim(
+                "consumer-a",
+                OUTBOX_ID,
+                claim_token="token-1",
+                processed_at=NOW + timedelta(seconds=1),
+                result_sha256="b" * 64,
+                apply=fail_after_effect,
+            )
+
+        assert (
+            store.connection.execute(
+                "SELECT COUNT(*) FROM consumer_projection"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            store.connection.execute(
+                "SELECT COUNT(*) FROM paper_settlement_consumer_receipts"
+            ).fetchone()[0]
+            == 0
+        )
+        assert store.claim_state("consumer-a", OUTBOX_ID, now=NOW) == "active"
+
+
 def test_readiness_reports_valid_and_invalid_schema_state(tmp_path):
     db = tmp_path / "paper.db"
     _create_legacy_db(db)
