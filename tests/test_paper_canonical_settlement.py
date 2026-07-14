@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import inspect
@@ -113,11 +114,28 @@ def _record_trade(
     analysis.market.venue = market_ref.venue.value
     analysis.market.market_id = market_ref.alias
     analysis.market.venue_market_id = market_ref.venue_market_id
+    return _record_analysis(trader, analysis, trade_id=trade_id)
+
+
+def _record_analysis(trader, analysis, *, trade_id: str) -> str:
+    assert len(trade_id) == 12
     with (
         patch("trading.paper_trader.uuid.uuid4", return_value=trade_id),
         patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}),
     ):
         return trader.record_trade(analysis)
+
+
+def _attempt_record_trade(
+    trader,
+    market_ref: MarketRef,
+    *,
+    trade_id: str,
+) -> tuple[str, Exception | None]:
+    try:
+        return _record_trade(trader, market_ref, trade_id=trade_id), None
+    except Exception as exc:  # noqa: BLE001 - durable state is the rejection contract.
+        return "", exc
 
 
 def _record_mapped_trade(
@@ -271,6 +289,84 @@ def test_schema_present_record_trade_without_canonical_id_fails_closed(
     assert trader.portfolio.open_positions() == []
 
 
+@pytest.mark.parametrize("missing_column", ["venue_market_id", "identity_status"])
+def test_canonical_entry_requires_complete_identity_schema_before_debit(
+    trader_factory,
+    missing_column,
+):
+    trader = trader_factory(f"incomplete-identity-{missing_column}")
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_settlement_schema_meta"
+    ).fetchone()[0] == 1
+    trader._conn.execute(f"ALTER TABLE paper_trades DROP COLUMN {missing_column}")
+    trader._conn.commit()
+    assert missing_column not in {
+        row[1] for row in trader._conn.execute("PRAGMA table_info(paper_trades)")
+    }
+    before = _financial_snapshot(trader)
+    assert before["bankroll_cents"] == Decimal("50000")
+    market_ref = MarketRef(Venue.POLYMARKET_US, "8594", "complete-schema")
+
+    result, _error = _attempt_record_trade(
+        trader,
+        market_ref,
+        trade_id="broken000001",
+    )
+
+    assert result == ""
+    assert _financial_snapshot(trader) == before
+    assert trader.portfolio.open_positions() == []
+
+
+def test_canonical_entry_insert_failure_rolls_back_debit_and_row(trader_factory):
+    trader = trader_factory("canonical-insert-failure")
+    trader._conn.execute(
+        """
+        CREATE TRIGGER inject_canonical_entry_failure
+        BEFORE INSERT ON paper_trades
+        WHEN NEW.identity_status='mapped'
+        BEGIN
+            SELECT RAISE(ABORT, 'injected canonical entry failure');
+        END
+        """
+    )
+    trader._conn.commit()
+    before = _financial_snapshot(trader)
+    assert before["bankroll_cents"] == Decimal("50000")
+    market_ref = MarketRef(Venue.POLYMARKET_US, "8594", "insert-failure")
+
+    result, _error = _attempt_record_trade(
+        trader,
+        market_ref,
+        trade_id="insertfail01",
+    )
+
+    assert result == ""
+    assert _financial_snapshot(trader) == before
+    assert trader.portfolio.open_positions() == []
+
+
+def test_schema_present_defaulted_kalshi_rejects_non_kx_ticker_before_debit(
+    trader_factory,
+):
+    trader = trader_factory("defaulted-kalshi-slug")
+    analysis = _make_mock_analysis(ticker="will-example-happen-2026")
+    analysis.venue = None
+    analysis.market.venue = None
+    analysis.market.venue_market_id = None
+    before = _financial_snapshot(trader)
+    assert before["bankroll_cents"] == Decimal("50000")
+
+    try:
+        result = _record_analysis(trader, analysis, trade_id="nonkx0000001")
+    except Exception:  # noqa: BLE001 - durable state is the rejection contract.
+        result = ""
+
+    assert result == ""
+    assert _financial_snapshot(trader) == before
+    assert trader.portfolio.open_positions() == []
+
+
 def test_schema_absent_existing_database_keeps_legacy_record_trade_insert(
     trader_factory,
 ):
@@ -382,6 +478,49 @@ def test_exact_market_ref_settles_only_matching_rows_and_closes_exact_portfolio_
     assert {position.trade_id for position in trader.portfolio.open_positions(alias)} == {
         other_venue_trade,
         other_id_trade,
+    }
+
+
+def test_alias_drift_closes_exact_canonical_portfolio_position(trader_factory):
+    trader = trader_factory("canonical-alias-drift")
+    stored_alias = "KX-SHARED-ALIAS"
+    target = MarketRef(Venue.POLYMARKET_US, "8594", stored_alias)
+    wrong_id = MarketRef(Venue.POLYMARKET_US, "9999", stored_alias)
+    cross_venue = MarketRef(Venue.KALSHI, stored_alias, stored_alias)
+    target_trade = _record_mapped_trade(
+        trader,
+        target,
+        trade_id="aliastgt0001",
+    )
+    wrong_id_trade = _record_mapped_trade(
+        trader,
+        wrong_id,
+        trade_id="aliasbad0001",
+    )
+    cross_venue_trade = _record_mapped_trade(
+        trader,
+        cross_venue,
+        trade_id="aliasxvn0001",
+    )
+    observation = _observation(
+        MarketRef(Venue.POLYMARKET_US, "8594", "renamed-display-alias"),
+        MarketOutcome.YES,
+    )
+
+    assert _resolve(trader, observation) is True
+
+    rows = trader._conn.execute(
+        "SELECT trade_id, resolved FROM paper_trades ORDER BY trade_id"
+    ).fetchall()
+    assert {row["trade_id"]: row["resolved"] for row in rows} == {
+        target_trade: 1,
+        wrong_id_trade: 0,
+        cross_venue_trade: 0,
+    }
+    assert _bankroll_cents(trader) == Decimal("49500")
+    assert {position.trade_id for position in trader.portfolio.open_positions()} == {
+        wrong_id_trade,
+        cross_venue_trade,
     }
 
 
@@ -552,6 +691,44 @@ def test_terminal_correction_preserves_financial_state_then_quarantines_separate
     _assert_quarantined_without_financial_change(trader, correction, before)
 
 
+@pytest.mark.parametrize("supersedes_kind", ["unknown", "cross-market"])
+def test_first_observation_rejects_unowned_supersedes_hash(
+    trader_factory,
+    supersedes_kind,
+):
+    trader = trader_factory(f"unowned-supersedes-{supersedes_kind}")
+    target_ref = MarketRef(Venue.POLYMARKET_US, "8594", "supersedes-target")
+    _record_mapped_trade(
+        trader,
+        target_ref,
+        trade_id="supertrg0001",
+    )
+    if supersedes_kind == "cross-market":
+        other_ref = MarketRef(Venue.POLYMARKET_US, "7777", "supersedes-other")
+        _record_mapped_trade(
+            trader,
+            other_ref,
+            trade_id="superoth0001",
+        )
+        other_observation = _observation(other_ref, MarketOutcome.YES)
+        assert _resolve(trader, other_observation) is True
+        supersedes_sha256 = other_observation.observation_sha256
+    else:
+        supersedes_sha256 = "f" * 64
+    observation = replace(
+        _observation(target_ref, MarketOutcome.YES),
+        supersedes_observation_sha256=supersedes_sha256,
+    )
+    before = _financial_snapshot(trader)
+
+    _attempt_resolution(trader, observation)
+
+    _assert_quarantined_without_financial_change(trader, observation, before)
+    assert {position.trade_id for position in trader.portfolio.open_positions()} == {
+        "supertrg0001"
+    }
+
+
 def test_per_trade_cas_row_count_drift_rolls_back_then_quarantines(trader_factory):
     trader = trader_factory("cas-drift")
     market_ref = MarketRef(Venue.KALSHI, "KX-DRIFT", "KX-DRIFT")
@@ -604,6 +781,60 @@ def test_legacy_null_identity_preserves_financial_state_then_quarantines(trader_
 
     _assert_quarantined_without_financial_change(trader, observation, before)
     assert trader.portfolio.open_positions(market_ref.alias)[0].venue_market_id is None
+
+
+def test_different_alias_unmapped_canonical_collision_rolls_back_and_quarantines(
+    trader_factory,
+):
+    trader = trader_factory("unmapped-canonical-collision")
+    market_ref = MarketRef(Venue.POLYMARKET_US, "8594", "mapped-target-alias")
+    mapped_trade = _record_mapped_trade(
+        trader,
+        market_ref,
+        trade_id="mapped000001",
+    )
+    legacy_ref = MarketRef(Venue.POLYMARKET_US, "8594", "older-legacy-alias")
+    legacy_trade = _record_mapped_trade(
+        trader,
+        legacy_ref,
+        trade_id="unmapped0001",
+    )
+    trader._conn.execute(
+        "UPDATE paper_trades SET identity_status=NULL WHERE trade_id=?",
+        (legacy_trade,),
+    )
+    trader._conn.commit()
+    portfolio = Portfolio()
+    portfolio.load_from_db(trader._conn)
+    trader.portfolio = portfolio
+    observation = _observation(market_ref, MarketOutcome.YES)
+    before = _financial_snapshot(trader)
+    assert before["bankroll_cents"] == Decimal("48000")
+
+    _attempt_resolution(trader, observation)
+
+    _assert_quarantined_without_financial_change(trader, observation, before)
+    first_quarantine = trader._conn.execute(
+        """
+        SELECT quarantine_id, reason_code, details_json
+        FROM paper_settlement_quarantine
+        """
+    ).fetchone()
+    assert first_quarantine["reason_code"] == "legacy_null_identity"
+    assert json.loads(first_quarantine["details_json"])["trade_ids"] == [legacy_trade]
+    _attempt_resolution(trader, observation)
+    quarantine_ids = [
+        row[0]
+        for row in trader._conn.execute(
+            "SELECT quarantine_id FROM paper_settlement_quarantine"
+        )
+    ]
+    assert quarantine_ids == [first_quarantine["quarantine_id"]]
+    assert _financial_snapshot(trader) == before
+    assert {position.trade_id for position in trader.portfolio.open_positions()} == {
+        mapped_trade,
+        legacy_trade,
+    }
 
 
 def test_mid_transaction_failure_rolls_back_finances_before_separate_quarantine(
