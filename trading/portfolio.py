@@ -151,10 +151,15 @@ class Portfolio:
         for ticker in list(self._positions):
             remaining = []
             for pos in self._positions[ticker]:
-                matches = (
-                    normalize_venue(pos.venue) == venue
-                    and pos.venue_market_id == market_ref.venue_market_id
-                )
+                try:
+                    position_venue = normalize_venue(pos.venue)
+                except ValueError:
+                    matches = False
+                else:
+                    matches = (
+                        position_venue == venue
+                        and pos.venue_market_id == market_ref.venue_market_id
+                    )
                 (closed if matches else remaining).append(pos)
 
             if remaining:
