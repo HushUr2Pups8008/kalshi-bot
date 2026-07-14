@@ -959,6 +959,60 @@ def test_complete_claim_blocks_callback_transaction_control(
         assert store.claim_state("consumer-a", OUTBOX_ID, now=NOW) == "active"
 
 
+def test_complete_claim_public_connection_cannot_escape_callback_guard(tmp_path):
+    db = tmp_path / "paper.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db, consumers=("consumer-a",))
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE consumer_projection (outbox_id TEXT PRIMARY KEY, value TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        public_connection = store.connection
+        assert store.acquire_claim(
+            "consumer-a",
+            OUTBOX_ID,
+            claim_token="token-1",
+            now=NOW,
+            lease_seconds=60,
+        )
+
+        def apply_effect(conn, requirement) -> None:
+            conn.execute(
+                "INSERT INTO consumer_projection (outbox_id, value) VALUES (?, ?)",
+                (requirement.outbox_id, "must-roll-back"),
+            )
+            public_connection.set_authorizer(None)
+            public_connection.commit()
+
+        with pytest.raises(RuntimeError, match="callback transaction control"):
+            store.complete_claim(
+                "consumer-a",
+                OUTBOX_ID,
+                claim_token="token-1",
+                processed_at=NOW + timedelta(seconds=1),
+                result_sha256="f" * 64,
+                apply=apply_effect,
+            )
+        assert (
+            store.connection.execute(
+                "SELECT COUNT(*) FROM consumer_projection"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            store.connection.execute(
+                "SELECT COUNT(*) FROM paper_settlement_consumer_receipts"
+            ).fetchone()[0]
+            == 0
+        )
+        assert store.claim_state("consumer-a", OUTBOX_ID, now=NOW) == "active"
+
+
 def test_readiness_reports_valid_and_invalid_schema_state(tmp_path):
     db = tmp_path / "paper.db"
     _create_legacy_db(db)
