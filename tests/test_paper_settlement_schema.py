@@ -708,6 +708,153 @@ def test_complete_claim_rolls_back_effect_and_receipt_on_callback_failure(tmp_pa
         assert store.claim_state("consumer-a", OUTBOX_ID, now=NOW) == "active"
 
 
+def test_complete_claim_rolls_back_effect_when_receipt_insert_fails(tmp_path):
+    db = tmp_path / "paper.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db, consumers=("consumer-a",))
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE consumer_projection (outbox_id TEXT PRIMARY KEY, value TEXT)"
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER inject_receipt_failure
+        BEFORE INSERT ON paper_settlement_consumer_receipts
+        BEGIN
+            SELECT RAISE(ABORT, 'injected receipt failure');
+        END
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        assert store.acquire_claim(
+            "consumer-a",
+            OUTBOX_ID,
+            claim_token="token-1",
+            now=NOW,
+            lease_seconds=60,
+        )
+
+        def apply_effect(conn: sqlite3.Connection, requirement) -> None:
+            conn.execute(
+                "INSERT INTO consumer_projection (outbox_id, value) VALUES (?, ?)",
+                (requirement.outbox_id, "must-roll-back"),
+            )
+
+        with pytest.raises(sqlite3.IntegrityError, match="injected receipt failure"):
+            store.complete_claim(
+                "consumer-a",
+                OUTBOX_ID,
+                claim_token="token-1",
+                processed_at=NOW + timedelta(seconds=1),
+                result_sha256="c" * 64,
+                apply=apply_effect,
+            )
+
+        assert (
+            store.connection.execute(
+                "SELECT COUNT(*) FROM consumer_projection"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            store.connection.execute(
+                "SELECT COUNT(*) FROM paper_settlement_consumer_receipts"
+            ).fetchone()[0]
+            == 0
+        )
+        assert store.claim_state("consumer-a", OUTBOX_ID, now=NOW) == "active"
+
+
+def test_complete_claim_validates_ownership_and_retry_before_callback(tmp_path):
+    db = tmp_path / "paper.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db, consumers=("consumer-a",))
+    callback_calls: list[str] = []
+
+    def apply_effect(_conn: sqlite3.Connection, requirement) -> None:
+        callback_calls.append(requirement.outbox_id)
+
+    with SettlementStore(db) as store:
+        with pytest.raises(RuntimeError, match="active claim token"):
+            store.complete_claim(
+                "consumer-a",
+                OUTBOX_ID,
+                claim_token="missing",
+                processed_at=NOW,
+                result_sha256="d" * 64,
+                apply=apply_effect,
+            )
+        assert callback_calls == []
+
+        assert store.acquire_claim(
+            "consumer-a",
+            OUTBOX_ID,
+            claim_token="token-1",
+            now=NOW,
+            lease_seconds=60,
+        )
+        with pytest.raises(RuntimeError, match="active claim token"):
+            store.complete_claim(
+                "consumer-a",
+                OUTBOX_ID,
+                claim_token="wrong-token",
+                processed_at=NOW + timedelta(seconds=1),
+                result_sha256="d" * 64,
+                apply=apply_effect,
+            )
+        with pytest.raises(RuntimeError, match="claim lease expired"):
+            store.complete_claim(
+                "consumer-a",
+                OUTBOX_ID,
+                claim_token="token-1",
+                processed_at=NOW + timedelta(seconds=60),
+                result_sha256="d" * 64,
+                apply=apply_effect,
+            )
+        assert callback_calls == []
+
+        assert store.acquire_claim(
+            "consumer-a",
+            OUTBOX_ID,
+            claim_token="token-2",
+            now=NOW + timedelta(seconds=61),
+            lease_seconds=60,
+        )
+        assert store.complete_claim(
+            "consumer-a",
+            OUTBOX_ID,
+            claim_token="token-2",
+            processed_at=NOW + timedelta(seconds=62),
+            result_sha256="d" * 64,
+            apply=apply_effect,
+        )
+        assert callback_calls == [OUTBOX_ID]
+
+        assert not store.complete_claim(
+            "consumer-a",
+            OUTBOX_ID,
+            claim_token="no-longer-relevant",
+            processed_at=NOW + timedelta(seconds=63),
+            result_sha256="d" * 64,
+            apply=apply_effect,
+        )
+        with pytest.raises(RuntimeError, match="receipt result drift"):
+            store.complete_claim(
+                "consumer-a",
+                OUTBOX_ID,
+                claim_token="no-longer-relevant",
+                processed_at=NOW + timedelta(seconds=63),
+                result_sha256="e" * 64,
+                apply=apply_effect,
+            )
+        assert callback_calls == [OUTBOX_ID]
+
+
 def test_readiness_reports_valid_and_invalid_schema_state(tmp_path):
     db = tmp_path / "paper.db"
     _create_legacy_db(db)
