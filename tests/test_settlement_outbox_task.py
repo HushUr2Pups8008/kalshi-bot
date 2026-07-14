@@ -209,19 +209,92 @@ def _execute(
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-class FailAfterFirstAppendTradeLogger(TradeLogger):
-    def __init__(self, path: Path) -> None:
+class FailAfterAppendTradeLogger(TradeLogger):
+    def __init__(self, path: Path, *, fail_after: int) -> None:
         super().__init__(path)
-        self._failed = False
+        self._append_count = 0
+        self._fail_after = fail_after
 
     def _write(self, record: dict[str, object]) -> None:
         super()._write(record)
-        if not self._failed:
-            self._failed = True
+        self._append_count += 1
+        if self._append_count == self._fail_after:
             raise RuntimeError("injected logger failure")
+
+
+def _clock_from_payload(seed: SeededEvent) -> FixedClock:
+    return FixedClock(datetime.fromisoformat(str(seed.payload["settled_at"])))
+
+
+def _paper_log_receipts(seed: SeededEvent) -> list[tuple]:
+    return _rows(
+        seed.db_path,
+        """
+        SELECT consumer_name FROM paper_settlement_consumer_receipts
+        WHERE outbox_id=? AND consumer_name='paper_trade_log'
+        """,
+        (seed.outbox_id,),
+    )
+
+
+def _expected_directional_log_records(seed: SeededEvent) -> list[dict[str, object]]:
+    common = {
+        "outbox_id": seed.outbox_id,
+        "ts": seed.payload["settled_at"],
+    }
+    return [
+        {
+            "type": "PAPER_RESOLUTION",
+            "trade_id": seed.trade_id,
+            "ticker": seed.payload["ticker"],
+            "resolved_yes": True,
+            "terminal_state": "lost",
+            "pnl_dollars": -10.0,
+            "bankroll_delta_dollars": 0.0,
+            "venue": "polymarket_us",
+            **common,
+        },
+        {
+            "type": "CALIBRATION_OBSERVATION",
+            "trade_id": seed.trade_id,
+            "ticker": seed.payload["ticker"],
+            "market_prefix": "PMOUTBOX",
+            "side": "no",
+            "estimated_probability": 0.33,
+            "realized_outcome": 0,
+            "entry_price_cents": 40.0,
+            "pnl_dollars": -10.0,
+            "cost_dollars": 10.0,
+            "llm_magnitude": "moderate",
+            "llm_confidence": 0.81,
+            "signal_source": "wire:test-source",
+            "ts_entry": seed.payload["entry_ts"],
+            "ts_resolved": seed.payload["settled_at"],
+            **common,
+        },
+        *[
+            {
+                "type": "CALIBRATION_CHECK",
+                "market_ticker": seed.payload["ticker"],
+                "lane": lane,
+                "lane_estimate": estimate,
+                "final_resolution": 1.0,
+                "error": error,
+                "venue": "polymarket_us",
+                **common,
+            }
+            for lane, estimate, error in (
+                ("fast", 0.7, 0.3),
+                ("accumulation", 0.65, 0.35),
+                ("structural", 0.6, 0.4),
+            )
+        ],
+    ]
 
 
 def _pending_consumers(seed: SeededEvent) -> tuple[str, ...]:
@@ -775,7 +848,12 @@ async def test_paper_trade_log_emits_directional_resolution_and_calibration_line
     monkeypatch,
     tmp_path,
 ):
-    seed = _seed_directional_event(monkeypatch, tmp_path)
+    seed = _seed_directional_event(
+        monkeypatch,
+        tmp_path,
+        side="no",
+        outcome=MarketOutcome.YES,
+    )
     _record_receipts(
         seed.db_path,
         seed.outbox_id,
@@ -783,104 +861,69 @@ async def test_paper_trade_log_emits_directional_resolution_and_calibration_line
     )
     log_path = tmp_path / "worker-trades.jsonl"
 
-    await _task(seed, trade_logger=TradeLogger(log_path)).run_once(limit=100)
+    await _task(
+        seed,
+        trade_logger=TradeLogger(log_path),
+        clock=_clock_from_payload(seed),
+    ).run_once(limit=100)
 
     records = _read_jsonl(log_path)
-    resolution = [row for row in records if row["type"] == "PAPER_RESOLUTION"]
-    observations = [
-        row for row in records if row["type"] == "CALIBRATION_OBSERVATION"
-    ]
-    checks = [row for row in records if row["type"] == "CALIBRATION_CHECK"]
-    assert len(resolution) == 1
-    assert len(observations) == 1
-    assert len(checks) == 3
-    assert all(row["outbox_id"] == seed.outbox_id for row in records)
-    assert all(row["ts"] == seed.payload["settled_at"] for row in records)
-    assert resolution[0] == {
-        "type": "PAPER_RESOLUTION",
-        "trade_id": seed.trade_id,
-        "ticker": seed.payload["ticker"],
-        "resolved_yes": True,
-        "terminal_state": "won",
-        "pnl_dollars": 15.0,
-        "bankroll_delta_dollars": 25.0,
-        "venue": "polymarket_us",
-        "outbox_id": seed.outbox_id,
-        "ts": seed.payload["settled_at"],
-    }
-    assert observations[0]["estimated_probability"] == pytest.approx(0.67)
-    assert observations[0]["realized_outcome"] == 1
-    assert observations[0]["ts_resolved"] == seed.payload["settled_at"]
-    assert {
-        (row["lane"], row["lane_estimate"], row["final_resolution"])
-        for row in checks
-    } == {
-        ("fast", 0.70, 1.0),
-        ("accumulation", 0.65, 1.0),
-        ("structural", 0.60, 1.0),
-    }
-    assert _rows(
-        seed.db_path,
-        """
-        SELECT consumer_name FROM paper_settlement_consumer_receipts
-        WHERE outbox_id=? AND consumer_name='paper_trade_log'
-        """,
-        (seed.outbox_id,),
-    ) == [("paper_trade_log",)]
+    assert records == _expected_directional_log_records(seed)
+    assert _paper_log_receipts(seed) == [("paper_trade_log",)]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fail_after", range(1, 6))
 async def test_logger_failure_retries_at_least_once_with_stable_outbox_lineage(
     monkeypatch,
     tmp_path,
+    fail_after,
 ):
-    seed = _seed_directional_event(monkeypatch, tmp_path)
+    seed = _seed_directional_event(
+        monkeypatch,
+        tmp_path,
+        side="no",
+        outcome=MarketOutcome.YES,
+    )
     _record_receipts(
         seed.db_path,
         seed.outbox_id,
         ("source_credibility", "calibration_state", "keyword_outcomes"),
     )
     log_path = tmp_path / "retry-trades.jsonl"
-    logger = FailAfterFirstAppendTradeLogger(log_path)
-    clock = FixedClock()
+    logger = FailAfterAppendTradeLogger(log_path, fail_after=fail_after)
+    clock = _clock_from_payload(seed)
     task = _task(seed, trade_logger=logger, clock=clock)
+    expected = _expected_directional_log_records(seed)
 
     await task.run_once(limit=100)
 
     first_records = _read_jsonl(log_path)
-    assert len(first_records) == 1
-    assert first_records[0]["outbox_id"] == seed.outbox_id
-    assert _rows(
-        seed.db_path,
-        """
-        SELECT consumer_name FROM paper_settlement_consumer_receipts
-        WHERE outbox_id=? AND consumer_name='paper_trade_log'
-        """,
-        (seed.outbox_id,),
-    ) == []
+    assert first_records == expected[:fail_after]
+    assert _paper_log_receipts(seed) == []
     with SettlementStore(seed.db_path) as store:
         assert (
             store.claim_state("paper_trade_log", seed.outbox_id, now=clock.value)
             == "active"
         )
 
-    clock.value += timedelta(seconds=61)
+    clock.value += timedelta(seconds=59)
+    await task.run_once(limit=100)
+
+    assert _read_jsonl(log_path) == first_records
+    assert _paper_log_receipts(seed) == []
+
+    clock.value += timedelta(seconds=2)
     await task.run_once(limit=100)
 
     retried_records = _read_jsonl(log_path)
-    resolution_rows = [
-        row for row in retried_records if row["type"] == "PAPER_RESOLUTION"
+    assert retried_records == [*expected[:fail_after], *expected]
+    assert retried_records[:fail_after] == retried_records[
+        fail_after : fail_after * 2
     ]
-    assert len(resolution_rows) == 2
-    assert {row["outbox_id"] for row in resolution_rows} == {seed.outbox_id}
-    assert _rows(
-        seed.db_path,
-        """
-        SELECT consumer_name FROM paper_settlement_consumer_receipts
-        WHERE outbox_id=? AND consumer_name='paper_trade_log'
-        """,
-        (seed.outbox_id,),
-    ) == [("paper_trade_log",)]
+    assert all(row["outbox_id"] == seed.outbox_id for row in retried_records)
+    assert all(row["ts"] == seed.payload["settled_at"] for row in retried_records)
+    assert _paper_log_receipts(seed) == [("paper_trade_log",)]
 
 
 @pytest.mark.asyncio
@@ -895,7 +938,11 @@ async def test_paper_trade_log_emits_void_without_directional_calibration(
     )
     log_path = tmp_path / "void-trades.jsonl"
 
-    await _task(seed, trade_logger=TradeLogger(log_path)).run_once(limit=100)
+    await _task(
+        seed,
+        trade_logger=TradeLogger(log_path),
+        clock=_clock_from_payload(seed),
+    ).run_once(limit=100)
 
     records = _read_jsonl(log_path)
     assert records == [
