@@ -245,6 +245,11 @@ class SettlementOutboxTask:
         self._token_factory = token_factory
         self._lease_seconds = lease_seconds
         self._fault_hook = fault_hook
+        self._optimistic_calibration: dict[
+            str,
+            tuple[str, dict[str, Any]],
+        ] = {}
+        self._dispatched_calibration_outbox_ids: set[str] = set()
 
     def _fault(self, stage: str) -> None:
         if self._fault_hook is not None:
@@ -438,11 +443,32 @@ class SettlementOutboxTask:
         store: SettlementStore,
         *,
         current: tuple[PendingRequirement, dict[str, Any]] | None = None,
+        now: datetime | None = None,
     ) -> None:
         payloads = {
             requirement.outbox_id: self._validated_event(store, requirement)
             for requirement in self._completed_calibration_requirements(store)
         }
+        if now is not None:
+            for outbox_id, (claim_token, payload) in self._optimistic_calibration.items():
+                claim = store.connection.execute(
+                    """
+                    SELECT claim_token FROM paper_settlement_delivery_claims
+                    WHERE consumer_name=? AND outbox_id=?
+                    """,
+                    (_CALIBRATION_CONSUMER, outbox_id),
+                ).fetchone()
+                if (
+                    claim is not None
+                    and claim["claim_token"] == claim_token
+                    and store.claim_state(
+                        _CALIBRATION_CONSUMER,
+                        outbox_id,
+                        now=now,
+                    )
+                    == "active"
+                ):
+                    payloads[outbox_id] = payload
         if current is not None:
             requirement, payload = current
             payloads[requirement.outbox_id] = payload
@@ -456,12 +482,29 @@ class SettlementOutboxTask:
             for check in self._calibration_checks(payload)
         )
         await self._calibration_task.replace_calibration_checks(checks)
+        for payload in ordered_payloads:
+            outbox_id = payload["outbox_id"]
+            if outbox_id in self._dispatched_calibration_outbox_ids:
+                continue
+            for check in self._calibration_checks(payload):
+                await self._calibration_task.record_calibration_check(
+                    market_ticker=str(check["market_ticker"]),
+                    lane=str(check["lane"]),
+                    lane_estimate=float(check["lane_estimate"]),
+                    final_resolution=float(check["final_resolution"]),
+                    error=float(check["error"]),
+                    outbox_id=str(check["outbox_id"]),
+                )
+            self._dispatched_calibration_outbox_ids.add(str(outbox_id))
 
     async def run_once(self, *, limit: int = 100) -> int:
         processed = 0
         with SettlementStore(self._db_path) as store:
             try:
-                await self._rebuild_calibration_state(store)
+                await self._rebuild_calibration_state(
+                    store,
+                    now=(self._clock() if self._optimistic_calibration else None),
+                )
             except Exception:  # noqa: BLE001 - keep corrupt replay fail-closed
                 log.exception("Settlement calibration state rebuild failed")
             pending = store.pending_requirements()
@@ -495,9 +538,14 @@ class SettlementOutboxTask:
                         continue
                     self._fault("after_claim")
                     if requirement.consumer_name == _CALIBRATION_CONSUMER:
+                        self._optimistic_calibration[requirement.outbox_id] = (
+                            claim_token,
+                            payload,
+                        )
                         await self._rebuild_calibration_state(
                             store,
                             current=(requirement, payload),
+                            now=now,
                         )
                     store.complete_claim(
                         requirement.consumer_name,
@@ -514,6 +562,8 @@ class SettlementOutboxTask:
                             payload,
                         ),
                     )
+                    if requirement.consumer_name == _CALIBRATION_CONSUMER:
+                        self._optimistic_calibration.pop(requirement.outbox_id, None)
                     processed += 1
                 except Exception:  # noqa: BLE001 - leave requirement pending for retry
                     log.exception(

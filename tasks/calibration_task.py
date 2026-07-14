@@ -69,22 +69,25 @@ class CalibrationTask:
         checks: Iterable[Mapping[str, object]],
     ) -> None:
         """Replace in-memory state with a deterministic replay of checks."""
-        async with self._lock:
-            self._state = CalibrationMonitorState()
-            self._seen_outbox_lanes.clear()
-
+        state = CalibrationMonitorState()
+        seen_outbox_lanes: set[tuple[str, str]] = set()
         for check in checks:
+            lane = str(check["lane"])
             raw_outbox_id = check.get("outbox_id")
-            await self.record_calibration_check(
-                market_ticker=str(check["market_ticker"]),
-                lane=str(check["lane"]),
-                lane_estimate=float(check["lane_estimate"]),
-                final_resolution=float(check["final_resolution"]),
-                error=float(check["error"]),
-                outbox_id=(
-                    str(raw_outbox_id) if raw_outbox_id is not None else None
-                ),
+            lineage = (
+                (str(raw_outbox_id), lane)
+                if raw_outbox_id is not None
+                else None
             )
+            if lineage is not None and lineage in seen_outbox_lanes:
+                continue
+            state = update_lane(state, lane, float(check["error"]))
+            if lineage is not None:
+                seen_outbox_lanes.add(lineage)
+
+        async with self._lock:
+            self._state = state
+            self._seen_outbox_lanes = seen_outbox_lanes
 
     def get_scaling_factor(self, lane: str) -> float:
         """Return current confidence scaling factor for a lane (1.0 = no change)."""
