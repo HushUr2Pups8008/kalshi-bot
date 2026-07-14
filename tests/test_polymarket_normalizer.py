@@ -6,6 +6,7 @@ from trading.venue import Venue
 
 def test_normalizes_binary_market_payload():
     payload = {
+        "id": 8594,
         "slug": "will-example-happen-2026",
         "title": "Will example happen in 2026?",
         "question": "Example resolution question?",
@@ -33,6 +34,7 @@ def test_normalizes_binary_market_payload():
 
     assert market.venue == Venue.POLYMARKET_US
     assert market.market_id == "will-example-happen-2026"
+    assert market.venue_market_id == "8594"
     assert market.title == "Will example happen in 2026?"
     assert market.question == "Example resolution question?"
     assert market.subtitle == "Example subtitle"
@@ -96,6 +98,52 @@ def test_authoritative_long_book_ignores_reversed_positional_prices():
     assert market.no_ask_cents == 88
     assert market.price_source == "polymarket_public"
     assert market.price_method == "pm_long_book_v1"
+
+
+@pytest.mark.parametrize("raw_id", [8594, "8594"])
+def test_preserves_numeric_canonical_id_separately_from_slug_alias(raw_id):
+    payload = _long_book_payload()
+    payload["id"] = raw_id
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.venue_market_id == "8594"
+    assert market.market_id == "ewc-usse-ga-2026-11-03-rep"
+    assert market.ticker == "ewc-usse-ga-2026-11-03-rep"
+    assert market.tradeable_id == "ewc-usse-ga-2026-11-03-rep"
+
+
+@pytest.mark.parametrize("raw_id", [None, "", "   "])
+def test_missing_canonical_id_remains_explicit_without_changing_alias_behavior(raw_id):
+    payload = _long_book_payload()
+    payload["id"] = raw_id
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.venue_market_id is None
+    assert market.market_id == "ewc-usse-ga-2026-11-03-rep"
+    assert market.ticker == market.market_id
+    assert market.tradeable_id == market.market_id
+    assert market.is_tradeable()
+
+
+def test_absent_canonical_id_remains_explicit_none():
+    payload = _long_book_payload()
+    payload.pop("id")
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.venue_market_id is None
+    assert market.market_id == "ewc-usse-ga-2026-11-03-rep"
+
+
+@pytest.mark.parametrize("raw_id", ["market-123", "8594.0", 8594.0, True])
+def test_rejects_nonnumeric_canonical_id(raw_id):
+    payload = _long_book_payload()
+    payload["id"] = raw_id
+
+    with pytest.raises(ValueError, match="canonical id"):
+        normalize_polymarket_market(payload)
 
 
 def test_market_side_quotes_are_oriented_fallback_without_top_level_book():
@@ -221,7 +269,7 @@ def test_closed_public_gateway_market_is_not_tradeable():
 
 def test_normalizes_id_and_question_fallbacks():
     payload = {
-        "id": "market-123",
+        "id": "123",
         "question": "Fallback title?",
         "status": "ACTIVE",
         "outcomes": [
@@ -233,7 +281,8 @@ def test_normalizes_id_and_question_fallbacks():
 
     market = normalize_polymarket_market(payload)
 
-    assert market.market_id == "market-123"
+    assert market.market_id == "123"
+    assert market.venue_market_id == "123"
     assert market.title == "Fallback title?"
     assert market.status == "active"
     assert market.is_tradeable()
