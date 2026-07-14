@@ -2664,6 +2664,10 @@ class TradingBot:
         and a result is present, resolves all open trades for that ticker.
         """
         _RESOLVE_INTERVAL = 1800  # 30 minutes
+        try:
+            await self._drain_persisted_settlement_outbox()
+        except Exception as exc:
+            log.warning("Settlement outbox drain failed: %s", exc)
         while True:
             await asyncio.sleep(_RESOLVE_INTERVAL)
             try:
@@ -2673,6 +2677,10 @@ class TradingBot:
 
     async def _check_and_resolve(self) -> None:
         """Single pass: check all open paper trade tickers for settlement."""
+        try:
+            await self._drain_persisted_settlement_outbox()
+        except Exception as exc:
+            log.warning("Settlement outbox drain failed: %s", exc)
         self.source_stats.flush()
         open_trades = await asyncio.to_thread(
             lambda: self.paper._conn.execute(
@@ -2680,10 +2688,6 @@ class TradingBot:
                 "FROM paper_trades WHERE resolved = 0"
             ).fetchall()
         )
-        try:
-            await self._drain_persisted_settlement_outbox()
-        except Exception as exc:
-            log.warning("Settlement outbox drain failed: %s", exc)
         if not open_trades:
             return
 
