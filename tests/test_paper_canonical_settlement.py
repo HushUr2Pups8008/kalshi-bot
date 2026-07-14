@@ -411,7 +411,7 @@ def test_resolution_uses_one_immediate_transaction_direct_bankroll_update_and_pe
         statement.startswith("UPDATE PAPER_TRADES") for statement in normalized
     ) == 2
     assert sum(
-        "BOT_STATE" in statement and "NOTIONAL_BANKROLL" in statement
+        statement.startswith("UPDATE BOT_STATE") and "NOTIONAL_BANKROLL" in statement
         for statement in normalized
     ) == 1
     assert _bankroll_cents(trader) == Decimal("53000")
