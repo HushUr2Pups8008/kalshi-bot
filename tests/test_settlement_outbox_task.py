@@ -68,7 +68,13 @@ def _task(seed: SeededEvent):
     )
 
 
-def _seed_directional_event(monkeypatch, tmp_path: Path) -> SeededEvent:
+def _seed_directional_event(
+    monkeypatch,
+    tmp_path: Path,
+    *,
+    side: str = "yes",
+    outcome: MarketOutcome = MarketOutcome.YES,
+) -> SeededEvent:
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
     monkeypatch.setattr(_cfg_module.cfg, "max_ticker_exposure_pct", 0.25)
@@ -91,8 +97,8 @@ def _seed_directional_event(monkeypatch, tmp_path: Path) -> SeededEvent:
     analysis = _make_mock_analysis(
         ticker=market_ref.alias,
         series_ticker="PMOUTBOX",
-        side="yes",
-        yes_price=40.0,
+        side=side,
+        yes_price=40.0 if side == "yes" else 60.0,
         estimated_prob=0.67,
         source="wire:test-source",
         keywords=["missile strike", "ceasefire"],
@@ -119,7 +125,7 @@ def _seed_directional_event(monkeypatch, tmp_path: Path) -> SeededEvent:
             market_ref.venue_market_id,
             "drifted-worker-alias",
         ),
-        MarketOutcome.YES,
+        outcome,
     )
     assert _resolve(trader, observation) is True
     row = trader._conn.execute(
@@ -169,6 +175,20 @@ def _rows(db_path: Path, sql: str, parameters: tuple[object, ...] = ()) -> list[
     try:
         conn.execute("PRAGMA foreign_keys=ON")
         return [tuple(row) for row in conn.execute(sql, parameters).fetchall()]
+    finally:
+        conn.close()
+
+
+def _execute(
+    db_path: Path,
+    sql: str,
+    parameters: tuple[object, ...] = (),
+) -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(sql, parameters)
+        conn.commit()
     finally:
         conn.close()
 
@@ -386,6 +406,163 @@ async def test_run_once_projects_source_and_keywords_atomically_once(
         FROM keyword_outcomes ORDER BY id
         """,
     ) == keyword_rows
+
+
+@pytest.mark.asyncio
+async def test_run_once_uses_losing_payload_after_trade_row_context_changes(
+    monkeypatch,
+    tmp_path,
+):
+    seed = _seed_directional_event(
+        monkeypatch,
+        tmp_path,
+        side="no",
+        outcome=MarketOutcome.YES,
+    )
+    assert seed.payload["won"] is False
+    _record_receipts(
+        seed.db_path,
+        seed.outbox_id,
+        ("paper_trade_log", "calibration_state"),
+    )
+    _execute(
+        seed.db_path,
+        """
+        UPDATE paper_trades
+        SET signal_source='mutated-source', series_ticker='MUTATED',
+            keywords_matched='["mutated-keyword"]', side='yes', resolved_yes=0
+        WHERE trade_id=?
+        """,
+        (seed.trade_id,),
+    )
+
+    await _task(seed).run_once(limit=100)
+
+    assert _rows(
+        seed.db_path,
+        "SELECT source, wins, losses, total FROM source_credibility",
+    ) == [("wire:test-source", 0, 1, 1)]
+    assert _rows(
+        seed.db_path,
+        """
+        SELECT ticker, series_ticker, keyword, direction, market_side,
+               resolved_yes, correct
+        FROM keyword_outcomes ORDER BY id
+        """,
+    ) == [
+        (
+            seed.payload["ticker"],
+            "PMOUTBOX",
+            "missile strike",
+            "yes",
+            "no",
+            1,
+            1,
+        ),
+        (
+            seed.payload["ticker"],
+            "PMOUTBOX",
+            "ceasefire",
+            "no",
+            "no",
+            1,
+            0,
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("consumer_name", "effect_table"),
+    (
+        ("source_credibility", "source_credibility"),
+        ("keyword_outcomes", "keyword_outcomes"),
+    ),
+)
+async def test_receipt_insert_failure_rolls_back_database_consumer_effect(
+    monkeypatch,
+    tmp_path,
+    consumer_name,
+    effect_table,
+):
+    seed = _seed_directional_event(monkeypatch, tmp_path)
+    _record_receipts(
+        seed.db_path,
+        seed.outbox_id,
+        tuple(consumer for consumer in DIRECTIONAL_CONSUMERS if consumer != consumer_name),
+    )
+    _execute(
+        seed.db_path,
+        f"""
+        CREATE TRIGGER inject_{consumer_name}_receipt_failure
+        BEFORE INSERT ON paper_settlement_consumer_receipts
+        WHEN NEW.consumer_name='{consumer_name}'
+        BEGIN
+            SELECT RAISE(ABORT, 'injected receipt failure');
+        END
+        """,
+    )
+
+    await _task(seed).run_once(limit=100)
+
+    assert _rows(seed.db_path, f"SELECT * FROM {effect_table}") == []
+    assert _rows(
+        seed.db_path,
+        """
+        SELECT consumer_name FROM paper_settlement_consumer_receipts
+        WHERE outbox_id=? AND consumer_name=?
+        """,
+        (seed.outbox_id, consumer_name),
+    ) == []
+    assert _pending_consumers(seed) == (consumer_name,)
+    with SettlementStore(seed.db_path) as store:
+        assert store.claim_state(consumer_name, seed.outbox_id, now=WORKER_NOW) == "active"
+
+
+@pytest.mark.asyncio
+async def test_second_keyword_insert_failure_rolls_back_batch_receipt_and_claim(
+    monkeypatch,
+    tmp_path,
+):
+    seed = _seed_directional_event(monkeypatch, tmp_path)
+    _record_receipts(
+        seed.db_path,
+        seed.outbox_id,
+        tuple(
+            consumer
+            for consumer in DIRECTIONAL_CONSUMERS
+            if consumer != "keyword_outcomes"
+        ),
+    )
+    _execute(
+        seed.db_path,
+        """
+        CREATE TRIGGER inject_second_keyword_failure
+        BEFORE INSERT ON keyword_outcomes
+        WHEN (SELECT COUNT(*) FROM keyword_outcomes) = 1
+        BEGIN
+            SELECT RAISE(ABORT, 'injected second keyword failure');
+        END
+        """,
+    )
+
+    await _task(seed).run_once(limit=100)
+
+    assert _rows(seed.db_path, "SELECT * FROM keyword_outcomes") == []
+    assert _rows(
+        seed.db_path,
+        """
+        SELECT consumer_name FROM paper_settlement_consumer_receipts
+        WHERE outbox_id=? AND consumer_name='keyword_outcomes'
+        """,
+        (seed.outbox_id,),
+    ) == []
+    assert _pending_consumers(seed) == ("keyword_outcomes",)
+    with SettlementStore(seed.db_path) as store:
+        assert (
+            store.claim_state("keyword_outcomes", seed.outbox_id, now=WORKER_NOW)
+            == "active"
+        )
 
 
 @pytest.mark.asyncio
