@@ -25,6 +25,7 @@ from trading.settlement_store import (  # noqa: E402
     SETTLEMENT_SCHEMA_VERSION,
     SETTLEMENT_TARGET_STATEMENTS,
     enable_and_verify_foreign_keys,
+    settlement_schema_contract_matches,
 )
 
 
@@ -200,8 +201,7 @@ def _migration_action(conn: sqlite3.Connection) -> str:
         len(meta) != 1
         or meta[0]["schema_version"] != SETTLEMENT_SCHEMA_VERSION
         or meta[0]["ddl_sha256"] != SETTLEMENT_DDL_SHA256
-        or not target_columns <= columns
-        or not target_objects <= objects
+        or not settlement_schema_contract_matches(conn)
     ):
         raise RuntimeError("settlement schema does not match target contract")
     return "noop"

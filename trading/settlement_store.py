@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from pathlib import Path
 
 SETTLEMENT_SCHEMA_VERSION = 1
@@ -219,6 +221,16 @@ FRESH_SCHEMA_PLAN_SHA256 = hashlib.sha256(
 _DECIMAL_TEXT = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?")
 _SHA256_TEXT = re.compile(r"[0-9a-f]{64}")
 
+_TARGET_OBJECT_TYPES = {
+    **{name: "table" for name, _statement in _TABLE_STATEMENTS},
+    **{name: "index" for name, _statement in _INDEX_STATEMENTS},
+    **{name: "trigger" for name, _statement in _immutable_trigger_statements()},
+}
+_TERMINAL_STATE_CHECK_SQL = (
+    "check (terminal_state is null or "
+    "terminal_state in ('won','lost','void'))"
+)
+
 
 @dataclass(frozen=True)
 class PendingRequirement:
@@ -242,6 +254,179 @@ def enable_and_verify_foreign_keys(conn: sqlite3.Connection) -> None:
     row = conn.execute("PRAGMA foreign_keys").fetchone()
     if row is None or int(row[0]) != 1:
         raise RuntimeError("SQLite foreign key enforcement is unavailable")
+
+
+def settlement_schema_contract_signature(conn: sqlite3.Connection) -> str:
+    """Return the normalized structural signature of the target schema."""
+    payload = _settlement_schema_contract_payload(conn)
+    encoded = json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def settlement_schema_contract_matches(conn: sqlite3.Connection) -> bool:
+    """Verify target SQL, columns, keys, indexes, and foreign keys exactly."""
+    try:
+        return settlement_schema_contract_signature(
+            conn
+        ) == _expected_settlement_schema_contract_signature()
+    except sqlite3.DatabaseError:
+        return False
+
+
+@lru_cache(maxsize=1)
+def _expected_settlement_schema_contract_signature() -> str:
+    conn = sqlite3.connect(":memory:")
+    try:
+        paper_columns = ",\n".join(
+            f"{name} {definition}"
+            for name, definition in SETTLEMENT_PAPER_TRADE_COLUMNS
+        )
+        conn.execute(
+            f"CREATE TABLE paper_trades (trade_id TEXT PRIMARY KEY, {paper_columns})"
+        )
+        for _name, statement in SETTLEMENT_TARGET_STATEMENTS:
+            conn.execute(statement)
+        return settlement_schema_contract_signature(conn)
+    finally:
+        conn.close()
+
+
+def _settlement_schema_contract_payload(
+    conn: sqlite3.Connection,
+) -> dict[str, object]:
+    objects: dict[str, object] = {}
+    for name, expected_type in _TARGET_OBJECT_TYPES.items():
+        rows = conn.execute(
+            """
+            SELECT type, name, tbl_name, sql
+            FROM sqlite_schema
+            WHERE name=?
+            """,
+            (name,),
+        ).fetchall()
+        if len(rows) != 1:
+            objects[name] = {"object_count": len(rows)}
+            continue
+        row = rows[0]
+        object_type = str(row[0])
+        details: dict[str, object] = {
+            "type": object_type,
+            "table": str(row[2]),
+            "sql": _normalize_schema_sql(row[3]),
+        }
+        if object_type == expected_type == "table":
+            details["columns"] = _table_columns(conn, name)
+            details["foreign_keys"] = _table_foreign_keys(conn, name)
+        elif object_type == expected_type == "index":
+            details["definition"] = _index_definition(conn, name, str(row[2]))
+            details["columns"] = _index_columns(conn, name)
+        objects[name] = details
+
+    paper_trade_columns = {
+        row["name"]: row
+        for row in _table_columns(conn, "paper_trades")
+        if row["name"] in {name for name, _ in SETTLEMENT_PAPER_TRADE_COLUMNS}
+    }
+    paper_trade_foreign_keys = [
+        row
+        for row in _table_foreign_keys(conn, "paper_trades")
+        if row["from"] in paper_trade_columns
+    ]
+    paper_trade_row = conn.execute(
+        "SELECT sql FROM sqlite_schema WHERE type='table' AND name='paper_trades'"
+    ).fetchone()
+    paper_trade_sql = _normalize_schema_sql(
+        paper_trade_row[0] if paper_trade_row is not None else None
+    )
+    return {
+        "objects": objects,
+        "paper_trades": {
+            "columns": paper_trade_columns,
+            "foreign_keys": paper_trade_foreign_keys,
+            "terminal_state_check": _TERMINAL_STATE_CHECK_SQL in paper_trade_sql,
+        },
+    }
+
+
+def _normalize_schema_sql(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.strip().rstrip(";").lower().split())
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> list[dict[str, object]]:
+    return [
+        {
+            "name": str(row[1]),
+            "type": str(row[2]).upper(),
+            "not_null": int(row[3]),
+            "default": row[4],
+            "primary_key": int(row[5]),
+            "hidden": int(row[6]),
+        }
+        for row in conn.execute(f"PRAGMA table_xinfo({table})")
+    ]
+
+
+def _table_foreign_keys(
+    conn: sqlite3.Connection,
+    table: str,
+) -> list[dict[str, object]]:
+    rows = [
+        {
+            "sequence": int(row[1]),
+            "table": str(row[2]),
+            "from": str(row[3]),
+            "to": str(row[4]),
+            "on_update": str(row[5]),
+            "on_delete": str(row[6]),
+            "match": str(row[7]),
+        }
+        for row in conn.execute(f"PRAGMA foreign_key_list({table})")
+    ]
+    return sorted(
+        rows,
+        key=lambda row: (
+            row["from"],
+            row["sequence"],
+            row["table"],
+            row["to"],
+        ),
+    )
+
+
+def _index_definition(
+    conn: sqlite3.Connection,
+    index: str,
+    table: str,
+) -> dict[str, object]:
+    for row in conn.execute(f"PRAGMA index_list({table})"):
+        if row[1] == index:
+            return {
+                "unique": int(row[2]),
+                "origin": str(row[3]),
+                "partial": int(row[4]),
+            }
+    return {}
+
+
+def _index_columns(conn: sqlite3.Connection, index: str) -> list[dict[str, object]]:
+    return [
+        {
+            "sequence": int(row[0]),
+            "name": row[2],
+            "descending": int(row[3]),
+            "collation": row[4],
+            "key": int(row[5]),
+        }
+        for row in conn.execute(f"PRAGMA index_xinfo({index})")
+    ]
 
 
 def initialize_fresh_settlement_schema(
@@ -697,18 +882,7 @@ def _require_aware(value: datetime, name: str) -> None:
 
 
 def _schema_objects_ready(conn: sqlite3.Connection) -> bool:
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(paper_trades)")}
-    objects = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_schema WHERE type IN ('table','index','trigger')"
-        )
-    }
-    expected_columns = {
-        name for name, _definition in SETTLEMENT_PAPER_TRADE_COLUMNS
-    }
-    expected_objects = {name for name, _statement in SETTLEMENT_TARGET_STATEMENTS}
-    return expected_columns <= columns and expected_objects <= objects
+    return settlement_schema_contract_matches(conn)
 
 
 def _parse_datetime(value: object) -> datetime:

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from scripts.migrate_paper_settlement_schema import (
+    _migration_action,
     _parse_args,
     apply_settlement_schema,
     main,
@@ -630,6 +631,134 @@ def test_readiness_rejects_missing_schema_object(tmp_path):
         result = store.readiness(pre_cutover=True)
         assert not result.ok
         assert "schema_objects" in result.failures
+
+
+def _replace_schema_sql(
+    conn: sqlite3.Connection,
+    *,
+    object_type: str,
+    name: str,
+    old: str,
+    new: str,
+) -> None:
+    sql = conn.execute(
+        "SELECT sql FROM sqlite_schema WHERE type=? AND name=?",
+        (object_type, name),
+    ).fetchone()[0]
+    assert old in sql
+    conn.execute("PRAGMA writable_schema=ON")
+    conn.execute(
+        "UPDATE sqlite_schema SET sql=? WHERE type=? AND name=?",
+        (sql.replace(old, new, 1), object_type, name),
+    )
+    conn.execute("PRAGMA schema_version = 999")
+    conn.execute("PRAGMA writable_schema=OFF")
+
+
+def _tamper_settlement_contract(conn: sqlite3.Connection, tamper: str) -> None:
+    if tamper == "table":
+        meta = conn.execute(
+            "SELECT * FROM paper_settlement_schema_meta"
+        ).fetchone()
+        conn.execute("DROP TABLE paper_settlement_schema_meta")
+        conn.execute(
+            """
+            CREATE TABLE paper_settlement_schema_meta (
+                schema_version INTEGER PRIMARY KEY,
+                ddl_sha256 TEXT NOT NULL UNIQUE,
+                migration_plan_sha256 TEXT NOT NULL,
+                applied_at BLOB NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO paper_settlement_schema_meta VALUES (?, ?, ?, ?)",
+            tuple(meta),
+        )
+    elif tamper == "index":
+        conn.execute("DROP INDEX paper_trades_settlement_observation_idx")
+        conn.execute(
+            "CREATE INDEX paper_trades_settlement_observation_idx "
+            "ON paper_trades(gross_payout_cents)"
+        )
+    elif tamper == "trigger":
+        conn.execute("DROP TRIGGER immutable_paper_settlement_outbox_update")
+        conn.execute(
+            """
+            CREATE TRIGGER immutable_paper_settlement_outbox_update
+            BEFORE UPDATE ON paper_settlement_outbox
+            BEGIN
+                SELECT 1;
+            END
+            """
+        )
+    else:  # pragma: no cover - parametrization owns the closed set
+        raise AssertionError(tamper)
+
+
+@pytest.mark.parametrize("tamper", ["table", "index", "trigger"])
+def test_exact_schema_contract_rejects_altered_same_name_objects(tmp_path, tamper):
+    db = tmp_path / f"same-name-{tamper}.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    _tamper_settlement_contract(conn, tamper)
+    conn.commit()
+    with pytest.raises(RuntimeError, match="does not match target contract"):
+        _migration_action(conn)
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.readiness(pre_cutover=True)
+        assert not result.ok
+        assert "schema_objects" in result.failures
+    with open_readonly(db) as conn:
+        with pytest.raises(RuntimeError, match="does not match target contract"):
+            plan_settlement_schema(conn, db)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("terminal_state TEXT CHECK", "terminal_state BLOB CHECK"),
+        (
+            "terminal_state IN ('won','lost','void')",
+            "terminal_state IN ('won','lost')",
+        ),
+        (
+            "REFERENCES paper_settlement_observations(observation_sha256)",
+            "REFERENCES paper_settlement_observations(payload_sha256)",
+        ),
+    ],
+    ids=["column-type", "terminal-check", "observation-fk"],
+)
+def test_exact_schema_contract_validates_added_paper_trade_columns(
+    tmp_path,
+    old,
+    new,
+):
+    db = tmp_path / "paper-column-contract.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    conn = sqlite3.connect(db)
+    _replace_schema_sql(
+        conn,
+        object_type="table",
+        name="paper_trades",
+        old=old,
+        new=new,
+    )
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.readiness(pre_cutover=True)
+        assert not result.ok
+        assert "schema_objects" in result.failures
+    with open_readonly(db) as conn:
+        with pytest.raises(RuntimeError, match="does not match target contract"):
+            plan_settlement_schema(conn, db)
 
 
 @pytest.mark.parametrize(
