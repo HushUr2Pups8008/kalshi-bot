@@ -222,7 +222,11 @@ def validate_observation_transition(
             )
         return
 
-    if previous.market_ref != current.market_ref:
+    if (
+        previous.market_ref.venue != current.market_ref.venue
+        or previous.market_ref.venue_market_id
+        != current.market_ref.venue_market_id
+    ):
         raise SettlementDriftError("settlement supersession identity mismatch")
     if current.observed_at < previous.observed_at:
         raise SettlementDriftError("settlement observed_at cannot move backward")

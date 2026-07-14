@@ -12,6 +12,8 @@ from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
 
+_SQLITE_CONNECT = sqlite3.connect
+
 SETTLEMENT_SCHEMA_VERSION = 1
 SETTLEMENT_EVENT_VERSION = 1
 
@@ -279,9 +281,25 @@ def settlement_schema_contract_matches(conn: sqlite3.Connection) -> bool:
         return False
 
 
+def canonical_entry_schema_ready(conn: sqlite3.Connection) -> bool:
+    """Require the settlement contract plus the canonical identity columns."""
+    if not settlement_schema_contract_matches(conn):
+        return False
+    try:
+        columns = {
+            str(row[1]): (str(row[2]).upper(), int(row[3]), int(row[5]))
+            for row in conn.execute("PRAGMA table_info(paper_trades)")
+        }
+    except sqlite3.DatabaseError:
+        return False
+    return columns.get("venue_market_id") == ("TEXT", 0, 0) and columns.get(
+        "identity_status"
+    ) == ("TEXT", 0, 0)
+
+
 @lru_cache(maxsize=1)
 def _expected_settlement_schema_contract_signature() -> str:
-    conn = sqlite3.connect(":memory:")
+    conn = _SQLITE_CONNECT(":memory:")
     try:
         paper_columns = ",\n".join(
             f"{name} {definition}"

@@ -146,22 +146,21 @@ class Portfolio:
             self._positions.pop(market_ref, None)
             return None
 
-        ticker = market_ref.alias
-        positions = self._positions.get(ticker, [])
         venue = normalize_venue(market_ref.venue)
-        closed = []
-        remaining = []
-        for pos in positions:
-            matches = (
-                normalize_venue(pos.venue) == venue
-                and pos.venue_market_id == market_ref.venue_market_id
-            )
-            (closed if matches else remaining).append(pos)
+        closed: list[Position] = []
+        for ticker in list(self._positions):
+            remaining = []
+            for pos in self._positions[ticker]:
+                matches = (
+                    normalize_venue(pos.venue) == venue
+                    and pos.venue_market_id == market_ref.venue_market_id
+                )
+                (closed if matches else remaining).append(pos)
 
-        if remaining:
-            self._positions[ticker] = remaining
-        else:
-            self._positions.pop(ticker, None)
+            if remaining:
+                self._positions[ticker] = remaining
+            else:
+                self._positions.pop(ticker, None)
         return closed
 
     # ── Queries ───────────────────────────────────────────────────────────────

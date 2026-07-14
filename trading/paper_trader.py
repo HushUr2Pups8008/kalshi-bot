@@ -31,18 +31,26 @@ from tabulate import tabulate
 import config as config_module
 from analysis import SignalAnalysis
 from analysis.match_feedback import matcher_weights_status
+from kalshi.public_market_data import is_safe_kalshi_identifier
 from tasks.stats.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR
 from trading.portfolio import Portfolio, Position
-from trading.settlement import MarketOutcome, SettlementObservation
+from trading.settlement import (
+    MarketOutcome,
+    SettlementDriftError,
+    SettlementObservation,
+    VoidRefundContract,
+    validate_observation_transition,
+)
 from trading.settlement_store import (
     SETTLEMENT_EVENT_VERSION,
     SETTLEMENT_PAPER_TRADE_COLUMNS_SQL,
+    canonical_entry_schema_ready,
     enable_and_verify_foreign_keys,
     initialize_fresh_settlement_schema,
     settlement_schema_contract_matches,
 )
-from trading.venue import Venue, normalize_venue
+from trading.venue import MarketRef, Venue, normalize_venue
 from utils.logger import get_logger, trade_log, TRADE_LOG_FILE
 
 log = get_logger("paper_trader")
@@ -957,6 +965,13 @@ class PaperTrader:
         canonical_identity = settlement_meta_present
         venue_market_id: str | None = None
         if canonical_identity:
+            if not canonical_entry_schema_ready(self._conn):
+                log.error(
+                    "[PAPER] Skipping record_trade for %s: canonical entry "
+                    "schema is incomplete",
+                    getattr(analysis.market, "ticker", "<unknown>"),
+                )
+                return ""
             try:
                 normalized_venue = normalize_venue(venue)
             except ValueError:
@@ -971,6 +986,12 @@ class PaperTrader:
                 venue_market_id = str(
                     getattr(analysis.market, "ticker", "") or ""
                 ).strip()
+                if (
+                    not is_safe_kalshi_identifier(venue_market_id)
+                    or not venue_market_id.startswith("KX")
+                    or len(venue_market_id) <= 2
+                ):
+                    venue_market_id = ""
             else:
                 raw_market_id = getattr(analysis.market, "venue_market_id", None)
                 venue_market_id = str(raw_market_id or "").strip()
@@ -998,7 +1019,9 @@ class PaperTrader:
         cost_dollars = contracts * price_cents / 100.0
 
         bankroll_before = self.get_notional_bankroll()
-        bankroll_after  = self._debit_bankroll(cost_dollars)
+        bankroll_after = bankroll_before - cost_dollars
+        if not canonical_identity:
+            bankroll_after = self._debit_bankroll(cost_dollars)
 
         source_mult = self.credibility.get_multiplier(analysis.news_item.source)
         # P-6 / CR-E: custom encoder routes around the LD-2/CR-C legacy guard
@@ -1149,17 +1172,54 @@ class PaperTrader:
                  fast_lane_confidence, accumulation_p, accumulation_confidence,
                  structural_p, structural_confidence, price_source, price_method,
                  price_retrieved_at, raw_payload_hash, p0_contract_version,
-                 cohort_extension, llm_capture_row_id)
+                  cohort_extension, llm_capture_row_id)
             """
-            insert_values = (
-                trade_id,
-                trade_ts,
-                analysis.market.ticker,
-                venue,
-                venue_market_id,
-                "mapped",
-                *remaining_values,
-            )
+            transaction_started = False
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                transaction_started = True
+                bankroll_row = self._conn.execute(
+                    "SELECT value FROM bot_state WHERE key='notional_bankroll'"
+                ).fetchone()
+                if bankroll_row is None:
+                    raise RuntimeError("notional_bankroll state is missing")
+                bankroll_before = float(bankroll_row[0])
+                bankroll_after = bankroll_before - cost_dollars
+                canonical_remaining_values = (
+                    *remaining_values[:15],
+                    bankroll_before,
+                    bankroll_after,
+                    *remaining_values[17:],
+                )
+                insert_values = (
+                    trade_id,
+                    trade_ts,
+                    analysis.market.ticker,
+                    venue,
+                    venue_market_id,
+                    "mapped",
+                    *canonical_remaining_values,
+                )
+                placeholders = ",".join("?" for _value in insert_values)
+                self._conn.execute(
+                    f"INSERT INTO paper_trades {columns} VALUES ({placeholders})",
+                    insert_values,
+                )
+                bankroll_cursor = self._conn.execute(
+                    "UPDATE bot_state SET value=? WHERE key='notional_bankroll'",
+                    (str(round(bankroll_after, 4)),),
+                )
+                if bankroll_cursor.rowcount != 1:
+                    raise RuntimeError("notional_bankroll update did not affect one row")
+                self._conn.commit()
+            except Exception:  # noqa: BLE001 - canonical entry must fail closed
+                if transaction_started:
+                    self._conn.rollback()
+                log.exception(
+                    "[PAPER] Canonical trade entry failed for %s",
+                    getattr(analysis.market, "ticker", "<unknown>"),
+                )
+                return ""
         else:
             columns = """
                 (trade_id, ts, ticker, venue, market_title, side, contracts,
@@ -1181,12 +1241,12 @@ class PaperTrader:
                 venue,
                 *remaining_values,
             )
-        placeholders = ",".join("?" for _value in insert_values)
-        self._conn.execute(
-            f"INSERT INTO paper_trades {columns} VALUES ({placeholders})",
-            insert_values,
-        )
-        self._conn.commit()
+            placeholders = ",".join("?" for _value in insert_values)
+            self._conn.execute(
+                f"INSERT INTO paper_trades {columns} VALUES ({placeholders})",
+                insert_values,
+            )
+            self._conn.commit()
 
         # Keep portfolio in sync with DB
         self.portfolio.add(Position(
@@ -1254,7 +1314,22 @@ class PaperTrader:
         try:
             self._conn.execute("BEGIN IMMEDIATE")
             transaction_started = True
-            open_row_set_sha256 = self._canonical_open_row_set_sha256(observation)
+            candidate_rows = self._canonical_candidate_rows(observation)
+            open_row_set_sha256 = self._canonical_open_row_set_sha256(candidate_rows)
+
+            prior = self._canonical_prior_observation(observation)
+            try:
+                validate_observation_transition(prior, observation)
+            except SettlementDriftError as exc:
+                raise _SettlementQuarantineRequired(
+                    "invalid_supersession",
+                    {
+                        "error": str(exc),
+                        "supersedes_observation_sha256": (
+                            observation.supersedes_observation_sha256
+                        ),
+                    },
+                ) from exc
 
             duplicate = self._conn.execute(
                 """
@@ -1267,64 +1342,37 @@ class PaperTrader:
                 self._conn.rollback()
                 return False
 
-            prior = self._conn.execute(
-                """
-                SELECT observation_sha256
-                FROM paper_settlement_observations
-                WHERE venue=? AND venue_market_id=?
-                ORDER BY applied_at, observation_sha256
-                LIMIT 1
-                """,
-                (
-                    observation.market_ref.venue.value,
-                    observation.market_ref.venue_market_id,
-                ),
-            ).fetchone()
             if prior is not None:
                 raise _SettlementQuarantineRequired(
                     "terminal_correction",
                     {
-                        "prior_observation_sha256": prior[0],
+                        "prior_observation_sha256": prior.observation_sha256,
                         "supersedes_observation_sha256": (
                             observation.supersedes_observation_sha256
                         ),
                     },
                 )
 
-            legacy_rows = self._conn.execute(
-                """
-                SELECT trade_id FROM paper_trades
-                WHERE venue=? AND ticker=? AND resolved=0
-                  AND (
-                      identity_status IS NOT 'mapped'
-                      OR venue_market_id IS NULL
-                      OR trim(venue_market_id)=''
-                  )
-                ORDER BY trade_id
-                """,
-                (
-                    observation.market_ref.venue.value,
-                    observation.market_ref.alias,
-                ),
-            ).fetchall()
+            legacy_rows = [
+                row
+                for row in candidate_rows
+                if row["identity_status"] != "mapped"
+                or row["venue_market_id"] is None
+                or not str(row["venue_market_id"]).strip()
+            ]
             if legacy_rows:
                 raise _SettlementQuarantineRequired(
                     "legacy_null_identity",
-                    {"trade_ids": [str(row[0]) for row in legacy_rows]},
+                    {"trade_ids": [str(row["trade_id"]) for row in legacy_rows]},
                 )
 
-            trades = self._conn.execute(
-                """
-                SELECT * FROM paper_trades
-                WHERE venue=? AND venue_market_id=?
-                  AND identity_status='mapped' AND resolved=0
-                ORDER BY trade_id
-                """,
-                (
-                    observation.market_ref.venue.value,
-                    observation.market_ref.venue_market_id,
-                ),
-            ).fetchall()
+            trades = [
+                row
+                for row in candidate_rows
+                if row["identity_status"] == "mapped"
+                and row["venue_market_id"]
+                == observation.market_ref.venue_market_id
+            ]
             if not trades:
                 self._conn.rollback()
                 return False
@@ -1441,14 +1489,13 @@ class PaperTrader:
         self.portfolio.resolve(observation.market_ref)
         return True
 
-    def _canonical_open_row_set_sha256(
+    def _canonical_candidate_rows(
         self,
         observation: SettlementObservation,
-    ) -> str:
-        rows = self._conn.execute(
+    ) -> list[sqlite3.Row]:
+        return self._conn.execute(
             """
-            SELECT trade_id, ticker, venue, venue_market_id, identity_status,
-                   side, contracts, price_cents, cost_dollars
+            SELECT *
             FROM paper_trades
             WHERE resolved=0 AND venue=?
               AND (venue_market_id=? OR ticker=?)
@@ -1460,11 +1507,78 @@ class PaperTrader:
                 observation.market_ref.alias,
             ),
         ).fetchall()
+
+    def _canonical_open_row_set_sha256(
+        self,
+        rows: Iterable[sqlite3.Row],
+    ) -> str:
+        fields = (
+            "trade_id",
+            "ticker",
+            "venue",
+            "venue_market_id",
+            "identity_status",
+            "side",
+            "contracts",
+            "price_cents",
+            "cost_dollars",
+        )
         payload = [
-            {key: row[key] for key in row.keys()}
+            {key: row[key] for key in fields}
             for row in rows
         ]
         return _settlement_sha256(payload)
+
+    def _canonical_prior_observation(
+        self,
+        observation: SettlementObservation,
+    ) -> SettlementObservation | None:
+        row = self._conn.execute(
+            """
+            SELECT *
+            FROM paper_settlement_observations
+            WHERE venue=? AND venue_market_id=?
+            ORDER BY applied_at DESC, observation_sha256 DESC
+            LIMIT 1
+            """,
+            (
+                observation.market_ref.venue.value,
+                observation.market_ref.venue_market_id,
+            ),
+        ).fetchone()
+        if row is None:
+            return None
+
+        refund = None
+        if row["refund_cents_per_contract"] is not None:
+            refund = VoidRefundContract(
+                refund_cents_per_contract=Decimal(
+                    str(row["refund_cents_per_contract"])
+                ),
+                refunds_entry_fee=bool(row["refunds_entry_fee"]),
+            )
+        return SettlementObservation(
+            market_ref=MarketRef(
+                normalize_venue(str(row["venue"])),
+                str(row["venue_market_id"]),
+                str(row["alias"]),
+            ),
+            outcome=MarketOutcome(str(row["outcome"])),
+            authoritative_outcome_json=str(row["authoritative_outcome_json"]),
+            canonical_payload_json=str(row["canonical_payload_json"]),
+            observed_at=datetime.fromisoformat(str(row["observed_at"])),
+            effective_at=datetime.fromisoformat(str(row["effective_at"])),
+            rules_version=str(row["rules_version"]),
+            source_id=str(row["source_id"]),
+            payload_sha256=str(row["payload_sha256"]),
+            observation_sha256=str(row["observation_sha256"]),
+            void_refund=refund,
+            supersedes_observation_sha256=(
+                str(row["supersedes_observation_sha256"])
+                if row["supersedes_observation_sha256"] is not None
+                else None
+            ),
+        )
 
     def _canonical_trade_outcomes(
         self,
