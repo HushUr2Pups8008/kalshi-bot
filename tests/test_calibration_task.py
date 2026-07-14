@@ -115,3 +115,23 @@ async def test_concurrent_records_do_not_corrupt_state():
     ])
     summary = task.get_calibration_summary()
     assert summary["fast"]["sample_count"] == 20
+
+
+@pytest.mark.asyncio
+async def test_outbox_lineage_deduplicates_each_lane():
+    task = CalibrationTask()
+    common = {
+        "market_ticker": "MKT-SETTLED",
+        "lane_estimate": 0.7,
+        "final_resolution": 1.0,
+        "error": 0.3,
+        "outbox_id": "a" * 64,
+    }
+
+    await task.record_calibration_check(lane="fast", **common)
+    await task.record_calibration_check(lane="fast", **common)
+    await task.record_calibration_check(lane="accumulation", **common)
+
+    summary = task.get_calibration_summary()
+    assert summary["fast"]["sample_count"] == 1
+    assert summary["accumulation"]["sample_count"] == 1

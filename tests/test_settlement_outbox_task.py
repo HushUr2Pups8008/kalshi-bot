@@ -61,13 +61,14 @@ def _settlement_outbox_task_class():
 def _task(
     seed: SeededEvent,
     *,
+    calibration_task: object | None = None,
     trade_logger: object | None = None,
     clock: FixedClock | None = None,
 ):
     tokens = (f"worker-token-{index}" for index in itertools.count(1))
     return _settlement_outbox_task_class()(
         db_path=seed.db_path,
-        calibration_task=CalibrationTask(),
+        calibration_task=calibration_task or CalibrationTask(),
         trade_logger=trade_logger or MagicMock(),
         clock=clock or FixedClock(),
         token_factory=lambda: next(tokens),
@@ -246,6 +247,41 @@ class FailAfterAppendTradeLogger(TradeLogger):
             raise RuntimeError("injected logger failure")
 
 
+class RecordingCalibrationTask(CalibrationTask):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[dict[str, object]] = []
+
+    async def record_calibration_check(
+        self,
+        *,
+        market_ticker: str,
+        lane: str,
+        lane_estimate: float,
+        final_resolution: float,
+        error: float,
+        outbox_id: str | None = None,
+    ) -> None:
+        self.calls.append(
+            {
+                "market_ticker": market_ticker,
+                "lane": lane,
+                "lane_estimate": lane_estimate,
+                "final_resolution": final_resolution,
+                "error": error,
+                "outbox_id": outbox_id,
+            }
+        )
+        await super().record_calibration_check(
+            market_ticker=market_ticker,
+            lane=lane,
+            lane_estimate=lane_estimate,
+            final_resolution=final_resolution,
+            error=error,
+            outbox_id=outbox_id,
+        )
+
+
 def _clock_from_payload(seed: SeededEvent) -> FixedClock:
     return FixedClock(datetime.fromisoformat(str(seed.payload["settled_at"])))
 
@@ -313,6 +349,24 @@ def _expected_directional_log_records(seed: SeededEvent) -> list[dict[str, objec
                 ("structural", 0.6, 0.4),
             )
         ],
+    ]
+
+
+def _expected_calibration_calls(seed: SeededEvent) -> list[dict[str, object]]:
+    return [
+        {
+            "market_ticker": seed.payload["ticker"],
+            "lane": lane,
+            "lane_estimate": estimate,
+            "final_resolution": 1.0,
+            "error": error,
+            "outbox_id": seed.outbox_id,
+        }
+        for lane, estimate, error in (
+            ("fast", 0.7, 0.3),
+            ("accumulation", 0.65, 0.35),
+            ("structural", 0.6, 0.4),
+        )
     ]
 
 
@@ -855,6 +909,83 @@ async def test_limit_counts_supported_database_consumers_after_filtering(
         "paper_trade_log",
         "source_credibility",
     )
+
+
+@pytest.mark.asyncio
+async def test_calibration_state_applies_payload_once_and_rebuilds_after_restart(
+    monkeypatch,
+    tmp_path,
+):
+    seed = _seed_directional_event(monkeypatch, tmp_path)
+    _record_receipts(
+        seed,
+        ("paper_trade_log", "source_credibility", "keyword_outcomes"),
+    )
+    _execute(
+        seed.db_path,
+        """
+        UPDATE paper_trades
+        SET ticker='MUTATED-CALIBRATION', fast_lane_p=0.01,
+            accumulation_p=0.02, structural_p=0.03, resolved_yes=0
+        WHERE trade_id=?
+        """,
+        (seed.trade_id,),
+    )
+    calibration = RecordingCalibrationTask()
+
+    await _task(
+        seed,
+        calibration_task=calibration,
+        clock=_clock_from_payload(seed),
+    ).run_once(limit=100)
+
+    expected_calls = _expected_calibration_calls(seed)
+    expected_summary = {
+        "fast": {
+            "lane": "fast",
+            "sample_count": 1,
+            "brier_score": 0.09,
+            "scaling_factor": 1.0,
+            "drift_detected": False,
+        },
+        "accumulation": {
+            "lane": "accumulation",
+            "sample_count": 1,
+            "brier_score": 0.1225,
+            "scaling_factor": 1.0,
+            "drift_detected": False,
+        },
+        "structural": {
+            "lane": "structural",
+            "sample_count": 1,
+            "brier_score": 0.16,
+            "scaling_factor": 1.0,
+            "drift_detected": False,
+        },
+    }
+    assert calibration.calls == expected_calls
+    assert calibration.get_calibration_summary() == expected_summary
+    assert _paper_log_receipts(seed) == [("paper_trade_log",)]
+    assert _rows(
+        seed.db_path,
+        """
+        SELECT consumer_name FROM paper_settlement_consumer_receipts
+        WHERE outbox_id=? AND consumer_name='calibration_state'
+        """,
+        (seed.outbox_id,),
+    ) == [("calibration_state",)]
+    assert _pending_consumers(seed) == ()
+
+    rebuilt = RecordingCalibrationTask()
+    await _task(
+        seed,
+        calibration_task=rebuilt,
+        clock=_clock_from_payload(seed),
+    ).run_once(limit=100)
+
+    assert rebuilt.calls == expected_calls
+    assert rebuilt.get_calibration_summary() == expected_summary
+    assert _pending_consumers(seed) == ()
 
 
 @pytest.mark.asyncio
