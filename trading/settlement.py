@@ -90,6 +90,10 @@ class SettlementObservation:
         )
         _require_aware(self.observed_at, "observed_at")
         _require_aware(self.effective_at, "effective_at")
+        if self.effective_at > self.observed_at:
+            raise SettlementValidationError(
+                "effective_at must not be later than observed_at"
+            )
         _require_nonempty(self.rules_version, "rules_version")
         _require_nonempty(self.source_id, "source_id")
         _require_sha256(self.payload_sha256, "payload_sha256")
@@ -190,6 +194,10 @@ def validate_observation_transition(
 
     if previous.market_ref != current.market_ref:
         raise SettlementDriftError("settlement supersession identity mismatch")
+    if current.observed_at < previous.observed_at:
+        raise SettlementDriftError("settlement observed_at cannot move backward")
+    if current.effective_at < previous.effective_at:
+        raise SettlementDriftError("settlement effective_at cannot move backward")
 
     if previous.payload_sha256 == current.payload_sha256:
         if previous.outcome is not current.outcome:

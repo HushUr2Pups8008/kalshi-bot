@@ -1,5 +1,5 @@
 from dataclasses import FrozenInstanceError, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -52,6 +52,8 @@ def _kalshi_market(*, ticker: str = "KXTEST-26JUL", result: str = "yes") -> Kals
 def _kalshi_observation(
     *,
     result: str = "yes",
+    observed_at: datetime = OBSERVED_AT,
+    effective_at: datetime = EFFECTIVE_AT,
     previous_observation: SettlementObservation | None = None,
     supersedes_payload_sha256: str | None = None,
     void_refund: VoidRefundContract | None = None,
@@ -59,8 +61,8 @@ def _kalshi_observation(
     return normalize_kalshi_settlement(
         MarketRef(Venue.KALSHI, "KXTEST-26JUL", "KXTEST-26JUL"),
         _kalshi_market(result=result),
-        observed_at=OBSERVED_AT,
-        effective_at=EFFECTIVE_AT,
+        observed_at=observed_at,
+        effective_at=effective_at,
         rules_version=RULES_VERSION,
         source_id=SOURCE_ID,
         void_refund=void_refund,
@@ -81,6 +83,8 @@ def _polymarket_payload(outcome: str = "YES") -> dict[str, object]:
 def _polymarket_observation(
     *,
     payload: dict[str, object] | None = None,
+    observed_at: datetime = OBSERVED_AT,
+    effective_at: datetime = EFFECTIVE_AT,
     previous_observation: SettlementObservation | None = None,
     supersedes_payload_sha256: str | None = None,
     void_refund: VoidRefundContract | None = None,
@@ -88,8 +92,8 @@ def _polymarket_observation(
     return normalize_polymarket_settlement(
         MarketRef(Venue.POLYMARKET_US, "pm-123", "will-example-happen"),
         payload or _polymarket_payload(),
-        observed_at=OBSERVED_AT,
-        effective_at=EFFECTIVE_AT,
+        observed_at=observed_at,
+        effective_at=effective_at,
         rules_version=RULES_VERSION,
         source_id=SOURCE_ID,
         void_refund=void_refund,
@@ -231,6 +235,20 @@ def test_observation_rejects_naive_timestamps(timestamp_field: str):
         )
 
 
+@pytest.mark.parametrize("venue", [Venue.KALSHI, Venue.POLYMARKET_US])
+def test_venue_normalizers_reject_effective_time_after_observation(venue: Venue):
+    kwargs = {
+        "observed_at": OBSERVED_AT,
+        "effective_at": OBSERVED_AT + timedelta(seconds=1),
+    }
+
+    with pytest.raises(SettlementValidationError, match="effective_at"):
+        if venue is Venue.KALSHI:
+            _kalshi_observation(**kwargs)
+        else:
+            _polymarket_observation(**kwargs)
+
+
 @pytest.mark.parametrize(
     ("rules_version", "source_id", "match"),
     [("", SOURCE_ID, "rules_version"), (RULES_VERSION, " ", "source_id")],
@@ -312,6 +330,99 @@ def test_changed_payload_requires_valid_supersession_for_each_venue(venue: Venue
     )
     assert corrected.supersedes_payload_sha256 == previous.payload_sha256
     assert corrected.payload_sha256 != previous.payload_sha256
+
+
+@pytest.mark.parametrize("venue", [Venue.KALSHI, Venue.POLYMARKET_US])
+def test_changed_supersession_rejects_regressing_observed_time(venue: Venue):
+    if venue is Venue.KALSHI:
+        previous = _kalshi_observation(result="yes")
+        changed_call = lambda **kwargs: _kalshi_observation(
+            result="no", previous_observation=previous, **kwargs
+        )
+    else:
+        previous = _polymarket_observation(payload=_polymarket_payload("YES"))
+        changed_call = lambda **kwargs: _polymarket_observation(
+            payload=_polymarket_payload("NO"),
+            previous_observation=previous,
+            **kwargs,
+        )
+
+    with pytest.raises(SettlementDriftError, match="observed_at"):
+        changed_call(
+            observed_at=previous.observed_at - timedelta(seconds=1),
+            effective_at=previous.effective_at,
+            supersedes_payload_sha256=previous.payload_sha256,
+        )
+
+
+@pytest.mark.parametrize("venue", [Venue.KALSHI, Venue.POLYMARKET_US])
+def test_changed_supersession_rejects_regressing_effective_time(venue: Venue):
+    if venue is Venue.KALSHI:
+        previous = _kalshi_observation(result="yes")
+        changed_call = lambda **kwargs: _kalshi_observation(
+            result="no", previous_observation=previous, **kwargs
+        )
+    else:
+        previous = _polymarket_observation(payload=_polymarket_payload("YES"))
+        changed_call = lambda **kwargs: _polymarket_observation(
+            payload=_polymarket_payload("NO"),
+            previous_observation=previous,
+            **kwargs,
+        )
+
+    with pytest.raises(SettlementDriftError, match="effective_at"):
+        changed_call(
+            observed_at=previous.observed_at + timedelta(seconds=1),
+            effective_at=previous.effective_at - timedelta(seconds=1),
+            supersedes_payload_sha256=previous.payload_sha256,
+        )
+
+
+@pytest.mark.parametrize("venue", [Venue.KALSHI, Venue.POLYMARKET_US])
+def test_changed_supersession_allows_equal_timestamps(venue: Venue):
+    if venue is Venue.KALSHI:
+        previous = _kalshi_observation(result="yes")
+        corrected = _kalshi_observation(
+            result="no",
+            previous_observation=previous,
+            supersedes_payload_sha256=previous.payload_sha256,
+        )
+    else:
+        previous = _polymarket_observation(payload=_polymarket_payload("YES"))
+        corrected = _polymarket_observation(
+            payload=_polymarket_payload("NO"),
+            previous_observation=previous,
+            supersedes_payload_sha256=previous.payload_sha256,
+        )
+
+    assert corrected.observed_at == previous.observed_at
+    assert corrected.effective_at == previous.effective_at
+
+
+@pytest.mark.parametrize("venue", [Venue.KALSHI, Venue.POLYMARKET_US])
+def test_identical_observation_may_repeat_later_but_not_earlier(venue: Venue):
+    if venue is Venue.KALSHI:
+        previous = _kalshi_observation()
+        repeat_call = lambda **kwargs: _kalshi_observation(
+            previous_observation=previous, **kwargs
+        )
+    else:
+        previous = _polymarket_observation()
+        repeat_call = lambda **kwargs: _polymarket_observation(
+            previous_observation=previous, **kwargs
+        )
+
+    repeated = repeat_call(
+        observed_at=previous.observed_at + timedelta(seconds=1),
+        effective_at=previous.effective_at,
+    )
+    assert repeated.payload_sha256 == previous.payload_sha256
+
+    with pytest.raises(SettlementDriftError, match="observed_at"):
+        repeat_call(
+            observed_at=previous.observed_at - timedelta(seconds=1),
+            effective_at=previous.effective_at,
+        )
 
 
 def test_settlement_contract_validates_hash_and_outcome_invariants():
