@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -736,6 +737,84 @@ class SettlementStore:
                 raise RuntimeError("receipt requires the active claim token")
             if _parse_datetime(claim["lease_expires_at"]) <= processed_at:
                 raise RuntimeError("receipt claim lease expired")
+            self._conn.execute(
+                """
+                INSERT INTO paper_settlement_consumer_receipts (
+                    consumer_name, outbox_id, processed_at, result_sha256
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (consumer_name, outbox_id, processed_at.isoformat(), result_sha256),
+            )
+            self._conn.execute(
+                """
+                DELETE FROM paper_settlement_delivery_claims
+                WHERE consumer_name=? AND outbox_id=? AND claim_token=?
+                """,
+                (consumer_name, outbox_id, claim_token),
+            )
+            self._conn.commit()
+            return True
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def complete_claim(
+        self,
+        consumer_name: str,
+        outbox_id: str,
+        *,
+        claim_token: str,
+        processed_at: datetime,
+        result_sha256: str,
+        apply: Callable[[sqlite3.Connection, PendingRequirement], None],
+    ) -> bool:
+        """Apply a same-database effect and receipt under one transaction."""
+        _require_aware(processed_at, "processed_at")
+        if _SHA256_TEXT.fullmatch(result_sha256) is None:
+            raise ValueError("result_sha256 must be lowercase SHA-256")
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = self._conn.execute(
+                """
+                SELECT result_sha256 FROM paper_settlement_consumer_receipts
+                WHERE consumer_name=? AND outbox_id=?
+                """,
+                (consumer_name, outbox_id),
+            ).fetchone()
+            if existing is not None:
+                if existing[0] != result_sha256:
+                    raise RuntimeError("receipt result drift")
+                self._conn.commit()
+                return False
+
+            claim = self._conn.execute(
+                """
+                SELECT claim_token, lease_expires_at
+                FROM paper_settlement_delivery_claims
+                WHERE consumer_name=? AND outbox_id=?
+                """,
+                (consumer_name, outbox_id),
+            ).fetchone()
+            if claim is None or claim["claim_token"] != claim_token:
+                raise RuntimeError("receipt requires the active claim token")
+            if _parse_datetime(claim["lease_expires_at"]) <= processed_at:
+                raise RuntimeError("receipt claim lease expired")
+
+            row = self._conn.execute(
+                """
+                SELECT r.outbox_id, r.consumer_name, o.event_version,
+                       o.event_kind, o.payload_json, o.created_at
+                FROM paper_settlement_outbox_requirements AS r
+                JOIN paper_settlement_outbox AS o ON o.outbox_id = r.outbox_id
+                WHERE r.consumer_name=? AND r.outbox_id=?
+                """,
+                (consumer_name, outbox_id),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("claim requirement is missing")
+            requirement = PendingRequirement(*tuple(row))
+            apply(self._conn, requirement)
+
             self._conn.execute(
                 """
                 INSERT INTO paper_settlement_consumer_receipts (
