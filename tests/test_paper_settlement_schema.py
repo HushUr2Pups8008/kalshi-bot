@@ -855,6 +855,110 @@ def test_complete_claim_validates_ownership_and_retry_before_callback(tmp_path):
         assert callback_calls == [OUTBOX_ID]
 
 
+def test_complete_claim_rejects_awaitable_callback_before_receipt(tmp_path):
+    db = tmp_path / "paper.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db, consumers=("consumer-a",))
+    callback_entered = False
+
+    async def apply_effect(_conn: sqlite3.Connection, _requirement) -> None:
+        nonlocal callback_entered
+        callback_entered = True
+
+    with SettlementStore(db) as store:
+        assert store.acquire_claim(
+            "consumer-a",
+            OUTBOX_ID,
+            claim_token="token-1",
+            now=NOW,
+            lease_seconds=60,
+        )
+        with pytest.raises(TypeError, match="callback must be synchronous"):
+            store.complete_claim(
+                "consumer-a",
+                OUTBOX_ID,
+                claim_token="token-1",
+                processed_at=NOW + timedelta(seconds=1),
+                result_sha256="f" * 64,
+                apply=apply_effect,
+            )
+        assert not callback_entered
+        assert (
+            store.connection.execute(
+                "SELECT COUNT(*) FROM paper_settlement_consumer_receipts"
+            ).fetchone()[0]
+            == 0
+        )
+        assert store.claim_state("consumer-a", OUTBOX_ID, now=NOW) == "active"
+
+
+@pytest.mark.parametrize(
+    "transaction_action",
+    ("commit", "rollback", "sql_commit", "savepoint"),
+)
+def test_complete_claim_blocks_callback_transaction_control(
+    tmp_path,
+    transaction_action,
+):
+    db = tmp_path / "paper.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db, consumers=("consumer-a",))
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE consumer_projection (outbox_id TEXT PRIMARY KEY, value TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        assert store.acquire_claim(
+            "consumer-a",
+            OUTBOX_ID,
+            claim_token="token-1",
+            now=NOW,
+            lease_seconds=60,
+        )
+
+        def apply_effect(conn, requirement) -> None:
+            conn.execute(
+                "INSERT INTO consumer_projection (outbox_id, value) VALUES (?, ?)",
+                (requirement.outbox_id, "must-roll-back"),
+            )
+            if transaction_action == "commit":
+                conn.commit()
+            elif transaction_action == "rollback":
+                conn.rollback()
+            elif transaction_action == "sql_commit":
+                conn.execute("COMMIT")
+            else:
+                conn.execute("SAVEPOINT callback")
+
+        with pytest.raises(RuntimeError, match="callback transaction control"):
+            store.complete_claim(
+                "consumer-a",
+                OUTBOX_ID,
+                claim_token="token-1",
+                processed_at=NOW + timedelta(seconds=1),
+                result_sha256="f" * 64,
+                apply=apply_effect,
+            )
+        assert (
+            store.connection.execute(
+                "SELECT COUNT(*) FROM consumer_projection"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            store.connection.execute(
+                "SELECT COUNT(*) FROM paper_settlement_consumer_receipts"
+            ).fetchone()[0]
+            == 0
+        )
+        assert store.claim_state("consumer-a", OUTBOX_ID, now=NOW) == "active"
+
+
 def test_readiness_reports_valid_and_invalid_schema_state(tmp_path):
     db = tmp_path / "paper.db"
     _create_legacy_db(db)
