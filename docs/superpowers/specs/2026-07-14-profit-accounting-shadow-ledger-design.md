@@ -185,6 +185,25 @@ deduplicates inside its target transaction; calibration rebuilds from unique
 durable events after restart and deduplicates in process; nonfinancial logs may
 repeat with the same `outbox_id`. An expired claim never implies completion.
 
+Settlement event version 1 fixes the required consumer set before production
+admission. Directional `YES`/`NO` events require `paper_trade_log`,
+`source_credibility`, `calibration_state`, and `keyword_outcomes`; `VOID` events
+require only `paper_trade_log`. `paper_trade_log` is explicitly at-least-once:
+every projected resolution/calibration row carries the same `outbox_id`, and a
+retry may repeat rows before the receipt is durable. Source-credibility and
+keyword effects commit in the same SQLite transaction as their receipts.
+Calibration state rebuilds from completed durable requirements in deterministic
+`(settled_at, trade_id, lane_order)` order, where lane order is fast,
+accumulation, then structural.
+
+The immutable event payload contains every consumer input rather than relying on
+later reads from mutable trade rows: `outbox_id`, stored ticker, venue, canonical
+market ID, alias, outcome, `resolved_yes`, terminal state, chosen-side result,
+settled timestamp, signal source, series, entry timestamp, estimated probability,
+entry price, cost, LLM magnitude/confidence, keyword outcomes, lane estimates,
+gross payout, and gross P&L. Consumer dispatch rejects unknown versions, event
+kinds, consumers, malformed payloads, and outer-row/payload disagreement.
+
 The migration plan fingerprint binds the resolved encoded DB path, current
 `sqlite_schema` hash, exact open-row fingerprints, schema version, and expected
 DDL hash. Apply requires the reviewed fingerprint before write access, acquires

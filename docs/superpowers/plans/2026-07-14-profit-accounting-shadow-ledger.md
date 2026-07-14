@@ -233,6 +233,15 @@ Commit: `feat: add unwired canonical settlement accounting`
 - Source credibility applies `outbox_id` in its target transaction. Calibration
   consumes unique durable events and rebuilds on restart. Nonfinancial log rows
   include `outbox_id` and are explicitly at-least-once.
+- Event version 1 uses fixed requirements: directional events require
+  `paper_trade_log`, `source_credibility`, `calibration_state`, and
+  `keyword_outcomes`; void events require `paper_trade_log` only. Source and
+  keyword effects commit atomically with receipts. Calibration rebuild order is
+  `(settled_at, trade_id, fast/accumulation/structural)`.
+- The immutable outbox payload carries all consumer inputs, including stored
+  ticker/canonical identity, terminal outcome, settled time, source/keyword
+  context, entry/calibration fields, and exact gross accounting. Consumers do
+  not reconstruct effects from mutable trade rows.
 - Turning the cutover false stops new observation reconciliation but leaves
   outbox drainage active for already-committed events.
 - CLI false mode preserves strict `YES|NO` validation. True mode requires exactly
