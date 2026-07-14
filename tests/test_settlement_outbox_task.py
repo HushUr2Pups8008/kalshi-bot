@@ -82,6 +82,11 @@ def _seed_directional_event(
     *,
     side: str = "yes",
     outcome: MarketOutcome = MarketOutcome.YES,
+    db_path: Path | None = None,
+    trade_id: str = "worker000001",
+    venue_market_id: str = "8594",
+    ticker: str = "stored-worker-alias",
+    lane_estimates: tuple[float, float, float] = (0.70, 0.65, 0.60),
 ) -> SeededEvent:
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
@@ -91,7 +96,7 @@ def _seed_directional_event(
     import trading.paper_trader as paper_trader_module
 
     monkeypatch.setattr(paper_trader_module, "trade_log", MagicMock())
-    db_path = tmp_path / "paper.db"
+    db_path = db_path or tmp_path / "paper.db"
     trader = paper_trader_module.PaperTrader(
         db_path=db_path,
         startup_context="test",
@@ -99,8 +104,8 @@ def _seed_directional_event(
     trader._set_state("notional_bankroll", "500.0")
     market_ref = MarketRef(
         Venue.POLYMARKET_US,
-        "8594",
-        "stored-worker-alias",
+        venue_market_id,
+        ticker,
     )
     analysis = _make_mock_analysis(
         ticker=market_ref.alias,
@@ -119,14 +124,14 @@ def _seed_directional_event(
     analysis.market.market_id = market_ref.alias
     analysis.market.venue_market_id = market_ref.venue_market_id
     analysis.signal_meta = {
-        "fast_lane_p": 0.70,
+        "fast_lane_p": lane_estimates[0],
         "fast_lane_confidence": 0.90,
-        "accumulation_p": 0.65,
+        "accumulation_p": lane_estimates[1],
         "accumulation_confidence": 0.80,
-        "structural_p": 0.60,
+        "structural_p": lane_estimates[2],
         "structural_confidence": 0.70,
     }
-    trade_id = _record_analysis(trader, analysis, trade_id="worker000001")
+    trade_id = _record_analysis(trader, analysis, trade_id=trade_id)
     observation = _observation(
         MarketRef(
             market_ref.venue,
@@ -145,7 +150,11 @@ def _seed_directional_event(
     )
     assert _resolve(trader, observation) is True
     row = trader._conn.execute(
-        "SELECT outbox_id, payload_json FROM paper_settlement_outbox"
+        """
+        SELECT outbox_id, payload_json FROM paper_settlement_outbox
+        WHERE trade_id=?
+        """,
+        (trade_id,),
     ).fetchone()
     seed = SeededEvent(
         db_path=db_path,
@@ -353,19 +362,23 @@ def _expected_directional_log_records(seed: SeededEvent) -> list[dict[str, objec
 
 
 def _expected_calibration_calls(seed: SeededEvent) -> list[dict[str, object]]:
+    final_resolution = 1.0 if seed.payload["resolved_yes"] else 0.0
     return [
         {
             "market_ticker": seed.payload["ticker"],
             "lane": lane,
             "lane_estimate": estimate,
-            "final_resolution": 1.0,
-            "error": error,
+            "final_resolution": final_resolution,
+            "error": abs(estimate - final_resolution),
             "outbox_id": seed.outbox_id,
         }
-        for lane, estimate, error in (
-            ("fast", 0.7, 0.3),
-            ("accumulation", 0.65, 0.35),
-            ("structural", 0.6, 0.4),
+        for lane, estimate in (
+            ("fast", float(seed.payload["lane_estimates"]["fast"])),
+            (
+                "accumulation",
+                float(seed.payload["lane_estimates"]["accumulation"]),
+            ),
+            ("structural", float(seed.payload["lane_estimates"]["structural"])),
         )
     ]
 
@@ -986,6 +999,141 @@ async def test_calibration_state_applies_payload_once_and_rebuilds_after_restart
     assert rebuilt.calls == expected_calls
     assert rebuilt.get_calibration_summary() == expected_summary
     assert _pending_consumers(seed) == ()
+
+
+@pytest.mark.asyncio
+async def test_calibration_receipt_failure_retry_does_not_double_samples(
+    monkeypatch,
+    tmp_path,
+):
+    seed = _seed_directional_event(monkeypatch, tmp_path)
+    _record_receipts(
+        seed,
+        ("paper_trade_log", "source_credibility", "keyword_outcomes"),
+    )
+    _execute(
+        seed.db_path,
+        """
+        CREATE TRIGGER inject_calibration_receipt_failure
+        BEFORE INSERT ON paper_settlement_consumer_receipts
+        WHEN NEW.consumer_name='calibration_state'
+        BEGIN
+            SELECT RAISE(ABORT, 'injected calibration receipt failure');
+        END
+        """,
+    )
+    calibration = RecordingCalibrationTask()
+    clock = _clock_from_payload(seed)
+    task = _task(seed, calibration_task=calibration, clock=clock)
+
+    await task.run_once(limit=100)
+
+    first_summary = calibration.get_calibration_summary()
+    assert {
+        lane: summary["sample_count"] for lane, summary in first_summary.items()
+    } == {"fast": 1, "accumulation": 1, "structural": 1}
+    assert _pending_consumers(seed) == ("calibration_state",)
+    with SettlementStore(seed.db_path) as store:
+        assert (
+            store.claim_state("calibration_state", seed.outbox_id, now=clock.value)
+            == "active"
+        )
+
+    _execute(seed.db_path, "DROP TRIGGER inject_calibration_receipt_failure")
+    clock.value += timedelta(seconds=61)
+    await task.run_once(limit=100)
+
+    assert calibration.get_calibration_summary() == first_summary
+    assert _rows(
+        seed.db_path,
+        """
+        SELECT consumer_name FROM paper_settlement_consumer_receipts
+        WHERE outbox_id=? AND consumer_name='calibration_state'
+        """,
+        (seed.outbox_id,),
+    ) == [("calibration_state",)]
+    assert _pending_consumers(seed) == ()
+
+
+@pytest.mark.asyncio
+async def test_calibration_reverse_delivery_matches_canonical_receipt_rebuild(
+    monkeypatch,
+    tmp_path,
+):
+    db_path = tmp_path / "ordered-calibration.db"
+    first = _seed_directional_event(
+        monkeypatch,
+        tmp_path,
+        db_path=db_path,
+        trade_id="worker000001",
+        venue_market_id="8594",
+        ticker="ordered-market-a",
+    )
+    second = _seed_directional_event(
+        monkeypatch,
+        tmp_path,
+        db_path=db_path,
+        trade_id="worker000002",
+        venue_market_id="8595",
+        ticker="ordered-market-b",
+        outcome=MarketOutcome.NO,
+        lane_estimates=(0.20, 0.30, 0.40),
+    )
+    for seed in (first, second):
+        _record_receipts(
+            seed,
+            ("paper_trade_log", "source_credibility", "keyword_outcomes"),
+        )
+    clock = FixedClock(
+        max(
+            datetime.fromisoformat(str(first.payload["settled_at"])),
+            datetime.fromisoformat(str(second.payload["settled_at"])),
+        )
+    )
+    with SettlementStore(db_path) as store:
+        assert store.acquire_claim(
+            "calibration_state",
+            first.outbox_id,
+            claim_token="hold-canonical-first",
+            now=clock.value,
+            lease_seconds=60,
+        )
+    reverse_delivery = RecordingCalibrationTask()
+    task = _task(
+        second,
+        calibration_task=reverse_delivery,
+        clock=clock,
+    )
+
+    await task.run_once(limit=100)
+
+    assert reverse_delivery.calls == _expected_calibration_calls(second)
+    clock.value += timedelta(seconds=61)
+    await task.run_once(limit=100)
+    reverse_summary = reverse_delivery.get_calibration_summary()
+    assert {
+        lane: summary["sample_count"] for lane, summary in reverse_summary.items()
+    } == {"fast": 2, "accumulation": 2, "structural": 2}
+    assert _pending_consumers(first) == ()
+    assert _pending_consumers(second) == ()
+
+    rebuilt = RecordingCalibrationTask()
+    await _task(
+        second,
+        calibration_task=rebuilt,
+        clock=clock,
+    ).run_once(limit=100)
+
+    canonical_events = sorted(
+        (first, second),
+        key=lambda seed: (str(seed.payload["settled_at"]), seed.trade_id),
+    )
+    assert rebuilt.calls == [
+        call
+        for seed in canonical_events
+        for call in _expected_calibration_calls(seed)
+    ]
+    assert rebuilt.get_calibration_summary() == reverse_summary
 
 
 @pytest.mark.asyncio
