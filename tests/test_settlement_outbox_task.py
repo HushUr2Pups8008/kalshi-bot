@@ -8,6 +8,7 @@ from decimal import Decimal
 import hashlib
 import itertools
 import json
+import logging
 from pathlib import Path
 import sqlite3
 from unittest.mock import MagicMock
@@ -64,8 +65,9 @@ def _task(
     calibration_task: object | None = None,
     trade_logger: object | None = None,
     clock: FixedClock | None = None,
+    token_prefix: str = "worker-token",
 ):
-    tokens = (f"worker-token-{index}" for index in itertools.count(1))
+    tokens = (f"{token_prefix}-{index}" for index in itertools.count(1))
     return _settlement_outbox_task_class()(
         db_path=seed.db_path,
         calibration_task=calibration_task or CalibrationTask(),
@@ -86,7 +88,11 @@ def _seed_directional_event(
     trade_id: str = "worker000001",
     venue_market_id: str = "8594",
     ticker: str = "stored-worker-alias",
-    lane_estimates: tuple[float, float, float] = (0.70, 0.65, 0.60),
+    lane_estimates: tuple[float | None, float | None, float | None] = (
+        0.70,
+        0.65,
+        0.60,
+    ),
     event_time: datetime | None = None,
 ) -> SeededEvent:
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
@@ -1170,6 +1176,128 @@ async def test_calibration_reverse_delivery_matches_canonical_receipt_rebuild(
         "structural",
     ]
     assert rebuilt.get_calibration_summary() == reverse_summary
+
+
+@pytest.mark.asyncio
+async def test_current_calibration_crossing_drift_warns_once_after_silent_replay(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    db_path = tmp_path / "drift-transition.db"
+    event_time = WORKER_NOW + timedelta(minutes=20)
+    seeds = [
+        _seed_directional_event(
+            monkeypatch,
+            tmp_path,
+            db_path=db_path,
+            trade_id=f"drift{index:07d}",
+            venue_market_id=str(8600 + index),
+            ticker=f"drift-ticker-{index}",
+            lane_estimates=(0.90, 0.80, None),
+            event_time=event_time + timedelta(seconds=index),
+        )
+        for index in range(10)
+    ]
+    for seed in seeds[:-1]:
+        _record_receipts(seed, DIRECTIONAL_CONSUMERS)
+    current = seeds[-1]
+    _record_receipts(
+        current,
+        ("paper_trade_log", "source_credibility", "keyword_outcomes"),
+    )
+    calibration = CalibrationTask()
+
+    with caplog.at_level(logging.WARNING, logger="calibration_task"):
+        await _task(
+            current,
+            calibration_task=calibration,
+            clock=_clock_from_payload(current),
+        ).run_once(limit=100)
+
+    live_warnings = [
+        record for record in caplog.records if "CALIBRATION_DRIFT" in record.message
+    ]
+    summary = calibration.get_calibration_summary()
+    assert len(live_warnings) == 1
+    assert "accumulation" in live_warnings[0].message
+    assert summary["fast"]["sample_count"] == 10
+    assert summary["accumulation"]["sample_count"] == 10
+    assert summary["accumulation"]["drift_detected"] is True
+
+    replayed = CalibrationTask()
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="calibration_task"):
+        await _task(
+            current,
+            calibration_task=replayed,
+            clock=_clock_from_payload(current),
+        ).run_once(limit=100)
+
+    replay_warnings = [
+        record for record in caplog.records if "CALIBRATION_DRIFT" in record.message
+    ]
+    assert replay_warnings == []
+    assert replayed.get_calibration_summary() == summary
+
+
+@pytest.mark.asyncio
+async def test_old_worker_prunes_optimistic_calibration_after_peer_recovery(
+    monkeypatch,
+    tmp_path,
+):
+    seed = _seed_directional_event(monkeypatch, tmp_path)
+    _record_receipts(
+        seed,
+        ("paper_trade_log", "source_credibility", "keyword_outcomes"),
+    )
+    _execute(
+        seed.db_path,
+        """
+        CREATE TRIGGER inject_calibration_receipt_failure
+        BEFORE INSERT ON paper_settlement_consumer_receipts
+        WHEN NEW.consumer_name='calibration_state'
+        BEGIN
+            SELECT RAISE(ABORT, 'injected calibration receipt failure');
+        END
+        """,
+    )
+    first_clock = _clock_from_payload(seed)
+    first_calibration = CalibrationTask()
+    worker_a = _task(
+        seed,
+        calibration_task=first_calibration,
+        clock=first_clock,
+        token_prefix="worker-a",
+    )
+
+    await worker_a.run_once(limit=100)
+
+    assert len(worker_a._optimistic_calibration) == 1
+    _execute(seed.db_path, "DROP TRIGGER inject_calibration_receipt_failure")
+    second_clock = FixedClock(first_clock.value + timedelta(seconds=61))
+    second_calibration = CalibrationTask()
+    worker_b = _task(
+        seed,
+        calibration_task=second_calibration,
+        clock=second_clock,
+        token_prefix="worker-b",
+    )
+
+    await worker_b.run_once(limit=100)
+
+    durable_summary = second_calibration.get_calibration_summary()
+    assert {
+        lane: row["sample_count"] for lane, row in durable_summary.items()
+    } == {"fast": 1, "accumulation": 1, "structural": 1}
+    assert _pending_consumers(seed) == ()
+
+    first_clock.value = second_clock.value + timedelta(seconds=1)
+    await worker_a.run_once(limit=100)
+
+    assert worker_a._optimistic_calibration == {}
+    assert first_calibration.get_calibration_summary() == durable_summary
+    assert _pending_consumers(seed) == ()
 
 
 @pytest.mark.asyncio
