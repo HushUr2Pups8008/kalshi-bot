@@ -1037,6 +1037,7 @@ async def test_calibration_receipt_failure_retry_does_not_double_samples(
     await task.run_once(limit=100)
 
     first_summary = calibration.get_calibration_summary()
+    first_calls = list(calibration.calls)
     assert {
         lane: summary["sample_count"] for lane, summary in first_summary.items()
     } == {"fast": 1, "accumulation": 1, "structural": 1}
@@ -1047,8 +1048,20 @@ async def test_calibration_receipt_failure_retry_does_not_double_samples(
             == "active"
         )
 
+    clock.value += timedelta(seconds=59)
+    await task.run_once(limit=100)
+
+    assert calibration.calls == first_calls
+    assert calibration.get_calibration_summary() == first_summary
+    assert _pending_consumers(seed) == ("calibration_state",)
+    with SettlementStore(seed.db_path) as store:
+        assert (
+            store.claim_state("calibration_state", seed.outbox_id, now=clock.value)
+            == "active"
+        )
+
     _execute(seed.db_path, "DROP TRIGGER inject_calibration_receipt_failure")
-    clock.value += timedelta(seconds=61)
+    clock.value += timedelta(seconds=2)
     await task.run_once(limit=100)
 
     assert calibration.get_calibration_summary() == first_summary
