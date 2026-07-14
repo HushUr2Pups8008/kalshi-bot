@@ -46,6 +46,51 @@ CREATE TABLE IF NOT EXISTS source_credibility (
 """
 
 
+def record_outcome_in_transaction(
+    connection: sqlite3.Connection,
+    *,
+    source: str,
+    was_correct: bool,
+    updated_at: str,
+) -> None:
+    """Update deterministic source statistics without committing the caller's transaction."""
+    connection.execute(
+        """
+        INSERT INTO source_credibility (
+            source, wins, losses, total, accuracy, multiplier, last_updated
+        ) VALUES (?, ?, ?, 1, ?, 1.0, ?)
+        ON CONFLICT(source) DO UPDATE SET
+            wins = wins + excluded.wins,
+            losses = losses + excluded.losses,
+            total = total + 1,
+            last_updated = excluded.last_updated
+        """,
+        (
+            source,
+            int(was_correct),
+            int(not was_correct),
+            float(was_correct),
+            updated_at,
+        ),
+    )
+    row = connection.execute(
+        "SELECT wins, total FROM source_credibility WHERE source=?",
+        (source,),
+    ).fetchone()
+    accuracy = int(row[0]) / int(row[1])
+    multiplier = CREDIBILITY_MIN_MULT + accuracy * (
+        CREDIBILITY_MAX_MULT - CREDIBILITY_MIN_MULT
+    )
+    connection.execute(
+        """
+        UPDATE source_credibility
+        SET accuracy=?, multiplier=?
+        WHERE source=?
+        """,
+        (round(accuracy, 4), round(multiplier, 4), source),
+    )
+
+
 class SourceCredibility:
     """
     Tracks and applies per-source signal reliability scores.

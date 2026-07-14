@@ -1,0 +1,367 @@
+"""Unwired worker for durable settlement outbox database consumers."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+import hashlib
+import json
+import logging
+import math
+from numbers import Real
+from pathlib import Path
+from typing import Any
+
+from tasks.stats.source_credibility import record_outcome_in_transaction
+from trading.settlement_store import PendingRequirement, SettlementStore
+
+
+log = logging.getLogger(__name__)
+
+_EVENT_KIND = "paper_trade_settled"
+_EVENT_VERSION = 1
+_KNOWN_CONSUMERS = frozenset(
+    {
+        "paper_trade_log",
+        "source_credibility",
+        "calibration_state",
+        "keyword_outcomes",
+    }
+)
+_DATABASE_CONSUMERS = frozenset({"source_credibility", "keyword_outcomes"})
+_SHA256_LENGTH = 64
+_REQUIRED_FIELDS = frozenset(
+    {
+        "outbox_id",
+        "event_version",
+        "event_kind",
+        "observation_sha256",
+        "trade_id",
+        "ticker",
+        "venue",
+        "venue_market_id",
+        "alias",
+        "outcome",
+        "side",
+        "resolved_yes",
+        "terminal_state",
+        "won",
+        "settled_at",
+        "signal_source",
+        "series_ticker",
+        "entry_ts",
+        "estimated_prob",
+        "entry_price_cents",
+        "cost_dollars",
+        "llm_magnitude",
+        "llm_confidence",
+        "keyword_outcomes",
+        "lane_estimates",
+        "gross_payout_cents",
+        "gross_pnl_cents",
+    }
+)
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _event_outbox_id(
+    event_version: int,
+    event_kind: str,
+    observation_sha256: str,
+    trade_id: str,
+) -> str:
+    encoded = _canonical_json(
+        {
+            "event_kind": event_kind,
+            "event_version": event_version,
+            "observation_sha256": observation_sha256,
+            "trade_id": trade_id,
+        }
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _result_sha256(outbox_id: str, consumer_name: str) -> str:
+    return hashlib.sha256(f"{outbox_id}:{consumer_name}".encode()).hexdigest()
+
+
+def _require_string(payload: dict[str, Any], field: str) -> str:
+    value = payload[field]
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field} must be a non-empty string")
+    return value
+
+
+def _require_number(payload: dict[str, Any], field: str) -> float:
+    value = payload[field]
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError(f"{field} must be numeric")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{field} must be finite")
+    return result
+
+
+def _require_timestamp(payload: dict[str, Any], field: str) -> str:
+    value = _require_string(payload, field)
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field} must be timezone-aware")
+    return value
+
+
+def _validate_payload(payload: object) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be an object")
+    missing = _REQUIRED_FIELDS - payload.keys()
+    if missing:
+        raise ValueError(f"payload missing fields: {sorted(missing)}")
+    if type(payload["event_version"]) is not int or payload["event_version"] != 1:
+        raise ValueError("unsupported event version")
+    if payload["event_kind"] != _EVENT_KIND:
+        raise ValueError("unsupported event kind")
+    for field in (
+        "outbox_id",
+        "observation_sha256",
+        "trade_id",
+        "ticker",
+        "venue",
+        "venue_market_id",
+        "alias",
+        "signal_source",
+        "series_ticker",
+    ):
+        _require_string(payload, field)
+    for field in ("outbox_id", "observation_sha256"):
+        value = payload[field]
+        if len(value) != _SHA256_LENGTH or any(ch not in "0123456789abcdef" for ch in value):
+            raise ValueError(f"{field} must be lowercase SHA-256")
+    if payload["venue"] not in {"kalshi", "polymarket_us"}:
+        raise ValueError("invalid venue")
+    if payload["outcome"] not in {"yes", "no", "void"}:
+        raise ValueError("invalid outcome")
+    if payload["side"] not in {"yes", "no"}:
+        raise ValueError("invalid side")
+    if payload["terminal_state"] not in {"won", "lost", "void"}:
+        raise ValueError("invalid terminal state")
+    _require_timestamp(payload, "settled_at")
+    _require_timestamp(payload, "entry_ts")
+    for field in ("estimated_prob", "entry_price_cents", "cost_dollars"):
+        _require_number(payload, field)
+    if payload["llm_magnitude"] is not None and not isinstance(
+        payload["llm_magnitude"], str
+    ):
+        raise ValueError("llm_magnitude must be a string or null")
+    if payload["llm_confidence"] is not None:
+        _require_number(payload, "llm_confidence")
+    for field in ("gross_payout_cents", "gross_pnl_cents"):
+        value = _require_string(payload, field)
+        try:
+            if not Decimal(value).is_finite():
+                raise ValueError(f"{field} must be finite")
+        except InvalidOperation as exc:
+            raise ValueError(f"{field} must be decimal text") from exc
+
+    resolved_yes = payload["resolved_yes"]
+    won = payload["won"]
+    if payload["outcome"] == "void":
+        if resolved_yes is not None or won is not None or payload["terminal_state"] != "void":
+            raise ValueError("void outcome fields disagree")
+    else:
+        if type(resolved_yes) is not bool or type(won) is not bool:
+            raise ValueError("directional result fields must be boolean")
+        expected_won = (payload["side"] == "yes") == resolved_yes
+        if won != expected_won:
+            raise ValueError("chosen-side result disagrees")
+        if payload["terminal_state"] != ("won" if won else "lost"):
+            raise ValueError("terminal state disagrees")
+
+    keyword_outcomes = payload["keyword_outcomes"]
+    if not isinstance(keyword_outcomes, list):
+        raise ValueError("keyword_outcomes must be a list")
+    for item in keyword_outcomes:
+        if not isinstance(item, dict) or set(item) != {"keyword", "direction", "correct"}:
+            raise ValueError("invalid keyword outcome")
+        if not isinstance(item["keyword"], str) or not item["keyword"]:
+            raise ValueError("invalid keyword")
+        if item["direction"] not in {"yes", "no"}:
+            raise ValueError("invalid keyword direction")
+        if item["correct"] is not None and type(item["correct"]) is not bool:
+            raise ValueError("invalid keyword correctness")
+
+    lanes = payload["lane_estimates"]
+    if not isinstance(lanes, dict) or set(lanes) != {
+        "fast",
+        "accumulation",
+        "structural",
+    }:
+        raise ValueError("invalid lane estimates")
+    for lane, value in lanes.items():
+        if value is not None:
+            _require_number({lane: value}, lane)
+    return payload
+
+
+class SettlementOutboxTask:
+    def __init__(
+        self,
+        *,
+        db_path: Path,
+        calibration_task: object,
+        trade_logger: object,
+        clock: Callable[[], datetime],
+        token_factory: Callable[[], str],
+        lease_seconds: int,
+        fault_hook: Callable[[str], None] | None = None,
+    ) -> None:
+        self._db_path = db_path
+        self._calibration_task = calibration_task
+        self._trade_logger = trade_logger
+        self._clock = clock
+        self._token_factory = token_factory
+        self._lease_seconds = lease_seconds
+        self._fault_hook = fault_hook
+
+    def _fault(self, stage: str) -> None:
+        if self._fault_hook is not None:
+            self._fault_hook(stage)
+
+    @staticmethod
+    def _validated_event(
+        store: SettlementStore,
+        requirement: PendingRequirement,
+    ) -> dict[str, Any]:
+        if requirement.consumer_name not in _KNOWN_CONSUMERS:
+            raise ValueError("unknown settlement consumer")
+        row = store.connection.execute(
+            """
+            SELECT outbox_id, event_version, event_kind, observation_sha256,
+                   trade_id, payload_json, created_at
+            FROM paper_settlement_outbox
+            WHERE outbox_id=?
+            """,
+            (requirement.outbox_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("settlement outbox row is missing")
+        try:
+            payload = _validate_payload(json.loads(row["payload_json"]))
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError("invalid settlement payload JSON") from exc
+        comparisons = {
+            "outbox_id": row["outbox_id"],
+            "event_version": row["event_version"],
+            "event_kind": row["event_kind"],
+            "observation_sha256": row["observation_sha256"],
+            "trade_id": row["trade_id"],
+        }
+        if any(payload[field] != value for field, value in comparisons.items()):
+            raise ValueError("settlement payload disagrees with outer row")
+        if requirement.event_version != row["event_version"]:
+            raise ValueError("requirement event version disagrees")
+        if requirement.event_kind != row["event_kind"]:
+            raise ValueError("requirement event kind disagrees")
+        if row["created_at"] != payload["settled_at"]:
+            raise ValueError("settlement timestamp disagrees")
+        expected_outbox_id = _event_outbox_id(
+            row["event_version"],
+            row["event_kind"],
+            row["observation_sha256"],
+            row["trade_id"],
+        )
+        if row["outbox_id"] != expected_outbox_id:
+            raise ValueError("settlement outbox identity is invalid")
+        return payload
+
+    def _apply(
+        self,
+        connection,
+        requirement: PendingRequirement,
+        payload: dict[str, Any],
+    ) -> None:
+        self._fault("before_effect")
+        if requirement.consumer_name == "source_credibility":
+            record_outcome_in_transaction(
+                connection,
+                source=payload["signal_source"],
+                was_correct=payload["won"],
+                updated_at=payload["settled_at"],
+            )
+        elif requirement.consumer_name == "keyword_outcomes":
+            for item in payload["keyword_outcomes"]:
+                connection.execute(
+                    """
+                    INSERT INTO keyword_outcomes (
+                        trade_id, ticker, series_ticker, keyword, direction,
+                        market_side, resolved_yes, correct, ts
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        payload["trade_id"],
+                        payload["ticker"],
+                        payload["series_ticker"],
+                        item["keyword"],
+                        item["direction"],
+                        payload["side"],
+                        int(payload["resolved_yes"]),
+                        int(item["correct"]),
+                        payload["settled_at"],
+                    ),
+                )
+        else:
+            raise ValueError("unsupported database consumer")
+        self._fault("after_effect")
+
+    async def run_once(self, *, limit: int = 100) -> int:
+        processed = 0
+        with SettlementStore(self._db_path) as store:
+            for requirement in store.pending_requirements()[:limit]:
+                try:
+                    payload = self._validated_event(store, requirement)
+                    if requirement.consumer_name not in _DATABASE_CONSUMERS:
+                        continue
+                    self._fault("before_claim")
+                    claim_token = self._token_factory()
+                    now = self._clock()
+                    if not store.acquire_claim(
+                        requirement.consumer_name,
+                        requirement.outbox_id,
+                        claim_token=claim_token,
+                        now=now,
+                        lease_seconds=self._lease_seconds,
+                    ):
+                        continue
+                    self._fault("after_claim")
+                    store.complete_claim(
+                        requirement.consumer_name,
+                        requirement.outbox_id,
+                        claim_token=claim_token,
+                        processed_at=now,
+                        result_sha256=_result_sha256(
+                            requirement.outbox_id,
+                            requirement.consumer_name,
+                        ),
+                        apply=lambda connection, current: self._apply(
+                            connection,
+                            current,
+                            payload,
+                        ),
+                    )
+                    processed += 1
+                except Exception:  # noqa: BLE001 - leave requirement pending for retry
+                    log.exception(
+                        "Settlement outbox consumer failed: %s/%s",
+                        requirement.outbox_id,
+                        requirement.consumer_name,
+                    )
+        return processed
