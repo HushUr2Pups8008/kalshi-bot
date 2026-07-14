@@ -649,7 +649,7 @@ def test_complete_claim_commits_consumer_effect_and_receipt_together(tmp_path):
                 "FROM paper_settlement_consumer_receipts"
             ).fetchone()
         ) == ("consumer-a", OUTBOX_ID, "a" * 64)
-        assert store.claim_state("consumer-a", OUTBOX_ID, now=NOW) == "missing"
+        assert store.claim_state("consumer-a", OUTBOX_ID, now=NOW) is None
 
 
 def test_complete_claim_rolls_back_effect_and_receipt_on_callback_failure(tmp_path):
