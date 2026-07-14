@@ -344,15 +344,19 @@ G7 decisions byte-for-byte. Any future G7 mark cutover requires a new T3 design.
 
 **Contract**
 
-- Add `ENABLE_FEE_NET_PAPER_ACCOUNTING=false`.
+- Add `ENABLE_FEE_NET_PAPER_ACCOUNTING=false`; it gates new entry admission.
 - Add nullable fill, schedule, fee-component, gross/net, refund, terminal-state,
-  settlement-receipt, and observation-hash columns.
+  settlement-receipt, observation-hash, and immutable `accounting_version`
+  columns.
 - False mode preserves canonical cash/P&L/Kelly behavior.
+- Existing fee-net rows continue version-matched settlement when the flag is
+  false; missing implementation or schedule quarantines without gross fallback.
 - Legacy matrix from the design is enforced.
 
 **TDD**
 
-1. RED schema, legacy, false-parity, and migration rollback tests.
+1. RED schema, legacy, false-parity, migration rollback, and persisted-version
+   dispatch tests.
 2. Implement additive schema and typed accounting records.
 3. Prove resolved legacy rows and bankroll are unchanged.
 
@@ -370,9 +374,11 @@ Commit: `feat: add disabled fee-net paper accounting schema`
 - Under enabled mode, one `BEGIN IMMEDIATE` transaction commits trade row, cost
   debit, entry fee components, provenance, and bankroll-after.
 - Faults before any commit roll back everything; retries are idempotent.
-- Disabled mode continues current canonical behavior.
+- Disabled mode blocks new fee-net entries but does not alter the settlement
+  contract of already-persisted fee-net positions.
 
-**TDD:** inject faults after every write and assert exact conservation.
+**TDD:** inject faults after every write and assert exact conservation. Add
+enable-entry -> disable -> restart coverage before settlement tests.
 
 Commit: `fix: commit paper entry fees and cash atomically`
 
@@ -389,12 +395,20 @@ Commit: `fix: commit paper entry fees and cash atomically`
 - Unique settlement receipt and compare-and-set `resolved=0`.
 - One transaction commits payout/refund, fee components, net P&L,
   bankroll-after, and immutable outbox event.
-- Consumer receipts are append-only and unique by `(outbox_id, consumer_id)`.
-- Crash before/after consumer effects never double-credits or double-delivers.
+- Same-database consumers commit effect plus receipt atomically. External
+  consumers must use `outbox_id` as their target-side idempotency key before the
+  local append-only receipt is written. Non-idempotent external consumers are
+  at-least-once and prohibited from financial effects.
+- Crash before/after consumer effects is tested against those concrete
+  idempotency contracts.
 - Legacy open rows settle gross with null net P&L and no retroactive fee.
+- Fee-net rows settle by persisted `accounting_version` even after admission is
+  disabled or the process restarts; they never fall back to the legacy path.
 
 **TDD:** won/lost/void/correction, duplicate/concurrent workers, every write
-fault, consumer crash boundaries, unsupported legacy fee, and row-count mismatch.
+fault, same-DB atomic consumer, external idempotency key, consumer crash
+boundaries, unsupported legacy fee, row-count mismatch, and
+enable-entry -> disable -> restart -> settle.
 
 Commit: `fix: settle fee-net paper accounting exactly once`
 
@@ -405,7 +419,9 @@ Commit: `fix: settle fee-net paper accounting exactly once`
 3. Classify T3 and obtain independent financial review.
 4. Merge protected with accounting disabled; restart and prove false parity.
 5. Snapshot DB, then enable accounting in a separate approved restart.
-6. Roll back flag to false on any balance, sizing, fee, or outbox mismatch.
+6. Roll back entry admission to false on any balance, sizing, fee, or outbox
+   mismatch; verify all existing fee-net rows remain on version-matched
+   settlement and quarantine any unsupported version.
 
 ## PR 4: Disabled Capital-Guard Shadow Evidence
 
@@ -417,9 +433,11 @@ Commit: `fix: settle fee-net paper accounting exactly once`
 - Modify: `config.py`, `.env.example`, `scripts/botcheck.py`
 - Create: `tests/test_capital_guard_shadow.py`
 
-Add `ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE=false`; candidate, conflict,
+Add `ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE=false` and
+`ENABLE_CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION=false`; candidate, conflict,
 observation, settlement, and evaluation tables live only in
-`data/capital_guard_shadow.db`. Flag-off creates no DB. Test idempotency,
+`data/capital_guard_shadow.db`. Both flags false and no existing backlog creates
+no DB. Collection may open an existing DB while capture is false. Test idempotency,
 concurrent writers, transaction faults, and canonical DB byte hashes.
 
 Commit: `feat: add disabled capital guard shadow store`
@@ -451,7 +469,10 @@ Commit: `feat: capture isolated G7-only decision evidence`
 
 Use the shared venue adapters and `SettlementObservation`. Write only shadow DB.
 Test identity mismatch/drift, yes/no/void, correction, 404/unresolved, duplicate,
-restart, and canonical DB byte hashes. Collector remains disabled with capture.
+restart, and canonical DB byte hashes. Collection is independently gated and
+continues for an existing DB when capture admission is false. Test capture true
+-> persist candidate -> capture false -> yes/no/void settle -> restart -> zero
+unresolved backlog.
 
 Commit: `feat: collect authoritative shadow settlements`
 
@@ -476,11 +497,12 @@ Commit: `feat: replay settled capital guard counterfactuals`
 
 1. Run shadow, blend, settlement, replay, botcheck, and isolation suites.
 2. Classify T3; obtain independent financial review; merge through protected CI.
-3. Restart with capture false and prove no DB creation/writes.
-4. In a separate approved restart set capture true.
+3. Restart with both flags false and prove no DB creation/writes.
+4. In a separate approved restart enable settlement collection, then capture.
 5. Verify append-only isolation, natural G7-only capture, and collector progress.
-6. Roll back false on any canonical hash change, incomplete provenance, capture
-   path behavior change, settlement drift, or replay conservation failure.
+6. On capture-path failure set capture false while collection keeps draining
+   persisted candidates. Disable collection only for collector integrity or
+   canonical-isolation failure. Record both flag states in acceptance evidence.
 
 ## Evidence Gate
 

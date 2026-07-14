@@ -143,7 +143,9 @@ and pre/post acceptance evidence.
 
 New schema is additive. A disabled accounting mode records proposed fee-net
 entry and settlement rows beside canonical gross accounting without changing
-canonical bankroll or Kelly inputs.
+canonical bankroll or Kelly inputs. Every position stores an immutable
+`accounting_version`; the feature flag gates admission of new fee-net entries,
+not settlement of positions already admitted under that version.
 
 Entry accounting is one `BEGIN IMMEDIATE` transaction containing the trade row,
 cost debit, entry fee debit, schedule/fill identity, and bankroll-after value.
@@ -151,9 +153,12 @@ Settlement is one `BEGIN IMMEDIATE` transaction containing a unique receipt,
 compare-and-set `resolved=0`, exact row-count assertion, payout/refund, fee
 components, net P&L, bankroll-after value, and immutable outbox event.
 
-The outbox remains append-only. Consumers append receipts unique on
-`(outbox_id, consumer_id)` so a crash before or after side effects cannot cause
-double delivery or double credit.
+The outbox remains append-only. A same-database consumer commits its effect and
+receipt atomically. Any external consumer must accept `outbox_id` as a durable
+idempotency key and deduplicate before applying its effect; the local receipt is
+an audit record, not the source of exactly-once semantics. A consumer without
+either contract is explicitly at-least-once and cannot be used for a financial
+effect.
 
 Legacy matrix:
 
@@ -164,8 +169,11 @@ Legacy matrix:
 - ambiguous legacy identity remains quarantined and uncredited.
 
 Fee-net accounting changes canonical cash and sizing, so its cutover is a
-separate T3 operator action after conservation replay and database snapshot. It
-has an immediate false rollback; rollback stops new fee-net writes and never
+separate T3 operator action after conservation replay and database snapshot. An
+immediate false rollback stops new fee-net entry admission. Open rows retain
+their immutable version and continue through the matching fee-net won/lost/void
+settlement path after flag-off and restart; an unavailable version or schedule
+quarantines instead of falling back to legacy gross settlement. Rollback never
 rewrites already committed financial history.
 
 ### 4. Shared Reporting
@@ -183,8 +191,11 @@ and show, by venue:
 
 ### 5. Isolated Capital-Guard Shadow Ledger
 
-`data/capital_guard_shadow.db` is owned by one schema module and disabled unless
-`ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE=true`. It never writes canonical paper,
+`data/capital_guard_shadow.db` is owned by one schema module. New candidate
+admission is disabled unless `ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE=true`.
+Settlement drainage has a separate
+`ENABLE_CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION` flag so turning capture off
+does not freeze already-admitted candidates. It never writes canonical paper,
 evidence, calibration, or feedback databases.
 
 Capture occurs only after canonical lifecycle telemetry has been emitted and
@@ -201,7 +212,8 @@ Incomplete rows are retained as unscorable diagnostics.
 An idempotent shadow-settlement collector uses the same venue adapters and
 `SettlementObservation` contract, but writes only the shadow database. It
 records identity drift, voids, corrections, payload hashes, and unresolved
-states without touching canonical rows.
+states without touching canonical rows. Capture can be false while collection
+continues until the persisted unresolved backlog reaches zero.
 
 Replay is chronological and stateful. It applies hypothetical entries,
 fill-level fees, open exposure, executable marks, settlement, bankroll, and
@@ -232,8 +244,12 @@ Tests cover:
 - report-only marks versus unchanged G7 input;
 - entry and settlement fault injection around every write;
 - outbox crash before and after consumer effects;
+- enable fee-net entry, disable admission, restart, then settle by persisted
+  accounting version;
 - shadow disabled state, SQLite lock/timeout/cancellation, and DB isolation;
 - shadow settlement identity, drift, void, correction, and retry;
+- capture enabled, candidate persisted, capture disabled, then settlement and
+  restart backlog drainage;
 - chronological replay conservation and unresolved worst case.
 
 ## Promotion Standard
@@ -263,8 +279,10 @@ described as repeatably profitable.
 3. Activate persisted-position reconciliation in a separate protected restart.
 4. Land PR 2 fee primitives and report-only executable liquidation.
 5. Land PR 3 additive fee-net ledger with canonical accounting cutover disabled.
-6. Replay conservation, snapshot, then activate accounting separately.
+6. Replay conservation, snapshot, then activate new fee-net entry admission;
+   persisted fee-net rows remain version-routed after any later rollback.
 7. Land PR 4 disabled shadow capture, settlement collector, and replay.
-8. Activate shadow capture only after independent review and isolation checks.
+8. Activate shadow capture and settlement collection only after independent
+   review; a capture rollback leaves collection draining existing candidates.
 9. Collect the preregistered evidence window; keep G7 unchanged unless the full
    promotion standard passes.
