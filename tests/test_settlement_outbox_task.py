@@ -87,6 +87,7 @@ def _seed_directional_event(
     venue_market_id: str = "8594",
     ticker: str = "stored-worker-alias",
     lane_estimates: tuple[float, float, float] = (0.70, 0.65, 0.60),
+    event_time: datetime | None = None,
 ) -> SeededEvent:
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
@@ -95,6 +96,13 @@ def _seed_directional_event(
 
     import trading.paper_trader as paper_trader_module
 
+    if event_time is not None:
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return event_time
+
+        monkeypatch.setattr(paper_trader_module, "datetime", FrozenDateTime)
     monkeypatch.setattr(paper_trader_module, "trade_log", MagicMock())
     db_path = db_path or tmp_path / "paper.db"
     trader = paper_trader_module.PaperTrader(
@@ -1061,53 +1069,52 @@ async def test_calibration_reverse_delivery_matches_canonical_receipt_rebuild(
     tmp_path,
 ):
     db_path = tmp_path / "ordered-calibration.db"
+    shared_event_time = WORKER_NOW + timedelta(minutes=10)
     first = _seed_directional_event(
         monkeypatch,
         tmp_path,
         db_path=db_path,
-        trade_id="worker000001",
+        trade_id="worker000002",
         venue_market_id="8594",
         ticker="ordered-market-a",
+        event_time=shared_event_time,
     )
     second = _seed_directional_event(
         monkeypatch,
         tmp_path,
         db_path=db_path,
-        trade_id="worker000002",
+        trade_id="worker000001",
         venue_market_id="8595",
         ticker="ordered-market-b",
         outcome=MarketOutcome.NO,
         lane_estimates=(0.20, 0.30, 0.40),
+        event_time=shared_event_time,
     )
+    assert second.payload["settled_at"] == first.payload["settled_at"]
     for seed in (first, second):
         _record_receipts(
             seed,
             ("paper_trade_log", "source_credibility", "keyword_outcomes"),
         )
-    clock = FixedClock(
-        max(
-            datetime.fromisoformat(str(first.payload["settled_at"])),
-            datetime.fromisoformat(str(second.payload["settled_at"])),
-        )
-    )
+    clock = FixedClock(shared_event_time)
     with SettlementStore(db_path) as store:
         assert store.acquire_claim(
             "calibration_state",
-            first.outbox_id,
+            second.outbox_id,
             claim_token="hold-canonical-first",
             now=clock.value,
             lease_seconds=60,
         )
     reverse_delivery = RecordingCalibrationTask()
     task = _task(
-        second,
+        first,
         calibration_task=reverse_delivery,
         clock=clock,
     )
 
     await task.run_once(limit=100)
 
-    assert reverse_delivery.calls == _expected_calibration_calls(second)
+    assert reverse_delivery.calls == _expected_calibration_calls(first)
     clock.value += timedelta(seconds=61)
     await task.run_once(limit=100)
     reverse_summary = reverse_delivery.get_calibration_summary()
@@ -1128,10 +1135,26 @@ async def test_calibration_reverse_delivery_matches_canonical_receipt_rebuild(
         (first, second),
         key=lambda seed: (str(seed.payload["settled_at"]), seed.trade_id),
     )
+    assert [seed.trade_id for seed in canonical_events] == [
+        "worker000001",
+        "worker000002",
+    ]
     assert rebuilt.calls == [
         call
         for seed in canonical_events
         for call in _expected_calibration_calls(seed)
+    ]
+    assert [call["outbox_id"] for call in rebuilt.calls] == [
+        *([second.outbox_id] * 3),
+        *([first.outbox_id] * 3),
+    ]
+    assert [call["lane"] for call in rebuilt.calls] == [
+        "fast",
+        "accumulation",
+        "structural",
+        "fast",
+        "accumulation",
+        "structural",
     ]
     assert rebuilt.get_calibration_summary() == reverse_summary
 

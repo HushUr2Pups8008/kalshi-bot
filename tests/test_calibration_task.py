@@ -131,7 +131,11 @@ async def test_outbox_lineage_deduplicates_each_lane():
     await task.record_calibration_check(lane="fast", **common)
     await task.record_calibration_check(lane="fast", **common)
     await task.record_calibration_check(lane="accumulation", **common)
+    await task.record_calibration_check(
+        lane="fast",
+        **{**common, "outbox_id": "b" * 64},
+    )
 
     summary = task.get_calibration_summary()
-    assert summary["fast"]["sample_count"] == 1
+    assert summary["fast"]["sample_count"] == 2
     assert summary["accumulation"]["sample_count"] == 1
