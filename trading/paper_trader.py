@@ -33,13 +33,18 @@ from analysis.match_feedback import matcher_weights_status
 from tasks.stats.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR
 from trading.portfolio import Portfolio, Position
+from trading.settlement_store import (
+    SETTLEMENT_PAPER_TRADE_COLUMNS_SQL,
+    enable_and_verify_foreign_keys,
+    initialize_fresh_settlement_schema,
+)
 from utils.logger import get_logger, trade_log, TRADE_LOG_FILE
 
 log = get_logger("paper_trader")
 
 DB_PATH = DATA_DIR / "paper_trades.db"
 
-_DDL = """
+_DDL = f"""
 CREATE TABLE IF NOT EXISTS keyword_outcomes (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_id      TEXT    NOT NULL,
@@ -63,7 +68,7 @@ CREATE TABLE IF NOT EXISTS paper_trades (
         identity_status IS NULL OR identity_status IN ('mapped', 'quarantined')
     ),
     quarantine_reason       TEXT,
-    market_title            TEXT NOT NULL,
+{SETTLEMENT_PAPER_TRADE_COLUMNS_SQL}    market_title            TEXT NOT NULL,
     side                    TEXT NOT NULL,
     contracts               INTEGER NOT NULL,
     price_cents             INTEGER NOT NULL,
@@ -350,6 +355,7 @@ class PaperTrader:
         self._enforce_runtime_guards()
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=30.0)
         self._conn.row_factory = sqlite3.Row
+        enable_and_verify_foreign_keys(self._conn)
         self.credibility: SourceCredibility
         self.portfolio: Portfolio
         self.initialize()
@@ -365,11 +371,16 @@ class PaperTrader:
         """
         if self._initialized:
             return
+        fresh_database = self._conn.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='paper_trades'"
+        ).fetchone() is None
         with self._conn:
             for _stmt in _DDL.split(";"):
                 _stmt = _stmt.strip()
                 if _stmt:
                     self._conn.execute(_stmt)
+            if fresh_database:
+                initialize_fresh_settlement_schema(self._conn)
         self._migrate_db()
         self.credibility = SourceCredibility(self._db_path)
         self.portfolio = Portfolio()
