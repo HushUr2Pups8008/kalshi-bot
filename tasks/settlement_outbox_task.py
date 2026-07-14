@@ -445,12 +445,17 @@ class SettlementOutboxTask:
         current: tuple[PendingRequirement, dict[str, Any]] | None = None,
         now: datetime | None = None,
     ) -> None:
-        payloads = {
+        completed_payloads = {
             requirement.outbox_id: self._validated_event(store, requirement)
             for requirement in self._completed_calibration_requirements(store)
         }
+        payloads = dict(completed_payloads)
+        for outbox_id in completed_payloads:
+            self._optimistic_calibration.pop(outbox_id, None)
         if now is not None:
-            for outbox_id, (claim_token, payload) in self._optimistic_calibration.items():
+            for outbox_id, (claim_token, payload) in tuple(
+                self._optimistic_calibration.items()
+            ):
                 claim = store.connection.execute(
                     """
                     SELECT claim_token FROM paper_settlement_delivery_claims
@@ -469,20 +474,37 @@ class SettlementOutboxTask:
                     == "active"
                 ):
                     payloads[outbox_id] = payload
+                else:
+                    self._optimistic_calibration.pop(outbox_id, None)
         if current is not None:
             requirement, payload = current
             payloads[requirement.outbox_id] = payload
-        ordered_payloads = sorted(
-            payloads.values(),
+
+        current_outbox_id = current[0].outbox_id if current is not None else None
+        apply_current_live = (
+            current_outbox_id is not None
+            and current_outbox_id not in self._dispatched_calibration_outbox_ids
+        )
+        replay_payloads = (
+            {
+                outbox_id: payload
+                for outbox_id, payload in payloads.items()
+                if outbox_id != current_outbox_id
+            }
+            if apply_current_live
+            else payloads
+        )
+        ordered_replay_payloads = sorted(
+            replay_payloads.values(),
             key=lambda payload: (payload["settled_at"], payload["trade_id"]),
         )
         checks = tuple(
             check
-            for payload in ordered_payloads
+            for payload in ordered_replay_payloads
             for check in self._calibration_checks(payload)
         )
         await self._calibration_task.replace_calibration_checks(checks)
-        for payload in ordered_payloads:
+        for payload in ordered_replay_payloads:
             outbox_id = payload["outbox_id"]
             if outbox_id in self._dispatched_calibration_outbox_ids:
                 continue
@@ -496,6 +518,33 @@ class SettlementOutboxTask:
                     outbox_id=str(check["outbox_id"]),
                 )
             self._dispatched_calibration_outbox_ids.add(str(outbox_id))
+
+        if apply_current_live and current is not None:
+            for check in self._calibration_checks(current[1]):
+                await self._calibration_task.record_calibration_check(
+                    market_ticker=str(check["market_ticker"]),
+                    lane=str(check["lane"]),
+                    lane_estimate=float(check["lane_estimate"]),
+                    final_resolution=float(check["final_resolution"]),
+                    error=float(check["error"]),
+                    outbox_id=str(check["outbox_id"]),
+                )
+            self._dispatched_calibration_outbox_ids.add(current_outbox_id)
+            ordered_payloads = sorted(
+                payloads.values(),
+                key=lambda payload: (payload["settled_at"], payload["trade_id"]),
+            )
+            await self._calibration_task.replace_calibration_checks(
+                tuple(
+                    check
+                    for payload in ordered_payloads
+                    for check in self._calibration_checks(payload)
+                )
+            )
+
+        self._dispatched_calibration_outbox_ids.difference_update(
+            completed_payloads
+        )
 
     async def run_once(self, *, limit: int = 100) -> int:
         processed = 0
