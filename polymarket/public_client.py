@@ -164,10 +164,22 @@ class PolymarketPublicClient:
         # tries ?slug=; a numeric wanted tries ?slug= then ?id=. A defensive 400
         # guard on the id call (belt-and-suspenders) still degrades to a clean
         # miss rather than leaking an HTTPError.
+        candidates = self.find_market_payloads_by_slug_or_id(market_id)
+        if candidates:
+            return candidates[0]
+        raise ValueError(f"Polymarket market {market_id!r} not found")
+
+    def find_market_payloads_by_slug_or_id(
+        self,
+        market_id: str,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return every payload whose slug or numeric ID exactly matches."""
         wanted = str(market_id).strip()
         filter_keys = ["slug"]
         if wanted.isdigit():
             filter_keys.append("id")
+        matches: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
         for filter_key in filter_keys:
             params: dict[str, Any] = {filter_key: wanted, "limit": 5}
             try:
@@ -190,5 +202,11 @@ class PolymarketPublicClient:
                     str(payload.get("id") or "").strip(),
                 }
                 if wanted in identifiers:
-                    return payload
-        raise ValueError(f"Polymarket market {market_id!r} not found")
+                    identity = (
+                        str(payload.get("slug") or "").strip(),
+                        str(payload.get("id") or "").strip(),
+                    )
+                    if identity not in seen:
+                        seen.add(identity)
+                        matches.append(payload)
+        return tuple(matches)

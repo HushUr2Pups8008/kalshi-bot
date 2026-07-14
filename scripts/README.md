@@ -35,7 +35,11 @@ Common read-only operator entrypoints are exposed through `make`:
 | Script | Purpose |
 |---|---|
 | `migrate_trade_logs.py` | Split the legacy monolithic trade log into `archive/YYYY/MM/YYYY-MM-DD.jsonl` partitions. |
+| `migrate_paper_market_identity.py` | Read-only canonical identity plan by default; `--apply` maps reviewed unique matches, while `--apply-quarantine` additionally requires `--reviewed-plan-fingerprint`. Never instantiate `PaperTrader` or run against a live writer. |
 | `validate_trade_log_cutover.py` | Validate analytics parity between legacy and partitioned trade-log layouts. |
+
+Canonical-ID repair is intentionally not implemented by this migration; a conflicting
+persisted ID requires a separate reviewed repair task.
 
 ## Diagnostics (read-only)
 

@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     ts                      TEXT NOT NULL,
     ticker                  TEXT NOT NULL,
     venue                   TEXT NOT NULL DEFAULT 'kalshi',
+    venue_market_id         TEXT,
+    identity_status         TEXT CHECK (
+        identity_status IS NULL OR identity_status IN ('mapped', 'quarantined')
+    ),
+    quarantine_reason       TEXT,
     market_title            TEXT NOT NULL,
     side                    TEXT NOT NULL,
     contracts               INTEGER NOT NULL,
