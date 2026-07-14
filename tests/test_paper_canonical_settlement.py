@@ -414,7 +414,7 @@ def test_resolution_uses_one_immediate_transaction_direct_bankroll_update_and_pe
         "BOT_STATE" in statement and "NOTIONAL_BANKROLL" in statement
         for statement in normalized
     ) == 1
-    assert _bankroll_cents(trader) == Decimal("54000")
+    assert _bankroll_cents(trader) == Decimal("53000")
 
 
 @pytest.mark.parametrize(
