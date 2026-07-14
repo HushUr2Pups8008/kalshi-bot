@@ -246,10 +246,17 @@ class PendingRequirement:
     created_at: str
 
 
+class _CallbackTransactionControlError(RuntimeError, AttributeError):
+    pass
+
+
 class _CallbackTransactionGuard:
     __slots__ = ("blocked",)
 
     def __init__(self) -> None:
+        self.blocked = False
+
+    def reset(self) -> None:
         self.blocked = False
 
     def authorize(
@@ -267,14 +274,27 @@ class _CallbackTransactionGuard:
 
     def reject(self) -> None:
         self.blocked = True
-        raise RuntimeError("callback transaction control is forbidden")
+        raise _CallbackTransactionControlError(
+            "callback transaction control is forbidden"
+        )
 
 
 class _SettlementEffectCursor:
-    __slots__ = ("__cursor",)
+    __slots__ = ("__cursor", "__guard")
 
-    def __init__(self, cursor: sqlite3.Cursor) -> None:
+    def __init__(
+        self,
+        cursor: sqlite3.Cursor,
+        guard: _CallbackTransactionGuard,
+    ) -> None:
         self.__cursor = cursor
+        self.__guard = guard
+
+    def __enter__(self) -> "_SettlementEffectCursor":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
     @property
     def description(self):
@@ -295,6 +315,32 @@ class _SettlementEffectCursor:
     def close(self) -> None:
         self.__cursor.close()
 
+    def execute(self, sql: str, parameters: object = ()) -> "_SettlementEffectCursor":
+        try:
+            self.__cursor.execute(sql, parameters)
+        except sqlite3.DatabaseError as exc:
+            if self.__guard.blocked:
+                raise RuntimeError(
+                    "callback transaction control is forbidden"
+                ) from exc
+            raise
+        return self
+
+    def executemany(
+        self,
+        sql: str,
+        parameters: object,
+    ) -> "_SettlementEffectCursor":
+        try:
+            self.__cursor.executemany(sql, parameters)
+        except sqlite3.DatabaseError as exc:
+            if self.__guard.blocked:
+                raise RuntimeError(
+                    "callback transaction control is forbidden"
+                ) from exc
+            raise
+        return self
+
     def fetchall(self):
         return self.__cursor.fetchall()
 
@@ -310,6 +356,15 @@ class _SettlementEffectCursor:
 class _SettlementEffectConnection:
     __slots__ = ("__connection", "__guard")
 
+    _FORBIDDEN_ATTRIBUTES = frozenset(
+        {
+            "commit",
+            "rollback",
+            "set_authorizer",
+            "executescript",
+        }
+    )
+
     def __init__(
         self,
         connection: sqlite3.Connection,
@@ -318,11 +373,13 @@ class _SettlementEffectConnection:
         self.__connection = connection
         self.__guard = guard
 
-    def commit(self) -> None:
-        self.__guard.reject()
+    def __getattr__(self, name: str):
+        if name in self._FORBIDDEN_ATTRIBUTES:
+            self.__guard.reject()
+        raise AttributeError(name)
 
-    def rollback(self) -> None:
-        self.__guard.reject()
+    def cursor(self) -> _SettlementEffectCursor:
+        return _SettlementEffectCursor(self.__connection.cursor(), self.__guard)
 
     def execute(self, sql: str, parameters: object = ()) -> _SettlementEffectCursor:
         try:
@@ -333,7 +390,7 @@ class _SettlementEffectConnection:
                     "callback transaction control is forbidden"
                 ) from exc
             raise
-        return _SettlementEffectCursor(cursor)
+        return _SettlementEffectCursor(cursor, self.__guard)
 
     def executemany(
         self,
@@ -348,7 +405,7 @@ class _SettlementEffectConnection:
                     "callback transaction control is forbidden"
                 ) from exc
             raise
-        return _SettlementEffectCursor(cursor)
+        return _SettlementEffectCursor(cursor, self.__guard)
 
 
 @dataclass(frozen=True)
@@ -649,6 +706,11 @@ class SettlementStore:
         )
         self._conn.row_factory = sqlite3.Row
         enable_and_verify_foreign_keys(self._conn)
+        self._callback_guard = _CallbackTransactionGuard()
+        self._connection_facade = _SettlementEffectConnection(
+            self._conn,
+            self._callback_guard,
+        )
 
     def __enter__(self) -> "SettlementStore":
         return self
@@ -657,8 +719,8 @@ class SettlementStore:
         self.close()
 
     @property
-    def connection(self) -> sqlite3.Connection:
-        return self._conn
+    def connection(self) -> _SettlementEffectConnection:
+        return self._connection_facade
 
     def close(self) -> None:
         self._conn.close()
@@ -919,11 +981,11 @@ class SettlementStore:
             if row is None:
                 raise RuntimeError("claim requirement is missing")
             requirement = PendingRequirement(*tuple(row))
-            guard = _CallbackTransactionGuard()
-            effect_connection = _SettlementEffectConnection(self._conn, guard)
+            guard = self._callback_guard
+            guard.reset()
             self._conn.set_authorizer(guard.authorize)
             try:
-                callback_result = apply(effect_connection, requirement)
+                callback_result = apply(self._connection_facade, requirement)
                 if inspect.isawaitable(callback_result):
                     close = getattr(callback_result, "close", None)
                     if callable(close):
