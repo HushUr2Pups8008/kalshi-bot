@@ -683,12 +683,17 @@ def test_void_credits_exact_refund_and_emits_no_directional_feedback_requirement
     trader_factory,
 ):
     trader = trader_factory("void-refund")
-    market_ref = MarketRef(Venue.POLYMARKET_US, "8594", "void-market")
+    stored_ticker = "stored-void-alias"
+    market_ref = MarketRef(Venue.POLYMARKET_US, "8594", stored_ticker)
     trade_id = _record_mapped_trade(
         trader, market_ref, trade_id="void00000001"
     )
     observation = _observation(
-        market_ref,
+        MarketRef(
+            market_ref.venue,
+            market_ref.venue_market_id,
+            "drifted-void-alias",
+        ),
         MarketOutcome.VOID,
         void_refund=VoidRefundContract(
             refund_cents_per_contract=Decimal("50"),
@@ -713,9 +718,17 @@ def test_void_credits_exact_refund_and_emits_no_directional_feedback_requirement
     assert Decimal(row["gross_pnl_cents"]) == Decimal("250")
     assert _bankroll_cents(trader) == Decimal("50250")
     outbox = trader._conn.execute(
-        "SELECT outbox_id, payload_json FROM paper_settlement_outbox"
+        """
+        SELECT outbox_id, event_version, event_kind, observation_sha256,
+               trade_id, payload_json
+        FROM paper_settlement_outbox
+        """
     ).fetchone()
-    assert json.loads(outbox["payload_json"])["outcome"] == "void"
+    trade = trader._conn.execute(
+        "SELECT ticker, settled_at FROM paper_trades WHERE trade_id=?",
+        (trade_id,),
+    ).fetchone()
+    payload = json.loads(outbox["payload_json"])
     consumers = {
         row[0]
         for row in trader._conn.execute(
@@ -727,6 +740,23 @@ def test_void_credits_exact_refund_and_emits_no_directional_feedback_requirement
         )
     }
     assert consumers == {"paper_trade_log"}
+    assert payload["outbox_id"] == outbox["outbox_id"]
+    assert payload["event_version"] == outbox["event_version"] == 1
+    assert payload["event_kind"] == outbox["event_kind"] == "paper_trade_settled"
+    assert payload["observation_sha256"] == outbox["observation_sha256"]
+    assert payload["trade_id"] == outbox["trade_id"] == trade_id
+    assert payload["ticker"] == trade["ticker"] == stored_ticker
+    assert payload["ticker"] != observation.market_ref.alias
+    assert payload["venue"] == market_ref.venue.value
+    assert payload["venue_market_id"] == market_ref.venue_market_id
+    assert payload["alias"] == observation.market_ref.alias
+    assert payload["outcome"] == "void"
+    assert payload["resolved_yes"] is None
+    assert payload["terminal_state"] == "void"
+    assert payload["won"] is None
+    assert payload["settled_at"] == trade["settled_at"]
+    assert payload["gross_payout_cents"] == "1250"
+    assert payload["gross_pnl_cents"] == "250"
 
 
 def test_duplicate_observation_is_a_financial_and_outbox_noop(trader_factory):
@@ -985,16 +1015,48 @@ def test_observation_and_outbox_ids_are_deterministic_across_databases(trader_fa
 
 
 @pytest.mark.parametrize(
-    ("outcome", "trade_id", "resolved_yes", "terminal_state", "won", "payout", "pnl"),
+    (
+        "outcome",
+        "trade_id",
+        "side",
+        "yes_price",
+        "resolved_yes",
+        "terminal_state",
+        "won",
+        "payout",
+        "pnl",
+    ),
     [
-        (MarketOutcome.YES, "outboxyes001", True, "won", True, "2500", "1500"),
-        (MarketOutcome.NO, "outboxno0001", False, "lost", False, "0", "-1000"),
+        (
+            MarketOutcome.YES,
+            "outboxyes001",
+            "yes",
+            40.0,
+            True,
+            "won",
+            True,
+            "2500",
+            "1500",
+        ),
+        (
+            MarketOutcome.NO,
+            "outboxno0001",
+            "no",
+            60.0,
+            False,
+            "won",
+            True,
+            "2500",
+            "1500",
+        ),
     ],
 )
 def test_directional_outbox_v1_is_complete_immutable_and_exactly_routed(
     trader_factory,
     outcome,
     trade_id,
+    side,
+    yes_price,
     resolved_yes,
     terminal_state,
     won,
@@ -1007,8 +1069,8 @@ def test_directional_outbox_v1_is_complete_immutable_and_exactly_routed(
     analysis = _make_mock_analysis(
         ticker=stored_ticker,
         series_ticker="PMOUTBOX",
-        side="yes",
-        yes_price=40.0,
+        side=side,
+        yes_price=yes_price,
         estimated_prob=0.67,
         source="wire:test-source",
         keywords=["missile strike", "ceasefire"],
@@ -1020,12 +1082,14 @@ def test_directional_outbox_v1_is_complete_immutable_and_exactly_routed(
     analysis.market.venue = market_ref.venue.value
     analysis.market.market_id = stored_ticker
     analysis.market.venue_market_id = market_ref.venue_market_id
-    analysis.fast_lane_p = 0.70
-    analysis.fast_lane_confidence = 0.90
-    analysis.accumulation_p = 0.65
-    analysis.accumulation_confidence = 0.80
-    analysis.structural_p = 0.60
-    analysis.structural_confidence = 0.70
+    analysis.signal_meta = {
+        "fast_lane_p": 0.70,
+        "fast_lane_confidence": 0.90,
+        "accumulation_p": 0.65,
+        "accumulation_confidence": 0.80,
+        "structural_p": 0.60,
+        "structural_confidence": 0.70,
+    }
     _record_analysis(trader, analysis, trade_id=trade_id)
     observation = _observation(
         MarketRef(
