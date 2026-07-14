@@ -9,7 +9,7 @@ from collections import defaultdict, deque
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import pytest
 
@@ -31,8 +31,10 @@ from kalshi.series_metadata import SettlementSource
 from kalshi.source_hints import MarketSourceHintDiagnostics, MarketSourceTargetPlan
 from main import TradingBot, _signal_to_evidence, _source_class_for_evidence
 from polymarket.settlement_reconciler import SettlementReconcileResult
+from tasks.settlement_outbox_task import SettlementOutboxTask
 from tests._helpers import write_jsonl
 from trading.portfolio import Position
+from utils.logger import TradeLogger
 
 
 @pytest.fixture(autouse=True)
@@ -3705,7 +3707,7 @@ class TestMainAsyncBlocking:
         bot.source_stats.flush.side_effect = lambda: events.append("flush")
         bot.paper._conn.execute.side_effect = execute
         settlement_store = MagicMock(name="SettlementStore")
-        outbox_task = MagicMock(name="SettlementOutboxTask")
+        outbox_task = create_autospec(SettlementOutboxTask, spec_set=True)
         monkeypatch.setattr(
             _cfg_module.cfg,
             "enable_canonical_persisted_settlement_reconciliation",
@@ -3743,17 +3745,20 @@ class TestMainAsyncBlocking:
     async def test_auto_resolve_false_schema_present_drains_existing_outbox(
         self,
         monkeypatch,
+        tmp_path,
     ):
         bot = self._make_bot()
-        bot._calibration_task = MagicMock()
-        bot.paper._db_path = MagicMock()
+        bot._calibration_task = main_module.CalibrationTask()
+        bot.paper._db_path = tmp_path / "paper-trades.db"
         bot.paper._conn.execute.return_value.fetchall.return_value = []
         bot.paper.resolve_observation = MagicMock()
-        drain = AsyncMock(return_value=2)
-        outbox_task = MagicMock(
-            name="SettlementOutboxTask",
-            return_value=SimpleNamespace(run_once=drain),
+        outbox_task = create_autospec(
+            SettlementOutboxTask,
+            spec_set=True,
         )
+        worker = outbox_task.return_value
+        drain = worker.run_once
+        drain.return_value = 2
         schema_matches = MagicMock(return_value=True)
         monkeypatch.setattr(
             _cfg_module.cfg,
@@ -3775,10 +3780,30 @@ class TestMainAsyncBlocking:
         )
 
         await bot._check_and_resolve()
+        await bot._check_and_resolve()
 
-        schema_matches.assert_called_once_with(bot.paper._conn)
+        assert schema_matches.call_count == 2
+        assert all(
+            probe.args == (bot.paper._conn,)
+            for probe in schema_matches.call_args_list
+        )
         outbox_task.assert_called_once()
-        drain.assert_awaited_once_with()
+        constructor = outbox_task.call_args
+        assert constructor.args == ()
+        kwargs = constructor.kwargs
+        assert kwargs["db_path"] == bot.paper._db_path
+        assert kwargs["calibration_task"] is bot._calibration_task
+        assert isinstance(kwargs["calibration_task"], main_module.CalibrationTask)
+        assert kwargs["trade_logger"] is main_module.trade_log
+        assert isinstance(kwargs["trade_logger"], TradeLogger)
+        assert callable(kwargs["clock"])
+        assert callable(kwargs["token_factory"])
+        assert isinstance(kwargs["lease_seconds"], int)
+        assert kwargs["lease_seconds"] > 0
+        assert drain.await_count == 2
+        for drain_call in drain.await_args_list:
+            assert drain_call.args == ()
+            assert drain_call.kwargs in ({}, {"limit": 100})
         bot.paper.resolve_observation.assert_not_called()
 
     @pytest.mark.asyncio
@@ -3793,11 +3818,12 @@ class TestMainAsyncBlocking:
             ("ewc-usgub-ks-2026-11-03-dem", "polymarket_us"),
         ]
         bot.paper.resolve_observation = MagicMock()
-        drain = AsyncMock(return_value=1)
-        outbox_task = MagicMock(
-            name="SettlementOutboxTask",
-            return_value=SimpleNamespace(run_once=drain),
+        outbox_task = create_autospec(
+            SettlementOutboxTask,
+            spec_set=True,
         )
+        drain = outbox_task.return_value.run_once
+        drain.return_value = 1
         legacy_polymarket_reconciler = MagicMock(name="SettlementReconciler")
         monkeypatch.setattr(
             _cfg_module.cfg,
@@ -3827,7 +3853,9 @@ class TestMainAsyncBlocking:
         await bot._check_and_resolve()
 
         outbox_task.assert_called_once()
-        drain.assert_awaited_once_with()
+        assert drain.await_count == 1
+        assert drain.await_args.args == ()
+        assert drain.await_args.kwargs in ({}, {"limit": 100})
         legacy_polymarket_reconciler.assert_not_called()
         bot.paper.resolve_observation.assert_not_called()
 
