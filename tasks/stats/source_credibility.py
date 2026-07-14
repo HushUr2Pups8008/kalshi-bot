@@ -63,7 +63,12 @@ def record_outcome_in_transaction(
             wins = wins + excluded.wins,
             losses = losses + excluded.losses,
             total = total + 1,
-            last_updated = excluded.last_updated
+            last_updated = CASE
+                WHEN source_credibility.last_updated IS NULL
+                  OR excluded.last_updated > source_credibility.last_updated
+                THEN excluded.last_updated
+                ELSE source_credibility.last_updated
+            END
         """,
         (
             source,

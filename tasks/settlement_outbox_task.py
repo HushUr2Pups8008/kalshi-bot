@@ -180,6 +180,9 @@ def _validate_payload(payload: object) -> dict[str, Any]:
     else:
         if type(resolved_yes) is not bool or type(won) is not bool:
             raise ValueError("directional result fields must be boolean")
+        expected_resolved_yes = payload["outcome"] == "yes"
+        if resolved_yes != expected_resolved_yes:
+            raise ValueError("outcome and resolved_yes disagree")
         expected_won = (payload["side"] == "yes") == resolved_yes
         if won != expected_won:
             raise ValueError("chosen-side result disagrees")
@@ -196,8 +199,15 @@ def _validate_payload(payload: object) -> dict[str, Any]:
             raise ValueError("invalid keyword")
         if item["direction"] not in {"yes", "no"}:
             raise ValueError("invalid keyword direction")
-        if item["correct"] is not None and type(item["correct"]) is not bool:
-            raise ValueError("invalid keyword correctness")
+        if payload["outcome"] == "void":
+            if item["correct"] is not None:
+                raise ValueError("void keyword correctness must be null")
+        else:
+            if type(item["correct"]) is not bool:
+                raise ValueError("directional keyword correctness must be boolean")
+            expected_correct = (item["direction"] == "yes") == resolved_yes
+            if item["correct"] != expected_correct:
+                raise ValueError("keyword correctness disagrees")
 
     lanes = payload["lane_estimates"]
     if not isinstance(lanes, dict) or set(lanes) != {
@@ -325,7 +335,12 @@ class SettlementOutboxTask:
     async def run_once(self, *, limit: int = 100) -> int:
         processed = 0
         with SettlementStore(self._db_path) as store:
-            for requirement in store.pending_requirements()[:limit]:
+            supported = tuple(
+                requirement
+                for requirement in store.pending_requirements()
+                if requirement.consumer_name in _DATABASE_CONSUMERS
+            )
+            for requirement in supported[:limit]:
                 try:
                     payload = self._validated_event(store, requirement)
                     if requirement.consumer_name not in _DATABASE_CONSUMERS:
