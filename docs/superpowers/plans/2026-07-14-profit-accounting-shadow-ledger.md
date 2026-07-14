@@ -1,558 +1,492 @@
 # Profit Accounting and Capital-Guard Shadow Ledger Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Revised 2026-07-14 after independent financial-path review. Execute in order.
 
-**Goal:** Produce venue-complete, fee-versioned paper accounting and a disabled-by-default shadow ledger that measures G7-only counterfactual trades without changing capital, sizing, admission, or order behavior.
+**Goal:** Produce venue-complete, fee-versioned paper accounting and an isolated
+shadow ledger that measures G7-only counterfactual trades without silently
+changing capital, sizing, admission, or live order behavior.
 
-**Architecture:** Land four bounded PRs in dependency order. First fix venue-qualified settlement identity and persisted-position reconciliation. Then add pure official fee primitives and net executable liquidation reporting. Next migrate new paper rows to fee/net settlement accounting with a durable feedback outbox. Finally add isolated G7-only shadow capture and stateful settlement replay. G7 remains unchanged throughout; any later policy change requires a separate evidence-gated design.
+**Architecture:** Four T3 PRs. PR 1 establishes canonical identity and settlement
+safety with routing cutover disabled. PR 2 adds pinned fill-level fee primitives
+and report-only liquidation. PR 3 adds atomic fee-net accounting with canonical
+cutover disabled. PR 4 adds disabled shadow capture, authoritative settlement,
+and stateful replay. Every activation is a later protected operator action.
 
-**Tech Stack:** Python 3.14, `Decimal`, dataclasses, SQLite, pytest, Ruff, existing Kalshi REST/series metadata and Polymarket US public settlement clients.
+**Tech:** Python 3.14, `Decimal`, frozen dataclasses, SQLite, pytest, Ruff.
 
 ## Global Constraints
 
-- Preserve `G7_MAX_OPEN_EXPOSURE_DRAWDOWN_PCT=0.20`; no threshold or failure-order changes.
-- Preserve paper mode, bankroll, sizing, cooldown, exposure, and live-order behavior.
-- Never delete, reset, rewrite, or backfill `data/paper_trades.db` with assumed fees.
-- Legacy fee state is `unknown`, never zero.
-- Use only Kalshi official APIs and the Polymarket US gateway/auth surfaces already present; no Global CLOB.
-- Use exact `Decimal`/fixed-point arithmetic for new money and quantity fields.
-- Unknown venue, identity, book, fee schedule, or settlement fails closed.
-- Runtime capture remains disabled until a separate reviewed restart.
-- Runtime artifacts remain outside commits: `data/matcher_token_weights.json`, `data/*.db`, `logs/backups/`, and `logs/state/`.
-- Every behavioral or financial-path PR receives independent review; T3 work must satisfy IC section 16 and explicit operator approval before runtime activation.
-
----
+- Preserve `G7_MAX_OPEN_EXPOSURE_DRAWDOWN_PCT=0.20` and failure ordering.
+- Never reset or rewrite `data/paper_trades.db`; never infer legacy fees.
+- Use exact `Decimal` or fixed-point storage for money and quantity.
+- Unknown venue, ID, book, fee schedule, or outcome fails closed.
+- Treat every schema or runtime financial-path PR as T3. No downgrade exemption.
+- Each activation needs an explicit flag, pre-change snapshot, classifier result,
+  replay disposition, independent review, operator approval, protected restart,
+  acceptance checks, and immediate false rollback.
+- Runtime artifacts stay outside commits: `data/*.db`,
+  `data/matcher_token_weights.json`, `logs/backups/`, and `logs/state/`.
+- Do not enable weather trading or generic search enforcement in these PRs.
 
 ## PR 1: Venue-Qualified Settlement Safety
 
-### Task 1: Introduce Canonical Market Identity
+### Task 1: Store Canonical Market Identity in Memory
 
-**Files:**
+**Files**
+
 - Modify: `trading/venue.py`
 - Modify: `trading/portfolio.py`
 - Test: `tests/test_portfolio.py`
 
-**Interfaces:**
-- Produces: `MarketRef(venue: Venue, venue_market_id: str, alias: str)`.
-- Produces: `Portfolio.resolve(market_ref: MarketRef) -> list[Position]`.
-- Preserves: ticker-based lookup helpers for non-settlement reads during this PR.
+**Contract**
 
-- [ ] **Step 1: Write failing identity and collision tests**
+- Frozen `MarketRef(venue, venue_market_id, alias)` rejects empty IDs.
+- `Position` stores nullable `venue_market_id` for legacy compatibility.
+- `Portfolio` remains keyed by display alias.
+- `resolve(MarketRef)` selects the alias bucket, then exact venue and canonical
+  ID. A legacy-null ID fails closed. `resolve(str)` remains read-compatible.
 
-```python
-def test_market_ref_rejects_empty_market_id():
-    with pytest.raises(ValueError, match="venue_market_id"):
-        MarketRef(Venue.KALSHI, "", "KX-SHARED")
+**TDD**
 
-
-def test_resolve_closes_only_matching_venue_market_identity(tmp_path):
-    portfolio = portfolio_with_same_alias_on_both_venues(tmp_path, "shared-id")
-
-    closed = portfolio.resolve(MarketRef(Venue.POLYMARKET_US, "shared-id", "shared-id"))
-
-    assert {row.venue for row in closed} == {Venue.POLYMARKET_US.value}
-    assert len(portfolio.open_positions("shared-id")) == 1
-    assert portfolio.open_positions("shared-id")[0].venue == Venue.KALSHI.value
-```
-
-- [ ] **Step 2: Verify RED**
-
-Run:
+1. Add collision tests where two venues share an alias.
+2. Add a regression where `alias != venue_market_id`.
+3. Add legacy-null fail-closed coverage.
+4. Run RED, implement minimal storage/filtering, run GREEN.
 
 ```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_portfolio.py -q
+.venv/bin/python -m pytest tests/test_portfolio.py -q
+.venv/bin/python -m pytest tests/test_portfolio.py \
+  tests/test_paper_trader_venue.py \
+  tests/polymarket/test_settlement_reconciler.py -q
+.venv/bin/ruff check trading/venue.py trading/portfolio.py tests/test_portfolio.py
+git diff --check
 ```
 
-Expected: `MarketRef` is missing and `Portfolio.resolve()` cannot distinguish venues.
+Commit: `fix: qualify portfolio positions by canonical market id`
 
-- [ ] **Step 3: Implement the minimal identity type and qualified resolve**
+### Task 2: Introduce SettlementObservation
 
-```python
-@dataclass(frozen=True)
-class MarketRef:
-    venue: Venue
-    venue_market_id: str
-    alias: str
+**Files**
 
-    def __post_init__(self) -> None:
-        if not self.venue_market_id.strip():
-            raise ValueError("venue_market_id is required")
-```
+- Create: `trading/settlement.py`
+- Modify: `kalshi/settlement.py` or the existing Kalshi settlement adapter
+- Modify: `polymarket/settlement_reconciler.py`
+- Create: `tests/test_settlement_observation.py`
+- Modify: venue settlement tests
 
-Key the mutation by normalized venue plus canonical ID. Do not change exposure,
-prefix, or duplicate-read semantics in this task.
+**Contract**
 
-- [ ] **Step 4: Verify GREEN and commit**
+- Frozen observation contains `MarketRef`, market outcome `yes|no|void`, raw
+  authoritative outcome, observed/effective timestamps, rules/source identity,
+  payload SHA-256, explicit void refund contract, and optional supersession ID.
+- Venue adapters normalize into the same contract.
+- Malformed outcomes, mismatched identity, unsupported void, and correction
+  conflicts are typed failures, never booleans.
+
+**TDD**
+
+1. Write RED adapter fixtures for yes, no, void, mismatch, malformed, and drift.
+2. Implement validation and deterministic payload hashing.
+3. Prove identical payloads hash identically and changed payloads conflict.
 
 ```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest tests/test_portfolio.py -q
-git add trading/venue.py trading/portfolio.py tests/test_portfolio.py
-git commit -m "fix: qualify portfolio resolution by venue"
+.venv/bin/python -m pytest tests/test_settlement_observation.py \
+  tests/polymarket/test_settlement_reconciler.py -q
+.venv/bin/ruff check trading/settlement.py polymarket/settlement_reconciler.py \
+  tests/test_settlement_observation.py
+git diff --check
 ```
 
-### Task 2: Resolve Paper Rows by Venue and Market ID
+Commit: `feat: normalize authoritative settlement observations`
 
-**Files:**
+### Task 3: Add Canonical-ID Migration and Quarantine
+
+**Files**
+
+- Modify: `trading/paper_trader.py`
+- Create: `scripts/migrate_paper_market_identity.py`
+- Create: `tests/test_paper_identity_migration.py`
+- Modify: `scripts/README.md`
+
+**Contract**
+
+- Add nullable `venue_market_id`, `identity_status`, and `quarantine_reason`.
+- Default command is read-only dry run.
+- Apply mode writes only unique venue-adapter mappings in one transaction.
+- Missing, conflicting, or drifting mappings become quarantined.
+- Settled legacy rows remain unchanged.
+- Emit machine-readable counts and row identities for mapped, quarantined, and
+  unresolved rows; never print secrets or mutate other databases.
+
+**TDD**
+
+1. RED tests: unique match, no match, multiple matches, alias/ID divergence,
+   existing conflicting ID, rollback after injected failure, idempotent retry.
+2. Implement additive migration and planner.
+3. Prove dry run leaves DB byte-for-byte unchanged.
+
+```bash
+.venv/bin/python -m pytest tests/test_paper_identity_migration.py \
+  tests/test_paper_trader.py -q
+.venv/bin/ruff check trading/paper_trader.py \
+  scripts/migrate_paper_market_identity.py tests/test_paper_identity_migration.py
+git diff --check
+```
+
+Commit: `feat: migrate and quarantine paper market identity`
+
+### Task 4: Resolve by Venue and Canonical ID
+
+**Files**
+
 - Modify: `trading/paper_trader.py`
 - Modify: `polymarket/settlement_reconciler.py`
+- Modify: Kalshi settlement routing files
 - Test: `tests/test_paper_trader_venue.py`
 - Test: `tests/polymarket/test_settlement_reconciler.py`
 
-**Interfaces:**
-- Consumes: `MarketRef` from Task 1.
-- Produces: `PaperTrader._resolve_market_sync(market_ref, resolved_yes)`.
-- Produces: `SettlementResolver._resolve_market_sync(market_ref, resolved_yes)` protocol.
+**Contract**
 
-- [ ] **Step 1: Write failing cross-venue database regression**
+- `PaperTrader` consumes `SettlementObservation`, not `resolved_yes: bool`.
+- Financial update filters `venue`, `venue_market_id`, and `resolved=0`.
+- Row-count mismatch rolls back and quarantines; no alias-only fallback.
+- Portfolio closure receives the exact `MarketRef`.
+- Legacy-null and quarantined rows cannot mutate bankroll.
 
-Create two unresolved rows with the same ticker and different venues. Resolve
-only `MarketRef(Venue.POLYMARKET_US, ticker, ticker)`. Assert the Polymarket row
-resolves, the Kalshi row remains open, bankroll credits exactly once, and only
-the Polymarket `Position` closes.
+**TDD**
 
-- [ ] **Step 2: Update reconciler protocol tests before implementation**
-
-```python
-assert resolver.resolved == [
-    (MarketRef(Venue.POLYMARKET_US, "will-example-fail-2026", "will-example-fail-2026"), False)
-]
-```
-
-- [ ] **Step 3: Verify RED**
+1. RED tests for cross-venue alias collision, wrong ID, duplicate observation,
+   two-row collision, void, and correction conflict.
+2. Implement exact compare-and-set routing.
+3. Run related settlement and paper suites.
 
 ```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_paper_trader_venue.py \
-  tests/polymarket/test_settlement_reconciler.py -q
-```
-
-Expected: current SQL `WHERE ticker=? AND resolved=0` resolves both venue rows.
-
-- [ ] **Step 4: Implement venue-qualified SQL and propagation**
-
-Use:
-
-```sql
-SELECT ... FROM paper_trades
-WHERE venue = ? AND ticker = ? AND resolved = 0
-```
-
-Pass `market_ref` to `Portfolio.resolve()`. Preserve transactional bankroll
-credit and existing lane-event return shape.
-
-- [ ] **Step 5: Verify GREEN and commit**
-
-```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_paper_trader_venue.py \
-  tests/polymarket/test_settlement_reconciler.py -q
-git add trading/paper_trader.py polymarket/settlement_reconciler.py \
-  tests/test_paper_trader_venue.py tests/polymarket/test_settlement_reconciler.py
-git commit -m "fix: isolate settlement identity by venue"
-```
-
-### Task 3: Reconcile Persisted Positions Independent of Entry Flags
-
-**Files:**
-- Modify: `main.py`
-- Test: `tests/test_main_pipeline.py`
-
-**Interfaces:**
-- Consumes: persisted open venue set from `paper_trades`.
-- Preserves: `POLYMARKET_US_ENABLED=false` as a hard block on discovery and new entries.
-- Produces: Polymarket settlement reconciliation whenever an unresolved Polymarket row exists.
-
-- [ ] **Step 1: Add failing runtime routing test**
-
-Extend the existing auto-resolve fixture with `polymarket_us_enabled=False` and
-one persisted unresolved `venue='polymarket_us'` row. Assert the reconciler is
-constructed and called while the Polymarket paper runtime/discovery path stays
-disabled.
-
-- [ ] **Step 2: Verify RED**
-
-```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_main_pipeline.py -k 'auto_resolve and polymarket' -q
-```
-
-Expected: `has_polymarket and cfg.polymarket_us_enabled` skips reconciliation.
-
-- [ ] **Step 3: Remove the entry-flag condition only from settlement routing**
-
-Use persisted venue presence as the settlement condition. Do not alter startup
-probe, candidate adapter, market discovery, or execution feature-flag checks.
-
-- [ ] **Step 4: Verify focused PR 1 suite and commit**
-
-```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_portfolio.py \
-  tests/test_paper_trader_venue.py \
+.venv/bin/python -m pytest tests/test_paper_trader_venue.py \
   tests/polymarket/test_settlement_reconciler.py \
-  tests/test_main_pipeline.py -k 'portfolio or venue or settlement or auto_resolve' -q
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/ruff check \
-  trading/venue.py trading/portfolio.py trading/paper_trader.py \
-  polymarket/settlement_reconciler.py main.py \
-  tests/test_portfolio.py tests/test_paper_trader_venue.py \
-  tests/polymarket/test_settlement_reconciler.py tests/test_main_pipeline.py
+  tests/test_paper_trader.py -q
+.venv/bin/ruff check trading/paper_trader.py \
+  polymarket/settlement_reconciler.py tests/test_paper_trader_venue.py
 git diff --check
-git add main.py tests/test_main_pipeline.py
-git commit -m "fix: reconcile persisted Polymarket positions"
 ```
 
----
+Commit: `fix: settle paper rows by authoritative market id`
 
-## PR 2: Official Fees and Executable Liquidation Reporting
+### Task 5: Decouple Persisted Settlement from Entry Flags
 
-### Task 4: Add Versioned Pure Fee Calculators
+**Files**
 
-**Files:**
+- Modify: `config.py`
+- Modify: `.env.example`
+- Modify: `main.py`
+- Modify: `scripts/botcheck.py`
+- Test: `tests/test_main_pipeline.py`
+- Test: `tests/test_botcheck.py`
+
+**Contract**
+
+- Add `ENABLE_PERSISTED_POSITION_SETTLEMENT_RECONCILIATION=false`.
+- When false, current routing is unchanged.
+- When true, unresolved mapped positions reconcile even when entry/discovery is
+  disabled. Entry, discovery, and startup probes keep their existing flags.
+- Botcheck reports flag state, mapped/quarantined backlog, and last observation.
+
+**TDD**
+
+1. RED tests for false parity, true persisted routing, and no entry-path leak.
+2. Implement narrow routing condition.
+3. Prove false mode produces the same task graph as baseline.
+
+```bash
+.venv/bin/python -m pytest tests/test_main_pipeline.py \
+  tests/test_botcheck.py -k 'settlement or polymarket or persisted' -q
+.venv/bin/ruff check config.py main.py scripts/botcheck.py \
+  tests/test_main_pipeline.py tests/test_botcheck.py
+git diff --check
+```
+
+Commit: `feat: gate persisted-position settlement routing`
+
+### PR 1 Gate
+
+1. Run focused suites plus full paper/settlement tests.
+2. Run T3 classifier and replay disposition.
+3. Obtain independent financial review.
+4. Open protected PR; merge only after CI and explicit operator approval.
+5. Sync main. Snapshot canonical DB and run identity dry run.
+6. Review mapping report; apply migration only with zero unexplained rows.
+7. Enable the settlement flag in a separate protected restart.
+8. Roll back flag to false on mutation count, quarantine, or backlog regression.
+
+## PR 2: Pinned Fees and Report-Only Liquidation
+
+### Task 6: Pin Official Fee Artifacts and Implement Fill-Level Fees
+
+**Files**
+
 - Create: `trading/fees.py`
+- Create: `tests/fixtures/fees/manifest.json`
+- Add: immutable official fee fixtures permitted by source terms
 - Create: `tests/test_fees.py`
 
-**Interfaces:**
-- Produces: `FeeScheduleId` and `FeeQuote` frozen dataclasses.
-- Produces: `kalshi_taker_fee(contracts, price, multiplier, schedule_at)`.
-- Produces: `polymarket_us_taker_fee(contracts, price, schedule_at)`.
-- Produces: `quote_taker_fee(venue, ...)` exhaustive dispatcher.
+**Contract**
 
-- [ ] **Step 1: Write fee-matrix tests**
+- Manifest stores venue, effective interval, source URL, retrieval timestamp,
+  SHA-256, and supported fee types.
+- `FeeContext` includes account precision, role, quantity, price, signed revenue,
+  order identity, accumulator state, multiplier/coefficient, and timestamp.
+- `FeeQuote` separates base fee, rounding adjustment, rebate, net fee, and next
+  accumulator state.
+- Kalshi supports fractional/subpenny multi-fill examples and direct/non-direct
+  precision. Polymarket supports taker/maker coefficients and half-even cents.
+- Any schedule gap or provenance mismatch is unscorable.
 
-Cover price `$0.01`, `$0.10`, `$0.50`, `$0.90`, `$0.99`; one and 1,000
-contracts; Kalshi multipliers; Polymarket banker's-round boundaries `$0.025`
-and `$0.035`; effective-date boundaries; invalid/non-finite inputs; unknown
-venue and unsupported Kalshi fee type.
+**TDD**
 
-```python
-def test_polymarket_us_taker_fee_at_midpoint():
-    quote = polymarket_us_taker_fee(Decimal("1000"), Decimal("0.50"), AT_JULY_2026)
-    assert quote.amount == Decimal("15.00")
-
-
-def test_kalshi_general_taker_fee_uses_series_multiplier():
-    quote = kalshi_taker_fee(Decimal("100"), Decimal("0.50"), Decimal("1"), AT_JULY_2026)
-    assert quote.amount == Decimal("1.75")
-```
-
-- [ ] **Step 2: Verify RED, implement with `Decimal`, verify GREEN, commit**
+1. Pin and hash the current official artifacts; verify effective dates manually.
+2. Transcribe official examples as RED table tests, including fill splitting.
+3. Implement pure calculators and an exhaustive venue dispatcher.
+4. Test boundaries, negative values, NaN/infinity, and accumulator replay.
 
 ```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest tests/test_fees.py -q
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest tests/test_fees.py -q
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/ruff check trading/fees.py tests/test_fees.py
-git add trading/fees.py tests/test_fees.py
-git commit -m "feat: add versioned venue fee calculators"
-```
-
-### Task 5: Use Net Executable Bid Liquidation and Exhaustive Venue Dispatch
-
-**Files:**
-- Modify: `scripts/mark_open_positions.py`
-- Modify: `kalshi/series_metadata.py` only if stricter fee parsing is required.
-- Test: `tests/test_mark_open_positions.py`
-- Test: `tests/test_series_metadata.py`
-
-**Interfaces:**
-- Consumes: Task 4 fee calculator and existing `Venue` enum.
-- Produces: `compute_open_position_marks()` keys `gross_marked_value`, `estimated_exit_fees`, `marked_value`, `unknown_cost`, `unscorable_reasons`, `as_of`, and `fee_schedule_versions`.
-- Preserves: `marked_value` as the G7-compatible net liquidation value key.
-
-- [ ] **Step 1: Write RED tests for conservative liquidation**
-
-Prove held YES uses YES bid, held NO uses NO bid, midpoint/ask/last are not G7
-marks, exit taker fees reduce value, same-market lots share one snapshot, API
-fetches deduplicate, and an unsupported venue is unpriced rather than routed to
-Polymarket.
-
-- [ ] **Step 2: Verify RED**
-
-```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_mark_open_positions.py tests/test_series_metadata.py -q
-```
-
-- [ ] **Step 3: Implement adapter mapping and net mark result**
-
-Normalize `row['venue']` with `normalize_venue`; use an explicit mapping keyed
-by every `Venue`. Fetch each market and Kalshi series once. Treat missing
-series multiplier, bid, fee version, or identity as unscorable with zero value.
-
-- [ ] **Step 4: Verify G7 remains fail-closed**
-
-```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_mark_open_positions.py \
-  tests/test_main_startup.py \
-  tests/test_blend_task.py \
-  tests/test_trade_readiness_gate.py -q
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add scripts/mark_open_positions.py kalshi/series_metadata.py \
-  tests/test_mark_open_positions.py tests/test_series_metadata.py
-git commit -m "fix: value exposure at fee-net executable bids"
-```
-
-### Task 6: Route Daily Review Through Canonical Marks
-
-**Files:**
-- Modify: `scripts/paper_performance_drilldown.py`
-- Modify: `scripts/daily_review.py`
-- Test: `tests/test_paper_performance_drilldown.py`
-- Test: `tests/test_daily_review.py`
-
-**Interfaces:**
-- Consumes: injectable `mark_provider(db_path)` returning Task 5 result.
-- Produces: venue-neutral `open_mark` reporting fields.
-- Preserves: old Kalshi-only keys for one compatibility cycle as deprecated derived values.
-
-- [ ] **Step 1: Replace tests that codify Polymarket as unknown**
-
-Inject a mixed-venue canonical mark result and assert daily review renders open
-cost, gross value, exit fees, net value, unrealized net P&L, unknown cost, and
-schedule/as-of provenance. Add provider-failure coverage that renders explicit
-unavailable status without breaking the report.
-
-- [ ] **Step 2: Verify RED, implement, and verify GREEN**
-
-```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_paper_performance_drilldown.py tests/test_daily_review.py -q
-```
-
-- [ ] **Step 3: Run PR 2 verification and commit**
-
-```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_fees.py tests/test_series_metadata.py \
-  tests/test_mark_open_positions.py tests/test_main_startup.py \
-  tests/test_blend_task.py tests/test_trade_readiness_gate.py \
-  tests/test_paper_performance_drilldown.py tests/test_daily_review.py -q
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/ruff check \
-  trading/fees.py scripts/mark_open_positions.py \
-  scripts/paper_performance_drilldown.py scripts/daily_review.py tests/test_fees.py \
-  tests/test_mark_open_positions.py tests/test_paper_performance_drilldown.py \
-  tests/test_daily_review.py
+.venv/bin/python -m pytest tests/test_fees.py -q
+.venv/bin/ruff check trading/fees.py tests/test_fees.py
 git diff --check
-git add scripts/paper_performance_drilldown.py scripts/daily_review.py \
-  tests/test_paper_performance_drilldown.py tests/test_daily_review.py
-git commit -m "fix: share venue-complete exposure reporting"
 ```
 
----
+Commit: `feat: add pinned fill-level venue fee accounting`
 
-## PR 3: Fee-Net Settlement and Durable Feedback
+### Task 7: Preserve Venue Contract and Fill Provenance
 
-### Task 7: Preserve Contract and Fee Identity on New Trades
+**Files**
 
-**Files:**
+- Modify: Kalshi API/model normalization files discovered by `rg`
+- Modify: `kalshi/series_metadata.py`
 - Modify: `polymarket/models.py`
 - Modify: `polymarket/normalizer.py`
-- Modify: `trading/paper_trader.py`
-- Test: `tests/test_polymarket_normalizer.py`
-- Test: `tests/polymarket/test_paper_trader.py`
-- Test: `tests/test_paper_trader.py`
+- Test: `tests/test_series_metadata.py`
+- Test: `tests/polymarket/test_normalizer.py`
 
-**Interfaces:**
-- Produces: canonical venue market ID, side IDs, fee coefficient, minimum quantity, tick size, and contract snapshot provenance on normalized markets.
-- Produces nullable paper columns for entry fee, fee schedule, gross/net accounting, refund, terminal state, and settlement observation hash.
-- Legacy rows receive `fee_status='unknown'` and no calculated net P&L.
+**Contract**
 
-- [ ] **Step 1: Write schema and normalization RED tests**
-- [ ] **Step 2: Implement additive fields and idempotent migration**
-- [ ] **Step 3: Prove legacy rows are unchanged and commit**
+- Both venues preserve canonical market ID, fee type/multiplier/coefficient,
+  effective timestamp, quantity step, price tick, fill role, side/token IDs,
+  source payload hash, and snapshot timestamp.
+- Unsupported or absent fields remain explicit, not venue defaults.
+
+**TDD**
+
+1. RED normalized-fixture tests for every required field and missing provenance.
+2. Implement additive fields and parsing.
+3. Prove old fixtures remain readable with unscorable status.
 
 ```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_polymarket_normalizer.py tests/polymarket/test_paper_trader.py \
-  tests/test_paper_trader.py -q
-git add polymarket/models.py polymarket/normalizer.py trading/paper_trader.py \
-  tests/test_polymarket_normalizer.py tests/polymarket/test_paper_trader.py \
-  tests/test_paper_trader.py
-git commit -m "feat: preserve paper fee and contract identity"
+.venv/bin/python -m pytest tests/test_series_metadata.py \
+  tests/polymarket/test_normalizer.py -q
+.venv/bin/ruff check kalshi polymarket tests/test_series_metadata.py \
+  tests/polymarket/test_normalizer.py
+git diff --check
 ```
 
-### Task 8: Commit Net Settlement and Feedback Outbox Atomically
+Commit: `feat: retain venue fee and contract provenance`
 
-**Files:**
+### Task 8: Add Report-Only Executable Liquidation
+
+**Files**
+
+- Modify: `scripts/mark_open_positions.py`
+- Modify: `scripts/paper_performance_drilldown.py`
+- Modify: `scripts/daily_review.py`
+- Test: related script tests
+
+**Contract**
+
+- Exhaustive venue dispatch; no heuristic fallback.
+- Held YES uses YES bid; held NO uses NO bid.
+- No midpoint, ask, or last fallback.
+- Report keys include gross bid value, estimated exit fees, report-only net value,
+  unscorable cost/reasons, schedule hashes, and `as_of`.
+- Preserve the existing G7 `marked_value` input unchanged in this PR.
+- Reports share one injected provider and timestamp.
+
+**TDD**
+
+1. RED tests for held-side bids, fee subtraction, unknown=zero, API failure,
+   snapshot sharing, venue exhaustiveness, and unchanged G7 input.
+2. Implement report-only keys and shared provider.
+3. Prove daily review no longer labels priced Polymarket cost as unknown.
+
+```bash
+.venv/bin/python -m pytest tests/test_mark_open_positions.py \
+  tests/test_paper_performance_drilldown.py tests/test_daily_review.py \
+  tests/test_trade_readiness_gate.py -q
+.venv/bin/ruff check scripts/mark_open_positions.py \
+  scripts/paper_performance_drilldown.py scripts/daily_review.py
+git diff --check
+```
+
+Commit: `fix: report fee-net executable liquidation by venue`
+
+### PR 2 Gate
+
+Classify T3, run all fee/report/G7 tests, obtain independent financial review,
+merge through protected CI, and restart with no G7-input cutover. Compare pre/post
+G7 decisions byte-for-byte. Any future G7 mark cutover requires a new T3 design.
+
+## PR 3: Atomic Fee-Net Paper Accounting
+
+### Task 9: Add Disabled Additive Accounting Schema
+
+**Files**
+
+- Modify: `config.py`, `.env.example`, `trading/paper_trader.py`
+- Create: `trading/paper_accounting.py`
+- Create: `tests/test_paper_accounting.py`
+
+**Contract**
+
+- Add `ENABLE_FEE_NET_PAPER_ACCOUNTING=false`.
+- Add nullable fill, schedule, fee-component, gross/net, refund, terminal-state,
+  settlement-receipt, and observation-hash columns.
+- False mode preserves canonical cash/P&L/Kelly behavior.
+- Legacy matrix from the design is enforced.
+
+**TDD**
+
+1. RED schema, legacy, false-parity, and migration rollback tests.
+2. Implement additive schema and typed accounting records.
+3. Prove resolved legacy rows and bankroll are unchanged.
+
+Commit: `feat: add disabled fee-net paper accounting schema`
+
+### Task 10: Make Entry Accounting Atomic
+
+**Files**
+
+- Modify: `trading/paper_trader.py`, `trading/paper_accounting.py`
+- Modify: `tests/test_paper_accounting.py`, `tests/test_paper_trader.py`
+
+**Contract**
+
+- Under enabled mode, one `BEGIN IMMEDIATE` transaction commits trade row, cost
+  debit, entry fee components, provenance, and bankroll-after.
+- Faults before any commit roll back everything; retries are idempotent.
+- Disabled mode continues current canonical behavior.
+
+**TDD:** inject faults after every write and assert exact conservation.
+
+Commit: `fix: commit paper entry fees and cash atomically`
+
+### Task 11: Make Settlement and Feedback Atomic
+
+**Files**
+
 - Create: `trading/settlement_accounting.py`
-- Modify: `trading/paper_trader.py`
-- Modify: `polymarket/settlement_reconciler.py`
+- Modify: `trading/paper_trader.py`, settlement reconcilers
 - Create: `tests/test_settlement_accounting.py`
-- Modify: `tests/polymarket/test_settlement_reconciler.py`
-- Modify: `tests/test_paper_trader.py`
 
-**Interfaces:**
-- Produces: terminal `won|lost|void` accounting result with gross payout, fees/rebates/refund, and net P&L.
-- Produces: append-only `paper_feedback_outbox` rows committed with financial state.
-- Produces: idempotent outbox drain called after commit and on startup.
+**Contract**
 
-- [ ] **Step 1: Write RED conservation, void, duplicate, and crash tests**
+- Unique settlement receipt and compare-and-set `resolved=0`.
+- One transaction commits payout/refund, fee components, net P&L,
+  bankroll-after, and immutable outbox event.
+- Consumer receipts are append-only and unique by `(outbox_id, consumer_id)`.
+- Crash before/after consumer effects never double-credits or double-delivers.
+- Legacy open rows settle gross with null net P&L and no retroactive fee.
 
-Inject failures before and after each write. Assert rollback before commit,
-exactly-once bankroll credit after retry, durable outbox presence after a
-post-commit consumer crash, and idempotent feedback replay.
+**TDD:** won/lost/void/correction, duplicate/concurrent workers, every write
+fault, consumer crash boundaries, unsupported legacy fee, and row-count mismatch.
 
-- [ ] **Step 2: Implement pure accounting result and one transaction**
-- [ ] **Step 3: Implement idempotent outbox drain without changing financial state**
-- [ ] **Step 4: Run complete paper/Polymarket suite and commit**
+Commit: `fix: settle fee-net paper accounting exactly once`
 
-```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_settlement_accounting.py tests/test_paper_trader.py \
-  tests/polymarket tests/test_polymarket*.py -q
-git add trading/settlement_accounting.py trading/paper_trader.py \
-  polymarket/settlement_reconciler.py tests/test_settlement_accounting.py \
-  tests/test_paper_trader.py tests/polymarket/test_settlement_reconciler.py
-git commit -m "fix: settle paper positions net of fees atomically"
-```
+### PR 3 Gate
 
----
+1. Run full paper, settlement, accounting, sizing, and G7 suites.
+2. Replay a production DB copy in disabled and enabled modes; prove conservation.
+3. Classify T3 and obtain independent financial review.
+4. Merge protected with accounting disabled; restart and prove false parity.
+5. Snapshot DB, then enable accounting in a separate approved restart.
+6. Roll back flag to false on any balance, sizing, fee, or outbox mismatch.
 
 ## PR 4: Disabled Capital-Guard Shadow Evidence
 
-### Task 9: Add Append-Only Shadow Store and Disabled Configuration
+### Task 12: Add Isolated Append-Only Shadow Store
 
-**Files:**
+**Files**
+
 - Create: `trading/capital_guard_shadow.py`
-- Modify: `config.py`
-- Modify: `.env.example`
-- Modify: `scripts/botcheck.py`
+- Modify: `config.py`, `.env.example`, `scripts/botcheck.py`
 - Create: `tests/test_capital_guard_shadow.py`
-- Modify: `tests/test_botcheck.py`
 
-**Interfaces:**
-- Produces: `ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE` default `false`.
-- Produces: `CapitalGuardShadowStore` at `data/capital_guard_shadow.db`.
-- Produces append-only candidate, conflict, settlement, and evaluation tables.
+Add `ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE=false`; candidate, conflict,
+observation, settlement, and evaluation tables live only in
+`data/capital_guard_shadow.db`. Flag-off creates no DB. Test idempotency,
+concurrent writers, transaction faults, and canonical DB byte hashes.
 
-- [ ] **Step 1: Write disabled/no-create and append-only RED tests**
-- [ ] **Step 2: Implement exact schema, constraints, triggers, and idempotent capture key**
-- [ ] **Step 3: Add bounded read-only botcheck status and commit**
+Commit: `feat: add disabled capital guard shadow store`
 
-```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_capital_guard_shadow.py tests/test_botcheck.py -q
-git add trading/capital_guard_shadow.py config.py .env.example \
-  scripts/botcheck.py tests/test_capital_guard_shadow.py tests/test_botcheck.py
-git commit -m "feat: add disabled capital guard shadow store"
-```
+### Task 13: Capture Fully Specified G7-Only Candidates
 
-### Task 10: Capture Only Fully Specified G7-Only Candidates
+**Files**
 
-**Files:**
 - Modify: `tasks/blend_task.py`
-- Modify: `main.py`
-- Modify: `utils/logger.py`
-- Modify: `tests/test_blend_task.py`
-- Modify: `tests/test_lifecycle_telemetry.py`
+- Modify: `models/analysis.py`
+- Modify: shadow and blend tests
 
-**Interfaces:**
-- Consumes: complete readiness failure set, canonical executed-side edge, depth, fee and sizing provenance.
-- Produces: append-only eligible or unscorable shadow candidate without enqueueing.
+Emit canonical lifecycle telemetry first. Then perform bounded, fail-isolated
+capture from already available data only; no network calls. Capture the complete
+failure set, side, depth, edge, identity, fee/fill provenance, sizing inputs, and
+decision timestamp. Only G7-only rows are eligible. Test flag off, other-gate
+failure, missing provenance, duplicate lifecycle, SQLite lock/timeout,
+cancellation, logger failure, and capture exception with identical queue/result.
 
-- [ ] **Step 1: Write RED matrix**
+Commit: `feat: capture isolated G7-only decision evidence`
 
-Cover flag off, G7-only, G7 plus zero liquidity, missing side, missing depth,
-missing fee, duplicate lifecycle, store failure, and canonical NO-side edge.
-Assert no queue mutation and no canonical DB mutation in every case.
+### Task 14: Collect Authoritative Shadow Settlements
 
-- [ ] **Step 2: Implement capture after readiness evaluation and before blocked return**
-- [ ] **Step 3: Verify isolation and commit**
+**Files**
 
-```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_capital_guard_shadow.py tests/test_blend_task.py \
-  tests/test_lifecycle_telemetry.py tests/test_main_pipeline.py -q
-git add tasks/blend_task.py main.py utils/logger.py \
-  tests/test_blend_task.py tests/test_lifecycle_telemetry.py
-git commit -m "feat: capture G7-only shadow candidates"
-```
+- Create: `tasks/capital_guard_shadow_settlement.py`
+- Modify: `trading/capital_guard_shadow.py`, `main.py`
+- Create: `tests/test_capital_guard_shadow_settlement.py`
 
-### Task 11: Add Stateful Fee-Net Shadow Replay
+Use the shared venue adapters and `SettlementObservation`. Write only shadow DB.
+Test identity mismatch/drift, yes/no/void, correction, 404/unresolved, duplicate,
+restart, and canonical DB byte hashes. Collector remains disabled with capture.
 
-**Files:**
+Commit: `feat: collect authoritative shadow settlements`
+
+### Task 15: Add Stateful Fee-Net Replay
+
+**Files**
+
 - Create: `scripts/capital_guard_shadow_replay.py`
 - Create: `tests/test_capital_guard_shadow_replay.py`
 - Modify: `scripts/README.md`
 
-**Interfaces:**
-- Produces: chronological stateful replay over a preregistered window.
-- Produces: JSON report with classification/coverage, gross/net P&L, fees, risk, unresolved worst case, family/day block-bootstrap CI, and no-promotion verdicts.
+Chronologically apply eligible entries, fill-level fees, open exposure, marks,
+settlements, bankroll, and drawdown. Emit coverage by rows/stake/venue, resolved
+families, gross/net P&L, fees, turnover, risk, unresolved worst case,
+family/day block-bootstrap CI, and explicit promotion failures. Another-gate
+rows are diagnostics only. Test ordering, fee-version change, void/correction,
+exposure cap, unresolved worst case, and non-independent family grouping.
 
-- [ ] **Step 1: Write deterministic replay RED fixtures**
+Commit: `feat: replay settled capital guard counterfactuals`
 
-Include duplicate lifecycle, same-family burst, depth-limited fill, cooldown,
-exposure cap, fee version change, void, unresolved worst case, and another-gate
-failure. Prove independent-row summation would differ from the expected
-chronological result.
+### PR 4 and Runtime Gate
 
-- [ ] **Step 2: Implement read-only replay and strict coverage gates**
-- [ ] **Step 3: Verify deterministic output and commit**
+1. Run shadow, blend, settlement, replay, botcheck, and isolation suites.
+2. Classify T3; obtain independent financial review; merge through protected CI.
+3. Restart with capture false and prove no DB creation/writes.
+4. In a separate approved restart set capture true.
+5. Verify append-only isolation, natural G7-only capture, and collector progress.
+6. Roll back false on any canonical hash change, incomplete provenance, capture
+   path behavior change, settlement drift, or replay conservation failure.
 
-```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest \
-  tests/test_capital_guard_shadow_replay.py -q
-git add scripts/capital_guard_shadow_replay.py \
-  tests/test_capital_guard_shadow_replay.py scripts/README.md
-git commit -m "feat: replay capital guard shadow outcomes"
-```
+## Evidence Gate
 
----
-
-### Task 12: Review, PR, and Runtime Gates
-
-**Files:**
-- Modify: `CHANGELOG.md` in each implementation PR.
-- Modify: `docs/profit_path_debt_log.md` only when a bounded item closes or changes status.
-
-**Interfaces:**
-- Consumes: all prior tasks.
-- Produces: independent review evidence, protected PRs, CI, and separate disabled/enabled runtime gates.
-
-- [ ] **Step 1: Run full local verification per PR**
-
-```bash
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest -q
-/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/ruff check .
-git diff --check
-```
-
-- [ ] **Step 2: Run tier classification and replay requirements**
-
-Classify each PR independently. Treat settlement/accounting or G7-input changes
-as T3 unless the classifier and independent reviewer prove a stricter safety-
-fix exemption. Never combine a negative-evidence override with a relaxation.
-
-- [ ] **Step 3: Obtain independent financial-path review**
-
-Review venue exhaustiveness, exact money conservation, fee effective dates,
-legacy unknown handling, collision isolation, feature-flag independence,
-transaction fault injection, and absence of order/queue paths.
-
-- [ ] **Step 4: Publish protected PRs in dependency order**
-
-Merge only after CI and review. Sync `main`; do not enable shadow capture.
-
-- [ ] **Step 5: Separate activation gate**
-
-After explicit operator approval, set only
-`ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE=true`, protected restart, and verify:
-
-- stable PID and healthy P0;
-- canonical DB hashes/counts unchanged by a synthetic capture test;
-- exact schema and append-only triggers;
-- natural G7-only capture with complete provenance;
-- zero unexpected errors;
-- immediate rollback to `false` on any failure.
-
-- [ ] **Step 6: Evidence gate before any G7 proposal**
-
-Require 30 independent resolved families, 10 per affected venue, 95% scorable
-coverage by rows and stake, positive lower 95% confidence bound on fee-net
-incremental P&L, and stressed drawdown no greater than 20%. Otherwise retain
-G7 unchanged and record the hypothesis as rejected or still insufficient.
+Do not propose a G7 change until a preregistered fixed window has 30 independent
+resolved families overall, 10 per affected venue, at least 95% scorable rows and
+stake overall, no venue below 90%, positive lower 95% confidence bound on
+incremental fee-net P&L, stressed liquidation drawdown at or below 20%, and no
+venue with negative fee-net expectancy. Failure keeps G7 unchanged and records
+the hypothesis as rejected or insufficient.

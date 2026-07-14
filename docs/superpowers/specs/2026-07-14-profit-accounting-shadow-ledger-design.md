@@ -1,295 +1,270 @@
 # Profit Accounting and Capital-Guard Shadow Ledger Design
 
-Date: 2026-07-14
+**Status:** Revised after independent financial-path review on 2026-07-14.
 
 ## Problem
 
-The bot has not demonstrated repeatable profitability. The canonical paper
-ledger currently contains 34 resolved trades, 8 wins, 26 losses, and gross
-realized P&L of -$16.96. Thirteen open positions have $24.28 of entry cost and
-currently mark to approximately $29.17, leaving paper equity near $37.93 and
-start-to-current drawdown near 24.1%. The existing 20% G7 capital guard is
-therefore correctly preventing new exposure.
+The current paper record does not establish a repeatable profitable strategy.
+The latest verified state has 47 lifetime paper trades, 34 resolved, 8 wins, 26
+losses, and gross realized P&L of -$16.96 before venue fees. Thirteen open
+positions have $24.28 of cost and produce start-to-current drawdown near 24.1%.
+The 20% G7 capital guard is therefore protecting capital correctly.
 
-Three measurement gaps prevent a defensible recovery decision:
+The accounting and evidence path is not yet decision-grade:
 
-1. Paper settlement P&L is gross of venue fees and has no explicit void state.
-2. G7 marking is not uniformly executable liquidation accounting. Kalshi can
-   use midpoint, ask, or last fallbacks, and venue routing treats every
-   non-Kalshi row as Polymarket.
-3. G7-blocked logs do not contain enough decision-time state to replay only the
-   candidates that would otherwise have traded, net of fees and stateful risk
-   constraints.
-
-The daily review also uses a separate Kalshi-only snapshot helper and currently
-labels all $23.50 of open Polymarket cost as unknown even though the G7 and
-performance paths can price it. This is an operator decision-quality defect,
-not the reason G7 is binding.
+1. Settlement rows are selected with ticker aliases that can collide across
+   venues and can differ from authoritative venue market IDs.
+2. Paper P&L is gross of venue fees and has no explicit void/refund contract.
+3. Kalshi fees depend on fill-level precision, signed revenue, and an order fee
+   accumulator, not only quantity and price.
+4. Open-position reporting and G7 do not share a reproducible, fee-aware
+   executable liquidation model.
+5. G7-blocked logs lack the complete state and later authoritative settlements
+   required for stateful counterfactual replay.
 
 ## Goal
 
-Create one venue-complete, fee-versioned accounting surface and a disabled-by-
-default append-only shadow ledger that can prove or refute positive
-counterfactual expectancy while G7 continues to protect paper capital.
-
-This design does not promise profitability. It creates the evidence and
-accounting required before any capital, sizing, live-mode, or G7 policy change
-can be considered.
+Build a venue-complete, versioned accounting and evidence system that can prove
+or refute positive fee-net out-of-sample expectancy while the existing G7 guard
+continues to protect paper capital. Implementation must not claim profitability
+until realized, settled evidence meets the promotion standard below.
 
 ## Non-Goals
 
-- Do not lower, bypass, reset, or otherwise change G7.
-- Do not reset or delete `data/paper_trades.db`.
-- Do not change bankroll, sizing, paper/live mode, or order behavior.
-- Do not backfill legacy fees as zero or with a current fee schedule.
-- Do not enable shadow capture in the same PR that introduces it.
-- Do not activate weather trading, generic search enforcement, or any live
-  order path through this work.
+- Do not lower, bypass, reorder, or reset G7.
+- Do not reset the paper bankroll or erase historical losses.
+- Do not backfill legacy fees using a current schedule or assume zero fees.
+- Do not change sizing, live order behavior, or enable weather trading.
+- Do not activate settlement, accounting, G7-input, or shadow cutovers in the
+  same commit that introduces them.
 
-## Authoritative Fee Contracts
+## Canonical Contracts
 
-Fee rules are versioned by venue and effective timestamp. Each captured or
-newly recorded trade stores the exact schedule identity used for calculation.
+### Market Identity
 
-### Kalshi
+`MarketRef` is the only settlement identity:
 
-The July 7, 2026 official schedule defines the general taker fee as:
+- `venue`: exhaustive `Venue` enum;
+- `venue_market_id`: authoritative immutable venue identifier;
+- `alias`: ticker or slug used only for display and legacy lookup.
 
-`round_up(M * 0.07 * C * P * (1 - P))`
+`Position` and new paper rows persist `venue_market_id`. Portfolio storage may
+remain keyed by alias for read compatibility, but settlement must select an
+alias bucket and then match exact normalized venue plus exact canonical ID.
+Ticker alone never authorizes a financial mutation.
 
-where `M` is the series fee multiplier, `C` is contracts, and `P` is contract
-price in dollars. The series metadata endpoint already exposes
-`fee_multiplier` and `fee_type`; a missing, unsupported, or non-finite value is
-unscorable. Fee and balance rounding follow the official API fee-rounding
-contract. The bot's decision-time executable ask represents a taker fill.
+Existing unresolved rows receive a nullable `venue_market_id`,
+`identity_status`, and `quarantine_reason`. A read-only migration planner asks
+the authoritative venue adapter to map each row. Apply mode writes only unique,
+verified matches. Missing, conflicting, or drifting mappings are quarantined.
+Settlement cutover is blocked until every unresolved row is mapped or
+quarantined and the mapping report is independently reviewed.
 
-Sources:
+### Settlement Observation
 
-- `https://kalshi.com/docs/kalshi-fee-schedule.pdf`, effective 2026-07-07.
-- `https://docs.kalshi.com/getting_started/fee_rounding`.
+Venue adapters produce one frozen `SettlementObservation`:
 
-### Polymarket US
+- `market_ref`;
+- terminal market outcome `yes`, `no`, or `void`;
+- authoritative outcome payload;
+- observed and effective timestamps;
+- rules version and source identity;
+- canonical payload hash;
+- explicit refund contract for `void`;
+- correction/supersession reference when supported.
 
-The schedule effective July 1, 2026 defines:
+`PaperTrader` derives position `won` or `lost` from the held side and the market
+outcome. Malformed outcomes, identity drift, unsupported voids, or correction
+conflicts quarantine before any bankroll write.
 
-`Fee = theta * C * P * (1 - P)`
+### Fee Context
 
-with taker `theta=0.06`, maker rebate `theta=-0.0125`, and banker's rounding to
-the nearest cent. Shadow and paper buys at the executable ask are taker fills.
-Volume rebates are not assumed; an actual known tier may be stored explicitly
-in future versions.
+Every fee calculation uses an immutable `FeeContext` containing:
 
-Source: `https://docs.polymarket.us/fees`, effective 2026-07-01.
+- venue and pinned `FeeScheduleId(venue, effective_from, effective_to,
+  artifact_sha256)`;
+- fee type and multiplier/coefficient;
+- maker/taker role;
+- direct or non-direct account precision when relevant;
+- fill quantity, price, and signed revenue;
+- order identity and incoming fee-accumulator state;
+- fill and schedule-effective timestamps.
+
+Every `FeeQuote` persists base trade fee, rounding adjustment, rebate, net fee,
+and outgoing accumulator state separately. Fractional quantities and subpenny
+prices are supported. Unknown schedules, missing provenance, unsupported fee
+types, non-finite values, and time gaps are explicitly unscorable.
+
+The exact Kalshi schedule artifact must be fetched, checked into test fixtures
+or pinned by immutable content hash, and its effective interval verified before
+implementation. The current fee-rounding documentation requires direct account
+precision of $0.0001, non-direct precision of $0.01, trade fee rounding to
+$0.0001, per-fill rounding adjustments, and an order-level accumulator/rebate.
+No implementation may rely on the previously assumed July 7 effective date.
+
+Polymarket US uses the official schedule effective 2026-07-01. Taker and maker
+coefficients, fill role, and banker's rounding to the nearest cent are stored as
+schedule data rather than hard-coded call-site assumptions.
 
 ## Architecture
 
-### 1. Canonical Money Types and Fee Registry
+### 1. Venue-Qualified Settlement Safety
 
-Add a small shared accounting module using `Decimal` and explicit cents. It
-owns:
+PR 1 adds identity and observation contracts, persists canonical IDs, migrates
+or quarantines legacy open rows, and resolves with:
 
-- `FeeScheduleId(venue, effective_at, version_hash)`;
-- venue-native taker fee calculation and rounding;
-- strict validation of price, contracts, multiplier, and schedule timestamp;
-- immutable official-source metadata;
-- an exhaustive `Venue` adapter registry.
+```sql
+UPDATE paper_trades
+SET ...
+WHERE venue = ? AND venue_market_id = ? AND resolved = 0
+```
 
-Unknown venue, unknown schedule, missing Kalshi series multiplier, fractional
-or non-finite values, and unsupported fee types return an explicit unscorable
-result. They never silently become zero fees.
+The update must affect exactly the expected row set. Settlement reconciliation
+for persisted positions is independent of entry/discovery flags, but that new
+routing is behind a separate default-false cutover and T3 restart gate.
 
-Add an immutable `MarketRef(venue, venue_market_id, alias)` and make it the
-identity passed by valuation, portfolio, settlement, and shadow components.
-Display tickers and slugs are aliases, not database keys. A same-text alias on
-two venues must remain two distinct positions and settlements.
+### 2. Report-Only Executable Liquidation
 
-### 2. Executable Liquidation Marks
+One exhaustive venue dispatcher obtains a timestamped executable held-side bid:
 
-Replace heuristic venue branching with exhaustive `Venue` dispatch. Each
-valuation run fetches one timestamped market snapshot per `(venue, market_id)`
-and applies it to every open lot in that market.
+- held YES uses YES bid;
+- held NO uses NO bid;
+- no midpoint, ask, or last-trade fallback;
+- value is bid proceeds less the applicable exit fee;
+- missing identity, bid, depth, or fee provenance contributes zero value and an
+  explicit unscorable reason.
 
-- Held YES liquidation mark is the executable YES bid.
-- Held NO liquidation mark is the executable NO bid.
-- Crossed, empty, malformed, stale, or orientation-ambiguous books are
-  unpriced.
-- Liquidation value is gross bid proceeds minus the venue-native taker fee for
-  selling at that bid.
-- Missing price or fee provenance contributes zero marked value and records
-  unknown cost, preserving fail-closed G7 behavior.
-- Entry snapshots remain diagnostic only. They cannot inflate G7 equity.
+PR 2 exposes `report_net_liquidation_value` and fee provenance to reports only.
+It does not overwrite the current `marked_value` key consumed by G7. A later T3
+G7-input cutover requires its own replay, review, approval, restart, rollback,
+and pre/post acceptance evidence.
 
-G7 continues to compute equity as notional cash plus canonical net liquidation
-value and continues to block above 20% drawdown.
+### 3. Additive Fee-Net Paper Ledger
 
-### 3. Settlement Accounting
+New schema is additive. A disabled accounting mode records proposed fee-net
+entry and settlement rows beside canonical gross accounting without changing
+canonical bankroll or Kelly inputs.
 
-New paper rows store gross payout, entry fee, settlement or exit fee if any,
-fee schedule identity, net P&L, and terminal state (`won`, `lost`, `void`).
-Legacy rows retain explicit `fee_status=unknown`; their historical gross P&L is
-never relabeled as net.
+Entry accounting is one `BEGIN IMMEDIATE` transaction containing the trade row,
+cost debit, entry fee debit, schedule/fill identity, and bankroll-after value.
+Settlement is one `BEGIN IMMEDIATE` transaction containing a unique receipt,
+compare-and-set `resolved=0`, exact row-count assertion, payout/refund, fee
+components, net P&L, bankroll-after value, and immutable outbox event.
 
-Settlement remains exactly once and atomic. A receipt binds venue, canonical
-market identity, side orientation, authoritative outcome, and rules version.
-Payload drift, identity mismatch, malformed outcomes, or an unsupported void
-contract quarantines the settlement before any bankroll write.
+The outbox remains append-only. Consumers append receipts unique on
+`(outbox_id, consumer_id)` so a crash before or after side effects cannot cause
+double delivery or double credit.
 
-The reconciler discovers work from persisted open positions, grouped by
-`MarketRef`; entry/discovery feature flags may prevent new positions but may
-not stop reconciliation of existing positions. `PaperTrader` and `Portfolio`
-resolve by `(venue, venue_market_id)`, never by naked ticker. A schema migration
-must reject ambiguous legacy identity rather than updating multiple venues.
+Legacy matrix:
 
-The accounting transaction writes the terminal observation, gross payout,
-fees/refunds, net P&L, bankroll credit, and a durable feedback outbox row before
-commit. Keyword, source, calibration, and log consumers drain the outbox
-idempotently, so a crash after financial commit cannot silently lose learning
-feedback or double-credit the position.
+- resolved legacy rows remain unchanged with gross P&L and null net P&L;
+- open legacy rows may settle authoritatively for contractual gross payout;
+- legacy fees remain `unknown` and net P&L remains null;
+- no estimated entry fee is ever debited retroactively;
+- ambiguous legacy identity remains quarantined and uncredited.
 
-Void/cancel/refund is not a win, loss, or unresolved row. It credits the
-contractually correct refund and separately records any nonrefundable fee only
-when the effective venue contract proves it.
+Fee-net accounting changes canonical cash and sizing, so its cutover is a
+separate T3 operator action after conservation replay and database snapshot. It
+has an immediate false rollback; rollback stops new fee-net writes and never
+rewrites already committed financial history.
 
 ### 4. Shared Reporting
 
-`paper_performance_drilldown` consumes the canonical valuation result through
-an injectable provider. Daily review and performance reporting render the same
-venue-neutral fields:
+Daily review and performance drilldown consume the same injected mark provider
+and show, by venue:
 
-- open entry cost;
-- gross executable liquidation value;
+- open cost;
+- gross executable value;
 - estimated exit fees;
-- net liquidation value;
-- unrealized net P&L;
-- unknown/unscorable cost by venue and reason;
-- fee-schedule versions and snapshot timestamp.
+- report-only net liquidation value;
+- unrealized fee-net P&L;
+- unknown/unscorable cost and reasons;
+- fee schedule hashes and snapshot timestamp.
 
-Old Kalshi-only keys may remain for one compatibility cycle but are derived
-from the canonical result and labeled deprecated.
+### 5. Isolated Capital-Guard Shadow Ledger
 
-### 5. Capital-Guard Shadow Ledger
+`data/capital_guard_shadow.db` is owned by one schema module and disabled unless
+`ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE=true`. It never writes canonical paper,
+evidence, calibration, or feedback databases.
 
-Add a dedicated SQLite database, `data/capital_guard_shadow.db`, owned by one
-module and excluded from canonical paper accounting. Creation and writes are
-disabled unless `ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE=true`.
+Capture occurs only after canonical lifecycle telemetry has been emitted and
+uses already available decision-time data. It performs no network calls. Store
+lock, timeout, cancellation, logger, and capture failures cannot change queueing
+or `BlendTaskResult`.
 
-At the BlendTask boundary, capture a row only when:
+Every candidate records the complete readiness failure set. Only candidates
+whose sole failure is `G7_open_exposure_drawdown` are evaluation eligible.
+Incomplete rows are retained as unscorable diagnostics.
 
-- paper mode is active;
-- `G7_open_exposure_drawdown` is present;
-- every other readiness failure is absent; and
-- the candidate has a canonical side, executable ask, book depth, lifecycle
-  identity, fee schedule, and complete sizing inputs.
+### 6. Authoritative Shadow Settlement and Replay
 
-The capture does not enqueue or call the executor. It records the complete
-failure set even though only G7-only rows are evaluation eligible. Missing
-depth, side, fee, or provenance is written as an unscorable diagnostic row,
-never as an assumed fill.
+An idempotent shadow-settlement collector uses the same venue adapters and
+`SettlementObservation` contract, but writes only the shadow database. It
+records identity drift, voids, corrections, payload hashes, and unresolved
+states without touching canonical rows.
 
-Required immutable fields include:
-
-- lifecycle ID, venue, canonical market ID, market family, and signal time;
-- side, executed ask, displayed depth, raw snapshot hash, and price method;
-- model probability for the executed side and correctly signed edge;
-- readiness failure set and gate thresholds;
-- Kelly inputs, proposed contracts, bankroll and open-exposure state;
-- fee schedule identity, series multiplier, and estimated entry fee;
-- code commit, config fingerprint, and model/capture provenance.
-
-Tables are append-only. Corrections create new versioned rows. Unique keys
-prevent duplicate lifecycle capture. Canonical paper and evidence databases are
-never read-write dependencies of the capture transaction.
-
-### 6. Stateful Settlement Replay
-
-An offline read-only evaluator processes a predeclared window chronologically.
-It re-applies cooldown, duplicate, family concentration, bankroll, sizing,
-depth, and exposure state after every simulated fill and authoritative
-settlement. It never sums independent hypothetical row P&L.
-
-The report separates:
-
-- all G7-blocked decisions;
-- G7-only candidates;
-- scorable/no-fill/unscorable candidates;
-- gross and fee-net P&L;
-- fees, turnover, capital at risk, maximum liquidation drawdown, and unresolved
-  worst case;
-- results by venue, family, source, and signal type;
-- block-bootstrap 95% confidence intervals by market family and day.
-
-Candidate rows that fail another gate are not attributed to G7.
+Replay is chronological and stateful. It applies hypothetical entries,
+fill-level fees, open exposure, executable marks, settlement, bankroll, and
+drawdown in order. It never sums independent row P&L. Another-gate failures are
+reported but never attributed to G7.
 
 ## Safety Invariants
 
-- Every supported `Venue` has exactly one valuation, fee, and settlement
-  adapter; unknown venue fails closed.
-- All lots in one market share one valuation snapshot per run.
-- Money reconciliation uses exact decimal/cents arithmetic.
-- Cash, entry debit, fees, payout, realized net P&L, open cost, marked value,
-  and maximum remaining loss reconcile exactly.
-- Missing fees, marks, outcomes, identity, or provenance are explicit and
-  fail closed.
-- Persisted open positions reconcile even when their venue's entry/discovery
-  feature flag is disabled.
-- Settlement and capture writes are transactional, idempotent, append-only,
-  and safe under retry, crash, concurrent workers, and outbox replay.
-- No code in this design can place or enqueue a live or paper trade.
-- Runtime activation is a separate operator-reviewed step with an immediate
-  false rollback.
+- Every supported venue has one identity, fee, valuation, and settlement path.
+- Money and quantity use `Decimal` or fixed-point storage; no float arithmetic.
+- Missing fee, mark, outcome, identity, or provenance fails closed.
+- Entry, settlement, and capture writes are transactional and idempotent.
+- Each runtime-affecting or schema PR is T3. No safety-fix downgrade exception.
+- Every T3 PR gets classifier evidence, full replay disposition, independent
+  financial review, explicit operator approval, protected restart, acceptance
+  checks, and rollback instructions.
+- Runtime databases and state artifacts remain outside commits.
 
 ## Verification
 
-### Unit and Integration Coverage
+Tests cover:
 
-- Fee matrices for both venues across prices, sides, quantities, rounding
-  boundaries, effective dates, and invalid schedules.
-- YES/NO liquidation with asymmetric, crossed, empty, stale, and malformed
-  books.
-- Exhaustive venue dispatch and mixed-venue portfolio conservation.
-- Multi-lot snapshot consistency and API fetch deduplication.
-- Settlement outcomes for won, lost, unresolved, void, 404, wrong identity,
-  malformed/nonbinary values, and corrections.
-- Same alias on two venues resolves only the exact `MarketRef`; existing
-  Polymarket positions continue reconciling when new Polymarket entry is off.
-- Transaction fault injection around every settlement and shadow write,
-  duplicate delivery, concurrent reconcilers, outbox replay, and restart
-  recovery.
-- End-to-end mixed-venue accounting through G7 and both report surfaces.
-- Disabled-by-default proof: no shadow database or writes when the flag is
-  false.
-- Isolation proof: shadow writes do not alter canonical paper, evidence, or
-  matcher state.
+- alias/ID divergence and cross-venue collisions;
+- legacy mapping, quarantine, and identity drift;
+- `yes`, `no`, `void`, correction, malformed, and duplicate observations;
+- official fractional/subpenny multi-fill fee examples and fill splitting;
+- direct/non-direct precision and accumulator/rebate state;
+- report-only marks versus unchanged G7 input;
+- entry and settlement fault injection around every write;
+- outbox crash before and after consumer effects;
+- shadow disabled state, SQLite lock/timeout/cancellation, and DB isolation;
+- shadow settlement identity, drift, void, correction, and retry;
+- chronological replay conservation and unresolved worst case.
 
-### Promotion Standard
+## Promotion Standard
 
-Shadow capture is observational and does not authorize G7 changes. Any later
-G7 alternative requires a separate design and all of:
+Shadow capture never authorizes a G7 change by itself. A later alternative must
+use a fixed preregistered out-of-sample window and satisfy all of:
 
-- a fixed, preregistered evaluation window;
-- 100% candidate-universe classification;
-- at least 95% scorable coverage by rows and proposed stake, with no venue
-  below 90%;
-- at least 30 independent resolved market families overall and 10 per affected
-  venue;
-- historically effective fee schedules and authoritative settlements;
+- only G7-only candidates;
+- stateful chronological replay with pinned historical fee schedules;
+- authoritative settlements and no assumed outcomes;
+- at least 30 independent resolved market families overall;
+- at least 10 resolved families per affected venue;
+- at least 95% scorable coverage by rows and stake overall;
+- no affected venue below 90% coverage;
 - positive lower 95% confidence bound on incremental fee-net P&L;
-- observed and stressed maximum liquidation drawdown no greater than 20%;
-- no result dependent on unresolved mark-to-market value;
-- independent financial-path review and explicit operator approval.
+- stressed maximum liquidation drawdown at or below 20%;
+- no venue with negative fee-net expectancy;
+- independent financial review and a separate operator-approved T3 design.
+
+Until these conditions are met, G7 remains unchanged and the bot must not be
+described as repeatably profitable.
 
 ## Rollout
 
-1. Land fee/accounting primitives and canonical reporting with no runtime flag.
-2. Land disabled shadow schema, capture, and evaluator in a separate PR.
-3. Run focused and full suites, replay-as-CI classification, and independent
-   review.
-4. Merge and sync without enabling capture.
-5. In a separate authorized restart, enable shadow capture only; verify DB
-   isolation, append-only behavior, and natural G7-only captures.
-6. Continue settlement collection until the promotion standard is met or the
-   hypothesis is rejected.
-
-Any accounting mismatch, unsupported fee schedule, settlement backlog,
-unpriced open cost, venue omission, or optimistic fallback blocks promotion and
-keeps G7 unchanged.
+1. Land PR 1 identity/settlement safety with cutover disabled.
+2. Dry-run and review canonical-ID mapping; snapshot the DB before apply mode.
+3. Activate persisted-position reconciliation in a separate protected restart.
+4. Land PR 2 fee primitives and report-only executable liquidation.
+5. Land PR 3 additive fee-net ledger with canonical accounting cutover disabled.
+6. Replay conservation, snapshot, then activate accounting separately.
+7. Land PR 4 disabled shadow capture, settlement collector, and replay.
+8. Activate shadow capture only after independent review and isolation checks.
+9. Collect the preregistered evidence window; keep G7 unchanged unless the full
+   promotion standard passes.
