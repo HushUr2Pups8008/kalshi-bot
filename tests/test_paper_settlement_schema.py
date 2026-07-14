@@ -245,6 +245,8 @@ def test_fresh_paper_trader_initializes_full_settlement_schema(tmp_path, monkeyp
             )
     finally:
         trader._conn.close()
+    with SettlementStore(db) as store:
+        assert store.readiness(pre_cutover=True).ok
 
 
 def test_existing_paper_trader_startup_does_not_add_settlement_schema(
@@ -750,6 +752,45 @@ def test_exact_schema_contract_validates_added_paper_trade_columns(
         new=new,
     )
     conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.readiness(pre_cutover=True)
+        assert not result.ok
+        assert "schema_objects" in result.failures
+    with open_readonly(db) as conn:
+        with pytest.raises(RuntimeError, match="does not match target contract"):
+            plan_settlement_schema(conn, db)
+
+
+def test_exact_schema_contract_rejects_terminal_state_nocase_collation(tmp_path):
+    db = tmp_path / "paper-column-collation.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    _replace_schema_sql(
+        conn,
+        object_type="table",
+        name="paper_trades",
+        old="terminal_state TEXT CHECK",
+        new="terminal_state TEXT COLLATE NOCASE CHECK",
+    )
+    conn.execute(
+        """
+        INSERT INTO paper_trades (
+            trade_id, ticker, venue, resolved, venue_market_id, identity_status,
+            side, contracts, price_cents, cost_dollars, terminal_state
+        ) VALUES ('nocase', 'KX-NOCASE', 'kalshi', 0, 'KX-NOCASE', 'mapped',
+                  'yes', 1, 40, 0.4, 'WON')
+        """
+    )
+    conn.commit()
+    assert conn.execute(
+        "SELECT terminal_state FROM paper_trades WHERE trade_id='nocase'"
+    ).fetchone()[0] == "WON"
+    with pytest.raises(RuntimeError, match="does not match target contract"):
+        _migration_action(conn)
     conn.close()
 
     with SettlementStore(db) as store:

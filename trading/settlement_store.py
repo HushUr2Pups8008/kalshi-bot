@@ -341,13 +341,17 @@ def _settlement_schema_contract_payload(
     paper_trade_row = conn.execute(
         "SELECT sql FROM sqlite_schema WHERE type='table' AND name='paper_trades'"
     ).fetchone()
+    paper_trade_schema_sql = paper_trade_row[0] if paper_trade_row is not None else None
     paper_trade_sql = _normalize_schema_sql(
-        paper_trade_row[0] if paper_trade_row is not None else None
+        paper_trade_schema_sql
     )
     return {
         "objects": objects,
         "paper_trades": {
             "columns": paper_trade_columns,
+            "column_clauses": _settlement_paper_trade_column_clauses(
+                paper_trade_schema_sql
+            ),
             "foreign_keys": paper_trade_foreign_keys,
             "terminal_state_check": _TERMINAL_STATE_CHECK_SQL in paper_trade_sql,
         },
@@ -358,6 +362,62 @@ def _normalize_schema_sql(value: object) -> str:
     if not isinstance(value, str):
         return ""
     return " ".join(value.strip().rstrip(";").lower().split())
+
+
+def _settlement_paper_trade_column_clauses(value: object) -> dict[str, str]:
+    """Extract exact added-column clauses independent of base-table layout."""
+    if not isinstance(value, str):
+        return {}
+    start = value.find("(")
+    end = value.rfind(")")
+    if start < 0 or end <= start:
+        return {}
+    target_names = {name for name, _definition in SETTLEMENT_PAPER_TRADE_COLUMNS}
+    clauses: dict[str, str] = {}
+    for clause in _split_top_level_sql_list(value[start + 1 : end]):
+        normalized = _normalize_schema_sql(clause)
+        for name in target_names:
+            if normalized == name or normalized.startswith(f"{name} "):
+                clauses[name] = normalized
+                break
+    return clauses
+
+
+def _split_top_level_sql_list(value: str) -> list[str]:
+    clauses: list[str] = []
+    current: list[str] = []
+    depth = 0
+    quote: str | None = None
+    index = 0
+    while index < len(value):
+        char = value[index]
+        current.append(char)
+        if quote == "[":
+            if char == "]":
+                quote = None
+        elif quote is not None:
+            if char == quote:
+                if index + 1 < len(value) and value[index + 1] == quote:
+                    current.append(value[index + 1])
+                    index += 1
+                else:
+                    quote = None
+        elif char in {"'", '"', "`"}:
+            quote = char
+        elif char == "[":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "," and depth == 0:
+            current.pop()
+            clauses.append("".join(current).strip())
+            current = []
+        index += 1
+    if current:
+        clauses.append("".join(current).strip())
+    return clauses
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> list[dict[str, object]]:
