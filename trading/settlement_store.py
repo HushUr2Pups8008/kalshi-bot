@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import re
 import sqlite3
@@ -243,6 +244,111 @@ class PendingRequirement:
     event_kind: str
     payload_json: str
     created_at: str
+
+
+class _CallbackTransactionGuard:
+    __slots__ = ("blocked",)
+
+    def __init__(self) -> None:
+        self.blocked = False
+
+    def authorize(
+        self,
+        action_code: int,
+        _arg1: str | None,
+        _arg2: str | None,
+        _database: str | None,
+        _trigger: str | None,
+    ) -> int:
+        if action_code in {sqlite3.SQLITE_TRANSACTION, sqlite3.SQLITE_SAVEPOINT}:
+            self.blocked = True
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    def reject(self) -> None:
+        self.blocked = True
+        raise RuntimeError("callback transaction control is forbidden")
+
+
+class _SettlementEffectCursor:
+    __slots__ = ("__cursor",)
+
+    def __init__(self, cursor: sqlite3.Cursor) -> None:
+        self.__cursor = cursor
+
+    @property
+    def description(self):
+        return self.__cursor.description
+
+    @property
+    def lastrowid(self):
+        return self.__cursor.lastrowid
+
+    @property
+    def rowcount(self) -> int:
+        return self.__cursor.rowcount
+
+    def __iter__(self):
+        while (row := self.__cursor.fetchone()) is not None:
+            yield row
+
+    def close(self) -> None:
+        self.__cursor.close()
+
+    def fetchall(self):
+        return self.__cursor.fetchall()
+
+    def fetchmany(self, size: int | None = None):
+        if size is None:
+            return self.__cursor.fetchmany()
+        return self.__cursor.fetchmany(size)
+
+    def fetchone(self):
+        return self.__cursor.fetchone()
+
+
+class _SettlementEffectConnection:
+    __slots__ = ("__connection", "__guard")
+
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        guard: _CallbackTransactionGuard,
+    ) -> None:
+        self.__connection = connection
+        self.__guard = guard
+
+    def commit(self) -> None:
+        self.__guard.reject()
+
+    def rollback(self) -> None:
+        self.__guard.reject()
+
+    def execute(self, sql: str, parameters: object = ()) -> _SettlementEffectCursor:
+        try:
+            cursor = self.__connection.execute(sql, parameters)
+        except sqlite3.DatabaseError as exc:
+            if self.__guard.blocked:
+                raise RuntimeError(
+                    "callback transaction control is forbidden"
+                ) from exc
+            raise
+        return _SettlementEffectCursor(cursor)
+
+    def executemany(
+        self,
+        sql: str,
+        parameters: object,
+    ) -> _SettlementEffectCursor:
+        try:
+            cursor = self.__connection.executemany(sql, parameters)
+        except sqlite3.DatabaseError as exc:
+            if self.__guard.blocked:
+                raise RuntimeError(
+                    "callback transaction control is forbidden"
+                ) from exc
+            raise
+        return _SettlementEffectCursor(cursor)
 
 
 @dataclass(frozen=True)
@@ -766,7 +872,7 @@ class SettlementStore:
         claim_token: str,
         processed_at: datetime,
         result_sha256: str,
-        apply: Callable[[sqlite3.Connection, PendingRequirement], None],
+        apply: Callable[[_SettlementEffectConnection, PendingRequirement], object],
     ) -> bool:
         """Apply a same-database effect and receipt under one transaction."""
         _require_aware(processed_at, "processed_at")
@@ -813,7 +919,27 @@ class SettlementStore:
             if row is None:
                 raise RuntimeError("claim requirement is missing")
             requirement = PendingRequirement(*tuple(row))
-            apply(self._conn, requirement)
+            guard = _CallbackTransactionGuard()
+            effect_connection = _SettlementEffectConnection(self._conn, guard)
+            self._conn.set_authorizer(guard.authorize)
+            try:
+                callback_result = apply(effect_connection, requirement)
+                if inspect.isawaitable(callback_result):
+                    close = getattr(callback_result, "close", None)
+                    if callable(close):
+                        try:
+                            close()
+                        except Exception:  # noqa: BLE001 - still reject callback
+                            pass
+                    raise TypeError("callback must be synchronous")
+                if guard.blocked:
+                    raise RuntimeError(
+                        "callback transaction control is forbidden"
+                    )
+            finally:
+                self._conn.set_authorizer(None)
+            if not self._conn.in_transaction:
+                raise RuntimeError("callback transaction control is forbidden")
 
             self._conn.execute(
                 """
