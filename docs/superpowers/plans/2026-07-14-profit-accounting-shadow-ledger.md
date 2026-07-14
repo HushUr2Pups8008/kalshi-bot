@@ -110,20 +110,30 @@ Commit: `feat: normalize authoritative settlement observations`
 
 **Contract**
 
-- Add nullable `venue_market_id`, `identity_status`, and `quarantine_reason`.
+- Add nullable `venue_market_id`, `identity_status`, and `quarantine_reason` to
+  fresh-database DDL only; normal `PaperTrader` startup must not auto-ALTER an
+  existing database.
 - Default command is read-only dry run.
-- Apply mode writes only unique venue-adapter mappings in one transaction.
-- Missing, conflicting, or drifting mappings become quarantined.
+- The Polymarket adapter exposes all exact candidates so uniqueness is proven;
+  the migration must not call its private HTTP method or trust a first match.
+- Apply mode resolves all lookups first, then adds all columns and writes only
+  unique venue-adapter mappings in one `BEGIN IMMEDIATE` transaction.
+- Transport failure or a single clean miss remains unresolved and unwritten.
+- Deterministic conflicts or repeated confirmed absence emit quarantine
+  candidates. Only a separate reviewed `--apply-quarantine` mode writes them;
+  exact-match repair is a separate reviewed operation.
 - Settled legacy rows remain unchanged.
 - Emit machine-readable counts and row identities for mapped, quarantined, and
   unresolved rows; never print secrets or mutate other databases.
 
 **TDD**
 
-1. RED tests: unique match, no match, multiple matches, alias/ID divergence,
-   existing conflicting ID, rollback after injected failure, idempotent retry.
+1. RED tests: startup no-ALTER, unique match, transient/no match, multiple
+   matches, alias/ID divergence, repeated absence, explicit quarantine, repair,
+   existing conflicting ID, transaction drift, rollback, and idempotent retry.
 2. Implement additive migration and planner.
-3. Prove dry run leaves DB byte-for-byte unchanged.
+3. Prove dry run leaves DB and sidecar files byte-for-byte unchanged; prove DDL
+   and row updates roll back together after every injected failure.
 
 ```bash
 .venv/bin/python -m pytest tests/test_paper_identity_migration.py \

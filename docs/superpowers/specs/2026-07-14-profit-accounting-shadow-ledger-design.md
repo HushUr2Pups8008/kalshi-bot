@@ -54,10 +54,14 @@ alias bucket and then match exact normalized venue plus exact canonical ID.
 Ticker alone never authorizes a financial mutation.
 
 Existing unresolved rows receive a nullable `venue_market_id`,
-`identity_status`, and `quarantine_reason`. A read-only migration planner asks
-the authoritative venue adapter to map each row. Apply mode writes only unique,
-verified matches. Missing, conflicting, or drifting mappings are quarantined.
-Settlement cutover is blocked until every unresolved row is mapped or
+`identity_status`, and `quarantine_reason`. Production startup does not add
+these columns automatically; only an explicit migration apply transaction may
+alter an existing database. A read-only planner asks the authoritative venue
+adapter for all exact candidates and writes only unique, verified matches.
+Transport failures and a single clean miss remain unresolved and unwritten.
+Deterministic conflicts or repeated confirmed absence become quarantine
+candidates, but quarantine requires a separate explicit apply option and review.
+Settlement cutover is blocked until every unresolved row is mapped or formally
 quarantined and the mapping report is independently reviewed.
 
 ### Settlement Observation
@@ -237,7 +241,8 @@ reported but never attributed to G7.
 Tests cover:
 
 - alias/ID divergence and cross-venue collisions;
-- legacy mapping, quarantine, and identity drift;
+- legacy mapping, transient miss, explicit quarantine, repair, and identity
+  drift;
 - `yes`, `no`, `void`, correction, malformed, and duplicate observations;
 - official fractional/subpenny multi-fill fee examples and fill splitting;
 - direct/non-direct precision and accumulator/rebate state;
