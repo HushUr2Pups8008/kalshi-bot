@@ -303,6 +303,20 @@ def _insert_invalid_event(seed: SeededEvent, invalid_case: str) -> SeededEvent:
         payload["keyword_outcomes"] = "not-a-list"
     elif invalid_case == "invalid_enum":
         payload["side"] = "hold"
+    elif invalid_case == "outcome_yes_resolved_no":
+        payload["resolved_yes"] = False
+        payload["won"] = False
+        payload["terminal_state"] = "lost"
+        payload["keyword_outcomes"] = [
+            {"keyword": "missile strike", "direction": "yes", "correct": False},
+            {"keyword": "ceasefire", "direction": "no", "correct": True},
+        ]
+    elif invalid_case == "outcome_no_resolved_yes":
+        payload["outcome"] = "no"
+    elif invalid_case == "keyword_correct_contradiction":
+        payload["keyword_outcomes"][0]["correct"] = False
+    elif invalid_case == "keyword_correct_none":
+        payload["keyword_outcomes"][0]["correct"] = None
     elif invalid_case == "outer_event_version_mismatch":
         outer_event_version = 2
     elif invalid_case == "outer_event_kind_mismatch":
@@ -701,6 +715,59 @@ async def test_run_once_rejects_invalid_contract_without_effects_or_receipts(
     )
     assert invalid_receipts == before_effect_receipts
     assert ("unknown_consumer",) not in invalid_receipts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_case",
+    (
+        "outcome_yes_resolved_no",
+        "outcome_no_resolved_yes",
+        "keyword_correct_contradiction",
+        "keyword_correct_none",
+    ),
+)
+async def test_semantic_payload_contradictions_are_rejected_before_claim(
+    monkeypatch,
+    tmp_path,
+    invalid_case,
+):
+    seed = _seed_directional_event(monkeypatch, tmp_path)
+    invalid_seed = _insert_invalid_event(seed, invalid_case)
+
+    await _task(invalid_seed).run_once(limit=100)
+
+    assert _rows(invalid_seed.db_path, "SELECT * FROM source_credibility") == []
+    assert _rows(invalid_seed.db_path, "SELECT * FROM keyword_outcomes") == []
+    with SettlementStore(invalid_seed.db_path) as store:
+        for consumer_name in ("source_credibility", "keyword_outcomes"):
+            assert (
+                store.claim_state(
+                    consumer_name,
+                    invalid_seed.outbox_id,
+                    now=WORKER_NOW,
+                )
+                is None
+            )
+
+
+@pytest.mark.asyncio
+async def test_limit_counts_supported_database_consumers_after_filtering(
+    monkeypatch,
+    tmp_path,
+):
+    seed = _seed_directional_event(monkeypatch, tmp_path)
+
+    processed = await _task(seed).run_once(limit=1)
+
+    assert processed == 1
+    assert len(_rows(seed.db_path, "SELECT * FROM keyword_outcomes")) == 2
+    assert _rows(seed.db_path, "SELECT * FROM source_credibility") == []
+    assert _pending_consumers(seed) == (
+        "calibration_state",
+        "paper_trade_log",
+        "source_credibility",
+    )
 
 
 @pytest.mark.asyncio
