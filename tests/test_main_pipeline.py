@@ -3684,6 +3684,61 @@ class TestMainAsyncBlocking:
         bot.paper.get_notional_bankroll.return_value = 490.0
         return bot
 
+    @pytest.mark.asyncio
+    async def test_auto_resolve_false_schema_absent_preserves_legacy_noop(
+        self,
+        monkeypatch,
+    ):
+        bot = self._make_bot()
+        events = []
+        expected_sql = (
+            "SELECT DISTINCT ticker, COALESCE(venue, 'kalshi') AS venue "
+            "FROM paper_trades WHERE resolved = 0"
+        )
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+
+        def execute(sql):
+            events.append(("execute", sql))
+            return cursor
+
+        bot.source_stats.flush.side_effect = lambda: events.append("flush")
+        bot.paper._conn.execute.side_effect = execute
+        settlement_store = MagicMock(name="SettlementStore")
+        outbox_task = MagicMock(name="SettlementOutboxTask")
+        monkeypatch.setattr(
+            _cfg_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            False,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "settlement_schema_contract_matches",
+            MagicMock(return_value=False),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "SettlementStore",
+            settlement_store,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "SettlementOutboxTask",
+            outbox_task,
+            raising=False,
+        )
+
+        await bot._check_and_resolve()
+
+        assert events == ["flush", ("execute", expected_sql)]
+        settlement_store.assert_not_called()
+        outbox_task.assert_not_called()
+        bot.rest.get_market.assert_not_called()
+        bot.paper.resolve_market.assert_not_awaited()
+
     def test_operator_reports_are_not_generated_from_bot_runtime_loop(self):
         assert not hasattr(TradingBot, "_daily_report_task")
 
