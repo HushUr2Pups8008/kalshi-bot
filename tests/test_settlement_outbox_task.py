@@ -162,27 +162,46 @@ def _result_sha256(outbox_id: str, consumer_name: str) -> str:
 
 
 def _record_receipts(
-    db_path: Path,
-    outbox_id: str,
+    seed: SeededEvent,
     consumers: tuple[str, ...],
 ) -> None:
-    with SettlementStore(db_path) as store:
+    settled_at = datetime.fromisoformat(str(seed.payload["settled_at"]))
+    with SettlementStore(seed.db_path) as store:
+        outbox_row = store.connection.execute(
+            "SELECT created_at FROM paper_settlement_outbox WHERE outbox_id=?",
+            (seed.outbox_id,),
+        ).fetchone()
+        assert outbox_row is not None
+        created_at = datetime.fromisoformat(str(outbox_row["created_at"]))
+        claim_at = max(settled_at, created_at)
+        processed_at = claim_at + timedelta(seconds=1)
         for index, consumer_name in enumerate(consumers, start=1):
             claim_token = f"fixture-token-{index}-{consumer_name}"
             assert store.acquire_claim(
                 consumer_name,
-                outbox_id,
+                seed.outbox_id,
                 claim_token=claim_token,
-                now=WORKER_NOW,
+                now=claim_at,
                 lease_seconds=60,
             )
             assert store.record_receipt(
                 consumer_name,
-                outbox_id,
+                seed.outbox_id,
                 claim_token=claim_token,
-                processed_at=WORKER_NOW + timedelta(seconds=1),
-                result_sha256=_result_sha256(outbox_id, consumer_name),
+                processed_at=processed_at,
+                result_sha256=_result_sha256(seed.outbox_id, consumer_name),
             )
+            receipt = store.connection.execute(
+                """
+                SELECT processed_at FROM paper_settlement_consumer_receipts
+                WHERE outbox_id=? AND consumer_name=?
+                """,
+                (seed.outbox_id, consumer_name),
+            ).fetchone()
+            assert receipt is not None
+            persisted_at = datetime.fromisoformat(str(receipt["processed_at"]))
+            assert persisted_at >= settled_at
+            assert persisted_at >= created_at
 
 
 def _rows(db_path: Path, sql: str, parameters: tuple[object, ...] = ()) -> list[tuple]:
@@ -350,10 +369,10 @@ def _insert_invalid_event(seed: SeededEvent, invalid_case: str) -> SeededEvent:
             conn.commit()
         finally:
             conn.close()
-        _record_receipts(seed.db_path, seed.outbox_id, DIRECTIONAL_CONSUMERS)
+        _record_receipts(seed, DIRECTIONAL_CONSUMERS)
         return seed
 
-    _record_receipts(seed.db_path, seed.outbox_id, DIRECTIONAL_CONSUMERS)
+    _record_receipts(seed, DIRECTIONAL_CONSUMERS)
     payload = dict(seed.payload)
     original_observation_sha256 = str(payload["observation_sha256"])
     outer_observation_sha256 = hashlib.sha256(
@@ -477,8 +496,7 @@ def _insert_invalid_event(seed: SeededEvent, invalid_case: str) -> SeededEvent:
         payload=payload,
     )
     _record_receipts(
-        invalid_seed.db_path,
-        invalid_seed.outbox_id,
+        invalid_seed,
         ("paper_trade_log", "calibration_state"),
     )
     return invalid_seed
@@ -491,8 +509,7 @@ async def test_run_once_projects_source_and_keywords_atomically_once(
 ):
     seed = _seed_directional_event(monkeypatch, tmp_path)
     _record_receipts(
-        seed.db_path,
-        seed.outbox_id,
+        seed,
         ("paper_trade_log", "calibration_state"),
     )
     assert _pending_consumers(seed) == ("keyword_outcomes", "source_credibility")
@@ -586,8 +603,7 @@ async def test_run_once_uses_losing_payload_after_trade_row_context_changes(
     )
     assert seed.payload["won"] is False
     _record_receipts(
-        seed.db_path,
-        seed.outbox_id,
+        seed,
         ("paper_trade_log", "calibration_state"),
     )
     _execute(
@@ -652,8 +668,7 @@ async def test_receipt_insert_failure_rolls_back_database_consumer_effect(
 ):
     seed = _seed_directional_event(monkeypatch, tmp_path)
     _record_receipts(
-        seed.db_path,
-        seed.outbox_id,
+        seed,
         tuple(consumer for consumer in DIRECTIONAL_CONSUMERS if consumer != consumer_name),
     )
     _execute(
@@ -691,8 +706,7 @@ async def test_second_keyword_insert_failure_rolls_back_batch_receipt_and_claim(
 ):
     seed = _seed_directional_event(monkeypatch, tmp_path)
     _record_receipts(
-        seed.db_path,
-        seed.outbox_id,
+        seed,
         tuple(
             consumer
             for consumer in DIRECTIONAL_CONSUMERS
@@ -855,8 +869,7 @@ async def test_paper_trade_log_emits_directional_resolution_and_calibration_line
         outcome=MarketOutcome.YES,
     )
     _record_receipts(
-        seed.db_path,
-        seed.outbox_id,
+        seed,
         ("source_credibility", "calibration_state", "keyword_outcomes"),
     )
     log_path = tmp_path / "worker-trades.jsonl"
@@ -886,8 +899,7 @@ async def test_logger_failure_retries_at_least_once_with_stable_outbox_lineage(
         outcome=MarketOutcome.YES,
     )
     _record_receipts(
-        seed.db_path,
-        seed.outbox_id,
+        seed,
         ("source_credibility", "calibration_state", "keyword_outcomes"),
     )
     log_path = tmp_path / "retry-trades.jsonl"
