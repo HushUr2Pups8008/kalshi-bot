@@ -28,7 +28,8 @@ class Position:
     ``price_source`` and ``price_method`` fields carry provenance so callers
     can distinguish executed-side semantics from legacy rows. Defaulted to
     ``"unavailable"`` / ``"none"`` for hydration of pre-P0 DB rows that
-    lack the columns.
+    lack the columns. ``venue_market_id`` is the venue's canonical identity;
+    legacy rows without it remain ineligible for canonical resolution.
 
     P1-B renamed the underlying DB column from ``market_yes_price`` to
     ``entry_price_cents``. The hydration layer still tolerates the legacy
@@ -47,6 +48,7 @@ class Position:
     venue:            str = "kalshi"
     price_source:     str = "unavailable"
     price_method:     str = "none"
+    venue_market_id:  str | None = None
 
 
 class Portfolio:
@@ -78,17 +80,22 @@ class Portfolio:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(paper_trades)").fetchall()}
         has_provenance = "price_source" in cols and "price_method" in cols
         venue_expr = "venue" if "venue" in cols else "'kalshi' AS venue"
+        venue_market_id_expr = (
+            "venue_market_id" if "venue_market_id" in cols else "NULL AS venue_market_id"
+        )
         entry_price_col = "entry_price_cents" if "entry_price_cents" in cols else "market_yes_price"
         if has_provenance:
             select_sql = (
-                "SELECT trade_id, ticker, side, contracts, cost_dollars, price_cents, "
+                "SELECT trade_id, ticker, "
+                f"       {venue_market_id_expr}, side, contracts, cost_dollars, price_cents, "
                 f"       estimated_prob, {entry_price_col} AS entry_price_cents, ts, "
                 f"       {venue_expr}, price_source, price_method "
                 "FROM paper_trades WHERE resolved = 0 ORDER BY ts ASC"
             )
         else:
             select_sql = (
-                "SELECT trade_id, ticker, side, contracts, cost_dollars, price_cents, "
+                "SELECT trade_id, ticker, "
+                f"       {venue_market_id_expr}, side, contracts, cost_dollars, price_cents, "
                 f"       estimated_prob, {entry_price_col} AS entry_price_cents, ts, "
                 f"       {venue_expr} "
                 "FROM paper_trades WHERE resolved = 0 ORDER BY ts ASC"
@@ -117,6 +124,7 @@ class Portfolio:
                 venue=_get("venue", "kalshi"),
                 price_source=_get("price_source", "unavailable"),
                 price_method=_get("price_method", "none"),
+                venue_market_id=_get("venue_market_id", None),
             )
             self._positions.setdefault(pos.ticker, []).append(pos)
 
@@ -138,11 +146,17 @@ class Portfolio:
             self._positions.pop(market_ref, None)
             return None
 
-        ticker = market_ref.venue_market_id
+        ticker = market_ref.alias
         positions = self._positions.get(ticker, [])
         venue = normalize_venue(market_ref.venue)
-        closed = [pos for pos in positions if normalize_venue(pos.venue) == venue]
-        remaining = [pos for pos in positions if normalize_venue(pos.venue) != venue]
+        closed = []
+        remaining = []
+        for pos in positions:
+            matches = (
+                normalize_venue(pos.venue) == venue
+                and pos.venue_market_id == market_ref.venue_market_id
+            )
+            (closed if matches else remaining).append(pos)
 
         if remaining:
             self._positions[ticker] = remaining
