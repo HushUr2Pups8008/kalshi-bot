@@ -238,6 +238,25 @@ async def test_event_readers_share_canonical_open_status(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("raw_market_status", ["closed", "settled"])
+async def test_detail_reader_preserves_non_open_status(
+    raw_market_status: str,
+) -> None:
+    markets = _fixture("kalshi_markets_page_1.json")
+    for market in markets["markets"]:
+        market["status"] = raw_market_status
+    reader, _ = _reader(
+        event=_fixture("kalshi_event.json"),
+        markets=markets,
+    )
+
+    detailed = await reader.get_event(event_ticker="KXHIGHNY-26JUL13")
+
+    assert detailed.status == raw_market_status
+    assert detailed.status != "open"
+
+
+@pytest.mark.asyncio
 async def test_get_event_uses_fixed_path_and_complete_paginated_markets() -> None:
     first = _fixture("kalshi_markets_page_1.json")
     second = {"markets": [first["markets"].pop()], "cursor": ""}
