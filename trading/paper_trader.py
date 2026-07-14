@@ -1673,12 +1673,25 @@ class PaperTrader:
             outcomes.append(
                 {
                     "trade_id": str(trade["trade_id"]),
+                    "ticker": trade["ticker"],
                     "side": side,
                     "resolved_yes": resolved_yes,
                     "won": won,
                     "terminal_state": terminal_state,
                     "gross_payout_cents": gross_payout_cents,
                     "gross_pnl_cents": gross_pnl_cents,
+                    "entry_ts": trade["ts"],
+                    "estimated_prob": trade["estimated_prob"],
+                    "entry_price_cents": trade["entry_price_cents"],
+                    "cost_dollars": trade["cost_dollars"],
+                    "signal_source": trade["signal_source"],
+                    "series_ticker": trade["series_ticker"],
+                    "llm_magnitude": trade["llm_magnitude"],
+                    "llm_confidence": trade["llm_confidence"],
+                    "keywords_matched": trade["keywords_matched"],
+                    "fast_lane_p": trade["fast_lane_p"],
+                    "accumulation_p": trade["accumulation_p"],
+                    "structural_p": trade["structural_p"],
                 }
             )
         return outcomes, total_payout_cents
@@ -1752,10 +1765,35 @@ class PaperTrader:
                 "trade_id": outcome["trade_id"],
             }
         )
+        resolved_yes = (
+            bool(outcome["resolved_yes"])
+            if outcome["resolved_yes"] is not None
+            else None
+        )
+        keyword_directions = {
+            keyword: signal["direction"]
+            for signal in config_module.GEOPOLITICAL_SIGNALS
+            for keyword in signal["keywords"]
+        }
+        keywords = json.loads(outcome["keywords_matched"] or "[]")
+        keyword_outcomes = []
+        for keyword in keywords:
+            direction = keyword_directions.get(keyword, outcome["side"])
+            correct = None
+            if resolved_yes is not None:
+                correct = (direction == "yes") == resolved_yes
+            keyword_outcomes.append(
+                {
+                    "keyword": keyword,
+                    "direction": direction,
+                    "correct": correct,
+                }
+            )
         payload = {
             "alias": observation.market_ref.alias,
             "event_kind": event_kind,
             "event_version": SETTLEMENT_EVENT_VERSION,
+            "outbox_id": outbox_id,
             "gross_payout_cents": _settlement_decimal_text(
                 outcome["gross_payout_cents"]
             ),
@@ -1764,11 +1802,29 @@ class PaperTrader:
             ),
             "observation_sha256": observation.observation_sha256,
             "outcome": observation.outcome.value,
+            "ticker": outcome["ticker"],
             "side": outcome["side"],
             "trade_id": outcome["trade_id"],
             "venue": observation.market_ref.venue.value,
             "venue_market_id": observation.market_ref.venue_market_id,
+            "resolved_yes": resolved_yes,
+            "terminal_state": outcome["terminal_state"],
             "won": outcome["won"],
+            "settled_at": created_at,
+            "signal_source": outcome["signal_source"],
+            "series_ticker": outcome["series_ticker"],
+            "entry_ts": outcome["entry_ts"],
+            "estimated_prob": outcome["estimated_prob"],
+            "entry_price_cents": outcome["entry_price_cents"],
+            "cost_dollars": outcome["cost_dollars"],
+            "llm_magnitude": outcome["llm_magnitude"],
+            "llm_confidence": outcome["llm_confidence"],
+            "keyword_outcomes": keyword_outcomes,
+            "lane_estimates": {
+                "fast": outcome["fast_lane_p"],
+                "accumulation": outcome["accumulation_p"],
+                "structural": outcome["structural_p"],
+            },
         }
         self._conn.execute(
             """
@@ -1789,7 +1845,13 @@ class PaperTrader:
         )
         consumers = ["paper_trade_log"]
         if observation.outcome is not MarketOutcome.VOID:
-            consumers.extend(("calibration", "source_credibility"))
+            consumers.extend(
+                (
+                    "source_credibility",
+                    "calibration_state",
+                    "keyword_outcomes",
+                )
+            )
         for consumer_name in consumers:
             self._conn.execute(
                 """
