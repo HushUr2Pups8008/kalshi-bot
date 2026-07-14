@@ -363,6 +363,9 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
     assert weather_task.cancelled is True
     assert all(task.cancelled for task in runtime_tasks)
     assert all(task not in drain_items for task in runtime_tasks)
+    runtime_task_names = [task.name for task in runtime_tasks]
+    assert runtime_task_names.count("auto_resolve") == 1
+    assert not any("settlement" in name for name in runtime_task_names)
     assert events.index("drain:weather_shadow_capture") < events.index(
         "targeted-prewarm-cleanup"
     )

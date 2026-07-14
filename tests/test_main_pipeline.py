@@ -3739,6 +3739,98 @@ class TestMainAsyncBlocking:
         bot.rest.get_market.assert_not_called()
         bot.paper.resolve_market.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_auto_resolve_false_schema_present_drains_existing_outbox(
+        self,
+        monkeypatch,
+    ):
+        bot = self._make_bot()
+        bot._calibration_task = MagicMock()
+        bot.paper._db_path = MagicMock()
+        bot.paper._conn.execute.return_value.fetchall.return_value = []
+        bot.paper.resolve_observation = MagicMock()
+        drain = AsyncMock(return_value=2)
+        outbox_task = MagicMock(
+            name="SettlementOutboxTask",
+            return_value=SimpleNamespace(run_once=drain),
+        )
+        schema_matches = MagicMock(return_value=True)
+        monkeypatch.setattr(
+            _cfg_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            False,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "settlement_schema_contract_matches",
+            schema_matches,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "SettlementOutboxTask",
+            outbox_task,
+            raising=False,
+        )
+
+        await bot._check_and_resolve()
+
+        schema_matches.assert_called_once_with(bot.paper._conn)
+        outbox_task.assert_called_once()
+        drain.assert_awaited_once_with()
+        bot.paper.resolve_observation.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_outbox_drain_ignores_polymarket_entry_flag(
+        self,
+        monkeypatch,
+    ):
+        bot = self._make_bot()
+        bot._calibration_task = MagicMock()
+        bot.paper._db_path = MagicMock()
+        bot.paper._conn.execute.return_value.fetchall.return_value = [
+            ("ewc-usgub-ks-2026-11-03-dem", "polymarket_us"),
+        ]
+        bot.paper.resolve_observation = MagicMock()
+        drain = AsyncMock(return_value=1)
+        outbox_task = MagicMock(
+            name="SettlementOutboxTask",
+            return_value=SimpleNamespace(run_once=drain),
+        )
+        legacy_polymarket_reconciler = MagicMock(name="SettlementReconciler")
+        monkeypatch.setattr(
+            _cfg_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            False,
+            raising=False,
+        )
+        monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", False)
+        monkeypatch.setattr(
+            main_module,
+            "settlement_schema_contract_matches",
+            MagicMock(return_value=True),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "SettlementOutboxTask",
+            outbox_task,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "SettlementReconciler",
+            legacy_polymarket_reconciler,
+        )
+
+        await bot._check_and_resolve()
+
+        outbox_task.assert_called_once()
+        drain.assert_awaited_once_with()
+        legacy_polymarket_reconciler.assert_not_called()
+        bot.paper.resolve_observation.assert_not_called()
+
     def test_operator_reports_are_not_generated_from_bot_runtime_loop(self):
         assert not hasattr(TradingBot, "_daily_report_task")
 
