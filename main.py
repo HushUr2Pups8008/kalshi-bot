@@ -58,6 +58,7 @@ import os
 import signal
 import sqlite3
 import time
+import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from types import ModuleType, SimpleNamespace
@@ -79,6 +80,7 @@ from tasks.research_paper_admission import (
     ResearchPaperAdmissionBridge,
 )
 from tasks.research_prewarm_task import ResearchPrewarmTask
+from tasks.settlement_outbox_task import SettlementOutboxTask
 from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
 from polymarket.settlement_reconciler import (
@@ -111,6 +113,7 @@ from tasks.calibration_task import CalibrationTask
 from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
+from trading.settlement_store import settlement_schema_contract_matches
 from utils.logger import (
     TRADE_LOG_FILE,
     get_logger,
@@ -787,6 +790,7 @@ class TradingBot:
             startup_context="runtime",
             calibration_task=self._calibration_task,
         )
+        self._settlement_outbox_task: SettlementOutboxTask | None = None
         self.executor      = TradeExecutor(self.rest, self.paper)
         # Wire live loss limit shutdown: executor calls this when the session loss
         # threshold is breached. Uses asyncio.create_task so it's safe from any context.
@@ -2676,6 +2680,10 @@ class TradingBot:
                 "FROM paper_trades WHERE resolved = 0"
             ).fetchall()
         )
+        try:
+            await self._drain_persisted_settlement_outbox()
+        except Exception as exc:
+            log.warning("Settlement outbox drain failed: %s", exc)
         if not open_trades:
             return
 
@@ -2775,6 +2783,32 @@ class TradingBot:
                 resolved_count, len(rows),
                 bankroll,
             )
+
+    async def _drain_persisted_settlement_outbox(self) -> None:
+        if not bool(getattr(self.paper, "settlement_schema_present", False)):
+            return
+        try:
+            schema_matches = await asyncio.to_thread(
+                settlement_schema_contract_matches,
+                self.paper._conn,
+            )
+        except Exception as exc:
+            log.warning("Settlement schema verification failed: %s", exc)
+            return
+        if not schema_matches:
+            return
+        worker = getattr(self, "_settlement_outbox_task", None)
+        if worker is None:
+            worker = SettlementOutboxTask(
+                db_path=self.paper._db_path,
+                calibration_task=self._calibration_task,
+                trade_logger=trade_log,
+                clock=lambda: datetime.now(timezone.utc),
+                token_factory=lambda: uuid.uuid4().hex,
+                lease_seconds=300,
+            )
+            self._settlement_outbox_task = worker
+        await worker.run_once(limit=100)
 
     async def _refresh_market_cache_once(self, *, initial: bool = False) -> None:
         async with self._market_refresh_lock:

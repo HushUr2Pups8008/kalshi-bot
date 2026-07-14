@@ -44,6 +44,7 @@ from trading.settlement import (
 )
 from trading.settlement_store import (
     SETTLEMENT_EVENT_VERSION,
+    SETTLEMENT_PAPER_TRADE_COLUMNS,
     SETTLEMENT_PAPER_TRADE_COLUMNS_SQL,
     canonical_entry_schema_ready,
     enable_and_verify_foreign_keys,
@@ -214,6 +215,15 @@ _P0_PROVENANCE_COLUMNS: tuple[tuple[str, str], ...] = (
 
 _VENUE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("venue", "TEXT NOT NULL DEFAULT 'kalshi'"),
+)
+
+_SETTLEMENT_SCHEMA_SENTINEL_COLUMNS = frozenset(
+    {
+        "venue_market_id",
+        "identity_status",
+        "quarantine_reason",
+        *(name for name, _definition in SETTLEMENT_PAPER_TRADE_COLUMNS),
+    }
 )
 
 
@@ -411,6 +421,7 @@ class PaperTrader:
         self._db_path = db_path
         self._startup_context = startup_context
         self._initialized = False
+        self._settlement_schema_present = False
         self._calibration_task = calibration_task
         self._validate_startup_context()
         self._enforce_runtime_guards()
@@ -458,6 +469,10 @@ class PaperTrader:
     @property
     def db_path(self) -> Path:
         return self._db_path
+
+    @property
+    def settlement_schema_present(self) -> bool:
+        return self._settlement_schema_present
 
     def _ensure_p0_cohort_sentinel(self) -> None:
         """Idempotent insert of bot_state.p0_price_fix_deployed_ts (P-9 / LD-7).
@@ -647,6 +662,10 @@ class PaperTrader:
         for name, ddl in _P0_PROVENANCE_COLUMNS:
             if name not in cols and self._ensure_paper_trades_column(name, ddl, cols):
                 added_cols.append(name)
+
+        self._settlement_schema_present = (
+            _SETTLEMENT_SCHEMA_SENTINEL_COLUMNS <= cols
+        )
 
         # Backfill series_ticker from market_snapshot JSON for historical rows
         if "series_ticker" in added_cols:
