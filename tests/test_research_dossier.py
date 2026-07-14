@@ -661,6 +661,22 @@ async def test_research_dossier_initialize_is_safe_under_concurrency(tmp_path):
     assert snapshot is None
 
 
+def test_research_dossier_initializes_schema_once_per_store(monkeypatch, tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    initialize_calls = 0
+
+    def initialize_schema():
+        nonlocal initialize_calls
+        initialize_calls += 1
+
+    monkeypatch.setattr(store, "_initialize_sync_locked", initialize_schema)
+
+    store._initialize_sync()
+    store._initialize_sync()
+
+    assert initialize_calls == 1
+
+
 @pytest.mark.asyncio
 async def test_research_dossier_records_run_queries_and_latest_verdict(tmp_path):
     db_path = tmp_path / "research_dossier.db"
