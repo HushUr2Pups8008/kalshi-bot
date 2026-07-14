@@ -726,7 +726,7 @@ def test_void_credits_exact_refund_and_emits_no_directional_feedback_requirement
             (outbox["outbox_id"],),
         )
     }
-    assert all("calibr" not in name and "credib" not in name for name in consumers)
+    assert consumers == {"paper_trade_log"}
 
 
 def test_duplicate_observation_is_a_financial_and_outbox_noop(trader_factory):
@@ -982,6 +982,130 @@ def test_observation_and_outbox_ids_are_deterministic_across_databases(trader_fa
     assert first_observation.observation_sha256 == second_observation.observation_sha256
     assert outbox_ids[0] == outbox_ids[1]
     assert len(outbox_ids[0]) == 64
+
+
+@pytest.mark.parametrize(
+    ("outcome", "trade_id", "resolved_yes", "terminal_state", "won", "payout", "pnl"),
+    [
+        (MarketOutcome.YES, "outboxyes001", True, "won", True, "2500", "1500"),
+        (MarketOutcome.NO, "outboxno0001", False, "lost", False, "0", "-1000"),
+    ],
+)
+def test_directional_outbox_v1_is_complete_immutable_and_exactly_routed(
+    trader_factory,
+    outcome,
+    trade_id,
+    resolved_yes,
+    terminal_state,
+    won,
+    payout,
+    pnl,
+):
+    trader = trader_factory(f"directional-outbox-{outcome.value}")
+    stored_ticker = "stored-polymarket-alias"
+    market_ref = MarketRef(Venue.POLYMARKET_US, "8594", stored_ticker)
+    analysis = _make_mock_analysis(
+        ticker=stored_ticker,
+        series_ticker="PMOUTBOX",
+        side="yes",
+        yes_price=40.0,
+        estimated_prob=0.67,
+        source="wire:test-source",
+        keywords=["missile strike", "ceasefire"],
+        llm_direction="yes",
+        llm_magnitude="moderate",
+        llm_confidence=0.81,
+    )
+    analysis.venue = market_ref.venue.value
+    analysis.market.venue = market_ref.venue.value
+    analysis.market.market_id = stored_ticker
+    analysis.market.venue_market_id = market_ref.venue_market_id
+    analysis.fast_lane_p = 0.70
+    analysis.fast_lane_confidence = 0.90
+    analysis.accumulation_p = 0.65
+    analysis.accumulation_confidence = 0.80
+    analysis.structural_p = 0.60
+    analysis.structural_confidence = 0.70
+    _record_analysis(trader, analysis, trade_id=trade_id)
+    observation = _observation(
+        MarketRef(
+            Venue.POLYMARKET_US,
+            market_ref.venue_market_id,
+            "drifted-observation-alias",
+        ),
+        outcome,
+    )
+
+    assert _resolve(trader, observation) is True
+
+    outer = trader._conn.execute(
+        """
+        SELECT outbox_id, event_version, event_kind, observation_sha256,
+               trade_id, payload_json
+        FROM paper_settlement_outbox
+        """
+    ).fetchone()
+    trade = trader._conn.execute(
+        """
+        SELECT ticker, ts, settled_at
+        FROM paper_trades
+        WHERE trade_id=?
+        """,
+        (trade_id,),
+    ).fetchone()
+    payload = json.loads(outer["payload_json"])
+    consumers = {
+        row[0]
+        for row in trader._conn.execute(
+            """
+            SELECT consumer_name
+            FROM paper_settlement_outbox_requirements
+            WHERE outbox_id=?
+            """,
+            (outer["outbox_id"],),
+        )
+    }
+
+    assert consumers == {
+        "paper_trade_log",
+        "source_credibility",
+        "calibration_state",
+        "keyword_outcomes",
+    }
+    assert payload["outbox_id"] == outer["outbox_id"]
+    assert payload["event_version"] == outer["event_version"] == 1
+    assert payload["event_kind"] == outer["event_kind"] == "paper_trade_settled"
+    assert payload["observation_sha256"] == outer["observation_sha256"]
+    assert payload["trade_id"] == outer["trade_id"] == trade_id
+    assert payload["ticker"] == trade["ticker"] == stored_ticker
+    assert payload["ticker"] != observation.market_ref.alias
+    assert payload["venue"] == market_ref.venue.value
+    assert payload["venue_market_id"] == market_ref.venue_market_id
+    assert payload["alias"] == observation.market_ref.alias
+    assert payload["outcome"] == outcome.value
+    assert payload["resolved_yes"] is resolved_yes
+    assert payload["terminal_state"] == terminal_state
+    assert payload["won"] is won
+    assert payload["settled_at"] == trade["settled_at"]
+    assert payload["signal_source"] == "wire:test-source"
+    assert payload["series_ticker"] == "PMOUTBOX"
+    assert payload["entry_ts"] == trade["ts"]
+    assert payload["estimated_prob"] == pytest.approx(0.67)
+    assert payload["entry_price_cents"] == pytest.approx(40.0)
+    assert payload["cost_dollars"] == pytest.approx(10.0)
+    assert payload["llm_magnitude"] == "moderate"
+    assert payload["llm_confidence"] == pytest.approx(0.81)
+    assert payload["keyword_outcomes"] == [
+        {"keyword": "missile strike", "direction": "yes", "correct": resolved_yes},
+        {"keyword": "ceasefire", "direction": "no", "correct": not resolved_yes},
+    ]
+    assert payload["lane_estimates"] == {
+        "fast": pytest.approx(0.70),
+        "accumulation": pytest.approx(0.65),
+        "structural": pytest.approx(0.60),
+    }
+    assert payload["gross_payout_cents"] == payout
+    assert payload["gross_pnl_cents"] == pnl
 
 
 def test_legacy_resolve_market_behavior_remains_separate_from_canonical_store(
