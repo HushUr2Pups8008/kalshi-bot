@@ -29,7 +29,9 @@ _KNOWN_CONSUMERS = frozenset(
         "keyword_outcomes",
     }
 )
-_DATABASE_CONSUMERS = frozenset({"source_credibility", "keyword_outcomes"})
+_SUPPORTED_CONSUMERS = frozenset(
+    {"paper_trade_log", "source_credibility", "keyword_outcomes"}
+)
 _SHA256_LENGTH = 64
 _REQUIRED_FIELDS = frozenset(
     {
@@ -300,7 +302,60 @@ class SettlementOutboxTask:
         payload: dict[str, Any],
     ) -> None:
         self._fault("before_effect")
-        if requirement.consumer_name == "source_credibility":
+        if requirement.consumer_name == "paper_trade_log":
+            pnl_dollars = float(Decimal(payload["gross_pnl_cents"]) / 100)
+            settled_at = payload["settled_at"]
+            self._trade_logger.log_paper_resolution(
+                trade_id=payload["trade_id"],
+                ticker=payload["ticker"],
+                resolved_yes=payload["resolved_yes"],
+                terminal_state=payload["terminal_state"],
+                pnl_dollars=pnl_dollars,
+                bankroll_delta_dollars=float(
+                    Decimal(payload["gross_payout_cents"]) / 100
+                ),
+                venue=payload["venue"],
+                outbox_id=payload["outbox_id"],
+                ts=settled_at,
+            )
+            if payload["outcome"] != "void":
+                estimated_probability = float(payload["estimated_prob"])
+                if payload["side"] == "no":
+                    estimated_probability = 1.0 - estimated_probability
+                self._trade_logger.log_calibration_observation(
+                    trade_id=payload["trade_id"],
+                    ticker=payload["ticker"],
+                    market_prefix=payload["series_ticker"],
+                    side=payload["side"],
+                    estimated_probability=estimated_probability,
+                    realized_outcome=int(payload["won"]),
+                    entry_price_cents=float(payload["entry_price_cents"]),
+                    pnl_dollars=pnl_dollars,
+                    cost_dollars=float(payload["cost_dollars"]),
+                    llm_magnitude=payload["llm_magnitude"],
+                    llm_confidence=payload["llm_confidence"],
+                    signal_source=payload["signal_source"],
+                    ts_entry=payload["entry_ts"],
+                    ts_resolved=settled_at,
+                    outbox_id=payload["outbox_id"],
+                    ts=settled_at,
+                )
+                final_resolution = 1.0 if payload["resolved_yes"] else 0.0
+                for lane in ("fast", "accumulation", "structural"):
+                    lane_estimate = payload["lane_estimates"][lane]
+                    if lane_estimate is None:
+                        continue
+                    self._trade_logger.log_calibration_check(
+                        market_ticker=payload["ticker"],
+                        lane=lane,
+                        lane_estimate=float(lane_estimate),
+                        final_resolution=final_resolution,
+                        error=abs(float(lane_estimate) - final_resolution),
+                        venue=payload["venue"],
+                        outbox_id=payload["outbox_id"],
+                        ts=settled_at,
+                    )
+        elif requirement.consumer_name == "source_credibility":
             record_outcome_in_transaction(
                 connection,
                 source=payload["signal_source"],
@@ -329,7 +384,7 @@ class SettlementOutboxTask:
                     ),
                 )
         else:
-            raise ValueError("unsupported database consumer")
+            raise ValueError("unsupported settlement consumer")
         self._fault("after_effect")
 
     async def run_once(self, *, limit: int = 100) -> int:
@@ -338,12 +393,12 @@ class SettlementOutboxTask:
             supported = tuple(
                 requirement
                 for requirement in store.pending_requirements()
-                if requirement.consumer_name in _DATABASE_CONSUMERS
+                if requirement.consumer_name in _SUPPORTED_CONSUMERS
             )
             for requirement in supported[:limit]:
                 try:
                     payload = self._validated_event(store, requirement)
-                    if requirement.consumer_name not in _DATABASE_CONSUMERS:
+                    if requirement.consumer_name not in _SUPPORTED_CONSUMERS:
                         continue
                     self._fault("before_claim")
                     claim_token = self._token_factory()
