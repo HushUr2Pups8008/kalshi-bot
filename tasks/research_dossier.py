@@ -327,6 +327,7 @@ class ResearchDossierStore:
 
     def _initialize_sync_locked(self) -> None:
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS research_dossiers (
