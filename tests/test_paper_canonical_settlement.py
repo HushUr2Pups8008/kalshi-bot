@@ -264,6 +264,24 @@ def test_schema_present_record_trade_persists_mapped_canonical_identity(
     assert position.venue_market_id == market_ref.venue_market_id
 
 
+def test_schema_present_kalshi_ticker_is_authoritative_over_separate_id(
+    trader_factory,
+):
+    trader = trader_factory("kalshi-ticker-authoritative")
+    analysis = _make_mock_analysis(ticker="KX-AUTHORITATIVE")
+    analysis.venue = Venue.KALSHI.value
+    analysis.market.venue = Venue.KALSHI.value
+    analysis.market.venue_market_id = "KX-DIFFERENT-ID"
+
+    trade_id = _record_analysis(trader, analysis, trade_id="kxauth000001")
+
+    row = trader._conn.execute(
+        "SELECT venue_market_id, identity_status FROM paper_trades WHERE trade_id=?",
+        (trade_id,),
+    ).fetchone()
+    assert tuple(row) == ("KX-AUTHORITATIVE", "mapped")
+
+
 @pytest.mark.parametrize("canonical_id", [None, "", "   "])
 def test_schema_present_record_trade_without_canonical_id_fails_closed(
     trader_factory,
@@ -451,9 +469,9 @@ def test_exact_market_ref_settles_only_matching_rows_and_closes_exact_portfolio_
     trader_factory,
 ):
     trader = trader_factory("exact-market-ref")
-    alias = "shared-display-alias"
+    alias = "KX-SHARED-ALIAS"
     target = MarketRef(Venue.POLYMARKET_US, "8594", alias)
-    other_venue = MarketRef(Venue.KALSHI, alias, alias)
+    other_venue = MarketRef(Venue.KALSHI, "KX-SHARED-ALIAS", alias)
     other_id = MarketRef(Venue.POLYMARKET_US, "9999", alias)
     target_trade = _record_mapped_trade(
         trader, target, trade_id="target000001"
