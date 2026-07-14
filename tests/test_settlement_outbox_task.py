@@ -638,6 +638,18 @@ async def test_run_once_rejects_invalid_contract_without_effects_or_receipts(
     seed = _seed_directional_event(monkeypatch, tmp_path)
     invalid_seed = _insert_invalid_event(seed, invalid_case)
     before_pending = _pending_consumers(invalid_seed)
+    before_effect_receipts = _rows(
+        invalid_seed.db_path,
+        """
+        SELECT consumer_name
+        FROM paper_settlement_consumer_receipts
+        WHERE outbox_id=? AND consumer_name IN (
+            'source_credibility', 'keyword_outcomes', 'unknown_consumer'
+        )
+        ORDER BY consumer_name
+        """,
+        (invalid_seed.outbox_id,),
+    )
     task = _task(invalid_seed)
 
     await task.run_once(limit=100)
@@ -656,4 +668,5 @@ async def test_run_once_rejects_invalid_contract_without_effects_or_receipts(
         """,
         (invalid_seed.outbox_id,),
     )
-    assert invalid_receipts == []
+    assert invalid_receipts == before_effect_receipts
+    assert ("unknown_consumer",) not in invalid_receipts
