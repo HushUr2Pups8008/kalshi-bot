@@ -5,6 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
+from trading.settlement import SettlementDriftError
 from trading.venue import Venue
 from utils.logger import get_logger
 
@@ -13,10 +14,6 @@ log = get_logger("polymarket_settlement")
 
 class SettlementNotFound(Exception):
     """Raised by a settlement source when the market has not settled yet."""
-
-
-class SettlementDriftError(RuntimeError):
-    """Raised when Polymarket settlement payload shape violates expectations."""
 
 
 class SettlementSource(Protocol):
