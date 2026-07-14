@@ -311,6 +311,22 @@ class KalshiRestClient:
             log.warning("get_market(%s) failed: %s", ticker, exc)
             return None
 
+    def get_market_exact(self, ticker: str) -> Optional[KalshiMarket]:
+        """Fetch and normalize one exact ticker without hiding lookup failures.
+
+        An authoritative HTTP 404 is the only missing-market result. Transport,
+        server, JSON, and payload-contract failures remain exceptions so callers
+        cannot mistake an inconclusive lookup for confirmed absence.
+        """
+        try:
+            data = self._request("GET", f"/markets/{ticker}")
+        except requests.HTTPError as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status == 404:
+                return None
+            raise
+        return normalize_market_detail(data)
+
     def get_series(self, series_ticker: str) -> KalshiSeriesMetadata | None:
         """Fetch and normalize one series detail payload for shadow metadata."""
         try:

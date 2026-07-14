@@ -134,7 +134,7 @@ class PublicVenueIdentityResolver:
     def lookup(self, venue: Venue, alias: str) -> IdentityLookup:
         if venue is Venue.KALSHI:
             try:
-                market = self._kalshi.get_market(alias)
+                market = self._kalshi.get_market_exact(alias)
             except Exception:
                 return IdentityLookup.transport()
             if market is None:
@@ -167,7 +167,8 @@ class PublicVenueIdentityResolver:
 
 @contextmanager
 def open_readonly(path: Path) -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
+    resolved_path = path.expanduser().resolve()
+    conn = sqlite3.connect(f"{resolved_path.as_uri()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA query_only=ON")
     try:
@@ -316,13 +317,8 @@ def _ensure_identity_columns(
             fault_hook(f"after_ddl:{name}")
 
 
-def _current_fingerprint(conn: sqlite3.Connection, trade_id: str) -> tuple[object, ...] | None:
-    row = conn.execute(
-        "SELECT trade_id, venue, ticker, resolved, venue_market_id, "
-        "identity_status, quarantine_reason FROM paper_trades WHERE trade_id=?",
-        (trade_id,),
-    ).fetchone()
-    return tuple(row) if row is not None else None
+def _plan_rows(plan: IdentityMigrationPlan) -> tuple[IdentityRow, ...]:
+    return plan.mapped + plan.quarantine + plan.unresolved + plan.unchanged
 
 
 def apply_identity_plan(
@@ -333,23 +329,24 @@ def apply_identity_plan(
     reviewed_plan_fingerprint: str | None = None,
     fault_hook: Callable[[str], None] | None = None,
 ) -> None:
-    if apply_quarantine and reviewed_plan_fingerprint != plan.fingerprint:
-        raise ValueError("--apply-quarantine requires the reviewed plan fingerprint")
+    if reviewed_plan_fingerprint != plan.fingerprint:
+        raise ValueError("write modes require the reviewed plan fingerprint")
     hook = fault_hook or (lambda _stage: None)
-    conn = sqlite3.connect(db_path, isolation_level=None, timeout=30.0)
+    resolved_path = db_path.expanduser().resolve()
+    conn = sqlite3.connect(resolved_path, isolation_level=None, timeout=30.0)
+    conn.row_factory = sqlite3.Row
     try:
         conn.execute("BEGIN IMMEDIATE")
         _ensure_identity_columns(conn, hook)
         hook("after_ddl")
-        planned_rows = (
-            plan.mapped
-            + plan.quarantine
-            + plan.unresolved
-            + plan.unchanged
+        planned_fingerprints = tuple(
+            sorted(row.fingerprint_values() for row in _plan_rows(plan))
         )
-        for row in planned_rows:
-            if _current_fingerprint(conn, row.trade_id) != row.fingerprint_values():
-                raise RuntimeError(f"database drift for trade_id={row.trade_id}")
+        current_fingerprints = tuple(
+            sorted(row.fingerprint_values() for row in _load_open_rows(conn))
+        )
+        if current_fingerprints != planned_fingerprints:
+            raise RuntimeError("database drift in open paper-trade set")
         actions = list(plan.mapped)
         if apply_quarantine:
             actions.extend(plan.quarantine)
@@ -384,24 +381,26 @@ def _parse_args() -> argparse.Namespace:
     mode.add_argument("--apply", action="store_true")
     mode.add_argument("--apply-quarantine", action="store_true")
     parser.add_argument("--reviewed-plan-fingerprint")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if (args.apply or args.apply_quarantine) and not args.reviewed_plan_fingerprint:
+        parser.error("write modes require --reviewed-plan-fingerprint")
+    return args
 
 
 def main() -> int:
     args = _parse_args()
+    db_path = args.db.expanduser().resolve()
     resolver = PublicVenueIdentityResolver()
-    with open_readonly(args.db) as conn:
+    with open_readonly(db_path) as conn:
         plan = plan_identity_migration(
             conn,
             resolver,
-            reviewed_plan_fingerprint=(
-                args.reviewed_plan_fingerprint if args.apply_quarantine else None
-            ),
+            reviewed_plan_fingerprint=args.reviewed_plan_fingerprint,
         )
     print(plan.to_json())
     if args.apply or args.apply_quarantine:
         apply_identity_plan(
-            args.db,
+            db_path,
             plan,
             apply_quarantine=args.apply_quarantine,
             reviewed_plan_fingerprint=args.reviewed_plan_fingerprint,

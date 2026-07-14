@@ -3,17 +3,23 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
+from kalshi.normalizer import UnsupportedPayloadContractError
+from kalshi.rest_client import KalshiRestClient
 from polymarket.public_client import PolymarketPublicClient
 from scripts.migrate_paper_market_identity import (
     IdentityLookup,
     PublicVenueIdentityResolver,
+    _parse_args,
     apply_identity_plan,
+    main,
     open_readonly,
     plan_identity_migration,
 )
@@ -113,6 +119,12 @@ def _artifact_hashes(path: Path) -> dict[str, str]:
     return result
 
 
+def _http_error(status_code: int) -> requests.HTTPError:
+    response = requests.Response()
+    response.status_code = status_code
+    return requests.HTTPError(response=response)
+
+
 def test_fresh_ddl_has_nullable_constrained_identity_columns():
     conn = sqlite3.connect(":memory:")
     for statement in _DDL.split(";"):
@@ -154,21 +166,146 @@ def test_paper_trader_startup_does_not_add_identity_columns(tmp_path, monkeypatc
     assert not {"venue_market_id", "identity_status", "quarantine_reason"} & trader._paper_trades_columns()
 
 
-def test_public_client_returns_all_exact_candidates():
+def test_public_client_paginates_to_return_all_exact_candidates():
     client = PolymarketPublicClient(base_url="https://example.invalid")
     client._request = MagicMock(
-        return_value={
-            "markets": [
-                {"slug": "same-slug", "id": 11},
-                {"slug": "different", "id": 12},
-                {"slug": "same-slug", "id": 13},
-            ]
-        }
+        side_effect=[
+            {
+                "markets": [
+                    {"slug": "same-slug", "id": 11},
+                    {"slug": "different", "id": 12},
+                ],
+                "cursor": "next-page",
+            },
+            {"markets": [{"slug": "same-slug", "id": 13}], "cursor": None},
+        ]
     )
     assert client.find_market_payloads_by_slug_or_id("same-slug") == (
         {"slug": "same-slug", "id": 11},
         {"slug": "same-slug", "id": 13},
     )
+    assert client._request.call_args_list[1].kwargs["params"]["cursor"] == "next-page"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        [],
+        {},
+        {"markets": []},
+        {"markets": {}},
+        {"markets": [], "cursor": 123},
+        {"markets": [None], "cursor": None},
+    ],
+)
+def test_public_client_rejects_malformed_exact_filter_pages(response):
+    client = PolymarketPublicClient(base_url="https://example.invalid")
+    client._request = MagicMock(return_value=response)
+    with pytest.raises(ValueError, match="Polymarket exact-filter"):
+        client.find_market_payloads_by_slug_or_id("same-slug")
+
+
+def test_public_client_rejects_exact_filter_cursor_cycle():
+    client = PolymarketPublicClient(base_url="https://example.invalid")
+    client._request = MagicMock(
+        side_effect=[
+            {"markets": [], "cursor": "repeat"},
+            {"markets": [], "cursor": "repeat"},
+        ]
+    )
+    with pytest.raises(ValueError, match="cursor cycle"):
+        client.find_market_payloads_by_slug_or_id("same-slug")
+
+
+def test_public_client_rejects_exact_filter_page_bound(monkeypatch):
+    client = PolymarketPublicClient(base_url="https://example.invalid")
+    monkeypatch.setattr(client, "_EXACT_FILTER_MAX_PAGES", 2, raising=False)
+    client._request = MagicMock(
+        side_effect=[
+            {"markets": [], "cursor": "page-2"},
+            {"markets": [], "cursor": "page-3"},
+        ]
+    )
+    with pytest.raises(ValueError, match="page limit"):
+        client.find_market_payloads_by_slug_or_id("same-slug")
+
+
+def test_public_client_does_not_return_partial_exact_filter_results():
+    client = PolymarketPublicClient(base_url="https://example.invalid")
+    client._request = MagicMock(
+        side_effect=[
+            {
+                "markets": [{"slug": "same-slug", "id": 11}],
+                "cursor": "next-page",
+            },
+            requests.Timeout("timed out"),
+        ]
+    )
+    with pytest.raises(requests.Timeout):
+        client.find_market_payloads_by_slug_or_id("same-slug")
+
+
+def test_kalshi_exact_lookup_maps_only_authoritative_404_to_missing():
+    client = KalshiRestClient()
+    client._request = MagicMock(side_effect=_http_error(404))
+    assert client.get_market_exact("KX-EXACT") is None
+
+    client._request.side_effect = _http_error(503)
+    with pytest.raises(requests.HTTPError):
+        client.get_market_exact("KX-EXACT")
+
+    client._request.side_effect = requests.Timeout("timed out")
+    with pytest.raises(requests.Timeout):
+        client.get_market_exact("KX-EXACT")
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ValueError("malformed response"),
+        UnsupportedPayloadContractError("unsupported response", ticker="KX-EXACT"),
+    ],
+    ids=["malformed", "unsupported"],
+)
+def test_kalshi_exact_lookup_preserves_normalization_failures(monkeypatch, failure):
+    client = KalshiRestClient()
+    client._request = MagicMock(return_value={"market": {"ticker": "KX-EXACT"}})
+    normalizer = MagicMock(side_effect=failure)
+    monkeypatch.setattr("kalshi.rest_client.normalize_market_detail", normalizer)
+
+    with pytest.raises(type(failure), match=str(failure)):
+        client.get_market_exact("KX-EXACT")
+
+    normalizer.assert_called_once_with({"market": {"ticker": "KX-EXACT"}})
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        requests.Timeout("timed out"),
+        _http_error(503),
+        ValueError("malformed response"),
+        UnsupportedPayloadContractError("unsupported response", ticker="KX-EXACT"),
+    ],
+    ids=["timeout", "http-5xx", "malformed", "unsupported"],
+)
+def test_repeated_kalshi_failures_never_become_quarantine(tmp_path, failure):
+    db = tmp_path / "paper.db"
+    _create_db(db)
+    _insert(db, "k1", "kalshi", "KX-EXACT")
+    kalshi = MagicMock()
+    kalshi.get_market_exact.side_effect = [failure, failure]
+    resolver = PublicVenueIdentityResolver(kalshi=kalshi, polymarket=MagicMock())
+    with open_readonly(db) as conn:
+        first = plan_identity_migration(conn, resolver)
+    with open_readonly(db) as conn:
+        second = plan_identity_migration(
+            conn,
+            resolver,
+            reviewed_plan_fingerprint=first.fingerprint,
+        )
+    assert [row.trade_id for row in second.unresolved] == ["k1"]
+    assert not second.quarantine
 
 
 @pytest.mark.parametrize(
@@ -210,7 +347,7 @@ def test_public_resolver_requires_unique_exact_pm_slug_and_numeric_id(
 )
 def test_public_resolver_requires_exact_kalshi_ticker(market, kind):
     kalshi = MagicMock()
-    kalshi.get_market.return_value = market
+    kalshi.get_market_exact.return_value = market
     resolver = PublicVenueIdentityResolver(kalshi=kalshi, polymarket=MagicMock())
     assert resolver.lookup(Venue.KALSHI, "KX-EXACT").kind == kind
 
@@ -251,7 +388,7 @@ def test_slug_numeric_divergence_and_same_alias_cross_venue(tmp_path):
     )
     with open_readonly(db) as conn:
         plan = plan_identity_migration(conn, resolver)
-    apply_identity_plan(db, plan)
+    apply_identity_plan(db, plan, reviewed_plan_fingerprint=plan.fingerprint)
     assert _rows(db) == [
         ("k1", "kalshi", "shared", 0, "shared", "mapped", None),
         ("p1", "polymarket_us", "shared", 0, "44051", "mapped", None),
@@ -285,7 +422,7 @@ def test_missing_and_transport_remain_unwritten(tmp_path, kind):
     resolver = FakeResolver({(Venue.POLYMARKET_US, "slug"): lookup})
     with open_readonly(db) as conn:
         plan = plan_identity_migration(conn, resolver)
-    apply_identity_plan(db, plan)
+    apply_identity_plan(db, plan, reviewed_plan_fingerprint=plan.fingerprint)
     assert _rows(db) == [("p1", "polymarket_us", "slug", 0, None, None, None)]
 
 
@@ -300,7 +437,7 @@ def test_deterministic_conflicts_require_explicit_quarantine(tmp_path, lookup):
     resolver = FakeResolver({(Venue.POLYMARKET_US, "slug"): lookup})
     with open_readonly(db) as conn:
         plan = plan_identity_migration(conn, resolver)
-    apply_identity_plan(db, plan)
+    apply_identity_plan(db, plan, reviewed_plan_fingerprint=plan.fingerprint)
     assert _rows(db)[0][-2:] == (None, None)
     with pytest.raises(ValueError, match="reviewed plan fingerprint"):
         apply_identity_plan(db, plan, apply_quarantine=True)
@@ -358,7 +495,7 @@ def test_existing_same_is_noop_conflicting_id_never_overwritten(tmp_path):
         plan = plan_identity_migration(conn, resolver)
     assert [row.trade_id for row in plan.unchanged] == ["same"]
     assert [row.trade_id for row in plan.quarantine] == ["conflict"]
-    apply_identity_plan(db, plan)
+    apply_identity_plan(db, plan, reviewed_plan_fingerprint=plan.fingerprint)
     assert dict((row[0], row[4]) for row in _rows(db)) == {"conflict": "old", "same": "11"}
 
 
@@ -370,11 +507,11 @@ def test_settled_rows_untouched_and_apply_is_idempotent(tmp_path):
     resolver = FakeResolver({(Venue.KALSHI, "KX-OPEN"): IdentityLookup.mapped("KX-OPEN")})
     with open_readonly(db) as conn:
         plan = plan_identity_migration(conn, resolver)
-    apply_identity_plan(db, plan)
+    apply_identity_plan(db, plan, reviewed_plan_fingerprint=plan.fingerprint)
     first = _rows(db)
     with open_readonly(db) as conn:
         retry = plan_identity_migration(conn, resolver)
-    apply_identity_plan(db, retry)
+    apply_identity_plan(db, retry, reviewed_plan_fingerprint=retry.fingerprint)
     assert _rows(db) == first
     assert next(row for row in first if row[0] == "settled")[4:] == (None, None, None)
 
@@ -400,6 +537,7 @@ def test_apply_rolls_back_ddl_and_updates_on_fault(tmp_path, fail_stage):
         apply_identity_plan(
             db,
             plan,
+            reviewed_plan_fingerprint=plan.fingerprint,
             fault_hook=lambda stage: (_ for _ in ()).throw(RuntimeError("injected"))
             if stage == fail_stage
             else None,
@@ -425,7 +563,93 @@ def test_apply_aborts_on_database_drift(tmp_path, lookup):
     conn.commit()
     conn.close()
     with pytest.raises(RuntimeError, match="database drift"):
-        apply_identity_plan(db, plan)
+        apply_identity_plan(db, plan, reviewed_plan_fingerprint=plan.fingerprint)
+
+
+@pytest.mark.parametrize("provided", [None, "wrong-fingerprint"])
+def test_apply_rejects_unreviewed_plan_before_opening_database(
+    tmp_path,
+    monkeypatch,
+    provided,
+):
+    db = tmp_path / "paper.db"
+    _create_db(db)
+    _insert(db, "k1", "kalshi", "KX-EXACT")
+    resolver = FakeResolver({(Venue.KALSHI, "KX-EXACT"): IdentityLookup.mapped("KX-EXACT")})
+    with open_readonly(db) as conn:
+        plan = plan_identity_migration(conn, resolver)
+    connect = MagicMock(side_effect=AssertionError("database must not be opened"))
+    monkeypatch.setattr("scripts.migrate_paper_market_identity.sqlite3.connect", connect)
+    with pytest.raises(ValueError, match="reviewed plan fingerprint"):
+        apply_identity_plan(db, plan, reviewed_plan_fingerprint=provided)
+    connect.assert_not_called()
+
+
+def test_apply_aborts_when_open_row_is_inserted_after_plan(tmp_path):
+    db = tmp_path / "paper.db"
+    _create_db(db)
+    _insert(db, "k1", "kalshi", "KX-EXACT")
+    resolver = FakeResolver({(Venue.KALSHI, "KX-EXACT"): IdentityLookup.mapped("KX-EXACT")})
+    with open_readonly(db) as conn:
+        plan = plan_identity_migration(conn, resolver)
+    _insert(db, "k2", "kalshi", "KX-INSERTED")
+
+    with pytest.raises(RuntimeError, match="database drift"):
+        apply_identity_plan(db, plan, reviewed_plan_fingerprint=plan.fingerprint)
+
+    conn = sqlite3.connect(db)
+    assert "venue_market_id" not in {
+        row[1] for row in conn.execute("PRAGMA table_info(paper_trades)")
+    }
+    conn.close()
+
+
+@pytest.mark.parametrize("marker", ["?", "#", "%"])
+def test_database_paths_are_uri_safe_and_do_not_create_other_artifacts(tmp_path, marker):
+    db = tmp_path / f"paper{marker}identity.db"
+    _create_db(db)
+    _insert(db, "k1", "kalshi", "KX-EXACT")
+    before_names = {path.name for path in tmp_path.iterdir()}
+    resolver = FakeResolver({(Venue.KALSHI, "KX-EXACT"): IdentityLookup.mapped("KX-EXACT")})
+    with open_readonly(db) as conn:
+        plan = plan_identity_migration(conn, resolver)
+    assert {path.name for path in tmp_path.iterdir()} == before_names
+
+    apply_identity_plan(db, plan, reviewed_plan_fingerprint=plan.fingerprint)
+
+    assert _rows(db)[0][4:6] == ("KX-EXACT", "mapped")
+    assert {path.name for path in tmp_path.iterdir()} == before_names
+
+
+@pytest.mark.parametrize("mode", ["--apply", "--apply-quarantine"])
+def test_cli_write_modes_require_reviewed_plan_fingerprint(monkeypatch, mode):
+    monkeypatch.setattr(sys, "argv", ["migrate_paper_market_identity.py", mode])
+    with pytest.raises(SystemExit):
+        _parse_args()
+
+
+def test_cli_binds_provided_fingerprint_to_plan_and_apply(tmp_path, monkeypatch):
+    db = tmp_path / "paper.db"
+    _create_db(db)
+    args = SimpleNamespace(
+        db=db,
+        apply=True,
+        apply_quarantine=False,
+        reviewed_plan_fingerprint="reviewed-fingerprint",
+    )
+    plan = MagicMock(fingerprint="reviewed-fingerprint")
+    plan.to_json.return_value = "{}"
+    planner = MagicMock(return_value=plan)
+    applier = MagicMock()
+    monkeypatch.setattr("scripts.migrate_paper_market_identity._parse_args", lambda: args)
+    monkeypatch.setattr("scripts.migrate_paper_market_identity.PublicVenueIdentityResolver", MagicMock())
+    monkeypatch.setattr("scripts.migrate_paper_market_identity.plan_identity_migration", planner)
+    monkeypatch.setattr("scripts.migrate_paper_market_identity.apply_identity_plan", applier)
+
+    assert main() == 0
+
+    assert planner.call_args.kwargs["reviewed_plan_fingerprint"] == "reviewed-fingerprint"
+    assert applier.call_args.kwargs["reviewed_plan_fingerprint"] == "reviewed-fingerprint"
 
 
 def test_plan_json_is_deterministic_and_payload_free(tmp_path):

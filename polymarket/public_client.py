@@ -18,6 +18,8 @@ log = get_logger("polymarket_public")
 
 class PolymarketPublicClient:
     venue = Venue.POLYMARKET_US
+    _EXACT_FILTER_PAGE_SIZE = 200
+    _EXACT_FILTER_MAX_PAGES = 100
 
     def __init__(self, *, base_url: str | None = None):
         self._base = (base_url or cfg.polymarket_us_public_base_url).rstrip("/")
@@ -164,7 +166,13 @@ class PolymarketPublicClient:
         # tries ?slug=; a numeric wanted tries ?slug= then ?id=. A defensive 400
         # guard on the id call (belt-and-suspenders) still degrades to a clean
         # miss rather than leaking an HTTPError.
-        candidates = self.find_market_payloads_by_slug_or_id(market_id)
+        try:
+            candidates = self.find_market_payloads_by_slug_or_id(market_id)
+        except HTTPError as exc:
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            if str(market_id).strip().isdigit() and status_code == 400:
+                raise ValueError(f"Polymarket market {market_id!r} not found") from exc
+            raise
         if candidates:
             return candidates[0]
         raise ValueError(f"Polymarket market {market_id!r} not found")
@@ -173,7 +181,7 @@ class PolymarketPublicClient:
         self,
         market_id: str,
     ) -> tuple[dict[str, Any], ...]:
-        """Return every payload whose slug or numeric ID exactly matches."""
+        """Return every exact slug or numeric-ID match across all filter pages."""
         wanted = str(market_id).strip()
         filter_keys = ["slug"]
         if wanted.isdigit():
@@ -181,32 +189,53 @@ class PolymarketPublicClient:
         matches: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
         for filter_key in filter_keys:
-            params: dict[str, Any] = {filter_key: wanted, "limit": 5}
-            try:
-                data = self._request("GET", "/v1/markets", params=params)
-            except HTTPError as exc:
-                status_code = getattr(
-                    getattr(exc, "response", None), "status_code", None
-                )
-                if filter_key == "id" and status_code == 400:
-                    # Filter rejected the identifier -> treat as no match and
-                    # fall through to the not-found ValueError contract.
-                    continue
-                raise
-            raw_markets = data.get("markets", []) if isinstance(data, dict) else data
-            for payload in raw_markets:
-                if not isinstance(payload, dict):
-                    continue
-                identifiers = {
-                    str(payload.get("slug") or "").strip(),
-                    str(payload.get("id") or "").strip(),
+            cursor: str | None = None
+            seen_cursors: set[str] = set()
+            for _page_number in range(self._EXACT_FILTER_MAX_PAGES):
+                params: dict[str, Any] = {
+                    filter_key: wanted,
+                    "limit": self._EXACT_FILTER_PAGE_SIZE,
                 }
-                if wanted in identifiers:
-                    identity = (
+                if cursor is not None:
+                    params["cursor"] = cursor
+                data = self._request("GET", "/v1/markets", params=params)
+                if not isinstance(data, dict):
+                    raise ValueError("Polymarket exact-filter response must be an object")
+                if "markets" not in data or "cursor" not in data:
+                    raise ValueError(
+                        "Polymarket exact-filter response must include markets and cursor"
+                    )
+                raw_markets = data["markets"]
+                next_cursor = data["cursor"]
+                if not isinstance(raw_markets, list):
+                    raise ValueError("Polymarket exact-filter markets must be a list")
+                if next_cursor is not None and not isinstance(next_cursor, str):
+                    raise ValueError(
+                        "Polymarket exact-filter cursor must be a string or null"
+                    )
+                for payload in raw_markets:
+                    if not isinstance(payload, dict):
+                        raise ValueError(
+                            "Polymarket exact-filter market payload must be an object"
+                        )
+                    identifiers = {
                         str(payload.get("slug") or "").strip(),
                         str(payload.get("id") or "").strip(),
-                    )
-                    if identity not in seen:
-                        seen.add(identity)
-                        matches.append(payload)
+                    }
+                    if wanted in identifiers:
+                        identity = (
+                            str(payload.get("slug") or "").strip(),
+                            str(payload.get("id") or "").strip(),
+                        )
+                        if identity not in seen:
+                            seen.add(identity)
+                            matches.append(payload)
+                if not next_cursor:
+                    break
+                if next_cursor in seen_cursors:
+                    raise ValueError("Polymarket exact-filter cursor cycle detected")
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+            else:
+                raise ValueError("Polymarket exact-filter page limit exceeded")
         return tuple(matches)
