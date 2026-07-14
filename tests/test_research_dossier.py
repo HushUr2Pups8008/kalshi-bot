@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import sqlite3
@@ -449,8 +450,35 @@ async def test_research_paper_admission_claim_is_sequentially_at_most_once(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_research_paper_admission_claim_is_atomic_across_stores(tmp_path):
+async def test_research_paper_admission_claim_is_atomic_across_stores(
+    tmp_path,
+    monkeypatch,
+):
     db_path = tmp_path / "research.db"
+    migration_barrier = threading.Barrier(2)
+    real_connect = sqlite3.connect
+
+    class _ConcurrentMigrationConnection(sqlite3.Connection):
+        def execute(self, statement, parameters=(), /):
+            cursor = super().execute(statement, parameters)
+            if statement.strip() != "PRAGMA table_info(research_dossiers)":
+                return cursor
+
+            rows = cursor.fetchall()
+            try:
+                migration_barrier.wait(timeout=0.5)
+            except threading.BrokenBarrierError:
+                pass
+            return SimpleNamespace(fetchall=lambda: rows)
+
+    def connect_with_migration_barrier(*args, **kwargs):
+        kwargs["factory"] = _ConcurrentMigrationConnection
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "tasks.research_dossier.sqlite3.connect",
+        connect_with_migration_barrier,
+    )
     stores = [ResearchDossierStore(db_path), ResearchDossierStore(db_path)]
     await asyncio.gather(*(store.initialize() for store in stores))
 
@@ -466,7 +494,7 @@ async def test_research_paper_admission_claim_is_atomic_across_stores(tmp_path):
     )
 
     assert sorted(results) == [False, True]
-    with sqlite3.connect(db_path) as conn:
+    with real_connect(db_path) as conn:
         count = conn.execute("SELECT COUNT(*) FROM research_paper_admissions").fetchone()[0]
     assert count == 1
 
@@ -631,6 +659,22 @@ async def test_research_dossier_initialize_is_safe_under_concurrency(tmp_path):
 
     snapshot = await store.get_dossier_snapshot("KX-MISSING")
     assert snapshot is None
+
+
+def test_research_dossier_initializes_schema_once_per_store(monkeypatch, tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    initialize_calls = 0
+
+    def initialize_schema():
+        nonlocal initialize_calls
+        initialize_calls += 1
+
+    monkeypatch.setattr(store, "_initialize_sync_locked", initialize_schema)
+
+    store._initialize_sync()
+    store._initialize_sync()
+
+    assert initialize_calls == 1
 
 
 @pytest.mark.asyncio

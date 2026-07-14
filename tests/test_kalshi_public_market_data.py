@@ -213,6 +213,50 @@ async def test_normalization_tolerates_unrelated_live_payload_keys() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("raw_market_status", ["active", "open"])
+async def test_event_readers_share_canonical_open_status(
+    raw_market_status: str,
+) -> None:
+    events_payload = _fixture("kalshi_events_page_1.json")
+    list_markets = _fixture("kalshi_markets_page_1.json")
+    detail_markets = _fixture("kalshi_markets_page_1.json")
+    for payload in (events_payload["events"][0]["markets"], list_markets["markets"]):
+        for market in payload:
+            market["status"] = raw_market_status
+    for market in detail_markets["markets"]:
+        market["status"] = raw_market_status
+    list_reader, _ = _reader(events=events_payload, markets=list_markets)
+    detail_reader, _ = _reader(
+        event=_fixture("kalshi_event.json"),
+        markets=detail_markets,
+    )
+
+    listed = await list_reader.list_active_events(series_ticker="KXHIGHNY")
+    detailed = await detail_reader.get_event(event_ticker="KXHIGHNY-26JUL13")
+
+    assert listed[0].status == detailed.status == "open"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_market_status", ["closed", "settled"])
+async def test_detail_reader_preserves_non_open_status(
+    raw_market_status: str,
+) -> None:
+    markets = _fixture("kalshi_markets_page_1.json")
+    for market in markets["markets"]:
+        market["status"] = raw_market_status
+    reader, _ = _reader(
+        event=_fixture("kalshi_event.json"),
+        markets=markets,
+    )
+
+    detailed = await reader.get_event(event_ticker="KXHIGHNY-26JUL13")
+
+    assert detailed.status == raw_market_status
+    assert detailed.status != "open"
+
+
+@pytest.mark.asyncio
 async def test_get_event_uses_fixed_path_and_complete_paginated_markets() -> None:
     first = _fixture("kalshi_markets_page_1.json")
     second = {"markets": [first["markets"].pop()], "cursor": ""}

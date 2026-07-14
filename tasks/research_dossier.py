@@ -119,6 +119,7 @@ class ResearchDossierStore:
         self._locks: dict[str, asyncio.Lock] = {}
         self._write_lock = asyncio.Lock()
         self._schema_lock = threading.Lock()
+        self._schema_initialized = False
 
     async def initialize(self) -> None:
         await asyncio.to_thread(self._initialize_sync)
@@ -323,10 +324,14 @@ class ResearchDossierStore:
 
     def _initialize_sync(self) -> None:
         with self._schema_lock:
+            if self._schema_initialized:
+                return
             self._initialize_sync_locked()
+            self._schema_initialized = True
 
     def _initialize_sync_locked(self) -> None:
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS research_dossiers (

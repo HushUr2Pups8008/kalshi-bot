@@ -317,6 +317,76 @@ async def test_weather_completes_before_quotes_and_batch_uses_finish_as_as_of() 
 
 
 @pytest.mark.asyncio
+async def test_capture_accepts_active_refresh_normalized_by_public_reader() -> None:
+    source_event = event(status="open")
+    active_refresh = event(status="active")
+
+    class ReaderContractMarkets(FakeMarkets):
+        async def get_event(self, *, event_ticker: str) -> RetrievedEvent:
+            assert event_ticker == active_refresh.event_ticker
+            self.get_calls += 1
+            return KalshiPublicMarketDataReader._normalize_event(
+                active_refresh.event_ticker,
+                active_refresh.markets,
+                active_refresh.retrieved_at,
+                authoritative_market_tickers=active_refresh.market_tickers,
+                requested_open=False,
+            )
+
+    store = FakeStore()
+    markets = ReaderContractMarkets((source_event,))
+    times = iter((dt("2026-07-12T17:29:58Z"), dt("2026-07-12T17:30:03Z")))
+
+    result = await task(
+        store=store,
+        markets=markets,
+        weather=FakeWeather(),
+        now=lambda: next(times),
+    ).capture_event(source_event, "T-1h")
+
+    assert result.captured is True
+    assert markets.get_calls == 1
+    assert len(store.batches) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_market_status", ["closed", "settled"])
+async def test_capture_rejects_non_open_refresh_normalized_by_public_reader(
+    raw_market_status: str,
+) -> None:
+    source_event = event(status="open")
+    refreshed = event(status=raw_market_status)
+
+    class ReaderContractMarkets(FakeMarkets):
+        async def get_event(self, *, event_ticker: str) -> RetrievedEvent:
+            assert event_ticker == refreshed.event_ticker
+            self.get_calls += 1
+            return KalshiPublicMarketDataReader._normalize_event(
+                refreshed.event_ticker,
+                refreshed.markets,
+                refreshed.retrieved_at,
+                authoritative_market_tickers=refreshed.market_tickers,
+                requested_open=False,
+            )
+
+    store = FakeStore()
+    markets = ReaderContractMarkets((source_event,))
+    times = iter((dt("2026-07-12T17:29:58Z"), dt("2026-07-12T17:30:03Z")))
+
+    result = await task(
+        store=store,
+        markets=markets,
+        weather=FakeWeather(),
+        now=lambda: next(times),
+    ).capture_event(source_event, "T-1h")
+
+    assert result.captured is False
+    assert result.reason == "ineligible"
+    assert markets.get_calls == 1
+    assert store.batches == []
+
+
+@pytest.mark.asyncio
 async def test_cycle_fetches_series_once_and_processes_at_most_two_events_sequentially() -> None:
     source_event = event()
     cycle_close = dt("2026-07-12T18:29:58Z")

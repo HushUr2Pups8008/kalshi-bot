@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
@@ -396,6 +397,10 @@ class KalshiPublicMarketDataReader:
         authoritative_market_tickers: tuple[str, ...],
         requested_open: bool,
     ) -> RetrievedEvent:
+        markets = tuple(
+            replace(market, status="open") if market.status == "active" else market
+            for market in markets
+        )
         retrieved_market_tickers = tuple(market.market_ticker for market in markets)
         if (
             not authoritative_market_tickers
@@ -411,7 +416,7 @@ class KalshiPublicMarketDataReader:
         if len(close_times) != 1 or len(statuses) != 1:
             raise KalshiPublicMarketDataError("event ladder metadata is inconsistent")
         market_status = next(iter(statuses))
-        event_status = "open" if requested_open and market_status == "active" else market_status
+        event_status = "open" if market_status == "active" else market_status
         return RetrievedEvent(
             event_ticker=event_ticker,
             status=event_status,
