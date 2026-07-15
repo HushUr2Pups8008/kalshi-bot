@@ -4,6 +4,7 @@ import json
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -19,6 +20,12 @@ from scripts.migrate_paper_settlement_schema import (
     plan_settlement_schema,
 )
 from trading.paper_trader import PaperTrader, _DDL
+from trading.settlement import (
+    MarketOutcome,
+    SettlementObservation,
+    VoidRefundContract,
+    build_settlement_observation,
+)
 from trading.settlement_store import (
     SETTLEMENT_DDL_SHA256,
     SETTLEMENT_PAPER_TRADE_COLUMNS_SQL,
@@ -26,6 +33,7 @@ from trading.settlement_store import (
     SettlementStore,
     settlement_result_sha256,
 )
+from trading.venue import MarketRef, Venue
 
 
 SETTLEMENT_TABLES = {
@@ -44,10 +52,58 @@ SETTLEMENT_COLUMNS = {
     "gross_payout_cents",
     "gross_pnl_cents",
 }
-OBSERVATION_SHA = "a" * 64
-PAYLOAD_SHA = "b" * 64
 OUTBOX_ID = "c" * 64
 NOW = datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc)
+TEST_MARKET_REF = MarketRef(Venue.KALSHI, "KX-t1", "KX-t1")
+
+
+def _build_test_observation(
+    *,
+    outcome: str = "yes",
+    market_ref: MarketRef = TEST_MARKET_REF,
+    observed_at: datetime = NOW,
+    effective_at: datetime = NOW - timedelta(minutes=1),
+    refund_cents_per_contract: str | None = None,
+    refunds_entry_fee: int | None = None,
+    authoritative_outcome: object | None = None,
+    authoritative_payload: object | None = None,
+    previous_observation: SettlementObservation | None = None,
+    supersedes_observation_sha256: str | None = None,
+) -> SettlementObservation:
+    void_refund = None
+    if outcome == "void":
+        if refund_cents_per_contract is None or refunds_entry_fee not in {0, 1}:
+            raise ValueError("void test observation requires an explicit refund contract")
+        void_refund = VoidRefundContract(
+            refund_cents_per_contract=Decimal(refund_cents_per_contract),
+            refunds_entry_fee=bool(refunds_entry_fee),
+        )
+    return build_settlement_observation(
+        market_ref=market_ref,
+        outcome=MarketOutcome(outcome),
+        authoritative_outcome=(
+            {"outcome": outcome}
+            if authoritative_outcome is None
+            else authoritative_outcome
+        ),
+        authoritative_payload=(
+            {"settled": True}
+            if authoritative_payload is None
+            else authoritative_payload
+        ),
+        observed_at=observed_at,
+        effective_at=effective_at,
+        rules_version="v1",
+        source_id="kalshi-api",
+        void_refund=void_refund,
+        previous_observation=previous_observation,
+        supersedes_observation_sha256=supersedes_observation_sha256,
+    )
+
+
+BASE_OBSERVATION = _build_test_observation()
+OBSERVATION_SHA = BASE_OBSERVATION.observation_sha256
+PAYLOAD_SHA = BASE_OBSERVATION.payload_sha256
 
 
 def _create_legacy_db(path: Path) -> None:
@@ -60,6 +116,7 @@ def _create_legacy_db(path: Path) -> None:
             venue TEXT NOT NULL DEFAULT 'kalshi',
             resolved INTEGER NOT NULL DEFAULT 0,
             resolved_yes INTEGER,
+            resolved_ts TEXT,
             venue_market_id TEXT,
             identity_status TEXT,
             quarantine_reason TEXT,
@@ -140,7 +197,6 @@ def _artifact_names(path: Path) -> set[str]:
 def _insert_observation(
     conn: sqlite3.Connection,
     *,
-    observation_sha256: str = OBSERVATION_SHA,
     outcome: str = "yes",
     applied_trade_count: int = 1,
     bankroll_before: str = "1000",
@@ -148,7 +204,28 @@ def _insert_observation(
     bankroll_after: str = "1100",
     refund_cents_per_contract: str | None = None,
     refunds_entry_fee: int | None = None,
-) -> None:
+    market_ref: MarketRef = TEST_MARKET_REF,
+    observed_at: datetime = NOW,
+    effective_at: datetime = NOW - timedelta(minutes=1),
+    applied_at: datetime = NOW,
+    authoritative_outcome: object | None = None,
+    authoritative_payload: object | None = None,
+    previous_observation: SettlementObservation | None = None,
+    supersedes_observation_sha256: str | None = None,
+) -> SettlementObservation:
+    observation = _build_test_observation(
+        outcome=outcome,
+        market_ref=market_ref,
+        observed_at=observed_at,
+        effective_at=effective_at,
+        refund_cents_per_contract=refund_cents_per_contract,
+        refunds_entry_fee=refunds_entry_fee,
+        authoritative_outcome=authoritative_outcome,
+        authoritative_payload=authoritative_payload,
+        previous_observation=previous_observation,
+        supersedes_observation_sha256=supersedes_observation_sha256,
+    )
+    void_refund = observation.void_refund
     conn.execute(
         """
         INSERT INTO paper_settlement_observations (
@@ -159,30 +236,61 @@ def _insert_observation(
             supersedes_observation_sha256, applied_trade_count,
             bankroll_before_cents, gross_payout_cents, bankroll_after_cents,
             applied_at
-        ) VALUES (?, 'kalshi', 'KX-t1', 'KX-t1', ?,
-                  '{"outcome":"yes"}', '{"settled":true}', ?,
-                  ?, ?, 'v1', 'kalshi-api', ?, ?, NULL, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            observation_sha256,
-            outcome,
-            PAYLOAD_SHA,
-            NOW.isoformat(),
-            (NOW - timedelta(minutes=1)).isoformat(),
-            refund_cents_per_contract,
-            refunds_entry_fee,
+            observation.observation_sha256,
+            observation.market_ref.venue.value,
+            observation.market_ref.venue_market_id,
+            observation.market_ref.alias,
+            observation.outcome.value,
+            observation.authoritative_outcome_json,
+            observation.canonical_payload_json,
+            observation.payload_sha256,
+            observation.observed_at.isoformat(),
+            observation.effective_at.isoformat(),
+            observation.rules_version,
+            observation.source_id,
+            (
+                format(void_refund.refund_cents_per_contract.normalize(), "f")
+                if void_refund is not None
+                else None
+            ),
+            int(void_refund.refunds_entry_fee) if void_refund is not None else None,
+            observation.supersedes_observation_sha256,
             applied_trade_count,
             bankroll_before,
             payout,
             bankroll_after,
-            NOW.isoformat(),
+            applied_at.isoformat(),
         ),
     )
+    return observation
+
+
+def _mutate_observation(
+    conn: sqlite3.Connection,
+    mutation: str,
+    parameters: tuple[object, ...] = (),
+) -> None:
+    trigger_name = "immutable_paper_settlement_observations_update"
+    row = conn.execute(
+        "SELECT sql FROM sqlite_schema WHERE type='trigger' AND name=?",
+        (trigger_name,),
+    ).fetchone()
+    assert row is not None and row[0]
+    conn.execute(f"DROP TRIGGER {trigger_name}")
+    try:
+        conn.execute(mutation, parameters)
+    finally:
+        conn.execute(str(row[0]))
 
 
 def _seed_settled_trade(
     conn: sqlite3.Connection,
     *,
+    trade_id: str = "t1",
+    market_ref: MarketRef = TEST_MARKET_REF,
     payout: str = "100",
     gross_pnl: str = "60",
     observation_sha256: str | None = OBSERVATION_SHA,
@@ -193,6 +301,8 @@ def _seed_settled_trade(
     price_cents: int | float = 40,
     cost_dollars: float = 0.4,
     pnl_dollars: float | None = 0.6,
+    settled_at: str = NOW.isoformat(),
+    resolved_ts: str = NOW.isoformat(),
 ) -> None:
     conn.execute(
         """
@@ -200,22 +310,27 @@ def _seed_settled_trade(
             trade_id, ticker, venue, resolved, venue_market_id, identity_status,
             side, contracts, price_cents, cost_dollars, terminal_state,
             settlement_observation_sha256, settled_at, gross_payout_cents,
-            gross_pnl_cents, resolved_yes, pnl_dollars
-        ) VALUES ('t1', 'KX-t1', 'kalshi', 1, 'KX-t1', 'mapped',
-                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            gross_pnl_cents, resolved_yes, pnl_dollars, resolved_ts
+        ) VALUES (?, ?, ?, 1, ?, 'mapped',
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
+            trade_id,
+            market_ref.alias,
+            market_ref.venue.value,
+            market_ref.venue_market_id,
             side,
             contracts,
             price_cents,
             cost_dollars,
             terminal_state,
             observation_sha256,
-            NOW.isoformat(),
+            settled_at,
             payout,
             gross_pnl,
             resolved_yes,
             pnl_dollars,
+            resolved_ts,
         ),
     )
 
@@ -1303,7 +1418,7 @@ def test_conservation_reports_accounting_and_lease_violations(tmp_path, invalid)
     _migrate(db)
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA foreign_keys=ON")
-    _insert_observation(
+    observation = _insert_observation(
         conn,
         applied_trade_count=2 if invalid == "trade_count" else 1,
         bankroll_after="1099" if invalid == "bankroll" else "1100",
@@ -1458,7 +1573,7 @@ def test_conservation_rejects_internally_balanced_fabricated_void_refund(tmp_pat
     _migrate(db)
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA foreign_keys=ON")
-    _insert_observation(
+    observation = _insert_observation(
         conn,
         outcome="void",
         payout="40",
@@ -1473,6 +1588,7 @@ def test_conservation_rejects_internally_balanced_fabricated_void_refund(tmp_pat
         terminal_state="void",
         resolved_yes=None,
         pnl_dollars=0.0,
+        observation_sha256=observation.observation_sha256,
     )
     conn.commit()
     conn.close()
@@ -1480,7 +1596,10 @@ def test_conservation_rejects_internally_balanced_fabricated_void_refund(tmp_pat
     with SettlementStore(db) as store:
         result = store.conservation(now=NOW)
         assert not result.ok
-        assert f"trade_financials:{OBSERVATION_SHA}:t1" in result.failures
+        assert (
+            f"trade_financials:{observation.observation_sha256}:t1"
+            in result.failures
+        )
         assert result.metrics["invalid_linked_trade_financials"] == 1
 
 
@@ -1519,14 +1638,22 @@ def test_conservation_rejects_incoherent_observation_refund_fields(
     _migrate(db)
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA foreign_keys=ON")
-    _insert_observation(
+    canonical_fee = 0 if outcome == "void" else None
+    observation = _insert_observation(
         conn,
         outcome=outcome,
         payout=payout,
         bankroll_after=bankroll_after,
         refund_cents_per_contract=refund_cents_per_contract,
-        refunds_entry_fee=refunds_entry_fee,
+        refunds_entry_fee=canonical_fee,
     )
+    if refunds_entry_fee != canonical_fee:
+        _mutate_observation(
+            conn,
+            "UPDATE paper_settlement_observations SET refunds_entry_fee=? "
+            "WHERE observation_sha256=?",
+            (refunds_entry_fee, observation.observation_sha256),
+        )
     _seed_settled_trade(
         conn,
         payout=payout,
@@ -1534,6 +1661,7 @@ def test_conservation_rejects_incoherent_observation_refund_fields(
         terminal_state=terminal_state,
         resolved_yes=resolved_yes,
         pnl_dollars=pnl_dollars,
+        observation_sha256=observation.observation_sha256,
     )
     conn.commit()
     conn.close()
@@ -1541,7 +1669,10 @@ def test_conservation_rejects_incoherent_observation_refund_fields(
     with SettlementStore(db) as store:
         result = store.conservation(now=NOW)
         assert not result.ok
-        assert f"trade_financials:{OBSERVATION_SHA}:t1" in result.failures
+        assert (
+            f"trade_financials:{observation.observation_sha256}:t1"
+            in result.failures
+        )
         assert result.metrics["invalid_linked_trade_financials"] == 1
 
 
@@ -1561,6 +1692,348 @@ def test_conservation_accepts_observation_alias_drift(tmp_path):
         assert result.ok
         assert result.metrics["invalid_linked_trade_identity"] == 0
         assert result.metrics["linked_trade_alias_drifts"] == 1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "UPDATE paper_settlement_observations SET venue='evil'",
+        "UPDATE paper_settlement_observations SET venue_market_id='   '",
+        "UPDATE paper_settlement_observations SET alias='   '",
+    ],
+    ids=["venue", "venue-market-id", "alias"],
+)
+def test_observation_identity_schema_checks_reject_invalid_writes(
+    tmp_path,
+    mutation,
+):
+    db = tmp_path / "observation-identity-schema.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    conn = sqlite3.connect(db)
+    _insert_observation(conn)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        _mutate_observation(conn, mutation)
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    "mutations",
+    [
+        (
+            "UPDATE paper_settlement_observations SET venue='evil'",
+            "UPDATE paper_trades SET venue='evil' WHERE trade_id='t1'",
+        ),
+        (
+            "UPDATE paper_settlement_observations SET venue_market_id='   '",
+            "UPDATE paper_trades SET venue_market_id='   ' WHERE trade_id='t1'",
+        ),
+        (
+            "UPDATE paper_settlement_observations SET alias='   '",
+            "UPDATE paper_trades SET ticker='   ' WHERE trade_id='t1'",
+        ),
+    ],
+    ids=["forged-venue", "blank-venue-market-id", "blank-aliases"],
+)
+def test_conservation_rejects_forged_observation_and_trade_identity(
+    tmp_path,
+    mutations,
+):
+    db = tmp_path / "forged-settlement-identity.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db)
+
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA ignore_check_constraints=ON")
+    for mutation in mutations:
+        if "paper_settlement_observations" in mutation:
+            _mutate_observation(conn, mutation)
+        else:
+            conn.execute(mutation)
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.conservation(now=NOW)
+        assert not result.ok
+        assert f"observation_identity:{OBSERVATION_SHA}" in result.failures
+        assert f"trade_identity:{OBSERVATION_SHA}:t1" in result.failures
+        assert result.metrics["invalid_observation_identities"] == 1
+        assert result.metrics["invalid_linked_trade_identity"] == 1
+
+
+@pytest.mark.parametrize(
+    ("mutations", "expected_failure", "metric"),
+    [
+        (
+            ("UPDATE paper_trades SET settled_at='not-a-time' WHERE trade_id='t1'",),
+            f"trade_timestamps:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_timestamps",
+        ),
+        (
+            (
+                "UPDATE paper_trades SET resolved_ts='2026-07-14T12:00:00' "
+                "WHERE trade_id='t1'",
+            ),
+            f"trade_timestamps:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_timestamps",
+        ),
+        (
+            (
+                "UPDATE paper_trades SET resolved_ts='2026-07-14T12:01:00+00:00' "
+                "WHERE trade_id='t1'",
+            ),
+            f"trade_timestamps:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_timestamps",
+        ),
+        (
+            (
+                "UPDATE paper_settlement_observations "
+                "SET applied_at='2026-07-14T12:01:00+00:00'",
+            ),
+            f"trade_timestamps:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_timestamps",
+        ),
+        (
+            ("UPDATE paper_settlement_observations SET observed_at='not-a-time'",),
+            f"observation_timestamps:{OBSERVATION_SHA}",
+            "invalid_observation_timestamps",
+        ),
+        (
+            (
+                "UPDATE paper_settlement_observations "
+                "SET effective_at='2026-07-14T11:59:00'",
+            ),
+            f"observation_timestamps:{OBSERVATION_SHA}",
+            "invalid_observation_timestamps",
+        ),
+        (
+            ("UPDATE paper_settlement_observations SET applied_at='not-a-time'",),
+            f"observation_timestamps:{OBSERVATION_SHA}",
+            "invalid_observation_timestamps",
+        ),
+        (
+            (
+                "UPDATE paper_settlement_observations "
+                "SET effective_at='2026-07-14T12:01:00+00:00'",
+            ),
+            f"observation_timestamps:{OBSERVATION_SHA}",
+            "invalid_observation_timestamps",
+        ),
+        (
+            (
+                "UPDATE paper_settlement_observations "
+                "SET observed_at='2026-07-14T12:01:00+00:00'",
+            ),
+            f"observation_timestamps:{OBSERVATION_SHA}",
+            "invalid_observation_timestamps",
+        ),
+    ],
+    ids=[
+        "malformed-settled-at",
+        "naive-resolved-ts",
+        "mismatched-resolved-ts",
+        "mismatched-applied-at",
+        "malformed-observed-at",
+        "naive-effective-at",
+        "malformed-applied-at",
+        "effective-after-observed",
+        "observed-after-applied",
+    ],
+)
+def test_conservation_rejects_timestamp_lineage_corruption(
+    tmp_path,
+    mutations,
+    expected_failure,
+    metric,
+):
+    db = tmp_path / "settlement-timestamp-lineage.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db)
+
+    conn = sqlite3.connect(db)
+    for mutation in mutations:
+        if "paper_settlement_observations" in mutation:
+            _mutate_observation(conn, mutation)
+        else:
+            conn.execute(mutation)
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.conservation(now=NOW)
+        assert not result.ok
+        assert expected_failure in result.failures
+        assert result.metrics[metric] == 1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        (
+            "UPDATE paper_settlement_observations "
+            "SET canonical_payload_json='{\"settled\": true}'"
+        ),
+        (
+            "UPDATE paper_settlement_observations "
+            f"SET payload_sha256='{'d' * 64}'"
+        ),
+        (
+            "UPDATE paper_settlement_observations "
+            "SET authoritative_outcome_json='{\"outcome\":\"no\"}'"
+        ),
+    ],
+    ids=["noncanonical-payload-json", "payload-hash", "semantic-outcome"],
+)
+def test_conservation_rejects_corrupt_observation_provenance(tmp_path, mutation):
+    db = tmp_path / "corrupt-observation-provenance.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db)
+
+    conn = sqlite3.connect(db)
+    _mutate_observation(conn, mutation)
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.conservation(now=NOW)
+        assert not result.ok
+        assert f"observation_semantics:{OBSERVATION_SHA}" in result.failures
+        assert result.metrics["invalid_observation_semantics"] == 1
+
+
+def test_conservation_rejects_corrupt_observation_sha256(tmp_path):
+    db = tmp_path / "corrupt-observation-sha.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db)
+    forged_sha = "d" * 64
+
+    conn = sqlite3.connect(db)
+    _mutate_observation(
+        conn,
+        "UPDATE paper_settlement_observations SET observation_sha256=?",
+        (forged_sha,),
+    )
+    conn.execute(
+        "UPDATE paper_trades SET settlement_observation_sha256=? WHERE trade_id='t1'",
+        (forged_sha,),
+    )
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.conservation(now=NOW)
+        assert not result.ok
+        assert f"observation_semantics:{forged_sha}" in result.failures
+        assert result.metrics["invalid_observation_semantics"] == 1
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    ["missing-target", "wrong-market", "applied-order", "effective-order"],
+)
+def test_conservation_rejects_invalid_observation_supersession(tmp_path, invalid):
+    db = tmp_path / "invalid-observation-supersession.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    conn = sqlite3.connect(db)
+
+    first = _insert_observation(
+        conn,
+        observed_at=NOW - timedelta(minutes=6),
+        effective_at=NOW - timedelta(minutes=7),
+        applied_at=NOW - timedelta(minutes=5),
+        authoritative_payload={"revision": 1},
+    )
+    _seed_settled_trade(
+        conn,
+        observation_sha256=first.observation_sha256,
+        settled_at=(NOW - timedelta(minutes=5)).isoformat(),
+        resolved_ts=(NOW - timedelta(minutes=5)).isoformat(),
+    )
+
+    successor_effective_at = NOW - timedelta(minutes=2)
+    if invalid == "effective-order":
+        successor_effective_at = NOW - timedelta(minutes=8)
+    successor = _insert_observation(
+        conn,
+        observed_at=NOW - timedelta(minutes=1),
+        effective_at=successor_effective_at,
+        applied_at=NOW,
+        authoritative_payload={"revision": 2},
+    )
+    _mutate_observation(
+        conn,
+        "UPDATE paper_settlement_observations "
+        "SET supersedes_observation_sha256=? WHERE observation_sha256=?",
+        (first.observation_sha256, successor.observation_sha256),
+    )
+    _seed_settled_trade(
+        conn,
+        trade_id="t2",
+        observation_sha256=successor.observation_sha256,
+    )
+
+    if invalid == "missing-target":
+        _mutate_observation(
+            conn,
+            "UPDATE paper_settlement_observations "
+            "SET supersedes_observation_sha256=? WHERE observation_sha256=?",
+            ("f" * 64, successor.observation_sha256),
+        )
+    elif invalid == "wrong-market":
+        other_ref = MarketRef(Venue.KALSHI, "KX-other", "KX-other")
+        other = _insert_observation(
+            conn,
+            market_ref=other_ref,
+            observed_at=NOW - timedelta(minutes=4),
+            effective_at=NOW - timedelta(minutes=4),
+            applied_at=NOW - timedelta(minutes=3),
+            authoritative_payload={"revision": "other"},
+        )
+        _seed_settled_trade(
+            conn,
+            trade_id="t3",
+            market_ref=other_ref,
+            observation_sha256=other.observation_sha256,
+            settled_at=(NOW - timedelta(minutes=3)).isoformat(),
+            resolved_ts=(NOW - timedelta(minutes=3)).isoformat(),
+        )
+        _mutate_observation(
+            conn,
+            "UPDATE paper_settlement_observations "
+            "SET supersedes_observation_sha256=? WHERE observation_sha256=?",
+            (other.observation_sha256, successor.observation_sha256),
+        )
+    elif invalid == "applied-order":
+        later = (NOW + timedelta(minutes=1)).isoformat()
+        _mutate_observation(
+            conn,
+            "UPDATE paper_settlement_observations SET applied_at=? "
+            "WHERE observation_sha256=?",
+            (later, first.observation_sha256),
+        )
+        conn.execute(
+            "UPDATE paper_trades SET settled_at=?, resolved_ts=? WHERE trade_id='t1'",
+            (later, later),
+        )
+
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.conservation(now=NOW)
+        assert not result.ok
+        assert (
+            f"observation_supersession:{successor.observation_sha256}"
+            in result.failures
+        )
+        assert result.metrics["invalid_observation_supersessions"] >= 1
 
 
 @pytest.mark.parametrize(
@@ -1600,7 +2073,7 @@ def test_conservation_accepts_coherent_trade_outcomes(
     _migrate(db)
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA foreign_keys=ON")
-    _insert_observation(
+    observation = _insert_observation(
         conn,
         outcome=outcome,
         payout=payout,
@@ -1616,6 +2089,7 @@ def test_conservation_accepts_coherent_trade_outcomes(
         terminal_state=terminal_state,
         resolved_yes=resolved_yes,
         pnl_dollars=pnl_dollars,
+        observation_sha256=observation.observation_sha256,
     )
     conn.commit()
     conn.close()

@@ -14,6 +14,14 @@ from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
 
+from trading.settlement import (
+    MarketOutcome,
+    SettlementObservation,
+    VoidRefundContract,
+    validate_observation_transition,
+)
+from trading.venue import MarketRef, Venue
+
 _SQLITE_CONNECT = sqlite3.connect
 
 SETTLEMENT_SCHEMA_VERSION = 1
@@ -55,9 +63,11 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
         """
         CREATE TABLE paper_settlement_observations (
             observation_sha256 TEXT PRIMARY KEY,
-            venue TEXT NOT NULL,
-            venue_market_id TEXT NOT NULL,
-            alias TEXT NOT NULL,
+            venue TEXT NOT NULL CHECK (venue IN ('kalshi','polymarket_us')),
+            venue_market_id TEXT NOT NULL CHECK (
+                length(trim(venue_market_id)) > 0
+            ),
+            alias TEXT NOT NULL CHECK (length(trim(alias)) > 0),
             outcome TEXT NOT NULL CHECK (outcome IN ('yes','no','void')),
             authoritative_outcome_json TEXT NOT NULL,
             canonical_payload_json TEXT NOT NULL,
@@ -1113,6 +1123,9 @@ class SettlementStore:
         observations = self._conn.execute(
             """
             SELECT observation_sha256, venue, venue_market_id, alias, outcome,
+                   authoritative_outcome_json, canonical_payload_json,
+                   payload_sha256, observed_at, effective_at, applied_at,
+                   rules_version, source_id, supersedes_observation_sha256,
                    refund_cents_per_contract, refunds_entry_fee,
                    applied_trade_count,
                    bankroll_before_cents, gross_payout_cents,
@@ -1122,19 +1135,68 @@ class SettlementStore:
             """
         ).fetchall()
         linked_trades = 0
+        invalid_observation_identities = 0
+        invalid_observation_timestamps = 0
+        invalid_observation_semantics = 0
         invalid_trade_identity = 0
         linked_trade_alias_drifts = 0
         invalid_trade_financials = 0
         invalid_trade_outcomes = 0
+        invalid_trade_timestamps = 0
+        observation_applied_at: dict[str, datetime] = {}
+        reconstructed_observations: dict[
+            str, tuple[SettlementObservation, datetime]
+        ] = {}
         for observation in observations:
             observation_id = observation["observation_sha256"]
+            identity_valid = _valid_market_identity(
+                observation["venue"],
+                observation["venue_market_id"],
+                observation["alias"],
+            )
+            if not identity_valid:
+                failures.append(f"observation_identity:{observation_id}")
+                invalid_observation_identities += 1
+
+            timestamps_valid = False
+            try:
+                observed_at = _parse_datetime(observation["observed_at"])
+                effective_at = _parse_datetime(observation["effective_at"])
+                applied_at = _parse_datetime(observation["applied_at"])
+                if not effective_at <= observed_at <= applied_at:
+                    raise ValueError("invalid observation timestamp order")
+                observation_applied_at[observation_id] = applied_at
+                timestamps_valid = True
+            except ValueError:
+                failures.append(f"observation_timestamps:{observation_id}")
+                invalid_observation_timestamps += 1
+
+            if identity_valid and timestamps_valid:
+                try:
+                    reconstructed = _reconstruct_observation(
+                        observation,
+                        observed_at=observed_at,
+                        effective_at=effective_at,
+                    )
+                except (AttributeError, RuntimeError, TypeError, ValueError):
+                    failures.append(f"observation_semantics:{observation_id}")
+                    invalid_observation_semantics += 1
+                else:
+                    reconstructed_observations[observation_id] = (
+                        reconstructed,
+                        applied_at,
+                    )
+            reconstructed_entry = reconstructed_observations.get(observation_id)
+            canonical_observation = (
+                reconstructed_entry[0] if reconstructed_entry is not None else None
+            )
             trades = self._conn.execute(
                 """
                 SELECT trade_id, ticker, venue, venue_market_id, side,
                        contracts, price_cents, cost_dollars, pnl_dollars,
                        gross_payout_cents,
                        gross_pnl_cents, resolved, resolved_yes,
-                       identity_status, terminal_state, settled_at
+                       identity_status, terminal_state, settled_at, resolved_ts
                 FROM paper_trades
                 WHERE settlement_observation_sha256=?
                 ORDER BY trade_id
@@ -1150,13 +1212,31 @@ class SettlementStore:
             for row in trades:
                 trade_key = f"{observation_id}:{row['trade_id']}"
                 if (
-                    row["venue"] != observation["venue"]
+                    not _valid_market_identity(
+                        row["venue"], row["venue_market_id"], row["ticker"]
+                    )
+                    or row["venue"] != observation["venue"]
                     or row["venue_market_id"] != observation["venue_market_id"]
                 ):
                     failures.append(f"trade_identity:{trade_key}")
                     invalid_trade_identity += 1
                 if row["ticker"] != observation["alias"]:
                     linked_trade_alias_drifts += 1
+
+                trade_timestamps_invalid = False
+                try:
+                    settled_at = _parse_datetime(row["settled_at"])
+                    resolved_ts = _parse_datetime(row["resolved_ts"])
+                    applied_at = observation_applied_at.get(observation_id)
+                    if applied_at is not None and (
+                        settled_at != resolved_ts or settled_at != applied_at
+                    ):
+                        trade_timestamps_invalid = True
+                except ValueError:
+                    trade_timestamps_invalid = True
+                if trade_timestamps_invalid:
+                    failures.append(f"trade_timestamps:{trade_key}")
+                    invalid_trade_timestamps += 1
 
                 financials_invalid = False
                 try:
@@ -1179,30 +1259,25 @@ class SettlementStore:
                     if cost_cents != contracts * price_cents:
                         financials_invalid = True
 
-                    if observation["outcome"] == "void":
-                        refund_cents = _parse_decimal(
-                            observation["refund_cents_per_contract"]
+                    if canonical_observation is None:
+                        financials_invalid = True
+                    elif canonical_observation.outcome is MarketOutcome.VOID:
+                        void_refund = canonical_observation.void_refund
+                        if void_refund is None:
+                            raise ValueError("void observation is missing refund semantics")
+                        expected_payout = (
+                            contracts * void_refund.refund_cents_per_contract
                         )
-                        if (
-                            refund_cents < 0
-                            or refund_cents > 100
-                            or observation["refunds_entry_fee"] not in {0, 1}
-                        ):
+                        if gross_payout != expected_payout:
                             financials_invalid = True
-                        expected_payout = contracts * refund_cents
                     else:
-                        if (
-                            observation["refund_cents_per_contract"] is not None
-                            or observation["refunds_entry_fee"] is not None
-                        ):
-                            financials_invalid = True
                         expected_payout = (
                             contracts * 100
-                            if row["side"] == observation["outcome"]
+                            if row["side"] == canonical_observation.outcome.value
                             else Decimal("0")
                         )
-                    if gross_payout != expected_payout:
-                        financials_invalid = True
+                        if gross_payout != expected_payout:
+                            financials_invalid = True
                     if gross_pnl != gross_payout - cost_cents:
                         financials_invalid = True
                     if row["pnl_dollars"] is None or (
@@ -1219,13 +1294,20 @@ class SettlementStore:
                     invalid_trade_financials += 1
 
                 expected_resolved_yes: int | None
-                if observation["outcome"] == "void":
+                if canonical_observation is None:
+                    expected_resolved_yes = None
+                    expected_terminal_state = None
+                elif canonical_observation.outcome is MarketOutcome.VOID:
                     expected_resolved_yes = None
                     expected_terminal_state = "void"
                 else:
-                    expected_resolved_yes = int(observation["outcome"] == "yes")
+                    expected_resolved_yes = int(
+                        canonical_observation.outcome is MarketOutcome.YES
+                    )
                     expected_terminal_state = (
-                        "won" if row["side"] == observation["outcome"] else "lost"
+                        "won"
+                        if row["side"] == canonical_observation.outcome.value
+                        else "lost"
                     )
                 if (
                     row["resolved"] != 1
@@ -1264,11 +1346,57 @@ class SettlementStore:
             ):
                 failures.append(f"linked_trade_state:{observation_id}")
 
+        observation_histories: dict[
+            tuple[Venue, str], list[tuple[SettlementObservation, datetime]]
+        ] = {}
+        for reconstructed, applied_at in reconstructed_observations.values():
+            history_key = (
+                reconstructed.market_ref.venue,
+                reconstructed.market_ref.venue_market_id,
+            )
+            observation_histories.setdefault(history_key, []).append(
+                (reconstructed, applied_at)
+            )
+
+        invalid_supersessions: set[str] = set()
+        for history in observation_histories.values():
+            history.sort(key=lambda item: (item[1], item[0].observation_sha256))
+            previous: tuple[SettlementObservation, datetime] | None = None
+            for current, current_applied_at in history:
+                supersession_invalid = False
+                if previous is None:
+                    try:
+                        validate_observation_transition(None, current)
+                    except (RuntimeError, ValueError):
+                        supersession_invalid = True
+                else:
+                    previous_observation, previous_applied_at = previous
+                    try:
+                        validate_observation_transition(previous_observation, current)
+                    except (RuntimeError, ValueError):
+                        supersession_invalid = True
+                    if (
+                        previous_observation.market_ref != current.market_ref
+                        or previous_applied_at >= current_applied_at
+                    ):
+                        supersession_invalid = True
+                if supersession_invalid:
+                    invalid_supersessions.add(current.observation_sha256)
+                previous = (current, current_applied_at)
+
+        for observation_id in sorted(invalid_supersessions):
+            failures.append(f"observation_supersession:{observation_id}")
+
         metrics["linked_trades"] = linked_trades
+        metrics["invalid_observation_identities"] = invalid_observation_identities
+        metrics["invalid_observation_timestamps"] = invalid_observation_timestamps
+        metrics["invalid_observation_semantics"] = invalid_observation_semantics
+        metrics["invalid_observation_supersessions"] = len(invalid_supersessions)
         metrics["invalid_linked_trade_identity"] = invalid_trade_identity
         metrics["linked_trade_alias_drifts"] = linked_trade_alias_drifts
         metrics["invalid_linked_trade_financials"] = invalid_trade_financials
         metrics["invalid_linked_trade_outcomes"] = invalid_trade_outcomes
+        metrics["invalid_linked_trade_timestamps"] = invalid_trade_timestamps
 
         unresolved_links = self._conn.execute(
             """
@@ -1377,6 +1505,59 @@ def _schema_objects_ready(conn: sqlite3.Connection) -> bool:
 
 def _foreign_key_violation_count(conn: sqlite3.Connection) -> int:
     return len(conn.execute("PRAGMA foreign_key_check").fetchall())
+
+
+def _reconstruct_observation(
+    row: sqlite3.Row,
+    *,
+    observed_at: datetime,
+    effective_at: datetime,
+) -> SettlementObservation:
+    outcome = MarketOutcome(row["outcome"])
+    void_refund = None
+    if outcome is MarketOutcome.VOID:
+        if row["refunds_entry_fee"] not in {0, 1}:
+            raise ValueError("void observation requires an explicit fee refund flag")
+        void_refund = VoidRefundContract(
+            refund_cents_per_contract=_parse_decimal(
+                row["refund_cents_per_contract"]
+            ),
+            refunds_entry_fee=bool(row["refunds_entry_fee"]),
+        )
+    elif (
+        row["refund_cents_per_contract"] is not None
+        or row["refunds_entry_fee"] is not None
+    ):
+        raise ValueError("directional observation cannot carry void refund fields")
+
+    return SettlementObservation(
+        market_ref=MarketRef(
+            Venue(row["venue"]),
+            row["venue_market_id"],
+            row["alias"],
+        ),
+        outcome=outcome,
+        authoritative_outcome_json=row["authoritative_outcome_json"],
+        canonical_payload_json=row["canonical_payload_json"],
+        observed_at=observed_at,
+        effective_at=effective_at,
+        rules_version=row["rules_version"],
+        source_id=row["source_id"],
+        payload_sha256=row["payload_sha256"],
+        observation_sha256=row["observation_sha256"],
+        void_refund=void_refund,
+        supersedes_observation_sha256=row["supersedes_observation_sha256"],
+    )
+
+
+def _valid_market_identity(venue: object, market_id: object, alias: object) -> bool:
+    return (
+        venue in {Venue.KALSHI.value, Venue.POLYMARKET_US.value}
+        and isinstance(market_id, str)
+        and bool(market_id.strip())
+        and isinstance(alias, str)
+        and bool(alias.strip())
+    )
 
 
 def _parse_datetime(value: object) -> datetime:
