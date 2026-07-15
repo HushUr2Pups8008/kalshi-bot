@@ -20,6 +20,8 @@ from scripts.migrate_paper_accounting_schema import (
 from trading.fees import (
     DIRECT_ACCOUNT_PRECISION,
     KALSHI_GENERAL_2026_07_07,
+    NON_DIRECT_ACCOUNT_PRECISION,
+    POLYMARKET_US_2026_07_01,
     FeeContext,
     FeeRole,
     FeeScheduleId,
@@ -35,6 +37,7 @@ from trading.paper_accounting import (
     PaperAccountingHandlers,
     PaperAccountingRecord,
     PaperAccountingSchemaError,
+    accounting_schema_state,
     initialize_fresh_paper_accounting_schema,
     paper_accounting_schema_contract_matches,
     require_paper_accounting_admission,
@@ -125,14 +128,51 @@ def _entry_record(**changes: object) -> PaperAccountingRecord:
         price=context.price,
         signed_revenue=context.signed_revenue,
         multiplier=context.multiplier,
+        fee_type="quadratic",
+        fee_multiplier_provenance_sha256="d" * 64,
+        fee_multiplier_effective_at=NOW - timedelta(minutes=1),
         coefficient=context.coefficient,
         account_precision=context.account_precision,
+        account_precision_mode="direct",
         quote=quote,
         gross_entry_debit=gross_entry_debit,
         net_entry_debit=gross_entry_debit + quote.net_fee,
         recorded_at=NOW,
     )
     return replace(record, **changes)
+
+
+def _polymarket_entry_record(
+    entry: PaperAccountingRecord | None = None,
+    **changes: object,
+) -> PaperAccountingRecord:
+    record = entry or _entry_record()
+    coefficient = fee_coefficient_for(POLYMARKET_US_2026_07_01, FeeRole.TAKER)
+    context = FeeContext(
+        schedule_id=POLYMARKET_US_2026_07_01,
+        role=FeeRole.TAKER,
+        quantity=record.quantity,
+        price=record.price,
+        signed_revenue=record.signed_revenue,
+        order_id=record.order_id,
+        accumulator=D("0"),
+        multiplier=record.multiplier,
+        coefficient=coefficient,
+        account_precision=None,
+        timestamp=record.filled_at,
+    )
+    quote = quote_fee(context)
+    polymarket = replace(
+        record,
+        schedule_id=context.schedule_id,
+        role=context.role,
+        coefficient=context.coefficient,
+        account_precision=None,
+        account_precision_mode="not_applicable",
+        quote=quote,
+        net_entry_debit=record.gross_entry_debit + quote.net_fee,
+    )
+    return replace(polymarket, **changes)
 
 
 def _settled_record(
@@ -248,6 +288,133 @@ def test_record_rejects_causally_impossible_timestamps_direct_and_persisted() ->
         PaperAccountingRecord.from_database_row(settled_values)
 
 
+def test_record_requires_exact_fee_multiplier_provenance_direct_and_persisted() -> None:
+    entry = _entry_record()
+    with pytest.raises(ValueError, match="fee_type is required"):
+        replace(entry, fee_type="")
+    with pytest.raises(ValueError, match="fee_multiplier_provenance_sha256"):
+        replace(entry, fee_multiplier_provenance_sha256="D" * 64)
+    with pytest.raises(
+        ValueError,
+        match="fee_multiplier_effective_at must not follow filled_at",
+    ):
+        replace(
+            entry,
+            fee_multiplier_effective_at=entry.filled_at + timedelta(microseconds=1),
+        )
+
+    for column, value, message in (
+        ("fee_type", "", "fee_type is required"),
+        (
+            "fee_multiplier_provenance_sha256",
+            "D" * 64,
+            "fee_multiplier_provenance_sha256",
+        ),
+        (
+            "fee_multiplier_effective_at",
+            (entry.filled_at + timedelta(microseconds=1)).isoformat(),
+            "fee_multiplier_effective_at must not follow filled_at",
+        ),
+    ):
+        values = entry.to_database_values()
+        values[column] = value
+        with pytest.raises(ValueError, match=message):
+            PaperAccountingRecord.from_database_row(values)
+
+
+def test_zero_fee_multiplier_remains_valid_with_exact_provenance() -> None:
+    entry = _entry_record()
+    zero_context = replace(
+        FeeContext(
+            schedule_id=entry.schedule_id,
+            role=entry.role,
+            quantity=entry.quantity,
+            price=entry.price,
+            signed_revenue=entry.signed_revenue,
+            order_id=entry.order_id,
+            accumulator=entry.quote.previous_accumulator,
+            multiplier=entry.multiplier,
+            coefficient=entry.coefficient,
+            account_precision=entry.account_precision,
+            timestamp=entry.filled_at,
+        ),
+        multiplier=D("0"),
+    )
+    quote = quote_fee(zero_context)
+    zero = replace(
+        entry,
+        multiplier=D("0"),
+        quote=quote,
+        net_entry_debit=entry.gross_entry_debit + quote.net_fee,
+    )
+    assert zero.multiplier == D("0")
+    assert PaperAccountingRecord.from_database_row(zero.to_database_values()) == zero
+
+
+def test_entry_debit_rejects_coherent_positive_signed_revenue() -> None:
+    entry = _entry_record()
+    context = FeeContext(
+        schedule_id=entry.schedule_id,
+        role=entry.role,
+        quantity=entry.quantity,
+        price=entry.price,
+        signed_revenue=abs(entry.signed_revenue),
+        order_id=entry.order_id,
+        accumulator=entry.quote.previous_accumulator,
+        multiplier=entry.multiplier,
+        coefficient=entry.coefficient,
+        account_precision=entry.account_precision,
+        timestamp=entry.filled_at,
+    )
+    quote = quote_fee(context)
+    with pytest.raises(ValueError, match="signed_revenue must be negative"):
+        replace(
+            entry,
+            signed_revenue=context.signed_revenue,
+            quote=quote,
+            net_entry_debit=entry.gross_entry_debit + quote.net_fee,
+        )
+
+
+def test_account_precision_mode_matches_venue_and_exact_quantum() -> None:
+    direct = _entry_record()
+    with pytest.raises(ValueError, match="account_precision_mode"):
+        replace(direct, account_precision_mode="non_direct")
+
+    non_direct_context = FeeContext(
+        schedule_id=direct.schedule_id,
+        role=direct.role,
+        quantity=direct.quantity,
+        price=direct.price,
+        signed_revenue=direct.signed_revenue,
+        order_id=direct.order_id,
+        accumulator=direct.quote.previous_accumulator,
+        multiplier=direct.multiplier,
+        coefficient=direct.coefficient,
+        account_precision=NON_DIRECT_ACCOUNT_PRECISION,
+        timestamp=direct.filled_at,
+    )
+    non_direct_quote = quote_fee(non_direct_context)
+    non_direct = replace(
+        direct,
+        account_precision=NON_DIRECT_ACCOUNT_PRECISION,
+        account_precision_mode="non_direct",
+        quote=non_direct_quote,
+        net_entry_debit=direct.gross_entry_debit + non_direct_quote.net_fee,
+    )
+    assert PaperAccountingRecord.from_database_row(non_direct.to_database_values()) == non_direct
+
+    polymarket = _polymarket_entry_record(direct)
+    assert PaperAccountingRecord.from_database_row(polymarket.to_database_values()) == polymarket
+    with pytest.raises(ValueError, match="account_precision_mode"):
+        replace(polymarket, account_precision_mode="direct")
+
+    values = direct.to_database_values()
+    values["account_precision_mode"] = "not_applicable"
+    with pytest.raises(ValueError, match="account_precision_mode"):
+        PaperAccountingRecord.from_database_row(values)
+
+
 def test_settlement_fields_are_all_null_or_complete_and_exact() -> None:
     entry = _entry_record()
     with pytest.raises(ValueError, match="settlement fields must be all null or complete"):
@@ -338,8 +505,12 @@ def test_accounting_entry_meta_and_delete_are_database_immutable(tmp_path: Path)
             "fee_schedule_artifact_sha256": "c" * 64,
             "fee_schedule_supporting_artifacts_json": "[]",
             "fee_multiplier": "2",
+            "fee_type": "other",
+            "fee_multiplier_provenance_sha256": "e" * 64,
+            "fee_multiplier_effective_at": (NOW - timedelta(minutes=2)).isoformat(),
             "fee_coefficient": "0.06",
             "account_precision_dollars": "0.01",
+            "account_precision_mode": "non_direct",
             "base_fee_dollars": "1",
             "trade_fee_dollars": "1",
             "rounding_adjustment_dollars": "1",
@@ -367,6 +538,44 @@ def test_accounting_entry_meta_and_delete_are_database_immutable(tmp_path: Path)
             )
         with pytest.raises(sqlite3.IntegrityError, match="meta is immutable"):
             conn.execute("DELETE FROM paper_accounting_schema_meta")
+    finally:
+        conn.close()
+
+
+def test_fill_identity_is_unique_within_venue_not_across_venues(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "paper.db"
+    _create_gross_v1_database(db)
+    conn = _connect(db)
+    try:
+        _install_accounting(conn)
+        _seed_trade(conn)
+        kalshi = _entry_record()
+        _insert_record(conn, kalshi)
+        _seed_trade(conn, "trade-2")
+        polymarket = _polymarket_entry_record(
+            kalshi,
+            entry_request_id="req-2",
+            trade_id="trade-2",
+        )
+        _insert_record(conn, polymarket)
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM paper_trade_accounting WHERE fill_id=?",
+                (kalshi.fill_id,),
+            ).fetchone()[0]
+            == 2
+        )
+
+        _seed_trade(conn, "trade-3")
+        duplicate_kalshi = replace(
+            kalshi,
+            entry_request_id="req-3",
+            trade_id="trade-3",
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            _insert_record(conn, duplicate_kalshi)
     finally:
         conn.close()
 
@@ -432,6 +641,34 @@ def test_schema_contract_rejects_noncanonical_meta_applied_at(tmp_path: Path) ->
         conn.close()
 
 
+def test_initialize_rejects_noncanonical_applied_at_before_creating_artifacts(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "paper.db"
+    _create_gross_v1_database(db)
+    conn = _connect(db)
+    try:
+        with pytest.raises(ValueError, match="applied_at"):
+            initialize_fresh_paper_accounting_schema(
+                conn,
+                migration_plan_sha256=PLAN_SHA,
+                applied_at="",
+            )
+        artifacts = conn.execute(
+            """
+            SELECT name
+            FROM sqlite_schema
+            WHERE tbl_name IN ('paper_accounting_schema_meta', 'paper_trade_accounting')
+               OR name GLOB 'paper_accounting_*'
+               OR name GLOB 'paper_trade_accounting_*'
+            """
+        ).fetchall()
+        assert artifacts == []
+    finally:
+        conn.rollback()
+        conn.close()
+
+
 def test_contract_rejects_tampered_accounting_object(tmp_path: Path) -> None:
     db = tmp_path / "paper.db"
     _create_gross_v1_database(db)
@@ -441,6 +678,67 @@ def test_contract_rejects_tampered_accounting_object(tmp_path: Path) -> None:
         conn.execute("DROP INDEX paper_trade_accounting_accumulator_idx")
         assert not paper_accounting_schema_contract_matches(conn)
     finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    "rogue_sql",
+    (
+        "CREATE INDEX rogue_attached_index ON paper_trade_accounting(order_id)",
+        """
+        CREATE TRIGGER rogue_attached_trigger
+        AFTER INSERT ON paper_trade_accounting
+        BEGIN
+            SELECT 1;
+        END
+        """,
+        "CREATE TABLE paper_accounting_rogue (id INTEGER PRIMARY KEY)",
+        """
+        CREATE VIEW paper_trade_accounting_rogue_view
+        AS SELECT trade_id FROM paper_trades
+        """,
+        """
+        CREATE TRIGGER paper_accounting_mutate_parent
+        AFTER INSERT ON paper_trades
+        BEGIN
+            UPDATE paper_trades
+            SET reasoning = 'mutated'
+            WHERE trade_id = NEW.trade_id;
+        END
+        """,
+    ),
+)
+def test_contract_and_state_reject_rogue_accounting_namespace_objects(
+    tmp_path: Path,
+    rogue_sql: str,
+) -> None:
+    db = tmp_path / "paper.db"
+    _create_gross_v1_database(db)
+    conn = _connect(db)
+    try:
+        _install_accounting(conn)
+        conn.execute(rogue_sql)
+        assert not paper_accounting_schema_contract_matches(conn)
+        with pytest.raises(PaperAccountingSchemaError, match="partial"):
+            accounting_schema_state(conn)
+    finally:
+        conn.close()
+
+
+def test_initialize_rejects_reserved_namespace_artifact(tmp_path: Path) -> None:
+    db = tmp_path / "paper.db"
+    _create_gross_v1_database(db)
+    conn = _connect(db)
+    try:
+        conn.execute("CREATE VIEW paper_accounting_rogue AS SELECT 1 AS value")
+        with pytest.raises(PaperAccountingSchemaError, match="partial or existing"):
+            initialize_fresh_paper_accounting_schema(
+                conn,
+                migration_plan_sha256=PLAN_SHA,
+                applied_at=NOW.isoformat(),
+            )
+    finally:
+        conn.rollback()
         conn.close()
 
 

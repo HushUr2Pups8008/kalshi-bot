@@ -18,11 +18,13 @@ from types import MappingProxyType
 from typing import Callable, Mapping
 
 from trading.fees import (
+    DIRECT_ACCOUNT_PRECISION,
     FeeContext,
     FeeQuote,
     FeeRole,
     FeeScheduleId,
     FeeUnscorableError,
+    NON_DIRECT_ACCOUNT_PRECISION,
     fee_coefficient_for,
     quote_fee,
 )
@@ -139,8 +141,12 @@ class PaperAccountingRecord:
     price: Decimal
     signed_revenue: Decimal
     multiplier: Decimal
+    fee_type: str
+    fee_multiplier_provenance_sha256: str
+    fee_multiplier_effective_at: datetime
     coefficient: Decimal
     account_precision: Decimal | None
+    account_precision_mode: str
     quote: FeeQuote
     gross_entry_debit: Decimal
     net_entry_debit: Decimal
@@ -171,6 +177,17 @@ class PaperAccountingRecord:
         _require_aware_datetime("recorded_at", self.recorded_at)
         if self.recorded_at < self.filled_at:
             raise ValueError("recorded_at must not precede filled_at")
+        _require_nonempty_text("fee_type", self.fee_type)
+        _require_sha256(
+            "fee_multiplier_provenance_sha256",
+            self.fee_multiplier_provenance_sha256,
+        )
+        _require_aware_datetime(
+            "fee_multiplier_effective_at",
+            self.fee_multiplier_effective_at,
+        )
+        if self.fee_multiplier_effective_at > self.filled_at:
+            raise ValueError("fee_multiplier_effective_at must not follow filled_at")
         if not isinstance(self.schedule_id, FeeScheduleId):
             raise ValueError("schedule_id must be FeeScheduleId")
         _validate_schedule(self.schedule_id)
@@ -189,6 +206,25 @@ class PaperAccountingRecord:
             _require_decimal(name, getattr(self, name))
         if self.account_precision is not None:
             _require_decimal("account_precision", self.account_precision)
+        expected_precision_mode: str
+        if self.schedule_id.venue is Venue.KALSHI:
+            if self.account_precision == DIRECT_ACCOUNT_PRECISION:
+                expected_precision_mode = "direct"
+            elif self.account_precision == NON_DIRECT_ACCOUNT_PRECISION:
+                expected_precision_mode = "non_direct"
+            else:
+                raise ValueError("Kalshi account_precision must use an exact supported quantum")
+        elif self.schedule_id.venue is Venue.POLYMARKET_US:
+            if self.account_precision is not None:
+                raise ValueError("Polymarket account_precision must be absent")
+            expected_precision_mode = "not_applicable"
+        else:  # pragma: no cover - Venue rejects unknown values before this boundary.
+            raise ValueError("unsupported fee schedule venue")
+        if self.account_precision_mode != expected_precision_mode:
+            raise ValueError("account_precision_mode does not match venue and exact account precision")
+
+        if self.signed_revenue >= 0:
+            raise ValueError("signed_revenue must be negative for an entry debit")
 
         if self.quote.schedule_id != self.schedule_id:
             raise ValueError("quote schedule_id does not match persisted schedule")
@@ -291,10 +327,14 @@ class PaperAccountingRecord:
                 separators=(",", ":"),
             ),
             "fee_multiplier": _decimal_text(self.multiplier),
+            "fee_type": self.fee_type,
+            "fee_multiplier_provenance_sha256": self.fee_multiplier_provenance_sha256,
+            "fee_multiplier_effective_at": _datetime_text(self.fee_multiplier_effective_at),
             "fee_coefficient": _decimal_text(self.coefficient),
             "account_precision_dollars": (
                 _decimal_text(self.account_precision) if self.account_precision is not None else None
             ),
+            "account_precision_mode": self.account_precision_mode,
             "base_fee_dollars": _decimal_text(self.quote.base_fee),
             "trade_fee_dollars": _decimal_text(self.quote.trade_fee),
             "rounding_adjustment_dollars": _decimal_text(self.quote.rounding_adjustment),
@@ -381,6 +421,15 @@ class PaperAccountingRecord:
             price=_parse_decimal_text("fill_price_dollars", value("fill_price_dollars")),
             signed_revenue=_parse_decimal_text("signed_revenue_dollars", value("signed_revenue_dollars")),
             multiplier=_parse_decimal_text("fee_multiplier", value("fee_multiplier")),
+            fee_type=_required_nonempty_text("fee_type", value("fee_type")),
+            fee_multiplier_provenance_sha256=_required_sha256(
+                "fee_multiplier_provenance_sha256",
+                value("fee_multiplier_provenance_sha256"),
+            ),
+            fee_multiplier_effective_at=_parse_datetime_text(
+                "fee_multiplier_effective_at",
+                value("fee_multiplier_effective_at"),
+            ),
             coefficient=_parse_decimal_text("fee_coefficient", value("fee_coefficient")),
             account_precision=(
                 _parse_decimal_text(
@@ -389,6 +438,10 @@ class PaperAccountingRecord:
                 )
                 if value("account_precision_dollars") is not None
                 else None
+            ),
+            account_precision_mode=_required_nonempty_text(
+                "account_precision_mode",
+                value("account_precision_mode"),
             ),
             quote=quote,
             gross_entry_debit=_parse_decimal_text(
@@ -453,7 +506,7 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
                 ON UPDATE RESTRICT ON DELETE RESTRICT,
             venue TEXT NOT NULL CHECK (venue IN ('kalshi','polymarket_us')),
             order_id TEXT NOT NULL CHECK (length(trim(order_id)) > 0),
-            fill_id TEXT NOT NULL UNIQUE CHECK (length(trim(fill_id)) > 0),
+            fill_id TEXT NOT NULL CHECK (length(trim(fill_id)) > 0),
             fee_role TEXT NOT NULL CHECK (fee_role IN ('maker','taker')),
             filled_at TEXT NOT NULL,
             fill_quantity TEXT NOT NULL,
@@ -468,8 +521,17 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
             ),
             fee_schedule_supporting_artifacts_json TEXT NOT NULL,
             fee_multiplier TEXT NOT NULL,
+            fee_type TEXT NOT NULL CHECK (length(trim(fee_type)) > 0),
+            fee_multiplier_provenance_sha256 TEXT NOT NULL CHECK (
+                length(fee_multiplier_provenance_sha256) = 64
+                AND fee_multiplier_provenance_sha256 NOT GLOB '*[^0-9a-f]*'
+            ),
+            fee_multiplier_effective_at TEXT NOT NULL,
             fee_coefficient TEXT NOT NULL,
             account_precision_dollars TEXT,
+            account_precision_mode TEXT NOT NULL CHECK (
+                account_precision_mode IN ('direct','non_direct','not_applicable')
+            ),
             base_fee_dollars TEXT NOT NULL,
             trade_fee_dollars TEXT NOT NULL,
             rounding_adjustment_dollars TEXT NOT NULL,
@@ -488,6 +550,7 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
             net_settlement_payout_dollars TEXT,
             fee_net_pnl_dollars TEXT,
             recorded_at TEXT NOT NULL,
+            UNIQUE (venue, fill_id),
             CHECK (
                 (
                     settlement_observation_sha256 IS NULL
@@ -555,8 +618,13 @@ _TRIGGER_STATEMENTS: tuple[tuple[str, str], ...] = (
           OR NEW.fee_schedule_supporting_artifacts_json
              IS NOT OLD.fee_schedule_supporting_artifacts_json
           OR NEW.fee_multiplier IS NOT OLD.fee_multiplier
+          OR NEW.fee_type IS NOT OLD.fee_type
+          OR NEW.fee_multiplier_provenance_sha256
+             IS NOT OLD.fee_multiplier_provenance_sha256
+          OR NEW.fee_multiplier_effective_at IS NOT OLD.fee_multiplier_effective_at
           OR NEW.fee_coefficient IS NOT OLD.fee_coefficient
           OR NEW.account_precision_dollars IS NOT OLD.account_precision_dollars
+          OR NEW.account_precision_mode IS NOT OLD.account_precision_mode
           OR NEW.base_fee_dollars IS NOT OLD.base_fee_dollars
           OR NEW.trade_fee_dollars IS NOT OLD.trade_fee_dollars
           OR NEW.rounding_adjustment_dollars IS NOT OLD.rounding_adjustment_dollars
@@ -645,6 +713,11 @@ def initialize_fresh_paper_accounting_schema(
 
     _require_valid_gross_settlement_v1(conn)
     _require_sha256("migration_plan_sha256", migration_plan_sha256)
+    canonical_applied_at = (
+        datetime.now(timezone.utc).isoformat()
+        if applied_at is None
+        else _datetime_text(_parse_datetime_text("applied_at", applied_at))
+    )
     artifacts = _present_accounting_artifacts(conn)
     if artifacts:
         raise PaperAccountingSchemaError("partial or existing paper-accounting schema; explicit no-op required")
@@ -664,7 +737,7 @@ def initialize_fresh_paper_accounting_schema(
             PAPER_ACCOUNTING_VERSION,
             PAPER_ACCOUNTING_DDL_SHA256,
             migration_plan_sha256,
-            applied_at or datetime.now(timezone.utc).isoformat(),
+            canonical_applied_at,
         ),
     )
     hook("after_meta")
@@ -677,6 +750,8 @@ def paper_accounting_schema_contract_matches(conn: sqlite3.Connection) -> bool:
 
     try:
         _require_valid_gross_settlement_v1(conn)
+        if _present_accounting_artifacts(conn) != _ACCOUNTING_OBJECT_NAMES:
+            return False
         expected = {
             name: (_object_type(name), _normalize_sql(statement))
             for name, statement in PAPER_ACCOUNTING_TARGET_STATEMENTS
@@ -771,10 +846,17 @@ def _require_valid_gross_settlement_v1(conn: sqlite3.Connection) -> None:
 
 
 def _present_accounting_artifacts(conn: sqlite3.Connection) -> frozenset[str]:
-    placeholders = ",".join("?" for _ in _ACCOUNTING_OBJECT_NAMES)
     rows = conn.execute(
-        f"SELECT name FROM sqlite_schema WHERE name IN ({placeholders})",
-        tuple(sorted(_ACCOUNTING_OBJECT_NAMES)),
+        """
+        SELECT name
+        FROM sqlite_schema
+        WHERE name NOT GLOB 'sqlite_autoindex_*'
+          AND (
+              tbl_name IN ('paper_accounting_schema_meta', 'paper_trade_accounting')
+              OR name GLOB 'paper_accounting_*'
+              OR name GLOB 'paper_trade_accounting_*'
+          )
+        """
     ).fetchall()
     return frozenset(str(row[0]) for row in rows)
 
@@ -831,6 +913,13 @@ def _require_identifier(name: str, value: object) -> None:
         raise ValueError(f"{name} is required")
     if value != value.strip() or not value.isascii():
         raise ValueError(f"{name} must be trimmed ASCII text")
+
+
+def _require_nonempty_text(name: str, value: object) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} is required")
+    if value != value.strip():
+        raise ValueError(f"{name} must be trimmed text")
 
 
 def _require_decimal(name: str, value: object) -> Decimal:
@@ -908,6 +997,12 @@ def _required_sha256(name: str, value: object) -> str:
 
 def _required_text(name: str, value: object) -> str:
     _require_identifier(name, value)
+    assert isinstance(value, str)
+    return value
+
+
+def _required_nonempty_text(name: str, value: object) -> str:
+    _require_nonempty_text(name, value)
     assert isinstance(value, str)
     return value
 
