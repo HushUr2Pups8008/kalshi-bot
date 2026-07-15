@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
 from polymarket.settlement_reconciler import (
     PersistedPositionReconciler,
     SettlementNotFound,
+    VenueRoutingAuthoritativeSettlementSource,
 )
 from trading.settlement import (
     MarketOutcome,
@@ -136,3 +138,77 @@ def test_reconciler_rejects_observation_identity_drift_before_mutation():
         PersistedPositionReconciler(source=source, resolver=resolver).reconcile()
 
     assert resolver.resolved == []
+
+
+def test_authoritative_source_fetches_and_normalizes_kalshi_by_canonical_id():
+    market_ref = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "KXGDP-26JUL31")
+    kalshi_source = SimpleNamespace(
+        get_market=lambda market_id: SimpleNamespace(
+            ticker=market_id,
+            status="settled",
+            result="yes",
+            expiration_time="2026-07-31T16:00:00Z",
+            raw_payload_hash="a" * 64,
+            updated_time=_NOW,
+        )
+    )
+    polymarket_source = SimpleNamespace(
+        get_settlement=lambda _market_id: pytest.fail("wrong venue route")
+    )
+    source = VenueRoutingAuthoritativeSettlementSource(
+        kalshi_source=kalshi_source,
+        polymarket_source=polymarket_source,
+        clock=lambda: _NOW,
+    )
+
+    observation = source.get_settlement(market_ref)
+
+    assert observation is not None
+    assert observation.market_ref == market_ref
+    assert observation.outcome is MarketOutcome.YES
+    assert observation.observed_at == _NOW
+    assert observation.effective_at == _NOW
+
+
+def test_authoritative_source_treats_nonterminal_kalshi_as_not_found():
+    market_ref = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "KXGDP-26JUL31")
+    source = VenueRoutingAuthoritativeSettlementSource(
+        kalshi_source=SimpleNamespace(
+            get_market=lambda market_id: SimpleNamespace(
+                ticker=market_id,
+                status="open",
+                result="",
+                expiration_time="2026-07-31T16:00:00Z",
+                raw_payload_hash="a" * 64,
+                updated_time=_NOW,
+            )
+        ),
+        polymarket_source=SimpleNamespace(),
+        clock=lambda: _NOW,
+    )
+
+    assert source.get_settlement(market_ref) is None
+
+
+def test_authoritative_source_fetches_and_normalizes_polymarket_by_canonical_id():
+    market_ref = MarketRef(Venue.POLYMARKET_US, "104982", "gdp-q2")
+    requested_ids: list[str] = []
+
+    def get_settlement(market_id: str):
+        requested_ids.append(market_id)
+        return {"id": market_id, "settled": True, "settlement": 1}
+
+    source = VenueRoutingAuthoritativeSettlementSource(
+        kalshi_source=SimpleNamespace(
+            get_market=lambda _market_id: pytest.fail("wrong venue route")
+        ),
+        polymarket_source=SimpleNamespace(get_settlement=get_settlement),
+        clock=lambda: _NOW,
+    )
+
+    observation = source.get_settlement(market_ref)
+
+    assert requested_ids == ["104982"]
+    assert observation is not None
+    assert observation.market_ref == market_ref
+    assert observation.outcome is MarketOutcome.YES
