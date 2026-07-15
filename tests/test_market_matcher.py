@@ -338,6 +338,87 @@ class TestFindCandidates:
         assert payload["settlement_source_match"] is match_meta["settlement_source_match"]
 
     @pytest.mark.asyncio
+    async def test_disabled_diagnostics_preserve_candidates_and_real_path_emits_once(
+        self,
+        matcher,
+        monkeypatch,
+    ):
+        market = _make_market(
+            "KXNEWDEAL-JUN01",
+            "Will Trump sign an Iran nuclear deal in June?",
+        )
+        suppressed_market = _make_market(
+            "KXTRUMP-25A",
+            "Will Trump order military action under the 25th Amendment this year?",
+        )
+        matcher._cache.get_markets = AsyncMock(
+            return_value=[market, suppressed_market],
+        )
+        news = _make_news("Trump announces Iran nuclear deal breakthrough")
+        weights = {
+            "KXNEWDEAL:nuclear": {
+                "weight": 0.25,
+                "pinned": False,
+                "_seed_status": "provisional",
+            },
+        }
+        monkeypatch.setattr(
+            "analysis.match_feedback.load_verified_weights",
+            lambda: weights,
+        )
+
+        from analysis import market_matcher as mm
+
+        diagnostics = []
+        weight_events = []
+        suppression_candidates = []
+        suppressed_events = []
+        monkeypatch.setattr(mm, "ENABLE_LOW_QUALITY_MATCH_SUPPRESSION", True)
+        monkeypatch.setattr(mm, "ENABLE_MATCH_SUPPRESSION_DEBUG", True)
+        monkeypatch.setattr(
+            mm.trade_log,
+            "log_match_diagnostic",
+            lambda **kwargs: diagnostics.append(kwargs),
+        )
+        monkeypatch.setattr(
+            mm.trade_log,
+            "log_match_weight_applied",
+            lambda **kwargs: weight_events.append(kwargs),
+        )
+        monkeypatch.setattr(
+            mm.trade_log,
+            "log_match_suppression_candidate",
+            lambda **kwargs: suppression_candidates.append(kwargs),
+        )
+        monkeypatch.setattr(
+            mm.trade_log,
+            "log_match_suppressed",
+            lambda **kwargs: suppressed_events.append(kwargs),
+        )
+
+        shadow_results = await matcher.find_candidates(
+            news,
+            emit_diagnostics=False,
+        )
+        real_results = await matcher.find_candidates(news)
+
+        assert shadow_results == real_results
+        assert len(diagnostics) == 2
+        assert len(weight_events) == 2
+        assert {event["ticker"] for event in diagnostics} == {
+            market.ticker,
+            suppressed_market.ticker,
+        }
+        assert {event["ticker"] for event in weight_events} == {
+            market.ticker,
+            suppressed_market.ticker,
+        }
+        assert len(suppression_candidates) == 1
+        assert suppression_candidates[0]["ticker"] == suppressed_market.ticker
+        assert len(suppressed_events) == 1
+        assert suppressed_events[0]["ticker"] == suppressed_market.ticker
+
+    @pytest.mark.asyncio
     async def test_match_diagnostics_flags_single_named_entity_overlap_as_low_quality(self, matcher):
         # PROFIT-MATCH-001 (B') note: under the post-fix predicate, this
         # candidate is also SUPPRESSED — `trump` is the only matched token

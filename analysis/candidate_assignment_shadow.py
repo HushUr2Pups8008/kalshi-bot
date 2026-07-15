@@ -44,7 +44,11 @@ def _unpack_top_candidate(candidate: object) -> tuple[str, float]:
 
 
 async def build_shadow_assignment(matcher: object, news: object) -> ShadowAssignment:
-    candidates = await matcher.find_candidates(news, refresh_cache=False)
+    candidates = await matcher.find_candidates(
+        news,
+        refresh_cache=False,
+        emit_diagnostics=False,
+    )
     source = str(getattr(news, "source", ""))
     headline = str(getattr(news, "headline", ""))
     if not candidates:

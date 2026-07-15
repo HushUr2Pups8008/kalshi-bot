@@ -35,6 +35,15 @@ from utils.lifecycle import build_lifecycle_id, settlement_source_match
 log = get_logger("market_matcher")
 
 
+async def _write_match_telemetry(
+    enabled: bool,
+    writer: Any,
+    **payload: Any,
+) -> None:
+    if enabled:
+        await write_trade_log_async(writer, **payload)
+
+
 def _diagnostic_venue_for_market(market: KalshiMarket, market_prefix: str) -> str:
     raw_venue = getattr(market, "venue", None)
     if hasattr(raw_venue, "value"):
@@ -1009,12 +1018,14 @@ class MarketMatcher:
         max_results: int | None = None,
         *,
         refresh_cache: bool = True,
+        emit_diagnostics: bool = True,
     ) -> list[tuple[KalshiMarket, float, dict[str, Any]]]:
         """
         Return (market, score, match_meta) triples sorted by score descending.
 
         Thresholds and candidate count are automatically adjusted based on
         whether the bot is in paper trading mode.
+        ``emit_diagnostics`` controls MATCH_* telemetry only.
         """
         is_paper     = cfg.is_paper_trading
         min_score    = PAPER_MIN_MATCH_SCORE if is_paper else LIVE_MIN_MATCH_SCORE
@@ -1110,7 +1121,8 @@ class MarketMatcher:
                 )
                 token_weight_multiplier = weight_details["final_multiplier"]
                 score *= token_weight_multiplier
-                await write_trade_log_async(
+                await _write_match_telemetry(
+                    emit_diagnostics,
                     trade_log.log_match_weight_applied,
                     source=news.source,
                     headline=news.headline,
@@ -1162,7 +1174,8 @@ class MarketMatcher:
             match_meta["settlement_source_match"] = settlement_match
             # P3.2 diagnostic field -- pure function, no behavior change.
             market_specificity = compute_specificity_score(market)
-            await write_trade_log_async(
+            await _write_match_telemetry(
+                emit_diagnostics,
                 trade_log.log_match_diagnostic,
                 source=news.source,
                 headline=news.headline,
@@ -1232,7 +1245,11 @@ class MarketMatcher:
                 and (_near_threshold_weak or _pure_single_entity)
             )
 
-            if ENABLE_MATCH_SUPPRESSION_DEBUG and _meets_suppression_criteria:
+            if (
+                emit_diagnostics
+                and ENABLE_MATCH_SUPPRESSION_DEBUG
+                and _meets_suppression_criteria
+            ):
                 # MATCH-001 (operator-directed swallow-with-warning):
                 # observability write must not abort find_candidates.
                 # Matches series-fetch precedent at line ~460.
@@ -1261,7 +1278,8 @@ class MarketMatcher:
                 # suppression-write must not abort the matching loop;
                 # the `continue` below still fires on the success path.
                 try:
-                    await write_trade_log_async(
+                    await _write_match_telemetry(
+                        emit_diagnostics,
                         trade_log.log_match_suppressed,
                         source=news.source,
                         headline=news.headline,
