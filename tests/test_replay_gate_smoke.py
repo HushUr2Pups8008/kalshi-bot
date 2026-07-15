@@ -23,7 +23,10 @@ from typing import Any, Sequence
 import pytest
 
 from scripts.edge_replay.llm_cache import CacheKey
-from scripts.edge_replay.oos_registry import canonical_registration_hash
+from scripts.edge_replay.oos_registry import (
+    OOSRegistryError,
+    canonical_registration_hash,
+)
 from scripts.edge_replay.replay_gate import (
     GateError,
     GateSpec,
@@ -90,6 +93,7 @@ def _row_with_keys(**overrides: Any) -> dict[str, Any]:
     """
     base = {
         "row_id": "r1",
+        "trade_id": "r1",
         "prompt_template_hash": "tpl-h",
         "prompt_filled_hash": "filled-h",
         "model_id": "m",
@@ -115,10 +119,15 @@ def _row_with_keys(**overrides: Any) -> dict[str, Any]:
         "llm_capture_max_age_seconds": 3600,
         "pnl_dollars": None,
         "fee_net_pnl_dollars": None,
+        "resolved": 0,
     }
     base.update(overrides)
+    if "trade_id" not in overrides:
+        base["trade_id"] = str(base["row_id"])
     if "pnl_dollars" in overrides and "fee_net_pnl_dollars" not in overrides:
-        base["fee_net_pnl_dollars"] = overrides["pnl_dollars"]
+        base["fee_net_pnl_dollars"] = str(overrides["pnl_dollars"])
+    if "resolved" not in overrides:
+        base["resolved"] = int(base["fee_net_pnl_dollars"] is not None)
     return base
 
 
@@ -188,6 +197,7 @@ def _common_kwargs(
         "corpus_dir": tmp_workspace / "logs" / "edge_replay",
         "ci_run_dir": tmp_workspace / "logs" / "edge_replay" / "ci_runs",
         "governance_dir": tmp_workspace / "docs" / "governance",
+        "registration_attestor": lambda registration, **kwargs: None,
         "scenario_runner": ["unused"],  # exercised only when no fake passed
         "cache_factory": factory,
         "commit_sha": "deadbeef",
@@ -276,7 +286,7 @@ def test_t1_in_period_only_fails_without_allow_flag(
         **_common_kwargs(tmp_workspace),
     )
     assert verdict.pass_ is False
-    assert "insufficient corpus" in (verdict.failure_reason or "")
+    assert "actual market-family diversity" in (verdict.failure_reason or "")
 
 
 @pytest.mark.parametrize(
@@ -338,10 +348,16 @@ def test_registered_oos_corpus_rejects_duplicate_trade_rows(
         corpus_path,
         [
             _row_with_keys(
-                row_id="duplicate", market_families=["KXFAMA"], pnl_dollars=1.0
+                row_id="cache-a",
+                trade_id="duplicate",
+                market_families=["KXFAMA"],
+                pnl_dollars=1.0,
             ),
             _row_with_keys(
-                row_id="duplicate", market_families=["KXFAMB"], pnl_dollars=1.0
+                row_id="cache-b",
+                trade_id="duplicate",
+                market_families=["KXFAMB"],
+                pnl_dollars=1.0,
             ),
         ],
     )
@@ -353,7 +369,58 @@ def test_registered_oos_corpus_rejects_duplicate_trade_rows(
     )
 
     assert verdict.pass_ is False
-    assert "duplicate row_id" in (verdict.failure_reason or "")
+    assert "duplicate trade_id" in (verdict.failure_reason or "")
+
+
+def test_corrupt_discovered_corpus_blocks_valid_corpus(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_scenario_runner(monkeypatch, 0)
+    corpus_dir = tmp_workspace / "logs" / "edge_replay"
+    _build_diverse_corpus(
+        corpus_dir / "corpus_valid_2026-05-01_2026-05-08.jsonl",
+        n_per_family=20,
+        pnl_each=1.0,
+    )
+    (corpus_dir / "corpus_corrupt_2026-05-01_2026-05-08.jsonl").write_text(
+        "{not-json}\n",
+        encoding="utf-8",
+    )
+
+    verdict = run_replay_gate(
+        changed_files=[Path("analysis/signal_analyzer.py")],
+        gate_spec=GateSpec(min_trades=10),
+        **_common_kwargs(tmp_workspace),
+    )
+
+    assert verdict.pass_ is False
+    assert "corpus discovery failed" in (verdict.failure_reason or "")
+
+
+def test_unattested_registration_blocks_registered_corpus(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_scenario_runner(monkeypatch, 0)
+    corpus_dir = tmp_workspace / "logs" / "edge_replay"
+    _build_diverse_corpus(
+        corpus_dir / "corpus_unattested_2026-05-01_2026-05-08.jsonl",
+        n_per_family=20,
+        pnl_each=1.0,
+    )
+
+    def reject_attestation(registration, **kwargs):
+        raise OOSRegistryError("registration did not exist on protected history")
+
+    kwargs = _common_kwargs(tmp_workspace)
+    kwargs["registration_attestor"] = reject_attestation
+    verdict = run_replay_gate(
+        changed_files=[Path("analysis/signal_analyzer.py")],
+        gate_spec=GateSpec(min_trades=10),
+        **kwargs,
+    )
+
+    assert verdict.pass_ is False
+    assert "protected history" in (verdict.failure_reason or "")
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +592,7 @@ def test_t3_rule4_uses_fee_net_pnl_not_positive_gross_pnl(
                 row_id=f"a{i}",
                 market_families=["KXFAMA"],
                 pnl_dollars=2.0,
-                fee_net_pnl_dollars=-1.0,
+                fee_net_pnl_dollars="-1.0",
             )
         )
         rows.append(
@@ -533,7 +600,7 @@ def test_t3_rule4_uses_fee_net_pnl_not_positive_gross_pnl(
                 row_id=f"b{i}",
                 market_families=["KXFAMB"],
                 pnl_dollars=2.0,
-                fee_net_pnl_dollars=-1.0,
+                fee_net_pnl_dollars="-1.0",
             )
         )
     _write_corpus(corpus_path, rows)
@@ -550,6 +617,85 @@ def test_t3_rule4_uses_fee_net_pnl_not_positive_gross_pnl(
     assert verdict.rule4 is not None
     assert verdict.rule4.realized_pnl == pytest.approx(-40.0)
     assert "EV CI" in (verdict.failure_reason or "")
+
+
+@pytest.mark.parametrize(
+    "bad_fee_net",
+    [None, "NaN", "Infinity", 1.0, "01.00", "1e0", "9" * 400],
+)
+def test_settled_row_requires_exact_finite_fee_net_pnl(
+    tmp_workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bad_fee_net: Any,
+) -> None:
+    _patch_scenario_runner(monkeypatch, 0)
+    corpus_path = (
+        tmp_workspace
+        / "logs"
+        / "edge_replay"
+        / "corpus_invalid_fee_net_2026-05-01_2026-05-08.jsonl"
+    )
+    rows = [
+        _row_with_keys(
+            row_id="a",
+            market_families=["KXFAMA"],
+            resolved=1,
+            pnl_dollars=1.0,
+            fee_net_pnl_dollars=bad_fee_net,
+        ),
+        _row_with_keys(
+            row_id="b",
+            market_families=["KXFAMB"],
+            resolved=1,
+            pnl_dollars=1.0,
+            fee_net_pnl_dollars="1.00",
+        ),
+    ]
+    _write_corpus(corpus_path, rows)
+
+    verdict = run_replay_gate(
+        changed_files=[Path("analysis/signal_analyzer.py")],
+        gate_spec=GateSpec(min_trades=1),
+        **_common_kwargs(tmp_workspace),
+    )
+
+    assert verdict.pass_ is False
+    assert "fee-net settlement validation failed" in (verdict.failure_reason or "")
+
+
+def test_unsettled_row_cannot_carry_fee_net_pnl(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_scenario_runner(monkeypatch, 0)
+    corpus_path = (
+        tmp_workspace
+        / "logs"
+        / "edge_replay"
+        / "corpus_unsettled_fee_net_2026-05-01_2026-05-08.jsonl"
+    )
+    _write_corpus(
+        corpus_path,
+        [
+            _row_with_keys(
+                row_id="a",
+                market_families=["KXFAMA"],
+                resolved=0,
+                fee_net_pnl_dollars="1.00",
+            ),
+            _row_with_keys(
+                row_id="b", market_families=["KXFAMB"], pnl_dollars=1.0
+            ),
+        ],
+    )
+
+    verdict = run_replay_gate(
+        changed_files=[Path("analysis/signal_analyzer.py")],
+        gate_spec=GateSpec(min_trades=1),
+        **_common_kwargs(tmp_workspace),
+    )
+
+    assert verdict.pass_ is False
+    assert "fee-net settlement validation failed" in (verdict.failure_reason or "")
 
 
 # ---------------------------------------------------------------------------
@@ -599,6 +745,7 @@ def test_output_files_written_for_pass(
         ci_run_dir=tmp_workspace / "logs" / "edge_replay" / "ci_runs",
         corpus_dir=corpus_dir,
         governance_dir=tmp_workspace / "docs" / "governance",
+        registration_attestor=lambda registration, **kwargs: None,
         cache_factory=lambda: _StubCache(),
     )
     out = verdict.output_dir

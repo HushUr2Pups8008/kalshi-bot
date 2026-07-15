@@ -561,6 +561,16 @@ def test_registered_oos_stamps_hash_and_actual_row_family(tmp_path: Path) -> Non
         assert row["in_period_validation_only"] is False
         assert "row_id" not in row
 
+    from scripts.edge_replay.oos_registry import load_oos_registry
+    from scripts.edge_replay.replay_gate import _validate_registered_oos_corpus
+
+    trade_ids, registration = _validate_registered_oos_corpus(
+        out,
+        load_oos_registry(registry_path),
+    )
+    assert trade_ids == {"t3", "t4"}
+    assert registration.registration_hash == registration_hash
+
 
 def test_registered_oos_preserves_trade_id_when_capture_row_id_is_present(
     tmp_path: Path,

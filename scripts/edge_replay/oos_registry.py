@@ -352,6 +352,7 @@ def attest_oos_registration_history(
         resolved_root,
         "rev-list",
         "--reverse",
+        "--topo-order",
         trusted_commit,
         "--",
         registry_tree_path,
@@ -413,7 +414,7 @@ def attest_oos_registration_history(
             f"does not exist on trusted ref {trusted_ref!r}"
         )
 
-    committed_at, commit = min(matching_commits)
+    committed_at, commit = matching_commits[0]
     window_start = _parse_canonical_utc(
         registration.window_start_utc,
         field_name="window.start_utc",

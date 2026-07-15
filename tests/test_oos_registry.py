@@ -232,6 +232,49 @@ def test_attest_registration_history_accepts_pre_window_trusted_commit(
     assert attestation.registration_hash == registration.registration_hash
 
 
+def test_attestation_uses_first_topological_appearance_not_backdated_child(
+    tmp_path: Path,
+) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    registry_path, first_commit = _commit_registry(
+        repo,
+        _registration_payload(),
+        author_date="2026-07-16T00:00:00Z",
+        committer_date="2026-07-16T00:00:00Z",
+    )
+    document = json.loads(registry_path.read_text(encoding="utf-8"))
+    second = _registration_payload(
+        id="profit-oos-2026-08-b",
+        universe_policy={
+            "type": "market_families",
+            "market_families": ["KXCPI", "KXJOBS"],
+        },
+    )
+    document["registrations"].append(
+        dict(second, registration_hash=_hash(second))
+    )
+    registry_path.write_text(json.dumps(document), encoding="utf-8")
+    _git(repo, "add", str(registry_path.relative_to(repo)))
+    child_env = {
+        **os.environ,
+        "GIT_AUTHOR_DATE": "2026-07-15T00:00:00Z",
+        "GIT_COMMITTER_DATE": "2026-07-15T00:00:00Z",
+    }
+    _git(repo, "commit", "-m", "add another registration", env=child_env)
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    registration = oos_registry.get_oos_registration(
+        "profit-oos-2026-08-a", registry_path
+    )
+
+    attestation = oos_registry.attest_oos_registration_history(
+        registration,
+        registry_path=registry_path,
+    )
+
+    assert attestation.commit == first_commit
+    assert attestation.committed_at_utc == "2026-07-16T00:00:00Z"
+
+
 def test_attest_registration_history_uses_committer_date_not_backdated_declaration(
     tmp_path: Path,
 ) -> None:
