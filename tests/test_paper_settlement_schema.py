@@ -1344,6 +1344,11 @@ def test_conservation_reports_accounting_and_lease_violations(tmp_path, invalid)
             "invalid_linked_trade_financials",
         ),
         (
+            "UPDATE paper_trades SET pnl_dollars=NULL WHERE trade_id='t1'",
+            f"trade_financials:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_financials",
+        ),
+        (
             "UPDATE paper_trades SET contracts=0 WHERE trade_id='t1'",
             f"trade_financials:{OBSERVATION_SHA}:t1",
             "invalid_linked_trade_financials",
@@ -1390,6 +1395,7 @@ def test_conservation_reports_accounting_and_lease_violations(tmp_path, invalid)
     ids=[
         "gross-pnl",
         "legacy-pnl",
+        "null-legacy-pnl",
         "zero-contracts",
         "fractional-contracts",
         "zero-price",

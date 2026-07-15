@@ -1205,7 +1205,7 @@ class SettlementStore:
                         financials_invalid = True
                     if gross_pnl != gross_payout - cost_cents:
                         financials_invalid = True
-                    if row["pnl_dollars"] is not None and (
+                    if row["pnl_dollars"] is None or (
                         _parse_legacy_decimal(row["pnl_dollars"]) * 100
                         != gross_pnl
                     ):
