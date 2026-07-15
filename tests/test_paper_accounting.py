@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
 from pathlib import Path
 import sqlite3
+from unittest.mock import MagicMock
 
 import pytest
 
 from config import BotConfig
+import scripts.migrate_paper_accounting_schema as migration_module
 from scripts.migrate_paper_accounting_schema import (
     apply_paper_accounting_schema,
     open_readonly,
@@ -26,6 +28,8 @@ from trading.fees import (
 )
 from trading.paper_accounting import (
     PAPER_ACCOUNTING_DDL_SHA256,
+    PAPER_ACCOUNTING_SCHEMA_VERSION,
+    PAPER_ACCOUNTING_TARGET_STATEMENTS,
     PAPER_ACCOUNTING_VERSION,
     PaperAccountingAdmissionError,
     PaperAccountingHandlers,
@@ -131,6 +135,24 @@ def _entry_record(**changes: object) -> PaperAccountingRecord:
     return replace(record, **changes)
 
 
+def _settled_record(
+    entry: PaperAccountingRecord | None = None,
+    **changes: object,
+) -> PaperAccountingRecord:
+    record = entry or _entry_record()
+    settled = replace(
+        record,
+        settlement_observation_sha256="b" * 64,
+        settled_at=NOW,
+        settlement_fee=D("0.01"),
+        settlement_refund=D("0"),
+        gross_settlement_payout=D("0.10"),
+        net_settlement_payout=D("0.09"),
+        fee_net_pnl=D("0.09") - record.net_entry_debit,
+    )
+    return replace(settled, **changes)
+
+
 def _install_accounting(conn: sqlite3.Connection) -> None:
     initialize_fresh_paper_accounting_schema(
         conn,
@@ -208,21 +230,30 @@ def test_record_rejects_noncanonical_persisted_decimal_text() -> None:
         PaperAccountingRecord.from_database_row(values)
 
 
+def test_record_rejects_causally_impossible_timestamps_direct_and_persisted() -> None:
+    entry = _entry_record()
+    with pytest.raises(ValueError, match="recorded_at must not precede filled_at"):
+        replace(entry, recorded_at=entry.filled_at - timedelta(microseconds=1))
+    with pytest.raises(ValueError, match="settled_at must not precede recorded_at"):
+        _settled_record(entry, settled_at=entry.recorded_at - timedelta(microseconds=1))
+
+    values = entry.to_database_values()
+    values["recorded_at"] = (entry.filled_at - timedelta(microseconds=1)).isoformat()
+    with pytest.raises(ValueError, match="recorded_at must not precede filled_at"):
+        PaperAccountingRecord.from_database_row(values)
+
+    settled_values = _settled_record(entry).to_database_values()
+    settled_values["settled_at"] = (entry.recorded_at - timedelta(microseconds=1)).isoformat()
+    with pytest.raises(ValueError, match="settled_at must not precede recorded_at"):
+        PaperAccountingRecord.from_database_row(settled_values)
+
+
 def test_settlement_fields_are_all_null_or_complete_and_exact() -> None:
     entry = _entry_record()
     with pytest.raises(ValueError, match="settlement fields must be all null or complete"):
         replace(entry, settlement_fee=D("0"))
 
-    settled = replace(
-        entry,
-        settlement_observation_sha256="b" * 64,
-        settled_at=NOW,
-        settlement_fee=D("0.01"),
-        settlement_refund=D("0"),
-        gross_settlement_payout=D("0.10"),
-        net_settlement_payout=D("0.09"),
-        fee_net_pnl=D("0.09") - entry.net_entry_debit,
-    )
+    settled = _settled_record(entry)
     values = settled.to_database_values()
     assert PaperAccountingRecord.from_database_row(values) == settled
     with pytest.raises(ValueError, match="net_settlement_payout"):
@@ -281,6 +312,126 @@ def test_schema_contract_meta_uniques_and_immutable_version(tmp_path: Path) -> N
         conn.close()
 
 
+def test_accounting_entry_meta_and_delete_are_database_immutable(tmp_path: Path) -> None:
+    db = tmp_path / "paper.db"
+    _create_gross_v1_database(db)
+    conn = _connect(db)
+    try:
+        _install_accounting(conn)
+        _seed_trade(conn)
+        _insert_record(conn, _entry_record())
+        immutable_changes: dict[str, object] = {
+            "accounting_id": 99,
+            "entry_request_id": "req-other",
+            "trade_id": "trade-other",
+            "venue": "polymarket_us",
+            "order_id": "paper-order:other",
+            "fill_id": "paper-fill:other:0",
+            "fee_role": "maker",
+            "filled_at": (NOW + timedelta(seconds=1)).isoformat(),
+            "fill_quantity": "0.25",
+            "fill_price_dollars": "0.25",
+            "signed_revenue_dollars": "-0.0625",
+            "fee_schedule_name": "other",
+            "fee_schedule_effective_from": (NOW - timedelta(days=1)).isoformat(),
+            "fee_schedule_effective_to": (NOW + timedelta(days=1)).isoformat(),
+            "fee_schedule_artifact_sha256": "c" * 64,
+            "fee_schedule_supporting_artifacts_json": "[]",
+            "fee_multiplier": "2",
+            "fee_coefficient": "0.06",
+            "account_precision_dollars": "0.01",
+            "base_fee_dollars": "1",
+            "trade_fee_dollars": "1",
+            "rounding_adjustment_dollars": "1",
+            "balance_rounding_fee_dollars": "1",
+            "rebate_dollars": "1",
+            "net_fee_dollars": "1",
+            "accumulator_before_dollars": "1",
+            "accumulator_after_dollars": "1",
+            "gross_entry_debit_dollars": "1",
+            "net_entry_debit_dollars": "1",
+            "recorded_at": (NOW + timedelta(seconds=1)).isoformat(),
+        }
+        for column, value in immutable_changes.items():
+            with pytest.raises(sqlite3.IntegrityError, match="entry fields are immutable"):
+                conn.execute(
+                    f"UPDATE paper_trade_accounting SET {column}=? WHERE entry_request_id='req-1'",
+                    (value,),
+                )
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("DELETE FROM paper_trade_accounting WHERE entry_request_id='req-1'")
+        with pytest.raises(sqlite3.IntegrityError, match="meta is immutable"):
+            conn.execute(
+                "UPDATE paper_accounting_schema_meta SET applied_at=?",
+                ((NOW + timedelta(seconds=1)).isoformat(),),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="meta is immutable"):
+            conn.execute("DELETE FROM paper_accounting_schema_meta")
+    finally:
+        conn.close()
+
+
+def test_settlement_transitions_once_then_is_database_immutable(tmp_path: Path) -> None:
+    db = tmp_path / "paper.db"
+    _create_gross_v1_database(db)
+    conn = _connect(db)
+    try:
+        _install_accounting(conn)
+        _seed_trade(conn)
+        entry = _entry_record()
+        _insert_record(conn, entry)
+        settled = _settled_record(entry)
+        values = settled.to_database_values()
+        settlement_columns = (
+            "settlement_observation_sha256",
+            "settled_at",
+            "settlement_fee_dollars",
+            "settlement_refund_dollars",
+            "gross_settlement_payout_dollars",
+            "net_settlement_payout_dollars",
+            "fee_net_pnl_dollars",
+        )
+        conn.execute(
+            "UPDATE paper_trade_accounting SET "
+            + ",".join(f"{column}=?" for column in settlement_columns)
+            + " WHERE entry_request_id='req-1'",
+            tuple(values[column] for column in settlement_columns),
+        )
+        row = conn.execute("SELECT * FROM paper_trade_accounting WHERE entry_request_id='req-1'").fetchone()
+        assert PaperAccountingRecord.from_database_row(row) == settled
+        with pytest.raises(sqlite3.IntegrityError, match="settlement is immutable"):
+            conn.execute("UPDATE paper_trade_accounting SET fee_net_pnl_dollars='0' WHERE entry_request_id='req-1'")
+    finally:
+        conn.close()
+
+
+def test_schema_contract_rejects_noncanonical_meta_applied_at(tmp_path: Path) -> None:
+    db = tmp_path / "paper.db"
+    _create_gross_v1_database(db)
+    conn = _connect(db)
+    try:
+        for _name, statement in PAPER_ACCOUNTING_TARGET_STATEMENTS:
+            conn.execute(statement)
+        conn.execute(
+            """
+            INSERT INTO paper_accounting_schema_meta (
+                schema_version, accounting_version, ddl_sha256,
+                migration_plan_sha256, applied_at
+            ) VALUES (?, ?, ?, ?, '')
+            """,
+            (
+                PAPER_ACCOUNTING_SCHEMA_VERSION,
+                PAPER_ACCOUNTING_VERSION,
+                PAPER_ACCOUNTING_DDL_SHA256,
+                PLAN_SHA,
+            ),
+        )
+        assert not paper_accounting_schema_contract_matches(conn)
+    finally:
+        conn.rollback()
+        conn.close()
+
+
 def test_contract_rejects_tampered_accounting_object(tmp_path: Path) -> None:
     db = tmp_path / "paper.db"
     _create_gross_v1_database(db)
@@ -301,12 +452,30 @@ def test_handlers_dispatch_by_persisted_version() -> None:
     )
     record = _entry_record()
     handlers.dispatch_entry(record)
-    handlers.dispatch_settlement(record)
+    handlers.dispatch_settlement(_settled_record(record))
     assert calls == [("entry", "req-1"), ("settlement", "trade-1")]
 
     unsupported = replace(record, accounting_version=2, validate=False)
     with pytest.raises(PaperAccountingAdmissionError, match="entry handler.*version 2"):
         handlers.dispatch_entry(unsupported)
+
+
+def test_handlers_reject_wrong_phase_and_partial_records() -> None:
+    calls: list[str] = []
+    handlers = PaperAccountingHandlers(
+        entry={1: lambda _record: calls.append("entry")},
+        settlement={1: lambda _record: calls.append("settlement")},
+    )
+    entry = _entry_record()
+    settled = _settled_record(entry)
+    with pytest.raises(PaperAccountingAdmissionError, match="entry.*unsettled"):
+        handlers.dispatch_entry(settled)
+    with pytest.raises(PaperAccountingAdmissionError, match="settlement.*complete"):
+        handlers.dispatch_settlement(entry)
+    partial = replace(entry, settlement_fee=D("0"), validate=False)
+    with pytest.raises(PaperAccountingAdmissionError, match="invalid settlement record"):
+        handlers.dispatch_settlement(partial)
+    assert calls == []
 
 
 def test_admission_requires_schema_both_handlers_request_and_pinned_schedule(
@@ -428,7 +597,7 @@ def test_migration_rechecks_all_paper_trade_rows_under_writer_lock(
         apply_paper_accounting_schema(db, plan, reviewed_plan_fingerprint=plan.fingerprint)
 
 
-def test_noop_migration_rechecks_accounting_meta_under_writer_lock(
+def test_noop_migration_rechecks_accounting_rows_under_writer_lock(
     tmp_path: Path,
 ) -> None:
     db = tmp_path / "paper.db"
@@ -440,13 +609,31 @@ def test_noop_migration_rechecks_accounting_meta_under_writer_lock(
         apply_plan,
         reviewed_plan_fingerprint=apply_plan.fingerprint,
     )
+    conn = _connect(db)
+    _seed_trade(conn)
+    entry = _entry_record()
+    _insert_record(conn, entry)
+    conn.commit()
+    conn.close()
     with open_readonly(db) as conn:
         noop_plan = plan_paper_accounting_schema(conn, db)
 
     conn = _connect(db)
+    settled_values = _settled_record(entry).to_database_values()
+    settlement_columns = (
+        "settlement_observation_sha256",
+        "settled_at",
+        "settlement_fee_dollars",
+        "settlement_refund_dollars",
+        "gross_settlement_payout_dollars",
+        "net_settlement_payout_dollars",
+        "fee_net_pnl_dollars",
+    )
     conn.execute(
-        "UPDATE paper_accounting_schema_meta SET migration_plan_sha256=?",
-        ("f" * 64,),
+        "UPDATE paper_trade_accounting SET "
+        + ",".join(f"{column}=?" for column in settlement_columns)
+        + " WHERE entry_request_id='req-1'",
+        tuple(settled_values[column] for column in settlement_columns),
     )
     conn.commit()
     conn.close()
@@ -456,6 +643,59 @@ def test_noop_migration_rechecks_accounting_meta_under_writer_lock(
             noop_plan,
             reviewed_plan_fingerprint=noop_plan.fingerprint,
         )
+
+
+def test_apply_uses_mode_rw_and_does_not_recreate_deleted_reviewed_database(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "paper.db"
+    _create_gross_v1_database(db)
+    with open_readonly(db) as conn:
+        plan = plan_paper_accounting_schema(conn, db)
+    db.unlink()
+
+    with pytest.raises(sqlite3.OperationalError):
+        apply_paper_accounting_schema(
+            db,
+            plan,
+            reviewed_plan_fingerprint=plan.fingerprint,
+        )
+    assert not db.exists()
+
+
+def test_connections_close_when_foreign_key_enablement_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = tmp_path / "paper.db"
+    _create_gross_v1_database(db)
+    with open_readonly(db) as conn:
+        plan = plan_paper_accounting_schema(conn, db)
+
+    connection = MagicMock()
+    monkeypatch.setattr(migration_module.sqlite3, "connect", lambda *_args, **_kwargs: connection)
+
+    def fail_foreign_keys(_conn: sqlite3.Connection) -> None:
+        raise RuntimeError("foreign keys unavailable")
+
+    monkeypatch.setattr(
+        migration_module,
+        "enable_and_verify_foreign_keys",
+        fail_foreign_keys,
+    )
+    with pytest.raises(RuntimeError, match="foreign keys unavailable"):
+        with migration_module.open_readonly(db):
+            pass
+    assert connection.close.call_count == 1
+
+    connection.reset_mock()
+    with pytest.raises(RuntimeError, match="foreign keys unavailable"):
+        apply_paper_accounting_schema(
+            db,
+            plan,
+            reviewed_plan_fingerprint=plan.fingerprint,
+        )
+    assert connection.close.call_count == 1
 
 
 def test_planner_rejects_corrupt_gross_settlement_meta(tmp_path: Path) -> None:

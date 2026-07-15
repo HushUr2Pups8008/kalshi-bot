@@ -109,7 +109,17 @@ class PaperAccountingHandlers:
             raise PaperAccountingAdmissionError(
                 f"no {kind} handler for persisted accounting version {record.accounting_version}"
             )
-        record.validate_record()
+        try:
+            record.validate_record()
+        except ValueError as exc:
+            raise PaperAccountingAdmissionError(
+                f"invalid {kind} record for persisted accounting version {record.accounting_version}"
+            ) from exc
+        settled = record.settled_at is not None
+        if kind == "entry" and settled:
+            raise PaperAccountingAdmissionError("entry handlers require an unsettled accounting record")
+        if kind == "settlement" and not settled:
+            raise PaperAccountingAdmissionError("settlement handlers require a complete settled accounting record")
         handler(record)
 
 
@@ -159,6 +169,8 @@ class PaperAccountingRecord:
             _require_identifier(name, getattr(self, name))
         _require_aware_datetime("filled_at", self.filled_at)
         _require_aware_datetime("recorded_at", self.recorded_at)
+        if self.recorded_at < self.filled_at:
+            raise ValueError("recorded_at must not precede filled_at")
         if not isinstance(self.schedule_id, FeeScheduleId):
             raise ValueError("schedule_id must be FeeScheduleId")
         _validate_schedule(self.schedule_id)
@@ -234,6 +246,8 @@ class PaperAccountingRecord:
                 self.settlement_observation_sha256,
             )
             _require_aware_datetime("settled_at", self.settled_at)
+            if self.settled_at < self.recorded_at:
+                raise ValueError("settled_at must not precede recorded_at")
             for name in (
                 "settlement_fee",
                 "settlement_refund",
@@ -518,6 +532,99 @@ _TRIGGER_STATEMENTS: tuple[tuple[str, str], ...] = (
         END
         """,
     ),
+    (
+        "immutable_paper_trade_accounting_entry",
+        """
+        CREATE TRIGGER immutable_paper_trade_accounting_entry
+        BEFORE UPDATE ON paper_trade_accounting
+        WHEN NEW.accounting_id IS NOT OLD.accounting_id
+          OR NEW.entry_request_id IS NOT OLD.entry_request_id
+          OR NEW.trade_id IS NOT OLD.trade_id
+          OR NEW.venue IS NOT OLD.venue
+          OR NEW.order_id IS NOT OLD.order_id
+          OR NEW.fill_id IS NOT OLD.fill_id
+          OR NEW.fee_role IS NOT OLD.fee_role
+          OR NEW.filled_at IS NOT OLD.filled_at
+          OR NEW.fill_quantity IS NOT OLD.fill_quantity
+          OR NEW.fill_price_dollars IS NOT OLD.fill_price_dollars
+          OR NEW.signed_revenue_dollars IS NOT OLD.signed_revenue_dollars
+          OR NEW.fee_schedule_name IS NOT OLD.fee_schedule_name
+          OR NEW.fee_schedule_effective_from IS NOT OLD.fee_schedule_effective_from
+          OR NEW.fee_schedule_effective_to IS NOT OLD.fee_schedule_effective_to
+          OR NEW.fee_schedule_artifact_sha256 IS NOT OLD.fee_schedule_artifact_sha256
+          OR NEW.fee_schedule_supporting_artifacts_json
+             IS NOT OLD.fee_schedule_supporting_artifacts_json
+          OR NEW.fee_multiplier IS NOT OLD.fee_multiplier
+          OR NEW.fee_coefficient IS NOT OLD.fee_coefficient
+          OR NEW.account_precision_dollars IS NOT OLD.account_precision_dollars
+          OR NEW.base_fee_dollars IS NOT OLD.base_fee_dollars
+          OR NEW.trade_fee_dollars IS NOT OLD.trade_fee_dollars
+          OR NEW.rounding_adjustment_dollars IS NOT OLD.rounding_adjustment_dollars
+          OR NEW.balance_rounding_fee_dollars IS NOT OLD.balance_rounding_fee_dollars
+          OR NEW.rebate_dollars IS NOT OLD.rebate_dollars
+          OR NEW.net_fee_dollars IS NOT OLD.net_fee_dollars
+          OR NEW.accumulator_before_dollars IS NOT OLD.accumulator_before_dollars
+          OR NEW.accumulator_after_dollars IS NOT OLD.accumulator_after_dollars
+          OR NEW.gross_entry_debit_dollars IS NOT OLD.gross_entry_debit_dollars
+          OR NEW.net_entry_debit_dollars IS NOT OLD.net_entry_debit_dollars
+          OR NEW.recorded_at IS NOT OLD.recorded_at
+        BEGIN
+            SELECT RAISE(ABORT, 'paper-accounting entry fields are immutable');
+        END
+        """,
+    ),
+    (
+        "immutable_paper_trade_accounting_settlement",
+        """
+        CREATE TRIGGER immutable_paper_trade_accounting_settlement
+        BEFORE UPDATE ON paper_trade_accounting
+        WHEN OLD.settled_at IS NOT NULL AND (
+            NEW.settlement_observation_sha256
+                IS NOT OLD.settlement_observation_sha256
+            OR NEW.settled_at IS NOT OLD.settled_at
+            OR NEW.settlement_fee_dollars IS NOT OLD.settlement_fee_dollars
+            OR NEW.settlement_refund_dollars IS NOT OLD.settlement_refund_dollars
+            OR NEW.gross_settlement_payout_dollars
+                IS NOT OLD.gross_settlement_payout_dollars
+            OR NEW.net_settlement_payout_dollars
+                IS NOT OLD.net_settlement_payout_dollars
+            OR NEW.fee_net_pnl_dollars IS NOT OLD.fee_net_pnl_dollars
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'paper-accounting settlement is immutable');
+        END
+        """,
+    ),
+    (
+        "immutable_paper_trade_accounting_delete",
+        """
+        CREATE TRIGGER immutable_paper_trade_accounting_delete
+        BEFORE DELETE ON paper_trade_accounting
+        BEGIN
+            SELECT RAISE(ABORT, 'paper-accounting ledger is append-only');
+        END
+        """,
+    ),
+    (
+        "immutable_paper_accounting_schema_meta_update",
+        """
+        CREATE TRIGGER immutable_paper_accounting_schema_meta_update
+        BEFORE UPDATE ON paper_accounting_schema_meta
+        BEGIN
+            SELECT RAISE(ABORT, 'paper-accounting schema meta is immutable');
+        END
+        """,
+    ),
+    (
+        "immutable_paper_accounting_schema_meta_delete",
+        """
+        CREATE TRIGGER immutable_paper_accounting_schema_meta_delete
+        BEFORE DELETE ON paper_accounting_schema_meta
+        BEGIN
+            SELECT RAISE(ABORT, 'paper-accounting schema meta is immutable');
+        END
+        """,
+    ),
 )
 
 PAPER_ACCOUNTING_TARGET_STATEMENTS = _TABLE_STATEMENTS + _INDEX_STATEMENTS + _TRIGGER_STATEMENTS
@@ -583,7 +690,7 @@ def paper_accounting_schema_contract_matches(conn: sqlite3.Connection) -> bool:
         meta = conn.execute(
             """
             SELECT schema_version, accounting_version, ddl_sha256,
-                   migration_plan_sha256
+                   migration_plan_sha256, applied_at
             FROM paper_accounting_schema_meta
             """
         ).fetchall()
@@ -596,6 +703,7 @@ def paper_accounting_schema_contract_matches(conn: sqlite3.Connection) -> bool:
             or _SHA256_TEXT.fullmatch(str(meta[0][3])) is None
         ):
             return False
+        _parse_datetime_text("paper_accounting_schema_meta.applied_at", meta[0][4])
         foreign_keys = conn.execute("PRAGMA foreign_key_list(paper_trade_accounting)").fetchall()
         if len(foreign_keys) != 1:
             return False

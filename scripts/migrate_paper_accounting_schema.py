@@ -58,10 +58,10 @@ class PaperAccountingSchemaPlan:
 def open_readonly(path: Path) -> Iterator[sqlite3.Connection]:
     resolved_path = path.expanduser().resolve()
     conn = sqlite3.connect(f"{resolved_path.as_uri()}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    enable_and_verify_foreign_keys(conn)
-    conn.execute("PRAGMA query_only=ON")
     try:
+        conn.row_factory = sqlite3.Row
+        enable_and_verify_foreign_keys(conn)
+        conn.execute("PRAGMA query_only=ON")
         yield conn
     finally:
         conn.close()
@@ -160,10 +160,15 @@ def apply_paper_accounting_schema(
     if resolved_path.as_uri() != plan.resolved_db_uri:
         raise RuntimeError("resolved database path drift")
 
-    conn = sqlite3.connect(resolved_path, isolation_level=None, timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    enable_and_verify_foreign_keys(conn)
+    conn = sqlite3.connect(
+        f"{resolved_path.as_uri()}?mode=rw",
+        uri=True,
+        isolation_level=None,
+        timeout=30.0,
+    )
     try:
+        conn.row_factory = sqlite3.Row
+        enable_and_verify_foreign_keys(conn)
         conn.execute("BEGIN IMMEDIATE")
         if sqlite_schema_sha256(conn) != plan.sqlite_schema_sha256:
             raise RuntimeError("sqlite_schema drift")
