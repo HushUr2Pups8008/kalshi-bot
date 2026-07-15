@@ -71,6 +71,10 @@ _SCHEDULE_COEFFICIENTS = {
         FeeRole.MAKER: Decimal("-0.0125"),
     },
 }
+_SCHEDULE_FEE_TYPES = {
+    KALSHI_GENERAL_2026_07_07: "quadratic",
+    POLYMARKET_US_2026_07_01: "quadratic",
+}
 
 
 def fee_schedule_at(*, venue: Venue, timestamp: datetime) -> FeeScheduleId:
@@ -109,12 +113,22 @@ def fee_schedule_record(schedule_id: FeeScheduleId) -> dict[str, object]:
             if schedule_id.effective_to is not None
             else None
         ),
+        "fee_type": fee_type_for_schedule(schedule_id),
         "name": schedule_id.name,
         "supporting_artifact_sha256": list(
             schedule_id.supporting_artifact_sha256
         ),
         "venue": schedule_id.venue.value,
     }
+
+
+def fee_type_for_schedule(schedule_id: FeeScheduleId) -> str:
+    if schedule_id not in _SUPPORTED_SCHEDULES:
+        raise FeeUnscorableError("unknown or unpinned fee schedule")
+    fee_type = _SCHEDULE_FEE_TYPES.get(schedule_id)
+    if fee_type is None:
+        raise FeeUnscorableError("fee formula type is not pinned for schedule")
+    return fee_type
 
 
 def serialize_fee_schedule(schedule_id: FeeScheduleId) -> str:

@@ -20,6 +20,7 @@ from trading.fees import (
     deserialize_fee_schedule,
     fee_schedule_at,
     fee_schedule_record,
+    fee_type_for_schedule,
     quote_fee,
     quote_kalshi_rounding,
     serialize_fee_schedule,
@@ -136,6 +137,7 @@ def test_fee_schedule_serialization_round_trips_only_exact_supported_schedule():
         "artifact_sha256": KALSHI_GENERAL_2026_07_07.artifact_sha256,
         "effective_from": "2026-07-07T00:00:00-04:00",
         "effective_to": None,
+        "fee_type": "quadratic",
         "name": "kalshi-general-2026-07-07",
         "supporting_artifact_sha256": list(
             KALSHI_GENERAL_2026_07_07.supporting_artifact_sha256
@@ -159,6 +161,16 @@ def test_fee_schedule_serialization_rejects_unsupported_descriptor():
 
     with pytest.raises(FeeUnscorableError, match="unknown or unpinned fee schedule"):
         fee_schedule_record(unsupported)
+    with pytest.raises(FeeUnscorableError, match="unknown or unpinned fee schedule"):
+        fee_type_for_schedule(unsupported)
+
+
+@pytest.mark.parametrize(
+    "schedule",
+    [KALSHI_GENERAL_2026_07_07, POLYMARKET_US_2026_07_01],
+)
+def test_current_pinned_schedules_use_quadratic_fee_formula(schedule):
+    assert fee_type_for_schedule(schedule) == "quadratic"
 
 
 def test_kalshi_general_taker_fee_uses_decimal_formula_and_direct_precision():
