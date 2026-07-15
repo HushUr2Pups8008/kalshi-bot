@@ -493,6 +493,362 @@ def test_weather_shadow_status_reports_missing_and_unexpected_application_tables
     assert "rows=snapshots:0,quotes:missing,outcomes:0,conflicts:0,checks:0" in out
 
 
+def _create_legacy_paper_db(db_path: Path) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE paper_trades (
+                trade_id TEXT PRIMARY KEY,
+                ticker TEXT NOT NULL,
+                venue TEXT NOT NULL DEFAULT 'kalshi',
+                resolved INTEGER NOT NULL DEFAULT 0,
+                venue_market_id TEXT,
+                identity_status TEXT,
+                quarantine_reason TEXT,
+                side TEXT,
+                contracts INTEGER,
+                price_cents INTEGER,
+                cost_dollars REAL
+            )
+            """
+        )
+
+
+def _create_settlement_diagnostics_db(db_path: Path) -> None:
+    from scripts.migrate_paper_settlement_schema import (
+        apply_settlement_schema,
+        open_readonly,
+        plan_settlement_schema,
+    )
+
+    _create_legacy_paper_db(db_path)
+    with open_readonly(db_path) as conn:
+        plan = plan_settlement_schema(conn, db_path)
+    apply_settlement_schema(
+        db_path,
+        plan,
+        reviewed_plan_fingerprint=plan.fingerprint,
+    )
+
+    older_observation = "a" * 64
+    latest_observation = "b" * 64
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        for observation_sha256, venue_market_id, outcome, applied_at in (
+            (
+                older_observation,
+                "KX-OLDER",
+                "no",
+                "2026-07-14T16:00:00+00:00",
+            ),
+            (
+                latest_observation,
+                "KX-LATEST",
+                "yes",
+                "2026-07-14T18:00:00+00:00",
+            ),
+        ):
+            conn.execute(
+                """
+                INSERT INTO paper_settlement_observations (
+                    observation_sha256, venue, venue_market_id, alias, outcome,
+                    authoritative_outcome_json, canonical_payload_json,
+                    payload_sha256, observed_at, effective_at, rules_version,
+                    source_id, applied_trade_count, bankroll_before_cents,
+                    gross_payout_cents, bankroll_after_cents, applied_at
+                ) VALUES (?, 'kalshi', ?, ?, ?, '{}', '{}', ?, ?, ?,
+                          'official-rules-v1', 'official-api:test', 1,
+                          '10000', '100', '10100', ?)
+                """,
+                (
+                    observation_sha256,
+                    venue_market_id,
+                    venue_market_id,
+                    outcome,
+                    "c" * 64,
+                    applied_at,
+                    applied_at,
+                    applied_at,
+                ),
+            )
+
+        conn.executemany(
+            """
+            INSERT INTO paper_trades (
+                trade_id, ticker, venue, resolved, venue_market_id,
+                identity_status, quarantine_reason, side, contracts,
+                price_cents, cost_dollars, terminal_state,
+                settlement_observation_sha256, settled_at,
+                gross_payout_cents, gross_pnl_cents
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'yes', 1, 40, 0.4, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    "mapped-kalshi",
+                    "KX-OPEN",
+                    "kalshi",
+                    0,
+                    "KX-OPEN",
+                    "mapped",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                (
+                    "mapped-pm",
+                    "pm-open",
+                    "polymarket_us",
+                    0,
+                    "pm-123",
+                    "mapped",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                (
+                    "identity-quarantine",
+                    "KX-QUARANTINED",
+                    "kalshi",
+                    0,
+                    None,
+                    "quarantined",
+                    "ambiguous_identity",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                (
+                    "identity-unmapped",
+                    "KX-UNMAPPED",
+                    "kalshi",
+                    0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                (
+                    "settled-trade",
+                    "KX-LATEST",
+                    "kalshi",
+                    1,
+                    "KX-LATEST",
+                    "mapped",
+                    None,
+                    "won",
+                    latest_observation,
+                    "2026-07-14T18:00:00+00:00",
+                    "100",
+                    "60",
+                ),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_settlement_quarantine (
+                quarantine_id, observation_sha256, payload_sha256, venue,
+                venue_market_id, alias, reason_code, details_json,
+                open_row_set_sha256, detected_at
+            ) VALUES ('quarantine-1', ?, ?, 'kalshi', 'KX-LATEST', 'KX-LATEST',
+                      'terminal_correction', '{}', ?, ?)
+            """,
+            (
+                latest_observation,
+                "c" * 64,
+                "d" * 64,
+                "2026-07-14T18:01:00+00:00",
+            ),
+        )
+        conn.executemany(
+            """
+            INSERT INTO paper_settlement_outbox (
+                outbox_id, event_version, event_kind, observation_sha256,
+                trade_id, payload_json, created_at
+            ) VALUES (?, 1, 'trade_settled', ?, 'settled-trade', '{}', ?)
+            """,
+            (
+                (
+                    "pending-outbox",
+                    latest_observation,
+                    "2026-07-14T18:00:01+00:00",
+                ),
+                (
+                    "complete-outbox",
+                    latest_observation,
+                    "2026-07-14T18:00:02+00:00",
+                ),
+            ),
+        )
+        conn.executemany(
+            """
+            INSERT INTO paper_settlement_outbox_requirements (
+                outbox_id, consumer_name
+            ) VALUES (?, ?)
+            """,
+            (
+                ("pending-outbox", "paper_trade_log"),
+                ("pending-outbox", "source_credibility"),
+                ("complete-outbox", "paper_trade_log"),
+            ),
+        )
+        conn.executemany(
+            """
+            INSERT INTO paper_settlement_consumer_receipts (
+                consumer_name, outbox_id, processed_at, result_sha256
+            ) VALUES (?, ?, '2026-07-14T18:02:00+00:00', ?)
+            """,
+            (
+                ("paper_trade_log", "pending-outbox", "e" * 64),
+                ("paper_trade_log", "complete-outbox", "f" * 64),
+            ),
+        )
+
+
+def test_canonical_settlement_status_missing_db_is_reported_without_creation(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "ENABLE_CANONICAL_PERSISTED_SETTLEMENT_RECONCILIATION",
+        "true",
+    )
+    db_path = tmp_path / "data" / "paper_trades.db"
+
+    def unexpected_connect(*args, **kwargs):
+        pytest.fail(f"missing paper DB was opened: {args!r} {kwargs!r}")
+
+    monkeypatch.setattr(botcheck.sqlite3, "connect", unexpected_connect)
+
+    botcheck.print_canonical_settlement_status(tmp_path)
+
+    assert capsys.readouterr().out.strip() == (
+        "canonical_settlement: on (process-env) db=missing schema=n/a "
+        "contract=n/a mapped_open=n/a identity_quarantined_open=n/a "
+        "identity_unmapped_open=n/a settlement_quarantine=n/a "
+        "pending_outbox=n/a last_observation=n/a"
+    )
+    assert not db_path.exists()
+
+
+def test_canonical_settlement_status_schema_absent_is_read_only(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv(
+        "ENABLE_CANONICAL_PERSISTED_SETTLEMENT_RECONCILIATION",
+        raising=False,
+    )
+    db_path = tmp_path / "data" / "paper_trades.db"
+    _create_legacy_paper_db(db_path)
+    before_bytes = db_path.read_bytes()
+    before_names = set(tmp_path.rglob("*"))
+
+    botcheck.print_canonical_settlement_status(tmp_path)
+
+    assert capsys.readouterr().out.strip() == (
+        "canonical_settlement: off (default) db=ok schema=absent "
+        "contract=n/a mapped_open=n/a identity_quarantined_open=n/a "
+        "identity_unmapped_open=n/a settlement_quarantine=n/a "
+        "pending_outbox=n/a last_observation=n/a"
+    )
+    assert db_path.read_bytes() == before_bytes
+    assert set(tmp_path.rglob("*")) == before_names
+
+
+def test_canonical_settlement_status_reports_backlogs_and_last_observation_read_only(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv(
+        "ENABLE_CANONICAL_PERSISTED_SETTLEMENT_RECONCILIATION",
+        raising=False,
+    )
+    (tmp_path / ".env").write_text(
+        "ENABLE_CANONICAL_PERSISTED_SETTLEMENT_RECONCILIATION=true\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "data" / "paper_trades.db"
+    _create_settlement_diagnostics_db(db_path)
+    before_bytes = db_path.read_bytes()
+    before_names = set(tmp_path.rglob("*"))
+    real_connect = sqlite3.connect
+    connect_calls = []
+    statements = []
+
+    def traced_connect(*args, **kwargs):
+        connect_calls.append((args, kwargs))
+        conn = real_connect(*args, **kwargs)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(botcheck.sqlite3, "connect", traced_connect)
+
+    botcheck.print_canonical_settlement_status(tmp_path)
+
+    assert connect_calls == [
+        ((f"{db_path.resolve().as_uri()}?mode=ro",), {"uri": True})
+    ]
+    assert statements
+    assert all(
+        statement.lstrip().upper().startswith(("SELECT", "PRAGMA"))
+        for statement in statements
+    )
+    out = capsys.readouterr().out.strip()
+    assert out.startswith(
+        "canonical_settlement: on (.env) db=ok schema=present contract=ok"
+    )
+    assert "mapped_open=2" in out
+    assert "identity_quarantined_open=1" in out
+    assert "identity_unmapped_open=1" in out
+    assert "settlement_quarantine=1" in out
+    assert "pending_outbox=1" in out
+    assert (
+        "last_observation=2026-07-14T18:00:00+00:00|kalshi|KX-LATEST|yes|"
+        f"{'b' * 64}"
+    ) in out
+    assert db_path.read_bytes() == before_bytes
+    assert set(tmp_path.rglob("*")) == before_names
+
+
+def test_canonical_settlement_status_reports_sqlite_error(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "ENABLE_CANONICAL_PERSISTED_SETTLEMENT_RECONCILIATION",
+        "false",
+    )
+    db_path = tmp_path / "data" / "paper_trades.db"
+    db_path.parent.mkdir(parents=True)
+    db_path.write_text("not sqlite", encoding="utf-8")
+
+    botcheck.print_canonical_settlement_status(tmp_path)
+
+    out = capsys.readouterr().out.strip()
+    assert out.startswith(
+        "canonical_settlement: off (process-env) db=error "
+        "error=file is not a database"
+    )
+    assert db_path.read_text(encoding="utf-8") == "not sqlite"
+
+
 def test_print_research_gate_section_surfaces_prewarm_backlog(
     capsys,
     tmp_path,

@@ -42,6 +42,7 @@ from utils.research_prewarm_targets import (
 )
 from utils.research_evidence_quality import research_evidence_temporally_valid
 from scripts.research_activation_status import evaluate_activation_profile
+from trading.settlement_store import settlement_schema_contract_matches
 
 
 LOG_TS_RE = re.compile(
@@ -781,6 +782,136 @@ def _format_ts_age(ts: datetime | None, *, now: datetime) -> tuple[str, str]:
     if ts is None:
         return "n/a", "n/a"
     return ts.isoformat(), human_duration((now - ts).total_seconds())
+
+
+def print_canonical_settlement_status(repo_root: Path) -> None:
+    enabled_value, source = _research_env_value(
+        repo_root,
+        "ENABLE_CANONICAL_PERSISTED_SETTLEMENT_RECONCILIATION",
+        "false",
+    )
+    enabled = "on" if _env_bool(enabled_value) else "off"
+    prefix = f"canonical_settlement: {enabled} ({source})"
+    unavailable = (
+        "mapped_open=n/a identity_quarantined_open=n/a "
+        "identity_unmapped_open=n/a settlement_quarantine=n/a "
+        "pending_outbox=n/a last_observation=n/a"
+    )
+
+    db_path = repo_root / "data" / "paper_trades.db"
+    if not db_path.is_file():
+        print(f"{prefix} db=missing schema=n/a contract=n/a {unavailable}")
+        return
+
+    try:
+        db_uri = f"{db_path.resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(db_uri, uri=True) as conn:
+            schema_present = _sqlite_table_exists(
+                conn,
+                "paper_settlement_schema_meta",
+            )
+            if not schema_present:
+                print(
+                    f"{prefix} db=ok schema=absent contract=n/a {unavailable}"
+                )
+                return
+
+            contract = (
+                "ok" if settlement_schema_contract_matches(conn) else "mismatch"
+            )
+            paper_columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(paper_trades)")
+            }
+            identity_columns = {"resolved", "identity_status", "venue_market_id"}
+            if identity_columns <= paper_columns:
+                backlog_row = conn.execute(
+                    """
+                    SELECT
+                        SUM(CASE WHEN identity_status='mapped'
+                                      AND venue_market_id IS NOT NULL
+                                      AND TRIM(venue_market_id)<>''
+                                 THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN identity_status='quarantined'
+                                 THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN COALESCE(identity_status, '')<>'quarantined'
+                                      AND (identity_status IS NULL
+                                           OR identity_status<>'mapped'
+                                           OR venue_market_id IS NULL
+                                           OR TRIM(venue_market_id)='')
+                                 THEN 1 ELSE 0 END)
+                    FROM paper_trades
+                    WHERE resolved=0
+                    """
+                ).fetchone()
+                mapped_open = int(backlog_row[0] or 0)
+                identity_quarantined_open = int(backlog_row[1] or 0)
+                identity_unmapped_open = int(backlog_row[2] or 0)
+            else:
+                mapped_open = None
+                identity_quarantined_open = None
+                identity_unmapped_open = None
+
+            if _sqlite_table_exists(conn, "paper_settlement_quarantine"):
+                quarantine_row = conn.execute(
+                    "SELECT COUNT(*) FROM paper_settlement_quarantine"
+                ).fetchone()
+                settlement_quarantine = int(quarantine_row[0] if quarantine_row else 0)
+            else:
+                settlement_quarantine = None
+
+            outbox_tables = (
+                "paper_settlement_outbox",
+                "paper_settlement_outbox_requirements",
+                "paper_settlement_consumer_receipts",
+            )
+            if all(_sqlite_table_exists(conn, table) for table in outbox_tables):
+                pending_row = conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT requirement.outbox_id)
+                    FROM paper_settlement_outbox_requirements AS requirement
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM paper_settlement_consumer_receipts AS receipt
+                        WHERE receipt.outbox_id=requirement.outbox_id
+                          AND receipt.consumer_name=requirement.consumer_name
+                    )
+                    """
+                ).fetchone()
+                pending_outbox = int(pending_row[0] if pending_row else 0)
+            else:
+                pending_outbox = None
+
+            if _sqlite_table_exists(conn, "paper_settlement_observations"):
+                observation_row = conn.execute(
+                    """
+                    SELECT applied_at, venue, venue_market_id, outcome,
+                           observation_sha256
+                    FROM paper_settlement_observations
+                    ORDER BY applied_at DESC, observation_sha256 DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+            else:
+                observation_row = None
+    except sqlite3.Error as exc:
+        print(f"{prefix} db=error error={exc}")
+        return
+
+    last_observation = (
+        "|".join(str(value) for value in observation_row)
+        if observation_row is not None
+        else "n/a"
+    )
+    display = lambda value: "n/a" if value is None else str(value)
+    print(
+        f"{prefix} db=ok schema=present contract={contract} "
+        f"mapped_open={display(mapped_open)} "
+        f"identity_quarantined_open={display(identity_quarantined_open)} "
+        f"identity_unmapped_open={display(identity_unmapped_open)} "
+        f"settlement_quarantine={display(settlement_quarantine)} "
+        f"pending_outbox={display(pending_outbox)} "
+        f"last_observation={last_observation}"
+    )
 
 
 def print_weather_shadow_status(repo_root: Path) -> None:
@@ -1644,6 +1775,7 @@ def main() -> int:
         dossier_stats=research_dossiers,
     )
     print_weather_shadow_status(args.home)
+    print_canonical_settlement_status(args.home)
     print_kalshi_drift_section(now=now)
     print_history(sessions=sessions, current_proc=current_proc, now=now)
     return 0
