@@ -117,9 +117,17 @@ class _Matcher:
 class _RefreshAwareMatcher:
     def __init__(self):
         self.refresh_cache = None
+        self.emit_diagnostics = None
 
-    async def find_candidates(self, news, *, refresh_cache=True):
+    async def find_candidates(
+        self,
+        news,
+        *,
+        refresh_cache=True,
+        emit_diagnostics=True,
+    ):
         self.refresh_cache = refresh_cache
+        self.emit_diagnostics = emit_diagnostics
         return []
 
 
@@ -144,6 +152,7 @@ def test_shadow_assignment_uses_snapshot_only_matching():
     ))
 
     assert matcher.refresh_cache is False
+    assert matcher.emit_diagnostics is False
     assert row.assigned is False
 
 
