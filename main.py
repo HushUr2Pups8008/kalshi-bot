@@ -84,8 +84,10 @@ from tasks.settlement_outbox_task import SettlementOutboxTask
 from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
 from polymarket.settlement_reconciler import (
+    PersistedPositionReconciler,
     PolymarketPublicSettlementSource,
     SettlementReconciler,
+    VenueRoutingAuthoritativeSettlementSource,
 )
 from tasks.stats.source_stats import SourceStats
 from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, VERSION,
@@ -113,7 +115,7 @@ from tasks.calibration_task import CalibrationTask
 from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
-from trading.settlement_store import settlement_schema_contract_matches
+from trading.settlement_store import SettlementStore, settlement_schema_contract_matches
 from utils.logger import (
     TRADE_LOG_FILE,
     get_logger,
@@ -2681,6 +2683,41 @@ class TradingBot:
             await self._drain_persisted_settlement_outbox()
         except Exception as exc:
             log.warning("Settlement outbox drain failed: %s", exc)
+        if cfg.enable_canonical_persisted_settlement_reconciliation:
+            worker = getattr(self, "_persisted_position_reconciler", None)
+            if worker is None:
+                source = getattr(self, "_canonical_settlement_source", None)
+                if source is None:
+                    source = VenueRoutingAuthoritativeSettlementSource(
+                        kalshi_source=self.rest,
+                        polymarket_source=PolymarketPublicSettlementSource(),
+                    )
+                    self._canonical_settlement_source = source
+                worker = PersistedPositionReconciler(
+                    source=source,
+                    resolver=self.paper,
+                )
+                self._persisted_position_reconciler = worker
+            result = await asyncio.to_thread(worker.reconcile)
+            if result.checked:
+                log.info(
+                    "Canonical settlement: checked=%d resolved=%d not_found=%d "
+                    "errors=%d",
+                    result.checked,
+                    result.resolved,
+                    result.not_found,
+                    result.errors,
+                )
+            return
+
+        if bool(getattr(self.paper, "settlement_schema_present", False)):
+            alias_check = await self._legacy_settlement_alias_preflight()
+            if not alias_check.ok:
+                log.error(
+                    "Legacy settlement paused by alias preflight: %s",
+                    ",".join(alias_check.failures),
+                )
+                return
         self.source_stats.flush()
         open_trades = await asyncio.to_thread(
             lambda: self.paper._conn.execute(
@@ -2813,6 +2850,27 @@ class TradingBot:
             )
             self._settlement_outbox_task = worker
         await worker.run_once(limit=100)
+
+    async def _canonical_settlement_preflight(self) -> None:
+        def _check() -> None:
+            with SettlementStore(self.paper._db_path) as store:
+                readiness = store.readiness(pre_cutover=True)
+                if not readiness.ok:
+                    raise RuntimeError(
+                        "canonical settlement readiness failed: "
+                        + ",".join(readiness.failures)
+                    )
+                conservation = store.conservation(now=datetime.now(timezone.utc))
+                if not conservation.ok:
+                    raise RuntimeError(
+                        "canonical settlement conservation failed: "
+                        + ",".join(conservation.failures)
+                    )
+
+        await asyncio.to_thread(_check)
+
+    async def _legacy_settlement_alias_preflight(self):
+        return await asyncio.to_thread(self.paper.legacy_settlement_alias_check)
 
     async def _refresh_market_cache_once(self, *, initial: bool = False) -> None:
         async with self._market_refresh_lock:
@@ -3455,6 +3513,8 @@ class TradingBot:
                 await asyncio.sleep(60)
 
     async def run(self) -> None:
+        if cfg.enable_canonical_persisted_settlement_reconciliation:
+            await self._canonical_settlement_preflight()
         notional = self.paper.get_notional_bankroll()
         max_bet  = cfg.dynamic_max_bet(notional)
 
