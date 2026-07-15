@@ -452,6 +452,42 @@ def test_schema_present_record_trade_persists_mapped_canonical_identity(
     assert position.venue_market_id == market_ref.venue_market_id
 
 
+def test_record_trade_rejects_exact_identity_after_canonical_settlement(
+    trader_factory,
+):
+    trader = trader_factory("reject-late-entry-after-settlement")
+    settled_ref = MarketRef(
+        Venue.POLYMARKET_US,
+        "8594",
+        "original-market-alias",
+    )
+    settled_trade_id = _record_trade(
+        trader,
+        settled_ref,
+        trade_id="settle000001",
+    )
+    assert _resolve(trader, _observation(settled_ref, MarketOutcome.YES)) is True
+    before = _financial_snapshot(trader)
+    assert len(before["trades"]) == 1
+    assert before["trades"][0][:2] == (settled_trade_id, 1)
+    assert trader.portfolio.open_positions() == []
+    late_ref = MarketRef(
+        Venue.POLYMARKET_US,
+        settled_ref.venue_market_id,
+        "renamed-market-alias",
+    )
+
+    late_trade_id = _record_trade(
+        trader,
+        late_ref,
+        trade_id="late00000001",
+    )
+
+    assert late_trade_id == ""
+    assert _financial_snapshot(trader) == before
+    assert trader.portfolio.open_positions() == []
+
+
 def test_record_trade_waits_for_canonical_settlement_transaction(trader_factory, monkeypatch):
     trader = trader_factory("serialized-entry-and-settlement")
     settled_ref = MarketRef(

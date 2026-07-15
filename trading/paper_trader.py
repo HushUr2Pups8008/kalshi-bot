@@ -1208,6 +1208,20 @@ class PaperTrader:
             try:
                 self._conn.execute("BEGIN IMMEDIATE")
                 transaction_started = True
+                settled_identity = self._conn.execute(
+                    """
+                    SELECT 1
+                    FROM paper_settlement_observations
+                    WHERE venue=? AND venue_market_id=?
+                    LIMIT 1
+                    """,
+                    (venue, venue_market_id),
+                ).fetchone()
+                if settled_identity is not None:
+                    raise RuntimeError(
+                        "canonical market already has a durable settlement "
+                        f"observation: {venue}:{venue_market_id}"
+                    )
                 bankroll_row = self._conn.execute(
                     "SELECT value FROM bot_state WHERE key='notional_bankroll'"
                 ).fetchone()
