@@ -606,6 +606,22 @@ _INDEX_STATEMENTS: tuple[tuple[str, str], ...] = (
 
 _TRIGGER_STATEMENTS: tuple[tuple[str, str], ...] = (
     (
+        "paper_trade_accounting_parent_venue_guard",
+        """
+        CREATE TRIGGER paper_trade_accounting_parent_venue_guard
+        BEFORE INSERT ON paper_trade_accounting
+        WHEN NOT EXISTS (
+            SELECT 1
+            FROM paper_trades
+            WHERE paper_trades.trade_id = NEW.trade_id
+              AND paper_trades.venue = NEW.venue
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'paper-accounting parent trade venue mismatch');
+        END
+        """,
+    ),
+    (
         "immutable_paper_trade_accounting_version",
         """
         CREATE TRIGGER immutable_paper_trade_accounting_version

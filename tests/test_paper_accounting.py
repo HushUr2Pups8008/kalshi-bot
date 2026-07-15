@@ -79,7 +79,11 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _seed_trade(conn: sqlite3.Connection, trade_id: str = "trade-1") -> None:
+def _seed_trade(
+    conn: sqlite3.Connection,
+    trade_id: str = "trade-1",
+    venue: str = "kalshi",
+) -> None:
     conn.execute(
         """
         INSERT INTO paper_trades (
@@ -88,11 +92,11 @@ def _seed_trade(conn: sqlite3.Connection, trade_id: str = "trade-1") -> None:
             estimated_prob, entry_price_cents, edge, kelly_dollars,
             capped_dollars, signal_headline, signal_source,
             keywords_matched, reasoning
-        ) VALUES (?, ?, 'KXTEST-1', 'kalshi', 'KXTEST-1', 'mapped',
+        ) VALUES (?, ?, 'KXTEST-1', ?, 'KXTEST-1', 'mapped',
                   'Test market', 'yes', 1, 33, 0.33, 0.55, 33, 0.22,
                   0.33, 0.33, 'headline', 'source', '[]', 'reason')
         """,
-        (trade_id, NOW.isoformat()),
+        (trade_id, NOW.isoformat(), venue),
     )
 
 
@@ -674,7 +678,7 @@ def test_fill_identity_is_unique_within_venue_not_across_venues(
         _seed_trade(conn)
         kalshi = _entry_record()
         _insert_record(conn, kalshi)
-        _seed_trade(conn, "trade-2")
+        _seed_trade(conn, "trade-2", "polymarket_us")
         polymarket = _polymarket_entry_record(
             kalshi,
             entry_request_id="req-2",
@@ -697,6 +701,21 @@ def test_fill_identity_is_unique_within_venue_not_across_venues(
         )
         with pytest.raises(sqlite3.IntegrityError):
             _insert_record(conn, duplicate_kalshi)
+    finally:
+        conn.close()
+
+
+def test_accounting_insert_requires_parent_trade_venue_match(tmp_path: Path) -> None:
+    db = tmp_path / "paper.db"
+    _create_gross_v1_database(db)
+    conn = _connect(db)
+    try:
+        _install_accounting(conn)
+        _seed_trade(conn, venue="kalshi")
+        mismatched = _polymarket_entry_record()
+        with pytest.raises(sqlite3.IntegrityError, match="parent trade venue mismatch"):
+            _insert_record(conn, mismatched)
+        assert conn.execute("SELECT COUNT(*) FROM paper_trade_accounting").fetchone()[0] == 0
     finally:
         conn.close()
 
@@ -806,6 +825,31 @@ def test_contract_rejects_tampered_accounting_object(tmp_path: Path) -> None:
         _install_accounting(conn)
         conn.execute("DROP INDEX paper_trade_accounting_accumulator_idx")
         assert not paper_accounting_schema_contract_matches(conn)
+    finally:
+        conn.close()
+
+
+def test_parent_venue_guard_is_part_of_exact_schema_contract(tmp_path: Path) -> None:
+    db = tmp_path / "paper.db"
+    _create_gross_v1_database(db)
+    conn = _connect(db)
+    try:
+        _install_accounting(conn)
+        trigger_name = "paper_trade_accounting_parent_venue_guard"
+        target_sql = dict(PAPER_ACCOUNTING_TARGET_STATEMENTS)[trigger_name]
+        persisted_sql = conn.execute(
+            "SELECT sql FROM sqlite_schema WHERE type='trigger' AND name=?",
+            (trigger_name,),
+        ).fetchone()[0]
+        assert "NEW.trade_id" in target_sql
+        assert "NEW.venue" in target_sql
+        assert persisted_sql
+        assert paper_accounting_schema_contract_matches(conn)
+
+        conn.execute(f"DROP TRIGGER {trigger_name}")
+        assert not paper_accounting_schema_contract_matches(conn)
+        with pytest.raises(PaperAccountingSchemaError, match="partial"):
+            accounting_schema_state(conn)
     finally:
         conn.close()
 
