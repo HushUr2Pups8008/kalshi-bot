@@ -28,6 +28,7 @@ from trading.settlement import (
 )
 from trading.settlement_store import (
     SETTLEMENT_DDL_SHA256,
+    SETTLEMENT_EVENT_VERSION,
     SETTLEMENT_PAPER_TRADE_COLUMNS_SQL,
     SETTLEMENT_SCHEMA_VERSION,
     SettlementStore,
@@ -54,6 +55,14 @@ SETTLEMENT_COLUMNS = {
     "gross_payout_cents",
     "gross_pnl_cents",
 }
+
+
+def test_fee_accounting_schema_does_not_change_gross_settlement_v1_contract():
+    assert SETTLEMENT_SCHEMA_VERSION == 1
+    assert SETTLEMENT_EVENT_VERSION == 1
+    assert SETTLEMENT_DDL_SHA256 == (
+        "312ffc84d37e4f1e4fb235c6bd124da5bc7b3b7f844623272aea91fa0fd4eb9e"
+    )
 OUTBOX_ID = "c" * 64
 NOW = datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc)
 TEST_MARKET_REF = MarketRef(Venue.KALSHI, "KX-t1", "KX-t1")

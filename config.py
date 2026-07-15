@@ -1191,6 +1191,12 @@ class BotConfig:
             "false",
         )
     )
+    enable_fee_net_paper_accounting: bool = field(
+        default_factory=lambda: _parse_bool_env(
+            "ENABLE_FEE_NET_PAPER_ACCOUNTING",
+            "false",
+        )
+    )
 
     # Polymarket US credentials and endpoints. Disabled until explicitly enabled.
     polymarket_us_enabled: bool = field(
