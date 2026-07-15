@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import socket
 
 import pytest
@@ -54,6 +55,22 @@ def test_ipv4_validation_deduplicates_global_answers() -> None:
     assert research_gate._validated_global_ipv4_addresses(
         ("8.8.8.8", "1.1.1.1", "8.8.8.8")
     ) == ("8.8.8.8", "1.1.1.1")
+
+
+def test_ipv4_validation_preserves_private_name_and_signature() -> None:
+    validate = research_gate._validated_global_ipv4_addresses
+
+    assert validate.__name__ == "_validated_global_ipv4_addresses"
+    assert str(inspect.signature(validate)) == (
+        "(addresses: 'Iterable[str]', *, provider_name: 'str' = 'Google News') "
+        "-> 'tuple[str, ...]'"
+    )
+
+
+def test_ipv4_validation_accepts_addresses_keyword() -> None:
+    assert research_gate._validated_global_ipv4_addresses(
+        addresses=("8.8.8.8",),
+    ) == ("8.8.8.8",)
 
 
 @pytest.mark.parametrize(

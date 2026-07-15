@@ -28,7 +28,6 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
-from functools import partial
 from html.parser import HTMLParser
 from typing import Any, Awaitable, Callable, Iterable, Sequence
 from zoneinfo import ZoneInfo
@@ -3431,10 +3430,15 @@ async def _reconcile_persisted_verdict(
     )
 
 
-_validated_global_ipv4_addresses = partial(
-    _shared_validated_global_ipv4_addresses,
-    provider_name="Google News",
-)
+def _validated_global_ipv4_addresses(
+    addresses: Iterable[str],
+    *,
+    provider_name: str = "Google News",
+) -> tuple[str, ...]:
+    return _shared_validated_global_ipv4_addresses(
+        addresses,
+        provider_name=provider_name,
+    )
 
 
 async def _fetch_bounded_https_ipv4(
