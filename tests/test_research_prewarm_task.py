@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import gc
 from types import SimpleNamespace
 import sqlite3
+import weakref
 
 import pytest
 
@@ -617,6 +619,61 @@ async def test_prewarm_provider_admission_releases_all_slots_on_cancellation(
 def test_prewarm_provider_admission_rejects_invalid_intervals(interval):
     with pytest.raises(ValueError, match="finite and non-negative"):
         _ResearchPrewarmProviderAdmission(min_start_interval_seconds=interval)
+
+
+@pytest.mark.asyncio
+async def test_prewarm_provider_admission_is_shared_by_live_loop():
+    first = research_prewarm_task_module._get_research_prewarm_provider_admission()
+    second = research_prewarm_task_module._get_research_prewarm_provider_admission()
+
+    assert second is first
+
+
+def test_prewarm_provider_admission_does_not_retain_closed_event_loops(monkeypatch):
+    references: list[
+        tuple[
+            weakref.ReferenceType[asyncio.AbstractEventLoop],
+            weakref.ReferenceType[_ResearchPrewarmProviderAdmission],
+        ]
+    ] = []
+    monkeypatch.setattr(
+        research_prewarm_task_module,
+        "_RESEARCH_PREWARM_PROVIDER_MIN_START_INTERVAL_SECONDS",
+        0.0,
+    )
+
+    async def contend_for_admission():
+        loop = asyncio.get_running_loop()
+        admission = (
+            research_prewarm_task_module._get_research_prewarm_provider_admission()
+        )
+        release = asyncio.Event()
+        started = asyncio.Event()
+
+        async def provider(query: str):
+            if query == "first":
+                started.set()
+                await release.wait()
+            return query
+
+        first = asyncio.create_task(admission.run(provider, "first"))
+        await started.wait()
+        second = asyncio.create_task(admission.run(provider, "second"))
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(first, second)
+        return weakref.ref(loop), weakref.ref(admission)
+
+    for _ in range(2):
+        references.append(asyncio.run(contend_for_admission()))
+    gc.collect()
+
+    assert not hasattr(
+        research_prewarm_task_module,
+        "_RESEARCH_PREWARM_PROVIDER_ADMISSIONS",
+    )
+    assert all(loop_ref() is None for loop_ref, _ in references)
+    assert all(admission_ref() is None for _, admission_ref in references)
 
 
 @pytest.mark.asyncio

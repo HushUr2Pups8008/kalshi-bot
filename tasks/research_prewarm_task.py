@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import math
-import threading
 import time
 import uuid
-import weakref
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -87,26 +85,31 @@ class _ResearchPrewarmProviderAdmission:
             return await provider(query)
 
 
-_RESEARCH_PREWARM_PROVIDER_ADMISSIONS: weakref.WeakKeyDictionary[
-    asyncio.AbstractEventLoop,
-    _ResearchPrewarmProviderAdmission,
-] = weakref.WeakKeyDictionary()
-_RESEARCH_PREWARM_PROVIDER_ADMISSIONS_LOCK = threading.Lock()
+_RESEARCH_PREWARM_PROVIDER_ADMISSION_ATTRIBUTE = (
+    "_kalshi_research_prewarm_provider_admission"
+)
 
 
 def _get_research_prewarm_provider_admission() -> _ResearchPrewarmProviderAdmission:
     loop = asyncio.get_running_loop()
-    with _RESEARCH_PREWARM_PROVIDER_ADMISSIONS_LOCK:
-        admission = _RESEARCH_PREWARM_PROVIDER_ADMISSIONS.get(loop)
-        if admission is None:
-            admission = _ResearchPrewarmProviderAdmission(
-                min_start_interval_seconds=(
-                    _RESEARCH_PREWARM_PROVIDER_MIN_START_INTERVAL_SECONDS
-                ),
-                clock=loop.time,
-            )
-            _RESEARCH_PREWARM_PROVIDER_ADMISSIONS[loop] = admission
-        return admission
+    admission = getattr(
+        loop,
+        _RESEARCH_PREWARM_PROVIDER_ADMISSION_ATTRIBUTE,
+        None,
+    )
+    if admission is None:
+        admission = _ResearchPrewarmProviderAdmission(
+            min_start_interval_seconds=(
+                _RESEARCH_PREWARM_PROVIDER_MIN_START_INTERVAL_SECONDS
+            ),
+            clock=loop.time,
+        )
+        setattr(
+            loop,
+            _RESEARCH_PREWARM_PROVIDER_ADMISSION_ATTRIBUTE,
+            admission,
+        )
+    return admission
 
 
 class ResearchPrewarmError(Exception):
