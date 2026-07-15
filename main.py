@@ -115,6 +115,7 @@ from tasks.calibration_task import CalibrationTask
 from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
+from trading.settlement import MarketOutcome, SettlementObservation
 from trading.settlement_store import SettlementStore, settlement_schema_contract_matches
 from utils.logger import (
     TRADE_LOG_FILE,
@@ -3632,6 +3633,64 @@ class TradingBot:
 
 # ── CLI handlers ──────────────────────────────────────────────────────────────
 
+
+def _manual_settlement_outcome(result: str) -> MarketOutcome:
+    if result not in {"YES", "NO"}:
+        raise SystemExit("--resolve RESULT must be exactly YES or NO")
+    return MarketOutcome.YES if result == "YES" else MarketOutcome.NO
+
+
+async def _resolve_paper_market_from_cli(
+    paper: PaperTrader,
+    *,
+    ticker: str,
+    result: str,
+) -> MarketOutcome:
+    requested_outcome = _manual_settlement_outcome(result)
+    if not cfg.enable_canonical_persisted_settlement_reconciliation:
+        await paper.resolve_market(ticker, requested_outcome is MarketOutcome.YES)
+        return requested_outcome
+
+    market_refs = await asyncio.to_thread(paper.mapped_open_market_refs)
+    matching_refs = tuple(ref for ref in market_refs if ref.alias == ticker)
+    if len(matching_refs) != 1:
+        raise SystemExit(
+            f"--resolve {ticker} requires exactly one mapped market; "
+            f"found {len(matching_refs)}"
+        )
+
+    market_ref = matching_refs[0]
+    source = VenueRoutingAuthoritativeSettlementSource(
+        kalshi_source=KalshiRestClient(),
+        polymarket_source=PolymarketPublicSettlementSource(),
+    )
+    observation = await asyncio.to_thread(source.get_settlement, market_ref)
+    if observation is None:
+        raise SystemExit(
+            f"--resolve {ticker} has no authoritative terminal settlement"
+        )
+    if not isinstance(observation, SettlementObservation):
+        raise SystemExit(
+            f"--resolve {ticker} authority returned an invalid observation"
+        )
+    if observation.market_ref != market_ref:
+        raise SystemExit(
+            f"--resolve {ticker} authority returned a different market identity"
+        )
+    if observation.outcome is not requested_outcome:
+        raise SystemExit(
+            f"--resolve {ticker} requested {requested_outcome.value.upper()} "
+            f"but disagrees with authoritative {observation.outcome.value.upper()}"
+        )
+
+    applied = await asyncio.to_thread(paper.resolve_observation, observation)
+    if not applied:
+        raise SystemExit(
+            f"--resolve {ticker} found no matching open canonical position"
+        )
+    return observation.outcome
+
+
 async def async_main() -> None:
     args = parse_args()
     startup_context = "cli" if _is_cli_only_command(args) else "runtime"
@@ -3652,10 +3711,12 @@ async def async_main() -> None:
             return
         if args.resolve:
             ticker, result_str = args.resolve
-            resolved_yes = result_str.upper() == "YES"
-            # resolve_market is async as of v0.29.47 (PROFIT-CAL-001).
-            asyncio.run(paper.resolve_market(ticker, resolved_yes))
-            log.info("Resolved %s as %s", ticker, "YES" if resolved_yes else "NO")
+            outcome = await _resolve_paper_market_from_cli(
+                paper,
+                ticker=ticker,
+                result=result_str,
+            )
+            log.info("Resolved %s as %s", ticker, outcome.value.upper())
             return
         if args.go_live:
             _handle_go_live(paper)

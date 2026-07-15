@@ -3,9 +3,10 @@ import io
 import shutil
 import uuid
 from argparse import Namespace
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -22,6 +23,8 @@ from main import (
     async_main,
 )
 from config import cfg
+from trading.settlement import MarketOutcome, build_settlement_observation
+from trading.venue import MarketRef, Venue
 
 
 def _tmp_root() -> Path:
@@ -438,6 +441,190 @@ async def test_async_main_cli_path_is_not_blocked_by_runtime_lock(caplog):
         guard.release()
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def _settlement_observation(
+    market_ref: MarketRef,
+    outcome: MarketOutcome,
+):
+    now = datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc)
+    return build_settlement_observation(
+        market_ref=market_ref,
+        outcome=outcome,
+        authoritative_outcome={"result": outcome.value},
+        authoritative_payload={"result": outcome.value},
+        observed_at=now,
+        effective_at=now,
+        rules_version="test-v1",
+        source_id="test-authority",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_main_resolve_false_mode_rejects_non_yes_no(monkeypatch):
+    monkeypatch.setattr(
+        cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        False,
+    )
+    paper = MagicMock()
+    paper.resolve_market = AsyncMock()
+    args = Namespace(
+        report=False,
+        credibility=False,
+        resolve=("KXTEST", "MAYBE"),
+        go_live=False,
+        rotate_logs=False,
+    )
+
+    with patch("main.parse_args", return_value=args), patch(
+        "main.PaperTrader", return_value=paper
+    ):
+        with pytest.raises(SystemExit, match="exactly YES or NO"):
+            await async_main()
+
+    paper.resolve_market.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_main_resolve_false_mode_preserves_legacy_resolution(monkeypatch):
+    monkeypatch.setattr(
+        cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        False,
+    )
+    paper = MagicMock()
+    paper.resolve_market = AsyncMock()
+    args = Namespace(
+        report=False,
+        credibility=False,
+        resolve=("KXTEST", "YES"),
+        go_live=False,
+        rotate_logs=False,
+    )
+
+    with patch("main.parse_args", return_value=args), patch(
+        "main.PaperTrader", return_value=paper
+    ), patch("main.VenueRoutingAuthoritativeSettlementSource") as source_cls:
+        await async_main()
+
+    paper.resolve_market.assert_awaited_once_with("KXTEST", True)
+    paper.resolve_observation.assert_not_called()
+    source_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("matching_ref_count", [0, 2])
+async def test_async_main_resolve_true_mode_requires_exactly_one_mapped_ref(
+    monkeypatch,
+    matching_ref_count,
+):
+    monkeypatch.setattr(
+        cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        True,
+    )
+    market_ref = MarketRef(Venue.KALSHI, "KXTEST-1", "KXTEST")
+    paper = MagicMock()
+    paper.mapped_open_market_refs.return_value = tuple(
+        market_ref for _ in range(matching_ref_count)
+    )
+    args = Namespace(
+        report=False,
+        credibility=False,
+        resolve=("KXTEST", "YES"),
+        go_live=False,
+        rotate_logs=False,
+    )
+
+    with patch("main.parse_args", return_value=args), patch(
+        "main.PaperTrader", return_value=paper
+    ), patch("main.VenueRoutingAuthoritativeSettlementSource") as source_cls:
+        with pytest.raises(SystemExit, match="exactly one mapped market"):
+            await async_main()
+
+    paper.resolve_observation.assert_not_called()
+    source_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_main_resolve_true_mode_rejects_authority_disagreement(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        True,
+    )
+    market_ref = MarketRef(Venue.POLYMARKET_US, "pm-1", "SHARED")
+    paper = MagicMock()
+    paper.mapped_open_market_refs.return_value = (market_ref,)
+    source = MagicMock()
+    source.get_settlement.return_value = _settlement_observation(
+        market_ref,
+        MarketOutcome.NO,
+    )
+    args = Namespace(
+        report=False,
+        credibility=False,
+        resolve=("SHARED", "YES"),
+        go_live=False,
+        rotate_logs=False,
+    )
+
+    with patch("main.parse_args", return_value=args), patch(
+        "main.PaperTrader", return_value=paper
+    ), patch(
+        "main.VenueRoutingAuthoritativeSettlementSource", return_value=source
+    ), patch("main.KalshiRestClient"), patch("main.PolymarketPublicSettlementSource"):
+        with pytest.raises(SystemExit, match="disagrees with authoritative NO"):
+            await async_main()
+
+    source.get_settlement.assert_called_once_with(market_ref)
+    paper.resolve_observation.assert_not_called()
+    paper.resolve_market.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_main_resolve_true_mode_applies_authoritative_observation(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        True,
+    )
+    market_ref = MarketRef(Venue.POLYMARKET_US, "pm-1", "SHARED")
+    observation = _settlement_observation(market_ref, MarketOutcome.YES)
+    paper = MagicMock()
+    paper.mapped_open_market_refs.return_value = (market_ref,)
+    paper.resolve_observation.return_value = True
+    source = MagicMock()
+    source.get_settlement.return_value = observation
+    args = Namespace(
+        report=False,
+        credibility=False,
+        resolve=("SHARED", "YES"),
+        go_live=False,
+        rotate_logs=False,
+    )
+
+    with patch("main.parse_args", return_value=args), patch(
+        "main.PaperTrader", return_value=paper
+    ), patch(
+        "main.VenueRoutingAuthoritativeSettlementSource", return_value=source
+    ) as source_cls, patch("main.KalshiRestClient") as kalshi_cls, patch(
+        "main.PolymarketPublicSettlementSource"
+    ) as polymarket_cls:
+        await async_main()
+
+    source_cls.assert_called_once_with(
+        kalshi_source=kalshi_cls.return_value,
+        polymarket_source=polymarket_cls.return_value,
+    )
+    source.get_settlement.assert_called_once_with(market_ref)
+    paper.resolve_observation.assert_called_once_with(observation)
+    paper.resolve_market.assert_not_called()
 
 
 @pytest.mark.asyncio
