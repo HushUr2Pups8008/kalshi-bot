@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -77,6 +78,38 @@ def _start_end() -> tuple[datetime, datetime]:
     )
 
 
+def _write_oos_registry(repo_root: Path) -> tuple[Path, str]:
+    path = repo_root / "docs" / "governance" / "oos-corpus-registry.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    registration = {
+        "id": "profit-oos-test-a",
+        "declared_at_utc": "2026-05-23T20:00:00Z",
+        "window": {
+            "start_utc": "2026-05-23T21:22:16Z",
+            "end_utc": "2026-05-26T00:00:00Z",
+        },
+        "regime_label": "post_v030_2_oos_seed",
+        "universe_policy": {
+            "type": "market_families",
+            "market_families": ["KXTRUMPIRAN", "KXMOCTRUMP25"],
+        },
+        "exclude_contamination": True,
+    }
+    canonical = json.dumps(
+        registration,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    registration_hash = hashlib.sha256(canonical).hexdigest()
+    registration["registration_hash"] = registration_hash
+    path.write_text(
+        json.dumps({"schema_version": 1, "registrations": [registration]}),
+        encoding="utf-8",
+    )
+    return path, registration_hash
+
+
 def _make_paper_trades_db_with_capture_key(path: Path) -> None:
     """paper_trades mirror that includes the I-1 llm_capture_row_id join key."""
     conn = sqlite3.connect(path)
@@ -129,7 +162,7 @@ def _write_capture_fixture(path: Path) -> Path:
         # bulky fields the index must DROP (must not bloat the corpus row):
         "response": {"big": "payload"},
         "request_payload": {"messages": ["..."]},
-        "captured_at_utc": "2026-05-23T21:22:20+00:00",
+        "captured_at_utc": "2026-05-23T21:22:15+00:00",
     }
     path.write_text(json.dumps(record) + "\n", encoding="utf-8")
     return path
@@ -326,7 +359,7 @@ def test_in_period_validation_only_true_for_single_family(tmp_path: Path) -> Non
     assert any("IN_PERIOD" in n or "in_period" in n for n in result.notes)
 
 
-def test_in_period_validation_only_false_when_two_or_more_families(
+def test_unregistered_multifamily_corpus_remains_historical_only(
     tmp_path: Path,
 ) -> None:
     db = tmp_path / "paper_trades.db"
@@ -345,7 +378,8 @@ def test_in_period_validation_only_false_when_two_or_more_families(
         paper_trades_db=db,
         regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
     )
-    assert result.in_period_validation_only is False
+    assert result.in_period_validation_only is True
+    assert result.evidence_class == "historical_diagnostic"
 
 
 def test_pragma_query_only_db_unchanged(tmp_path: Path) -> None:
@@ -474,9 +508,117 @@ def test_required_field_values_correct(tmp_path: Path) -> None:
         assert row["corpus_window_end_utc"] == "2026-05-26T00:00:00Z"
         assert row["cohort_tag"] == "POST_V030_2_OOS_SEED"
         assert row["regime_label"] == "post_v030_2_oos_seed"
-        assert sorted(row["market_families"]) == ["KXMOCTRUMP25", "KXTRUMPIRAN"]
+        assert row["market_families"] == [row["series_ticker"]]
         assert row["corpus_builder_version"] == build_corpus.CORPUS_BUILDER_VERSION
         assert row["built_at_utc"] == "2026-05-24T00:00:00Z"
+
+
+def test_registered_oos_stamps_hash_and_actual_row_family(tmp_path: Path) -> None:
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db(db)
+    _write_regimes_doc(tmp_path)
+    registry_path, registration_hash = _write_oos_registry(tmp_path)
+    start, end = _start_end()
+    out = tmp_path / "registered.jsonl"
+
+    result = build_corpus.build_corpus(
+        start_utc=start,
+        end_utc=end,
+        market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+        cohort_tag="POST_V030_2_OOS_SEED",
+        regime_label="post_v030_2_oos_seed",
+        output_path=out,
+        paper_trades_db=db,
+        regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+        built_at_utc="2026-05-26T00:00:00Z",
+        oos_registration_id="profit-oos-test-a",
+        oos_registry_path=registry_path,
+    )
+
+    assert result.evidence_class == "registered_oos"
+    assert result.registration_hash == registration_hash
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert rows
+    for row in rows:
+        assert row["evidence_class"] == "registered_oos"
+        assert row["oos_registration_id"] == "profit-oos-test-a"
+        assert row["registration_hash"] == registration_hash
+        assert row["market_families"] == [row["series_ticker"]]
+        assert row["llm_capture_max_age_seconds"] == 900
+
+
+def test_registered_oos_cannot_materialize_before_window_end(tmp_path: Path) -> None:
+    from scripts.edge_replay.oos_registry import OOSMaterializationTooEarlyError
+
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db(db)
+    _write_regimes_doc(tmp_path)
+    registry_path, _ = _write_oos_registry(tmp_path)
+    start, end = _start_end()
+
+    with pytest.raises(OOSMaterializationTooEarlyError):
+        build_corpus.build_corpus(
+            start_utc=start,
+            end_utc=end,
+            market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+            cohort_tag="POST_V030_2_OOS_SEED",
+            regime_label="post_v030_2_oos_seed",
+            output_path=tmp_path / "too-early.jsonl",
+            paper_trades_db=db,
+            regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+            built_at_utc="2026-05-25T23:59:59Z",
+            oos_registration_id="profit-oos-test-a",
+            oos_registry_path=registry_path,
+        )
+
+
+def test_registered_oos_requires_exact_registered_build_policy(tmp_path: Path) -> None:
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db(db)
+    _write_regimes_doc(tmp_path)
+    registry_path, _ = _write_oos_registry(tmp_path)
+    start, end = _start_end()
+
+    with pytest.raises(ValueError, match="market_families do not match"):
+        build_corpus.build_corpus(
+            start_utc=start,
+            end_utc=end,
+            market_families=["KXTRUMPIRAN"],
+            cohort_tag="POST_V030_2_OOS_SEED",
+            regime_label="post_v030_2_oos_seed",
+            output_path=tmp_path / "mismatch.jsonl",
+            paper_trades_db=db,
+            regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+            built_at_utc="2026-05-26T00:00:00Z",
+            oos_registration_id="profit-oos-test-a",
+            oos_registry_path=registry_path,
+        )
+
+
+def test_legacy_builder_is_explicitly_historical_diagnostic(tmp_path: Path) -> None:
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db(db)
+    _write_regimes_doc(tmp_path)
+    start, end = _start_end()
+    out = tmp_path / "historical.jsonl"
+
+    result = build_corpus.build_corpus(
+        start_utc=start,
+        end_utc=end,
+        market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+        cohort_tag="POST_V030_2_OOS_SEED",
+        regime_label="post_v030_2_oos_seed",
+        output_path=out,
+        paper_trades_db=db,
+        regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+    )
+
+    assert result.evidence_class == "historical_diagnostic"
+    assert result.in_period_validation_only is True
+    assert result.registration_hash is None
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert all(row["evidence_class"] == "historical_diagnostic" for row in rows)
+    assert all("registration_hash" not in row for row in rows)
 
 
 def test_missing_db_cli_exit_code_2(tmp_path: Path) -> None:

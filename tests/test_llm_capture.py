@@ -24,6 +24,7 @@ import hashlib
 import importlib
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -649,34 +650,72 @@ def test_signal_capture_row_id_format():
     assert signal_capture_row_id("KXFOO-1", "") == "signal::KXFOO-1::"
 
 
-def test_index_captures_by_row_id_last_write_wins_and_drops_payload(tmp_path: Path):
-    """The offline index keeps only the 13 cache-key fields (drops the bulky
-    response/request payload), skips unparseable + id-less lines, and keeps the
-    LAST capture for a repeated row_id (the most recent decision)."""
+def test_capture_selector_uses_nearest_pretrade_capture_and_drops_payload(tmp_path: Path):
+    """Duplicate row ids require a time-bounded as-of join, never last-write-wins."""
     from scripts.edge_replay.llm_capture import (
         CAPTURE_CACHE_KEY_FIELDS,
         index_captures_by_row_id,
+        select_capture_for_trade,
     )
 
     p = tmp_path / "cap.jsonl"
     lines = [
         json.dumps({"row_id": "k1", "response_hash": "OLD", "model_id": "m",
-                    "response": {"x": 1}, "request_payload": {"y": 2}}),
+                    "response": {"x": 1}, "request_payload": {"y": 2},
+                    "captured_at_utc": "2026-07-15T04:50:00Z"}),
         "this is not json",  # unparseable -> skipped, must not lose the index
-        json.dumps({"row_id": "k1", "response_hash": "NEW", "model_id": "m"}),  # last wins
+        json.dumps({"row_id": "k1", "response_hash": "NEAREST", "model_id": "m",
+                    "captured_at_utc": "2026-07-15T04:59:00Z"}),
+        json.dumps({"row_id": "k1", "response_hash": "POST_TRADE", "model_id": "m",
+                    "captured_at_utc": "2026-07-15T05:01:00Z"}),
         json.dumps({"response_hash": "noid"}),  # missing row_id -> skipped
-        json.dumps({"row_id": "k2", "prompt_template_hash": "tpl"}),
+        json.dumps({"row_id": "k2", "prompt_template_hash": "tpl",
+                    "captured_at_utc": "2026-07-15T04:58:00Z"}),
     ]
     p.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     idx = index_captures_by_row_id(p)
+    selected = select_capture_for_trade(
+        idx,
+        row_id="k1",
+        trade_ts=datetime(2026, 7, 15, 5, 0, tzinfo=timezone.utc),
+        max_age=timedelta(minutes=15),
+    )
 
     assert set(idx.keys()) == {"k1", "k2"}
-    assert idx["k1"]["response_hash"] == "NEW"  # last write wins
+    assert len(idx["k1"]) == 3
+    assert selected is not None
+    assert selected["response_hash"] == "NEAREST"
     # Only the 13 cache-key fields are retained (missing ones present as None).
-    assert set(idx["k1"].keys()) == set(CAPTURE_CACHE_KEY_FIELDS)
-    assert "response" not in idx["k1"]
-    assert "request_payload" not in idx["k1"]
+    assert set(selected.keys()) == set(CAPTURE_CACHE_KEY_FIELDS)
+    assert "response" not in selected
+    assert "request_payload" not in selected
+
+
+def test_capture_selector_leaves_posttrade_stale_and_ambiguous_uncovered(tmp_path: Path):
+    from scripts.edge_replay.llm_capture import (
+        index_captures_by_row_id,
+        select_capture_for_trade,
+    )
+
+    p = tmp_path / "cap.jsonl"
+    records = [
+        {"row_id": "post", "response_hash": "p", "captured_at_utc": "2026-07-15T05:01:00Z"},
+        {"row_id": "stale", "response_hash": "s", "captured_at_utc": "2026-07-15T04:00:00Z"},
+        {"row_id": "amb", "response_hash": "a1", "captured_at_utc": "2026-07-15T04:59:00Z"},
+        {"row_id": "amb", "response_hash": "a2", "captured_at_utc": "2026-07-15T04:59:00Z"},
+    ]
+    p.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    idx = index_captures_by_row_id(p)
+    trade_ts = datetime(2026, 7, 15, 5, 0, tzinfo=timezone.utc)
+
+    for row_id in ("post", "stale", "amb"):
+        assert select_capture_for_trade(
+            idx,
+            row_id=row_id,
+            trade_ts=trade_ts,
+            max_age=timedelta(minutes=15),
+        ) is None
 
 
 def test_index_captures_by_row_id_missing_file_returns_empty(tmp_path: Path):

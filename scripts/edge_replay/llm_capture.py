@@ -53,7 +53,8 @@ import subprocess
 import threading
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Final, Literal
 
@@ -61,8 +62,15 @@ __all__ = [
     "capture_llm_response",
     "signal_capture_row_id",
     "index_captures_by_row_id",
+    "select_capture_for_trade",
     "CAPTURE_CACHE_KEY_FIELDS",
 ]
+
+
+@dataclass(frozen=True)
+class _IndexedCapture:
+    captured_at_utc: datetime
+    cache_key: dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -491,25 +499,23 @@ def capture_llm_response(
 
 def index_captures_by_row_id(
     path: Path | str | None = None,
-) -> dict[str, dict[str, Any]]:
-    """Build an offline ``{row_id: {13 cache-key fields}}`` index of the capture
-    log, for the corpus builder (PROFIT-PHASE3 I-1 completion).
+) -> dict[str, tuple[_IndexedCapture, ...]]:
+    """Build a temporal offline index for the corpus builder.
 
     Read-only, fail-soft helper — NOT part of the production write path. Each
     line is parsed independently; unparseable lines are skipped (a corrupt tail
-    line must not lose the whole index). When a ``row_id`` appears more than once
-    (e.g. the same (ticker, news_item) decided in two cycles), the LAST capture
-    wins, matching the most-recent decision. Returns an empty dict if the capture
-    file does not exist (honest absence → the gate counts those rows as
-    cache-uncovered rather than silently fabricating coverage).
+    line must not lose the whole index). Every timestamped duplicate is retained
+    so :func:`select_capture_for_trade` can make a bounded as-of join. Captures
+    without an aware ``captured_at_utc`` cannot be tied to a trade and are
+    omitted. Returns an empty dict if the capture file does not exist.
 
     Only the ``CAPTURE_CACHE_KEY_FIELDS`` are retained; the raw response and
     request payload are intentionally dropped to keep the index small.
     """
     target = Path(path) if path is not None else _DEFAULT_CAPTURE_PATH
-    index: dict[str, dict[str, Any]] = {}
+    mutable_index: dict[str, list[_IndexedCapture]] = {}
     if not target.exists():
-        return index
+        return {}
     with target.open("r", encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
@@ -524,7 +530,62 @@ def index_captures_by_row_id(
             row_id = record.get("row_id")
             if not row_id:
                 continue
-            index[str(row_id)] = {
+            captured_at_raw = record.get("captured_at_utc")
+            if not isinstance(captured_at_raw, str):
+                continue
+            try:
+                captured_at = datetime.fromisoformat(
+                    captured_at_raw.replace("Z", "+00:00")
+                )
+            except ValueError:
+                continue
+            if captured_at.tzinfo is None:
+                continue
+            cache_key = {
                 field: record.get(field) for field in CAPTURE_CACHE_KEY_FIELDS
             }
-    return index
+            mutable_index.setdefault(str(row_id), []).append(
+                _IndexedCapture(
+                    captured_at_utc=captured_at.astimezone(timezone.utc),
+                    cache_key=cache_key,
+                )
+            )
+    return {
+        row_id: tuple(sorted(captures, key=lambda item: item.captured_at_utc))
+        for row_id, captures in mutable_index.items()
+    }
+
+
+def select_capture_for_trade(
+    capture_index: dict[str, tuple[_IndexedCapture, ...]],
+    *,
+    row_id: str,
+    trade_ts: datetime,
+    max_age: timedelta,
+) -> dict[str, Any] | None:
+    """Select the unique nearest capture at or before ``trade_ts``.
+
+    Post-trade, stale, invalid, and same-timestamp ambiguous captures return
+    ``None``. This intentionally turns uncertain joins into cache-uncovered
+    replay rows.
+    """
+    if trade_ts.tzinfo is None:
+        raise ValueError("trade_ts must be timezone-aware")
+    if max_age <= timedelta(0):
+        raise ValueError("max_age must be positive")
+    normalized_trade_ts = trade_ts.astimezone(timezone.utc)
+    eligible = [
+        capture
+        for capture in capture_index.get(str(row_id), ())
+        if capture.captured_at_utc <= normalized_trade_ts
+        and normalized_trade_ts - capture.captured_at_utc <= max_age
+    ]
+    if not eligible:
+        return None
+    nearest_ts = max(capture.captured_at_utc for capture in eligible)
+    nearest = [
+        capture for capture in eligible if capture.captured_at_utc == nearest_ts
+    ]
+    if len(nearest) != 1:
+        return None
+    return dict(nearest[0].cache_key)

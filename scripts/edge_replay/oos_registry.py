@@ -1,0 +1,255 @@
+"""Fail-closed registry for prospectively declared OOS corpus windows."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Final
+
+SCHEMA_VERSION: Final = 1
+DEFAULT_REGISTRY_PATH: Final[Path] = (
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "governance"
+    / "oos-corpus-registry.json"
+)
+
+_ROOT_KEYS: Final = frozenset({"schema_version", "registrations"})
+_REGISTRATION_KEYS: Final = frozenset(
+    {
+        "id",
+        "declared_at_utc",
+        "window",
+        "regime_label",
+        "universe_policy",
+        "exclude_contamination",
+        "registration_hash",
+    }
+)
+_WINDOW_KEYS: Final = frozenset({"start_utc", "end_utc"})
+_UNIVERSE_POLICY_KEYS: Final = frozenset({"type", "market_families"})
+_ID_RE: Final = re.compile(r"^[a-z0-9][a-z0-9._-]{2,127}$")
+_HASH_RE: Final = re.compile(r"^[0-9a-f]{64}$")
+
+
+class OOSRegistryError(ValueError):
+    """Registry schema or integrity failure."""
+
+
+class OOSRegistrationNotFoundError(OOSRegistryError):
+    """Requested registration id is absent."""
+
+
+class OOSMaterializationTooEarlyError(OOSRegistryError):
+    """Registered closed window has not ended yet."""
+
+
+@dataclass(frozen=True)
+class OOSRegistration:
+    id: str
+    declared_at_utc: str
+    window_start_utc: str
+    window_end_utc: str
+    regime_label: str
+    market_families: tuple[str, ...]
+    exclude_contamination: bool
+    registration_hash: str
+
+
+def _parse_canonical_utc(value: object, *, field_name: str) -> datetime:
+    if not isinstance(value, str):
+        raise OOSRegistryError(f"{field_name} must be a canonical UTC string")
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError as exc:
+        raise OOSRegistryError(
+            f"{field_name} must use canonical UTC YYYY-MM-DDTHH:MM:SSZ"
+        ) from exc
+    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
+        raise OOSRegistryError(
+            f"{field_name} must use canonical UTC YYYY-MM-DDTHH:MM:SSZ"
+        )
+    return parsed
+
+
+def canonical_registration_hash(registration: Mapping[str, Any]) -> str:
+    """Hash canonical JSON, excluding only the self-referential hash field."""
+    payload = {
+        key: value
+        for key, value in registration.items()
+        if key != "registration_hash"
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _exact_keys(
+    value: Mapping[str, Any],
+    expected: frozenset[str],
+    *,
+    label: str,
+) -> None:
+    keys = set(value)
+    unknown = sorted(keys - expected)
+    missing = sorted(expected - keys)
+    if unknown:
+        raise OOSRegistryError(f"unknown {label} keys: {unknown}")
+    if missing:
+        raise OOSRegistryError(f"missing {label} keys: {missing}")
+
+
+def _validate_registration(raw: object) -> OOSRegistration:
+    if not isinstance(raw, dict):
+        raise OOSRegistryError("each registration must be an object")
+    _exact_keys(raw, _REGISTRATION_KEYS, label="registration")
+
+    registration_id = raw["id"]
+    if not isinstance(registration_id, str) or not _ID_RE.fullmatch(
+        registration_id
+    ):
+        raise OOSRegistryError("registration id has invalid format")
+
+    declared_at = _parse_canonical_utc(
+        raw["declared_at_utc"], field_name="declared_at_utc"
+    )
+    window = raw["window"]
+    if not isinstance(window, dict):
+        raise OOSRegistryError("window must be an object")
+    _exact_keys(window, _WINDOW_KEYS, label="window")
+    start = _parse_canonical_utc(window["start_utc"], field_name="window.start_utc")
+    end = _parse_canonical_utc(window["end_utc"], field_name="window.end_utc")
+    if declared_at >= start:
+        raise OOSRegistryError("declared_at_utc must be before window.start_utc")
+    if start >= end:
+        raise OOSRegistryError("window.start_utc must be before window.end_utc")
+
+    regime_label = raw["regime_label"]
+    if not isinstance(regime_label, str) or not regime_label.strip():
+        raise OOSRegistryError("regime_label must be a non-empty string")
+    if regime_label != regime_label.strip():
+        raise OOSRegistryError("regime_label must not have surrounding whitespace")
+
+    policy = raw["universe_policy"]
+    if not isinstance(policy, dict):
+        raise OOSRegistryError("universe_policy must be an object")
+    _exact_keys(policy, _UNIVERSE_POLICY_KEYS, label="universe_policy")
+    if policy["type"] != "market_families":
+        raise OOSRegistryError("universe_policy.type must be 'market_families'")
+    families = policy["market_families"]
+    if not isinstance(families, list) or not families:
+        raise OOSRegistryError(
+            "universe_policy.market_families must be a non-empty list"
+        )
+    if any(
+        not isinstance(family, str)
+        or not family.strip()
+        or family != family.strip()
+        for family in families
+    ):
+        raise OOSRegistryError("market_families must contain clean non-empty strings")
+    if len(set(families)) != len(families):
+        raise OOSRegistryError("market_families must not contain duplicates")
+
+    if raw["exclude_contamination"] is not True:
+        raise OOSRegistryError("exclude_contamination must be true")
+
+    registration_hash = raw["registration_hash"]
+    if not isinstance(registration_hash, str) or not _HASH_RE.fullmatch(
+        registration_hash
+    ):
+        raise OOSRegistryError("registration_hash must be 64 lowercase hex characters")
+    expected_hash = canonical_registration_hash(raw)
+    if registration_hash != expected_hash:
+        raise OOSRegistryError(
+            f"registration_hash mismatch for {registration_id!r}: "
+            f"expected {expected_hash}, got {registration_hash}"
+        )
+
+    return OOSRegistration(
+        id=registration_id,
+        declared_at_utc=raw["declared_at_utc"],
+        window_start_utc=window["start_utc"],
+        window_end_utc=window["end_utc"],
+        regime_label=regime_label,
+        market_families=tuple(families),
+        exclude_contamination=True,
+        registration_hash=registration_hash,
+    )
+
+
+def load_oos_registry(
+    path: Path | str = DEFAULT_REGISTRY_PATH,
+) -> dict[str, OOSRegistration]:
+    target = Path(path)
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise OOSRegistryError(f"OOS registry not found: {target}") from exc
+    except json.JSONDecodeError as exc:
+        raise OOSRegistryError(f"OOS registry is not valid JSON: {target}") from exc
+    if not isinstance(raw, dict):
+        raise OOSRegistryError("OOS registry root must be an object")
+    _exact_keys(raw, _ROOT_KEYS, label="registry root")
+    if type(raw["schema_version"]) is not int or raw["schema_version"] != SCHEMA_VERSION:
+        raise OOSRegistryError(
+            f"schema_version must be integer {SCHEMA_VERSION}"
+        )
+    entries = raw["registrations"]
+    if not isinstance(entries, list):
+        raise OOSRegistryError("registrations must be a list")
+
+    registrations: dict[str, OOSRegistration] = {}
+    for entry in entries:
+        registration = _validate_registration(entry)
+        if registration.id in registrations:
+            raise OOSRegistryError(
+                f"duplicate registration id: {registration.id!r}"
+            )
+        registrations[registration.id] = registration
+    return registrations
+
+
+def get_oos_registration(
+    registration_id: str,
+    path: Path | str = DEFAULT_REGISTRY_PATH,
+) -> OOSRegistration:
+    registrations = load_oos_registry(path)
+    try:
+        return registrations[registration_id]
+    except KeyError as exc:
+        raise OOSRegistrationNotFoundError(
+            f"OOS registration not found: {registration_id!r}"
+        ) from exc
+
+
+def assert_materializable(
+    registration: OOSRegistration,
+    *,
+    as_of_utc: datetime,
+) -> None:
+    if as_of_utc.tzinfo is None:
+        raise OOSRegistryError("materialization as_of_utc must be timezone-aware")
+    end = _parse_canonical_utc(
+        registration.window_end_utc,
+        field_name="window.end_utc",
+    )
+    normalized_as_of = as_of_utc.astimezone(timezone.utc)
+    if normalized_as_of < end:
+        raise OOSMaterializationTooEarlyError(
+            f"registration {registration.id!r} cannot materialize before "
+            f"closed window end {registration.window_end_utc}; "
+            f"as_of={normalized_as_of.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        )
