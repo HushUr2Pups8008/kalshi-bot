@@ -46,6 +46,7 @@ from trading.settlement_store import (
     SETTLEMENT_EVENT_VERSION,
     SETTLEMENT_PAPER_TRADE_COLUMNS,
     SETTLEMENT_PAPER_TRADE_COLUMNS_SQL,
+    StoreCheck,
     canonical_entry_schema_ready,
     enable_and_verify_foreign_keys,
     initialize_fresh_settlement_schema,
@@ -2194,6 +2195,81 @@ class PaperTrader:
             "ORDER BY ts ASC",
             (ticker,),
         ).fetchall()
+
+    def mapped_open_market_refs(self) -> tuple[MarketRef, ...]:
+        """Return unresolved canonical identities once, failing closed on drift."""
+        market_refs: list[MarketRef] = []
+        seen: set[MarketRef] = set()
+        for row in self._open_settlement_identity_rows():
+            market_ref = self._mapped_market_ref_from_row(row)
+            if market_ref not in seen:
+                seen.add(market_ref)
+                market_refs.append(market_ref)
+        return tuple(market_refs)
+
+    def legacy_settlement_alias_check(self) -> StoreCheck:
+        """Prove alias-only rollback settlement cannot span canonical identities."""
+        refs_by_alias: dict[str, set[tuple[str, str]]] = {}
+        invalid_aliases: list[str] = []
+        for row in self._open_settlement_identity_rows():
+            alias = str(row["ticker"] or "").strip() or "<empty>"
+            try:
+                market_ref = self._mapped_market_ref_from_row(row)
+            except SettlementDriftError:
+                invalid_aliases.append(alias)
+                continue
+            refs_by_alias.setdefault(market_ref.alias, set()).add(
+                (market_ref.venue.value, market_ref.venue_market_id)
+            )
+
+        collisions = sorted(
+            alias for alias, refs in refs_by_alias.items() if len(refs) > 1
+        )
+        failures = tuple(
+            [f"invalid_identity:{alias}" for alias in sorted(set(invalid_aliases))]
+            + [f"alias_collision:{alias}" for alias in collisions]
+        )
+        return StoreCheck(
+            ok=not failures,
+            failures=failures,
+            metrics={
+                "open_alias_count": len(refs_by_alias),
+                "invalid_identity_count": len(invalid_aliases),
+                "alias_collision_count": len(collisions),
+            },
+        )
+
+    def _open_settlement_identity_rows(self) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            """
+            SELECT trade_id, ticker, venue, venue_market_id, identity_status,
+                   quarantine_reason
+            FROM paper_trades
+            WHERE resolved=0
+            ORDER BY ts, trade_id
+            """
+        ).fetchall()
+
+    @staticmethod
+    def _mapped_market_ref_from_row(row: sqlite3.Row) -> MarketRef:
+        alias = str(row["ticker"] or "").strip()
+        venue_market_id = str(row["venue_market_id"] or "").strip()
+        identity_status = str(row["identity_status"] or "").strip()
+        try:
+            venue = normalize_venue(str(row["venue"] or "").strip())
+        except (TypeError, ValueError) as exc:
+            raise SettlementDriftError(
+                f"open trade {row['trade_id']} is not a valid mapped identity"
+            ) from exc
+        if identity_status != "mapped" or not alias or not venue_market_id:
+            raise SettlementDriftError(
+                f"open trade {row['trade_id']} is not a complete mapped identity"
+            )
+        return MarketRef(
+            venue=venue,
+            venue_market_id=venue_market_id,
+            alias=alias,
+        )
 
     def get_all_trades(self) -> list[sqlite3.Row]:
         return self._conn.execute(

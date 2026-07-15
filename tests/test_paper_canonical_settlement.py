@@ -193,8 +193,8 @@ def _bankroll_cents(trader) -> Decimal:
 
 def test_mapped_open_market_refs_deduplicate_exact_two_venue_identities(trader_factory):
     trader = trader_factory("mapped-open-refs")
-    kalshi = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "shared-alias")
-    polymarket = MarketRef(Venue.POLYMARKET_US, "104982", "shared-alias")
+    kalshi = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "KXGDP-26JUL31")
+    polymarket = MarketRef(Venue.POLYMARKET_US, "104982", "KXGDP-26JUL31")
     _record_mapped_trade(trader, kalshi, trade_id="mapref000001")
     _record_mapped_trade(trader, kalshi, trade_id="mapref000002")
     _record_mapped_trade(trader, polymarket, trade_id="mapref000003")
@@ -206,7 +206,7 @@ def test_mapped_open_market_refs_deduplicate_exact_two_venue_identities(trader_f
 
 def test_mapped_open_market_refs_fail_closed_on_invalid_identity(trader_factory):
     trader = trader_factory("invalid-open-ref")
-    market_ref = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "gdp")
+    market_ref = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "KXGDP-26JUL31")
     trade_id = _record_mapped_trade(
         trader,
         market_ref,
@@ -234,8 +234,8 @@ def test_legacy_alias_check_allows_same_ref_duplicates_and_blocks_cross_ref_alia
     trader_factory,
 ):
     trader = trader_factory("legacy-alias-check")
-    first = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "shared-alias")
-    second = MarketRef(Venue.POLYMARKET_US, "104982", "shared-alias")
+    first = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "KXGDP-26JUL31")
+    second = MarketRef(Venue.POLYMARKET_US, "104982", "KXGDP-26JUL31")
     _record_mapped_trade(trader, first, trade_id="alias0000001")
     _record_mapped_trade(trader, first, trade_id="alias0000002")
 
@@ -248,7 +248,7 @@ def test_legacy_alias_check_allows_same_ref_duplicates_and_blocks_cross_ref_alia
 
     blocked = trader.legacy_settlement_alias_check()
     assert not blocked.ok
-    assert blocked.failures == ("alias_collision:shared-alias",)
+    assert blocked.failures == ("alias_collision:KXGDP-26JUL31",)
     assert blocked.metrics["alias_collision_count"] == 1
 
 
@@ -1320,7 +1320,7 @@ def test_legacy_resolve_market_behavior_remains_separate_from_canonical_store(
     ).fetchone()[0] == 0
 
 
-def test_runtime_callers_remain_unwired_from_canonical_resolver():
+def test_runtime_entrypoint_keeps_canonical_resolver_behind_shared_reconciler():
     repo_root = Path(__file__).resolve().parents[1]
 
     def _called_attributes(path: Path) -> set[str]:
@@ -1337,4 +1337,5 @@ def test_runtime_callers_remain_unwired_from_canonical_resolver():
     )
     assert "resolve_market" in main_calls
     assert "_resolve_market_sync" in polymarket_calls
-    assert "resolve_observation" not in main_calls | polymarket_calls
+    assert "resolve_observation" not in main_calls
+    assert "resolve_observation" in polymarket_calls
