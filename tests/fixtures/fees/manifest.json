@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "retrieved_at": "2026-07-15T03:19:32Z",
+  "schedules": [
+    {
+      "schedule_id": "kalshi-general-2026-07-07",
+      "venue": "kalshi",
+      "effective_from": "2026-07-07T00:00:00-04:00",
+      "effective_to": null,
+      "source_url": "https://kalshi.com/docs/kalshi-fee-schedule.pdf",
+      "artifact_sha256": "815e2d5127d02d2fb90773d1a3844dc15a987696171eddc4e58de87b59c6124c",
+      "supporting_artifacts": [
+        {
+          "source_url": "https://docs.kalshi.com/getting_started/fee_rounding.md",
+          "artifact_sha256": "c9b8c7efd50df6512a4528e5a86044ad40699e17ababc7f9c42497c722829796"
+        }
+      ],
+      "supported_roles": ["taker", "maker"],
+      "coefficients": {"taker": "0.07", "maker": "0.0175"}
+    },
+    {
+      "schedule_id": "polymarket-us-2026-07-01",
+      "venue": "polymarket_us",
+      "effective_from": "2026-07-01T00:00:00-04:00",
+      "effective_to": null,
+      "source_url": "https://docs.polymarket.us/fees.md",
+      "artifact_sha256": "83580a99558f43d350051847edda2918410481a47c1b4a2a13fca90b1e0c8451",
+      "supporting_artifacts": [],
+      "supported_roles": ["taker", "maker"],
+      "coefficients": {"taker": "0.06", "maker": "-0.0125"}
+    }
+  ]
+}
