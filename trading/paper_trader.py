@@ -67,6 +67,10 @@ class _SettlementQuarantineRequired(RuntimeError):
         self.details = details
 
 
+class _SettlementObservationAlreadyApplied(RuntimeError):
+    pass
+
+
 def _settlement_json(value: object) -> str:
     return json.dumps(
         value,
@@ -1331,6 +1335,7 @@ class PaperTrader:
 
         open_row_set_sha256 = _settlement_sha256([])
         transaction_started = False
+        observation_already_applied = False
         try:
             self._conn.execute("BEGIN IMMEDIATE")
             transaction_started = True
@@ -1359,8 +1364,7 @@ class PaperTrader:
                 (observation.observation_sha256,),
             ).fetchone()
             if duplicate is not None:
-                self._conn.rollback()
-                return False
+                raise _SettlementObservationAlreadyApplied
 
             if prior is not None:
                 raise _SettlementQuarantineRequired(
@@ -1485,6 +1489,10 @@ class PaperTrader:
                     created_at=applied_at,
                 )
             self._conn.commit()
+        except _SettlementObservationAlreadyApplied:
+            if transaction_started:
+                self._conn.rollback()
+            observation_already_applied = True
         except _SettlementQuarantineRequired as exc:
             if transaction_started:
                 self._conn.rollback()
@@ -1507,7 +1515,7 @@ class PaperTrader:
             return False
 
         self.portfolio.resolve(observation.market_ref)
-        return True
+        return not observation_already_applied
 
     def _canonical_candidate_rows(
         self,
