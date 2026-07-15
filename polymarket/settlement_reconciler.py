@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import math
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol
 
+from kalshi.settlement import normalize_kalshi_settlement
+from polymarket.settlement import normalize_polymarket_settlement
 from trading.settlement import SettlementDriftError, SettlementObservation
 from trading.venue import MarketRef, Venue
 from utils.logger import get_logger
@@ -46,6 +50,11 @@ class PersistedPositionResolver(Protocol):
         """Apply one canonical observation atomically."""
 
 
+class KalshiSettlementSource(Protocol):
+    def get_market(self, market_id: str) -> Any | None:
+        """Return one market by exact canonical ticker."""
+
+
 class PolymarketPublicSettlementSource:
     def __init__(self, client: Any | None = None):
         if client is None:
@@ -72,6 +81,64 @@ class PolymarketPublicSettlementSource:
                 ) from exc
             raise
         return payload
+
+
+class VenueRoutingAuthoritativeSettlementSource:
+    """Fetch and normalize settlement by exact venue-qualified identity."""
+
+    def __init__(
+        self,
+        *,
+        kalshi_source: KalshiSettlementSource,
+        polymarket_source: SettlementSource,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._kalshi_source = kalshi_source
+        self._polymarket_source = polymarket_source
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def get_settlement(
+        self,
+        market_ref: MarketRef,
+    ) -> SettlementObservation | None:
+        observed_at = self._clock()
+        if market_ref.venue is Venue.KALSHI:
+            market = self._kalshi_source.get_market(market_ref.venue_market_id)
+            if market is None:
+                return None
+            if str(getattr(market, "status", "")).strip().lower() not in {
+                "finalized",
+                "settled",
+            }:
+                return None
+            effective_at = getattr(market, "updated_time", None) or observed_at
+            return normalize_kalshi_settlement(
+                market_ref,
+                market,
+                observed_at=observed_at,
+                effective_at=effective_at,
+                rules_version="kalshi-settlement-v1",
+                source_id="kalshi-market-api",
+            )
+
+        if market_ref.venue is Venue.POLYMARKET_US:
+            payload = self._polymarket_source.get_settlement(
+                market_ref.venue_market_id
+            )
+            if payload is None:
+                return None
+            return normalize_polymarket_settlement(
+                market_ref,
+                payload,
+                observed_at=observed_at,
+                effective_at=observed_at,
+                rules_version="polymarket-us-settlement-v1",
+                source_id="polymarket-us-public-api",
+            )
+
+        raise SettlementDriftError(
+            f"unsupported settlement venue: {market_ref.venue!r}"
+        )
 
 
 @dataclass(frozen=True)
