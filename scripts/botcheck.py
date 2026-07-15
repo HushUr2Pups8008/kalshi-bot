@@ -938,12 +938,39 @@ def print_canonical_settlement_status(repo_root: Path) -> None:
     )
 
 
-def print_weather_shadow_status(repo_root: Path) -> None:
-    enabled_value, source = _research_env_value(
-        repo_root,
+def _running_process_env_value(
+    proc: ProcessInfo | None,
+    key: str,
+) -> tuple[str | None, bool]:
+    if proc is None or re.fullmatch(r"[A-Z][A-Z0-9_]*", key) is None:
+        return None, False
+    output = run_command(["ps", "eww", "-p", str(proc.pid), "-o", "command="])
+    if not output:
+        return None, False
+    match = re.search(rf"(?:^|\s){re.escape(key)}=([^\s]*)", output)
+    return (match.group(1) if match else None), True
+
+
+def print_weather_shadow_status(
+    repo_root: Path,
+    *,
+    current_proc: ProcessInfo | None = None,
+) -> None:
+    runtime_value, runtime_readable = _running_process_env_value(
+        current_proc,
         "ENABLE_WEATHER_SHADOW_CAPTURE",
-        "false",
     )
+    if current_proc is not None and not runtime_readable:
+        print("weather_shadow: unknown (runtime-process-env-unreadable)")
+        return
+    if runtime_readable:
+        enabled_value, source = runtime_value or "false", "runtime-process-env"
+    else:
+        enabled_value, source = _research_env_value(
+            repo_root,
+            "ENABLE_WEATHER_SHADOW_CAPTURE",
+            "false",
+        )
     if not _env_bool(enabled_value):
         print(f"weather_shadow: off ({source})")
         return
@@ -1798,7 +1825,7 @@ def main() -> int:
         now=now,
         dossier_stats=research_dossiers,
     )
-    print_weather_shadow_status(args.home)
+    print_weather_shadow_status(args.home, current_proc=current_proc)
     print_canonical_settlement_status(args.home)
     print_kalshi_drift_section(now=now)
     print_history(sessions=sessions, current_proc=current_proc, now=now)

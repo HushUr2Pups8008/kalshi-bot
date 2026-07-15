@@ -254,14 +254,22 @@ def test_normalize_complete_ladder_preserves_fixed_point_values_and_partition() 
 def test_ladder_allows_contract_specific_fingerprints_with_common_sources() -> None:
     source = event()
     markets = tuple(
-        replace(item, fingerprints=replace(item.fingerprints, contract=f"contract-{index}"))
+        replace(
+            item,
+            fingerprints=replace(
+                item.fingerprints,
+                contract=f"contract-{index}",
+                rules_source=f"rules-{index}",
+            ),
+        )
         for index, item in enumerate(source.markets)
     )
     quotes = normalize_complete_ladder(replace(source, markets=markets), date(2026, 7, 12))
     assert len({quote.fingerprints.contract for quote in quotes}) == len(quotes)
+    assert len({quote.fingerprints.rules_source for quote in quotes}) == len(quotes)
 
 
-@pytest.mark.parametrize("failure", ["enumeration", "gap", "tails", "status", "close", "fingerprint", "cents", "crossed", "complement", "size"])
+@pytest.mark.parametrize("failure", ["enumeration", "gap", "tails", "status", "close", "settlement_fingerprint", "cents", "crossed", "complement", "size"])
 def test_ladder_fails_closed(failure: str) -> None:
     source = event()
     markets = list(source.markets)
@@ -275,8 +283,14 @@ def test_ladder_fails_closed(failure: str) -> None:
         markets[1] = replace(markets[1], status="closed")
     elif failure == "close":
         markets[1] = replace(markets[1], close_time=markets[1].close_time + timedelta(seconds=1))
-    elif failure == "fingerprint":
-        markets[1] = replace(markets[1], fingerprints=replace(markets[1].fingerprints, rules_source="rules-v2"))
+    elif failure == "settlement_fingerprint":
+        markets[1] = replace(
+            markets[1],
+            fingerprints=replace(
+                markets[1].fingerprints,
+                settlement_source="settlement-v2",
+            ),
+        )
     elif failure == "cents":
         markets[1] = replace(markets[1], yes_ask_cents=101)
     elif failure == "crossed":

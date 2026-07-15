@@ -200,6 +200,7 @@ def test_weather_shadow_factory_enabled_builds_one_isolated_supervisor(monkeypat
         "capture_weather": weather_clients[0],
         "label_markets": market_clients[1],
         "label_weather": weather_clients[1],
+        "runtime_logger": main_module.log,
     }
 
 
