@@ -7,7 +7,7 @@ import inspect
 import json
 import re
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -18,6 +18,7 @@ from trading.settlement import (
     MarketOutcome,
     SettlementObservation,
     VoidRefundContract,
+    canonical_payload_json,
     validate_observation_transition,
 )
 from trading.venue import MarketRef, Venue
@@ -26,6 +27,14 @@ _SQLITE_CONNECT = sqlite3.connect
 
 SETTLEMENT_SCHEMA_VERSION = 1
 SETTLEMENT_EVENT_VERSION = 1
+PAPER_TRADE_SETTLED_EVENT_KIND = "paper_trade_settled"
+PAPER_TRADE_SETTLED_VOID_REQUIREMENTS = ("paper_trade_log",)
+PAPER_TRADE_SETTLED_DIRECTIONAL_REQUIREMENTS = (
+    "paper_trade_log",
+    "source_credibility",
+    "calibration_state",
+    "keyword_outcomes",
+)
 
 SETTLEMENT_PAPER_TRADE_COLUMNS: tuple[tuple[str, str], ...] = (
     (
@@ -423,6 +432,161 @@ class StoreCheck:
     ok: bool
     failures: tuple[str, ...]
     metrics: dict[str, int | str | bool]
+
+
+@dataclass(frozen=True)
+class PaperTradeSettledOutboxContract:
+    outbox_id: str
+    event_version: int
+    event_kind: str
+    observation_sha256: str
+    trade_id: str
+    payload_json: str
+    created_at: str
+    requirements: tuple[str, ...]
+
+
+def settlement_keyword_directions() -> dict[str, str]:
+    """Return the current producer keyword-direction contract."""
+    import config as config_module
+
+    return {
+        keyword: signal["direction"]
+        for signal in config_module.GEOPOLITICAL_SIGNALS
+        for keyword in signal["keywords"]
+    }
+
+
+def paper_trade_settled_outbox_contract(
+    observation: SettlementObservation,
+    trade: Mapping[str, object],
+    *,
+    created_at: str,
+    keyword_directions: Mapping[str, str],
+) -> PaperTradeSettledOutboxContract:
+    """Build the canonical durable event for one settled paper trade."""
+    event_identity = {
+        "event_kind": PAPER_TRADE_SETTLED_EVENT_KIND,
+        "event_version": SETTLEMENT_EVENT_VERSION,
+        "observation_sha256": observation.observation_sha256,
+        "trade_id": trade["trade_id"],
+    }
+    outbox_id = hashlib.sha256(
+        canonical_payload_json(event_identity).encode("utf-8")
+    ).hexdigest()
+    resolved_yes = (
+        bool(trade["resolved_yes"])
+        if trade["resolved_yes"] is not None
+        else None
+    )
+    keywords = json.loads(str(trade["keywords_matched"] or "[]"))
+    if not isinstance(keywords, list):
+        raise ValueError("keywords_matched must encode a list")
+    keyword_outcomes = []
+    for keyword in keywords:
+        direction = keyword_directions.get(keyword, str(trade["side"]))
+        correct = None
+        if resolved_yes is not None:
+            correct = (direction == "yes") == resolved_yes
+        keyword_outcomes.append(
+            {"keyword": keyword, "direction": direction, "correct": correct}
+        )
+
+    payload = {
+        "alias": observation.market_ref.alias,
+        "event_kind": PAPER_TRADE_SETTLED_EVENT_KIND,
+        "event_version": SETTLEMENT_EVENT_VERSION,
+        "outbox_id": outbox_id,
+        "gross_payout_cents": _settlement_decimal_text(
+            trade["gross_payout_cents"]
+        ),
+        "gross_pnl_cents": _settlement_decimal_text(trade["gross_pnl_cents"]),
+        "observation_sha256": observation.observation_sha256,
+        "outcome": observation.outcome.value,
+        "ticker": trade["ticker"],
+        "side": trade["side"],
+        "trade_id": trade["trade_id"],
+        "venue": observation.market_ref.venue.value,
+        "venue_market_id": observation.market_ref.venue_market_id,
+        "resolved_yes": resolved_yes,
+        "terminal_state": trade["terminal_state"],
+        "won": trade["won"],
+        "settled_at": created_at,
+        "signal_source": trade["signal_source"],
+        "series_ticker": trade["series_ticker"],
+        "entry_ts": trade["entry_ts"],
+        "estimated_prob": trade["estimated_prob"],
+        "entry_price_cents": trade["entry_price_cents"],
+        "cost_dollars": trade["cost_dollars"],
+        "llm_magnitude": trade["llm_magnitude"],
+        "llm_confidence": trade["llm_confidence"],
+        "keyword_outcomes": keyword_outcomes,
+        "lane_estimates": {
+            "fast": trade["fast_lane_p"],
+            "accumulation": trade["accumulation_p"],
+            "structural": trade["structural_p"],
+        },
+    }
+    requirements = (
+        PAPER_TRADE_SETTLED_VOID_REQUIREMENTS
+        if observation.outcome is MarketOutcome.VOID
+        else PAPER_TRADE_SETTLED_DIRECTIONAL_REQUIREMENTS
+    )
+    return PaperTradeSettledOutboxContract(
+        outbox_id=outbox_id,
+        event_version=SETTLEMENT_EVENT_VERSION,
+        event_kind=PAPER_TRADE_SETTLED_EVENT_KIND,
+        observation_sha256=observation.observation_sha256,
+        trade_id=str(trade["trade_id"]),
+        payload_json=canonical_payload_json(payload),
+        created_at=created_at,
+        requirements=requirements,
+    )
+
+
+def _persisted_keyword_directions(
+    payload_json: str,
+    trade: Mapping[str, object],
+) -> dict[str, str]:
+    """Recover and validate the immutable keyword-direction event snapshot."""
+    payload = json.loads(payload_json)
+    if not isinstance(payload, dict) or "resolved_yes" not in payload:
+        raise ValueError("outbox payload must encode a resolved event object")
+    resolved_yes = payload["resolved_yes"]
+    if resolved_yes is not None and type(resolved_yes) is not bool:
+        raise ValueError("resolved_yes must be boolean or null")
+
+    keywords = json.loads(str(trade["keywords_matched"] or "[]"))
+    keyword_outcomes = payload.get("keyword_outcomes")
+    if (
+        not isinstance(keywords, list)
+        or any(not isinstance(keyword, str) for keyword in keywords)
+        or not isinstance(keyword_outcomes, list)
+        or len(keyword_outcomes) != len(keywords)
+    ):
+        raise ValueError("keyword outcomes must match the stored trade keywords")
+
+    directions: dict[str, str] = {}
+    for keyword, outcome in zip(keywords, keyword_outcomes):
+        if not isinstance(outcome, dict) or set(outcome) != {
+            "keyword",
+            "direction",
+            "correct",
+        }:
+            raise ValueError("keyword outcome must use the canonical event shape")
+        direction = outcome["direction"]
+        if outcome["keyword"] != keyword or direction not in {"yes", "no"}:
+            raise ValueError("keyword outcome does not match the stored trade")
+        expected_correct = (
+            None if resolved_yes is None else (direction == "yes") == resolved_yes
+        )
+        if outcome["correct"] is not expected_correct:
+            raise ValueError("keyword outcome correctness is inconsistent")
+        previous_direction = directions.get(keyword)
+        if previous_direction is not None and previous_direction != direction:
+            raise ValueError("duplicate keyword directions are inconsistent")
+        directions[keyword] = direction
+    return directions
 
 
 def settlement_result_sha256(outbox_id: str, consumer_name: str) -> str:
@@ -1143,9 +1307,14 @@ class SettlementStore:
         invalid_trade_financials = 0
         invalid_trade_outcomes = 0
         invalid_trade_timestamps = 0
+        invalid_settlement_outboxes = 0
+        invalid_settlement_outbox_requirements = 0
         observation_applied_at: dict[str, datetime] = {}
         reconstructed_observations: dict[
             str, tuple[SettlementObservation, datetime]
+        ] = {}
+        expected_outbox_inputs: dict[
+            tuple[str, str], tuple[SettlementObservation, dict[str, object], str]
         ] = {}
         for observation in observations:
             observation_id = observation["observation_sha256"]
@@ -1196,7 +1365,11 @@ class SettlementStore:
                        contracts, price_cents, cost_dollars, pnl_dollars,
                        gross_payout_cents,
                        gross_pnl_cents, resolved, resolved_yes,
-                       identity_status, terminal_state, settled_at, resolved_ts
+                       identity_status, terminal_state, settled_at, resolved_ts,
+                       ts AS entry_ts, estimated_prob, entry_price_cents,
+                       signal_source, series_ticker, llm_magnitude,
+                       llm_confidence, keywords_matched, fast_lane_p,
+                       accumulation_p, structural_p
                 FROM paper_trades
                 WHERE settlement_observation_sha256=?
                 ORDER BY trade_id
@@ -1318,6 +1491,19 @@ class SettlementStore:
                     failures.append(f"trade_outcome:{trade_key}")
                     invalid_trade_outcomes += 1
 
+                if canonical_observation is not None:
+                    trade_event = dict(row)
+                    trade_event["won"] = (
+                        None
+                        if canonical_observation.outcome is MarketOutcome.VOID
+                        else row["terminal_state"] == "won"
+                    )
+                    expected_outbox_inputs[(observation_id, row["trade_id"])] = (
+                        canonical_observation,
+                        trade_event,
+                        str(observation["applied_at"]),
+                    )
+
             try:
                 observation_payout = _parse_decimal(
                     observation["gross_payout_cents"]
@@ -1387,6 +1573,96 @@ class SettlementStore:
         for observation_id in sorted(invalid_supersessions):
             failures.append(f"observation_supersession:{observation_id}")
 
+        outboxes = self._conn.execute(
+            """
+            SELECT outbox_id, event_version, event_kind, observation_sha256,
+                   trade_id, payload_json, created_at
+            FROM paper_settlement_outbox
+            ORDER BY outbox_id
+            """
+        ).fetchall()
+        outboxes_by_link: dict[tuple[str, str], list[sqlite3.Row]] = {}
+        for outbox in outboxes:
+            link = (outbox["observation_sha256"], outbox["trade_id"])
+            outboxes_by_link.setdefault(link, []).append(outbox)
+
+        requirements_by_outbox: dict[str, set[str]] = {}
+        requirement_rows = self._conn.execute(
+            """
+            SELECT outbox_id, consumer_name
+            FROM paper_settlement_outbox_requirements
+            ORDER BY outbox_id, consumer_name
+            """
+        ).fetchall()
+        for requirement in requirement_rows:
+            requirements_by_outbox.setdefault(requirement["outbox_id"], set()).add(
+                requirement["consumer_name"]
+            )
+
+        for link, expected_input in sorted(expected_outbox_inputs.items()):
+            linked_outboxes = outboxes_by_link.get(link, [])
+            if len(linked_outboxes) != 1:
+                failures.append(f"outbox_count:{link[0]}:{link[1]}")
+                invalid_settlement_outboxes += 1
+                continue
+
+            outbox = linked_outboxes[0]
+            outbox_contract_invalid = False
+            observation, trade_event, expected_created_at = expected_input
+            try:
+                keyword_directions = _persisted_keyword_directions(
+                    str(outbox["payload_json"]),
+                    trade_event,
+                )
+                expected = paper_trade_settled_outbox_contract(
+                    observation,
+                    trade_event,
+                    created_at=expected_created_at,
+                    keyword_directions=keyword_directions,
+                )
+            except (KeyError, RuntimeError, TypeError, ValueError):
+                expected = None
+                outbox_contract_invalid = True
+            try:
+                created_at = _parse_datetime(outbox["created_at"])
+            except ValueError:
+                outbox_contract_invalid = True
+            else:
+                applied_at = observation_applied_at.get(link[0])
+                if applied_at is None or created_at != applied_at:
+                    outbox_contract_invalid = True
+            if expected is None or (
+                outbox["outbox_id"] != expected.outbox_id
+                or outbox["event_version"] != expected.event_version
+                or outbox["event_kind"] != expected.event_kind
+                or outbox["observation_sha256"] != expected.observation_sha256
+                or outbox["trade_id"] != expected.trade_id
+                or outbox["payload_json"] != expected.payload_json
+            ):
+                outbox_contract_invalid = True
+            if outbox_contract_invalid:
+                failures.append(f"outbox_contract:{outbox['outbox_id']}")
+                invalid_settlement_outboxes += 1
+
+            actual_requirements = requirements_by_outbox.get(
+                outbox["outbox_id"], set()
+            )
+            expected_requirements = (
+                PAPER_TRADE_SETTLED_VOID_REQUIREMENTS
+                if observation.outcome is MarketOutcome.VOID
+                else PAPER_TRADE_SETTLED_DIRECTIONAL_REQUIREMENTS
+            )
+            if actual_requirements != set(expected_requirements):
+                failures.append(f"outbox_requirements:{outbox['outbox_id']}")
+                invalid_settlement_outbox_requirements += 1
+
+        for link, linked_outboxes in sorted(outboxes_by_link.items()):
+            if link in expected_outbox_inputs:
+                continue
+            for outbox in linked_outboxes:
+                failures.append(f"outbox_unlinked:{outbox['outbox_id']}")
+                invalid_settlement_outboxes += 1
+
         metrics["linked_trades"] = linked_trades
         metrics["invalid_observation_identities"] = invalid_observation_identities
         metrics["invalid_observation_timestamps"] = invalid_observation_timestamps
@@ -1397,6 +1673,11 @@ class SettlementStore:
         metrics["invalid_linked_trade_financials"] = invalid_trade_financials
         metrics["invalid_linked_trade_outcomes"] = invalid_trade_outcomes
         metrics["invalid_linked_trade_timestamps"] = invalid_trade_timestamps
+        metrics["settlement_outboxes"] = len(outboxes)
+        metrics["invalid_settlement_outboxes"] = invalid_settlement_outboxes
+        metrics["invalid_settlement_outbox_requirements"] = (
+            invalid_settlement_outbox_requirements
+        )
 
         unresolved_links = self._conn.execute(
             """
@@ -1593,3 +1874,10 @@ def _parse_legacy_decimal(value: object) -> Decimal:
     if not parsed.is_finite():
         raise ValueError("legacy amount must be finite")
     return parsed
+
+
+def _settlement_decimal_text(value: object) -> str:
+    parsed = _parse_legacy_decimal(value)
+    if parsed == 0:
+        return "0"
+    return format(parsed.normalize(), "f")

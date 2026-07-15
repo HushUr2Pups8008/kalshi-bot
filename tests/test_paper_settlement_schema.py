@@ -31,6 +31,8 @@ from trading.settlement_store import (
     SETTLEMENT_PAPER_TRADE_COLUMNS_SQL,
     SETTLEMENT_SCHEMA_VERSION,
     SettlementStore,
+    paper_trade_settled_outbox_contract,
+    settlement_keyword_directions,
     settlement_result_sha256,
 )
 from trading.venue import MarketRef, Venue
@@ -124,7 +126,18 @@ def _create_legacy_db(path: Path) -> None:
             contracts INTEGER,
             price_cents INTEGER,
             cost_dollars REAL,
-            pnl_dollars REAL
+            pnl_dollars REAL,
+            ts TEXT,
+            estimated_prob REAL,
+            entry_price_cents REAL,
+            signal_source TEXT,
+            keywords_matched TEXT,
+            series_ticker TEXT,
+            llm_magnitude TEXT,
+            llm_confidence REAL,
+            fast_lane_p REAL,
+            accumulation_p REAL,
+            structural_p REAL
         )
         """
     )
@@ -273,7 +286,24 @@ def _mutate_observation(
     mutation: str,
     parameters: tuple[object, ...] = (),
 ) -> None:
-    trigger_name = "immutable_paper_settlement_observations_update"
+    _mutate_append_only_table(
+        conn,
+        "paper_settlement_observations",
+        "update",
+        mutation,
+        parameters,
+    )
+
+
+def _mutate_append_only_table(
+    conn: sqlite3.Connection,
+    table: str,
+    operation: str,
+    mutation: str,
+    parameters: tuple[object, ...] = (),
+) -> None:
+    assert operation in {"update", "delete"}
+    trigger_name = f"immutable_{table}_{operation}"
     row = conn.execute(
         "SELECT sql FROM sqlite_schema WHERE type='trigger' AND name=?",
         (trigger_name,),
@@ -310,9 +340,14 @@ def _seed_settled_trade(
             trade_id, ticker, venue, resolved, venue_market_id, identity_status,
             side, contracts, price_cents, cost_dollars, terminal_state,
             settlement_observation_sha256, settled_at, gross_payout_cents,
-            gross_pnl_cents, resolved_yes, pnl_dollars, resolved_ts
+            gross_pnl_cents, resolved_yes, pnl_dollars, resolved_ts,
+            ts, estimated_prob, entry_price_cents, signal_source,
+            keywords_matched, series_ticker, llm_magnitude, llm_confidence,
+            fast_lane_p, accumulation_p, structural_p
         ) VALUES (?, ?, ?, 1, ?, 'mapped',
-                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                  ?, 0.7, 40.0, 'wire:test', '["ceasefire"]', 'KXTEST',
+                  'moderate', 0.8, 0.7, 0.65, 0.6)
         """,
         (
             trade_id,
@@ -331,6 +366,7 @@ def _seed_settled_trade(
             resolved_yes,
             pnl_dollars,
             resolved_ts,
+            (NOW - timedelta(hours=1)).isoformat(),
         ),
     )
 
@@ -354,13 +390,74 @@ def _seed_outbox(conn: sqlite3.Connection, consumers: tuple[str, ...]) -> None:
     )
 
 
+def _seed_canonical_outbox(
+    conn: sqlite3.Connection,
+    observation: SettlementObservation,
+    *,
+    trade_id: str = "t1",
+    keyword_directions: dict[str, str] | None = None,
+) -> str:
+    cursor = conn.execute(
+        """
+        SELECT trade_id, ticker, side, resolved_yes, terminal_state,
+               gross_payout_cents, gross_pnl_cents, ts AS entry_ts,
+               signal_source, series_ticker, estimated_prob, entry_price_cents,
+               cost_dollars, llm_magnitude, llm_confidence, keywords_matched,
+               fast_lane_p, accumulation_p, structural_p
+        FROM paper_trades WHERE trade_id=?
+        """,
+        (trade_id,),
+    )
+    row = cursor.fetchone()
+    assert row is not None
+    trade = {column[0]: value for column, value in zip(cursor.description, row)}
+    trade["won"] = (
+        None if observation.outcome is MarketOutcome.VOID else trade["terminal_state"] == "won"
+    )
+    applied_at = conn.execute(
+        "SELECT applied_at FROM paper_settlement_observations "
+        "WHERE observation_sha256=?",
+        (observation.observation_sha256,),
+    ).fetchone()
+    assert applied_at is not None
+    contract = paper_trade_settled_outbox_contract(
+        observation,
+        trade,
+        created_at=str(applied_at[0]),
+        keyword_directions=(
+            settlement_keyword_directions()
+            if keyword_directions is None
+            else keyword_directions
+        ),
+    )
+    conn.execute(
+        "INSERT INTO paper_settlement_outbox VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            contract.outbox_id,
+            contract.event_version,
+            contract.event_kind,
+            contract.observation_sha256,
+            contract.trade_id,
+            contract.payload_json,
+            contract.created_at,
+        ),
+    )
+    conn.executemany(
+        "INSERT INTO paper_settlement_outbox_requirements VALUES (?, ?)",
+        [(contract.outbox_id, consumer) for consumer in contract.requirements],
+    )
+    return contract.outbox_id
+
+
 def _seed_valid_accounting(path: Path, *, consumers: tuple[str, ...] = ()) -> None:
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys=ON")
-    _insert_observation(conn)
+    observation = _insert_observation(conn)
     _seed_settled_trade(conn)
     if consumers:
         _seed_outbox(conn, consumers)
+    else:
+        _seed_canonical_outbox(conn, observation)
     conn.commit()
     conn.close()
 
@@ -630,9 +727,12 @@ def test_settlement_history_tables_are_append_only(
     db = tmp_path / "paper.db"
     _create_legacy_db(db)
     _migrate(db)
-    _seed_valid_accounting(db, consumers=("consumer-a",))
+    _seed_valid_accounting(db)
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA foreign_keys=ON")
+    outbox_id = conn.execute(
+        "SELECT outbox_id FROM paper_settlement_outbox"
+    ).fetchone()[0]
     conn.execute(
         """
         INSERT INTO paper_settlement_quarantine VALUES (
@@ -644,10 +744,10 @@ def test_settlement_history_tables_are_append_only(
     conn.execute(
         "INSERT INTO paper_settlement_consumer_receipts VALUES (?, ?, ?, ?)",
         (
-            "consumer-a",
-            OUTBOX_ID,
+            "paper_trade_log",
+            outbox_id,
             NOW.isoformat(),
-            settlement_result_sha256(OUTBOX_ID, "consumer-a"),
+            settlement_result_sha256(outbox_id, "paper_trade_log"),
         ),
     )
     conn.commit()
@@ -656,7 +756,8 @@ def test_settlement_history_tables_are_append_only(
         conn.execute(update_sql)
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         conn.execute(delete_sql)
-    assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1
+    expected_rows = 4 if table == "paper_settlement_outbox_requirements" else 1
+    assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == expected_rows
     conn.close()
 
 
@@ -664,14 +765,18 @@ def test_unclaimed_requirement_is_valid_pending_work(tmp_path):
     db = tmp_path / "paper.db"
     _create_legacy_db(db)
     _migrate(db)
-    _seed_valid_accounting(db, consumers=("consumer-a",))
+    _seed_valid_accounting(db)
 
     with SettlementStore(db) as store:
         pending = store.pending_requirements()
-        assert [(row.outbox_id, row.consumer_name) for row in pending] == [
-            (OUTBOX_ID, "consumer-a")
-        ]
-        assert not store.is_outbox_drained(OUTBOX_ID)
+        assert {row.consumer_name for row in pending} == {
+            "paper_trade_log",
+            "source_credibility",
+            "calibration_state",
+            "keyword_outcomes",
+        }
+        outbox_id = pending[0].outbox_id
+        assert not store.is_outbox_drained(outbox_id)
         assert store.conservation(now=NOW).ok
 
 
@@ -1170,6 +1275,26 @@ def test_readiness_reports_valid_and_invalid_schema_state(tmp_path):
     _create_legacy_db(db)
     _migrate(db)
     _seed_valid_accounting(db)
+
+    conn = sqlite3.connect(db)
+    requirements = conn.execute(
+        "SELECT outbox_id, consumer_name "
+        "FROM paper_settlement_outbox_requirements"
+    ).fetchall()
+    conn.executemany(
+        "INSERT INTO paper_settlement_consumer_receipts VALUES (?, ?, ?, ?)",
+        [
+            (
+                consumer_name,
+                outbox_id,
+                NOW.isoformat(),
+                settlement_result_sha256(outbox_id, consumer_name),
+            )
+            for outbox_id, consumer_name in requirements
+        ],
+    )
+    conn.commit()
+    conn.close()
 
     with SettlementStore(db) as store:
         assert store.readiness(pre_cutover=True).ok
@@ -1680,10 +1805,17 @@ def test_conservation_accepts_observation_alias_drift(tmp_path):
     db = tmp_path / "linked-trade-alias-drift.db"
     _create_legacy_db(db)
     _migrate(db)
-    _seed_valid_accounting(db)
-
     conn = sqlite3.connect(db)
-    conn.execute("UPDATE paper_trades SET ticker='older-alias' WHERE trade_id='t1'")
+    observation = _insert_observation(
+        conn,
+        market_ref=MarketRef(Venue.KALSHI, "KX-t1", "newer-alias"),
+    )
+    _seed_settled_trade(
+        conn,
+        market_ref=MarketRef(Venue.KALSHI, "KX-t1", "older-alias"),
+        observation_sha256=observation.observation_sha256,
+    )
+    _seed_canonical_outbox(conn, observation)
     conn.commit()
     conn.close()
 
@@ -1692,6 +1824,192 @@ def test_conservation_accepts_observation_alias_drift(tmp_path):
         assert result.ok
         assert result.metrics["invalid_linked_trade_identity"] == 0
         assert result.metrics["linked_trade_alias_drifts"] == 1
+
+
+def test_conservation_uses_persisted_keyword_direction_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    db = tmp_path / "historical-keyword-directions.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    conn = sqlite3.connect(db)
+    observation = _insert_observation(conn)
+    _seed_settled_trade(conn)
+    _seed_canonical_outbox(
+        conn,
+        observation,
+        keyword_directions={"ceasefire": "yes"},
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(
+        "config.GEOPOLITICAL_SIGNALS",
+        [{"keywords": ["ceasefire"], "direction": "no"}],
+    )
+
+    with SettlementStore(db) as store:
+        result = store.conservation(now=NOW)
+        assert result.ok
+        assert result.metrics["invalid_settlement_outboxes"] == 0
+
+
+@pytest.mark.parametrize(
+    ("invalid", "expected_failure", "metric"),
+    [
+        (
+            "missing-outbox",
+            f"outbox_count:{OBSERVATION_SHA}:t1",
+            "invalid_settlement_outboxes",
+        ),
+        (
+            "bad-outbox-id",
+            f"outbox_contract:{'d' * 64}",
+            "invalid_settlement_outboxes",
+        ),
+        (
+            "duplicate-outbox",
+            f"outbox_count:{OBSERVATION_SHA}:t1",
+            "invalid_settlement_outboxes",
+        ),
+        ("payload", "outbox_contract", "invalid_settlement_outboxes"),
+        ("keyword-direction", "outbox_contract", "invalid_settlement_outboxes"),
+        ("keyword-correct", "outbox_contract", "invalid_settlement_outboxes"),
+        ("missing-keyword", "outbox_contract", "invalid_settlement_outboxes"),
+        ("created-at", "outbox_contract", "invalid_settlement_outboxes"),
+        (
+            "missing-requirement",
+            "outbox_requirements",
+            "invalid_settlement_outbox_requirements",
+        ),
+        (
+            "extra-requirement",
+            "outbox_requirements",
+            "invalid_settlement_outbox_requirements",
+        ),
+    ],
+)
+def test_conservation_rejects_corrupt_settlement_outbox_graph(
+    tmp_path,
+    invalid,
+    expected_failure,
+    metric,
+):
+    db = tmp_path / "corrupt-settlement-outbox.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db)
+
+    conn = sqlite3.connect(db)
+    row = conn.execute(
+        "SELECT outbox_id, event_version, event_kind, observation_sha256, "
+        "trade_id, payload_json, created_at FROM paper_settlement_outbox"
+    ).fetchone()
+    assert row is not None
+    outbox_id = str(row[0])
+    if invalid == "missing-outbox":
+        _mutate_append_only_table(
+            conn,
+            "paper_settlement_outbox_requirements",
+            "delete",
+            "DELETE FROM paper_settlement_outbox_requirements WHERE outbox_id=?",
+            (outbox_id,),
+        )
+        _mutate_append_only_table(
+            conn,
+            "paper_settlement_outbox",
+            "delete",
+            "DELETE FROM paper_settlement_outbox WHERE outbox_id=?",
+            (outbox_id,),
+        )
+    elif invalid == "bad-outbox-id":
+        bad_id = "d" * 64
+        _mutate_append_only_table(
+            conn,
+            "paper_settlement_outbox_requirements",
+            "update",
+            "UPDATE paper_settlement_outbox_requirements SET outbox_id=?",
+            (bad_id,),
+        )
+        _mutate_append_only_table(
+            conn,
+            "paper_settlement_outbox",
+            "update",
+            "UPDATE paper_settlement_outbox SET outbox_id=?",
+            (bad_id,),
+        )
+    elif invalid == "duplicate-outbox":
+        duplicate_id = "e" * 64
+        conn.execute(
+            "INSERT INTO paper_settlement_outbox VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (duplicate_id, *row[1:]),
+        )
+        requirements = conn.execute(
+            "SELECT consumer_name FROM paper_settlement_outbox_requirements "
+            "WHERE outbox_id=?",
+            (outbox_id,),
+        ).fetchall()
+        conn.executemany(
+            "INSERT INTO paper_settlement_outbox_requirements VALUES (?, ?)",
+            [(duplicate_id, requirement[0]) for requirement in requirements],
+        )
+    elif invalid == "payload":
+        payload = json.loads(str(row[5]))
+        payload["gross_payout_cents"] = "90"
+        _mutate_append_only_table(
+            conn,
+            "paper_settlement_outbox",
+            "update",
+            "UPDATE paper_settlement_outbox SET payload_json=?",
+            (json.dumps(payload, separators=(",", ":"), sort_keys=True),),
+        )
+    elif invalid in {"keyword-direction", "keyword-correct", "missing-keyword"}:
+        payload = json.loads(str(row[5]))
+        if invalid == "keyword-direction":
+            payload["keyword_outcomes"][0]["direction"] = "maybe"
+        elif invalid == "keyword-correct":
+            payload["keyword_outcomes"][0]["correct"] = not payload[
+                "keyword_outcomes"
+            ][0]["correct"]
+        else:
+            payload["keyword_outcomes"] = []
+        _mutate_append_only_table(
+            conn,
+            "paper_settlement_outbox",
+            "update",
+            "UPDATE paper_settlement_outbox SET payload_json=?",
+            (json.dumps(payload, separators=(",", ":"), sort_keys=True),),
+        )
+    elif invalid == "created-at":
+        _mutate_append_only_table(
+            conn,
+            "paper_settlement_outbox",
+            "update",
+            "UPDATE paper_settlement_outbox "
+            "SET created_at='2026-07-14T12:01:00+00:00'",
+        )
+    elif invalid == "missing-requirement":
+        _mutate_append_only_table(
+            conn,
+            "paper_settlement_outbox_requirements",
+            "delete",
+            "DELETE FROM paper_settlement_outbox_requirements "
+            "WHERE outbox_id=? AND consumer_name='keyword_outcomes'",
+            (outbox_id,),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO paper_settlement_outbox_requirements VALUES (?, ?)",
+            (outbox_id, "unknown_consumer"),
+        )
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.conservation(now=NOW)
+        assert not result.ok
+        assert any(expected_failure in failure for failure in result.failures)
+        assert result.metrics[metric] >= 1
 
 
 @pytest.mark.parametrize(
@@ -2091,6 +2409,7 @@ def test_conservation_accepts_coherent_trade_outcomes(
         pnl_dollars=pnl_dollars,
         observation_sha256=observation.observation_sha256,
     )
+    _seed_canonical_outbox(conn, observation)
     conn.commit()
     conn.close()
 
@@ -2102,22 +2421,22 @@ def test_conservation_accepts_coherent_trade_outcomes(
 
 
 @pytest.mark.parametrize(
-    ("processed_at", "result_sha256", "expected_failure"),
+    ("processed_at", "forged_result_sha256", "failure_prefix"),
     [
         (
             "not-a-time",
-            settlement_result_sha256(OUTBOX_ID, "consumer-a"),
-            f"receipt_processed_at:consumer-a:{OUTBOX_ID}",
+            None,
+            "receipt_processed_at",
         ),
         (
             NOW.replace(tzinfo=None).isoformat(),
-            settlement_result_sha256(OUTBOX_ID, "consumer-a"),
-            f"receipt_processed_at:consumer-a:{OUTBOX_ID}",
+            None,
+            "receipt_processed_at",
         ),
         (
             NOW.isoformat(),
             "f" * 64,
-            f"receipt_result_sha256:consumer-a:{OUTBOX_ID}",
+            "receipt_result_sha256",
         ),
     ],
     ids=["malformed-timestamp", "naive-timestamp", "forged-result-hash"],
@@ -2125,19 +2444,37 @@ def test_conservation_accepts_coherent_trade_outcomes(
 def test_conservation_rejects_forged_consumer_receipts(
     tmp_path,
     processed_at,
-    result_sha256,
-    expected_failure,
+    forged_result_sha256,
+    failure_prefix,
 ):
     db = tmp_path / "forged-receipt.db"
     _create_legacy_db(db)
     _migrate(db)
-    _seed_valid_accounting(db, consumers=("consumer-a",))
+    _seed_valid_accounting(db)
 
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute(
+    requirements = conn.execute(
+        "SELECT outbox_id, consumer_name "
+        "FROM paper_settlement_outbox_requirements"
+    ).fetchall()
+    outbox_id = requirements[0][0]
+    conn.executemany(
         "INSERT INTO paper_settlement_consumer_receipts VALUES (?, ?, ?, ?)",
-        ("consumer-a", OUTBOX_ID, processed_at, result_sha256),
+        [
+            (
+                consumer_name,
+                outbox_id,
+                processed_at if consumer_name == "paper_trade_log" else NOW.isoformat(),
+                (
+                    forged_result_sha256
+                    if consumer_name == "paper_trade_log"
+                    and forged_result_sha256 is not None
+                    else settlement_result_sha256(outbox_id, consumer_name)
+                ),
+            )
+            for _, consumer_name in requirements
+        ],
     )
     conn.commit()
     conn.close()
@@ -2146,8 +2483,10 @@ def test_conservation_rejects_forged_consumer_receipts(
         assert store.pending_requirements() == ()
         result = store.conservation(now=NOW)
         assert not result.ok
-        assert expected_failure in result.failures
-        assert result.metrics["consumer_receipts"] == 1
+        assert (
+            f"{failure_prefix}:paper_trade_log:{outbox_id}" in result.failures
+        )
+        assert result.metrics["consumer_receipts"] == 4
         assert result.metrics["invalid_consumer_receipts"] == 1
 
 
@@ -2155,16 +2494,19 @@ def test_conservation_accepts_exact_valid_accounting(tmp_path):
     db = tmp_path / "paper.db"
     _create_legacy_db(db)
     _migrate(db)
-    _seed_valid_accounting(db, consumers=("consumer-a",))
+    _seed_valid_accounting(db)
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA foreign_keys=ON")
+    outbox_id = conn.execute(
+        "SELECT outbox_id FROM paper_settlement_outbox"
+    ).fetchone()[0]
     conn.execute(
         "INSERT INTO paper_settlement_consumer_receipts VALUES (?, ?, ?, ?)",
         (
-            "consumer-a",
-            OUTBOX_ID,
+            "paper_trade_log",
+            outbox_id,
             NOW.isoformat(),
-            settlement_result_sha256(OUTBOX_ID, "consumer-a"),
+            settlement_result_sha256(outbox_id, "paper_trade_log"),
         ),
     )
     conn.commit()
@@ -2182,3 +2524,6 @@ def test_conservation_accepts_exact_valid_accounting(tmp_path):
         assert result.metrics["linked_trade_alias_drifts"] == 0
         assert result.metrics["invalid_linked_trade_financials"] == 0
         assert result.metrics["invalid_linked_trade_outcomes"] == 0
+        assert result.metrics["settlement_outboxes"] == 1
+        assert result.metrics["invalid_settlement_outboxes"] == 0
+        assert result.metrics["invalid_settlement_outbox_requirements"] == 0

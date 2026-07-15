@@ -44,13 +44,14 @@ from trading.settlement import (
     validate_observation_transition,
 )
 from trading.settlement_store import (
-    SETTLEMENT_EVENT_VERSION,
     SETTLEMENT_PAPER_TRADE_COLUMNS,
     SETTLEMENT_PAPER_TRADE_COLUMNS_SQL,
     StoreCheck,
     canonical_entry_schema_ready,
     enable_and_verify_foreign_keys,
     initialize_fresh_settlement_schema,
+    paper_trade_settled_outbox_contract,
+    settlement_keyword_directions,
     settlement_schema_contract_matches,
 )
 from trading.venue import MarketRef, Venue, normalize_venue
@@ -1843,76 +1844,12 @@ class PaperTrader:
         *,
         created_at: str,
     ) -> None:
-        event_kind = "paper_trade_settled"
-        outbox_id = _settlement_sha256(
-            {
-                "event_kind": event_kind,
-                "event_version": SETTLEMENT_EVENT_VERSION,
-                "observation_sha256": observation.observation_sha256,
-                "trade_id": outcome["trade_id"],
-            }
+        contract = paper_trade_settled_outbox_contract(
+            observation,
+            outcome,
+            created_at=created_at,
+            keyword_directions=settlement_keyword_directions(),
         )
-        resolved_yes = (
-            bool(outcome["resolved_yes"])
-            if outcome["resolved_yes"] is not None
-            else None
-        )
-        keyword_directions = {
-            keyword: signal["direction"]
-            for signal in config_module.GEOPOLITICAL_SIGNALS
-            for keyword in signal["keywords"]
-        }
-        keywords = json.loads(outcome["keywords_matched"] or "[]")
-        keyword_outcomes = []
-        for keyword in keywords:
-            direction = keyword_directions.get(keyword, outcome["side"])
-            correct = None
-            if resolved_yes is not None:
-                correct = (direction == "yes") == resolved_yes
-            keyword_outcomes.append(
-                {
-                    "keyword": keyword,
-                    "direction": direction,
-                    "correct": correct,
-                }
-            )
-        payload = {
-            "alias": observation.market_ref.alias,
-            "event_kind": event_kind,
-            "event_version": SETTLEMENT_EVENT_VERSION,
-            "outbox_id": outbox_id,
-            "gross_payout_cents": _settlement_decimal_text(
-                outcome["gross_payout_cents"]
-            ),
-            "gross_pnl_cents": _settlement_decimal_text(
-                outcome["gross_pnl_cents"]
-            ),
-            "observation_sha256": observation.observation_sha256,
-            "outcome": observation.outcome.value,
-            "ticker": outcome["ticker"],
-            "side": outcome["side"],
-            "trade_id": outcome["trade_id"],
-            "venue": observation.market_ref.venue.value,
-            "venue_market_id": observation.market_ref.venue_market_id,
-            "resolved_yes": resolved_yes,
-            "terminal_state": outcome["terminal_state"],
-            "won": outcome["won"],
-            "settled_at": created_at,
-            "signal_source": outcome["signal_source"],
-            "series_ticker": outcome["series_ticker"],
-            "entry_ts": outcome["entry_ts"],
-            "estimated_prob": outcome["estimated_prob"],
-            "entry_price_cents": outcome["entry_price_cents"],
-            "cost_dollars": outcome["cost_dollars"],
-            "llm_magnitude": outcome["llm_magnitude"],
-            "llm_confidence": outcome["llm_confidence"],
-            "keyword_outcomes": keyword_outcomes,
-            "lane_estimates": {
-                "fast": outcome["fast_lane_p"],
-                "accumulation": outcome["accumulation_p"],
-                "structural": outcome["structural_p"],
-            },
-        }
         self._conn.execute(
             """
             INSERT INTO paper_settlement_outbox (
@@ -1921,32 +1858,23 @@ class PaperTrader:
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                outbox_id,
-                SETTLEMENT_EVENT_VERSION,
-                event_kind,
-                observation.observation_sha256,
-                outcome["trade_id"],
-                _settlement_json(payload),
-                created_at,
+                contract.outbox_id,
+                contract.event_version,
+                contract.event_kind,
+                contract.observation_sha256,
+                contract.trade_id,
+                contract.payload_json,
+                contract.created_at,
             ),
         )
-        consumers = ["paper_trade_log"]
-        if observation.outcome is not MarketOutcome.VOID:
-            consumers.extend(
-                (
-                    "source_credibility",
-                    "calibration_state",
-                    "keyword_outcomes",
-                )
-            )
-        for consumer_name in consumers:
+        for consumer_name in contract.requirements:
             self._conn.execute(
                 """
                 INSERT INTO paper_settlement_outbox_requirements (
                     outbox_id, consumer_name
                 ) VALUES (?, ?)
                 """,
-                (outbox_id, consumer_name),
+                (contract.outbox_id, consumer_name),
             )
 
     def _append_settlement_quarantine(
