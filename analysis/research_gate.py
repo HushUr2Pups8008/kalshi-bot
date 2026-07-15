@@ -12,6 +12,7 @@ from email.utils import parsedate_to_datetime
 import hashlib
 import html
 import http.client
+import ipaddress
 import io
 import json
 import math
@@ -3363,13 +3364,54 @@ def _create_ipv4_connection(
     timeout: float,
     source_address: tuple[str, int] | None = None,
 ) -> socket.socket:
-    last_error: OSError | None = None
-    for family, socktype, proto, _canonname, sockaddr in socket.getaddrinfo(
-        address[0],
-        address[1],
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("Google News RSS connection timeout must be finite and positive")
+
+    host, port = address
+    if not host or isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65_535:
+        raise ValueError("Google News RSS connection address is invalid")
+    resolver_answers = socket.getaddrinfo(
+        host,
+        port,
         socket.AF_INET,
         socket.SOCK_STREAM,
-    ):
+    )
+    validated_answers: list[tuple[int, int, int, tuple[str, int]]] = []
+    for answer in resolver_answers:
+        if not isinstance(answer, tuple) or len(answer) != 5:
+            raise ValueError("Google News RSS resolver answer is malformed")
+        family, socktype, proto, _canonname, sockaddr = answer
+        if (
+            family != socket.AF_INET
+            or socktype != socket.SOCK_STREAM
+            or proto not in {0, socket.IPPROTO_TCP}
+        ):
+            raise ValueError("Google News RSS resolver answer has an unexpected socket type")
+        if not isinstance(sockaddr, tuple) or len(sockaddr) != 2 or sockaddr[1] != port:
+            raise ValueError("Google News RSS resolver answer has an unexpected port")
+        if not isinstance(sockaddr[0], str):
+            raise ValueError("Google News RSS resolver answer has an invalid IP address")
+        try:
+            resolved_ip = ipaddress.ip_address(sockaddr[0])
+        except ValueError as exc:
+            raise ValueError("Google News RSS resolver answer has an invalid IP address") from exc
+        if (
+            not isinstance(resolved_ip, ipaddress.IPv4Address)
+            or not resolved_ip.is_global
+            or resolved_ip.is_private
+            or resolved_ip.is_loopback
+            or resolved_ip.is_link_local
+            or resolved_ip.is_multicast
+            or resolved_ip.is_unspecified
+            or resolved_ip.is_reserved
+        ):
+            raise ValueError("Google News RSS resolver answer is not a global IPv4 address")
+        validated_answers.append((family, socktype, proto, (str(resolved_ip), port)))
+    if not validated_answers:
+        raise OSError("Google News RSS has no validated IPv4 address")
+
+    last_error: OSError | None = None
+    for family, socktype, proto, sockaddr in validated_answers:
         sock = socket.socket(family, socktype, proto)
         try:
             sock.settimeout(timeout)
@@ -3377,12 +3419,14 @@ def _create_ipv4_connection(
                 sock.bind(source_address)
             sock.connect(sockaddr)
             return sock
-        except OSError as exc:
-            last_error = exc
+        except BaseException as exc:
             sock.close()
+            if not isinstance(exc, OSError):
+                raise
+            last_error = exc
     if last_error is not None:
         raise last_error
-    raise OSError("Google News RSS has no IPv4 address")
+    raise OSError("Google News RSS could not connect to a validated IPv4 address")
 
 
 def _fetch_google_news_rss_ipv4(
@@ -3400,7 +3444,7 @@ def _fetch_google_news_rss_ipv4(
         or parsed.password is not None
     ):
         raise ValueError("Google News RSS transport requires the canonical HTTPS host")
-    if timeout <= 0 or max_bytes <= 0:
+    if not math.isfinite(timeout) or timeout <= 0 or max_bytes <= 0:
         raise ValueError("Google News RSS transport bounds must be positive")
 
     connection = http.client.HTTPSConnection(
