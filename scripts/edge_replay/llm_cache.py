@@ -65,8 +65,9 @@ Two layers, distinct on purpose:
      Ollama+qwen3 multi-slot drift is durable evidence the row cannot
      be trusted to gate paper-mode deploys).
    Poisoned rows raise ``CachePoisonedError`` from ``get`` BEFORE the
-   live recompute and report ``False`` from ``has`` so
-   ``compute_cache_coverage`` excludes them from gate-eligible hits.
+   live recompute and report ``False`` from ``has``. Gate coverage uses
+   the stricter ``verified_status`` boundary, which also excludes rows
+   whose repeat verification was skipped or nondeterministic.
 """
 
 from __future__ import annotations
@@ -661,10 +662,10 @@ WHERE {_LOOKUP_WHERE}
 LIMIT 1
 """
 
-# ``has`` excludes poisoned rows by construction so ``compute_cache_coverage``
-# counts them as misses (a poisoned row cannot satisfy a gate). The
-# additional WHERE clause is added to ``_LOOKUP_WHERE`` rather than checking
-# the row in Python so the predicate is evaluated inside SQLite.
+# ``has`` excludes poisoned rows while preserving raw presence semantics for
+# clean repeat-skipped rows. The additional WHERE clause is added to
+# ``_LOOKUP_WHERE`` rather than checking the row in Python so the predicate
+# is evaluated inside SQLite.
 _HAS_SQL: Final[str] = f"""
 SELECT 1
 FROM llm_responses
@@ -676,6 +677,16 @@ LIMIT 1
 # row whether it is healthy or poisoned. Returns NULL if the row is absent.
 _IS_POISONED_SQL: Final[str] = f"""
 SELECT poisoned
+FROM llm_responses
+WHERE {_LOOKUP_WHERE}
+LIMIT 1
+"""
+
+# Eligibility is deliberately separate from raw presence/read semantics.
+# Some diagnostics need to inspect a clean ``skipped`` response via ``get``;
+# only a non-poisoned, repeat-verified row may satisfy replay coverage.
+_VERIFIED_STATUS_SQL: Final[str] = f"""
+SELECT repeat_verification, poisoned
 FROM llm_responses
 WHERE {_LOOKUP_WHERE}
 LIMIT 1
@@ -743,15 +754,40 @@ class LLMReplayCache:
         return int(row[0])
 
     def has(self, key: CacheKey) -> bool:
-        """Return True iff a NON-POISONED row matches ``key``.
+        """Return True iff a non-poisoned row matches ``key``.
 
-        Poisoned rows are excluded by construction so that
-        ``compute_cache_coverage`` counts them as misses — a poisoned row
-        cannot satisfy a gate. Call ``is_poisoned`` if you need to
-        distinguish "absent" from "quarantined".
+        This is the raw presence boundary: repeat-skipped rows remain
+        available to legitimate diagnostic callers. Use ``has_verified``
+        for replay eligibility. Call ``is_poisoned`` to distinguish
+        "absent" from "quarantined".
         """
         row = self._conn.execute(_HAS_SQL, _key_to_params(key)).fetchone()
         return row is not None
+
+    def verified_status(self, key: CacheKey) -> str:
+        """Return the replay-eligibility status for ``key``.
+
+        ``"verified"`` is the only eligible result. Miss labels are stable
+        operator-facing diagnostics: ``"missing"``, ``"poisoned"``, or
+        ``"repeat_verification=<value>"``.
+        """
+        row = self._conn.execute(
+            _VERIFIED_STATUS_SQL,
+            _key_to_params(key),
+        ).fetchone()
+        if row is None:
+            return "missing"
+
+        repeat_verification, poisoned = row
+        if repeat_verification != "verified":
+            return f"repeat_verification={repeat_verification}"
+        if poisoned:
+            return "poisoned"
+        return "verified"
+
+    def has_verified(self, key: CacheKey) -> bool:
+        """Return True iff ``key`` is non-poisoned and repeat-verified."""
+        return self.verified_status(key) == "verified"
 
     def is_poisoned(self, key: CacheKey) -> bool:
         """Return True iff a row matches ``key`` AND is marked poisoned.
@@ -874,7 +910,10 @@ def compute_cache_coverage(
     ``passes_threshold = coverage_ratio >= threshold``. An empty corpus is
     treated as passing (ratio = 1.0) since there's nothing to fail on. The
     ``missing_row_ids`` list is capped at the first 20 misses for readable
-    operator output.
+    operator output. Only non-poisoned rows with
+    ``repeat_verification='verified'`` count as hits; skipped,
+    nondeterministic, poisoned, and absent rows are misses with distinct
+    diagnostic labels.
 
     This function is intended as a pre-gate check: I-4 replay-as-CI must
     refuse to open a T1 observation window if coverage is below the
@@ -914,22 +953,16 @@ def compute_cache_coverage(
                 missing_row_ids.append(str(row.get("row_id", f"<missing-{exc}>")))
             continue
 
-        if cache.has(key):
+        verified_status = cache.verified_status(key)
+        if verified_status == "verified":
             hits += 1
         else:
             misses += 1
             if len(missing_row_ids) < _MAX_MISSING_ROW_IDS:
-                # I-12: distinguish absent rows from poisoned (quarantined)
-                # rows in operator output. ``has`` already excludes
-                # poisoned rows, but the operator needs to know WHY a
-                # gate failed — "poisoned" is fixable by re-capture or
-                # by un-poisoning after the underlying nondeterminism
-                # is understood; a missing row needs the capture pipeline
-                # to be re-run.
-                if cache.is_poisoned(key):
-                    missing_row_ids.append(f"{key.row_id} [poisoned]")
-                else:
+                if verified_status == "missing":
                     missing_row_ids.append(key.row_id)
+                else:
+                    missing_row_ids.append(f"{key.row_id} [{verified_status}]")
 
     ratio = hits / total
     return CoverageReport(
