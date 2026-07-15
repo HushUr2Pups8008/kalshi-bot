@@ -803,6 +803,23 @@ def _signal_to_evidence(analysis: SignalAnalysis) -> Evidence:
     )
 
 
+def _build_capital_guard_shadow_capture_sink(
+    enabled: bool,
+    *,
+    db_path: os.PathLike[str] | str | None = None,
+) -> object | None:
+    """Build and initialize the isolated store only after explicit opt-in."""
+    if not enabled:
+        return None
+    from tasks.capital_guard_shadow_capture import CapitalGuardShadowCaptureSink
+    from trading.capital_guard_shadow import CapitalGuardShadowStore
+
+    path = DATA_DIR / "capital_guard_shadow.db" if db_path is None else db_path
+    store = CapitalGuardShadowStore(db_path=path)
+    store.initialize(applied_at=datetime.now(timezone.utc))
+    return CapitalGuardShadowCaptureSink(store)
+
+
 class TradingBot:
     def __init__(self):
         self.rest          = KalshiRestClient()
@@ -869,12 +886,18 @@ class TradingBot:
         # evidence queue feeds AccumulationTask independently of the fast lane.
         self._trading_queue: asyncio.Queue[TradeCandidate] = asyncio.Queue(maxsize=500)
         self._evidence_queue: asyncio.Queue[Evidence | None] = asyncio.Queue(maxsize=2000)
+        self._capital_guard_shadow_capture_sink = (
+            _build_capital_guard_shadow_capture_sink(
+                cfg.enable_capital_guard_shadow_capture
+            )
+        )
         self._blend_task = BlendTask(
             trading_queue=self._trading_queue,
             calibration=self._calibration_task,
             open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_pct(
                 self.paper
             ),
+            capital_guard_capture_sink=self._capital_guard_shadow_capture_sink,
         )
         self._research_paper_admission_bridge = ResearchPaperAdmissionBridge(
             research_store=default_research_dossier_store(),
@@ -2323,6 +2346,11 @@ class TradingBot:
             is_paper_mode=True,
             open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_pct(
                 self.paper
+            ),
+            capital_guard_capture_sink=getattr(
+                self,
+                "_capital_guard_shadow_capture_sink",
+                None,
             ),
         )
         return await self._route_analysis_through_blend(

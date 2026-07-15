@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 
 from config import BotConfig
+from main import _build_capital_guard_shadow_capture_sink
 from scripts import botcheck
+import tasks.capital_guard_shadow_capture as capture_module
+import trading.capital_guard_shadow as shadow_module
 from trading.capital_guard_shadow import CapitalGuardShadowStore
 
 
@@ -35,6 +38,54 @@ def test_capital_guard_shadow_flags_default_off_and_parse_true(
 
     assert enabled.enable_capital_guard_shadow_capture is True
     assert enabled.enable_capital_guard_shadow_settlement_collection is True
+
+
+def test_disabled_runtime_capture_build_performs_zero_store_or_file_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "missing" / "shadow.db"
+
+    def unexpected_store(*args: object, **kwargs: object) -> None:
+        pytest.fail(f"disabled capture constructed store: {args!r} {kwargs!r}")
+
+    def unexpected_connect(*args: object, **kwargs: object) -> None:
+        pytest.fail(f"disabled capture opened SQLite: {args!r} {kwargs!r}")
+
+    monkeypatch.setattr(shadow_module, "CapitalGuardShadowStore", unexpected_store)
+    monkeypatch.setattr(sqlite3, "connect", unexpected_connect)
+
+    assert _build_capital_guard_shadow_capture_sink(False, db_path=db_path) is None
+    assert not db_path.parent.exists()
+
+
+def test_enabled_runtime_capture_explicitly_initializes_isolated_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[str, object]] = []
+
+    class SpyStore:
+        def __init__(self, db_path: Path) -> None:
+            events.append(("store", db_path))
+
+        def initialize(self, *, applied_at: datetime) -> None:
+            events.append(("initialize", applied_at))
+
+    class SpySink:
+        def __init__(self, store: SpyStore) -> None:
+            events.append(("sink", store))
+
+    monkeypatch.setattr(shadow_module, "CapitalGuardShadowStore", SpyStore)
+    monkeypatch.setattr(capture_module, "CapitalGuardShadowCaptureSink", SpySink)
+    db_path = tmp_path / "isolated" / "shadow.db"
+
+    sink = _build_capital_guard_shadow_capture_sink(True, db_path=db_path)
+
+    assert isinstance(sink, SpySink)
+    assert [event for event, _value in events] == ["store", "initialize", "sink"]
+    assert events[0][1] == db_path
+    assert isinstance(events[1][1], datetime)
 
 
 def test_capital_guard_shadow_status_disabled_performs_zero_sqlite_io(
